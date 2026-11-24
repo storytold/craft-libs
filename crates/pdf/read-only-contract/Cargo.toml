@@ -1,0 +1,23 @@
+[package]
+name = "craft-pdf-read-only-contract"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+# Keep backend dev-dependencies in the parent workspace out of these tests.
+[workspace]
+resolver = "3"
+
+[dependencies]
+craft-pdf = { path = "..", default-features = false, features = ["read"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.79"
+
+[patch.crates-io]
+hayro-syntax = { path = "../../../vendor/hayro-syntax" }
+
+[lints.rust]
+unsafe_code = "forbid"

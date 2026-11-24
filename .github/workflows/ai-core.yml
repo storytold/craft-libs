@@ -1,0 +1,37 @@
+name: AI model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/ai-core/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ai-core.yml']
+  pull_request:
+    paths: ['crates/ai-core/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ai-core.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: ai-core-${{ github.ref }}
+  cancel-in-progress: true
+
+# fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
+jobs:
+  ai-core:
+    name: AI model WASM
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      # The model promises to compile for the web.
+      - run: cargo check -p craft-ai-core --target wasm32-unknown-unknown --locked

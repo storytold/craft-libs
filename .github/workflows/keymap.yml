@@ -1,0 +1,73 @@
+name: Keymap
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+  pull_request:
+    paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: keymap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    timeout-minutes: 15
+    # fmt, and clippy and the tests with default and with all features, run in the Workspace gate
+    # on every OS; this runs the feature subsets.
+    name: Keymap feature sets
+    runs-on: ubuntu-latest
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout test fonts
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: .test-inputs/craft-fonts
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
+      # `snapshot` covers `ui` and `egui` and compiles the dialog screenshots, which need a GPU
+      # to run, so the test steps leave them out.
+      - run: cargo clippy -p craft-keymap --all-targets --features snapshot --locked -- -D warnings
+      # Doctests run once, in the `ui` step.
+      - name: Test core
+        run: cargo test -p craft-keymap --no-default-features --lib --tests --locked
+      - name: Test egui dispatch and the shortcuts dialog
+        run: cargo test -p craft-keymap --features ui --locked
+  wasm:
+    timeout-minutes: 10
+    name: Keymap WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p craft-keymap --features ui --locked --target wasm32-unknown-unknown

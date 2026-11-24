@@ -21,10 +21,10 @@ fn windows_printers_are_sorted_once_with_their_default() {
     assert_eq!(
         printers,
         [
-            Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: Some(true) },
-            Printer { name: "Zebra Label".into(), default: false, two_sided: Some(false) },
-            Printer { name: r"\\print01\Office, 2nd floor".into(), default: true, two_sided: Some(true) },
-            Printer { name: "Копир Canon iR".into(), default: false, two_sided: None },
+            Printer { name: "HP LaserJet 400 (Copy 2)".into(), description: String::new(), default: false, two_sided: Some(true) },
+            Printer { name: "Zebra Label".into(), description: String::new(), default: false, two_sided: Some(false) },
+            Printer { name: r"\\print01\Office, 2nd floor".into(), description: String::new(), default: true, two_sided: Some(true) },
+            Printer { name: "Копир Canon iR".into(), description: String::new(), default: false, two_sided: None },
         ]
     );
     assert!(spool::printer_list([("Office".to_string(), None)], Some("Office 2")).iter().all(|p| !p.default));
@@ -49,6 +49,10 @@ const TABLOID: TestPage = TestPage { media: Some([0.0, 0.0, 792.0, 1224.0]), cro
 /// cross-reference stream, as modern writers save. The root page node sets a Letter MediaBox
 /// for pages that inherit it.
 fn test_pdf(pages: &[TestPage], compressed: bool) -> Vec<u8> {
+    test_pdf_with_annotations(pages, compressed, None)
+}
+
+fn test_pdf_with_annotations(pages: &[TestPage], compressed: bool, annotations: Option<&str>) -> Vec<u8> {
     let n = pages.len();
     // 1 catalog, 2 page tree, 3 content, then the pages.
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + i)).collect();
@@ -68,6 +72,9 @@ fn test_pdf(pages: &[TestPage], compressed: bool) -> Vec<u8> {
         }
         if let Some(r) = p.rotate {
             page += &format!(" /Rotate {r}");
+        }
+        if let Some(annotations) = annotations {
+            page += &format!(" /Annots {annotations}");
         }
         objects.push(page + " >>");
     }
@@ -265,6 +272,43 @@ fn shrink_to_fit_reframes_sheets_on_the_paper() {
 }
 
 #[test]
+fn shrink_to_fit_refuses_to_drop_annotation_appearances() {
+    use crate::sheets::{Fit, plan, read};
+    for annotations in ["[<< /Subtype /Text /Rect [36 36 72 72] /F 4 >>]", "42 0 R"] {
+        let pdf = test_pdf_with_annotations(&[LETTER, LETTER_LANDSCAPE], false, Some(annotations));
+        let sheets = read(&pdf).unwrap();
+        let fit = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+        assert!(matches!(sheets.update(&fit), Err(Error::Spool(ref m)) if m.contains("flatten page annotations")));
+        let exact = plan(&sheets.sheets, (612.0, 792.0), Fit::Exact).unwrap();
+        let rotated = sheets.update(&exact).unwrap();
+        assert!(rotated.starts_with(&pdf));
+        assert!(String::from_utf8_lossy(&rotated[pdf.len()..]).contains("/Annots"), "rotation retains annotations on the updated page");
+    }
+    for annotations in ["[]", "null"] {
+        let pdf = test_pdf_with_annotations(&[LETTER, LETTER_LANDSCAPE], false, Some(annotations));
+        let sheets = read(&pdf).unwrap();
+        let fit = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+        assert!(sheets.update(&fit).is_ok());
+    }
+}
+
+#[test]
+fn annotation_print_visibility_is_checked_before_native_submission() {
+    for flags in [0, 4, 6, 36, 20] {
+        let annotations = format!("[<< /Subtype /Square /Rect [36 36 72 72] /F {flags} >>]");
+        let pdf = test_pdf_with_annotations(&[LETTER], false, Some(&annotations));
+        let sheets = crate::sheets::read(&pdf).unwrap();
+        assert_eq!(sheets.check_print_annotations().is_ok(), flags == 4, "flags={flags}");
+    }
+    for annotations in ["[]", "null"] {
+        let pdf = test_pdf_with_annotations(&[LETTER], false, Some(annotations));
+        assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok());
+    }
+    let pdf = test_pdf(&[LETTER], false);
+    assert!(crate::sheets::read(&pdf).unwrap().check_print_annotations().is_ok());
+}
+
+#[test]
 fn an_encrypted_file_is_turned_but_not_reframed() {
     // An /Encrypt entry is all it takes: new content streams would have to be encrypted too.
     let pdf = test_pdf(&[LETTER, LETTER_LANDSCAPE], false);
@@ -276,6 +320,14 @@ fn an_encrypted_file_is_turned_but_not_reframed() {
     assert!(String::from_utf8_lossy(&updated[encrypted.len()..]).contains("/Encrypt"), "the new trailer keeps /Encrypt");
     let shrunk = crate::sheets::plan(&sheets.sheets, (612.0, 792.0), crate::sheets::Fit::Shrink { margin: 18.0 }).unwrap();
     assert!(matches!(sheets.update(&shrunk), Err(Error::Spool(ref m)) if m.contains("encrypted")));
+}
+
+#[test]
+fn two_sided_is_unknown_for_a_printer_that_is_not_there() {
+    // A name no queue has, as when a printer was removed after the list was read: unknown, at
+    // once, never an error or a guess.
+    assert_eq!(spool::two_sided("craft-print: no such printer \u{1F5A8}"), None);
+    assert_eq!(spool::two_sided(""), None);
 }
 
 #[test]
@@ -310,6 +362,22 @@ fn unreadable_sheets_are_errors_never_panics() {
     }
 }
 
+/// What `f` returns, and how many driver capability queries it made on this thread.
+#[cfg(windows)]
+fn driver_queries<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    let queries = || crate::windows::CAPABILITY_QUERIES.with(std::cell::Cell::get);
+    let start = queries();
+    let out = f();
+    (out, queries().saturating_sub(start))
+}
+
+/// `two_sided(name)` and the driver queries it made, beside what it should be: the answer
+/// `printers()` listed for that queue, from one query.
+#[cfg(windows)]
+fn picked_printer(name: &str, listed: Option<&Printer>) -> ((Option<bool>, usize), (Option<bool>, usize)) {
+    (driver_queries(|| spool::two_sided(name)), (listed.and_then(|p| p.two_sided), 1))
+}
+
 /// Windows: the printer list comes from the spooler. A bare machine may have no printer; the
 /// list that exists has real names and at most one default.
 #[cfg(windows)]
@@ -318,6 +386,46 @@ fn windows_lists_the_printers_the_system_knows() {
     let printers = spool::printers();
     assert!(printers.iter().all(|p| !p.name.trim().is_empty()), "{printers:?}");
     assert!(printers.iter().filter(|p| p.default).count() <= 1, "{printers:?}");
+}
+
+/// Jobs for the paused test queue, cancelled: one before it was sent, then one held in each
+/// driver call before sending, its capability query and its DEVMODE conversion, as when the driver
+/// doesn't answer (a sleeping printer, storytold/wordcraft#5710). The cancel must win and the job
+/// stop once the driver answers. The first job's result, and whether the held ones behaved.
+#[cfg(windows)]
+fn cancelled_jobs(pdf: &[u8], job: &Job) -> (Result<String, Error>, Result<(), String>) {
+    let cancel = Cancel::new();
+    assert!(cancel.cancel());
+    let cancelled = spool::submit_cancellable(pdf, &Job { title: "cancelled".into(), ..job.clone() }, &mut |_, _| {}, &cancel);
+    let outcome =
+        [crate::windows::HELD_TITLE, crate::windows::HELD_CONVERSION_TITLE].iter().try_for_each(|title| cancelled_while_held(pdf, job, title));
+    (cancelled, outcome)
+}
+
+/// A job titled `title`, held in that driver call by the test hook, cancelled there and released.
+#[cfg(windows)]
+fn cancelled_while_held(pdf: &[u8], job: &Job, title: &str) -> Result<(), String> {
+    let (entered, reached_driver) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    *crate::windows::HELD_DRIVER.lock().unwrap() = Some((entered, released));
+    let held_cancel = Cancel::new();
+    let worker_cancel = held_cancel.clone();
+    let (held_pdf, held_job) = (pdf.to_vec(), Job { title: title.into(), ..job.clone() });
+    let held = std::thread::spawn(move || spool::submit_cancellable(&held_pdf, &held_job, &mut |_, _| {}, &worker_cancel));
+    let waited = reached_driver.recv_timeout(std::time::Duration::from_secs(60));
+    let cancelled_while_held = held_cancel.cancel();
+    let _ = release.send(());
+    let held = held.join().unwrap();
+    crate::windows::HELD_DRIVER.lock().unwrap().take();
+    if waited.is_err() {
+        Err(format!("{title}: the job never reached that driver call"))
+    } else if !cancelled_while_held {
+        Err(format!("{title}: a job waiting on its driver couldn't be cancelled"))
+    } else if held != Err(Error::Spool(CANCELLED_MESSAGE.into())) {
+        Err(format!("{title}: the job was not stopped once the driver answered: {held:?}"))
+    } else {
+        Ok(())
+    }
 }
 
 /// Run a PowerShell script for the Windows test's printer setup: its stdout, or everything it
@@ -346,6 +454,14 @@ fn windows_powershell(script: &str, printer: &str) -> Result<String, String> {
 /// them; the test uses PowerShell only to add, inspect and remove the printer. Its driver is the
 /// inbox "Generic / Text Only"; a machine that cannot add one (no rights, no driver) skips the
 /// test, unless `CRAFT_PRINT_REQUIRE_QUEUE=1` (CI) makes it mandatory.
+/// "Generic / Text Only" is a GDI (v3) driver: the XPS print API reaches it through Windows'
+/// XPS-to-GDI conversion, where an app may flatten transparency first (storytold/pdfcraft#6155).
+#[cfg(windows)]
+fn assert_gdi_driver(name: &str) {
+    assert_eq!(spool::xps_driver(name), Some(false), "the test queue's driver is a GDI driver");
+    assert_eq!(spool::xps_driver("Craft Test Print: no such queue"), None);
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_jobs_reach_the_spooler() {
@@ -365,18 +481,35 @@ fn windows_jobs_reach_the_spooler() {
         eprintln!("skipping the real print: the test printer could not be prepared: {why}");
         return;
     }
-    let listed = spool::printers().into_iter().find(|p| p.name == name);
+    let (listed, probed) = driver_queries(|| spool::printers().into_iter().find(|p| p.name == name));
+    assert_gdi_driver(name);
+    // The list a Print dialog shows first: the same queue, named without asking its driver (a
+    // networked printer in power save can hold that query, storytold/wordcraft#5710).
+    let (queue, unprobed) = driver_queries(|| spool::printer_queues().into_iter().find(|p| p.name == name));
+    // Then the one printer picked: its driver alone, the same answer printers() gave.
+    let (picked, expected) = picked_printer(name, listed.as_ref());
     let mixed = test_pdf(&[LETTER, LETTER_LANDSCAPE, LETTER], true);
-    let job = Job { printer: Some(name.into()), copies: 2, duplex: Some(Duplex::LongEdge), title: "mixed.pdf".into(), ..Job::default() };
+    let job = Job { printer: Some(name.into()), title: "mixed.pdf".into(), ..Job::default() };
     let caller = std::thread::current().id();
     // Rc proves callers are not required to make their callback Send just because native
-    // printing uses a COM worker. Counts describe PDF sheets, despite copies and duplex.
+    // printing uses a COM worker. Counts describe accepted PDF sheets.
     let processed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = std::rc::Rc::clone(&processed);
     let sent = spool::submit_with_progress(&mixed, &job, &mut move |done, total| {
         assert_eq!(std::thread::current().id(), caller);
         observed.borrow_mut().push((done, total));
     });
+    let mut duplex_progress = Vec::new();
+    let duplex_refused = if listed.as_ref().is_some_and(|p| p.two_sided == Some(false)) {
+        Some(spool::submit_with_progress(&mixed, &Job { duplex: Some(Duplex::LongEdge), ..job.clone() }, &mut |done, total| {
+            duplex_progress.push((done, total));
+        }))
+    } else {
+        None
+    };
+    // The Print dialog's default, an explicit one-sided request, on a queue with no duplex unit.
+    let simplex_only = listed.as_ref().is_some_and(|p| p.two_sided == Some(false));
+    let one_sided = simplex_only.then(|| spool::submit(&mixed, &Job { duplex: Some(Duplex::Off), title: "simplex".into(), ..job.clone() }));
     let tabloid = test_pdf(&[TABLOID, LETTER], false);
     let shrink = Job { printer: Some(name.into()), scaling: Scaling::ShrinkToFit, title: "shrink".into(), ..Job::default() };
     let shrunk = spool::submit(&tabloid, &shrink);
@@ -384,6 +517,8 @@ fn windows_jobs_reach_the_spooler() {
     let exact_refused = spool::submit_with_progress(&tabloid, &Job { printer: Some(name.into()), ..Job::default() }, &mut |done, total| {
         refused_progress.push((done, total));
     });
+    // Two cancelled jobs, which the exact list of queued jobs below shows never reached it.
+    let (cancelled, cancelled_while_held) = cancelled_jobs(&mixed, &job);
     let queued = windows_powershell(
         "@(Get-PrintJob -PrinterName $name | Sort-Object Id | ForEach-Object { $_.DocumentName + ' ' + $_.TotalPages }) -join '|'",
         name,
@@ -395,14 +530,67 @@ fn windows_jobs_reach_the_spooler() {
         name,
     );
     assert!(listed.as_ref().is_some_and(|p| p.two_sided.is_some()), "the new printer is listed, its duplex support known: {listed:?}");
+    assert!(queue.as_ref().is_some_and(|p| p.two_sided.is_none()), "the new printer is listed, its duplex support unknown: {queue:?}");
+    assert!(probed > 0, "printers() asks each driver, so the count sees driver queries: {probed}");
+    // printer_queues() asks no driver; two_sided(name) answers as printers() did, asking that one only.
+    assert_eq!((unprobed, picked), (0, expected));
     assert_eq!(sent.as_deref(), Ok("spooled 3 sheet(s)"), "{sent:?}");
+    if let Some(refused) = duplex_refused {
+        assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("simplex/duplex") && m.contains("nothing was sent")), "{refused:?}");
+    }
+    if let Some(one_sided) = one_sided {
+        assert_eq!(one_sided.as_deref(), Ok("spooled 3 sheet(s)"), "one-sided is what a simplex-only queue does: {one_sided:?}");
+    }
     assert_eq!(*processed.borrow(), [(0, 3), (1, 3), (2, 3), (3, 3)]);
+    assert!(duplex_progress.is_empty(), "driver refusal before submission has no progress");
     assert_eq!(shrunk.as_deref(), Ok("spooled 2 sheet(s)"), "{shrunk:?}");
     assert!(matches!(exact_refused, Err(Error::Spool(ref m)) if m.contains("one paper size")), "{exact_refused:?}");
     assert!(refused_progress.is_empty(), "rejection before a job starts has no progress: {refused_progress:?}");
-    assert_eq!(queued.as_deref().map(str::trim), Ok("mixed.pdf 3|shrink.pdf 2"), "one job each, all sheets, in the paused queue: {queued:?}");
+    let expected = if simplex_only { "mixed.pdf 3|simplex.pdf 3|shrink.pdf 2" } else { "mixed.pdf 3|shrink.pdf 2" };
+    assert_eq!(queued.as_deref().map(str::trim), Ok(expected), "one job each, all sheets, in the paused queue: {queued:?}");
     assert!(cleaned.is_ok(), "the test printer is removed again: {cleaned:?}");
+    assert_eq!(cancelled, Err(Error::Spool(CANCELLED_MESSAGE.into())), "a cancelled job is refused, not queued");
+    assert_eq!(cancelled_while_held, Ok(()), "a job cancelled while its driver doesn't answer is never sent");
     // Asking for a printer that isn't there is an error, never a job on another one.
     let missing = spool::submit(&mixed, &Job { printer: Some(name.into()), ..Job::default() });
     assert!(matches!(missing, Err(Error::Spool(ref m)) if m.contains(name)), "{missing:?}");
+}
+
+#[test]
+fn shrink_to_fit_refuses_a_sheet_the_output_cannot_represent() {
+    use crate::sheets::{Fit, plan, read};
+    // A runaway-zoom export: 16 000 000 pt wide. Written with four decimals the scale would be
+    // "0" -- a singular matrix, a blank page, reported back as a spooled job.
+    let huge = TestPage { media: Some([0.0, 0.0, 16_000_000.0, 792.0]), ..LETTER };
+    let pdf = test_pdf(&[huge], false);
+    let sheets = read(&pdf).unwrap();
+    let refused = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 });
+    assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink")), "{refused:?}");
+}
+
+#[test]
+fn shrink_to_fit_holds_the_one_percent_scale_boundary() {
+    use crate::sheets::{Fit, plan, read};
+    // The matrix carries the scale through the four-decimal formatter, so the plan refuses when
+    // what would be written is more than 1% off the real scale. Letter with an 18 pt margin gives
+    // 576 pt of printable width: a 118 700 pt wide, 120 000 pt tall sheet (no quarter turn) scales
+    // by 576 / 118 700 = 0.00485257, written 0.0049 -- 0.98% short, inside the bound, so it
+    // prints.
+    let inside = TestPage { media: Some([0.0, 0.0, 118_700.0, 120_000.0]), ..LETTER };
+    let pdf = test_pdf(&[inside], false);
+    let sheets = read(&pdf).unwrap();
+    let edits = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+    let updated = sheets.update(&edits).unwrap();
+    let frame = frame_of(&updated, pdf.len());
+    let written: f64 = frame.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let real = edits[0].frame.as_ref().unwrap().matrix[0];
+    assert!(written != real && (written - real).abs() < real * 0.01, "just inside the 1% bound the written scale is accepted: {frame}");
+
+    // A 118 750 pt wide sheet: 576 / 118 750 = 0.00485053, written 0.0049, 1.02% off -- refused as
+    // an error before anything is sent, rather than printed a percent too small.
+    let outside = TestPage { media: Some([0.0, 0.0, 118_750.0, 120_000.0]), ..LETTER };
+    let pdf = test_pdf(&[outside], false);
+    let sheets = read(&pdf).unwrap();
+    let refused = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 });
+    assert!(matches!(refused, Err(Error::Spool(ref m)) if m.contains("shrink") && m.contains("nothing was sent")), "{refused:?}");
 }

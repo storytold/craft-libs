@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 87ffcdf96df9f88e13c595fd71e4c6e86eadf365efcec4c7f8f395c57fdd6f20 # shrinks to perturbations = [Subdivision { t: 0.8279203883070297, idx: 11865133298020245315, next: Base { idx: 0 } }]
+cc e20fc6214f9e6b2d383bd5fe49c9c888a1b364ca32f9787f6e9427933f0ff66b # shrinks to perturbations = [Point { perturbation: PointPerturbation { x: Ulp(0), y: Ulp(1) }, idx: 11820034422209601546, next: Base { idx: 0 } }]

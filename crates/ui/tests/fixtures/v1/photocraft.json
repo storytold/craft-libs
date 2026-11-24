@@ -1,0 +1,151 @@
+{
+  "docking": {
+    "root": {
+      "Split": {
+        "axis": "Horizontal",
+        "size": {
+          "FixedSecond": 300.0
+        },
+        "first": {
+          "Tabs": {
+            "panels": [
+              "canvas"
+            ],
+            "active": 0
+          }
+        },
+        "second": {
+          "Split": {
+            "axis": "Vertical",
+            "size": {
+              "Ratio": 0.5
+            },
+            "first": {
+              "Tabs": {
+                "panels": [
+                  "layers",
+                  "channels",
+                  "paths"
+                ],
+                "active": 0
+              }
+            },
+            "second": {
+              "Tabs": {
+                "panels": [
+                  "adjustments",
+                  "history"
+                ],
+                "active": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "floating": [
+      {
+        "panels": [
+          "properties"
+        ],
+        "active": 0,
+        "rect": [
+          120.0,
+          160.0,
+          320.0,
+          440.0
+        ]
+      }
+    ]
+  },
+  "docking_hidden": {
+    "navigator": {
+      "floating": null,
+      "anchor": "layers",
+      "placement": {
+        "Tab": {
+          "before": "channels"
+        }
+      },
+      "size": null,
+      "stack": null,
+      "sibling": []
+    }
+  },
+  "panel_layout": {
+    "docking": {
+      "root": {
+        "Split": {
+          "axis": "Horizontal",
+          "size": {
+            "FixedSecond": 300.0
+          },
+          "first": {
+            "Tabs": {
+              "panels": [
+                "canvas"
+              ],
+              "active": 0
+            }
+          },
+          "second": {
+            "Split": {
+              "axis": "Vertical",
+              "size": {
+                "Ratio": 0.5
+              },
+              "first": {
+                "Tabs": {
+                  "panels": [
+                    "layers",
+                    "channels",
+                    "paths"
+                  ],
+                  "active": 0
+                }
+              },
+              "second": {
+                "Tabs": {
+                  "panels": [
+                    "adjustments",
+                    "history"
+                  ],
+                  "active": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "floating": [
+        {
+          "panels": [
+            "properties"
+          ],
+          "active": 0,
+          "rect": [
+            120.0,
+            160.0,
+            320.0,
+            440.0
+          ]
+        }
+      ]
+    },
+    "dockingHidden": {
+      "navigator": {
+        "floating": null,
+        "anchor": "layers",
+        "placement": {
+          "Tab": {
+            "before": "channels"
+          }
+        },
+        "size": null,
+        "stack": null,
+        "sibling": []
+      }
+    },
+    "dockingCollapsed": []
+  }
+}

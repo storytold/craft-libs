@@ -1,0 +1,40 @@
+[
+  {
+    "name": "NotoSansThai[wdth,wght].ttf",
+    "source": "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notosansthai/NotoSansThai%5Bwdth%2Cwght%5D.ttf",
+    "sha256": "5a1c559bb539583c8a1fd99d1c5b9491e5e14478c9cd2bd0970d5c3096cc9ef8",
+    "commit": "8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5",
+    "license": "OFL-1.1"
+  },
+  {
+    "name": "OFL.txt",
+    "source": "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notosansthai/OFL.txt",
+    "sha256": "2e98fd23a52d253db8612cd5942c8f2ff4111b21d2367050fdca91d8ccc374a0",
+    "commit": "8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5",
+    "license": "OFL-1.1"
+  },
+  {
+    "name": "NotoSansArabic.ttf",
+    "source": "https://raw.githubusercontent.com/storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/noto-sans-arabic/NotoSansArabic.ttf",
+    "sha256": "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e",
+    "license": "OFL-1.1"
+  },
+  {
+    "name": "OFL-Arabic.txt",
+    "source": "https://raw.githubusercontent.com/storytold/craft-fonts/8dcdacd5153e64560d109541a47d806f26f048c0/fonts/noto-sans-arabic/OFL.txt",
+    "sha256": "07fc70bfeb985cc1a87a8587d0a0c80bab11c86c9dc3fd95b6f0cb332f983e96",
+    "license": "OFL-1.1"
+  },
+  {
+    "name": "Inter-Regular.ttf",
+    "source": "https://raw.githubusercontent.com/storytold/pdfcraft/a6bc63a497954af87c1cd5a2a1e72e928a11c039/assets/fonts/Inter-Regular.ttf",
+    "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "license": "OFL-1.1"
+  },
+  {
+    "name": "OFL-Inter.txt",
+    "source": "https://raw.githubusercontent.com/storytold/pdfcraft/a6bc63a497954af87c1cd5a2a1e72e928a11c039/assets/fonts/OFL-Inter.txt",
+    "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+    "license": "OFL-1.1"
+  }
+]
