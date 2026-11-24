@@ -366,6 +366,12 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop(flag)]
     flat_thumbnail: bool,
+    /// A picked card is outlined in the accent round the whole card, over the fill it is marked with: a flat card's pick
+    /// is a fill alone, and a card that is one of a few choices (the New Document presets) reads better with the line,
+    /// which is the same width in every state it shows in. Only a card shows it.
+    #[style_key]
+    #[prop(flag)]
+    pick_ring: bool,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -460,6 +466,7 @@ impl<'a> Tile<'a> {
             card: false,
             card_text: CardText::File,
             flat_thumbnail: false,
+            pick_ring: false,
             detail: None,
             summary_action: None,
             accessible_name: None,
@@ -821,6 +828,11 @@ impl Component for Tile<'_> {
         let mut surface = SurfaceLook::new(fill).radius(radius);
         if key.action_place == TileActionPlace::Band {
             // A band tile has no ring round its picture: the selected tile is outlined as a whole.
+            let (line, accent) = (c(clear), c(colors.accent.solid));
+            surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
+        }
+        if key.card && key.pick_ring && key.action_place != TileActionPlace::Band {
+            // A picked card is outlined as a whole, as a band tile is.
             let (line, accent) = (c(clear), c(colors.accent.solid));
             surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
         }
