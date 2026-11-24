@@ -109,7 +109,10 @@ impl ComparisonCache {
             }
         };
         if flipped {
-            self.flipped.insert(stored.flip())
+            if let Some(out) = self.flipped.as_mut() {
+                stored.flip_into(out);
+            }
+            self.flipped.get_or_insert_with(|| stored.flip())
         } else {
             stored
         }
@@ -234,5 +237,30 @@ mod tests {
                 assert_eq!(reverse_after.metrics, forward.metrics);
             }
         }
+    }
+
+    #[test]
+    fn reversed_lookups_reuse_the_flipped_buffers() {
+        let segments = crossing_segments();
+        let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
+        let entries = |order: &CurveOrder| order.iter().collect::<Vec<_>>();
+        let forward = cmp_cache.compare_segments(&segments, SegIdx(0), SegIdx(1)).clone();
+        assert!(!forward.metrics.entries.is_empty());
+
+        let first = cmp_cache.compare_segments(&segments, SegIdx(1), SegIdx(0));
+        let first_entries = entries(first);
+        let first_metrics = first.metrics.entries.as_ptr();
+        let second = cmp_cache.compare_segments(&segments, SegIdx(1), SegIdx(0));
+        assert_eq!(second.metrics.entries.as_ptr(), first_metrics);
+        assert_eq!(entries(second), first_entries);
+        assert_eq!(second.metrics, forward.metrics);
+
+        // A buffer that held another pair's order gives the same result as
+        // `flip`.
+        let other = cmp_cache.compare_segments(&segments, SegIdx(0), SegIdx(2)).clone();
+        let mut out = other.flip();
+        forward.flip_into(&mut out);
+        assert_eq!(entries(&out), entries(&forward.flip()));
+        assert_eq!(out.metrics, forward.metrics);
     }
 }

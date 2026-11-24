@@ -192,6 +192,15 @@ impl CurveOrder {
         }
     }
 
+    // Craft patch (comparison cache size): writes the result of `flip` into
+    // `out`, reusing the allocations that `out` already holds.
+    pub(crate) fn flip_into(&self, out: &mut CurveOrder) {
+        out.start = self.start;
+        out.cmps.clear();
+        out.cmps.extend(self.cmps.iter().map(CurveOrderEntry::flip));
+        out.metrics.entries.clone_from(&self.metrics.entries);
+    }
+
     /// Imagine that our curve is to the left of the other curve at height `y`.
     /// What's the next height at which they touch?
     ///
