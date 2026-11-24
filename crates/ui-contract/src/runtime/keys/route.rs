@@ -140,7 +140,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // session control on a canvas), unless a modal layer is open. The window's document canvas is its key target
         // (`focus::host_canvas`): Page Up and Down, Home and End page it as they do while it has the focus. What the
         // canvas takes is its alone, as while it has the focus: the app's shortcuts do not run with it too. It takes the
-        // arrows with the modifiers it acts on (`KeyUse::nudge_mods`); the others are the app's.
+        // arrows with the modifiers it acts on (`KeyUse::nudge_mods`); the others are the app's, as is a page key bound to
+        // a command that runs now (`page_key_runs`).
         let declared = |mods: Mods| canvas.as_ref().is_none_or(|canvas| canvas.stop.keys.nudge_mods.contains(mods));
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             if let Some(id) = hover_delete
@@ -161,6 +162,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             } else if let Some(canvas) = &canvas
                 && let Some(Intent::Move(mv @ (NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End), mods)) =
                     keys::intent(os, press.key, press.mods, canvas.stop.role)
+                && !page_key_runs(ctx, canvas, press)
             {
                 push(&mut routed, Some(canvas.stop.id), Intent::Move(mv, mods), false);
                 *taken = Taken::Canvas;
@@ -275,6 +277,18 @@ pub(super) fn unfocused_canvas(ctx: &Context) -> Option<StopRec> {
 /// Rewrites the indices of `mods`, which count the entries of a list, to count only the entries `kept` says stay.
 fn remap_mods(mods: &[(usize, Mods)], kept: &[bool]) -> Vec<(usize, Mods)> {
     mods.iter().map(|(at, held)| (kept.get(..*at).unwrap_or(kept).iter().filter(|stays| **stays).count(), *held)).collect()
+}
+
+/// Whether `press`, a page key (Page Up or Down, Home, End) of the window's document canvas `canvas`, focused or the
+/// unfocused window's key target, runs the command the window's keymap binds it to (`commands::runs_now`): that app
+/// shortcut goes ahead of the canvas's page scroll (Q370), as the keymap ran it before the canvas paged. A canvas's
+/// editor part keeps its page keys as its input.
+fn page_key_runs(ctx: &Context, canvas: &StopRec, press: &Press) -> bool {
+    let keys = &canvas.stop.keys;
+    keys.chrome_key
+        && !keys.is_document_editor()
+        && matches!(press.key, Key::PageUp | Key::PageDown | Key::Home | Key::End)
+        && commands::runs_now(ctx, crate::runtime::egui::pass::current_viewport(ctx), &Chord { mods: press.mods, key: press.key })
 }
 
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
@@ -687,8 +701,8 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
             let leaves_row = !caret && is_vertical(mv) && focus::is_row_child(ctx, stop);
             let kept = caret || (stop.part.is_none() && stop.keys.keep.keeps_arrow(mv));
             // A stop that does not act on its moves leaves a move key a scoped command around it binds to that
-            // command, ahead of its roving group and the scroll owner.
-            if !leaves_row && !kept && !stop.role.moves && commands::binds_scoped(ctx, &chord) {
+            // command, ahead of its roving group and the scroll owner; the document canvas leaves a bound page key.
+            if (!leaves_row && !kept && !stop.role.moves && commands::binds_scoped(ctx, &chord)) || page_key_runs(ctx, rec, press) {
                 PressRoute::Free
             } else {
                 PressRoute::Move(mv, mods)
