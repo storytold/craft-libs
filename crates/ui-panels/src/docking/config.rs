@@ -96,6 +96,9 @@ pub struct DockConfig {
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// Every group shows its panel menu button, whose menu holds the dock's own rows when the shown panel has none of
+    /// its own (`DockPanels::panel_rows`). Off: only a group whose shown panel has rows of its own shows the button.
+    pub panel_menu_always: bool,
     /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
     /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
     pub iconic_mode: IconicMode,
@@ -120,6 +123,7 @@ impl Default for DockConfig {
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
+            panel_menu_always: false,
             iconic_mode: IconicMode::Flyouts,
         }
     }
@@ -137,6 +141,13 @@ impl DockConfig {
     #[must_use]
     pub fn group_order_items(mut self, on: bool) -> Self {
         self.group_order_items = on;
+        self
+    }
+
+    /// The panel menu button on every group on or off ([`panel_menu_always`](Self::panel_menu_always)).
+    #[must_use]
+    pub fn panel_menu_always(mut self, on: bool) -> Self {
+        self.panel_menu_always = on;
         self
     }
 
