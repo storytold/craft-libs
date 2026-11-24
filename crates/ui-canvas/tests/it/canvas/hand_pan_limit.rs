@@ -320,6 +320,27 @@ fn a_document_smaller_than_the_view_can_still_be_panned_with_overscroll_on() {
     assert!((at.y - before.y).abs() < SHOWN, "the axis nobody dragged stays: {before:?} -> {at:?}");
 }
 
+/// A mirrored view (View, Flip Horizontal) stops at the same limit: the pointer's drag moves the centre the mirror's
+/// way, and the range is the document's own.
+#[trial]
+fn a_mirrored_view_stops_at_the_same_limit_with_overscroll_on() {
+    let mut rig = Rig::new(HandTool::new(overscroll()), overscroll(), None, DOCUMENT, 1.0);
+    let mut mirrored = rig.view();
+    mirrored.flip_x = true;
+    rig.view.set(mirrored);
+    rig.tick(FRAME, Vec::new());
+    // Dragging right moves the centre toward the document's end edge in a mirrored view.
+    let (from, to) = gesture(Axis::X, true, full_drag(Axis::X));
+    for _ in 0..5 {
+        rig.drag(from, to, 7);
+    }
+    let got = rig.view().center.x;
+    assert!(
+        (got - past_end(Axis::X, DOCUMENT, 1.0)).abs() < SHOWN,
+        "the mirrored drag stops 636.5 points past the image's end edge, it came to {got}"
+    );
+}
+
 /// Overscroll off keeps today's clamp: the drag stops with the image's edge at the canvas edge, no pasteboard room.
 #[trial]
 fn overscroll_off_keeps_today_s_clamp_at_the_image_edges() {
