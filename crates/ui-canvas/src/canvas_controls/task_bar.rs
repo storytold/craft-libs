@@ -124,6 +124,10 @@ pub struct TaskBar<'a> {
     /// How far from its anchor's bounds a bar hung from document points hangs: a section gap by default.
     #[prop]
     hang_gap: TaskBarHang,
+    /// Centre the bar on `area` sideways instead of on its anchor: the reference application's transform bar sits
+    /// on the document window's centre line whatever the box's place.
+    #[prop(flag)]
+    centred_on_area: bool,
 }
 
 /// What a bar hangs from: the screen bounds of document points, or the canvas view's top edge, aligned in reading
@@ -162,7 +166,7 @@ pub enum TaskBarGrip {
 }
 
 /// How far from its anchor's bounds a [`TaskBar`] hangs.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub enum TaskBarHang {
     /// A section gap away.
@@ -170,6 +174,10 @@ pub enum TaskBarHang {
     Gap,
     /// The handle ring and a section gap away: clear of a selection's handles on that side and their hit area.
     ClearOfHandles,
+    /// This many points away; a negative or non-finite distance counts as a section gap. The reference application
+    /// hangs its transform bar 32 screen pixels below the box, clear of the rotate band outside it (measured
+    /// 2026-11-24).
+    Points(f32),
 }
 
 /// What an outside press does to a [`TaskBar`].
@@ -296,6 +304,7 @@ impl<'a> TaskBar<'a> {
             grip: TaskBarGrip::Icon,
             member_gap: None,
             hang_gap: TaskBarHang::Gap,
+            centred_on_area: false,
         }
     }
 
@@ -325,6 +334,7 @@ impl<'a> TaskBar<'a> {
             grip: TaskBarGrip::Icon,
             member_gap: None,
             hang_gap: TaskBarHang::Gap,
+            centred_on_area: false,
         }
     }
 
@@ -353,7 +363,22 @@ impl<'a> TaskBar<'a> {
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact, grip: grip_look, member_gap, hang_gap } = self;
+        let TaskBar {
+            label,
+            hang,
+            mut place,
+            rows,
+            kind,
+            side,
+            align,
+            keep_clear,
+            dismiss,
+            compact,
+            grip: grip_look,
+            member_gap,
+            hang_gap,
+            centred_on_area,
+        } = self;
         let side = side.unwrap_or(match kind {
             TaskBarKind::Task | TaskBarKind::Fixed => Side::Below,
             TaskBarKind::Selection => Side::Above,
@@ -371,10 +396,21 @@ impl<'a> TaskBar<'a> {
                     bounds.extend_with(at);
                     bounds
                 });
-                let clear = if hang_gap == TaskBarHang::ClearOfHandles { env.tokens.size.handle.ring } else { 0.0 };
-                let gap = env.tokens.space.gap.section + clear;
+                let section = env.tokens.space.gap.section;
+                let gap = match hang_gap {
+                    TaskBarHang::Gap => section,
+                    TaskBarHang::ClearOfHandles => section + env.tokens.size.handle.ring,
+                    TaskBarHang::Points(points) if points.is_finite() && points >= 0.0 => points,
+                    TaskBarHang::Points(_) => section,
+                };
                 // A fixed bar keeps the gap on both sides of its anchor: it opens above when there is no room below.
                 let rect = if kind == TaskBarKind::Fixed { bounds.expand2(Vec2::new(0.0, gap)) } else { hang_rect(bounds, gap, side) };
+                // Centred on the area, the bar hangs from the area's whole width at the anchor's height.
+                let rect = if centred_on_area && room {
+                    Rect::from_min_max(Pos2::new(area.min.x, rect.min.y), Pos2::new(area.max.x, rect.max.y))
+                } else {
+                    rect
+                };
                 (room && bounds.is_finite()).then(|| Hung {
                     rect,
                     side,
