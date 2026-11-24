@@ -327,6 +327,39 @@ fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
     assert!(focused.is_some() && focused != first && !reached, "egui focus on that widget is focus: the Tab is not egui's and moves nothing");
 }
 
+/// A window whose only stop is the app's own canvas, between two of the app's own buttons: a bare Tab moves egui
+/// focus through egui's order, from nothing focused and from the canvas alike, and a canvas that keeps Tab keeps it.
+#[trial]
+fn tab_moves_egui_focus_through_the_app_s_widgets_while_every_stop_is_a_host_stop() {
+    let (first, canvas, last) = (named_id("host first"), named_id("host canvas"), named_id("host last"));
+    let keeps = Rc::new(Cell::new(false));
+    let reached = Rc::new(Cell::new(false));
+    let (keep, seen) = (Rc::clone(&keeps), Rc::clone(&reached));
+    let mut show = move |ui: &mut Ui| {
+        seen.set(seen.get() || key_reached(ui.ctx(), Key::Tab));
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)));
+        fixture::host_button(ui, canvas, Rect::from_min_size(Pos2::new(220.0, 300.0), egui::vec2(80.0, 30.0)));
+        host_canvas(ui.ctx(), canvas, if keep.get() { KeyUse::CANVAS.with_keep(KeepKeys::Tab) } else { KeyUse::CANVAS });
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(340.0, 300.0), egui::vec2(80.0, 30.0)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let tab = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
+        reached.set(false);
+        frames.frame(vec![key_press(Key::Tab, Modifiers::NONE), key_release(Key::Tab, Modifiers::NONE)], &mut *show);
+        frames.frame(Vec::new(), &mut *show);
+        (egui_focused(&frames.ctx), reached.get())
+    };
+    assert_eq!(tab(&mut frames, &mut show), (Some(first), true), "Tab from nothing gives egui focus to the first widget in egui's order");
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "the next Tab reaches the canvas");
+    assert_eq!(tab(&mut frames, &mut show), (Some(last), true), "Tab from the canvas moves on through egui's order");
+    keeps.set(true);
+    request(&frames.ctx, FocusTarget::Id(canvas));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas));
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "a canvas that keeps Tab gets it from egui and keeps the focus");
+}
+
 #[trial]
 fn escape_ends_an_egui_drag_on_a_host_widget() {
     let area = named_id("host drag area");

@@ -277,10 +277,14 @@ pub(crate) fn is_canvas_member(ctx: &Context, rec: &StopRec) -> bool {
     })
 }
 
-/// Whether a Tab in `viewport` has nothing to leave and nowhere to go: egui held no focus at the end of its last pass
-/// and it registered no focus stop there. Read by the input hook, before the begin hook rotates the registrations.
-pub(crate) fn tab_from_nothing(ctx: &Context, viewport: ViewportId) -> bool {
-    with_viewport(ctx, viewport, |state| state.focus_now.is_none() && state.stops.is_empty())
+/// Whether a bare Tab in `viewport` is egui's own focus move: the window registered no framework stop in its last pass,
+/// only stops of the app's own egui widgets (`Stop::host`) if any, which egui's Tab order holds with the app's other
+/// widgets; and egui held no focus at the end of that pass, or held it on one of those stops. A framework move would
+/// reach the host stops alone. Read by the input hook, before the begin hook rotates the registrations.
+pub(crate) fn tab_is_egui_s(ctx: &Context, viewport: ViewportId) -> bool {
+    with_viewport(ctx, viewport, |state| {
+        state.stops.iter().all(|rec| rec.stop.host) && state.focus_now.is_none_or(|id| state.stops.iter().any(|rec| rec.stop.root == id))
+    })
 }
 
 /// How many stops the running pass has registered so far.
@@ -1004,8 +1008,8 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
         let (acts, announcements) = nav::begin(state, input);
         (acts, announcements, host_focus)
     });
-    // egui's direction moves focus from the widget it holds, an app's own, or from nothing with a Tab the key stage
-    // left to egui; never in a pass whose focus the framework moves.
+    // egui's direction moves focus from the widget it holds, an app's own, or with a Tab the key stage left to egui
+    // (from nothing or a host stop); never in a pass whose focus the framework moves.
     if !(host_focus || tab_to_egui) || !acts.is_empty() {
         egui_focus::clear_directional_focus(ctx);
     }
