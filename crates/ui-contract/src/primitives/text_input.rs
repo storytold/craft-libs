@@ -49,6 +49,9 @@ pub enum TabKey {
     Reports,
 }
 
+/// Whether a pasted text is whole ([`TextOptions::whole_paste`]).
+type WholePaste = dyn Fn(&str) -> bool;
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
@@ -119,6 +122,10 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// Set from the codec by `PartsCx::text`, never by hosts: a pasted text that this says is whole replaces all the
+    /// text instead of the selection. It gets the paste as copied; the codec trims it.
+    // PLAN: no `Send + Sync`: `Codec` and `PartsCx::text`'s codec are not `Send`.
+    pub whole_paste: Option<Arc<WholePaste>>,
     /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
     /// the line.
     pub submit_key: SubmitKey,
@@ -166,6 +173,7 @@ impl Default for TextOptions {
             unparsed: None,
             own_menu: false,
             holds_drafts: false,
+            whole_paste: None,
             submit_key: SubmitKey::CommandEnter,
         }
     }

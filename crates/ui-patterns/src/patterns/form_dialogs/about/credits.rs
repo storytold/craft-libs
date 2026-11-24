@@ -3,6 +3,7 @@
 
 use crate::runtime::env::Label;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 /// A link on the About tab.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,6 +88,8 @@ pub struct AboutInfo {
     pub links: Vec<AboutLink>,
     /// The faint last line naming what the application is built with.
     pub built_with: Label,
+    /// The application's mark, at the start of the About tab's header row.
+    pub icon: Option<Arc<egui::ColorImage>>,
 }
 
 impl AboutInfo {
@@ -101,6 +104,7 @@ impl AboutInfo {
             community: None,
             links: Vec::new(),
             built_with: Label::Empty,
+            icon: None,
         }
     }
 
@@ -136,6 +140,13 @@ impl AboutInfo {
     #[must_use]
     pub fn built_with(mut self, text: impl Into<Label>) -> Self {
         self.built_with = text.into();
+        self
+    }
+
+    /// The application's mark, shown at the start of the About tab's header row.
+    #[must_use]
+    pub fn icon(mut self, image: Arc<egui::ColorImage>) -> Self {
+        self.icon = Some(image);
         self
     }
 }

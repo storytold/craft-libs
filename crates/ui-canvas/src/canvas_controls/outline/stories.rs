@@ -61,3 +61,10 @@ fn dashed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let paths = paths();
     on_canvas(ui, |ui, at, _| SelectionOutline::dashed("Selected paths", &paths).show_at(ui, at))
 }
+
+#[story(SelectionOutline<'static>, covers = [Default], drive = Drive::Never)]
+fn key_outline(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let paths = paths();
+    let key = paths[0].clone();
+    on_canvas(ui, |ui, at, _| SelectionOutline::solid("Selected paths", &paths).key(&key).revision(1).show_at(ui, at))
+}

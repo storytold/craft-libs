@@ -1,6 +1,7 @@
 //! Presses on rows: select, activate, ask for a row's menu, and the parts an item opens menus from.
 
 use super::drag::SlowClick;
+use super::lead::PickBy;
 use super::{ItemsHooks, Placement, RowPress, SECTION};
 use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, RowPressed, SelectMode};
 use crate::contract::{Collection, Cx, ItemOpener};
@@ -108,8 +109,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
                     // carries all of it; the release as a click narrows it to the row. In a single selection that
-                    // allows an empty one, the release as a click empties it. A later click of a multi-click on a
-                    // held row keeps the selection the earlier click left (`keeps_pick`).
+                    // allows an empty one, the release as a click empties it. A plain press on a row outside the
+                    // selection picks it when it ends as a click, so a drag carries the row and leaves the selection
+                    // as it was. A later click of a multi-click on a held row keeps the selection the earlier click
+                    // left (`keeps_pick`).
                     let holds = match Self::select_mode(comp) {
                         SelectMode::Multi => true,
                         SelectMode::Single => props.allow_empty,
@@ -137,7 +140,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if again => {}
                         None if hold => self.drags.collapse = Some(key.clone()),
                         None if keep => {}
-                        None => self.pick(comp, at, mods.shift, mods.cmd),
+                        None if plain && !self.holds(at) => self.drags.pick = Some(key.clone()),
+                        None if primary => self.click_pick(comp, at, mods.shift, mods.cmd, mods),
+                        None => self.pick_by(comp, at, mods.shift, mods.cmd, PickBy::Pointer(mods)),
                     }
                     // A modified click on a pick kept beside the current item changes the pick only: the lead, which the
                     // host follows to the current item, stays.
@@ -167,7 +172,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && !matches!(Self::select_mode(comp), SelectMode::None)
                     && self.selection != C::Selection::default()
                 {
-                    self.change(SelectionChange::Clear);
+                    self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                 }
             }
         }
@@ -216,7 +221,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
-                    self.pick(comp, at, false, false);
+                    self.click_pick(comp, at, false, false, mods);
                 }
             } else if props.command_click && mods.cmd {
                 self.events.push(CollectionEvent::CommandClick { key: self.source.key(at), mods });
@@ -224,6 +229,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         match cx.core.press.phase {
             PressPhase::Release { click, start, pos, .. } => {
+                if let Some(key) = self.drags.pick.take()
+                    && click
+                    && let Some(at) = self.index_of(&key)
+                {
+                    self.click_pick(comp, at, false, false, mods_now);
+                }
                 if click
                     && props.menu_on_click
                     && start.button == craft_behavior::PointerButton::Primary
@@ -273,9 +284,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && let Some(at) = self.index_of(&key)
                 {
                     if Self::select_mode(comp) == SelectMode::Single {
-                        self.change(SelectionChange::Clear);
+                        self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                     } else {
-                        self.pick(comp, at, false, false);
+                        self.click_pick(comp, at, false, false, mods_now);
                     }
                 }
             }
@@ -283,6 +294,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             PressPhase::Cancel { .. } => {
                 self.drags.slow = None;
                 self.drags.collapse = None;
+                self.drags.pick = None;
                 self.drags.rename = None;
                 self.drags.activate = None;
                 self.drags.command = None;
@@ -316,7 +328,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let column = if Self::selects_cells(comp) { layout.column_at(local(pos), offset) } else { None };
                 match column {
                     Some(column) => self.cell_press(comp, layout, at, column, false, false),
-                    None => self.pick(comp, at, false, false),
+                    None => self.pick_by(comp, at, false, false, PickBy::Pointer(released.mods)),
                 }
             }
             self.move_lead(at, LeadSource::Pointer);

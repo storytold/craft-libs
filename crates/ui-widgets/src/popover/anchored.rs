@@ -2,7 +2,8 @@
 
 use crate::contract::overlay::{Anchor, Dismiss, OverlayFit};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, POPUP_PAD, Props as _, Role, SaveKey, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, POPUP_PAD, Pad, Props as _, Role, SaveKey,
+    Trigger,
 };
 use crate::runtime::env::Label;
 use crate::runtime::focus::{FocusPolicy, Initial};
@@ -85,6 +86,15 @@ impl<'a> Popover<'a> {
     pub fn new(label: impl Into<Label>, open: Bind<'a, bool>) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(Overlay::popover()));
         Popover { common: Common::new(), props, open, closed: None }.label(label)
+    }
+
+    /// The popover has no surface and no padding of its own: its content (a `Bar` with `surface(SurfaceKind::Floating)`)
+    /// is the one surface.
+    #[must_use]
+    pub fn content_surface(mut self) -> Self {
+        self.props.surface = None;
+        self.props.pad = Pad::None;
+        self
     }
 
     /// Changes the layer the popover shows in, for the settings without a setter of their own: the size a

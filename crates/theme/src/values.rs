@@ -168,6 +168,19 @@ pub(super) fn panel_step(mode: Mode) -> usize {
     }
 }
 
+/// Whether `token`'s default in `mode` comes from the accent ramp, directly or through the tokens it derives from (the
+/// text on an accent fill, a faded accent).
+pub(super) fn follows_accent(token: ColorToken, mode: Mode) -> bool {
+    match source(token, mode) {
+        ColorSource::Accent(_) | ColorSource::AccentMix { .. } => true,
+        ColorSource::Same(other) | ColorSource::Faded(other, _) | ColorSource::SolidFrom(other) | ColorSource::ShiftedFrom { base: other, .. } => {
+            follows_accent(other, mode)
+        }
+        ColorSource::OnSolid(solids) => solids.iter().any(|&solid| follows_accent(solid, mode)),
+        _ => false,
+    }
+}
+
 /// The default source of `token` in `mode`.
 pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
     use ColorSource::{

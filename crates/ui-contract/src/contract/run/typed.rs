@@ -214,6 +214,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.theme_scope(self.comp.get_ref())
     }
 
+    fn fit_rank(&self) -> Option<u8> {
+        self.hooks.fit_rank(self.comp.get_ref())
+    }
+
     fn memory_owner(&self) -> Option<Id> {
         self.hooks.memory_owner(self.comp.get_ref())
     }
@@ -374,6 +378,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
 
     fn value_flags(&self) -> Flags {
         steps::value_flags(self.comp, self.cx)
+    }
+
+    fn shown_bool(&self) -> Option<bool> {
+        steps::shown_bool(self.cx)
     }
 
     fn content_env(&self, values: &mut AppValues) {
@@ -577,7 +585,7 @@ pub(crate) fn show_container<C: Container, R>(
         inner = Some(body(ui, cx));
     };
     let mut hooks = crate::contract::body::BodyHooks::of(held(slot), &mut call);
-    let mut typed = Typed::owned(slot, &mut hooks);
+    let mut typed = Typed::owned(slot, &mut *hooks);
     super::run(&mut typed, ui, at, tip);
     let output = typed.output();
     let id = crate::contract::Outcome::response(&output).id;
@@ -665,7 +673,7 @@ pub(crate) fn measure_container<C: Container, R>(
         body(ui, cx);
     };
     let mut hooks = crate::contract::body::BodyHooks::of(comp, &mut call);
-    measure_shape(comp, ui, None, proposal, None, &mut hooks, super::MeasureFor::Component)
+    measure_shape(comp, ui, None, proposal, None, &mut *hooks, super::MeasureFor::Component)
 }
 
 /// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the
