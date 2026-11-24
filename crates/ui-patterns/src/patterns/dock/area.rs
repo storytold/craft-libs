@@ -20,10 +20,10 @@ use crate::docking::{
 };
 use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
+use crate::primitives::HostStyle;
 use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
 use crate::runtime::derived::derived;
 use crate::runtime::drag;
-use crate::runtime::egui::style::HostStyle;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
@@ -350,11 +350,7 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
         if !self.specs.get(panel).is_some_and(|spec| spec.host_body) {
             return run(ui);
         }
-        let own = HostStyle::of(ui);
-        self.host_style.apply(ui);
-        let shown = run(ui);
-        own.apply(ui);
-        shown
+        self.host_style.run(ui, run)
     }
 
     fn spec(&self, panel: &P) -> PanelSpec {

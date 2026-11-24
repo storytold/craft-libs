@@ -29,9 +29,12 @@ impl PanelSpecs<usize> for Specs {
 /// The app's panel fill, which no theme surface has.
 const APP_FILL: Color32 = Color32::from_rgb(3, 140, 7);
 
-/// Records the item spacing and the room each body's `Ui` has, by panel.
+/// What a body's `Ui` had: its item spacing and its room.
+type Seen = Option<(Vec2, Rect)>;
+
+/// Records what each body's `Ui` had, by panel.
 struct Panels {
-    seen: Rc<RefCell<[Option<(Vec2, Rect)>; 2]>>,
+    seen: Rc<RefCell<[Seen; 2]>>,
 }
 
 impl DockPanels<usize> for Panels {

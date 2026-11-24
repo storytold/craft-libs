@@ -9,6 +9,7 @@ mod focus_ring;
 #[doc(hidden)]
 pub mod glyph;
 mod handle;
+mod host;
 mod icon;
 mod ime_surface;
 mod kit;
@@ -38,6 +39,7 @@ pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor
 pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};
+pub use host::HostStyle;
 pub(crate) use icon::SvgIcon;
 pub use icon::{Glyph, IconMark, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
 pub use ime_surface::ImeSurface;

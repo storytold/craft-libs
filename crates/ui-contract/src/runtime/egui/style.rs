@@ -65,26 +65,13 @@ pub(crate) fn set_item_spacing(ui: &mut Ui, gap: egui::Vec2) {
     ui.spacing_mut().item_spacing = gap;
 }
 
-/// The egui style of an app's own `Ui`, kept where a framework part takes the app's egui code into a `Ui` of its own:
-/// the framework's regions set their layout spacing on the `Ui`s they hand out, and app code shown in one (a dock
-/// panel's body that the app draws with egui) lays out as it would outside the part when the part applies this.
-#[derive(Clone, Debug)]
-pub struct HostStyle(Arc<egui::Style>);
+/// The egui style `ui` has now, for a framework part that shows an app's own egui code in a `Ui` of its own
+/// (`primitives::HostStyle`).
+pub(crate) fn style_of(ui: &Ui) -> Arc<egui::Style> {
+    Arc::clone(ui.style())
+}
 
-impl HostStyle {
-    /// The style `ui` has now.
-    pub fn of(ui: &Ui) -> Self {
-        HostStyle(Arc::clone(ui.style()))
-    }
-
-    /// Gives `ui` the kept style.
-    pub fn apply(&self, ui: &mut Ui) {
-        ui.set_style(Arc::clone(&self.0));
-    }
-
-    /// Fills `rect` on `ui` with the kept style's panel fill (`Visuals::panel_fill`), as an egui panel of the app paints
-    /// its background: the app's own code shown in a framework region keeps the background it has outside it.
-    pub fn paint_panel(&self, ui: &Ui, rect: egui::Rect) {
-        ui.painter().rect_filled(rect, 0.0, self.0.visuals.panel_fill);
-    }
+/// Gives `ui` the style `style`: an app's own egui style kept by `primitives::HostStyle`, or `ui`'s own back after it.
+pub(crate) fn set_style(ui: &mut Ui, style: &Arc<egui::Style>) {
+    ui.set_style(Arc::clone(style));
 }
