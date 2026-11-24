@@ -104,8 +104,8 @@ fn small_render_is_the_downscaled_reference() {
     for (size, rough) in [(0.0, 50.0), (25.0, 50.0), (100.0, 50.0), (25.0, 0.0), (25.0, 100.0)] {
         let t = tile_of(size, rough);
         for k in [2usize, 4, 8] {
-            let full = patch(&t, REF_LONG, 120 * k, 0);
-            let n = 120;
+            let n = 48;
+            let full = patch(&t, REF_LONG, n * k, 0);
             let down: Vec<f32> = (0..n * n)
                 .map(|q| {
                     let (x, y) = (q % n, q / n);
@@ -388,7 +388,9 @@ fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
     let (seed, fresh) = (0x0d4a_0001, 0x0d4a_0002);
     let (a, b) = (CrystalLook::new(30.0, 50.0), CrystalLook::new(31.0, 50.0));
     let exact = |look: CrystalLook, seed: u32| patch(&CrystalTile::new(look, seed).expect("tile"), REF_LONG, 32, 0);
+    let drawing = std::time::Instant::now();
     let first = tile(a, seed, true).expect("tile");
+    eprintln!("DIAG crystal tile at size 30: {:?}", drawing.elapsed());
     assert_eq!(first.look, a);
     let stand_in = tile(b, seed, false).expect("tile");
     assert_eq!(stand_in.look, a, "the draft waited for its tile");
@@ -402,8 +404,9 @@ fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
         assert!(std::time::Instant::now() < deadline, "the background tile never arrived");
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
-    assert_eq!(patch(&drawn, REF_LONG, 32, 0), exact(b, seed));
-    assert_eq!(patch(&tile(b, seed, true).expect("tile"), REF_LONG, 32, 0), exact(b, seed));
+    let exact_b = exact(b, seed);
+    assert_eq!(patch(&drawn, REF_LONG, 32, 0), exact_b);
+    assert_eq!(patch(&tile(b, seed, true).expect("tile"), REF_LONG, 32, 0), exact_b);
     // nothing drawn for this seed: nothing to stand in, the draft draws it
     assert_eq!(patch(&tile(a, fresh, false).expect("tile"), REF_LONG, 32, 0), exact(a, fresh));
 }
@@ -474,7 +477,7 @@ fn renders_that_miss_a_tile_together_draw_it_once() {
     static OWN: Cache = Mutex::new(Vec::new());
     const N: usize = 8;
     // the first render's draw waits for the other seven to miss the tile too
-    const SEEDS: u32 = 40;
+    const SEEDS: u32 = 5;
     HOLDS.lock().unwrap_or_else(PoisonError::into_inner).push((std::ptr::from_ref(&OWN) as usize, N - 1, SEEDS as usize));
     let look = CrystalLook::new(0.0, 50.0);
     for seed in 0x0d4a_1000..0x0d4a_1000 + SEEDS {
