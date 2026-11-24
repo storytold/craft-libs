@@ -733,7 +733,7 @@ dependencies = [
  "arrayvec",
  "cc",
  "cfg-if",
- "constant_time_eq",
+ "constant_time_eq 0.4.2",
  "cpufeatures 0.3.1",
 ]
 
@@ -1399,6 +1399,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1799,7 +1808,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -1908,7 +1917,7 @@ dependencies = [
  "craft-zip",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -1932,7 +1941,7 @@ dependencies = [
  "thiserror 2.0.21",
  "unicode-bidi",
  "zeroize",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2008,7 +2017,7 @@ dependencies = [
  "craft-xml",
  "craft-zip",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2071,7 +2080,7 @@ dependencies = [
  "ruzstd",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2082,7 +2091,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2397,7 +2406,7 @@ dependencies = [
  "craft-xml",
  "craft-zip",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2543,7 +2552,7 @@ dependencies = [
  "craft-xml",
  "craft-zip",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2763,7 +2772,7 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "zeroize",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2800,7 +2809,7 @@ dependencies = [
  "craft-zip",
  "log",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2825,7 +2834,7 @@ dependencies = [
  "craft-xml",
  "craft-zip",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -2933,7 +2942,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -3290,7 +3299,7 @@ dependencies = [
  "kurbo 0.13.1",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -3566,7 +3575,7 @@ dependencies = [
  "verifysign",
  "winreg",
  "winsafe",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -3791,7 +3800,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "zip 9.1.3",
+ "zip 9.8.2",
 ]
 
 [[package]]
@@ -13571,18 +13580,21 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.1.3"
+version = "9.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
+checksum = "2d8dbe089cf6b0448b78f5fc50139ab5aaa40d08ac07cdc1baf2c13add35fcce"
 dependencies = [
+ "constant_time_eq 0.6.1",
  "crc32fast",
  "flate2",
  "getrandom 0.4.3",
  "indexmap",
+ "libc",
  "memchr",
  "nix",
  "typed-path 0.13.0",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
