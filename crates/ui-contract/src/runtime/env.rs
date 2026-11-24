@@ -419,8 +419,15 @@ impl Scoped {
 
     /// Starts a layer from its opener's scope: the inherited group stays, the layer-local fields start fresh, and the
     /// layer is no line of a bar it was opened from. A layer's content measures and runs in this.
+    ///
+    /// The layer is outside its opener's flow: an inside label and a filling cell belong to the beside label's own
+    /// control, and the opener's least measure is not the layer's. A tooltip of a control in an inspector cell keeps
+    /// its text width, not the layer's cap.
     pub(crate) fn start_layer(&mut self) {
         self.start_room();
+        self.inside_label = None;
+        self.cell_fills = false;
+        self.least = false;
         self.bracket = None;
         self.measure = None;
         self.arena = None;
