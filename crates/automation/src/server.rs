@@ -1,7 +1,7 @@
 //! The loopback JSON-lines TCP transport: one request per line, one reply per line.
 
-use std::io::{BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{BufReader, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -89,6 +89,7 @@ pub fn serve_with_deadline(
             let Some(permit) = limiter.try_acquire() else {
                 let _ = configure_stream(&stream);
                 let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
+                close_after_reply(&stream);
                 continue;
             };
             let tx = tx.clone();
@@ -177,6 +178,29 @@ fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>,
         };
         if write_reply(&mut out, &reply).is_err() || out.flush().is_err() {
             break;
+        }
+    }
+    close_after_reply(&out);
+}
+
+/// How long a closing connection's leftover input is read and dropped ([`close_after_reply`]).
+const CLOSE_LINGER: Duration = Duration::from_millis(250);
+
+/// Closes `stream` after its last reply without resetting it: the write side ends first, so the client reads the
+/// reply and then the end of the stream, and what the client still sends is read and dropped until it closes too, for
+/// at most [`CLOSE_LINGER`]. A socket closed with input unread is reset instead, and the client loses the reply
+/// (Linux) or reads the reset where the end of the stream should be (Windows).
+fn close_after_reply(mut stream: &TcpStream) {
+    let _ = stream.shutdown(Shutdown::Write);
+    let deadline = motion::now() + CLOSE_LINGER;
+    let mut sink = [0; 1024];
+    loop {
+        let left = deadline.saturating_duration_since(motion::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return;
+        }
+        if matches!(stream.read(&mut sink), Ok(0) | Err(_)) {
+            return;
         }
     }
 }

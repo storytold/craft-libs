@@ -44,7 +44,7 @@ pub use raster_source::{PixelRect, RasterSource};
 
 pub(crate) mod pasteboard;
 pub(crate) mod split;
-pub use pasteboard::{PageBorder, PageFill, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
+pub use pasteboard::{ArtboardEdge, PageBorder, PageFill, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
 pub use split::{PanePress, SplitAt, SplitLayout, SplitPane, SplitPaneAt, SplitStyle, SplitViews, SplitViewsOutput, TabDrop, TabDropTarget};
 pub use words::SplitWords;
 

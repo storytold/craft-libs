@@ -57,6 +57,7 @@ pub(crate) struct EnvFacts {
     given_column: bool,
     unbounded: (bool, bool),
     row_room: Option<f32>,
+    rank_short: Option<f32>,
     row_line: Option<crate::runtime::env::RowLine>,
     offered: Option<f32>,
     measure: Option<f32>,
@@ -77,6 +78,7 @@ impl EnvFacts {
             given_column: env.given_column,
             unbounded: env.unbounded,
             row_room: env.row_room,
+            rank_short: env.rank_short,
             row_line: env.row_line,
             offered: env.offered,
             measure: env.measure,
@@ -269,7 +271,7 @@ impl<'b> BodyHooks<'b> {
         } else {
             ((line.x + gap(end.x, end_gap)).max(across.x), line.y.max(end.y) + across.y)
         };
-        let above = self.rules.above;
+        let above = self.rules.above_band();
         if inline {
             Vec2::new(width, height + above)
         } else {

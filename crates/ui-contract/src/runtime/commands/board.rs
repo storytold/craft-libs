@@ -1731,10 +1731,11 @@ fn queue(ctx: &Context, fired: Fired) {
             observed.push(fired.command.clone());
         }
     });
-    // A command whose key the focused component claims reaches it as that key, as the key's press does; an edit command
-    // goes to the focused component that lists it; otherwise it goes to the instance that declared it or, with none,
-    // stays an app command.
-    if fired.phase != FirePhase::Release {
+    // A command run from a menu or the palette whose key the focused component claims reaches it as that key, as the
+    // key's press does (a button's is the button's command, even while a canvas gesture claims every key); an edit
+    // command goes to the focused component that lists it; otherwise it goes to the instance that declared it or, with
+    // none, stays an app command.
+    if fired.phase != FirePhase::Release && matches!(fired.source, FireSource::Menu | FireSource::Palette) {
         let chords: Vec<Chord> =
             bindings(ctx, &fired.command).into_iter().filter(|binding| !binding.trigger.is_double()).map(|binding| binding.trigger.chord).collect();
         if keys::fire_claimed(ctx, &chords) {

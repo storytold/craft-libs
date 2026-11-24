@@ -491,7 +491,6 @@ fn name_taken(e: &io::Error, tmp: &Path) -> bool {
 /// The Windows attributes a replaced file passes on to its stage: hidden and system, the two that
 /// say who should see the file. A read-only file is never replaced, the archive bit is the
 /// system's to set on a changed file, and the others describe how the volume stores it.
-
 #[cfg(windows)]
 const KEPT_ATTRIBUTES: u32 = 0x2 | 0x4;
 
@@ -549,8 +548,12 @@ const MAX_XATTR_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 /// binding, quarantine, resource forks) to the stage. The attributes are as untrusted as the
 /// bytes, so the reads are bounded; one that cannot be read or written whole, or passes a bound,
 /// refuses the save rather than dropping the user's metadata unnoticed. Only a volume without
-/// extended attributes (`ENOTSUP`) is skipped. `com.apple.provenance` belongs to macOS, which
-/// gives the new file its own. Compression bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
+/// extended attributes (`ENOTSUP`) is skipped. So is a file whose data the user may not read when
+/// its attribute names can't be listed either, as with mode 0200: its attributes are dropped, as
+/// before attributes were kept, since the user can't read them (or its bytes) at all. One whose
+/// data is denied but whose names can be listed (an ACL that denies reading) refuses the save.
+/// `com.apple.provenance` belongs to macOS, which gives the new file its own. Compression
+/// bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
 #[cfg(target_os = "macos")]
 fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
@@ -561,6 +564,7 @@ fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     let source = match open(target, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK, Mode::empty()) {
         Ok(fd) => File::from(fd),
         Err(Errno::NOENT | Errno::LOOP) => return Ok(()),
+        Err(Errno::ACCESS) => return unreadable_has_no_attributes(target),
         Err(e) => return Err(e.into()),
     };
     if !source.metadata()?.is_file() {
@@ -594,6 +598,27 @@ fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
         total = total.saturating_add(value.len());
     }
     Ok(())
+}
+
+/// For a target whose data can't be opened for reading: `Ok` when the user can list no extended
+/// attribute names on it (none, only `com.apple.provenance`, none supported, or listing is denied too,
+/// as for mode 0200, whose attributes are then dropped); otherwise refuse the save, as the attributes
+/// can't be copied without opening the file. The names are read without following a link, by path.
+#[cfg(target_os = "macos")]
+fn unreadable_has_no_attributes(target: &Path) -> io::Result<()> {
+    use rustix::fs::llistxattr;
+    use rustix::io::Errno;
+    let mut names = vec![0u8; MAX_XATTR_NAMES_BYTES];
+    match llistxattr(target, names.as_mut_slice()) {
+        Ok(0) | Err(Errno::NOTSUP | Errno::ACCESS | Errno::NOENT) => Ok(()),
+        Ok(len) if names.get(..len).is_some_and(|names| names.split(|b| *b == 0).all(|name| name.is_empty() || name == b"com.apple.provenance")) => {
+            Ok(())
+        }
+        Ok(_) | Err(Errno::RANGE) => {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file can't be read, so its extended attributes can't be copied"))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Read one attribute value of `size` bytes (already within the bounds) with `read`, then ask
