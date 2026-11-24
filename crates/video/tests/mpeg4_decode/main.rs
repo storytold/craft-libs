@@ -169,6 +169,51 @@ fn memory_budget_refuses_oversized_vol() {
 }
 
 #[test]
+fn lowering_the_budget_applies_to_the_active_layer() {
+    let mut dec = Decoder::new();
+    let vol_stream = [
+        0x00, 0x00, 0x01, 0xB0, 0x03, // VOS
+        0x00, 0x00, 0x01, 0x20, // VOL
+        0x00, 0x84, 0x40, 0xFA, 0x28, 0x50, 0x21, 0xE0, 0xA2, 0x1F,
+    ];
+    dec.decode(&vol_stream, 0).expect("layer fits the default budget");
+    dec.set_memory_budget(1024);
+    let err = dec.decode(&[0, 0, 1, 0xB6, 0x00, 0x00, 0x00, 0x00], 1).expect_err("budget now too small");
+    assert!(err.to_string().contains("memory budget"), "{err}");
+}
+
+/// Encode `frames` test frames with ffmpeg (`-bf 2`, so the last anchor is held for reordering).
+fn encode_with_bframes(name: &str, w: u32, h: u32, frames: usize) -> Option<Vec<u8>> {
+    let ff = craft_media_testkit::ffmpeg_or_skip("mpeg4 layer change")?;
+    let dir = craft_media_testkit::private_dir(&format!("mpeg4dec-{name}"));
+    let path = dir.join("stream.m4v");
+    let out = Command::new(&ff)
+        .args(["-hide_banner", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg(format!("testsrc2=size={w}x{h}:rate=25"))
+        .args(["-frames:v", &frames.to_string(), "-pix_fmt", "yuv420p", "-c:v", "mpeg4", "-bf", "2", "-f", "m4v"])
+        .arg(&path)
+        .output()
+        .expect("run ffmpeg encode");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let data = std::fs::read(&path).expect("read stream");
+    let _ = std::fs::remove_dir_all(&dir);
+    Some(data)
+}
+
+#[test]
+fn a_new_layer_size_does_not_drop_the_delayed_picture() {
+    let (Some(first), Some(second)) = (encode_with_bframes("layer-a", 176, 144, 5), encode_with_bframes("layer-b", 160, 128, 4)) else { return };
+    let mut dec = Decoder::new();
+    let mut pics = dec.decode(&first, 0).expect("first stream");
+    pics.extend(dec.decode(&second, 1).expect("second stream"));
+    pics.extend(dec.flush());
+    assert_eq!(pics.len(), 9, "every coded picture comes out exactly once");
+    let (a, b) = pics.split_at(5);
+    assert!(a.iter().all(|p| (p.width, p.height) == (176, 144)), "pictures keep their own size");
+    assert!(b.iter().all(|p| (p.width, p.height) == (160, 128)));
+}
+
+#[test]
 fn track_decoder_rejects_picture_in_extradata() {
     let params = CodecParams::new(CodecId::Mpeg4Video).with_extradata(vec![0, 0, 1, 0xB6, 0, 0]);
     assert!(matches!(TrackDecoder::new(&params), Err(VideoError::Malformed(_))));

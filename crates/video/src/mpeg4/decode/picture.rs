@@ -123,13 +123,20 @@ impl DcAcStore {
     }
 
     /// Return `(dc_pred_quantised, predict_from_top, neighbor_pred)` for intra block `b` at `(mx, my)`.
-    fn predict(&mut self, b: usize, mx: usize, my: usize, scaler: i32, slice_id: usize) -> (i32, bool, BlockPred) {
+    ///
+    /// With `field_dct`, the lower two luma blocks hold the bottom field, so their upper and
+    /// diagonal neighbours are the bottom-field blocks of the macroblock above (§7.6.1), while
+    /// the left neighbour stays in the lower block row of the macroblock to the left.
+    fn predict(&mut self, b: usize, mb: (usize, usize), field_dct: bool, scaler: i32, slice_id: usize) -> (i32, bool, BlockPred) {
+        let (mx, my) = mb;
         let (g, w, bx, by) = self.grid_and_pos(b, mx, my);
+        let upper_row = if field_dct && (b == 2 || b == 3) { 2 * my } else { by };
         let get = |dx: bool, dy: bool| -> BlockPred {
-            if (dx && bx == 0) || (dy && by == 0) {
+            if (dx && bx == 0) || (dy && upper_row == 0) {
                 return BlockPred::default();
             }
-            let p = g[(by - usize::from(dy)) * w + (bx - usize::from(dx))];
+            let row = if dy { upper_row - 1 } else { by };
+            let p = g[row * w + (bx - usize::from(dx))];
             if p.slice_id == slice_id { p } else { BlockPred::default() }
         };
         let a = get(true, false);
@@ -151,7 +158,7 @@ impl DcAcStore {
 }
 
 /// Inverse-quantise an intra 8×8 block into `deq` (ISO/IEC 14496-2 §7.4.2).
-fn dequant_intra(levels: &[i32; 64], qp: i32, scaler: i32, vol: &VolConfig, deq: &mut [i32; 64]) {
+pub(super) fn dequant_intra(levels: &[i32; 64], qp: i32, scaler: i32, vol: &VolConfig, deq: &mut [i32; 64]) {
     deq[0] = (levels[0] * scaler).clamp(-2048, 2047);
     if !vol.quant_type {
         let odd_sub = if qp & 1 == 0 { 1 } else { 0 };
@@ -171,8 +178,8 @@ fn dequant_intra(levels: &[i32; 64], qp: i32, scaler: i32, vol: &VolConfig, deq:
                 deq[k] = 0;
             } else {
                 let w = i32::from(vol.intra_quant_mat[k]);
-                let mag = (2 * lv.abs() * w * qp) >> 4;
-                deq[k] = (if lv < 0 { -mag } else { mag }).clamp(-2048, 2047);
+                let mag = (2 * i64::from(lv.unsigned_abs()) * i64::from(w) * i64::from(qp)) >> 4;
+                deq[k] = (if lv < 0 { -mag } else { mag }).clamp(-2048, 2047) as i32;
             }
         }
         let sum: i32 = deq.iter().sum();
@@ -202,8 +209,8 @@ fn dequant_inter(levels: &[i32; 64], qp: i32, vol: &VolConfig, deq: &mut [i32; 6
                 deq[k] = 0;
             } else {
                 let w = i32::from(vol.nonintra_quant_mat[k]);
-                let mag = ((2 * lv.abs() + 1) * w * qp) >> 4;
-                deq[k] = (if lv < 0 { -mag } else { mag }).clamp(-2048, 2047);
+                let mag = ((2 * i64::from(lv.unsigned_abs()) + 1) * i64::from(w) * i64::from(qp)) >> 4;
+                deq[k] = (if lv < 0 { -mag } else { mag }).clamp(-2048, 2047) as i32;
             }
         }
         let sum: i32 = deq.iter().sum();
@@ -318,6 +325,8 @@ struct VopCtx<'a> {
     mb_h: usize,
     qp: i32,
     slice_id: usize,
+    /// Quantiser of the previous coded macroblock, which selects the intra DC syntax (Table 6-12).
+    running_qp: i32,
     dc_store: DcAcStore,
     out: RefFrame,
 }
@@ -328,6 +337,7 @@ impl VopCtx<'_> {
             && let Some((_mb_num, new_q)) = try_read_video_packet_header(r, self.vol, self.vop)?
         {
             self.qp = i32::from(new_q);
+            self.running_qp = self.qp;
             self.slice_id += 1;
             return Ok(true);
         }
@@ -344,12 +354,13 @@ impl VopCtx<'_> {
     ) -> Result<(), DecodeError> {
         let (mx, my) = mb;
         let qp = self.qp;
-        let use_dc_vlc = qp < self.vop.intra_dc_vlc_thr_qp;
+        let use_dc_vlc = self.running_qp < self.vop.intra_dc_vlc_thr_qp;
+        self.running_qp = qp;
         for b in 0..6 {
             let luma = b < 4;
             let scaler = if self.vol.short_header { 8 } else { dc_scaler(qp, luma) };
             let (dc_pred, from_top, neighbor) =
-                if self.vol.short_header { (0, false, BlockPred::default()) } else { self.dc_store.predict(b, mx, my, scaler, self.slice_id) };
+                if self.vol.short_header { (0, false, BlockPred::default()) } else { self.dc_store.predict(b, mb, field_dct, scaler, self.slice_id) };
 
             let mut levels = [0i32; 64];
             let dc_diff = if self.vol.short_header {
@@ -480,27 +491,30 @@ impl VopCtx<'_> {
     fn decode_ps_vop(&mut self, r: &mut BitReader<'_>, reference: Option<&RefFrame>) -> Result<(), DecodeError> {
         let total_mbs = self.mb_w * self.mb_h;
         let is_svop = self.vop.coding_type == VopType::S;
-        for idx in 0..total_mbs {
+        'mb: for idx in 0..total_mbs {
             self.check_resync(r, idx)?;
             let (mx, my) = (idx % self.mb_w, idx / self.mb_w);
-            if r.read_bit()? {
-                let gmc_used = is_svop && r.read_bit()?;
-                self.dc_store.set_non_intra(mx, my, self.slice_id);
-                let mv = if gmc_used { self.vop.gmc_mv } else { (0, 0) };
-                self.out.mbs[idx] = MbMeta { not_coded: !gmc_used, intra: false, mvs: [mv; 4], slice_id: self.slice_id };
-                if let Some(ref_frame) = reference {
-                    if mv == (0, 0) {
-                        copy_macroblock(ref_frame, &mut self.out, mx, my);
-                    } else {
-                        let mut pred = MbPred::default();
-                        predict_macroblock(ref_frame, self.vol, self.vop.rounding, (mx, my), false, &[mv; 4], &mut pred);
-                        self.decode_inter_residual(r, (mx, my), 0, false, &pred)?;
+            let (mb_type, cbpc) = loop {
+                if r.read_bit()? {
+                    let gmc_used = is_svop;
+                    self.dc_store.set_non_intra(mx, my, self.slice_id);
+                    let mv = if gmc_used { self.vop.gmc_mv } else { (0, 0) };
+                    self.out.mbs[idx] = MbMeta { not_coded: !gmc_used, intra: false, mvs: [mv; 4], slice_id: self.slice_id };
+                    if let Some(ref_frame) = reference {
+                        if mv == (0, 0) {
+                            copy_macroblock(ref_frame, &mut self.out, mx, my);
+                        } else {
+                            let mut pred = MbPred::default();
+                            predict_macroblock(ref_frame, self.vol, self.vop.rounding, (mx, my), false, &[mv; 4], &mut pred);
+                            self.decode_inter_residual(r, (mx, my), 0, false, &pred)?;
+                        }
                     }
+                    continue 'mb;
                 }
-                continue;
-            }
-
-            let (mb_type, cbpc) = read_mcbpc_inter(r)?;
+                if let Some(v) = read_mcbpc_inter(r)? {
+                    break v;
+                }
+            };
             let intra = mb_type >= 3;
             let mcsel = if is_svop && (mb_type == 0 || mb_type == 1) { r.read_bit()? } else { false };
             let ac_pred_flag = if intra && !self.vol.short_header { r.read_bit()? } else { false };
@@ -526,6 +540,7 @@ impl VopCtx<'_> {
                 continue;
             }
 
+            self.running_qp = self.qp;
             self.dc_store.set_non_intra(mx, my, self.slice_id);
             self.out.mbs[idx].not_coded = false;
             self.out.mbs[idx].intra = false;
@@ -629,7 +644,7 @@ impl VopCtx<'_> {
                         mvs_f[b] = (fx, fy);
                         mvs_b[b] = (bx, by);
                     }
-                    let is_4mv = mvs_f[0] != mvs_f[1] || mvs_f[0] != mvs_f[2] || mvs_f[0] != mvs_f[3];
+                    let is_4mv = mvs_f.iter().any(|m| *m != mvs_f[0]) || mvs_b.iter().any(|m| *m != mvs_b[0]);
                     let mut fwd_p = MbPred::default();
                     let mut bwd_p = MbPred::default();
                     predict_macroblock(fwd_ref, self.vol, false, (mx, my), is_4mv, &mvs_f, &mut fwd_p);
@@ -700,7 +715,7 @@ pub(super) fn decode_vop(
     }
 
     let qp = i32::from(vop.quant);
-    let mut ctx = VopCtx { vol, vop, mb_w, mb_h, qp, slice_id: 0, dc_store: DcAcStore::new(mb_w, mb_h), out };
+    let mut ctx = VopCtx { vol, vop, mb_w, mb_h, qp, slice_id: 0, running_qp: qp, dc_store: DcAcStore::new(mb_w, mb_h), out };
 
     match ctx.vop.coding_type {
         VopType::I => ctx.decode_i_vop(r)?,

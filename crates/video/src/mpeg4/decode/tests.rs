@@ -2,12 +2,13 @@
 
 use craft_media::bitstream::{BitReader, BitWriter};
 
+use super::headers::{GmcConfig, VolConfig};
 use super::headers::{
     VopType, intra_dc_threshold_qp, is_packed_userdata, parse_visual_object, parse_vol, parse_vop_header, scan_start_codes,
     try_parse_short_video_header,
 };
 use super::mc::{MbMeta, Plane, chroma_mv_1mv, chroma_mv_4mv, mv_predictor, predict_qpel};
-use super::picture::{dc_scaler, idct};
+use super::picture::{dc_scaler, dequant_intra, idct};
 use super::vlc::{
     ALT_HORIZONTAL_SCAN, ALT_VERTICAL_SCAN, BMbType, CBPY, DC_SIZE_CHROMA, DC_SIZE_LUMA, ESCAPE, MCBPC_INTER, MCBPC_INTRA, MVD_TABLE, ZIGZAG,
     inter_tcoef, intra_tcoef, read_b_mb_type, read_cbpy, read_dc_diff, read_mcbpc_inter, read_mcbpc_intra, read_mv_component,
@@ -51,7 +52,8 @@ fn mcbpc_and_cbpy_vlc_roundtrip_with_stuffing() {
         w.write_bits(u32::from(code), u32::from(len));
         let bytes = w.finish();
         let mut r = BitReader::new(&bytes);
-        let (mb_type, cbpc) = read_mcbpc_inter(&mut r).expect("decode inter mcbpc");
+        assert_eq!(read_mcbpc_inter(&mut r).expect("stuffing"), None, "stuffing hands control back to the macroblock header");
+        let (mb_type, cbpc) = read_mcbpc_inter(&mut r).expect("decode inter mcbpc").expect("not a stuffing code");
         assert_eq!((mb_type, cbpc), (idx as u8 / 4, idx as u8 % 4));
     }
 
@@ -203,4 +205,57 @@ fn hostile_and_malformed_inputs_return_errors_never_panic() {
     let _ =
         (dc_scaler(8, true), idct(&mut [0; 64]), scan_start_codes(&[0, 0, 1, 0xB0, 3]), parse_visual_object(&[0]), parse_vol(&[0]), parse_vop_header);
     let _ = DecodeError::Invalid("test".into());
+}
+
+fn plain_vol(interlaced: bool) -> VolConfig {
+    VolConfig {
+        width: 64,
+        height: 48,
+        sar: (1, 1),
+        time_increment_resolution: 30,
+        fixed_time_increment: None,
+        low_delay: true,
+        interlaced,
+        quant_type: true,
+        intra_quant_mat: [255; 64],
+        nonintra_quant_mat: [255; 64],
+        quarter_sample: false,
+        resync_marker_disable: false,
+        gmc: None::<GmcConfig>,
+        short_header: false,
+    }
+}
+
+#[test]
+fn matrix_dequantisation_of_extreme_levels_saturates() {
+    let vol = plain_vol(false);
+    let mut levels = [0i32; 64];
+    levels[1..].fill(i32::MAX / 4);
+    let mut deq = [0i32; 64];
+    dequant_intra(&levels, 31, 8, &vol, &mut deq);
+    assert!(deq[1..].iter().all(|&c| c == 2047));
+}
+
+#[test]
+fn intra_dc_threshold_precedes_the_interlace_flags() {
+    let vol = plain_vol(true);
+    let mut w = BitWriter::new();
+    w.write_bits(0, 2); // I-VOP
+    w.write_bit(false); // modulo_time_base end
+    w.write_bit(true); // marker
+    w.write_bits(3, 5); // vop_time_increment
+    w.write_bit(true); // marker
+    w.write_bit(true); // vop_coded
+    w.write_bits(0, 3); // intra_dc_vlc_thr: DC VLC for the whole VOP
+    w.write_bit(true); // top_field_first
+    w.write_bit(false); // alternate_vertical_scan
+    w.write_bits(5, 5); // vop_quant
+    w.write_bits(0, 16);
+    let bytes = w.finish();
+    let mut r = BitReader::new(&bytes);
+    let vop = parse_vop_header(&mut r, &vol).expect("header");
+    assert_eq!(vop.intra_dc_vlc_thr_qp, intra_dc_threshold_qp(0));
+    assert!(vop.top_field_first);
+    assert!(!vop.alternate_vertical_scan);
+    assert_eq!(vop.quant, 5);
 }

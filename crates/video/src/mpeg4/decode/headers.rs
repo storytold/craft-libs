@@ -297,7 +297,10 @@ pub(super) fn parse_vol(payload: &[u8]) -> Result<VolConfig, DecodeError> {
     };
 
     if r.read_bit()? {
-        let _quant_precision = r.read_bits(4)?;
+        let quant_precision = r.read_bits(4)?;
+        if quant_precision != 5 {
+            return Err(DecodeError::Unsupported(format!("{quant_precision}-bit quantiser precision")));
+        }
         let bits_per_pixel = r.read_bits(4)?;
         if bits_per_pixel != 8 {
             return Err(DecodeError::Unsupported(format!("{bits_per_pixel}-bit sample depth")));
@@ -441,30 +444,15 @@ pub(super) fn parse_vop_header(r: &mut BitReader<'_>, vol: &VolConfig) -> Result
 
     let rounding = if coding_type == VopType::P || coding_type == VopType::S { r.read_bit()? } else { false };
 
-    let mut gmc_mv = (0, 0);
-    if coding_type == VopType::S {
-        let Some(gmc) = vol.gmc else {
-            return Err(DecodeError::Invalid("S-VOP without GMC enabled in VOL".into()));
-        };
-        if gmc.warping_points > 1 {
-            return Err(DecodeError::Unsupported(format!("S(GMC) VOP with {} warping points", gmc.warping_points)));
-        }
-        if gmc.warping_points == 1 {
-            let dx = read_gmc_duv(r)?;
-            let dy = read_gmc_duv(r)?;
-            let _ = r.read_bit()?; // marker_bit
-            // Convert from accuracy (0 = 1/2, 1 = 1/4, 2 = 1/8, 3 = 1/16) to half-pel (or qpel if quarter_sample)
-            let target_shift = if vol.quarter_sample { 1u8 } else { 0u8 };
-            let shift = gmc.warping_accuracy.saturating_sub(target_shift);
-            let up = target_shift.saturating_sub(gmc.warping_accuracy);
-            gmc_mv = ((dx << up) >> shift, (dy << up) >> shift);
-        }
-    }
+    let thr_code = r.read_bits(3)? as u8;
+    let intra_dc_vlc_thr_qp = intra_dc_threshold_qp(thr_code);
 
     let (top_field_first, alternate_vertical_scan) = if vol.interlaced { (r.read_bit()?, r.read_bit()?) } else { (false, false) };
 
-    let thr_code = r.read_bits(3)? as u8;
-    let intra_dc_vlc_thr_qp = intra_dc_threshold_qp(thr_code);
+    let mut gmc_mv = (0, 0);
+    if coding_type == VopType::S {
+        gmc_mv = read_gmc_trajectory(r, vol)?;
+    }
 
     let quant = r.read_bits(5)? as u8;
     if quant == 0 {
@@ -505,6 +493,28 @@ pub(super) fn parse_vop_header(r: &mut BitReader<'_>, vol: &VolConfig) -> Result
         fcode_backward,
         gmc_mv,
     })
+}
+
+/// Read the `sprite_trajectory` of an S(GMC) VOP (or of a video packet header extension) and
+/// convert it to the vector unit of the VOL. Zero warping points carry no trajectory.
+fn read_gmc_trajectory(r: &mut BitReader<'_>, vol: &VolConfig) -> Result<(i32, i32), DecodeError> {
+    let Some(gmc) = vol.gmc else {
+        return Err(DecodeError::Invalid("S-VOP without GMC enabled in VOL".into()));
+    };
+    match gmc.warping_points {
+        0 => Ok((0, 0)),
+        1 => {
+            let dx = read_gmc_duv(r)?;
+            let dy = read_gmc_duv(r)?;
+            let _ = r.read_bit()?; // marker_bit
+            // Convert from accuracy (0 = 1/2, 1 = 1/4, 2 = 1/8, 3 = 1/16) to half-pel (or qpel if quarter_sample)
+            let target_shift = if vol.quarter_sample { 1u8 } else { 0u8 };
+            let shift = gmc.warping_accuracy.saturating_sub(target_shift);
+            let up = target_shift.saturating_sub(gmc.warping_accuracy);
+            Ok(((dx << up) >> shift, (dy << up) >> shift))
+        }
+        n => Err(DecodeError::Unsupported(format!("S(GMC) VOP with {n} warping points"))),
+    }
 }
 
 /// Check if the bitstream begins with an ITU-T H.263 short video header (`0000 0000 0000 0000 1000 00`, §6.2.5.2)
@@ -592,7 +602,16 @@ pub(super) fn try_read_video_packet_header(r: &mut BitReader<'_>, vol: &VolConfi
     }
     if vol.short_header {
         // H.263 GOB header: 17-bit resync marker `0000 0000 0000 0000 1`
-        if r.bits_left() >= 17 + 12 && r.peek(17) == 1 {
+        // `GSTUF` zero bits may pad the previous GOB to a byte boundary before the marker.
+        let mut trial = r.clone();
+        if trial.bits_left() >= 17 + 12 && trial.peek(17) != 1 {
+            let rem = (8 - (trial.position() % 8)) % 8;
+            if rem > 0 && trial.read_bits(rem as u32)? != 0 {
+                return Ok(None);
+            }
+        }
+        if trial.bits_left() >= 17 + 12 && trial.peek(17) == 1 {
+            *r = trial;
             let _ = r.skip(17);
             let gob_num = r.read_bits(5)? as usize;
             let _gfid = r.read_bits(2)?;
@@ -657,6 +676,9 @@ pub(super) fn try_read_video_packet_header(r: &mut BitReader<'_>, vol: &VolConfi
         let _vop_type = trial.read_bits(2)?;
         let thr = trial.read_bits(3)? as u8;
         vop.intra_dc_vlc_thr_qp = intra_dc_threshold_qp(thr);
+        if vop.coding_type == VopType::S {
+            vop.gmc_mv = read_gmc_trajectory(&mut trial, vol)?;
+        }
         if vop.coding_type != VopType::I {
             let f = trial.read_bits(3)? as u8;
             if f > 0 {

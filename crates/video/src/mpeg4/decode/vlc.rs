@@ -385,18 +385,16 @@ pub(super) fn read_mcbpc_intra(r: &mut BitReader<'_>) -> Result<(u8, u8), Decode
     Err(DecodeError::Invalid("excessive mcbpc stuffing".into()))
 }
 
-/// Read `mcbpc` in a P-VOP (Table B-7), skipping any preceding stuffing codes (`0000 0000 1`).
-/// Returns `(mb_type, cbpc)` where `mb_type` is 0..=4.
-pub(super) fn read_mcbpc_inter(r: &mut BitReader<'_>) -> Result<(u8, u8), DecodeError> {
-    for _ in 0..64 {
-        if r.bits_left() >= 9 && r.peek(9) == 1 {
-            let _ = r.skip(9);
-            continue;
-        }
-        let idx = decode_small_vlc(r, &MCBPC_INTER, "invalid inter mcbpc")?;
-        return Ok((idx as u8 / 4, idx as u8 % 4));
+/// Read `mcbpc` in a P-VOP (Table B-7). Returns `(mb_type, cbpc)` where `mb_type` is 0..=4, or `None`
+/// after consuming one stuffing code (`0000 0000 1`); the caller then restarts at `not_coded`.
+pub(super) fn read_mcbpc_inter(r: &mut BitReader<'_>) -> Result<Option<(u8, u8)>, DecodeError> {
+    if r.bits_left() >= 9 && r.peek(9) == 1 {
+        // Stuffing: the macroblock header restarts at `not_coded`.
+        let _ = r.skip(9);
+        return Ok(None);
     }
-    Err(DecodeError::Invalid("excessive mcbpc stuffing".into()))
+    let idx = decode_small_vlc(r, &MCBPC_INTER, "invalid inter mcbpc")?;
+    Ok(Some((idx as u8 / 4, idx as u8 % 4)))
 }
 
 /// Read `cbpy` (Table B-8). For inter macroblocks (`!intra`), the 4 bits are inverted.

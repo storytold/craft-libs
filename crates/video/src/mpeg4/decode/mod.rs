@@ -115,6 +115,8 @@ pub struct Decoder {
     anchor_seconds: i64,
     prev_anchor_seconds: i64,
     memory_budget: u64,
+    /// Pictures displaced from the reorder store by a new layer, returned by the next call.
+    held: Vec<Picture>,
 }
 
 impl Default for Decoder {
@@ -138,6 +140,7 @@ impl Decoder {
             anchor_seconds: 0,
             prev_anchor_seconds: 0,
             memory_budget: crate::budget::DECODE_MEMORY_BUDGET,
+            held: Vec::new(),
         }
     }
 
@@ -191,7 +194,8 @@ impl Decoder {
         Ok(())
     }
 
-    fn activate_vol(&mut self, vol: VolConfig) -> Result<(), DecodeError> {
+    /// Check that the picture store for `vol` fits the current memory budget.
+    fn check_budget(&self, vol: &VolConfig) -> Result<(), DecodeError> {
         let shape = crate::budget::PictureShape {
             width: vol.mb_width() as u64 * 16,
             height: vol.mb_height() as u64 * 16,
@@ -203,8 +207,20 @@ impl Decoder {
         if !shape.fits(BUDGET_PICTURES, self.memory_budget) {
             return Err(DecodeError::Invalid("VOL dimensions exceed decoder memory budget".into()));
         }
+        Ok(())
+    }
+
+    fn activate_vol(&mut self, vol: VolConfig) -> Result<(), DecodeError> {
+        self.check_budget(&vol)?;
         let changed = self.vol.as_ref().is_none_or(|old| old.width != vol.width || old.height != vol.height);
         if changed {
+            // A delayed picture still waiting for display keeps its own size and metadata.
+            if let (Some(fut), Some(old_info)) = (self.future_ref.as_mut(), self.info.as_ref())
+                && !fut.shown
+            {
+                fut.shown = true;
+                self.held.push(Self::to_picture(&fut.frame, old_info));
+            }
             self.past_ref = None;
             self.future_ref = None;
             self.packed_b_pending = false;
@@ -252,12 +268,13 @@ impl Decoder {
             return Ok(Vec::new());
         }
         let units = scan_start_codes(packet);
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut self.held);
 
         if units.is_empty() {
             let mut r = BitReader::new(packet);
             if let Some((vol, mut vop)) = try_parse_short_video_header(&mut r)? {
                 self.activate_vol(vol)?;
+                out.extend(std::mem::take(&mut self.held));
                 let vol_cfg = self.vol.as_ref().ok_or_else(|| DecodeError::Invalid("missing VOL".into()))?.clone();
                 let info = self.info.as_ref().ok_or_else(|| DecodeError::Invalid("missing sequence info".into()))?.clone();
                 let ticks = i64::from(vop.time_increment);
@@ -279,7 +296,17 @@ impl Decoder {
 
         let vop_count = units.iter().filter(|&&(c, _)| c == VOP_START).count();
         if vop_count > MAX_OUTPUT_PICTURES_PER_PACKET {
+            self.held = out;
             return Err(DecodeError::Invalid("packet contains too many VOPs".into()));
+        }
+        // Every picture is returned at most once, so a packet returns at most the pictures already
+        // held, the delayed anchor waiting at entry, and one per VOP. Refuse before any state
+        // changes if that exceeds the limit.
+        let pending = self.future_ref.as_ref().is_some_and(|a| !a.shown);
+        let worst_case = out.len() + usize::from(pending) + vop_count;
+        if worst_case > MAX_OUTPUT_PICTURES_PER_PACKET {
+            self.held = out;
+            return Err(DecodeError::Invalid("packet could return too many pictures".into()));
         }
         let multi_vop_packet = vop_count > 1;
 
@@ -308,17 +335,15 @@ impl Decoder {
                 0x20..=0x2F => {
                     let vol = parse_vol(payload)?;
                     self.activate_vol(vol)?;
+                    out.append(&mut self.held);
                 }
                 GROUP_OF_VOP_START | 0x00..=0x1F => {}
                 VISUAL_OBJECT_SEQUENCE_END => {
-                    for pic in self.flush() {
-                        if out.len() < MAX_OUTPUT_PICTURES_PER_PACKET {
-                            out.push(pic);
-                        }
-                    }
+                    out.extend(self.flush());
                 }
                 VOP_START => {
                     let vol_cfg = self.vol.as_ref().ok_or_else(|| DecodeError::Invalid("VOP before VideoObjectLayer header".into()))?.clone();
+                    self.check_budget(&vol_cfg)?;
                     let info = self.info.as_ref().ok_or_else(|| DecodeError::Invalid("missing sequence info".into()))?.clone();
 
                     let mut r = BitReader::new(payload);
@@ -409,7 +434,7 @@ impl Decoder {
     /// Flush any delayed anchor picture held for B-VOP reordering at the end of the stream.
     pub fn flush(&mut self) -> Vec<Picture> {
         self.packed_b_pending = false;
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut self.held);
         if let (Some(fut), Some(info)) = (self.future_ref.as_mut(), self.info.as_ref())
             && !fut.shown
         {
