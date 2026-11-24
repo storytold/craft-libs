@@ -2,11 +2,8 @@
 """Exercise the Workspace gate's lint block and test steps without compiling Rust."""
 import os
 import re
-import shutil
-
 import tempfile
 import subprocess
-import sys
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -85,41 +82,6 @@ FAKE_POWERSHELL = """#!/usr/bin/env bash
 echo powershell.exe
 """
 
-
-def shell():
-    """The bash the workflow runs under, never the Windows launcher of WSL.
-
-    On Windows `bash` on PATH is C:\\Windows\\System32\\bash.exe, which starts a WSL distribution instead of
-    running the script, so the harness would test another machine. Git for Windows ships the bash the Linux
-    runner uses; without it the tests stop with a message rather than reporting a pass from the wrong shell.
-    """
-    if sys.platform != "win32":
-        found = shutil.which("bash")
-    else:
-        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-        candidates = (
-            program_files / "Git" / "bin" / "bash.exe",
-            program_files / "Git" / "usr" / "bin" / "bash.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Git" / "bin" / "bash.exe",
-        )
-        found = next((str(path) for path in candidates if path.is_file()), None)
-    if found is None:
-        raise AssertionError("no bash to run the workflow steps: install Git for Windows, whose bin/bash.exe is the shell the Linux runner uses")
-    return found
-
-
-def commands(os_name, fail="", name="command", source=None, tests="all", test_filter="all()"):
-    validate_source(WORKFLOW.read_text() if source is None else source, name)
-    return subprocess.run(
-        [shell(), "-euo", "pipefail", "-c", HARNESS],
-        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail, "BLOCK": name,
-             "CRAFT_TESTS": tests, "CRAFT_TEST_FILTER": test_filter},
-        # The harness prints the arguments it was handed, and bash writes them as UTF-8 on every
-        # platform. Decoding with the local default (cp936 on a Chinese Windows, cp1252 on an English
-        # one) raises UnicodeDecodeError inside the reader thread and hides the real exit status, so the
-        # encoding is named here rather than taken from the machine running the test.
-        encoding="utf-8", errors="replace", capture_output=True, check=False,
-    )
 
 def step(name, os_name="Linux", fail="", tests="all", test_filter="all()", **env):
     with tempfile.TemporaryDirectory() as tmp:
@@ -311,12 +273,12 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_unix_resource_groups_are_serial_and_leave_windows_alone(self):
         config = tomllib.loads((ROOT / ".config/nextest.toml").read_text())
-        all_overrides = config["profile"]["ci"]["overrides"]
-        # Priority tiers are overrides too: the slowest tests go first. They name no test group.
-        overrides = [override for override in all_overrides if "test-group" in override]
-        self.assertEqual([override for override in all_overrides if "test-group" not in override],
-                         [{"filter": override["filter"], "priority": override["priority"]}
-                          for override in all_overrides if "test-group" not in override])
+        # The priority overrides (slowest tests first) set no group or platform; only the group
+        # overrides are the resource audit's.
+        overrides = [o for o in config["profile"]["ci"]["overrides"] if "priority" not in o]
+        for o in config["profile"]["ci"]["overrides"]:
+            if "priority" in o:
+                self.assertEqual(set(o), {"filter", "priority"})
         self.assertEqual(overrides, [
             {"platform": "cfg(unix)",
              "filter": "package(craft-ui) | package(craft-keymap) | package(craft-update)",
