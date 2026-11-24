@@ -177,8 +177,24 @@ pub(crate) fn set_modal(ctx: &Context, id: Id) {
 /// holds focus replays while nothing reaches it.
 pub(crate) fn set_focus(ctx: &Context, id: Id) {
     crate::runtime::replay::journal(ctx, || id, |ctx, &id| set_focus(ctx, id));
-    with_emitted(ctx, |emitted| emitted.focus_set = true);
+    with_emitted(ctx, |emitted| emitted.focus = Some(id));
     ctx.set_accesskit_focus(id);
+}
+
+/// The node of the last finished pass of `viewport` that holds key focus.
+#[derive(Clone, Copy)]
+struct FocusedNode(Id);
+
+fn focused_node_key(viewport: ViewportId) -> Id {
+    memory::unique(("craft access focused node", viewport))
+}
+
+/// The node that held key focus at the end of the running viewport's last finished pass, the one reported to
+/// assistive technology: a focused part's node ([`sub_node_id`](crate::runtime::access::sub_node_id)), the shown item
+/// of a list that holds focus, else the focused component's own; `None` when nothing holds focus.
+pub fn focused_node(ctx: &Context) -> Option<Id> {
+    let viewport = pass::current_viewport(ctx);
+    ctx.data(|data| data.get_temp::<FocusedNode>(focused_node_key(viewport))).map(|node| node.0)
 }
 
 /// The runtime's nodes of a pass in the order it emitted them: the first time each node was reported as a child or
@@ -190,8 +206,8 @@ struct Emitted {
     written: IdSet,
     /// Text widgets whose node folds into their owner's node, each with its owner.
     folded: IdMap<Id>,
-    /// Whether the runtime reported a focused node this pass.
-    focus_set: bool,
+    /// The focused node the runtime reported this pass.
+    focus: Option<Id>,
     /// Components that offer a context menu this pass (a `Trigger::Context` opener on them).
     context: IdSet,
 }
@@ -288,11 +304,20 @@ pub(crate) fn order_children(ctx: &Context) {
         reported.emitted.remove(&viewport)
     })
     .unwrap_or_default();
-    if !emitted.focus_set
-        && let Some(owner) = ctx.memory(|memory| memory.focused()).and_then(|widget| emitted.folded.get(&widget))
+    let widget = ctx.memory(|memory| memory.focused());
+    let folded = widget.and_then(|widget| emitted.folded.get(&widget).copied());
+    if emitted.focus.is_none()
+        && let Some(owner) = folded
     {
-        ctx.set_accesskit_focus(*owner);
+        ctx.set_accesskit_focus(owner);
     }
+    let focused = widget.map(|widget| emitted.focus.or(folded).unwrap_or(widget));
+    ctx.data_mut(|data| match focused {
+        Some(node) => {
+            data.insert_temp(focused_node_key(viewport), FocusedNode(node));
+        }
+        None => data.remove::<FocusedNode>(focused_node_key(viewport)),
+    });
     hide_behind_modal(ctx, viewport, &emitted.written);
     for parent in emitted.written {
         ctx.accesskit_node_builder(parent, |node| {

@@ -20,7 +20,7 @@ use crate::contract::{
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
+use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, Span, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Proposal, Sense};
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -140,6 +140,9 @@ pub struct TabStyle {
     /// Document tabs in [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking): a name capped at
     /// `MAX_NAME_DIGITS` digits' width, a readable prefix at their least, and the marker dot for a modified tab.
     shrinking: bool,
+    /// Document tabs in [`DocumentTabLook::Semibold`](super::DocumentTabLook::Semibold): the label and its `*` in the
+    /// role's semibold face.
+    strong: bool,
     /// The marker dot's diameter.
     marker: f32,
     /// The marker dot of a marked tab.
@@ -155,6 +158,12 @@ struct Pill {
     fill: Stateful<StyleColor>,
     radius: egui::CornerRadius,
     height: f32,
+}
+
+/// `text` as a run of the label: in the role's semibold face where the look sets the label strong.
+fn label_text<'t>(style: &TabStyle, text: impl Into<Cow<'t, str>>) -> TextRun<'t> {
+    let span = Span::new(text);
+    TextRun::spans(vec![if style.strong { span.strong() } else { span }])
 }
 
 /// Where the parts of a tab lie in its content rect.
@@ -265,7 +274,7 @@ impl<'a> Tab<'a> {
     }
 
     fn label_run<'t>(&self, style: &TabStyle, text: &'t str) -> TextRun<'t> {
-        TextRun::new(text).role(style.label.role)
+        label_text(style, text).role(style.label.role)
     }
 
     /// Whether the marker dot shows: the tab's content has something to show, or the document is modified and the
@@ -296,7 +305,7 @@ impl<'a> Tab<'a> {
 
     /// The modified mark, in the label's type.
     fn mark_run(&self, style: &TabStyle) -> TextRun<'static> {
-        TextRun::new(MARK).role(style.label.role)
+        label_text(style, MARK).role(style.label.role)
     }
 
     /// Where the parts lie in `content`, with `natural` the unbounded width of a run. `parts` registers its parts
@@ -466,6 +475,7 @@ impl Component for Tab<'_> {
             close_side: close_side(cx.os, cx.direction.is_rtl()),
             sizes,
             shrinking: key.kind.shrinks_in(cx.env::<super::DocumentTabLook>()),
+            strong: key.kind == TabKind::Document && cx.env::<super::DocumentTabLook>() == super::DocumentTabLook::Semibold,
             marker: marker.side,
             marker_color: marker.color,
             marker_edge: marker.edge,
@@ -603,7 +613,7 @@ impl Component for Tab<'_> {
             draw.stroke(&line, StrokeWidth::Thick, style.underline);
         }
         let role = if selected { style.label.role } else { style.idle_role };
-        let label = TextRun::new(&*shown).role(role).color(cx.resolve(&style.label.color));
+        let label = label_text(style, &*shown).role(role).color(cx.resolve(&style.label.color));
         draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());

@@ -951,6 +951,48 @@ fn the_magnetic_lasso_shows_the_width_circle_under_the_precise_cursor() {
     }
 }
 
+/// The cursor `rig` shows over the middle of its canvas with `mods` held.
+fn lasso_cursor<T: Reports + 'static>(rig: &mut Rig<T>, mods: Modifiers) -> Option<craft_behavior::Cursor>
+where
+    for<'a> SelectToolPass<'a, T>: CanvasTool,
+{
+    let ctx = rig.fixture().ctx().clone();
+    let over = rig.canvas().center();
+    rig.fixture().frame(vec![pointer::moved(over)]);
+    hold(rig, mods);
+    rig.fixture().frame(Vec::new());
+    craft_ui::runtime::cursor::current(&ctx)
+}
+
+// The lassos show an arrow with its tip where the outline starts and the tool's icon below right of it, as the reference
+// application does; the operation's badge rides at the icon's lower right. With the icon alone on the pointer, its
+// empty top-left corner was the hotspot, so the outline began beside the icon (photocraft#16671).
+#[trial]
+fn the_lassos_point_an_arrow_at_where_the_outline_starts() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor, PointerGlyph};
+    use craft_ui::primitives::ToolIcon;
+    fn check(cursor: Option<Cursor>, icon: ToolIcon, badge: Option<CursorBadge>, what: &str) {
+        match cursor {
+            Some(Cursor::Painted(PaintedCursor::PointerTool { pointer, icon: shown, badge: b, .. })) => {
+                assert_eq!(pointer, PointerGlyph::Arrow, "{what}: an arrow");
+                assert_eq!(shown, icon.icon(), "{what}: the tool's icon");
+                assert_eq!(b, badge, "{what}: the badge");
+            }
+            other => panic!("{what}: an arrow with the tool's icon, got {other:?}"),
+        }
+    }
+    let selected = Rect::new(20.0, 20.0, 60.0, 60.0);
+    let shift = Modifiers::SHIFT;
+    let mut lasso = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    check(lasso_cursor(&mut lasso, Modifiers::NONE), ToolIcon::Lasso, None, "Lasso");
+    check(lasso_cursor(&mut lasso, shift), ToolIcon::Lasso, Some(CursorBadge::Add), "Lasso with Shift");
+    let mut polygon = rig("Polygonal Lasso", PolygonLassoTool::new(), Fake::selected(selected));
+    check(lasso_cursor(&mut polygon, Modifiers::NONE), ToolIcon::PolygonalLasso, None, "Polygonal Lasso");
+    check(lasso_cursor(&mut polygon, Modifiers::ALT), ToolIcon::PolygonalLasso, Some(CursorBadge::Subtract), "Polygonal Lasso with Alt");
+    let (mut magnetic, _) = magnetic();
+    check(lasso_cursor(&mut magnetic, Modifiers::NONE), ToolIcon::MagneticLasso, None, "Magnetic Lasso");
+}
+
 #[trial]
 fn width_steps_by_one_and_shift_jumps_to_the_limits() {
     let mut settings = MagneticSettings::default();

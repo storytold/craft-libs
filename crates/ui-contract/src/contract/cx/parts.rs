@@ -89,6 +89,8 @@ pub(crate) struct PartExtras {
     pub toggles: Option<crate::contract::overlay::ToggleDecl>,
     /// A header part at the end edge: its stop registers after the header's children.
     pub after_header: bool,
+    /// The part reports an access node of this role and name though no face is painted for it.
+    pub node: Option<(crate::runtime::access::Role, String)>,
 }
 
 impl PartBuilder<'_> {
@@ -242,6 +244,12 @@ impl PartBuilder<'_> {
     #[doc(hidden)]
     pub fn access_click(self, on: bool) -> Self {
         self.declared.no_access_click = !on;
+        self
+    }
+
+    /// The part reports an access node of `role`, named `name`, for a part the component paints no face for.
+    pub fn node(self, role: crate::runtime::access::Role, name: impl Into<String>) -> Self {
+        self.declared.node = Some((role, name.into()));
         self
     }
 
