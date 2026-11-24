@@ -169,3 +169,25 @@ fn server_token_sources_and_validation() {
         "bridge mode needs --control-token, --control-token-file, PHOTOCRAFT_CONTROL_TOKEN, or PHOTOCRAFT_CONTROL_TOKEN_FILE"
     );
 }
+
+// A token file create that runs out of time fails with its own error, even when it left a file at
+// the path: that file is not read as another process's. A create that another process beat to the
+// path reads that process's token.
+#[trial]
+fn a_token_file_create_that_runs_out_of_time_is_an_error() {
+    let dir = scratch_dir("token-limit");
+    let file = dir.join("token");
+    let late = |p: &Path, _: &str| {
+        std::fs::write(p, "partial").unwrap();
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{}: powershell.exe did not finish within 10 s and was ended", p.display())))
+    };
+    let err = server_token_with(None, Some(&file), late).unwrap_err().to_string();
+    assert!(err.starts_with("I/O: ") && err.ends_with("did not finish within 10 s and was ended"), "{err}");
+    std::fs::remove_file(&file).unwrap();
+    let beaten = |p: &Path, _: &str| {
+        create_token_file(p, TOKEN).unwrap();
+        Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the file already exists"))
+    };
+    assert_eq!(server_token_with(None, Some(&file), beaten).unwrap(), TOKEN);
+    let _ = std::fs::remove_dir_all(&dir);
+}
