@@ -4,10 +4,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use craft_behavior::{CellSelection, EditEvent, PartKey, PartRef, ScrollPos};
+use craft_behavior::{CellSelection, EditEvent, Mixed, PartKey, PartRef, ScrollPos};
 use craft_table::ui::{
-    CellAt, CellEdit, CellGrid, CellProblem, CellRange, ColumnFilter, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS,
-    SheetGeometry,
+    CellAt, CellEdit, CellGrid, CellProblem, CellRange, ColumnEdges, ColumnFilter, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS,
+    SHEET_ROWS, SheetGeometry,
 };
 use craft_ui::contract::PaintUi;
 use craft_ui::primitives::TextRun;
@@ -66,6 +66,11 @@ struct Rig {
 }
 
 fn rig(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32) -> Rig {
+    rig_with(hidden_column, selection, zoom, |grid| grid)
+}
+
+/// A rig whose grid `configure` sets the props of.
+fn rig_with(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32, configure: impl Fn(CellGrid<'_>) -> CellGrid<'_> + 'static) -> Rig {
     let state = Rc::new(RefCell::new(GridState::new(selection, zoom)));
     let edits = Rc::new(RefCell::new(Vec::new()));
     let committed = Rc::new(RefCell::new(Vec::new()));
@@ -79,7 +84,7 @@ fn rig(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32) -> 
     let mut fixture = Fixture::new(move |ui| {
         let model = Sheet::new(hidden_column, shown_zoom.clone());
         let mut state = shown_state.borrow().clone();
-        let out = CellGrid::new("Sheet", &model, &mut state).show_sheet(ui);
+        let out = configure(CellGrid::new("Sheet", &model, &mut state)).show_sheet(ui);
         shown_grid.set(Some(out.collection.response.id));
         *shown_geometry.borrow_mut() = Some(out.geometry);
         *shown_state.borrow_mut() = state;
@@ -189,6 +194,96 @@ fn point_mode_inserts_an_absolute_reference() {
     assert!(rig.take_edits().iter().any(|edit| matches!(edit, GridEdit::BeginEdit { .. })));
     let written = rig.committed.borrow().last().cloned();
     assert_eq!(written, Some(CellEdit::new(CellAt::new(5, 5), "=$F$5")), "the arrow pointed at the cell above and Enter committed the formula");
+}
+
+/// The column resizes among `edits`, as the column and the kind of event, in order.
+fn resize_steps(edits: Vec<GridEdit>) -> Vec<(u32, &'static str)> {
+    edits
+        .into_iter()
+        .filter_map(|edit| match edit {
+            GridEdit::ResizeColumn { column, width, .. } => Some((
+                column,
+                match width {
+                    EditEvent::Begin { .. } => "begin",
+                    EditEvent::Update { .. } => "update",
+                    EditEvent::Commit { .. } => "commit",
+                    EditEvent::Cancel { .. } => "cancel",
+                    _ => "other",
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// With headings off and `ColumnEdges::Cells`, a column's end edge over the cells resizes it as one gesture that Esc
+/// cancels; a press beside it selects the cell. With `ColumnEdges::Headers` the same drag only selects, and with
+/// headings on the header edge resizes.
+#[trial]
+fn a_cell_edge_resizes_its_column_in_a_sheet_without_headings() {
+    let edge = || PartKey::new("column_edge").at(1);
+    let headless = |edges: ColumnEdges| rig_with(None, a1(), 1.0, move |grid| grid.headings(false).column_edges(edges));
+
+    let mut cells = headless(ColumnEdges::Cells);
+    let from = cells.part_rect(edge()).center();
+    cells.drag_part(edge(), Vec2::X * 30.0);
+    let steps = resize_steps(cells.take_edits());
+    assert_eq!(steps.first(), Some(&(1, "begin")), "{steps:?}");
+    assert_eq!(steps.last(), Some(&(1, "commit")), "{steps:?}");
+    assert!(steps.contains(&(1, "update")) && steps.iter().all(|(column, _)| *column == 1), "{steps:?}");
+
+    cells.fixture.drag_hold_at(from, Vec2::X * 30.0);
+    cells.fixture.key(Key::Escape, Modifiers::NONE);
+    cells.fixture.release_at(from + Vec2::X * 30.0);
+    let steps = resize_steps(cells.take_edits());
+    assert_eq!(steps.first(), Some(&(1, "begin")), "{steps:?}");
+    assert!(steps.contains(&(1, "cancel")) && !steps.contains(&(1, "commit")), "Esc cancels the drag: {steps:?}");
+
+    let beside = from - Vec2::X * (COLUMN / 2.0);
+    cells.fixture.click_at(beside).idle(2);
+    assert_eq!(cells.active(), Some(cells.cell_under(beside)), "a press beside the edge selects the cell");
+    assert!(resize_steps(cells.take_edits()).is_empty(), "a press beside the edge resizes nothing");
+
+    let mut headers = headless(ColumnEdges::Headers);
+    headers.fixture.drag_at(from, Vec2::X * 30.0);
+    assert!(resize_steps(headers.take_edits()).is_empty(), "no edge over the cells with ColumnEdges::Headers");
+    assert_eq!(headers.active(), Some(headers.cell_under(from)), "the drag selects the cell instead");
+
+    let mut with_headings = rig(None, a1(), 1.0);
+    with_headings.drag_part(edge(), Vec2::X * 30.0);
+    let steps = resize_steps(with_headings.take_edits());
+    assert_eq!(steps.first(), Some(&(1, "begin")), "{steps:?}");
+    assert_eq!(steps.last(), Some(&(1, "commit")), "{steps:?}");
+}
+
+/// A drag whose only move arrives in its release's frame still resizes: the drag starts where the pointer already is.
+/// Esc on a running resize reports the width it started from.
+#[trial]
+fn an_edge_drag_moved_only_in_its_release_frame_resizes_and_esc_reports_the_start() {
+    let mut rig = rig(None, a1(), 1.0);
+    let from = rig.part_rect(PartKey::new("column_edge").at(1)).center();
+    let to = from + Vec2::X * 30.0;
+    rig.fixture.frame(vec![pointer::moved(from)]);
+    rig.fixture.frame(vec![pointer::press(from)]);
+    rig.fixture.frame(vec![pointer::moved(to), pointer::release(to)]);
+    rig.fixture.idle(2);
+    let widths = |edits: Vec<GridEdit>| {
+        edits.into_iter().find_map(|edit| match edit {
+            GridEdit::ResizeColumn { width: EditEvent::Commit { before: Mixed::Same(before), after, .. }, .. } => Some((before, after)),
+            _ => None,
+        })
+    };
+    let (before, after) = widths(rig.take_edits()).expect("the release commits a resize");
+    assert!(after > before, "the column grew by the drag: {before} -> {after}");
+
+    rig.fixture.drag_hold_at(from, Vec2::X * 30.0);
+    rig.fixture.key(Key::Escape, Modifiers::NONE);
+    rig.fixture.release_at(to);
+    let cancelled = rig.take_edits().into_iter().find_map(|edit| match edit {
+        GridEdit::ResizeColumn { width: EditEvent::Cancel { before, .. }, .. } => Some(before),
+        _ => None,
+    });
+    assert_eq!(cancelled, Some(Some(Mixed::Same(before))), "the cancel names the width the drag started from (the sheet keeps its widths)");
 }
 
 /// The test sheet, recording the rows whose cells it paints.

@@ -377,6 +377,33 @@ pub(crate) fn forget(ctx: &Context, id: Id) {
     pass_state::with::<Registry, _>(ctx, |reg| reg.session_writes += 1);
 }
 
+/// How long a remembered value lives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lifetime {
+    /// The value goes through the host's saved state (the `SaveKey` tier).
+    #[default]
+    Saved,
+    /// The value lasts until the app quits.
+    Run,
+}
+
+/// The run-only value under `key`, in the session tier. It never reaches the host. It gives the default until a value
+/// is set, and it is readable outside a pass, as [`saved_value`] is.
+pub fn run_value<T: Slot>(ctx: &Context, key: &SaveKey) -> T {
+    MemoryStage::peek_session(ctx, global("craft_ui.run", key))
+}
+
+/// Sets the run-only value under `key`; see [`run_value`].
+pub fn set_run_value<T: Slot>(ctx: &Context, key: &SaveKey, value: T) {
+    let id = global("craft_ui.run", key);
+    let mut stage = MemoryStage::new(ctx, id, id, false);
+    // No component shows under the key's id, so the stage stamps no `Seen` for it.
+    stage.touched.get_mut().clear();
+    *stage.session::<T>(id) = value;
+    stage.write_back();
+}
+
 /// The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'
 /// remembered fields use.
 pub fn saved_value<T: Savable>(ctx: &Context, key: &SaveKey) -> T {

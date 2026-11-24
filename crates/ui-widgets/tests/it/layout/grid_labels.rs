@@ -40,3 +40,34 @@ fn the_fields_of_a_grid_column_share_a_left_edge() {
     assert!((second.left() - fourth.left()).abs() <= 0.5, "the filling column's fields share a left edge: {second:?}, {fourth:?}");
     assert!(first.right() <= second.left() && third.right() <= fourth.left(), "the sized column holds its fields: {rects:?}");
 }
+
+/// A filling column, then one sized by its cells.
+static FILL_FIRST: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content];
+
+/// A grid row is as tall as a field in it whose label stacks above its control for want of room: the next row's label
+/// starts below the control. Guards against a grid that spaced its rows as if the label sat beside the control, so the
+/// next row's label overlapped it.
+#[trial]
+fn a_grid_row_holds_a_field_whose_label_stacks() {
+    let rects: Rc<RefCell<Vec<Rect>>> = Rc::default();
+    let seen = rects.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut seen = seen.borrow_mut();
+        seen.clear();
+        Grid::new(&FILL_FIRST).show(ui, |ui, _| {
+            for i in 0..2 {
+                Field::new(format!("Top Left Corner {i}")).show(ui, |ui, _| {
+                    seen.push(NumberField::new(format!("Radius {i}"), Bind::given(Some(10.0))).show(ui).response.rect);
+                });
+                craft_ui::display::Text::new("Round").show(ui);
+            }
+        });
+    });
+    fixture.room(egui::vec2(150.0, 400.0)).record_paint();
+    fixture.settle();
+    let rects = rects.borrow();
+    let [first, _] = rects[..] else { panic!("two fields show: {rects:?}") };
+    let label = fixture.texts().iter().find(|text| text.text == "Top Left Corner 1").map(|text| text.rect).expect("the second label shows");
+    assert!(label.bottom() <= rects[1].top() + 0.5, "the label stacks above its control: {label:?}, {:?}", rects[1]);
+    assert!(label.top() >= first.bottom() - 0.5, "the second row starts below the first row's control: {label:?}, {first:?}");
+}

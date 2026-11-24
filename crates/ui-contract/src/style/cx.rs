@@ -198,8 +198,23 @@ impl<'a> StyleCx<'a> {
     /// Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
     /// component's style, such as the dock's sizes outside a style pass.
     pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
-        let env = crate::runtime::env::Env::of_root(ctx);
+        Self::with_root_scoped(ctx, &crate::runtime::env::ThemeScope::new(), f)
+    }
+
+    /// Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
+    pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
+        let env = crate::runtime::env::Env::of_root(ctx).derive_local(|scoped| scope.apply(ctx, scoped));
         f(&StyleCx::of_env(ctx, &env))
+    }
+
+    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+    /// not `enabled`.
+    pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
+        let colors = &self.tokens.color;
+        let accent = if self.contrast() == Contrast::High { colors.accent.text } else { colors.accent.solid };
+        let (ink, off) = (self.color(accent), self.color(colors.text.disabled));
+        let rest = if enabled { ink } else { off };
+        super::look::TextLook::new(craft_theme::TypeRole::Body, Stateful::new(rest).off(States::new(rest, rest, rest, off)))
     }
 
     /// The same context measuring faces in `ui`; the collection hook calls it before it asks for a layout.

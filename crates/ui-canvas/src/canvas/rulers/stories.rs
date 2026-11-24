@@ -9,7 +9,7 @@ use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use crate::testing::{pointer, stage};
 use craft_behavior::kurbo::Point;
-use craft_behavior::{Mixed, RulerUnits};
+use craft_behavior::{Mixed, RulerUnits, TickLabels, Ticks};
 use egui::{Rect, Ui, Vec2};
 
 /// How far the corner is dragged, in drag thresholds: out of the corner and onto the document.
@@ -74,9 +74,8 @@ fn configured<'a>(rulers: Rulers<'a>, settings: Settings) -> Rulers<'a> {
     rulers.interactive(settings.interactive).origin_locked(settings.locked)
 }
 
-/// A canvas that shows `rulers` and whose view lies inside the strips, counting from their zero in pixels.
-fn rulers_canvas<'a>(room: Rect, pixels_per_point: f32, settings: Settings, rulers: Rulers<'a>) -> Canvas<'a> {
-    let text = pixels();
+/// A canvas that shows `rulers` and whose view lies inside the strips, counting from their zero in `text`.
+fn rulers_canvas<'a>(room: Rect, pixels_per_point: f32, settings: Settings, text: RulerText, rulers: Rulers<'a>) -> Canvas<'a> {
     let view =
         StoryDocument::STANDARD.view(room, pixels_per_point, settings.zoom).rotation(settings.rotation).flip_x(settings.flip).aspect(settings.aspect);
     Canvas::new("Document").view(view).with_rulers(Some(configured(rulers, settings))).rulers(text, text)
@@ -87,7 +86,7 @@ fn zero_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
     let (zero, zero_at) = data.value_at("zero", Point::ZERO);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind(&mut *zero)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, pixels(), Rulers::new("Rulers", zero_at.bind(&mut *zero)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -96,7 +95,7 @@ fn units_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
     let (zero, zero_at) = data.value_at("zero", Point::ZERO);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind(&mut *zero)).units(&UNITS));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, pixels(), Rulers::new("Rulers", zero_at.bind(&mut *zero)).units(&UNITS));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -105,7 +104,7 @@ fn zero_points_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
     let (zero, zero_at) = data.value_at("zero", Mixed::<Point>::Mixed);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind_mixed(&mut *zero)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, pixels(), Rulers::new("Rulers", zero_at.bind_mixed(&mut *zero)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -116,7 +115,7 @@ fn zero_point_left_of_the_document(ui: &mut Ui, data: &mut StoryData) -> StoryOu
     let room = stage(ui);
     let inside =
         |zero: &Point| if zero.x < LEAST_X { Validity::Refuse(Message::new("The zero point is left of the document")) } else { Validity::Ok };
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind(&mut *zero).check(inside)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, pixels(), Rulers::new("Rulers", zero_at.bind(&mut *zero).check(inside)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -129,7 +128,7 @@ fn in_face(ui: &mut Ui, data: &mut StoryData, face: RulerFace) -> StoryOutput {
     let (width, height) = (f64::from(size.width), f64::from(size.height));
     let margins = RulerMargins::new([0.0..MARGIN, width - MARGIN..width], [0.0..MARGIN, height - MARGIN..height]);
     let rulers = Rulers::new("Rulers", zero_at.bind(&mut *zero)).margins(margins).face(face);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, rulers);
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, pixels(), rulers);
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -145,4 +144,18 @@ fn edge_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Rulers<'static>, covers = [], drive = Drive::Never)]
 fn centred_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_face(ui, data, RulerFace::Centred)
+}
+
+/// Signed labels (VectorCraft's) on an inch ruler counting from the document's centre: ticks left of and above the zero
+/// point carry a minus sign, and a tick writes only the decimals it needs (`-0.5`, `1`).
+#[story(Rulers<'static>, covers = [], drive = Drive::Never)]
+fn signed_labels(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let settings = settings(data);
+    let size = StoryDocument::STANDARD.size();
+    let centre = Point::new(f64::from(size.width) / 2.0, f64::from(size.height) / 2.0);
+    let (zero, zero_at) = data.value_at("zero", centre);
+    let room = stage(ui);
+    let inches = RulerText::new(RulerUnits::new(1.0 / 72.0, Ticks::decimal(false)).with_labels(TickLabels::Signed), UnitKind::Inches);
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, inches, Rulers::new("Rulers", zero_at.bind(&mut *zero)));
+    on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }

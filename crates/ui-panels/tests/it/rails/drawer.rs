@@ -187,6 +187,49 @@ fn the_drawer_opens_on_the_side_it_is_given() {
     }
 }
 
+/// With two groups of tools the list holds heading rows between the tools, so a tool's key is not its flat index: a
+/// revealed tool far down the list scrolls into the drawer's room, and only a marked tool wears the mark.
+#[trial]
+fn a_revealed_tool_scrolls_into_view_and_wears_the_mark() {
+    use craft_ui::contract::Role;
+    use craft_ui::display::TargetMark;
+    use craft_ui::rails::{DrawerGroup, ToolbarDrawer};
+    use egui::{Pos2, Rect};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    const ROOM: Vec2 = Vec2::new(480.0, 240.0);
+    let shown = |marked: bool| {
+        let pending = Rc::new(Cell::new(true));
+        let mut fixture = Fixture::new(move |ui| {
+            let ids = |from: u8, to: u8| (from..to).map(tool).collect::<Vec<_>>();
+            let mut second = ids(30, 49);
+            second.push(tool(CUT));
+            let groups = [DrawerGroup::new("First", ids(10, 30)), DrawerGroup::new("Second", second)];
+            let toolbar = [slot(0, &[UNDO])];
+            let rail = Rect::from_min_size(Pos2::ZERO, Vec2::new(48.0, ROOM.y));
+            let target = CUT;
+            let mut drawer = ToolbarDrawer::new(rail, &groups, &toolbar, None);
+            if pending.replace(false) {
+                drawer = drawer.reveal(&target);
+            }
+            if marked {
+                drawer = drawer.mark(&target);
+            }
+            drawer.show(ui);
+        });
+        fixture.room(ROOM).idle(60);
+        // The drawer is a popover over the window, which is larger than the room: its list scrolls inside it.
+        let drawer = fixture.by_role(Role::DIALOG).first().expect("the drawer is open").rect;
+        let row = fixture.by_label("Cut").expect("the revealed tool's row is shown").rect;
+        (drawer, row, !fixture.styles_of(std::any::type_name::<TargetMark>()).is_empty())
+    };
+    let (drawer, row, marked) = shown(true);
+    assert!(drawer.contains_rect(row), "the revealed row {row:?} lies inside the drawer {drawer:?}");
+    assert!(marked, "the marked tool wears the mark");
+    let (_, _, unmarked) = shown(false);
+    assert!(!unmarked, "without a mark no ring is drawn");
+}
+
 // The Edit Toolbar button takes the app's icon (production shows a settings gear, not an ellipsis) and stays one named,
 // working button.
 #[trial]

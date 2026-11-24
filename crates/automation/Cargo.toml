@@ -46,15 +46,15 @@ egui = { workspace = true, optional = true }
 png = "0.17"
 serde = { workspace = true }
 serde_json = { workspace = true }
+craft-platform = { workspace = true }
+log = "0.4"
 # `std::time::Instant` panics on wasm; this is the same type on native.
 web-time = "1.1"
 
 # The server, client, token files, profiler and trace.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-platform = { workspace = true }
 getrandom = "0.3"
 hmac = "0.12"
-log = "0.4"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 

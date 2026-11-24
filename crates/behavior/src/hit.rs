@@ -51,6 +51,15 @@ pub enum HitShape {
         /// The corners of the polygon cut out of `within`.
         polygon: Vec<Pos2>,
     },
+    /// A shape with discs cut out of it: a widget part over a bounding-box handle leaves the handle's disc to the
+    /// handle.
+    #[non_exhaustive]
+    Excluding {
+        /// The shape the discs are cut out of.
+        shape: Box<HitShape>,
+        /// The discs cut out, each a centre and a radius.
+        holes: Vec<(Pos2, f32)>,
+    },
 }
 
 impl HitShape {
@@ -81,10 +90,16 @@ impl HitShape {
         HitShape::OutsidePolygon { within, polygon }
     }
 
+    /// `shape` without the discs `holes` (a centre and a radius each).
+    pub fn excluding(shape: HitShape, holes: Vec<(Pos2, f32)>) -> HitShape {
+        HitShape::Excluding { shape: Box::new(shape), holes }
+    }
+
     /// The smallest rectangle around the shape.
     pub fn bounds(&self) -> Rect {
         match self {
             HitShape::Rect(rect) | HitShape::OutsidePolygon { within: rect, .. } => *rect,
+            HitShape::Excluding { shape, .. } => shape.bounds(),
             HitShape::Circle { center, radius } => Rect::from_center_size(*center, Vec2::splat(radius * 2.0)),
             HitShape::Segment { a, b } => Rect::from_two_pos(*a, *b),
             HitShape::Polyline { points, .. } | HitShape::Polygon(points) => {
@@ -104,6 +119,10 @@ impl HitShape {
             HitShape::Polyline { points: line, closed, reach } => HitShape::Polyline { points: points(line), closed: *closed, reach: *reach },
             HitShape::Polygon(polygon) => HitShape::Polygon(points(polygon)),
             HitShape::OutsidePolygon { within, polygon } => HitShape::OutsidePolygon { within: within.translate(by), polygon: points(polygon) },
+            HitShape::Excluding { shape, holes } => HitShape::Excluding {
+                shape: Box::new(shape.translated(by)),
+                holes: holes.iter().map(|(center, radius)| (*center + by, *radius)).collect(),
+            },
         }
     }
 
@@ -130,6 +149,18 @@ impl HitShape {
             (HitShape::OutsidePolygon { within: area, polygon }, HitShape::OutsidePolygon { within: to_area, polygon: to_polygon }) => {
                 HitShape::OutsidePolygon { within: rect(*area, *to_area), polygon: points(polygon, to_polygon) }
             }
+            (HitShape::Excluding { shape, holes }, HitShape::Excluding { shape: to_shape, holes: to_holes }) => {
+                let holes = if holes.len() == to_holes.len() {
+                    holes
+                        .iter()
+                        .zip(to_holes)
+                        .map(|((center, radius), (to_center, to_radius))| (pos(*center, *to_center), near(*radius, *to_radius)))
+                        .collect()
+                } else {
+                    holes.clone()
+                };
+                HitShape::Excluding { shape: Box::new(shape.snapped(to_shape, within)), holes }
+            }
             _ => self.clone(),
         }
     }
@@ -152,6 +183,7 @@ impl HitShape {
                     || closing.is_some_and(|(first, last)| segment_distance(point, *last, *first) <= reach)
             }
             HitShape::OutsidePolygon { within, polygon } => within.contains(point) && !inside_polygon(point, polygon),
+            HitShape::Excluding { shape, holes } => shape.hit_across(point, across) && !in_hole(holes, point),
             HitShape::Polygon(points) => {
                 let bounds = self.bounds();
                 let small = bounds.width() < across || bounds.height() < across;
@@ -174,8 +206,14 @@ impl HitShape {
             }
             HitShape::Polygon(points) => inside_polygon(point, points),
             HitShape::OutsidePolygon { within, polygon } => within.contains(point) && !inside_polygon(point, polygon),
+            HitShape::Excluding { shape, holes } => shape.hit(point) && !in_hole(holes, point),
         }
     }
+}
+
+/// Whether `point` lies inside one of the discs `holes`.
+fn in_hole(holes: &[(Pos2, f32)], point: Pos2) -> bool {
+    holes.iter().any(|(center, radius)| center.distance(point) <= *radius)
 }
 
 impl From<Rect> for HitShape {

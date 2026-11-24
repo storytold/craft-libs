@@ -442,6 +442,31 @@ fn a_rerun_pass_delivers_none_of_the_frames_input_again() {
     assert!(log[0].stirred && log[0].injected && !log[1].stirred && !log[1].injected, "the first pass carries the input");
 }
 
+/// An injected step that enters a frame behind a real pointer press waits for the next frame (one press per pass), and
+/// the pass that carries it acts for the automation client. Guards against a step whose flight ended with the frame it
+/// entered, so the pass its text arrived in read as the user's (`injected_pass` false).
+#[trial]
+fn an_injected_step_held_behind_a_press_arrives_in_an_injected_pass() {
+    let log: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
+    let sink = log.clone();
+    let mut show = move |ui: &mut Ui| {
+        let ctx = ui.ctx().clone();
+        let typed = ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "x")));
+        sink.borrow_mut().push((typed, craft_ui::runtime::windows::WindowHost::of(&ctx).injected_pass()));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    craft_ui::runtime::windows::WindowHost::of(&frames.ctx).inject_text(egui::ViewportId::ROOT, "x");
+    log.borrow_mut().clear();
+    let at = Pos2::new(20.0, 20.0);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    frames.frame(vec![pointer::release(at)], &mut show);
+    frames.idle(2, &mut show);
+    let log = log.borrow();
+    let carrying: Vec<bool> = log.iter().filter(|(typed, _)| *typed).map(|(_, injected)| *injected).collect();
+    assert_eq!(carrying, [true], "one pass carries the text, and it is the client's: {log:?}");
+}
+
 fn downs(phases: &[PressPhase]) -> usize {
     phases.iter().filter(|phase| matches!(phase, PressPhase::Down { .. })).count()
 }
@@ -758,4 +783,82 @@ fn a_held_press_keeps_hover_off_other_roots() {
     frames.frame(vec![pointer::release(on_b)], &mut show_frame);
     frames.idle(1, &mut show_frame);
     assert!(log.borrow().last_root(1).root.hovered, "b hovers once the press ends");
+}
+
+/// A pick's modifiers are the ones its release carried: Shift that came after the button went down and is let go in
+/// the release's pass belongs to the pick in that pass only; every other pass reads the held modifiers.
+#[trial]
+fn a_click_carries_the_modifiers_its_release_carried() {
+    let seen: Rc<RefCell<Vec<(bool, bool, bool)>>> = Rc::default();
+    let sink = seen.clone();
+    let mut show = move |ui: &mut Ui| {
+        let frame = craft_ui::runtime::pointer::frame(ui.ctx());
+        sink.borrow_mut().push((frame.release.is_some(), frame.pick_mods.shift, frame.mods.shift));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let at = Pos2::new(150.0, 120.0);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    seen.borrow_mut().clear();
+    let release = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::SHIFT };
+    frames.frame(vec![release], &mut show);
+    frames.idle(1, &mut show);
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|(released, ..)| *released), "the release pass ran: {seen:?}");
+    for (released, pick, held) in seen.iter() {
+        assert!(!held, "no Shift is held: {seen:?}");
+        assert_eq!(pick, released, "Shift is the pick's in the release pass only: {seen:?}");
+    }
+}
+
+/// A press of another button counts in the click run as a primary one does: a primary click, a middle click (a pan the
+/// view tools take) and a primary click make the last a triple click, as the old apps counted them. Only primary
+/// presses carry the count.
+#[trial]
+fn a_middle_click_between_primary_clicks_counts_in_the_click_run() {
+    let at = Pos2::new(50.0, 50.0);
+    let counts: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let sink = counts.clone();
+    let mut show = move |ui: &mut Ui| {
+        if let Some(press) = craft_ui::runtime::pointer::frame(ui.ctx()).press.filter(|press| press.button == craft_behavior::PointerButton::Primary)
+        {
+            sink.borrow_mut().push(press.clicks);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    for button in ["primary", "middle", "primary"] {
+        let (down, up) =
+            if button == "middle" { (pointer::middle(at, true), pointer::middle(at, false)) } else { (pointer::press(at), pointer::release(at)) };
+        frames.frame(vec![down], &mut show);
+        frames.frame(vec![up], &mut show);
+    }
+    let counts = counts.borrow();
+    assert!(counts.len() == 2 && counts[1] == counts[0] + 2, "the middle press counts in the run: {counts:?}");
+}
+
+/// A press that became a drag leaves the click run: a press at the same place right after the drag's release is a
+/// single press, as only clicks counted toward a double click in the old apps.
+#[trial]
+fn a_press_after_a_drag_starts_a_new_click_run() {
+    let at = Pos2::new(50.0, 50.0);
+    let counts: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let sink = counts.clone();
+    let mut show = move |ui: &mut Ui| {
+        if let Some(press) = craft_ui::runtime::pointer::frame(ui.ctx()).press {
+            sink.borrow_mut().push(press.clicks);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    frames.frame(vec![pointer::moved(at + Vec2::new(60.0, 0.0))], &mut show);
+    frames.frame(vec![pointer::moved(at), pointer::release(at)], &mut show);
+    for _ in 0..2 {
+        frames.frame(vec![pointer::press(at)], &mut show);
+        frames.frame(vec![pointer::release(at)], &mut show);
+    }
+    let counts = counts.borrow();
+    assert!(counts.len() == 3 && counts[1] == 1 && counts[2] == 2, "the drag's press is out of the run, the clicks after it count: {counts:?}");
 }
