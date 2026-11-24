@@ -19,7 +19,7 @@ mod vector;
 /// nightly, where the divisor is 1), so tests sweeping the same list with different offsets together reach more of it.
 fn sampled<T>(items: impl IntoIterator<Item = T>, offset: usize) -> Vec<T> {
     let div = divisor();
-    items.into_iter().enumerate().filter(|(i, _)| (i + offset) % div == 0).map(|(_, t)| t).collect()
+    items.into_iter().enumerate().filter(|(i, _)| (i + offset).is_multiple_of(div)).map(|(_, t)| t).collect()
 }
 
 fn divisor() -> usize {

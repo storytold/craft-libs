@@ -5484,7 +5484,7 @@ mod grey_tests {
 
         /// Whether the next case of the sweep is in the sample.
         fn take(&mut self) -> bool {
-            let take = self.seen % self.stride == 0;
+            let take = self.seen.is_multiple_of(self.stride);
             self.seen += 1;
             self.visited += usize::from(take);
             take
