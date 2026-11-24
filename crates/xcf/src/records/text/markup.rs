@@ -8,6 +8,9 @@ use super::{Failure, ReadResult};
 use crate::{Error, Result};
 use std::{borrow::Cow, ops::Range};
 
+#[cfg(test)]
+mod regressions;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub bytes: usize,
@@ -363,12 +366,6 @@ impl<'a> Parser<'a, '_> {
         }
         Ok(Cow::Owned(String::from_utf8(output).map_err(|_| Failure::Stop(StopReason::Malformed))?))
     }
-    fn notice(&mut self, kind: NoticeKind, context: usize, attribute: Option<usize>, source: Range<usize>) {
-        self.has_unhandled = true;
-        if self.notices.len() >= self.limits.notices || self.budget.retain(&mut self.notices, Notice { kind, context, attribute, source }).is_err() {
-            self.notices_truncated = true;
-        }
-    }
     fn opening(&mut self) -> ReadResult<()> {
         let start = self.at;
         self.at += 1;
@@ -438,12 +435,7 @@ impl<'a> Parser<'a, '_> {
         };
         let index = self.contexts.len();
         let role = role(name);
-        if role == Role::Unhandled {
-            self.notice(NoticeKind::UnhandledElement, index, None, start..self.at);
-        }
-        for (attribute, value) in attributes.iter().enumerate().filter(|(_, value)| value.kind == AttributeKind::Unhandled) {
-            self.notice(NoticeKind::UnhandledAttribute, index, Some(attribute), value.source.clone());
-        }
+        self.has_unhandled |= role == Role::Unhandled || attributes.iter().any(|value| value.kind == AttributeKind::Unhandled);
         self.budget.retain(&mut self.contexts, Context { parent: self.stack.last().copied(), name, role, attributes, source: start..self.at })?;
         if self.stack.is_empty() {
             self.root_seen = true;
@@ -608,11 +600,39 @@ pub fn tokenize<'a>(raw: &'a str, limits: Limits, budget: &mut Budget, keep_goin
         let markup = parser.parse()?;
         let mut records = Vec::new();
         budget.retain(&mut records, markup)?;
+        // Optional diagnostics cannot crowd out the required contexts, runs or
+        // result slot. Derive them from the retained vocabulary only after all
+        // usable markup storage has been admitted.
+        if let Some(markup) = records.first_mut() {
+            for (index, context) in markup.contexts.iter().enumerate() {
+                if !keep_going() {
+                    return Err(Failure::Cancelled);
+                }
+                let element = (context.role == Role::Unhandled).then(|| Notice {
+                    kind: NoticeKind::UnhandledElement,
+                    context: index,
+                    attribute: None,
+                    source: context.source.clone(),
+                });
+                let attributes =
+                    context.attributes.iter().enumerate().filter(|(_, value)| value.kind == AttributeKind::Unhandled).map(|(attribute, value)| {
+                        Notice { kind: NoticeKind::UnhandledAttribute, context: index, attribute: Some(attribute), source: value.source.clone() }
+                    });
+                for notice in element.into_iter().chain(attributes) {
+                    if markup.notices.len() >= limits.notices || budget.retain(&mut markup.notices, notice).is_err() {
+                        markup.notices_truncated = true;
+                    }
+                }
+            }
+        }
         Ok(Scan::complete(records, raw.len()))
     })();
     match result {
         Ok(scan) => Ok(scan),
-        Err(Failure::Cancelled) => Err(Error::Cancelled),
+        Err(Failure::Cancelled) => {
+            budget.retained_left = retained;
+            Err(Error::Cancelled)
+        }
         Err(Failure::Stop(reason)) => {
             budget.retained_left = retained;
             Ok(Scan::stopped(Vec::new(), 0, reason))

@@ -155,6 +155,7 @@ struct VisitTarget {
     channels: usize,
     indexed: bool,
     dimensions: Option<(u32, u32)>,
+    coverage: bool,
 }
 
 pub(super) struct HierarchyHead {
@@ -228,6 +229,7 @@ impl Xcf<'_> {
                 channels,
                 indexed: matches!(layer.layer_type, 4 | 5),
                 dimensions: Some((layer.width, layer.height)),
+                coverage: false,
             },
             options,
             budget,
@@ -284,12 +286,18 @@ impl Xcf<'_> {
         if owner.is_some_and(|owner| owner != dimensions) {
             return Err(invalid("mask dimensions do not match their owner"));
         }
+        // An unanswered interpretation question publishes no samples and must
+        // not spend the metadata needed by the caller's explicit retry.
+        self.source_order(options)?;
         let name = cursor.string()?;
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
         let selection = props(&mut cursor)?.iter().any(|p| p.kind == 4);
+        if selection && dimensions != (self.image.width, self.image.height) {
+            return Err(invalid("selection dimensions do not match the canvas"));
+        }
         let hierarchy = cursor.ptr()?;
         let info = self.visit_hierarchy(
-            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some(dimensions) },
+            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some(dimensions), coverage: owner.is_some() },
             options,
             budget,
             keep_going,
@@ -341,7 +349,7 @@ impl Xcf<'_> {
         if !keep_going() {
             return Err(Error::Cancelled);
         }
-        let VisitTarget { pointer, channels, indexed, dimensions } = target;
+        let VisitTarget { pointer, channels, indexed, dimensions, coverage } = target;
         let order = self.source_order(options)?;
         let head = self.hierarchy_head(pointer, channels)?;
         if dimensions.is_some_and(|size| size != (head.width, head.height)) {
@@ -359,8 +367,13 @@ impl Xcf<'_> {
         }
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the source pixel limit"))?;
         let offsets = self.hierarchy_tiles(&head, true, keep_going)?;
-        let drawable =
-            SourceDrawable { width: head.width, height: head.height, channels, indexed, precision: self.source_precision(), sample_order: order };
+        let mut precision = self.source_precision();
+        if coverage {
+            // Layer masks contain coverage, not color in the image's transfer.
+            precision.transfer = Transfer::Linear;
+            precision.storage.linear = true;
+        }
+        let drawable = SourceDrawable { width: head.width, height: head.height, channels, indexed, precision, sample_order: order };
         let across = head.width.div_ceil(TILE) as usize;
         let count = across.checked_mul(head.height.div_ceil(TILE) as usize).ok_or_else(|| invalid("tile count overflow"))?;
         for index in 0..count {

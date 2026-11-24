@@ -155,6 +155,9 @@ impl Source {
             }
             w.end();
             let pixels = w.slot();
+            if self.version >= 26 {
+                w.ptr(0); // Channel/mask effects-list terminator precedes the hierarchy.
+            }
             let at = hierarchy(&mut w, self.width, self.height, self.bytes, data, self.compression);
             w.patch(pixels, at);
         }
@@ -298,6 +301,8 @@ fn layer_masks_and_channels_share_order_and_exact_source_budget() {
         .unwrap();
     let (mask, _) = reader
         .visit_layer_mask_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
+            assert_eq!(tile.drawable.precision.transfer, Transfer::Linear);
+            assert!(tile.drawable.precision.storage.linear);
             assert_eq!(tile.sample(0)?, SourceSample::F32(1.25));
             Ok(())
         })
@@ -312,6 +317,64 @@ fn layer_masks_and_channels_share_order_and_exact_source_budget() {
         .unwrap();
     assert!(channel.selection);
     assert_eq!(budget, 0);
+}
+
+#[test]
+fn historical_mask_question_preserves_the_metadata_for_an_explicit_retry() {
+    let mut source = Source::gray(250, 2, 0x1234u16.to_be_bytes().to_vec());
+    source.version = 11;
+    source.mask = Some(0xabcd_u16.to_be_bytes().to_vec());
+    let bytes = source.write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    reader.meta_budget.set("Mask".len());
+    let mut budget = 2;
+    let missing = SampleOptions { historical_order: HistoricalOrder::RequireExplicit };
+    let error = reader.visit_layer_mask_tiles(0, missing, &mut budget, GO, |_| panic!("no samples before a choice")).unwrap_err();
+    assert!(error.to_string().contains("explicit byte order"));
+    assert_eq!(reader.meta_budget.get(), "Mask".len());
+    assert_eq!(budget, 2);
+    let (mask, _) = reader
+        .visit_layer_mask_tiles(0, options(SampleOrder::BigEndian), &mut budget, GO, |tile| {
+            assert_eq!(tile.sample(0)?, SourceSample::U16(0xabcd));
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(mask.name, "Mask");
+    assert_eq!(reader.meta_budget.get(), 0);
+    assert_eq!(budget, 0);
+}
+
+#[test]
+fn saved_selection_must_match_canvas_before_any_callback() {
+    let mut source = Source::gray(150, 1, vec![10]);
+    source.channel = Some(vec![128]);
+    let mut bytes = source.write();
+    // Keep the channel record and its hierarchy mutually consistent at 1x1;
+    // only the independently framed canvas changes to 2x2.
+    let image_start = 14;
+    bytes[image_start..image_start + 4].copy_from_slice(&2u32.to_be_bytes());
+    bytes[image_start + 4..image_start + 8].copy_from_slice(&2u32.to_be_bytes());
+    let reader = Xcf::parse(&bytes).unwrap();
+    let mut budget = 1;
+    let error =
+        reader.visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, |_| panic!("invalid selection cannot publish samples")).unwrap_err();
+    assert!(error.to_string().contains("selection dimensions"));
+    assert_eq!(budget, 1);
+    // An ordinary auxiliary channel need not cover the canvas.
+    let ptr = reader.channels[0];
+    drop(reader);
+    let prop = ptr + 8 + 4 + "Selection".len() + 1;
+    bytes[prop..prop + 4].copy_from_slice(&6u32.to_be_bytes()); // Active channel, not selection.
+    let reader = Xcf::parse(&bytes).unwrap();
+    let (channel, drawable) = reader
+        .visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
+            assert_eq!(tile.sample(0)?, SourceSample::U8(128));
+            Ok(())
+        })
+        .unwrap();
+    assert!(!channel.selection);
+    assert_eq!((drawable.width, drawable.height), (1, 1));
 }
 
 #[test]
@@ -483,11 +546,12 @@ fn oversized_caller_budget_cannot_lift_the_source_drawable_limit() {
     let source = Source::gray(150, 1, vec![1]);
     let mut bytes = source.write();
     let hierarchy = Xcf::parse(&bytes).unwrap().image.layers[0].hierarchy;
-    bytes[hierarchy..hierarchy + 4].copy_from_slice(&crate::MAX_SIDE.to_be_bytes());
-    bytes[hierarchy + 4..hierarchy + 8].copy_from_slice(&crate::MAX_SIDE.to_be_bytes());
+    // Fits usize even on wasm32, but exceeds the 1 GiB source pixel limit.
+    bytes[hierarchy..hierarchy + 4].copy_from_slice(&32_769u32.to_be_bytes());
+    bytes[hierarchy + 4..hierarchy + 8].copy_from_slice(&32_768u32.to_be_bytes());
     let mut reader = Xcf::parse(&bytes).unwrap();
-    reader.image.layers[0].width = crate::MAX_SIDE;
-    reader.image.layers[0].height = crate::MAX_SIDE;
+    reader.image.layers[0].width = 32_769;
+    reader.image.layers[0].height = 32_768;
     let mut budget = usize::MAX;
     let error = reader.visit_layer_tiles(0, SampleOptions::default(), &mut budget, GO, |_| panic!("refuse before following the level")).unwrap_err();
     assert!(error.to_string().contains("source pixel limit"));

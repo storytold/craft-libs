@@ -8,6 +8,9 @@ use crate::{Error, Result};
 
 pub mod markup;
 
+#[cfg(test)]
+mod regressions;
+
 /// Limits for one optional configuration. Recursion has an absolute ceiling of
 /// 64 even when a caller supplies a larger depth, so hostile data cannot exhaust
 /// the process stack. Cumulative work and allocations use the shared Budget.
@@ -108,6 +111,10 @@ pub enum Direction {
     Auto,
     Ltr,
     Rtl,
+    TtbRtl,
+    TtbRtlUpright,
+    TtbLtr,
+    TtbLtrUpright,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +127,9 @@ pub enum LegacyEncoding {
 /// unmodified XLFD request. No font is loaded or native unit conversion applied.
 #[derive(Debug)]
 pub struct Legacy<'a> {
-    pub fields: Vec<&'a str>,
+    /// Original lexical fields; only a non-UTF-8 Latin-1 text field is converted.
+    /// `TextRecord::raw` and `spans` always preserve its exact original bytes.
+    pub fields: Vec<Cow<'a, str>>,
     pub spans: Vec<Span>,
     pub font_fields: Vec<&'a str>,
     pub text: String,
@@ -257,6 +266,7 @@ impl<'a> Parser<'a, '_> {
                         b't' => b'\t',
                         b'b' => 8,
                         b'f' => 12,
+                        b'v' if !require_quote => 11,
                         b'\\' | b'"' => escape,
                         _ => return Err(StopReason::Malformed.into()),
                     }
@@ -315,7 +325,11 @@ fn direction(config: &Config<'_>) -> ReadResult<Direction> {
     let base = match config.scalar("base-direction")? {
         Some("ltr") => Direction::Ltr,
         Some("rtl") => Direction::Rtl,
-        None | Some("ttb-rtl" | "ttb-rtl-upright" | "ttb-ltr" | "ttb-ltr-upright") => Direction::Auto,
+        Some("ttb-rtl") => Direction::TtbRtl,
+        Some("ttb-rtl-upright") => Direction::TtbRtlUpright,
+        Some("ttb-ltr") => Direction::TtbLtr,
+        Some("ttb-ltr-upright") => Direction::TtbLtrUpright,
+        None => Direction::Auto,
         _ => return Err(StopReason::Malformed.into()),
     };
     match config.scalar("base-dir-auto")? {
@@ -349,7 +363,10 @@ fn finish<'a>(result: ReadResult<TextRecord<'a>>, source_offset: usize, retained
     });
     match result {
         Ok(scan) => Ok(scan),
-        Err(Failure::Cancelled) => Err(Error::Cancelled),
+        Err(Failure::Cancelled) => {
+            budget.retained_left = retained;
+            Err(Error::Cancelled)
+        }
         Err(Failure::Stop(reason)) => {
             budget.retained_left = retained;
             Ok(Scan::stopped(Vec::new(), source_offset, reason))
@@ -401,9 +418,8 @@ pub fn gdyntext<'a>(
     let result = (|| {
         admit(bytes, limits, budget, keep_going)?;
         let raw = bytes.strip_suffix(&[0]).unwrap_or(bytes);
-        let source = std::str::from_utf8(raw).map_err(|_| Failure::Stop(StopReason::Malformed))?;
-        let body = source.strip_prefix("GDT10{").and_then(|source| source.strip_suffix('}')).ok_or(Failure::Stop(StopReason::Malformed))?;
-        let mut fields = [""; 8];
+        let body = raw.strip_prefix(b"GDT10{").and_then(|source| source.strip_suffix(b"}")).ok_or(Failure::Stop(StopReason::Malformed))?;
+        let mut fields: [&[u8]; 8] = [&[]; 8];
         let mut spans = [Span::default(); 8];
         let mut start = 0;
         for index in 0..8 {
@@ -412,12 +428,12 @@ pub fn gdyntext<'a>(
             }
             let remaining = body.get(start..).ok_or(Failure::Stop(StopReason::Malformed))?;
             let length = if index == 7 {
-                if remaining.contains("}{") {
+                if remaining.windows(2).any(|window| window == b"}{") {
                     return Err(StopReason::Malformed.into());
                 }
                 remaining.len()
             } else {
-                remaining.find("}{").ok_or(Failure::Stop(StopReason::Malformed))?
+                remaining.windows(2).position(|window| window == b"}{").ok_or(Failure::Stop(StopReason::Malformed))?
             };
             let end = start.checked_add(length).ok_or(Failure::Stop(StopReason::Malformed))?;
             if let Some(field) = fields.get_mut(index) {
@@ -431,7 +447,13 @@ pub fn gdyntext<'a>(
             }
             start = end.saturating_add(2);
         }
-        let font = fields.get(7).and_then(|font| font.strip_prefix('-')).ok_or(Failure::Stop(StopReason::Malformed))?;
+        // Metadata is UTF-8 independently of the legacy text field's declared
+        // encoding. A raw Latin-1 text byte must reach the explicit XLFD fallback.
+        let font = fields
+            .get(7)
+            .and_then(|font| std::str::from_utf8(font).ok())
+            .and_then(|font| font.strip_prefix('-'))
+            .ok_or(Failure::Stop(StopReason::Malformed))?;
         let mut font_fields = [""; 14];
         let mut parts = font.split('-');
         for field in &mut font_fields {
@@ -442,7 +464,7 @@ pub fn gdyntext<'a>(
         }
         let content = fields.first().copied().ok_or(Failure::Stop(StopReason::Malformed))?;
         let before = budget.retained_left;
-        let mut parser = Parser { bytes: content.as_bytes(), source_offset: 0, at: 0, checked_at: 0, nodes: 0, limits, budget, keep_going };
+        let mut parser = Parser { bytes: content, source_offset: 0, at: 0, checked_at: 0, nodes: 0, limits, budget, keep_going };
         let decoded = parser.quoted(false)?;
         if decoded.contains(&0) {
             return Err(StopReason::Malformed.into());
@@ -470,7 +492,24 @@ pub fn gdyntext<'a>(
         let mut stored_fields = Vec::new();
         let mut stored_spans = Vec::new();
         let mut stored_font_fields = Vec::new();
-        for field in fields {
+        for (index, field) in fields.into_iter().enumerate() {
+            let field = match std::str::from_utf8(field) {
+                Ok(field) => Cow::Borrowed(field),
+                Err(_) if index == 0 && encoding == LegacyEncoding::Latin1 => {
+                    let mut output = Vec::new();
+                    for (offset, byte) in field.iter().enumerate() {
+                        if offset.is_multiple_of(256) {
+                            parser.check()?;
+                        }
+                        let mut encoded = [0; 4];
+                        for byte in char::from(*byte).encode_utf8(&mut encoded).as_bytes() {
+                            parser.budget.retain(&mut output, *byte)?;
+                        }
+                    }
+                    Cow::Owned(String::from_utf8(output).map_err(|_| Failure::Stop(StopReason::Malformed))?)
+                }
+                Err(_) => return Err(StopReason::Malformed.into()),
+            };
             parser.budget.retain(&mut stored_fields, field)?;
         }
         for span in spans {
@@ -527,7 +566,7 @@ mod tests {
             ("(base-direction rtl) (base-dir-auto yes)", Direction::Auto),
             ("(base-dir-auto no)", Direction::Ltr),
             ("(base-direction rtl) (base-dir-auto no)", Direction::Rtl),
-            ("(base-direction ttb-rtl-upright)", Direction::Auto),
+            ("(base-direction ttb-rtl-upright)", Direction::TtbRtlUpright),
         ] {
             let raw = format!("(text \"אב 123, punctuation\") {fields}");
             let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut super::super::Budget::default(), &|| true).unwrap();
@@ -554,7 +593,7 @@ mod tests {
         assert_eq!(matrix[3].text().unwrap(), "3");
     }
 
-    fn legacy_bytes(text: &str, charset: &str) -> Vec<u8> {
+    pub(super) fn legacy_bytes(text: &str, charset: &str) -> Vec<u8> {
         format!("GDT10{{{text}}}{{1}}{{2}}{{17}}{{3}}{{0xff00aa}}{{0}}{{-source-example-medium-r-normal--12-120-75-75-p-60-{charset}-1}}")
             .into_bytes()
     }
