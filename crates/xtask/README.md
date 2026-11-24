@@ -10,7 +10,7 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `assets` | always | `Policy`, `RowMode`, `check`, `run`, `list_files`, `read_document`, `is_asset`, `ASSET_EXT`: the asset attribution check against the document, folders and extensions the app supplies |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
-| `pins` | `pins` | `run`, `check`, `check_commits`, `run_target_features`, `host_target`: the version, source and features of pinned dependencies, packages the app forbids, and one commit per git repository, read from `cargo metadata` within size limits |
+| `pins` | `pins` | `run`, `check`, `check_commits`: the version, source and features of pinned dependencies, packages the app forbids, and one commit per git repository, read from `cargo metadata`; `run_target_features`: one target's features, read from `cargo tree`; `host_target`: the host target, read from `rustc -vV`; each command's output is read within size limits |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `pins` adds `serde_json`.
 
@@ -199,14 +199,18 @@ Some("pdf-deps") => {
 - `run` runs `cargo metadata --locked --format-version 1` and passes the JSON to `check`.
 - Each `Pin` name has exactly one package, with the pinned `version` and `source`. `git_source(url, rev)`
   gives the source Cargo writes for a git dependency pinned to a full commit hash, and `CRATES_IO` the
-  source for crates.io.
+  source for crates.io. `git_source` and `check_commits` write an `http` or `https` URL as Cargo does:
+  the scheme and host in lowercase, without the default port (`https://github.com:443/o/r` becomes
+  `https://github.com/o/r`).
 - `FeatureRule::Contains` requires the listed features and allows others. `FeatureRule::Exactly`
   allows the listed features only. Both read the package's node in `resolve.nodes`.
 - `Scope::Active` rejects a forbidden package that has a resolved node, development dependencies
   included. `Scope::ProductionFrom(root)` rejects a forbidden package reached from `root` over normal
   or build edges; one reached only through development edges is allowed. `Name::Family("hayro")`
   matches `hayro` and every `hayro-*` name.
-- Packages the policy does not name are allowed, and an empty policy accepts any metadata.
+- Packages the policy does not name are allowed. An empty policy sets no rule on the packages, but
+  the metadata must still be within `metadata_bytes`, parse, and have a `packages` list with a `name`
+  for each package.
 - `check_commits` reads the same JSON against `OneCommit` rules. Every package whose source is the
   rule's git repository must resolve from one commit, the text after the source's `#`. An `Extra`
   names a package allowed at its own commit, for a dependency the app declares at a second revision
@@ -225,8 +229,9 @@ Some("pdf-deps") => {
   `cargo tree --target <target>` from a root package and checks that each line for one package has
   exactly the given features; `host_target` reads the host target from `rustc -vV`.
 - `Limits` bounds each command's output. More standard output than the limit stops the command and
-  returns an error. Standard error is read to its end, and its first `stderr_bytes` are kept for the
-  error message:
+  returns an error, and so does standard output that a process the command started keeps open for 2
+  seconds after the command exits. Standard error is read to its end, and its first `stderr_bytes`
+  are kept for the error message; after a failing exit it is read for at most 2 seconds more:
 
   | Limit | Default |
   |---|---|

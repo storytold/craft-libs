@@ -16,7 +16,9 @@
 //!   dependencies included. [`Scope::ProductionFrom`] rejects a forbidden package reached from a root
 //!   package over normal and build edges; a package reached only through development edges is
 //!   allowed.
-//! - Packages the policy does not name are allowed. An empty policy accepts any metadata.
+//! - Packages the policy does not name are allowed. An empty policy sets no rule on the packages of
+//!   metadata that is within [`Limits::metadata_bytes`], parses and has a `packages` list with a
+//!   `name` for each package.
 //!
 //! [`check_commits`] reads the same JSON against a list of [`OneCommit`] rules: every package from
 //! the rule's git repository resolves from one commit, apart from the [`Extra`] packages the rule
@@ -31,14 +33,19 @@
 //! reads the host target from `rustc -vV`.
 //!
 //! Every command's output is read within a [`Limits`] size: more standard output than the limit stops
-//! the command and returns [`Error::TooLarge`]. Standard error is read to its end while the command
-//! runs, and its first [`Limits::stderr_bytes`] bytes are kept for the error message.
+//! the command and returns [`Error::TooLarge`]. Standard output that stays open for 2 seconds after
+//! the command exits, held by a process it started, returns [`Error::Read`]. Standard error is read to
+//! its end while the command runs, and its first [`Limits::stderr_bytes`] bytes are kept for the error
+//! message; after a failing exit it is read for at most 2 seconds more.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -46,9 +53,49 @@ use serde_json::Value;
 pub const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 /// The `source` Cargo writes for a package from the git repository at `url`, pinned with
-/// `rev = "<rev>"` where `rev` is a full commit hash: `git+<url>?rev=<rev>#<rev>`.
+/// `rev = "<rev>"` where `rev` is a full commit hash: `git+<url>?rev=<rev>#<rev>`, with `url` written
+/// as Cargo writes it. For `http` and `https` that is the scheme and host in lowercase, without the
+/// default port: `https://github.com:443/o/r` becomes `https://github.com/o/r`.
 pub fn git_source(url: &str, rev: &str) -> String {
-    format!("git+{url}?rev={rev}#{rev}")
+    format!("git+{}?rev={rev}#{rev}", cargo_url(url))
+}
+
+/// `url` as Cargo writes it in a `source`: the scheme in lowercase and, for `http` and `https`, the
+/// host in lowercase, an empty port or the scheme's default port (80 or 443) left out, and `/` for an
+/// empty path. Other URLs are kept apart from the scheme.
+fn cargo_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.to_owned() };
+    let scheme = scheme.to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "http" => "80",
+        "https" => "443",
+        _ => return format!("{scheme}://{rest}"),
+    };
+    let (authority, tail) = rest.split_at_checked(rest.find(['/', '?', '#']).unwrap_or(rest.len())).unwrap_or((rest, ""));
+    let (user, host_port) = match authority.rsplit_once('@') {
+        Some((user, host_port)) => (Some(user), host_port),
+        None => (None, authority),
+    };
+    // A `:` inside an IPv6 address's brackets does not start the port.
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((host, port)) if !port.contains(']') => (host, Some(port)),
+        _ => (host_port, None),
+    };
+    let mut out = format!("{scheme}://");
+    if let Some(user) = user {
+        out.push_str(user);
+        out.push('@');
+    }
+    out.push_str(&host.to_ascii_lowercase());
+    if let Some(port) = port.filter(|port| !port.is_empty() && *port != default_port) {
+        out.push(':');
+        out.push_str(port);
+    }
+    if !tail.starts_with('/') {
+        out.push('/');
+    }
+    out.push_str(tail);
+    out
 }
 
 /// One pinned package.
@@ -273,7 +320,9 @@ pub enum Error {
         /// The error starting it.
         source: io::Error,
     },
-    /// A command's output could not be read, or the command could not be waited for.
+    /// A command's output could not be read, the command could not be waited for, or its standard
+    /// output was still open 2 seconds after it exited (an error of kind
+    /// [`io::ErrorKind::TimedOut`]).
     Read {
         /// The command.
         command: String,
@@ -389,11 +438,12 @@ pub fn check_commits(metadata_json: &[u8], rules: &[OneCommit<'_>], limits: &Lim
     let meta: Value = serde_json::from_slice(metadata_json).map_err(|e| invalid(format!("not JSON: {e}")))?;
     let packages = meta.get("packages").and_then(Value::as_array).ok_or_else(|| invalid("packages is missing"))?;
     for rule in rules {
+        let url = cargo_url(rule.url);
         let mut commits: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for package in packages {
             let name = str_field(package, "name", "a package")?;
             let Some(source) = package.get("source").and_then(Value::as_str) else { continue };
-            let Some(commit) = git_commit(source, rule.url)? else { continue };
+            let Some(commit) = git_commit(source, &url)? else { continue };
             if rule.extra.iter().any(|extra| extra.name == name && extra.rev == commit) {
                 continue;
             }
@@ -407,11 +457,11 @@ pub fn check_commits(metadata_json: &[u8], rules: &[OneCommit<'_>], limits: &Lim
     Ok(())
 }
 
-/// The commit of a `source` from the git repository at `url`: the text after its last `#`. `None`
-/// for a source from anywhere else.
+/// The commit of a `source` from the git repository at `url` (as [`cargo_url`] writes it): the text
+/// after its last `#`. `None` for a source from anywhere else.
 fn git_commit<'s>(source: &'s str, url: &str) -> Result<Option<&'s str>, Error> {
     let Some(rest) = source.strip_prefix("git+").and_then(|s| s.strip_prefix(url)) else { return Ok(None) };
-    if !rest.starts_with(['?', '#']) {
+    if !rest.is_empty() && !rest.starts_with(['?', '#']) {
         return Ok(None);
     }
     match rest.rsplit_once('#') {
@@ -641,36 +691,85 @@ pub fn host_target(rustc: impl FnOnce() -> Command, limits: &Limits) -> Result<S
         .ok_or_else(|| Error::Output { command: COMMAND.into(), why: "no host line".into() })
 }
 
+/// How long [`output`] waits for a command's pipes to close after the command exits. A process the
+/// command started can hold them open.
+const DRAIN: Duration = Duration::from_secs(2);
+
+/// How often [`output`] checks whether the command exited while its standard output is read.
+const POLL: Duration = Duration::from_millis(10);
+
 /// Runs `cmd` and returns its standard output, or an error when it fails or prints more than
-/// `limit` bytes. Standard error is read on another thread to its end, so a command that writes a
-/// lot there does not stop on a full pipe; its first `stderr_limit` bytes are kept.
+/// `limit` bytes. Standard output is read on another thread while the command's exit is checked, and
+/// once it exits the output must reach its end within [`DRAIN`]. Standard error is read on another
+/// thread to its end, so a command that writes a lot there does not stop on a full pipe; its first
+/// `stderr_limit` bytes are kept, waiting at most [`DRAIN`] after a failing exit.
 fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) -> Result<Vec<u8>, Error> {
+    let read_error = |source: io::Error| Error::Read { command: command.into(), source };
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|source| Error::Start { command: command.into(), source })?;
-    let stderr = child.stderr.take().map(|pipe| std::thread::spawn(move || read_head(pipe, stderr_limit)));
-    let read = match child.stdout.take() {
-        Some(stdout) => read_bounded(stdout, limit),
-        None => Err(io::Error::other("no output pipe")),
+    // Reader threads that cannot start stop the command. On an error the threads already started are
+    // left to end when their pipes close: a process the child started may hold a pipe open after the
+    // child is stopped.
+    let stderr = match child.stderr.take().map(|pipe| Head::start(pipe, stderr_limit)).transpose() {
+        Ok(head) => head,
+        Err(source) => {
+            stop(&mut child);
+            return Err(read_error(source));
+        }
     };
-    // On an error the stderr thread is left to end when the pipe closes: a process the child started
-    // may hold the pipe open after the child is stopped.
+    let Some(stdout) = child.stdout.take() else {
+        stop(&mut child);
+        return Err(read_error(io::Error::other("no output pipe")));
+    };
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let reader = thread::Builder::new().name("craft-xtask stdout".into()).spawn(move || {
+        let _ = sender.send(read_bounded(stdout, limit));
+    });
+    if let Err(source) = reader {
+        stop(&mut child);
+        return Err(read_error(source));
+    }
+    // The output, or `None` when it is still open `DRAIN` after the command exited.
+    let (read, exited) = loop {
+        match receiver.recv_timeout(POLL) {
+            Ok(read) => break (Some(read), None),
+            Err(RecvTimeoutError::Disconnected) => break (Some(Err(io::Error::other("the output reader stopped"))), None),
+            Err(RecvTimeoutError::Timeout) => match child.try_wait() {
+                Ok(Some(status)) => break (receiver.recv_timeout(DRAIN).ok(), Some(status)),
+                Ok(None) => {}
+                Err(source) => {
+                    stop(&mut child);
+                    return Err(read_error(source));
+                }
+            },
+        }
+    };
     let stdout = match read {
-        Ok(Some(stdout)) => stdout,
-        Ok(None) => {
+        Some(Ok(Some(stdout))) => Some(stdout),
+        Some(Ok(None)) => {
             stop(&mut child);
             return Err(Error::TooLarge { command: command.into(), limit });
         }
-        Err(source) => {
+        Some(Err(source)) => {
             stop(&mut child);
-            return Err(Error::Read { command: command.into(), source });
+            return Err(read_error(source));
         }
+        None => None,
     };
-    let status = child.wait().map_err(|source| Error::Read { command: command.into(), source })?;
+    let status = match exited {
+        Some(status) => status,
+        None => child.wait().map_err(read_error)?,
+    };
     if status.success() {
-        return Ok(stdout);
+        return stdout.ok_or_else(|| read_error(io::Error::new(io::ErrorKind::TimedOut, "the output stayed open after the command exited")));
     }
-    let stderr = stderr.map(join_head).unwrap_or_default();
-    Err(Error::Exit { command: command.into(), status, stderr: String::from_utf8_lossy(&stderr).trim().to_owned() })
+    let stderr = stderr.map(|head| head.finish(DRAIN)).unwrap_or_default();
+    let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
+    // An incomplete character at the end of the kept bytes decodes to a three-byte replacement.
+    while stderr.len() > stderr_limit {
+        stderr.pop();
+    }
+    Err(Error::Exit { command: command.into(), status, stderr: stderr.trim().to_owned() })
 }
 
 /// Everything `reader` gives, or `None` when that is more than `limit` bytes. The read stops one byte
@@ -681,14 +780,40 @@ fn read_bounded(reader: impl Read, limit: usize) -> io::Result<Option<Vec<u8>>> 
     Ok((buf.len() <= limit).then_some(buf))
 }
 
-/// Reads `reader` to its end and returns its first `limit` bytes.
-fn read_head(mut reader: impl Read, limit: usize) -> Vec<u8> {
-    let mut head = Vec::new();
+/// The first bytes of a pipe that another thread reads to its end.
+struct Head {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    done: mpsc::Receiver<()>,
+}
+
+impl Head {
+    /// Starts the thread that reads `reader` and keeps its first `limit` bytes.
+    fn start(reader: impl Read + Send + 'static, limit: usize) -> io::Result<Head> {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let (sender, done) = mpsc::sync_channel(1);
+        let head = Arc::clone(&bytes);
+        thread::Builder::new().name("craft-xtask stderr".into()).spawn(move || {
+            read_head(reader, limit, &head);
+            let _ = sender.send(());
+        })?;
+        Ok(Head { bytes, done })
+    }
+
+    /// The bytes kept once the pipe reaches its end, or those kept after `wait` when it is still open.
+    fn finish(self, wait: Duration) -> Vec<u8> {
+        let _ = self.done.recv_timeout(wait);
+        self.bytes.lock().map(|bytes| bytes.to_vec()).unwrap_or_default()
+    }
+}
+
+/// Reads `reader` to its end and keeps its first `limit` bytes in `head`.
+fn read_head(mut reader: impl Read, limit: usize, head: &Mutex<Vec<u8>>) {
     let mut chunk = [0u8; 8192];
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
+                let Ok(mut head) = head.lock() else { break };
                 let room = limit.saturating_sub(head.len());
                 head.extend_from_slice(chunk.get(..n.min(room)).unwrap_or_default());
             }
@@ -696,11 +821,6 @@ fn read_head(mut reader: impl Read, limit: usize) -> Vec<u8> {
             Err(_) => break,
         }
     }
-    head
-}
-
-fn join_head(handle: JoinHandle<Vec<u8>>) -> Vec<u8> {
-    handle.join().unwrap_or_default()
 }
 
 /// Ends a child whose output is no longer read.
@@ -777,6 +897,19 @@ mod tests {
     #[test]
     fn git_sources_name_the_revision_twice() {
         assert_eq!(git_source("https://github.com/o/r", "abc"), "git+https://github.com/o/r?rev=abc#abc");
+    }
+
+    #[test]
+    fn git_sources_write_the_url_as_cargo_does() {
+        assert_eq!(git_source("https://github.com:443/o/r", "abc"), "git+https://github.com/o/r?rev=abc#abc");
+        assert_eq!(git_source("HTTPS://GitHub.com/O/r", "abc"), "git+https://github.com/O/r?rev=abc#abc");
+        assert_eq!(git_source("http://host:80/r", "abc"), "git+http://host/r?rev=abc#abc");
+        assert_eq!(git_source("https://host:/r", "abc"), "git+https://host/r?rev=abc#abc");
+        assert_eq!(git_source("https://user@[::1]:443/r", "abc"), "git+https://user@[::1]/r?rev=abc#abc");
+        assert_eq!(git_source("https://host", "abc"), "git+https://host/?rev=abc#abc");
+        // Other ports, and schemes without a default port, are kept.
+        assert_eq!(git_source("https://host:8443/r", "abc"), "git+https://host:8443/r?rev=abc#abc");
+        assert_eq!(git_source("ssh://git@Host:22/r", "abc"), "git+ssh://git@Host:22/r?rev=abc#abc");
     }
 
     #[test]
@@ -867,7 +1000,16 @@ mod tests {
         assert!(check_libs(&m, &[]).is_ok());
         let m = libs_metadata(&[("craft-xml", &format!("git+{LIBS}?rev=aaa"))]);
         assert!(output_error(check_libs(&m, &[])).contains("names no commit"));
+        let m = libs_metadata(&[("craft-xml", &format!("git+{LIBS}"))]);
+        assert!(output_error(check_libs(&m, &[])).contains("names no commit"));
         assert!(output_error(check_libs(&json!({"packages": [{"source": CRATES_IO}]}), &[])).contains("name"));
+    }
+
+    #[test]
+    fn a_rule_url_with_the_default_port_matches_the_source_cargo_writes() {
+        let m = libs_metadata(&[("craft-xml", &git_source(LIBS, "aaa")), ("craft-zip", &git_source(LIBS, "bbb"))]);
+        let rule = OneCommit { url: "https://github.com:443/storytold/craft-libs", extra: &[] };
+        assert!(matches!(violation(check_commits(&bytes(&m), &[rule], &Limits::default())), Violation::Commits { .. }));
     }
 
     #[test]
@@ -1227,9 +1369,10 @@ mod tests {
             let mut duplicate = m["packages"][0].clone();
             duplicate["id"] = json!("craft-pdf-2");
             m["packages"].as_array_mut().unwrap().push(duplicate);
-            assert!(check(&m).is_err());
+            assert_eq!(violation(check(&m)), Violation::Count { name: "craft-pdf".into(), found: 2 });
+            let mut m = metadata();
             m["packages"].as_array_mut().unwrap().retain(|p| p["name"] != "hayro-syntax");
-            assert!(check(&m).is_err());
+            assert_eq!(violation(check(&m)), Violation::Count { name: "hayro-syntax".into(), found: 0 });
         }
 
         #[test]
@@ -1269,9 +1412,11 @@ mod tests {
     mod process {
         use super::super::{Error, Limits, TargetFeatures, Violation, host_target, metadata, run_target_features};
         use std::io::Write;
-        use std::process::Command;
+        use std::process::{Command, Stdio};
 
         const MODE: &str = "CRAFT_XTASK_PINS_FAKE";
+        /// The file whose lock a `linger` child waits for.
+        const RELEASE: &str = "CRAFT_XTASK_PINS_RELEASE";
 
         fn fake(mode: &str) -> Command {
             let mut cmd = Command::new(std::env::current_exe().unwrap());
@@ -1300,6 +1445,36 @@ mod tests {
                         let _ = err.write_all(&chunk);
                     }
                     std::process::exit(3);
+                }
+                "utf8" => {
+                    let _ = std::io::stderr().write_all("é".as_bytes());
+                    std::process::exit(3);
+                }
+                // Starts a `linger` child that keeps one of this process's pipes open after it exits.
+                "orphan-out" | "orphan-err" => {
+                    let mut linger = fake("linger");
+                    linger.stdin(Stdio::null());
+                    if mode == "orphan-out" {
+                        linger.stdout(Stdio::inherit()).stderr(Stdio::null());
+                    } else {
+                        linger.stdout(Stdio::null()).stderr(Stdio::inherit());
+                    }
+                    let _ = linger.spawn();
+                    if mode == "orphan-out" {
+                        std::process::exit(0);
+                    }
+                    eprint!("failed");
+                    std::process::exit(3);
+                }
+                // Waits for the lock the test holds on the release file, which the test drops once the
+                // call it checks has returned.
+                "linger" => {
+                    let Ok(release) = std::env::var(RELEASE) else {
+                        return;
+                    };
+                    if let Ok(file) = std::fs::File::open(release) {
+                        let _ = file.lock();
+                    }
                 }
                 "host" => println!("rustc 1.0.0\nhost: fake-target\nrelease: 1.0.0"),
                 "tree" => println!("app-pdf v0.1.0|\ncraft-pdf v0.1.0|write\nkrilla v0.8.2|raster-images,simple-text"),
@@ -1340,6 +1515,53 @@ mod tests {
                 Err(Error::Exit { status, stderr, .. }) => {
                     assert_eq!(status.code(), Some(3));
                     assert_eq!(stderr, "x".repeat(1000));
+                }
+                other => panic!("expected Exit, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn the_kept_stderr_fits_the_limit_after_decoding() {
+            let limits = Limits { stderr_bytes: 1, ..Limits::default() };
+            match metadata(|| fake("utf8"), &limits) {
+                Err(Error::Exit { stderr, .. }) => assert!(stderr.len() <= 1, "{stderr:?}"),
+                other => panic!("expected Exit, got {other:?}"),
+            }
+        }
+
+        /// Runs `mode` while the test holds a lock on the release file, and drops the lock once the call
+        /// has returned.
+        fn orphaned(mode: &str) -> Result<Vec<u8>, Error> {
+            let dir = tempfile::tempdir().unwrap();
+            let release = dir.path().join("release");
+            let held = std::fs::File::create(&release).unwrap();
+            held.lock().unwrap();
+            let r = metadata(
+                || {
+                    let mut cmd = fake(mode);
+                    cmd.env(RELEASE, &release);
+                    cmd
+                },
+                &Limits::default(),
+            );
+            held.unlock().unwrap();
+            r
+        }
+
+        #[test]
+        fn output_that_stays_open_after_the_command_exits_is_an_error() {
+            match orphaned("orphan-out") {
+                Err(Error::Read { source, .. }) => assert_eq!(source.kind(), std::io::ErrorKind::TimedOut),
+                other => panic!("expected Read, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_failing_command_returns_while_another_process_holds_its_stderr() {
+            match orphaned("orphan-err") {
+                Err(Error::Exit { status, stderr, .. }) => {
+                    assert_eq!(status.code(), Some(3));
+                    assert_eq!(stderr, "failed");
                 }
                 other => panic!("expected Exit, got {other:?}"),
             }
