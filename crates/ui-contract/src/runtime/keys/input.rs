@@ -1,7 +1,7 @@
 //! The input hook's key steps (H3): what it strips from each raw key event and records.
 
 use super::route::layout_of;
-use super::{AltTrack, Batch, EscapePress, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
+use super::{AltTrack, Batch, EscapePress, LastPress, LeftClip, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, Arrived, KeyEvent, RawInput};
 use crate::runtime::env::Env;
@@ -238,7 +238,8 @@ impl Strip<'_> {
                     self.press(batch, key, &input, false, at);
                 } else if !sent {
                     batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at, place: batch.place });
-                    // No component took it, so a host that reads what is left over (`unclaimed`) gets the event back.
+                    // No component took it, so a host that reads what is left over (`leftover_events`) gets the event back,
+                    // in its place among the events egui keeps.
                     let text = left.as_ref().and_then(|left| left.text.as_deref());
                     let event = match (command, left.as_ref().and_then(|left| left.image.as_ref())) {
                         (EditCommand::Cut, _) => Event::Cut,
@@ -246,7 +247,7 @@ impl Strip<'_> {
                         (EditCommand::Paste, _) => Event::Paste(text.unwrap_or_default().to_owned()),
                         _ => Event::Copy,
                     };
-                    batch.left_clips.push((event, input));
+                    batch.left_clips.push(LeftClip { event, input, at: batch.egui_events });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -743,8 +744,13 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
                 ime_next: ime_presses.contains(&arrived.event),
                 press_next: press_next.get(batch.place).copied().unwrap_or(false),
             };
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival)
+            let kept = strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival);
+            batch.egui_events += usize::from(kept);
+            kept
         });
+        if !batch.left_clips.is_empty() {
+            batch.passed = events.iter().map(|arrived| arrived.event.clone()).collect();
+        }
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);
         }

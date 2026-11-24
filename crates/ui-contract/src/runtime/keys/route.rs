@@ -243,6 +243,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         }
         stage.shortcuts = shortcuts;
         stage.left_clips = batch.left_clips;
+        stage.passed = batch.passed;
         if !stage.shortcuts.keys.is_empty() {
             stage.shortcuts.layout = stage.layout.clone();
         }
@@ -566,12 +567,29 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
         return Vec::new();
     }
     let platform = craft_keymap::egui::platform(ctx);
-    let (fired, clips, mut down) = current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), std::mem::take(&mut stage.fired_down)));
+    let (fired, clips, passed, mut down) =
+        current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), stage.passed.clone(), std::mem::take(&mut stage.fired_down)));
     let key_of = |input: &KeyInput| input.physical.or(input.typed);
     let same = |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) && input.mods == other.mods;
+    // The clipboard events whose press no command took, in the order they arrived.
+    let mut clips = clips.into_iter().filter(|clip| !fired.iter().any(|(fired, by_repeat)| !by_repeat && same(fired, &clip.input))).peekable();
     let events = ctx.input(|input| input.events.clone());
     let mut left = Vec::with_capacity(events.len());
+    // The place in `passed` after the last event found there.
+    let mut from = 0;
     for event in events {
+        // A clip goes back before the first event the strip left after it. Where an event stood is found among the
+        // events the strip left, as a widget may have taken earlier ones from egui's input since.
+        let place = match passed.get(from..).and_then(|rest| rest.iter().position(|passed| *passed == event)) {
+            Some(found) => {
+                from += found + 1;
+                from - 1
+            }
+            None => from,
+        };
+        while let Some(clip) = clips.next_if(|clip| clip.at <= place) {
+            left.push(clip.event);
+        }
         match leftover(&event) {
             Leftover::Key { pressed, repeat } => {
                 let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
@@ -593,11 +611,7 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
             Leftover::Other => {}
         }
     }
-    for (event, input) in clips {
-        if !fired.iter().any(|(fired, by_repeat)| !by_repeat && same(fired, &input)) {
-            left.push(event);
-        }
-    }
+    left.extend(clips.map(|clip| clip.event));
     current(ctx, |stage| {
         // What this pass did not release stays down for a later pass's release.
         stage.fired_down = down;

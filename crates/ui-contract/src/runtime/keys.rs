@@ -154,6 +154,18 @@ pub(crate) struct Shortcuts {
     pub(crate) pasted: Option<ClipContent>,
 }
 
+/// A clipboard event the strip took from egui's input for a shortcut press that no component lists the command of
+/// (`Strip::event`), which `leftover_events` gives back in its place when no command took the press.
+#[derive(Clone)]
+struct LeftClip {
+    /// The `Copy`, `Cut`, `Paste` or `PasteImage` event.
+    event: Event,
+    /// The press the event stands for.
+    input: KeyInput,
+    /// How many events the strip had left in egui's input before it (`Batch::egui_events`).
+    at: usize,
+}
+
 /// What the input hook recorded for the next pass's begin hook.
 #[derive(Default)]
 struct Batch {
@@ -172,8 +184,13 @@ struct Batch {
     /// Each clipboard command of the pass, with its place among the frame's events.
     clips: Vec<(EditCommand, usize)>,
     /// The clipboard events the strip took from egui's input for a shortcut press that no component lists the command
-    /// of (`Strip::event`), each with the press it stands for, so a host reading what no component took gets them back.
-    left_clips: Vec<(Event, KeyInput)>,
+    /// of (`Strip::event`), so a host reading what no component took gets them back.
+    left_clips: Vec<LeftClip>,
+    /// How many events the strip has left in egui's input so far.
+    egui_events: usize,
+    /// The events the strip left in egui's input, kept only in a pass with `left_clips`: `leftover_events` puts each
+    /// clip back among them where it was, though a widget may have taken some of them since.
+    passed: Vec<Event>,
     access: Vec<Action>,
     escapes: Vec<EscapePress>,
     claimed: Vec<Chord>,
@@ -327,7 +344,9 @@ pub(crate) struct Stage {
     consumed: Vec<Key>,
     shortcuts: Shortcuts,
     /// The clipboard events `Batch::left_clips` held, for this pass.
-    left_clips: Vec<(Event, KeyInput)>,
+    left_clips: Vec<LeftClip>,
+    /// The events `Batch::passed` held, for this pass.
+    passed: Vec<Event>,
     /// The presses the shortcut dispatcher fired a command for in this pass (`note_fired`), each `true` when the command
     /// fired for an auto-repeat.
     fired: Vec<(KeyInput, bool)>,

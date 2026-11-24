@@ -15,7 +15,7 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, FirePhase, Scope};
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, FirePhase, Scope};
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::{drag, keys};
@@ -1504,6 +1504,37 @@ fn a_held_key_a_command_fired_for_in_a_native_float_forwards_none_of_its_repeats
         assert_eq!(keys_of(&frame(vec![key_repeat(Key::F4, Modifiers::NONE)])), [(Key::F4, true, true)], "repeats {repeats}: with its repeats");
         assert_eq!(keys_of(&frame(vec![key_release(Key::F4, Modifiers::NONE)])), [(Key::F4, false, false)], "repeats {repeats}: and its release");
     }
+}
+
+/// A clipboard chord no command takes in a native float's own OS window is forwarded as its clipboard event in its place
+/// among the window's other leftover events: a Paste and a typed text in one pass are forwarded in the order they
+/// arrived, whichever comes first.
+#[trial]
+fn a_paste_and_a_text_in_one_pass_of_a_native_float_are_forwarded_in_their_order() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    // No command takes the paste chord, so the paste is the app's to read.
+    let mut unbound = craft_keymap::Overrides::new();
+    unbound.insert(EditCommands::Paste.id(), Vec::new());
+    windows.commands(CommandInput::new().overrides(Arc::new(unbound)));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+    let mut frame = |child: Vec<Event>| {
+        let mut forwarded = Vec::new();
+        windows.frame(vec![], child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
+                .show(ui)
+                .forwarded_events;
+        });
+        forwarded
+    };
+    for _ in 0..5 {
+        frame(vec![]);
+    }
+    let (paste, text) = (Event::Paste("pasted".to_owned()), Event::Text("ab".to_owned()));
+    assert_eq!(frame(vec![paste.clone(), text.clone()]), [paste.clone(), text.clone()], "the paste, then the text");
+    assert_eq!(frame(vec![text.clone(), paste.clone()]), [text, paste], "the text, then the paste");
 }
 
 /// A palette whose panel holds an Opacity field, then reads the keys its OS window's pass left, as an app passes a
