@@ -162,6 +162,8 @@ pub(crate) struct AdapterIn<'a> {
     /// The part keeps the selection it had for the surface that holds the focus: its own edit menu, or a menu bar or
     /// menu the keyboard goes back to the part from, whose picks act on it.
     pub keeps_selection: bool,
+    /// This pass's primary press on the component, on its text or the room around it, while the text takes the pointer.
+    pub press: Option<Pos2>,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
     /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's, except
@@ -594,10 +596,26 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
+    // egui's text edit asks for the focus again on its own click, which hands its surrender back to the app's rule: a
+    // click in the field's padding would then take the focus the runtime keeps (8.3).
+    if shown.focused {
+        crate::runtime::egui::focus::hold(ctx, widget);
+    }
     if let Some((caret, anchor)) = kept
         && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
     {
         select(ctx, widget, anchor, caret);
+    }
+    // A press in the room around the text (the field's padding) places the caret at the nearest character, as a press
+    // on the text would: egui's widget takes only presses on itself.
+    if let Some(at) = input.press.filter(|at| !input.rect.contains(*at))
+        && focused_before
+        && shown.focused
+        && state.preedit.is_none()
+    {
+        let near = at.clamp(input.rect.min, input.rect.max);
+        let caret = shown.galley.cursor_from_pos(near - shown.galley_pos).index.0;
+        select(ctx, widget, caret, caret);
     }
     // A single line keeps its caret in view through egui's own line offset; a multi-line part scrolls its text itself.
     // The caret is revealed only when it moved (against last pass's, `state.caret`), so a wheel that scrolled it out of
