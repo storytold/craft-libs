@@ -81,11 +81,39 @@ pub enum LabelScheme {
     Form,
     /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
     Inspector,
+    /// A document dialog: a beside label starts at the row's start and ends with a colon, and its control follows it
+    /// at once, at the control's own width. Labels share no column, so each row reads as one line.
+    Inline,
 }
 
 impl crate::runtime::env::EnvValue for LabelScheme {
     fn root() -> Self {
         LabelScheme::Form
+    }
+}
+
+/// Whether the beside captions of a [`LabelScheme::Inline`] form share one column. Off (the default), each caption is
+/// as wide as its own text and its control follows it at once. On, the captions keep to the row start in one column as
+/// wide as the widest, so the controls after them line up (production's Rotate Pages dialog: Direction:, Pages: and
+/// Rotate: in a column). Other schemes always share their column.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+pub struct CaptionColumn(bool);
+
+impl CaptionColumn {
+    /// The captions share one column.
+    pub const SHARED: CaptionColumn = CaptionColumn(true);
+    /// Each caption is as wide as its own text (the default).
+    pub const OWN: CaptionColumn = CaptionColumn(false);
+
+    /// Whether the captions share one column.
+    pub const fn shared(self) -> bool {
+        self.0
+    }
+}
+
+impl crate::runtime::env::EnvValue for CaptionColumn {
+    fn root() -> Self {
+        CaptionColumn::OWN
     }
 }
 
@@ -172,6 +200,18 @@ pub(crate) fn inside(env: EnvView<'_>, side: &SideLabel, enabled: bool) -> Optio
 /// The width of a caption's cell.
 pub type CellWidth = ColumnWidth;
 
+/// What a click on a control's side label does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LabelPress {
+    /// A click focuses the control.
+    #[default]
+    Focus,
+    /// The label shows in the link look, and a click reports to the control's host and leaves focus alone. It is no
+    /// Tab stop of its own, and a drag still scrubs when `scrub` is on.
+    Link,
+}
+
 /// What `ContainerProps.label` holds: how the label is shown and what it does. The text is `Common.label`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -192,6 +232,8 @@ pub struct SideLabel {
     pub detail: Option<Label>,
     /// The label's tooltip, in place of its text: a hint a short or glyph label has no room for.
     pub tooltip: Option<Tooltip>,
+    /// What a click on the label does.
+    pub press: LabelPress,
 }
 
 impl SideLabel {
@@ -218,6 +260,7 @@ impl SideLabel {
             icon: None,
             detail: None,
             tooltip: None,
+            press: LabelPress::Focus,
         }
     }
 
@@ -239,6 +282,13 @@ impl SideLabel {
     #[must_use]
     pub const fn role(mut self, role: FieldLabelRole) -> Self {
         self.role = role;
+        self
+    }
+
+    /// Shows the label as a link: a click reports to the control's host (`Cx::link_activated`) and leaves focus alone.
+    #[must_use]
+    pub const fn link(mut self) -> Self {
+        self.press = LabelPress::Link;
         self
     }
 

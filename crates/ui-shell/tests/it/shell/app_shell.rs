@@ -1,20 +1,24 @@
 //! The app shell's named slots: a bar in a top or bottom slot fills it with its members on the slot's middle, and a
 //! slot whose content is a memoized view runs only when its props change. A full-window page hides the slots and the
-//! body, and its band keeps the window's ends and moves the window.
+//! body, and its band keeps the window's ends and moves the window. What the body opens stops above the bottom slots.
 
-use craft_host::target::ShellInfo;
+use craft_host::target::{Os, ShellInfo};
+use craft_theme::Size;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, MemoProps, MemoView, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::menu::bar::{MenuBar, MenuTitle};
+use craft_ui::menu::{Menu, MenuItem};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
 use craft_ui::runtime::env::{Env, PageBandRoom, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::windows::NoWindows;
@@ -136,6 +140,198 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     assert!(slot.height() <= row.max.y - strip.min.y + RULE, "the slot {slot:?} is as tall as its content, from {strip:?} to {row:?}");
     assert!((row.width() - slot.width()).abs() <= SLACK, "the row {row:?} takes the slot's width {slot:?}");
     assert!(body.min.y >= row.max.y - SLACK, "the body {body:?} starts under the row {row:?}");
+}
+
+/// The labels of a column of buttons taller than a slot's default extent.
+const TALL: [&str; 6] = ["Paste", "Cut", "Copy", "Format Painter", "Clipboard", "Styles"];
+
+/// The rect of the fill-height column a content slot holds and of each of its buttons, from the last run.
+type Column = Rc<RefCell<(Rect, Vec<Rect>)>>;
+
+fn column() -> Column {
+    Rc::new(RefCell::new((Rect::NOTHING, Vec::new())))
+}
+
+/// A column of `labels` that fills its height, as a ribbon group does, recording its rects in `seen`.
+fn fill_column(ui: &mut Ui, labels: &[&'static str], seen: &Column) {
+    let mut buttons = Vec::new();
+    let column = Stack::new()
+        .sizing(Sizing::FillHeight)
+        .show(ui, |ui, _| {
+            for label in labels {
+                buttons.push(Button::new(*label).show(ui).rect);
+            }
+        })
+        .output
+        .rect;
+    *seen.borrow_mut() = (column, buttons);
+}
+
+/// A content slot whose content fills its height grows to that content, at the top and at the bottom edge: its
+/// content runs in the room the slot can grow into, not in the extent it was first laid out at, so the column takes
+/// its buttons' height and the slot takes the column's.
+#[trial]
+fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
+    let (top, bottom) = (column(), column());
+    let regions = Rc::new(RefCell::new(None));
+    let (top_seen, bottom_seen, out) = (Rc::clone(&top), Rc::clone(&bottom), Rc::clone(&regions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &top_seen))
+            .bottom(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &bottom_seen))
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        *out.borrow_mut() = Some(shown.regions);
+    });
+    fixture.room(Vec2::new(600.0, 700.0)).settle();
+    let regions = regions.borrow().clone().expect("the shell shows");
+    const SLACK: f32 = 1.0;
+    for (key, seen) in [("ribbon", &top), ("findBar", &bottom)] {
+        let slot = regions.slots.iter().find(|(shown, _)| *shown == key).map(|(_, rect)| *rect).expect("the slot shows");
+        let (column, buttons) = seen.borrow().clone();
+        assert_eq!(buttons.len(), TALL.len(), "{key}: every button shows");
+        for button in &buttons {
+            assert!(column.expand(SLACK).contains_rect(*button), "{key}: the button {button:?} lies in its column {column:?}");
+        }
+        assert!(slot.expand(SLACK).contains_rect(column), "{key}: the slot {slot:?} holds its column {column:?}");
+    }
+    let (top_slot, bottom_slot) = (regions.slots[0].1, regions.slots[1].1);
+    assert!(
+        regions.body.min.y >= top_slot.max.y - SLACK && regions.body.max.y <= bottom_slot.min.y + SLACK,
+        "the body {:?} lies between the slots",
+        regions.body
+    );
+    assert!((bottom_slot.max.y - 700.0).abs() <= SLACK, "the bottom slot {bottom_slot:?} stands on the window's bottom edge");
+}
+
+/// A settled frame runs a content slot's content once, in one pass: its measure is reused while its inputs are
+/// unchanged. A frame where the content grows (a roomier density makes every button taller) lays the window out again
+/// at most once, shows the new extent in that frame and leaves the next frame settled.
+#[trial]
+fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame() {
+    let runs = Rc::new(Cell::new(0_u32));
+    let seen = column();
+    let regions = Rc::new(RefCell::new(None));
+    let (count, column, out) = (Rc::clone(&runs), Rc::clone(&seen), Rc::clone(&regions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                count.set(count.get() + 1);
+                fill_column(ui, &TALL, &column);
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        *out.borrow_mut() = Some(shown.regions);
+    });
+    fixture.room(Vec2::new(600.0, 700.0)).density(Size::Compact).settle();
+    let before = seen.borrow().0;
+    runs.set(0);
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "a settled frame runs one pass");
+    assert_eq!(runs.get(), 1, "a settled frame runs the slot's content once");
+    fixture.density(Size::Comfortable).frame(Vec::new());
+    assert!(fixture.passes() <= 2, "the frame the content grows in lays the window out again at most once: {} passes", fixture.passes());
+    let slot = regions.borrow().as_ref().and_then(|regions| regions.slots.first().map(|(_, rect)| *rect)).expect("the slot shows");
+    let grown = seen.borrow().0;
+    assert!(grown.height() > before.height() + 1.0, "the roomier density makes the column taller: {before:?} to {grown:?}");
+    assert!(slot.expand(1.0).contains_rect(grown), "in the frame it grows in, the slot {slot:?} holds the grown column {grown:?}");
+    runs.set(0);
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "the frame after the grow is settled: one pass");
+    assert_eq!(runs.get(), 1, "the frame after the grow runs the slot's content once");
+}
+
+/// Content rails sit at their own sides in either reading direction, each as wide as the column it holds, and a
+/// settled frame runs one pass with each rail's content once: the start rail at the reading start, the end rail at the
+/// reading end, the body between them.
+#[trial]
+fn content_rails_sit_at_their_sides_and_settle_in_one_pass() {
+    const RAIL: [&str; 3] = ["Move", "Brush", "Eraser"];
+    for rtl in [false, true] {
+        let direction = if rtl { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
+        let (start, end) = (column(), column());
+        let (start_runs, end_runs) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)));
+        let regions = Rc::new(RefCell::new(None));
+        let (start_seen, end_seen, start_count, end_count, out) =
+            (Rc::clone(&start), Rc::clone(&end), Rc::clone(&start_runs), Rc::clone(&end_runs), Rc::clone(&regions));
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .start(Slot::new("tools").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    start_count.set(start_count.get() + 1);
+                    fill_column(ui, &RAIL, &start_seen);
+                })
+                .end(Slot::new("inspector").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    end_count.set(end_count.get() + 1);
+                    fill_column(ui, &RAIL, &end_seen);
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            *out.borrow_mut() = Some(shown.regions);
+        });
+        fixture.direction(direction).room(Vec2::new(600.0, 400.0)).settle();
+        let regions = regions.borrow().clone().expect("the shell shows");
+        const SLACK: f32 = 1.0;
+        let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map(|(_, rect)| *rect).expect("the rail shows");
+        let (start_rail, end_rail) = (rect_of("tools"), rect_of("inspector"));
+        for (key, rail, seen) in [("tools", start_rail, &start), ("inspector", end_rail, &end)] {
+            let (column, buttons) = seen.borrow().clone();
+            assert_eq!(buttons.len(), RAIL.len(), "RTL {rtl}, {key}: every button shows");
+            for button in &buttons {
+                assert!(column.expand(SLACK).contains_rect(*button), "RTL {rtl}, {key}: the button {button:?} lies in its column {column:?}");
+            }
+            assert!(rail.expand(SLACK).contains_rect(column), "RTL {rtl}, {key}: the rail {rail:?} holds its column {column:?}");
+        }
+        let body = regions.body;
+        let (left, right) = if rtl { (end_rail, start_rail) } else { (start_rail, end_rail) };
+        assert!(left.max.x <= body.min.x + SLACK, "RTL {rtl}: the rail {left:?} lies left of the body {body:?}");
+        assert!(right.min.x >= body.max.x - SLACK, "RTL {rtl}: the rail {right:?} lies right of the body {body:?}");
+        start_runs.set(0);
+        end_runs.set(0);
+        fixture.frame(Vec::new());
+        assert_eq!(fixture.passes(), 1, "RTL {rtl}: a settled frame runs one pass");
+        assert_eq!((start_runs.get(), end_runs.get()), (1, 1), "RTL {rtl}: a settled frame runs each rail's content once");
+    }
+}
+
+/// A content slot holding a list that scrolls along its height is as tall as the list's rows, whether the list sizes
+/// from its content or fills its height: the slot offers its content no bound along its edge, so the list shows all
+/// of its rows instead of taking the window's height, and the body keeps the rest of the window.
+#[trial]
+fn a_content_slot_holding_a_scrolling_list_takes_the_list_height() {
+    for sizing in [Sizing::Content, Sizing::FillHeight, Sizing::Fill] {
+        let rows = Rc::new(RefCell::new(Vec::new()));
+        let regions = Rc::new(RefCell::new(None));
+        let (seen, out) = (Rc::clone(&rows), Rc::clone(&regions));
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .top(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    let mut buttons = Vec::new();
+                    Stack::new().sizing(sizing).scroll(Scroll::vertical()).show(ui, |ui, _| {
+                        for label in ["First", "Second", "Third"] {
+                            buttons.push(Button::new(label).show(ui).rect);
+                        }
+                    });
+                    *seen.borrow_mut() = buttons;
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            *out.borrow_mut() = Some(shown.regions);
+        });
+        fixture.room(Vec2::new(600.0, 700.0)).settle();
+        let regions = regions.borrow().clone().expect("the shell shows");
+        let slot = regions.slots.iter().find(|(key, _)| *key == "findBar").map(|(_, rect)| *rect).expect("the slot shows");
+        let rows = rows.borrow().iter().fold(Rect::NOTHING, |all, row| all.union(*row));
+        const SLACK: f32 = 1.0;
+        // The rule toward the body, the stack's padding and rounding.
+        const AROUND: f32 = 24.0;
+        assert!(slot.expand(SLACK).contains_rect(rows), "{sizing:?}: the slot {slot:?} holds the list's rows {rows:?}");
+        assert!(slot.height() <= rows.height() + AROUND, "{sizing:?}: the slot {slot:?} is as tall as the list's rows {rows:?}, not the window");
+        let body = regions.body;
+        assert!(
+            body.min.y >= slot.max.y - SLACK && (body.max.y - 700.0).abs() <= SLACK,
+            "{sizing:?}: the body {body:?} keeps the window under the slot {slot:?}"
+        );
+    }
 }
 
 /// A check box with its label after it sits on the options slot's middle, as a button beside it does: the slot is
@@ -502,4 +698,117 @@ fn a_page_takes_the_windows_keys_with_nothing_focused() {
         frame(&mut frames, vec![]);
     }
     assert_eq!(printed.get(), 1, "Enter with nothing focused runs the page's command once");
+}
+
+/// A window shell with a status slot and `body`, 400 x 300, and the status slot's rect.
+fn shell_with_status(body: fn(&mut Ui)) -> (Fixture, Rc<Cell<Rect>>) {
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&slot);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .status(true, |ui, _, _: &mut ()| {
+                Text::new("Ready").show(ui);
+            })
+            .body(|ui, _, _| body(ui))
+            .show(ui, &mut ());
+        if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == slots::STATUS).map(|(_, rect)| *rect) {
+            seen.set(rect);
+        }
+    });
+    // The in-window menu bar is PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
+    fixture.room(Vec2::new(400.0, 300.0)).settle();
+    (fixture, slot)
+}
+
+fn button_menu(ui: &mut Ui) {
+    let opener = Button::new("Open").show(ui);
+    Menu::new("Long").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        for at in 0..40 {
+            MenuItem::new(format!("Row {at}")).show(ui);
+        }
+    });
+}
+
+fn menu_bar(ui: &mut Ui) {
+    let titles = vec![MenuTitle::new("&File", |ui| {
+        for at in 0..40 {
+            MenuItem::new(format!("Row {at}")).show(ui);
+        }
+    })];
+    MenuBar::new("Main menu", titles).show(ui);
+}
+
+fn select_list(ui: &mut Ui) {
+    let entries: Vec<Entry<u8>> = (0..60u8).map(|at| Entry::new(at, format!("Item {at}"))).collect();
+    let mut value = 0u8;
+    Select::new("Pick", Bind::bound(&mut value), &entries).show(ui);
+}
+
+/// What a shell's body opens (a menu, a menu bar's menu, a select's list) ends above the shell's bottom slot, so the
+/// status bar is never covered.
+#[trial]
+fn popups_stop_above_the_bottom_slots_in_each_window() {
+    type Case = (&'static str, fn(&mut Ui));
+    let cases: [Case; 3] = [("Open", button_menu), ("File", menu_bar), ("Pick", select_list)];
+    for (opener, body) in cases {
+        let (mut fixture, slot) = shell_with_status(body);
+        let opener_node = fixture.by_label(opener).unwrap_or_else(|| panic!("the opener {opener:?} shows"));
+        fixture.click(&opener_node).settle();
+        let popups: Vec<Rect> = [Role::MENU, Role::LIST_BOX]
+            .into_iter()
+            .flat_map(|role| fixture.by_role(role).iter().map(|node| node.rect).collect::<Vec<_>>())
+            .collect();
+        let slot = slot.get();
+        assert!(!popups.is_empty() && slot.height() > 0.0, "{opener:?} opens a popup over a shown status slot");
+        for popup in popups {
+            assert!(popup.bottom() <= slot.top() + 0.5, "{opener:?}: the popup {popup:?} ends above the status slot {slot:?}");
+        }
+    }
+}
+
+/// What a memoized options bar shows: one text button, as an app's tool options.
+#[derive(MemoProps)]
+struct MemoBar {
+    version: u64,
+}
+
+thread_local! {
+    /// The rect the memoized bar's button took when it last ran.
+    static MEMO_BUTTON: Cell<Rect> = const { Cell::new(Rect::NOTHING) };
+}
+
+fn memo_bar(_: &mut MemoBar, ui: &mut Ui) {
+    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        let rect = Button::new("Straighten").show(ui).rect;
+        MEMO_BUTTON.with(|button| button.set(rect));
+    });
+}
+
+/// photocraft#16405: an options bar the app shows through a memoized view sits on the slot's line as one shown directly
+/// does: its text button is drawn whole, centred in the slot, not cut off at the bottom.
+#[trial]
+fn a_memoized_options_bar_centres_its_button_in_the_slot() {
+    for ppp in [1.0, 1.25, 1.5] {
+        let seen = Rc::new(Cell::new(None::<Rect>));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .options_bar(true, |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("options", MemoBar { version: 0 }, memo_bar).show(ui);
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {
+                out.set(Some(slot));
+            }
+        });
+        fixture.ctx().set_pixels_per_point(ppp);
+        fixture.room(Vec2::new(600.0, 300.0)).settle();
+        let slot = seen.get().expect("the options slot shows");
+        let button = MEMO_BUTTON.with(Cell::get);
+        assert!(button.height() > 0.0, "{ppp}: the button shows: {button:?}");
+        assert!(button.max.y <= slot.max.y + 0.01 && button.min.y >= slot.min.y - 0.01, "{ppp}: the button {button:?} lies inside the slot {slot:?}");
+        assert!((button.center().y - slot.center().y).abs() <= 1.0, "{ppp}: the button {button:?} sits on the slot's middle {slot:?}");
+    }
 }

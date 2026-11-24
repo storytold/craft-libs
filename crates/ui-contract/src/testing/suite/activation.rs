@@ -41,7 +41,7 @@ fn each_activation_clicks_once(subject: &Subject) -> Result<(), String> {
             let mut fixture = input_fixture(story);
             fixture.take_outputs();
             run(&mut fixture, plan, variant);
-            let clicks = fixture.take_outputs().iter().filter(|output| output.clicked).count();
+            let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
             if clicks != 1 {
                 return Err(format!("{}: {} gave {clicks} clicks", story.name, variant_name(plan, variant)));
             }
@@ -97,7 +97,7 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
                     }
                 }
                 fixture.settle();
-                let clicks = fixture.take_outputs().iter().filter(|output| output.clicked).count();
+                let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
                 if clicks != 1 {
                     return Err(format!("{}: {name} on the part {part:?} gave {clicks} clicks", story.name));
                 }
@@ -145,7 +145,7 @@ fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
             fixture.access(kind, &target);
             fixture.settle();
             let outputs = fixture.take_outputs();
-            let acted = outputs.iter().any(|output| output.clicked || !output.edits.is_empty())
+            let acted = outputs.iter().any(|output| output.activated() || !output.edits.is_empty())
                 || signature(fixture.tree()) != before
                 || fixture.focused() != focus;
             if !acted {
@@ -219,7 +219,7 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
                 _ => by_key,
             });
             let could_step = step.is_some_and(|step| if step == Declared::Increment { steps_before.0 } else { steps_before.1 });
-            let clicked = fixture.take_outputs().iter().any(|output| output.clicked);
+            let clicked = fixture.take_outputs().iter().any(|output| output.activated());
             let changed = !lent && !fixture.data().changed_since(&before).is_empty();
             let radios = fixture.tree().with_role(Role::RADIO_BUTTON);
             let tree = fixture.tree();
@@ -305,7 +305,7 @@ fn escape_and_blur_cancel_a_press(subject: &Subject) -> Result<(), String> {
             fixture.settle();
             let outputs = fixture.take_outputs();
             let ended = outputs.iter().flat_map(|output| output.edits.iter()).any(|kind| matches!(kind, EditKind::Commit | EditKind::Set));
-            if outputs.iter().any(|output| output.clicked) || ended || !fixture.data().changed_since(&before).is_empty() {
+            if outputs.iter().any(|output| output.activated()) || ended || !fixture.data().changed_since(&before).is_empty() {
                 return Err(format!("{}: a press cancelled by {} still acted", story.name, if escape { "Escape" } else { "blur" }));
             }
         }
@@ -332,7 +332,9 @@ fn removal_cancels_a_press(subject: &Subject) -> Result<(), String> {
             if shared_hidden.get() {
                 return;
             }
-            let output = show(ui, &mut shared_data.borrow_mut());
+            crate::runtime::commands::observe_fired(ui.ctx());
+            let mut output = show(ui, &mut shared_data.borrow_mut());
+            output.fired = crate::runtime::commands::observe_fired(ui.ctx());
             shared_id.set(output.id);
             shared_outputs.borrow_mut().push(output);
         });
@@ -352,7 +354,7 @@ fn removal_cancels_a_press(subject: &Subject) -> Result<(), String> {
         fixture.settle();
         let outputs = std::mem::take(&mut *outputs.borrow_mut());
         let ended = outputs.iter().flat_map(|output| output.edits.iter()).any(|kind| matches!(kind, EditKind::Commit | EditKind::Set));
-        if outputs.iter().any(|output| output.clicked) || ended || !data.borrow().changed_since(&before).is_empty() {
+        if outputs.iter().any(|output| output.activated()) || ended || !data.borrow().changed_since(&before).is_empty() {
             return Err(format!("{}: a press whose component was not shown for a pass still acted on release", story.name));
         }
     }

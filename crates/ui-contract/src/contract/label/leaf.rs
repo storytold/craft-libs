@@ -5,7 +5,7 @@ use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
 use crate::contract::{Cx, MeasureCx, PaintUi, PartsCx, Styled as _};
-use crate::primitives::{IconSpec, TextRun, Wrap};
+use crate::primitives::{IconSpec, Span, TextRun, Wrap};
 use crate::runtime::access::{Access, Name};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::words::CommonWords;
@@ -87,6 +87,9 @@ pub(super) struct LabelLeaf {
     /// and wraps in its room instead of eliding.
     #[style_key]
     pub(super) after: bool,
+    /// The label is a link (`LabelPress::Link`): its name reads in the link look and is underlined.
+    #[style_key]
+    pub(super) link: bool,
     /// The control the label names takes the label into its own hit target: the label senses nothing itself.
     pub(super) claimed: bool,
     /// The size of the content the label step shows after the text, inside the label: 0 without one.
@@ -129,6 +132,7 @@ impl LabelLeaf {
             baseline: Cell::new(0.0),
             first_line: Cell::new(0.0),
             after: false,
+            link: false,
             claimed: false,
             trailing: Vec2::ZERO,
             named: true,
@@ -143,6 +147,8 @@ impl LabelLeaf {
 
 impl Component for LabelLeaf {
     const ROLE: crate::contract::Role = crate::contract::Role::LABEL;
+    // A link label is a link to assistive technology too, not a second name of its control.
+    const ALT_ROLES: &'static [crate::contract::Role] = &[crate::contract::Role::LINK];
     const OVERLAYS: bool = false;
     // The label is no key target: Enter and Space go to its control, which a click on the label focuses.
     const KEYS: crate::runtime::focus::KeyUse =
@@ -168,8 +174,13 @@ impl Component for LabelLeaf {
             name: {
                 let text = &cx.tokens.color.text;
                 let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
-                let (ink, off) = (cx.color(ink), cx.color(text.disabled));
-                TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                if key.link {
+                    // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
+                    TextLook { role, ..cx.link_look(true) }
+                } else {
+                    let (ink, off) = (cx.color(ink), cx.color(text.disabled));
+                    TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                }
             },
             glyph: {
                 let off = Some(cx.color(cx.tokens.color.text.disabled));
@@ -257,6 +268,9 @@ impl Component for LabelLeaf {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.link {
+            access.role(crate::contract::Role::LINK);
+        }
         if let Some(words) = &self.words {
             access.name(Name::Text(words.clone()));
         }
@@ -348,7 +362,9 @@ impl Component for LabelLeaf {
             let name_ink = cx.resolve(&cx.style.name.color);
             let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).role(cx.style.name.role).color(name_ink));
             let colon_width = colon.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
-            let run = TextRun::new(cx.core.resolved.label).role(cx.style.name.role).color(name_ink);
+            let named =
+                if self.link { TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()]) } else { TextRun::new(cx.core.resolved.label) };
+            let run = named.role(cx.style.name.role).color(name_ink);
             let run = if wrapped { run.wrap(Wrap::Wrap) } else { run.elide() };
             let name = draw.layout(&run, (rest.rect().width() - colon_width).max(0.0)).size();
             let (name_rect, after) = rest.take_start(name.x);
@@ -398,7 +414,7 @@ impl Component for LabelLeaf {
 /// a text label's, and in a bar a glyph text's as well ("X:"). An inspector's labels draw none. The label's node and
 /// the control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
-    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() != LabelScheme::Form {
+    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() == LabelScheme::Inspector {
         return None;
     }
     let text = match &input.side.kind {

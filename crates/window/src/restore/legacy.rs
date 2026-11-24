@@ -15,11 +15,14 @@ use serde_json::Value;
 
 use craft_behavior::placement::Placement;
 
+/// The smallest window size egui-winit restores, in points; it clamps a smaller stored size up to it.
+const EGUI_FLOOR: f32 = 64.0;
+
 /// The placement in an eframe `app.ron` text: its `"window"` entry, with the size converted to
 /// points at zoom 1 using the `"egui"` entry's `zoom_factor` (1 when absent).
 pub fn eframe_app_ron(text: &str) -> Option<Placement> {
-    let window = ron_string_entry(text, "window")?;
-    let zoom = ron_string_entry(text, "egui").and_then(|e| number(field(&e, "zoom_factor")?)).unwrap_or(1.0);
+    let window = eframe_app_ron_entry(text, "window")?;
+    let zoom = eframe_app_ron_entry(text, "egui").and_then(|e| number(field(&e, "zoom_factor")?)).unwrap_or(1.0);
     eframe_window_settings(&window, zoom)
 }
 
@@ -36,6 +39,11 @@ pub fn eframe_window_settings(ron: &str, zoom: f32) -> Option<Placement> {
     let geometry = field(ron, "normal_geometry").and_then(group).unwrap_or(ron);
     let scale = field(geometry, "scale_factor").and_then(number).filter(|s| *s > 0.0).unwrap_or(1.0);
     let size = field(geometry, "inner_size_points").and_then(vec2)?;
+    // egui-winit clamps a stored size up to its floor, so a window saved while minimized (0 × 0 on Windows) reads as
+    // the floor in both directions; reopening there gives an unusable window, so such a size restores nothing.
+    if size.iter().all(|v| *v <= EGUI_FLOOR + 0.5) {
+        return None;
+    }
     let pos = field(geometry, "outer_position_pixels").and_then(vec2).or_else(|| field(geometry, "inner_position_pixels").and_then(vec2));
     // The window's pixel size divided by zoom × scale (eframe >= 0.36), so × zoom is points at
     // zoom 1. Older eframe saved points at the then-current zoom, which this reads the same way.
@@ -142,7 +150,7 @@ fn vec2(s: &str) -> Option<[f32; 2]> {
 }
 
 /// The string value for `key` in a RON map of strings (`{"key": "value", …}`), unescaped.
-fn ron_string_entry(text: &str, key: &str) -> Option<String> {
+pub fn eframe_app_ron_entry(text: &str, key: &str) -> Option<String> {
     let mut literals = string_literals(text).into_iter();
     while let Some(k) = literals.next() {
         let v = literals.next()?;
@@ -213,4 +221,24 @@ fn escaped(text: &str, from: usize) -> (String, usize) {
         }
     }
     (s, text.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(width: f32, height: f32) -> String {
+        format!("(outer_position_pixels:Some((x:200.0,y:200.0)),inner_size_points:Some((x:{width:.1},y:{height:.1})))")
+    }
+
+    /// Closing a minimized window stored egui's floor, and the next start reopened at it in the screen's corner.
+    #[test]
+    fn a_window_at_eguis_floor_restores_no_size() {
+        assert!(eframe_window_settings(&settings(64.0, 64.0), 1.0).is_none(), "the floor in both directions");
+        assert!(eframe_window_settings(&settings(10.0, 0.0), 1.0).is_none(), "under the floor in both directions");
+        assert!(eframe_window_settings(&settings(64.0, 820.0), 1.0).is_some(), "a narrow window someone chose stays");
+        assert!(eframe_window_settings(&settings(820.0, 64.0), 1.0).is_some(), "a short window someone chose stays");
+        let app_ron = format!("{{\"window\": {:?}}}", settings(64.0, 64.0));
+        assert!(eframe_app_ron(&app_ron).is_none(), "the app.ron reader refuses it too");
+    }
 }

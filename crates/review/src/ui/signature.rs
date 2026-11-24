@@ -1,6 +1,5 @@
 //! The signature pad dialog and saved signatures.
 
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
@@ -18,7 +17,9 @@ use craft_ui::display::{Shade, Text};
 use craft_ui::fonts::FontRef;
 use craft_ui::layout_components::Row;
 use craft_ui::notices::{Notice, NoticeLayout};
+use craft_ui::popover::DropVeil;
 use craft_ui::primitives::{DocRun, DocText, Draw, HAlign, PaintShape, StrokeWidth, TextureCache};
+use craft_ui::runtime::drag::OsFile;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::focus::{ActivateKeys, EditSet, KeyUse};
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -26,7 +27,9 @@ use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx,
 use craft_ui::text::TextField;
 use egui::{ColorImage, Pos2, Rect, Vec2};
 
-use crate::signature::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, MAX_SIGNATURE_CHARS, SavedSignature, SignatureDraft, SignatureImage, SignatureTab};
+use crate::signature::{
+    MAX_SIGNATURE_CHARS, PAPER_CUTOFF, PAPER_FEATHER, PickError, SavedSignature, SignatureDraft, SignatureImage, SignatureTab, decode_fitted,
+};
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -65,17 +68,39 @@ craft_ui::words! {
         cancel: "signature.cancel" = "Cancel";
         image_failed: "signature.imageFailed" = "That image could not be read.";
         image_too_large: "signature.imageTooLarge" = "That image is too large: up to 4 MiB and 8192 × 8192 pixels.";
+        drop_image: "signature.dropImage" = "Drop an image here";
+        drop_photo: "signature.dropPhoto" = "Drop a photo of a signature here";
     }
 }
 
-/// The saved signature and initials, one settings section shared by every document.
+/// The saved signature and initials, one settings section shared by every document. Each slot reads on its own: a
+/// stored value that does not read (an oversize or corrupt image) leaves that slot `None` and the other loaded.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SignatureSettings {
     /// The saved signature, if any.
+    #[serde(default, deserialize_with = "lenient_slot")]
     pub signature: Option<SavedSignature>,
     /// The saved initials, if any.
+    #[serde(default, deserialize_with = "lenient_slot")]
     pub initials: Option<SavedSignature>,
+}
+
+/// A stored slot as read: a saved signature (or none), or anything else.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Slot {
+    Good(Option<SavedSignature>),
+    Bad(serde::de::IgnoredAny),
+}
+
+/// Reads a slot, turning a value that does not read into `None`: `Host::setting` defaults the whole section on any
+/// error, so one bad image would otherwise drop both slots.
+fn lenient_slot<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<SavedSignature>, D::Error> {
+    Ok(match <Slot as serde::Deserialize>::deserialize(deserializer)? {
+        Slot::Good(saved) => saved,
+        Slot::Bad(_ignored) => None,
+    })
 }
 
 impl craft_host::Section for SignatureSettings {
@@ -83,7 +108,7 @@ impl craft_host::Section for SignatureSettings {
 }
 
 /// Draws a saved signature into `rect` in `color`: strokes scaled from pad units and fitted keeping the pad's shape
-/// (at the theme's medium stroke, whatever the rect's size), typed text in the proportional face centred in the
+/// (at the theme's medium stroke, whatever the rect's size), typed text in the signature face centred in the
 /// rect, an image fitted keeping its aspect. `ctx` holds the image's texture, cached under the image's key.
 pub fn paint_signature(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, signature: &SavedSignature, color: DataColor) {
     match signature {
@@ -132,7 +157,7 @@ fn paint_strokes(rect: Rect, strokes: &[Vec<[f32; 2]>], fit: bool, dot: impl Fn(
     }
 }
 
-/// `label` in the proportional face, as large as fits `rect`, centred.
+/// `label` in the signature face, as large as fits `rect`, centred.
 fn paint_typed(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, label: &str, color: DataColor) {
     if label.trim().is_empty() {
         return;
@@ -140,13 +165,13 @@ fn paint_typed(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, label: &str, co
     let tall = rect.height() * TYPED_HEIGHT_SHARE;
     let width = rect.width() * TYPED_WIDTH_SHARE;
     // A name too wide at the height's size shrinks to the width, so it stays on one line.
-    let wide = DocText::new(&[DocRun::new(label.to_owned(), FontRef::proportional(), tall, color)])
+    let wide = DocText::new(&[DocRun::new(label.to_owned(), FontRef::signature(), tall, color)])
         .layout(ctx, &Env::of_root(ctx).tokens, craft_i18n::Direction::Ltr)
         .size()
         .x;
     let size = if wide > width { tall * width / wide } else { tall };
     let room = Vec2::new(width, size);
-    let run = [DocRun::new(label.to_owned(), FontRef::proportional(), size, color)];
+    let run = [DocRun::new(label.to_owned(), FontRef::signature(), size, color)];
     let mut text = DocText::new(&run);
     text.align = HAlign::Center;
     draw.doc(Rect::from_center_size(rect.center(), room), &text);
@@ -164,15 +189,6 @@ fn paint_image(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, image: &Signatu
     draw.texture(Rect::from_center_size(rect.center(), fitted), texture, uv);
 }
 
-/// Why a picked image was not taken.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PickError {
-    /// Unreadable, or not a PNG or JPEG.
-    Unreadable,
-    /// More than [`MAX_IMAGE_BYTES`] of file or [`MAX_IMAGE_SIDE`] pixels on a side.
-    TooLarge,
-}
-
 type Decoded = Result<SignatureImage, PickError>;
 
 /// Where a decode job gets its bytes.
@@ -181,22 +197,15 @@ enum Source {
     Path(PathBuf),
 }
 
-/// Decodes a PNG or JPEG of at most [`MAX_IMAGE_BYTES`] and [`MAX_IMAGE_SIDE`] pixels a side into straight RGBA. The
-/// size limits apply while decoding, so an oversize image is refused before its pixels are allocated.
+/// Decodes a picked or dropped PNG or JPEG ([`decode_fitted`]: the size caps, the EXIF orientation, the saved size),
+/// then makes its paper transparent, so a photo of a signature on white paper keeps only the ink.
 fn decode_image(bytes: &[u8]) -> Decoded {
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(PickError::TooLarge);
-    }
-    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|_| PickError::Unreadable)?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_SIDE);
-    limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    reader.limits(limits);
-    let decoded = reader
-        .decode()
-        .map_err(|error| if matches!(error, image::ImageError::Limits(_)) { PickError::TooLarge } else { PickError::Unreadable })?
-        .into_rgba8();
-    Ok(SignatureImage::new(decoded.width(), decoded.height(), decoded.into_raw()))
+    decode_fitted(bytes).map(|image| image.remove_white_background(PAPER_CUTOFF, PAPER_FEATHER))
+}
+
+/// The first of the files dropped: the pad takes one image.
+fn first_file(dropped: Option<&craft_ui::contract::OsFiles>) -> Option<OsFile> {
+    dropped.and_then(|files| files.files.first().cloned())
 }
 
 /// The pixels of `image` for its texture, empty when its buffer does not match its size.
@@ -394,14 +403,24 @@ fn pop_stroke(strokes: &mut Vec<Vec<[f32; 2]>>) -> bool {
     false
 }
 
-/// The Scan tab's content, the app's.
-pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft) + Send>;
+/// Input delivered to the host's scan tab.
+pub enum ScanEvent {
+    /// Draw the scan tab, with any file dropped on it this pass.
+    Show(Option<OsFile>),
+    /// Clear the scan's own state and cancel any pending work.
+    Clear,
+}
+
+/// The Scan tab's content and its clear handler, supplied by the host.
+pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft, ScanEvent) + Send>;
 
 /// Acrobat's signature pad on the dialog host: "Create signature" or "Change initials" with the tabs Type (a field over
 /// the pad that shows the typed signature), Draw (a pad of strokes, Undo), Image (Browse… a PNG or JPEG up to
-/// [`MAX_IMAGE_BYTES`] through `host.files()`, shown fitted to the same pad) and Scan (shown when the app gives a scan hook); Clear; Apply (enabled when [`SignatureDraft::ready`]) and Cancel.
-/// Browse… reads and decodes the file on `host.jobs()`; a pick that fails or is too large shows an error under the
-/// button.
+/// [`MAX_IMAGE_BYTES`](crate::signature::MAX_IMAGE_BYTES) through `host.files()`, or one dropped on the window, shown
+/// fitted to the same pad) and Scan (shown when the app gives a scan hook, which is handed a dropped photo); Clear;
+/// Apply (enabled when [`SignatureDraft::ready`]) and Cancel. Browse… and a drop read and decode the file on
+/// `host.jobs()`, and the paper of the image goes transparent; a file that fails or is too large shows an error under
+/// the button.
 #[derive(craft_ui::contract::Pattern)]
 pub struct SignaturePadDialog {
     draft: SignatureDraft,
@@ -431,9 +450,9 @@ impl SignaturePadDialog {
         Self { draft, scan: None, open: true, pick: None, decoding: None, error: None }
     }
 
-    /// The Scan tab's content: it fills `draft.image`.
+    /// The Scan tab's content: it fills `draft.image` and handles [`ScanEvent::Clear`].
     #[must_use]
-    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft) + Send + 'static) -> Self {
+    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft, ScanEvent) + Send + 'static) -> Self {
         self.scan = Some(Box::new(tab));
         self
     }
@@ -448,22 +467,10 @@ impl SignaturePadDialog {
                 Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => None,
                 Picked::Contents(files) => files.into_iter().next().map(|(_, bytes)| Source::Bytes(bytes)),
                 Picked::Paths(paths) => paths.into_iter().next().map(Source::Path),
+                Picked::Saved { path, .. } => Some(Source::Path(path)),
             };
             if let Some(source) = source {
-                let (send, receive) = channel();
-                let files = host.clone();
-                host.jobs().spawn(
-                    "signature-image",
-                    Box::new(move || {
-                        let decoded = match source {
-                            Source::Bytes(bytes) => decode_image(&bytes),
-                            Source::Path(path) => files.files().read(&path).map_err(|_| PickError::Unreadable).and_then(|bytes| decode_image(&bytes)),
-                        };
-                        // The dialog may have closed; then nobody reads the answer.
-                        let _ = send.send(decoded);
-                    }),
-                );
-                self.decoding = Some(receive);
+                self.decode(host, source);
             }
         }
         let Some(receive) = &self.decoding else { return };
@@ -483,6 +490,36 @@ impl SignaturePadDialog {
                 self.decoding = None;
             }
         }
+    }
+
+    /// Reads and decodes `source` on `host.jobs()`; [`take_picked`](Self::take_picked) takes the result.
+    fn decode(&mut self, host: &Host, source: Source) {
+        let (send, receive) = channel();
+        let files = host.clone();
+        host.jobs().spawn(
+            "signature-image",
+            Box::new(move || {
+                let decoded = match source {
+                    Source::Bytes(bytes) => decode_image(&bytes),
+                    Source::Path(path) => files.files().read(&path).map_err(|_| PickError::Unreadable).and_then(|bytes| decode_image(&bytes)),
+                };
+                // The dialog may have closed; then nobody reads the answer.
+                let _ = send.send(decoded);
+            }),
+        );
+        self.decoding = Some(receive);
+    }
+
+    /// Imports a file dropped on the Image tab in place of any pending Browse… pick. A file with neither bytes nor a
+    /// path (a web drop still being read) is left alone.
+    fn take_dropped(&mut self, host: &Host, file: OsFile) {
+        let source = match (file.bytes, file.path) {
+            (Some(bytes), _) => Source::Bytes(bytes.to_vec()),
+            (None, Some(path)) => Source::Path(path),
+            (None, None) => return,
+        };
+        self.forget_pick(Some(host));
+        self.decode(host, source);
     }
 
     fn forget_pick(&mut self, host: Option<&Host>) {
@@ -515,6 +552,8 @@ impl StackDialog for SignaturePadDialog {
             FooterButton::new(words.cancel.clone(), DialogRole::Cancel),
         ];
         let mut browse = false;
+        // A file dropped on the Image tab this pass.
+        let mut dropped: Option<OsFile> = None;
         let SignaturePadDialog { draft, scan, open, decoding, error, .. } = self;
         let decoding = decoding.is_some();
         let shown = Dialog::new(title.clone()).opened(Bind::bound(open)).buttons(buttons).show(ui, |ui, _| {
@@ -539,22 +578,25 @@ impl StackDialog for SignaturePadDialog {
                     DrawPad::new(words.draw_tab.clone(), Bind::bound(&mut draft.strokes)).show(ui);
                 }
                 SignatureTab::Image => {
-                    Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
-                    if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
-                        browse = true;
-                    }
-                    if let Some(error) = *error {
-                        let word = match error {
-                            PickError::Unreadable => &words.image_failed,
-                            PickError::TooLarge => &words.image_too_large,
-                        };
-                        Notice::new(Tone::Bad, word.clone()).layout(NoticeLayout::Inline).show(ui);
-                    }
-                    DrawPad::image(words.image_tab.clone(), draft.image.as_ref()).show(ui);
+                    let veil = DropVeil::new(words.drop_image.clone()).show_with_files(ui, |ui, _| {
+                        Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
+                        if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
+                            browse = true;
+                        }
+                        if let Some(error) = *error {
+                            let word = match error {
+                                PickError::Unreadable => &words.image_failed,
+                                PickError::TooLarge => &words.image_too_large,
+                            };
+                            Notice::new(Tone::Bad, word.clone()).layout(NoticeLayout::Inline).show(ui);
+                        }
+                        DrawPad::image(words.image_tab.clone(), draft.image.as_ref()).show(ui);
+                    });
+                    dropped = first_file(veil.output.dropped.as_ref());
                 }
                 SignatureTab::Scan => {
                     if let Some(tab) = scan.as_mut() {
-                        tab(ui, draft);
+                        DropVeil::new(words.drop_photo.clone()).show_with_files(ui, |ui, files| tab(ui, draft, ScanEvent::Show(first_file(files))));
                     }
                 }
             }
@@ -565,6 +607,9 @@ impl StackDialog for SignaturePadDialog {
                 if clicked(&Button::new(words.clear.clone()).show(ui)) {
                     draft.clear();
                     *error = None;
+                    if let Some(tab) = scan.as_mut() {
+                        tab(ui, draft, ScanEvent::Clear);
+                    }
                 }
             });
         });
@@ -573,6 +618,9 @@ impl StackDialog for SignaturePadDialog {
             let request =
                 PickRequest::open("signature-image").title(words.browse_title.as_str()).filter(words.image_filter.as_str(), &["png", "jpg", "jpeg"]);
             self.pick = Some(host.files().pick(request));
+        }
+        if let (Some(file), Some(host)) = (dropped, &host) {
+            self.take_dropped(host, file);
         }
         let output = shown.output;
         match output.picked {

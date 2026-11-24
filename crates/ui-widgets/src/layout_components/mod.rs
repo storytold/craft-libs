@@ -201,20 +201,25 @@ layout_component!(
     /// a collection that fills it.
     Stack,
     StackStyleKey,
-    [command_scope, surface],
+    [command_scope, surface, fallback_collection],
     <'a> { header: Option<RegionFn<'a>>, footer: Option<RegionFn<'a>> }
 );
 layout_component!(
     /// Children side by side.
     Row,
     RowStyleKey,
-    []
+    [fit_rank, fallback_collection]
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
+    ///
+    /// The cells are the grid's craft children. An egui container shown in the body (`ui.horizontal`, an
+    /// `egui::Grid`) is no cell: egui places it below the cells placed so far, and its children are not cells. The
+    /// rows after it are placed over it, since the grid's rows do not count it: show it as the last child, or put it
+    /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
-    []
+    [fallback_collection]
 );
 
 impl<'a> Stack<'a> {
@@ -329,7 +334,6 @@ impl Row {
     /// The row's line is at least `points` high, as a child of more than one line that high would make it: the
     /// children that fill the line's height take at least it. A row of command groups keeps the height of its
     /// rows of controls while its groups are shorter. Ignored by a row that wraps.
-    // design: allow[props/point-size](the least line of a row is the caller's measured extent (three control rows of a look and a title line), not a chosen size)
     pub fn least_height(mut self, points: f32) -> Self {
         self.props = self.props.least_height(points);
         self

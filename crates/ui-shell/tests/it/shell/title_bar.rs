@@ -131,6 +131,81 @@ fn the_window_title_is_sent_once_per_change() {
     assert!(titles(&out).is_empty(), "an embedded shell sends no title");
 }
 
+/// The leading content of a bar is a row as wide as the bar: a document tab strip beside the Home and Open buttons
+/// takes the width they and the title leave, and its tabs show and are in the tree. The strip used to be laid out at
+/// its minimum there, with no tab drawn or reachable.
+#[trial]
+fn a_document_tab_strip_in_the_bar_takes_the_free_width() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    use craft_ui::testing::Fixture;
+    let mut fixture = Fixture::new(|ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let tabs = [DocumentTab::new(0_usize, "One.pdf"), DocumentTab::new(1, "Two.pdf"), DocumentTab::new(2, "Three.pdf")];
+        let _ = TitleBar::new().frame(frame).show_titled(
+            ui,
+            Title::new("One.pdf"),
+            |ui, _| {
+                Button::new("Home").show(ui);
+                let _ = DocumentTabs::new("Documents", &tabs).reorderable(true).selected(0).show(ui);
+                Button::new("Open").show(ui);
+            },
+            |ui, _| {
+                Button::new("Settings").show(ui);
+            },
+        );
+    });
+    fixture.room(vec2(1400.0, 300.0)).settle();
+    let home = fixture.by_label("Home").expect("the Home button").rect;
+    let open = fixture.by_label("Open").expect("the Open button").rect;
+    let tabs: Vec<Rect> = fixture.by_role(Role::TAB).into_iter().map(|tab| tab.rect).collect();
+    assert_eq!(tabs.len(), 3, "every tab is in the tree: {tabs:?}");
+    for tab in &tabs {
+        assert!(tab.width() > 0.0 && tab.left() >= home.right() && tab.right() <= open.left(), "a tab shows between Home and Open: {tab:?}");
+    }
+    let strip = fixture.by_role(Role::TAB_LIST).first().expect("the strip's node").rect;
+    let settings = fixture.by_label("Settings").expect("the Settings button").rect;
+    assert!(strip.width() > (settings.left() - home.right()) / 2.0, "the strip takes the free width: {strip:?} up to {settings:?}");
+}
+
+/// With tabs that overflow the strip, the trailing control stays in sight at the end of the strip's row, left of the
+/// bar's own trailing controls (it runs under none of them).
+#[trial]
+fn a_trailing_control_of_overflowing_tabs_stays_clear_of_the_bars_controls() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    use craft_ui::testing::Fixture;
+    let mut fixture = Fixture::new(|ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let tabs: Vec<_> = (0..9).map(|i| DocumentTab::new(i, format!("Statement {i} for the office records, scanned.pdf")).closable(true)).collect();
+        let _ = TitleBar::new().frame(frame).show_titled(
+            ui,
+            Title::new("x"),
+            |ui, _| {
+                Button::new("Home").show(ui);
+                let _ = DocumentTabs::new("Documents", &tabs)
+                    .reorderable(true)
+                    .selected(0)
+                    .trailing(|ui| {
+                        Button::new("Open").show(ui);
+                    })
+                    .show(ui);
+            },
+            |ui, _| {
+                Button::new("Discord").show(ui);
+            },
+        );
+    });
+    fixture.room(vec2(1200.0, 300.0)).settle();
+    let open = fixture.by_label("Open").expect("the Open button").rect;
+    let discord = fixture.by_label("Discord").expect("the Discord button").rect;
+    assert!(open.right() <= discord.left() + 0.5, "Open {open:?} runs under Discord {discord:?}");
+}
+
 /// What the action-title trial saw: the passes that reported an activation, and the bar's rect.
 #[derive(Clone, Copy)]
 struct TitleSeen {
@@ -191,4 +266,90 @@ fn an_action_title_is_a_button_and_reports_its_activation() {
         "the long title {:?} is cut to fit inside the bar {bar:?}",
         title.rect
     );
+}
+
+/// What the mirrored-title trial saw, by label: the buttons' and the tabs' rects in the settled pass.
+fn lights_right_bar(follows: bool, lights_right: bool) -> impl Fn(&str) -> Rect {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Show as _, ShowContainer as _};
+    use craft_ui::shell::MacInset;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let frame = Frame::Inset(MacInset::default().with_lights_right(lights_right));
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let tabs = [DocumentTab::new(0_usize, "first.pdf"), DocumentTab::new(1, "last.pdf")];
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            let _ = AppShell::new(WindowKey::main())
+                .title_follows_lights(follows)
+                .title_bar(|ui, _, _: &mut ()| {
+                    let _ = TitleBar::new()
+                        .trailing(|ui, _| {
+                            Button::new("Discord").show(ui);
+                            Button::new("Preferences").show(ui);
+                        })
+                        .show(ui, |ui, _| {
+                            Button::new("Home").show(ui);
+                            let _ = DocumentTabs::new("Documents", &tabs)
+                                .selected(0)
+                                .trailing(|ui| {
+                                    Button::new("Open").show(ui);
+                                })
+                                .show(ui);
+                        });
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+        })
+    };
+    for _ in 0..3 {
+        frame();
+    }
+    let settled = frame();
+    let tree = settled.trees.into_iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    move |label: &str| {
+        tree.with_role(Role::BUTTON)
+            .into_iter()
+            .chain(tree.with_role(Role::TAB))
+            .find(|key| tree.name_of(*key) == Some(label))
+            .and_then(|key| tree.bounds_of(key))
+            .unwrap_or_else(|| panic!("{label} is in the tree"))
+    }
+}
+
+/// macOS with a right-to-left system language lays the traffic lights out from the right end. A shell whose title
+/// follows the lights mirrors the bar's flow: the lights' room is at the right, Home sits beside it, the tabs read from
+/// the right, then Open; the trailing controls are at the far left, in mirrored order. Labels keep reading left to
+/// right (production 4448ee940).
+#[trial]
+fn a_title_that_follows_the_lights_mirrors_when_they_are_at_the_right() {
+    let (width, lights) = (800.0, craft_ui::shell::MacInset::default().leading);
+    let rect = lights_right_bar(true, true);
+    let home = rect("Home");
+    for label in ["Home", "first.pdf", "last.pdf", "Open", "Discord", "Preferences"] {
+        assert!(rect(label).right() <= width - lights + 0.5, "{label} {:?} clears the lights at the right", rect(label));
+    }
+    assert!(home.right() >= width - lights - 16.0, "Home {home:?} sits beside the lights");
+    assert!(rect("first.pdf").right() <= home.left() + 0.5, "the first tab follows Home");
+    assert!(rect("last.pdf").right() <= rect("first.pdf").left() + 0.5, "the tabs read from the right");
+    assert!(rect("Open").right() <= rect("last.pdf").left() + 0.5, "Open follows the tabs");
+    let (discord, preferences) = (rect("Discord"), rect("Preferences"));
+    assert!(preferences.left() < 20.0, "Preferences {preferences:?} at the far end");
+    assert!(preferences.right() <= discord.left() + 0.5, "Preferences, then Discord, mirroring their order");
+    assert!(discord.right() < rect("Open").left(), "Discord stays clear of Open");
+}
+
+/// Without the opt-in the bar keeps its order and only the lights' room moves to the right end, so nothing sits under
+/// them; with the lights at the left the bar is as it always was.
+#[trial]
+fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
+    let (width, lights) = (800.0, craft_ui::shell::MacInset::default().leading);
+    let rect = lights_right_bar(false, true);
+    assert!(rect("Home").left() < 20.0, "Home {:?} keeps the start", rect("Home"));
+    assert!(rect("first.pdf").left() >= rect("Home").right() - 0.5, "the tabs read from the left");
+    let preferences = rect("Preferences");
+    assert!(preferences.right() <= width - lights + 0.5, "Preferences {preferences:?} clears the lights at the right");
+    let rect = lights_right_bar(true, false);
+    assert!(rect("Home").left() >= lights - 0.5, "Home {:?} after the lights at the left", rect("Home"));
+    assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
 }

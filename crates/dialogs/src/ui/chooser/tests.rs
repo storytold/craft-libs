@@ -108,6 +108,11 @@ fn picked(path: impl AsRef<Path>) -> Option<DialogResult<Answer>> {
     Some(DialogResult::Ok(Answer::Paths(vec![path.as_ref().to_path_buf()])))
 }
 
+/// A Save's answer of `path`, from a request that offers no file types.
+fn saved(path: impl AsRef<Path>) -> Option<DialogResult<Answer>> {
+    Some(DialogResult::Ok(Answer::Saved { path: path.as_ref().to_path_buf(), filter: None }))
+}
+
 // WordCraft's `save_adds_the_extension_and_asks_before_replacing`, `selecting_a_file_preserves_leading_spaces`,
 // `a_selected_folder_never_replaces_the_typed_save_name` and `a_removed_selected_file_keeps_its_exact_save_path`, with
 // `~` and "not found". The extension is the service's policy now, so the chooser answers the name as typed.
@@ -120,7 +125,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     assert_eq!((save.field("folder"), save.field("name")), (Value::from(shown("/d", "drafts")), Value::from("")), "the typed folder opens");
     save.type_name("chapter");
     save.click("Save");
-    assert_eq!(save.answer(), picked("/d/drafts/chapter"), "a new name is saved to as typed");
+    assert_eq!(save.answer(), saved("/d/drafts/chapter"), "a new name is saved to as typed");
 
     // A listed file is replaced only after the question, asked once.
     let mut replace = Chooser::open(PickRequest::save("document").directory("/d/drafts"));
@@ -128,7 +133,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     replace.click("Save");
     assert_eq!(replace.answer(), None, "the chooser asks before replacing");
     replace.click("Replace");
-    assert_eq!(replace.answer(), picked("/d/drafts/old.docx"));
+    assert_eq!(replace.answer(), saved("/d/drafts/old.docx"));
 
     // A selected file keeps its exact name, leading space and all, for Open and for Save's question.
     let mut open = Chooser::open(PickRequest::open("document").directory("/d"));
@@ -141,7 +146,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     save.click("Save");
     assert_eq!(save.answer(), None, "Save asks before replacing the selected file");
     save.click("Replace");
-    assert_eq!(save.answer(), picked("/d/ report.docx"));
+    assert_eq!(save.answer(), saved("/d/ report.docx"));
 
     // A selected file removed meanwhile still names the exact path, and nothing is asked.
     let mut removed = Chooser::open(PickRequest::save("document").file_name("Draft.docx").directory("/d"));
@@ -149,7 +154,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     removed.fake.remove_file("/d/ report.docx");
     removed.refocus();
     removed.click("Save");
-    assert_eq!(removed.answer(), picked("/d/ report.docx"), "the removed selection keeps its path, not `report.docx`");
+    assert_eq!(removed.answer(), saved("/d/ report.docx"), "the removed selection keeps its path, not `report.docx`");
 
     // A selected folder is entered and never becomes the save name; once it is gone, the typed name is saved to.
     let mut folder = Chooser::open(PickRequest::save("document").file_name("chapter.docx").directory("/d"));
@@ -162,7 +167,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     gone.fake.remove_folder("/d/Chapters");
     gone.refocus();
     gone.click("Save");
-    assert_eq!(gone.answer(), picked("/d/chapter.docx"), "the removed folder is not saved over as `Chapters.docx`");
+    assert_eq!(gone.answer(), saved("/d/chapter.docx"), "the removed folder is not saved over as `Chapters.docx`");
 
     // `~` is the Home root; a typed path elsewhere is listed, then opened.
     let mut home = Chooser::open(PickRequest::open("document").directory("/d"));
@@ -218,6 +223,8 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
         for _ in 0..400 {
             fixture.idle(1);
             if fields(&host).get("listed") == Some(&Value::Bool(true)) {
+                // The chooser lays out its listing in the next passes: a click reads where the controls rest.
+                fixture.settle();
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -238,7 +245,7 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     click(&mut fixture, "File name");
     fixture.type_text("novel");
     click(&mut fixture, "Save");
-    assert_eq!(service.take_answer(id), Some(Picked::Paths(vec![dir.join("novel.docx")])), "the policy adds the extension");
+    assert_eq!(service.take_answer(id), Some(Picked::Saved { path: dir.join("novel.docx"), file_type: None }), "the policy adds the extension");
 
     // A forced chooser: `report` is no listed file, so the chooser asks nothing; the policy's `report.docx` is,
     // so the service asks once.
@@ -249,7 +256,7 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     click(&mut fixture, "Save");
     assert_eq!(service.take_answer(id), None, "the Replace question waits");
     click(&mut fixture, "Replace");
-    assert_eq!(service.take_answer(id), Some(Picked::Paths(vec![dir.join("report.docx")])));
+    assert_eq!(service.take_answer(id), Some(Picked::Saved { path: dir.join("report.docx"), file_type: None }));
 
     // Cancel settles as Cancelled.
     let id = service.pick(PickRequest::open("document").directory(&dir).fallback(true));

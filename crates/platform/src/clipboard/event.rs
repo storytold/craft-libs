@@ -87,6 +87,10 @@ impl ClipboardBackend for EventClipboard {
         (self.out)(flavors)
     }
 
+    fn readable_any_time(&self) -> bool {
+        false
+    }
+
     // new: first offered flavour among `mimes`, limit checked
     fn read(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Flavor>, ClipboardError> {
         let Some(flavor) = self.offered(mimes) else { return Ok(None) };

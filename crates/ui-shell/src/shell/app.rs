@@ -135,7 +135,10 @@ impl<A: ShellApp> eframe::App for Driver<A> {
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
         embed::before_ui(ui.ctx(), frame);
+        #[cfg(target_arch = "wasm32")]
+        let _ = frame;
         self.app.ui(ui);
     }
 }
