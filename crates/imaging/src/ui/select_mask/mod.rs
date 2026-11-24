@@ -481,7 +481,13 @@ impl SelectMaskWorkspace {
     /// The events of the methods that ran between passes come first. A second pass of a frame reports only what its
     /// own input did, since the first pass took the frame's steps and commands. OK closes an open polygon first, so the
     /// result carries it.
-    fn pass(&mut self, ui: &mut Ui, source: &dyn SelectMaskSource, open: Bind<'_, bool>) -> WorkspacePass<SelectMaskEvent, SelectMaskDone> {
+    fn pass(
+        &mut self,
+        ui: &mut Ui,
+        source: &dyn SelectMaskSource,
+        revision: u64,
+        open: Bind<'_, bool>,
+    ) -> WorkspacePass<SelectMaskEvent, SelectMaskDone> {
         // pc: crates/ui-egui/src/dialogs/select_mask_ui.rs:1812 `show`, :1375 `keys`, :870
         // `enter`, :881 `escape`.
         let env = Env::of(ui);
@@ -511,7 +517,7 @@ impl SelectMaskWorkspace {
             .sides(|ui, cx| {
                 let mut guard = this.borrow_mut();
                 let work: &mut SelectMaskWorkspace = &mut guard;
-                let status = cx.pending(key.clone(), || source.preview_job(&request)).clone();
+                let status = cx.pending((revision, key.clone()), || source.preview_job(&request)).clone();
                 *side_status.borrow_mut() = Some(status.clone());
                 side_panel_open.set(None);
                 *side_pick.borrow_mut() = None;
@@ -910,8 +916,8 @@ impl FullWindowWorkspace for SelectMaskWorkspace {
     const KEY: &'static str = "select.selectAndMask";
 
     fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<Self::Event, Self::Result> {
-        let WorkspaceCx { source, open, .. } = cx;
-        self.pass(ui, source, open)
+        let WorkspaceCx { source, revision, open, .. } = cx;
+        self.pass(ui, source, revision, open)
     }
 
     /// The settings, and the bar's `tool`, `mode` (`"add"`, `"subtract"`), `size` (of the current tool), `hardness`,

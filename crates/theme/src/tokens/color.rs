@@ -68,6 +68,9 @@ pub struct SurfaceColors {
     pub knob: Rgba,
     /// Translucent cover behind modal surfaces.
     pub scrim: Rgba,
+    /// The surface that stands out from the others by being the opposite of them: light on a dark theme, dark on a
+    /// light one. Toasts sit on it, with `text.on_inverse` on top.
+    pub inverse: Rgba,
     /// The colour of every cast shadow (popups, menus, dialogs, floating windows, toasts,
     /// tooltips): black at the theme's alpha, as PhotoCraft's `Tokens::shadow`. Each use keeps its
     /// own offset and blur (`elevation.*`).
@@ -96,6 +99,8 @@ pub struct TextColors {
     pub on_status: Rgba,
     /// Text on `state.selected` and `state.selected_hover`.
     pub on_selected: Rgba,
+    /// Text on `surface.inverse`.
+    pub on_inverse: Rgba,
 }
 
 /// Lines and outlines.
@@ -115,6 +120,9 @@ pub struct LineColors {
     /// Marks that carry meaning and sit on control surfaces: slider marks and ticks, the ring
     /// around a badge dot. Holds the non-text minimum on them.
     pub mark: Rgba,
+    /// The marks of a grip a dock part is dragged by (the toolbar's, a panel group's): a little apart from
+    /// `surface.panel`, lighter in dark mode and darker in light mode, and quieter than icons and text.
+    pub grip: Rgba,
     /// Keyboard focus ring.
     pub focus: Rgba,
 }
@@ -315,10 +323,11 @@ impl ColorTokens {
                 sunken: c,
                 knob: c,
                 scrim: c,
+                inverse: c,
                 shadow: c,
             },
-            text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c },
-            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, focus: c },
+            text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c, on_inverse: c },
+            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
             accent: AccentColors {
                 solid: c,
                 hover: c,
@@ -433,6 +442,8 @@ color_tokens! {
     SurfaceKnob = "surface.knob" => surface.knob;
     /// `surface.scrim`
     SurfaceScrim = "surface.scrim" => surface.scrim;
+    /// `surface.inverse`
+    SurfaceInverse = "surface.inverse" => surface.inverse;
     /// `surface.shadow`
     SurfaceShadow = "surface.shadow" => surface.shadow;
     /// `text.normal`
@@ -451,6 +462,8 @@ color_tokens! {
     TextOnStatus = "text.on_status" => text.on_status;
     /// `text.on_selected`
     TextOnSelected = "text.on_selected" => text.on_selected;
+    /// `text.on_inverse`
+    TextOnInverse = "text.on_inverse" => text.on_inverse;
     /// `line.divider`
     LineDivider = "line.divider" => line.divider;
     /// `line.border`
@@ -463,6 +476,8 @@ color_tokens! {
     LineFrame = "line.frame" => line.frame;
     /// `line.mark`
     LineMark = "line.mark" => line.mark;
+    /// `line.grip`
+    LineGrip = "line.grip" => line.grip;
     /// `line.focus`
     LineFocus = "line.focus" => line.focus;
     /// `accent.solid`
@@ -632,11 +647,20 @@ impl ColorToken {
     /// (`surface.*` except `scrim` and `shadow`); those must be opaque.
     pub const fn is_opaque_surface(self) -> bool {
         use ColorToken::{
-            SurfaceBackground, SurfaceCanvas, SurfaceCanvasPattern, SurfaceChrome, SurfaceKnob, SurfacePanel, SurfaceRaised, SurfaceSunken,
+            SurfaceBackground, SurfaceCanvas, SurfaceCanvasPattern, SurfaceChrome, SurfaceInverse, SurfaceKnob, SurfacePanel, SurfaceRaised,
+            SurfaceSunken,
         };
         matches!(
             self,
-            SurfaceBackground | SurfaceCanvas | SurfaceCanvasPattern | SurfaceChrome | SurfacePanel | SurfaceRaised | SurfaceSunken | SurfaceKnob
+            SurfaceBackground
+                | SurfaceCanvas
+                | SurfaceCanvasPattern
+                | SurfaceChrome
+                | SurfacePanel
+                | SurfaceRaised
+                | SurfaceSunken
+                | SurfaceKnob
+                | SurfaceInverse
         )
     }
 }

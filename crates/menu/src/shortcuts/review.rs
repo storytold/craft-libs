@@ -1,12 +1,18 @@
-//! The foreign import review, in place of the table and the detail pane: what the set will change, what did not
-//! match and why, suggestions to pick from, and after the import the report of what was skipped, taken or failed.
+//! The foreign import review, in place of the table and the detail pane: the start, a search, what the set will change,
+//! what did not match and why with a command to pick for each, the key codes the file leaves undecided, and after the
+//! import the report of what was skipped, taken or failed.
 
+use std::cell::OnceCell;
+use std::cmp::Reverse;
+
+use craft_i18n::matcher::Matcher;
 use craft_keymap::chord::foreign::{ForeignError, ReadNote};
-use craft_keymap::import::{FailedChange, NoChangeReason, Planned, SkipReason, UnmatchedReason};
-use craft_keymap::{Binding, CommandRef, ImportPlan, ImportReport};
+use craft_keymap::import::{FailedChange, NoChangeReason, Planned, SkipReason, Start, Suggestion, UnmatchedReason};
+use craft_keymap::{Binding, CommandDef, CommandRef, ImportPlan, ImportReport};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::choice::{Checkbox, Radio, RadioGroup};
+use craft_ui::contract::{Animate as _, Bind, BodyCx, Entry, FieldLayout, Lazy, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::Notice;
@@ -16,13 +22,17 @@ use craft_ui::runtime::env::Env as UiEnv;
 use craft_ui::text::TextField;
 use egui::Ui;
 
-use super::state::{DialogState, Env};
-use super::words::{Say, around_chord};
+use super::recorder::ChordRecorder;
+use super::state::{DialogState, Env, Target};
+use super::view::recording_text;
+use super::words::{Say, ShortcutWords, around_chord};
 
 /// The separator between the parts of an entry's line.
 const PART_SEP: &str = " · ";
 /// The separator before an entry's note.
 const NOTE_SEP: &str = " — ";
+/// Most entry names listed beside a key code.
+const CODE_ENTRIES: usize = 3;
 
 /// One list row: the item, its line, its keys and a note.
 struct Line {
@@ -70,11 +80,25 @@ impl Line {
     }
 }
 
+/// What a control of the review asks for; `show` is the one place that turns it into a state change.
 enum Act {
-    Pick(usize, usize),
+    Start(Start),
+    Include(usize, bool),
+    Target(usize, Option<CommandRef>),
+    Record(String),
+    Code(String, Option<String>),
     Import,
     Close,
     Copy(String),
+}
+
+/// An undecided key or modifier code, and what the plan made of it.
+struct CodeRow {
+    /// `key:N` or `mods:N`.
+    code: String,
+    /// `None` while the code is open; `Some(None)` once answered No equivalent.
+    answer: Option<Option<String>>,
+    entries: Vec<String>,
 }
 
 /// Shows the review while one is open.
@@ -83,10 +107,14 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: &
     let (plan, name, done) = (review.plan.clone(), review.name.clone(), review.done.clone());
     let act = match &done {
         Some((set, report)) => after_report(ui, env, set, report),
-        None => plan_view(ui, env, state, &plan, name),
+        None => plan_view(ui, cx.now(), env, state, &plan, name),
     };
     match act {
-        Some(Act::Pick(s, c)) => state.pick_suggestion(env, s, c),
+        Some(Act::Start(start)) => state.set_start(env, start),
+        Some(Act::Include(entry, on)) => state.include(env, entry, on),
+        Some(Act::Target(entry, command)) => state.pick_target(env, entry, command),
+        Some(Act::Record(code)) => state.record(env, Target::Code { code }),
+        Some(Act::Code(code, answer)) => state.answer_code(env, code, answer),
         Some(Act::Import) => state.import_reviewed(env),
         Some(Act::Close) => state.close_review(),
         Some(Act::Copy(text)) => cx.clipboard().put(&[ClipItem::Text(text.into())]),
@@ -94,15 +122,23 @@ pub(crate) fn show(ui: &mut Ui, cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: &
     }
 }
 
+fn heading(ui: &mut Ui, say: &Say, title: &str, n: usize) {
+    let heading = say.words().title_n.fill(&[("title", title), ("n", n.to_string().as_str())]);
+    Text::new(heading).role(craft_ui::style::TypeRole::Heading).show(ui);
+}
+
 fn section(ui: &mut Ui, say: &Say, title: &str, lines: &[Line]) {
     if lines.is_empty() {
         return;
     }
-    let heading = say.words().title_n.fill(&[("title", title), ("n", lines.len().to_string().as_str())]);
-    Text::new(heading).role(craft_ui::style::TypeRole::Heading).show(ui);
+    heading(ui, say, title, lines.len());
+    let estimate = UiEnv::of(ui).tokens.size.row.text;
     for (at, line) in lines.iter().enumerate() {
-        let shade = if line.to { Shade::Normal } else { Shade::Muted };
-        Text::new(line.text(say)).shade(shade).id_salt((title, at)).show(ui);
+        // A line out of view does not run: a review can list thousands.
+        Lazy::new((title, at), estimate).show(ui, |ui| {
+            let shade = if line.to { Shade::Normal } else { Shade::Muted };
+            Text::new(line.text(say)).shade(shade).id_salt((title, at)).show(ui);
+        });
     }
 }
 
@@ -125,6 +161,8 @@ fn foreign_error(say: &Say, e: &ForeignError) -> String {
         ForeignError::TooLong => w.the_shortcut_is_too_long.as_str().to_owned(),
         ForeignError::UnknownKey(k) => w.unknown_key_key.fill(&[("key", k.as_str())]),
         ForeignError::UnsupportedModifier(m) => w.unsupported_modifier_key.fill(&[("key", m.as_str())]),
+        ForeignError::Undecided { key: Some(n), .. } => w.undecided_key.fill(&[("n", n.to_string().as_str())]),
+        ForeignError::Undecided { mods: Some(n), .. } => w.undecided_modifier.fill(&[("n", n.to_string().as_str())]),
         _ => String::new(),
     }
 }
@@ -145,8 +183,126 @@ fn binding_text(say: &Say, env: &Env<'_>, b: &Binding, home: Option<&craft_keyma
     }
 }
 
-/// The review of a plan: the counts, the set's name, Import and Cancel Import, then the lists.
-fn plan_view(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState, plan: &ImportPlan, mut name: String) -> Option<Act> {
+/// What the Start radios ask for: the keymap's bindings as they are, or every command's defaults.
+fn start_choice(ui: &mut Ui, say: &Say, start: Start) -> Option<Act> {
+    let w = say.words();
+    let after = SideLabel::new().layout(FieldLayout::After);
+    let group = RadioGroup::new(w.start.clone(), Bind::given(start == Start::Defaults)).show(ui, |ui, cx| {
+        cx.labelled(ui, "current", w.start_current.clone(), after.clone(), Radio::new(false));
+        cx.labelled(ui, "defaults", w.start_defaults.clone(), after.clone(), Radio::new(true));
+    });
+    group.output.value().copied().map(|defaults| Act::Start(if defaults { Start::Defaults } else { Start::Current }))
+}
+
+/// The command a target select value stands for: a catalog row, then No equivalent, then the line's own candidates.
+fn target_of(catalog: &[CommandDef], candidates: &[CommandRef], value: usize) -> Option<Option<CommandRef>> {
+    match value.cmp(&catalog.len()) {
+        std::cmp::Ordering::Less => catalog.get(value).map(|c| Some(c.command.clone())),
+        std::cmp::Ordering::Equal => Some(None),
+        std::cmp::Ordering::Greater => candidates.get(value - catalog.len() - 1).cloned().map(Some),
+    }
+}
+
+/// The 16 modifier combinations as (label, stored text), by number of modifiers then Cmd, Ctrl, Alt, Shift. Bit 3 is
+/// Cmd, bit 2 Ctrl, bit 1 Alt, bit 0 Shift; the stored text joins the names with `+` (`""` for none).
+fn modifier_choices(w: &ShortcutWords) -> Vec<(String, String)> {
+    let names = [("Cmd", w.mod_cmd.as_str()), ("Ctrl", w.mod_ctrl.as_str()), ("Alt", w.mod_alt.as_str()), ("Shift", w.mod_shift.as_str())];
+    let mut order: Vec<u8> = (0..16).collect();
+    order.sort_by_key(|n| (n.count_ones(), Reverse(*n)));
+    order
+        .into_iter()
+        .map(|n| {
+            let held: Vec<_> = names.iter().enumerate().filter(|(i, _)| n & (8 >> i) != 0).map(|(_, name)| name).collect();
+            if held.is_empty() {
+                return (w.mod_none.as_str().to_owned(), String::new());
+            }
+            let label = held.iter().map(|(_, label)| *label).collect::<Vec<_>>().join("+");
+            let stored = held.iter().map(|(stored, _)| *stored).collect::<Vec<_>>().join("+");
+            (label, stored)
+        })
+        .collect()
+}
+
+/// The codes the report decoded or was answered, then the ones still open, each once with the entries that use it.
+fn code_rows(report: &ImportReport) -> Vec<CodeRow> {
+    let mut rows: Vec<CodeRow> =
+        report.codes.iter().map(|d| CodeRow { code: d.code.clone(), answer: Some(d.text.clone()), entries: d.entries.clone() }).collect();
+    for u in &report.unreadable {
+        let ForeignError::Undecided { key, mods } = &u.reason else { continue };
+        for code in key.map(|n| format!("key:{n}")).into_iter().chain(mods.map(|n| format!("mods:{n}"))) {
+            match rows.iter_mut().find(|r| r.code == code) {
+                Some(row) => {
+                    if row.entries.len() < CODE_ENTRIES && !row.entries.contains(&u.item) {
+                        row.entries.push(u.item.clone());
+                    }
+                }
+                None => rows.push(CodeRow { code, answer: None, entries: vec![u.item.clone()] }),
+            }
+        }
+    }
+    rows
+}
+
+/// What a code row shows: the text it stands for, No equivalent, or the prompt while it is open.
+fn code_text(w: &ShortcutWords, row: &CodeRow) -> String {
+    match &row.answer {
+        Some(Some(text)) => text.clone(),
+        Some(None) => w.no_equivalent.as_str().to_owned(),
+        None => w.record_a_key.as_str().to_owned(),
+    }
+}
+
+/// The Keys section: for each code, a recorder (key codes) or the 16 modifier combinations (modifier codes), and No
+/// equivalent.
+fn keys_section(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, rows: &[CodeRow]) -> Option<Act> {
+    if rows.is_empty() {
+        return None;
+    }
+    let say = env.text;
+    let w = say.words();
+    heading(ui, say, w.keys_section.as_str(), rows.len());
+    let choices = modifier_choices(w);
+    let entries: Vec<Entry<usize>> = choices.iter().enumerate().map(|(i, (label, _))| Entry::new(i, label.clone())).collect();
+    let mut act = None;
+    for (at, row) in rows.iter().enumerate() {
+        Text::new(format!("{}{PART_SEP}{}", row.code, row.entries.join(", "))).shade(Shade::Muted).id_salt(("shortcuts.import.code", at)).show(ui);
+        Row::new().id_salt(("shortcuts.import.codeRow", at)).show(ui, |ui, _| {
+            if row.code.starts_with("mods:") {
+                let mut chosen = usize::MAX;
+                Select::new(row.code.clone(), Bind::bound(&mut chosen), &entries).placeholder(code_text(w, row)).id_salt("modifiers").show(ui);
+                if let Some((_, stored)) = choices.get(chosen) {
+                    act = Some(Act::Code(row.code.clone(), Some(stored.clone())));
+                }
+            } else {
+                let recording = matches!(state.recording.as_ref().map(|r| &r.target), Some(Target::Code { code }) if *code == row.code);
+                let shown = if recording { recording_text(env, state) } else { code_text(w, row) };
+                let name = format!("{}: {}", w.record_a_key.as_str(), row.code);
+                let out = ChordRecorder::new(name, recording, shown).id_salt("record").show(ui);
+                if out.started && !recording {
+                    act = Some(Act::Record(row.code.clone()));
+                }
+                if recording {
+                    if let Some(recording) = state.recording.as_mut() {
+                        recording.started = true;
+                    }
+                    if !out.chords.is_empty() {
+                        state.feed(env, &out.chords, now);
+                    } else if out.response.lost_focus() {
+                        state.stop_recording();
+                    }
+                }
+            }
+            if clicked(&Button::new(w.no_equivalent.clone()).id_salt("noEquivalent").show(ui)) {
+                act = Some(Act::Code(row.code.clone(), None));
+            }
+        });
+    }
+    act
+}
+
+/// The review of a plan: the counts, the set's name, Import and Cancel Import, the start and the search, then the lists
+/// with their choices and the Keys section.
+fn plan_view(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, plan: &ImportPlan, mut name: String) -> Option<Act> {
     let say = env.text;
     let w = say.words();
     let ui_env = UiEnv::of(ui);
@@ -181,9 +337,18 @@ fn plan_view(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState, plan: &ImportP
             act = Some(Act::Close);
         }
     });
+    let (start, mut search) = state.review.as_ref().map(|r| (r.options.start, r.search.clone())).unwrap_or_default();
+    if let Some(start_act) = start_choice(ui, say, start) {
+        act = Some(start_act);
+    }
+    TextField::search(w.search_entries.clone(), Bind::bound(&mut search)).id_salt("shortcuts.import.search").show(ui);
     if let Some(review) = state.review.as_mut() {
         review.name = name;
+        review.search = search.clone();
     }
+
+    let matcher = Matcher::new(&say.folder(), search.trim());
+    let shown = |line: &Line| search.trim().is_empty() || matcher.score(&format!("{} {} {}", line.item, line.keys, line.note)).is_some();
 
     let chord_list = |c: &Planned| -> String {
         let home = env.keymap.bindable(&c.command).map(|b| b.scope.clone());
@@ -203,35 +368,101 @@ fn plan_view(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState, plan: &ImportP
             line.note_chord = chords;
             line
         })
+        .filter(&shown)
         .collect();
-    section(ui, say, w.will_change.as_str(), &changes);
+    let unmatched: Vec<Line> = report
+        .unmatched
+        .iter()
+        .map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(unmatched_reason(say, u.reason)))
+        .filter(&shown)
+        .collect();
+    let mut unreadable: Vec<Line> =
+        report.unreadable.iter().map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(foreign_error(say, &u.reason))).collect();
+    // PLAN: words.rs has no "Not read" title; the file's unread lines share the unreadable list until shortcuts-w4 adds one.
+    unreadable.extend(report.not_read.iter().map(|n| Line::new(n.text.clone(), n.line)));
+    unreadable.retain(&shown);
+    let [(skipped_title, skipped), ..] = report_lists(say, env, report);
+    let mut skipped: Vec<Line> = skipped.into_iter().filter(&shown).collect();
 
-    if !report.suggestions.is_empty() {
-        Text::new(w.suggestions_n.fill(&[("n", number(report.suggestions.len()).as_str())])).role(craft_ui::style::TypeRole::Heading).show(ui);
-        for (si, s) in report.suggestions.iter().enumerate() {
-            Row::new().show(ui, |ui, _| {
-                Text::new(Line::new(s.item.clone(), s.line).text(say)).shade(Shade::Muted).id_salt(("shortcuts.import.item", si)).show(ui);
-                let entries: Vec<Entry<usize>> = s.candidates.iter().enumerate().map(|(ci, c)| Entry::new(ci, say.label_of(env.keymap, c))).collect();
-                let mut chosen = usize::MAX;
-                Select::new(w.command_for_item.fill(&[("item", s.item.as_str())]), Bind::bound(&mut chosen), &entries)
-                    .placeholder(w.choose_a_command_more.clone())
-                    .id_salt(("shortcuts.import.suggestion", si))
-                    .show(ui);
-                if chosen != usize::MAX {
-                    act = Some(Act::Pick(si, chosen));
-                }
+    let Some(review) = state.review.as_ref() else { return act };
+    // An entry left out is planned as if the set lacked it: it is listed with the skipped keys, its include box off.
+    skipped.extend(
+        review.set.entries.iter().zip(&review.included).filter(|(_, on)| !**on).map(|(entry, _)| Line::new(entry.item(), entry.line)).filter(&shown),
+    );
+    let entry_of = |item: &str, line: Option<usize>| review.entry_at(item, line).and_then(|i| review.included.get(i).map(|on| (i, *on)));
+    let catalog = env.keymap.catalog();
+    let shared: OnceCell<Vec<Entry<usize>>> = OnceCell::new();
+    let shared_entries = || {
+        shared.get_or_init(|| {
+            let none = Entry::new(catalog.len(), w.no_equivalent.as_str().to_owned());
+            catalog.iter().enumerate().map(|(i, c)| Entry::new(i, say.label_of(env.keymap, &c.command))).chain(std::iter::once(none)).collect()
+        })
+    };
+    let suggestions: &[Suggestion] = &report.suggestions;
+
+    let choice_lines = |ui: &mut Ui, tag: &'static str, title: &str, lines: &[Line], pick: bool, act: &mut Option<Act>| {
+        if lines.is_empty() {
+            return;
+        }
+        heading(ui, say, title, lines.len());
+        for (at, line) in lines.iter().enumerate() {
+            let marks = entry_of(&line.item, line.line);
+            // A line out of view does not run: a review can list thousands.
+            Lazy::new((tag, at), ui_env.tokens.size.control.md).show(ui, |ui| {
+                Row::new().id_salt((tag, at)).show(ui, |ui, _| {
+                    if let Some((entry, on)) = marks {
+                        let label = format!("{}: {}", w.include_entry.as_str(), line.item);
+                        let check = Checkbox::new(Bind::given(on)).label(label).show(ui);
+                        if let Some(on) = check.value().copied() {
+                            *act = Some(Act::Include(entry, on));
+                        }
+                    }
+                    let shade = if line.to { Shade::Normal } else { Shade::Muted };
+                    Text::new(line.text(say)).shade(shade).id_salt("text").show(ui);
+                    let Some((entry, _)) = marks.filter(|_| pick) else { return };
+                    let candidates: &[CommandRef] =
+                        suggestions.iter().find(|s| s.item == line.item && s.line == line.line).map(|s| s.candidates.as_slice()).unwrap_or_default();
+                    let own: Vec<Entry<usize>>;
+                    let entries: &[Entry<usize>] = if candidates.is_empty() {
+                        shared_entries()
+                    } else {
+                        let first = catalog.len() + 1;
+                        own = candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(ci, c)| Entry::new(first + ci, say.label_of(env.keymap, c)))
+                            .chain(shared_entries().iter().cloned())
+                            .collect();
+                        &own
+                    };
+                    let mut chosen = usize::MAX;
+                    Select::new(w.command_for_item.fill(&[("item", line.item.as_str())]), Bind::bound(&mut chosen), entries)
+                        .placeholder(w.choose_a_command_more.clone())
+                        .searchable()
+                        .id_salt("target")
+                        .show(ui);
+                    if let Some(target) = target_of(catalog, candidates, chosen) {
+                        *act = Some(Act::Target(entry, target));
+                    }
+                });
             });
         }
-    }
+    };
 
-    let unmatched: Vec<Line> =
-        report.unmatched.iter().map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(unmatched_reason(say, u.reason))).collect();
-    section(ui, say, w.not_matched.as_str(), &unmatched);
-    let unreadable: Vec<Line> =
-        report.unreadable.iter().map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(foreign_error(say, &u.reason))).collect();
-    section(ui, say, w.unreadable.as_str(), &unreadable);
-    let approximated: Vec<Line> =
-        report.approximated.iter().map(|a| Line::new(a.item.clone(), a.line).keys(a.keys.clone()).note(read_note(say, a.note))).collect();
+    choice_lines(ui, "shortcuts.import.changes", w.will_change.as_str(), &changes, false, &mut act);
+    if !report.suggestions.is_empty() {
+        Text::new(w.suggestions_n.fill(&[("n", number(report.suggestions.len()).as_str())])).role(craft_ui::style::TypeRole::Heading).show(ui);
+    }
+    choice_lines(ui, "shortcuts.import.unmatched", w.not_matched.as_str(), &unmatched, true, &mut act);
+    choice_lines(ui, "shortcuts.import.unreadable", w.unreadable.as_str(), &unreadable, false, &mut act);
+    choice_lines(ui, "shortcuts.import.skipped", &skipped_title, &skipped, false, &mut act);
+
+    let approximated: Vec<Line> = report
+        .approximated
+        .iter()
+        .map(|a| Line::new(a.item.clone(), a.line).keys(a.keys.clone()).note(read_note(say, a.note)))
+        .filter(&shown)
+        .collect();
     section(ui, say, w.approximated.as_str(), &approximated);
     let kept: Vec<Line> = report
         .matched_without_change
@@ -243,8 +474,13 @@ fn plan_view(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState, plan: &ImportP
             };
             Line::new(m.item.clone(), m.line).note(note)
         })
+        .filter(&shown)
         .collect();
     section(ui, say, w.matched_without_change.as_str(), &kept);
+
+    if let Some(keys_act) = keys_section(ui, now, env, state, &code_rows(report)) {
+        act = Some(keys_act);
+    }
     act
 }
 

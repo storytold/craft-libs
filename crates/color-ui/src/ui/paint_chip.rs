@@ -12,21 +12,21 @@ use std::collections::HashMap;
 use craft_behavior::Mixed;
 use craft_behavior::{Axis, EditEvent, EditEvents, Metrics, PartKey};
 use craft_cms::convert::CmykConverter;
+use craft_keymap::Mods;
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
-use craft_ui::choice::{ChoiceWords, Segmented, Swatch};
+use craft_ui::choice::{ChoiceWords, RING_SHARE, Segmented, Swatch, SwatchStyle, paint_ring};
 use craft_ui::contract::{
-    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _, Pages,
-    PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
+    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi,
+    Overlays as _, Pages, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
-use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetState};
+use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetRowMenu, PresetState};
 use craft_ui::primitives::textures::CachedTexture;
-use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
+use craft_ui::primitives::{ContentPainterCx, FacePaint, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
-use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
 
 use super::popover::compact_picker;
@@ -94,12 +94,22 @@ pub struct GradientPreview {
     /// Whether the host's gradient runs end to start. The ramp keeps the stops as given; the flag is part of the
     /// preview's value so that a Reverse edit, which leaves the stops alone, still changes the paint the chip sets.
     pub reverse: bool,
+    /// The host's painter for the preview's face; it paints over the checker, and `stops` still give the accessible
+    /// value.
+    pub face: Option<FacePaint>,
 }
 
 impl GradientPreview {
+    /// The preview shows `face` in the paint well.
+    #[must_use]
+    pub fn face(mut self, face: FacePaint) -> Self {
+        self.face = Some(face);
+        self
+    }
+
     /// A preview through `stops`, not reversed.
     pub fn new(stops: Vec<(f32, Srgba)>) -> Self {
-        GradientPreview { stops, reverse: false }
+        GradientPreview { stops, reverse: false, face: None }
     }
 
     /// The preview with the gradient reversed or not.
@@ -206,10 +216,27 @@ pub struct PaintChipStyle {
     radius: egui::CornerRadius,
     /// The ring on the chip's outline.
     edge: StyleColor,
-    /// The fill of an empty chip: the field's.
+    /// The fill of a picture chip with no texture yet: the field's.
     none_fill: StyleColor,
     /// The No Color diagonal.
     none_mark: StyleColor,
+    /// The swatch look the ring is painted with.
+    swatch: SwatchStyle,
+}
+
+impl PaintChipStyle {
+    /// The look of the chip's well, as a ring or filled.
+    pub(crate) fn well_look(&self, ring: bool) -> WellLook {
+        WellLook {
+            none_fill: self.none_fill,
+            none_mark: self.none_mark,
+            edge: self.edge,
+            height: self.height,
+            radius: self.radius,
+            ring,
+            swatch: self.swatch.clone(),
+        }
+    }
 }
 
 /// The last solid colour the chip held: a switch back to Solid starts from it.
@@ -242,6 +269,8 @@ pub struct PaintChipOutput {
     /// The Color Picker… button was pressed: the popover closed and the host opens the full picker with this request
     /// for that pass.
     pub pick_color: Option<ColorRequest>,
+    /// A click, Enter or Space on a chip without a popover: the modifiers held.
+    pub clicked: Option<Mods>,
 }
 
 impl Outcome for PaintChipOutput {
@@ -254,6 +283,72 @@ impl Outcome for PaintChipOutput {
     #[cfg(feature = "screen-testing")]
     fn story_facts(&self) -> craft_ui::testing::StoryOutput {
         self.edit.story_facts()
+    }
+}
+
+/// The look of a paint well: the chip's own look fields.
+pub(crate) struct WellLook {
+    pub(crate) none_fill: StyleColor,
+    pub(crate) none_mark: StyleColor,
+    pub(crate) edge: StyleColor,
+    pub(crate) height: f32,
+    /// The well's corners.
+    pub(crate) radius: egui::CornerRadius,
+    /// Whether the well shows its colour as a ring.
+    pub(crate) ring: bool,
+    /// The swatch look the ring is painted with.
+    pub(crate) swatch: SwatchStyle,
+}
+
+/// One paint-well face for `PaintChip` and `SwatchPair`: none, solid, a gradient face or ramp, a pattern or a picture;
+/// a face paints over the checker.
+///
+/// A ring well shows a solid paint through [`paint_ring`]; any other paint fills the well and the hole inside the band
+/// is filled with the surface the well sits on.
+pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl craft_ui::contract::ContentPainter>, well: Rect, paint: &Paint, style: &WellLook) {
+    if let (true, Paint::Solid(color)) = (style.ring, paint) {
+        let state = StateSet::new(State::Rest, Flags::empty(), StateMix::new(0.0, 0.0, 0.0));
+        paint_ring(&ui.draw(), well, *color, &style.swatch, &state, style.radius);
+        return;
+    }
+    let shape = PaintShape::Rect(well, style.radius);
+    let painter = ui.content_painter(cx);
+    match paint {
+        Paint::Solid(color) => {
+            if color.a < 1.0 {
+                painter.checker(well);
+            }
+            ui.draw().data_fill(&shape, DataColor::new(Color32::from(*color)));
+        }
+        Paint::None => {
+            let draw = ui.draw();
+            draw.fill(&shape, style.none_fill);
+            let inner = well.shrink(style.height * DIAGONAL_INSET_IN_HEIGHTS);
+            let (from, to) = if cx.flow.is_rtl() { (inner.right_bottom(), inner.left_top()) } else { (inner.left_bottom(), inner.right_top()) };
+            draw.stroke(&PaintShape::Path(vec![from, to]), StrokeWidth::Medium, style.none_mark);
+        }
+        Paint::Gradient(preview) => {
+            painter.checker(well);
+            if let Some(face) = &preview.face {
+                face.paint(&painter, well);
+            } else if !preview.stops.is_empty() {
+                painter.ramp(well, egui::CornerRadius::ZERO, &ramp_stops(preview, cx.flow.is_rtl()), Axis::X);
+            }
+        }
+        Paint::Pattern(image) | Paint::Picture(image) => {
+            painter.checker(well);
+            match image.texture {
+                Some(texture) => paint_image(&painter, well, texture, matches!(paint, Paint::Pattern(_))),
+                None => ui.draw().fill(&shape, style.none_fill),
+            }
+        }
+    }
+    if style.ring {
+        let ground =
+            ui.with_style(cx.resolved.variant, |scope| SurfaceStyle { edge: SurfaceEdge::None, shadow: None, ..scope.surface(cx.env.surface()) });
+        ui.draw().surface_styled(well.shrink(well.width() * RING_SHARE), &ground);
+    } else {
+        ui.draw().stroke(&shape, StrokeWidth::Thin, style.edge);
     }
 }
 
@@ -298,8 +393,17 @@ pub struct PaintChip<'a> {
     /// A Color Picker… button at the end of the kind row opens the full picker.
     #[prop]
     full_picker: bool,
+    /// A click, Enter or Space opens the popover; on by default. Off, nothing opens and the chip reports the held
+    /// modifiers as [`clicked`](PaintChipOutput::clicked) (host-picker mode).
+    #[prop]
+    popover: bool,
+    /// The chip draws as a stroke ring through the one ring painter.
+    #[prop]
+    ring: bool,
     /// The request of the Color Picker… button, for this pass.
     pick_color: Option<ColorRequest>,
+    /// The modifiers of this pass's click on a chip without a popover.
+    clicked: Option<Mods>,
 }
 
 impl<'a> PaintChip<'a> {
@@ -320,7 +424,10 @@ impl<'a> PaintChip<'a> {
             swatches: None,
             cmyk: None,
             full_picker: false,
+            popover: true,
+            ring: false,
             pick_color: None,
+            clicked: None,
         }
         .label(label)
     }
@@ -328,7 +435,7 @@ impl<'a> PaintChip<'a> {
     /// The [`ColorRequest::key`] of the full picker the Color Picker… button asks for.
     pub const COLOR_KEY: &'static str = "paintChip";
 
-    /// The swatches the popover lists (rows from `swatch_rows`) beside the picker: the groups the Swatches panel takes,
+    /// The swatches the popover lists (from `swatch_source`) beside the picker: the groups the Swatches panel takes,
     /// so a host builds no library copy each pass.
     #[must_use]
     pub fn swatches(mut self, groups: &'a [SwatchGroup], state: Bind<'a, PresetState<SwatchKey>>) -> Self {
@@ -430,6 +537,7 @@ impl Component for PaintChip<'_> {
             edge: cx.color(colors.line.control_edge),
             none_fill: cx.color(colors.surface.sunken),
             none_mark: cx.color(colors.status.bad.solid),
+            swatch: Swatch::style(cx, Swatch::new(Label::default(), Srgba::BLACK).style_key()),
         }
     }
 
@@ -442,7 +550,10 @@ impl Component for PaintChip<'_> {
     }
 
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let _ = cx.part(WELL, rect).toggles("picker");
+        let part = cx.part(WELL, rect);
+        if self.popover {
+            let _ = part.toggles("picker");
+        }
     }
 
     fn bind(&mut self) -> Option<craft_ui::contract::BindMut<'_, Paint>> {
@@ -455,10 +566,14 @@ impl Component for PaintChip<'_> {
             let color = *color;
             cx.memory::<LastSolid>().0 = Some(color);
         }
+        let activation = cx.activation().filter(|_: &Activation| cx.resolved.enabled);
+        if !self.popover {
+            self.clicked = activation.map(|activation| activation.mods);
+            return;
+        }
         let popup = cx.popup("picker");
-        let activated = cx.activation().filter(|_: &Activation| cx.resolved.enabled).is_some();
         let open = popup.is_open(cx);
-        if activated {
+        if activation.is_some() {
             if open {
                 popup.close(cx);
             } else {
@@ -468,6 +583,9 @@ impl Component for PaintChip<'_> {
     }
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        if !self.popover {
+            return;
+        }
         let popup = cx.popup("picker");
         let words = cx.words::<PaintWords>();
         let name = cx.label();
@@ -475,7 +593,7 @@ impl Component for PaintChip<'_> {
         let solid = cx.memory::<LastSolid>().0.unwrap_or(self.fallback);
         let current = FillKind::of(&paint);
         let sampled = self.sampled;
-        let recent_cells: Vec<(Label, Srgba)> = self.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
+        let recent = self.recent;
         let full_picker = self.full_picker;
         let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
         let solid_now = if let Paint::Solid(color) = &paint { Some(*color) } else { None };
@@ -505,20 +623,21 @@ impl Component for PaintChip<'_> {
                             compact_picker(name.clone(), Bind::given(PickedColor::rgb(*color)), sampled).alpha(true).eyedropper(true).show(ui);
                         shown.edit = picked.events;
                         shown.screen_pick = picked.screen_pick;
-                        if !recent_cells.is_empty() {
-                            Text::new(words.recent.clone()).shade(Shade::Faint).show(ui);
+                        if !recent.is_empty() {
+                            // A palette of no swatches: the recent row alone, under its caption.
                             let mut chosen = *color;
-                            let recent = SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &recent_cells).show(ui);
-                            shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
+                            let row =
+                                SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &[]).recent(words.recent.clone(), recent).show(ui);
+                            shown.picked = row.picked;
                         }
                         if let Some((groups, state)) = swatches.as_mut() {
                             let groups: &[SwatchGroup] = groups;
                             let source = swatch_source(groups, cmyk);
                             let colors: HashMap<&str, &SwatchColor> =
-                                groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                                groups.iter().flat_map(|g| g.entries.iter().filter_map(|e| e.color().map(|c| (e.name.as_str(), c)))).collect();
                             let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &source)
                                 .toolbar(false)
-                                .row_menu(false)
+                                .row_menu(PresetRowMenu::Off)
                                 .default_open(DefaultOpen::None)
                                 .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
                                 .show(ui);
@@ -575,51 +694,21 @@ impl Component for PaintChip<'_> {
             Some(paint) => access.value(value_text(&words, paint)),
             None => access.value(cx.words::<ChoiceWords>().swatch_mixed.as_str()),
         };
-        access.has_popup(PopupKind::Dialog);
+        if self.popover {
+            access.has_popup(PopupKind::Dialog);
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let style = cx.style;
-        let well = cx.rect;
-        let shape = PaintShape::Rect(well, style.radius);
         let Some(paint) = cx.value().cloned() else {
             ui.face(WELL, Swatch::new(cx.resolved.label.to_owned(), Mixed::<Srgba>::Mixed));
             return;
         };
-        let painter = ui.content_painter(cx);
-        match &paint {
-            Paint::Solid(color) => {
-                if color.a < 1.0 {
-                    painter.checker(well);
-                }
-                ui.draw().data_fill(&shape, DataColor::new(Color32::from(*color)));
-            }
-            Paint::None => {
-                let draw = ui.draw();
-                draw.fill(&shape, style.none_fill);
-                let inner = well.shrink(style.height * DIAGONAL_INSET_IN_HEIGHTS);
-                let (from, to) = if cx.flow.is_rtl() { (inner.right_bottom(), inner.left_top()) } else { (inner.left_bottom(), inner.right_top()) };
-                draw.stroke(&PaintShape::Path(vec![from, to]), StrokeWidth::Medium, style.none_mark);
-            }
-            Paint::Gradient(preview) => {
-                painter.checker(well);
-                if !preview.stops.is_empty() {
-                    painter.ramp(well, egui::CornerRadius::ZERO, &ramp_stops(preview, cx.flow.is_rtl()), Axis::X);
-                }
-            }
-            Paint::Pattern(image) | Paint::Picture(image) => {
-                painter.checker(well);
-                match image.texture {
-                    Some(texture) => paint_image(&painter, well, texture, matches!(paint, Paint::Pattern(_))),
-                    None => ui.draw().fill(&shape, style.none_fill),
-                }
-            }
-        }
-        ui.draw().stroke(&shape, StrokeWidth::Thin, style.edge);
+        paint_well(ui, cx, cx.rect, &paint, &cx.style.well_look(self.ring));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PaintChipOutput {
-        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: self.pick_color }
+        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: self.pick_color, clicked: self.clicked }
     }
 }
 

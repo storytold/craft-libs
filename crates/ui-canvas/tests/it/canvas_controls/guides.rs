@@ -228,6 +228,41 @@ fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_cha
     assert!(matches!(landed.as_slice(), [tick] if tick.fract() == 0.0), "Shift deep in lands on a whole pixel: {landed:?}");
 }
 
+// A double press on a strip places a guide at once, at the pointer, with the drag-out's Alt and Shift rules. The
+// pointer lies on the strip, so the guide lands only where the bounds take it: Alt turns it to the strip's across
+// axis, which runs inside them. A press and drag out of a strip still adds exactly one guide.
+#[trial]
+fn a_double_press_on_a_ruler_places_a_guide_at_once() {
+    let placed = |mods: Modifiers, at: &dyn Fn(Rect) -> Pos2| -> Vec<Guide> {
+        let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
+        let mut fixture = ruled(1.0, &guides);
+        let rect = fixture.canvas().rect;
+        fixture.fixture().hold(mods);
+        fixture.double_press_at(at(rect));
+        fixture.fixture().hold(Modifiers::NONE);
+        guides.borrow().clone()
+    };
+    let top = |x: f32| move |rect: Rect| pos2(x, rect.min.y + 4.0);
+    let left = |y: f32| move |rect: Rect| pos2(rect.min.x + 4.0, y);
+
+    let turned = placed(Modifiers::ALT, &top(300.4));
+    assert!(
+        matches!(turned.as_slice(), [one] if one.along == Axis::Y && (one.position - 300.4).abs() < 1e-3),
+        "Alt on the top ruler places a vertical guide at the pointer: {turned:?}"
+    );
+    let ticked = placed(Modifiers::ALT | Modifiers::SHIFT, &top(300.4));
+    assert!(matches!(ticked.as_slice(), [one] if one.position.fract() == 0.0), "Shift lands on a whole pixel: {ticked:?}");
+    let side = placed(Modifiers::ALT, &left(300.4));
+    assert!(matches!(side.as_slice(), [one] if one.along == Axis::X), "Alt on the left ruler places a horizontal guide: {side:?}");
+    assert!(placed(Modifiers::ALT, &top(650.0)).is_empty(), "a double press outside the bounds adds none");
+
+    let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
+    let mut fixture = ruled(1.0, &guides);
+    let rect = fixture.canvas().rect;
+    drag_with(&mut fixture, Modifiers::NONE, pos2(300.0, rect.min.y + 4.0), pos2(300.0, 247.6));
+    assert_eq!(guides.borrow().len(), 1, "a press and drag out of a strip adds exactly one guide: {:?}", guides.borrow());
+}
+
 // Delete on a focused guide removes it, and the focus the removal hands to the next guide selects nothing: no guide is
 // selected after a delete, as in Photoshop.
 #[trial]
@@ -237,11 +272,8 @@ fn a_deleted_guide_hands_focus_on_without_selecting_the_next_guide() {
     let (shown, picked) = (Rc::clone(&guides), Rc::clone(&selected));
     let mut fixture = ToolFixture::with_view("Document", Recorder::default(), view_at(1.0), move |ui, cx| {
         let mut list = shown.borrow_mut();
-        let mut built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *list)).interactive(true);
-        let current = *picked.borrow();
-        if let Some(key) = current {
-            built = built.selected_guide(key);
-        }
+        let current: Vec<GuideKey> = picked.borrow().iter().copied().collect();
+        let built = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *list)).interactive(true).selected_guides(&current);
         if let Some(select) = built.show_at(ui, cx.rect).select {
             *picked.borrow_mut() = select;
         }

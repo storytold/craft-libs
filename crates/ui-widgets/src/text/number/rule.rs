@@ -10,16 +10,17 @@ use std::ops::RangeInclusive;
 
 /// The value one step from a value in a direction: the up arrow, the wheel and the Page keys of a field whose values
 /// lie on a ladder instead of a grid (`NumberField::stepper`). The direction is `1` up and `-1` down.
-pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32) -> f64 + 'a>);
+pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32, f64) -> f64 + 'a>);
 
 impl<'a> NumberStepper<'a> {
-    /// The stepper that runs `next`.
-    pub fn new(next: impl Fn(f64, i32) -> f64 + 'a) -> Self {
+    /// The stepper that runs `next(from, direction, scale)`: `scale` is 1 for a plain arrow, wheel notch or AccessKit
+    /// step, `LARGE_STEPS` with Shift or a Page key, and a tenth with Alt where the field has one.
+    pub fn new(next: impl Fn(f64, i32, f64) -> f64 + 'a) -> Self {
         NumberStepper(Box::new(next))
     }
 
-    pub(super) fn next(&self, from: f64, direction: i32) -> f64 {
-        (self.0)(from, direction)
+    pub(super) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
+        (self.0)(from, direction, scale)
     }
 }
 
@@ -109,6 +110,7 @@ pub(super) struct Ruled<V> {
     pub(super) snap: bool,
     pub(super) decimals: Option<usize>,
     pub(super) mixed: bool,
+    pub(super) positive_only: bool,
     pub(super) names: Vec<(u32, String)>,
     pub(super) suffix: Option<String>,
     /// How many shown units make one stored unit (1 for a field that shows what it holds).
@@ -124,6 +126,7 @@ impl<V> Clone for Ruled<V> {
             snap: self.snap,
             decimals: self.decimals,
             mixed: self.mixed,
+            positive_only: self.positive_only,
             names: self.names.clone(),
             suffix: self.suffix.clone(),
             scale: self.scale,
@@ -193,6 +196,9 @@ impl<V: NumberValue> Codec for Ruled<V> {
         let (read, mut note) = self.inner.parse_tagged(self.without_suffix(text), &self.shown(start))?;
         match read {
             Some(number) => {
+                if self.positive_only && number <= 0.0 {
+                    return Err(NotAValue);
+                }
                 note.held = (number < self.rule.low || number > self.rule.high).then_some(number);
                 Ok((V::of_number(self.held(number) / self.scale), note))
             }
