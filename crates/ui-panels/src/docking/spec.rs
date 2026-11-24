@@ -107,11 +107,6 @@ impl DockGrid {
         }
     }
 
-    /// Whether the grid is a [`rail`](Self::rail) grid, before it is [`resolved`](Self::resolved).
-    pub(crate) fn is_rail(self) -> bool {
-        matches!(self.widths, GridWidths::Rail(_))
-    }
-
     /// The content's width at one column and the width each further column adds; zero for a rail grid not yet
     /// [`resolved`](Self::resolved).
     fn first_step(self) -> (f32, f32) {

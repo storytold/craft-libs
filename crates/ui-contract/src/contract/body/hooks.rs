@@ -165,8 +165,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.region_gap = gap_of(&env.tokens, Gap::Tight);
         self.end_gap = gap_of(&env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(props, &env.tokens);
-        self.after_rule = layout::flow_start(&ctx, env) == Some(true);
-        self.rules = RuleBands::of(props, &env.tokens, crate::runtime::egui::scale::pixels_per_point(&ctx), self.after_rule);
+        let start = layout::flow_start(&ctx, env);
+        self.after_rule = start == Some(true);
+        self.rules = RuleBands::of(props, env, crate::runtime::egui::scale::pixels_per_point(&ctx), start);
         self.least_width = least_of(&env.tokens, props.least_width);
         let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
         if !matches!(props.mount, Mount::Inline | Mount::Pane(_))
@@ -1900,8 +1901,9 @@ impl BodyHooks<'_> {
         self.region_gap = gap_of(&at.env.tokens, Gap::Tight);
         self.end_gap = gap_of(&at.env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(&props, &at.env.tokens);
-        self.after_rule = layout::flow_start(at.ui.ctx(), at.env) == Some(true);
-        self.rules = RuleBands::of(&props, &at.env.tokens, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()), self.after_rule);
+        let start = layout::flow_start(at.ui.ctx(), at.env);
+        self.after_rule = start == Some(true);
+        self.rules = RuleBands::of(&props, at.env, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()), start);
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
