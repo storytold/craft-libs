@@ -35,8 +35,9 @@ jobs:
 
   # Pull requests run the Workspace gate's Linux legs only, and pushes to next cancel each other's
   # runs, so this starts one Workspace run on next a day that nothing cancels: next's macOS and
-  # Windows legs then run in full at least once a day. Main gets the same from workspace.yml's own
-  # scheduled runs. The only job here with `actions: write`; it checks out and runs nothing from
+  # Windows legs then run in full at least once a day, and its Linux leg builds from source and
+  # saves next's own workspace-crates cache entry, which pull requests into next restore. Main gets
+  # the same from workspace.yml's own scheduled runs. The only job here with `actions: write`; it checks out and runs nothing from
   # the repository.
   workspace-next:
     name: Workspace on next

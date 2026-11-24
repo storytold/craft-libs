@@ -64,10 +64,13 @@ jobs:
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
   # rebuilds only the crates a change reaches. `cache-prune` keeps the newest entry. The midnight
-  # scheduled run builds from source (`cold-build`) and starts the entry afresh. The macOS and
-  # Windows legs keep a dependency-only entry: their workspace crates would not fit the 10 GB cache
-  # budget beside Linux's. The lint legs keep no cache (`lint-cache: false`) for the same reason; a
-  # cold lint leg is still shorter than its gate leg.
+  # scheduled run builds from source (`cold-build`) and starts the entry afresh. next has an entry
+  # of its own, since main's is built from different code and lockfile and a pull request into next
+  # rebuilt nearly everything from it (15.5 minutes): nightly.yml's daily manual run on next builds
+  # from source and saves it (`cache-save-on-dispatch`), and pull requests into next restore it
+  # before main's. The macOS and Windows legs keep a dependency-only entry: their workspace crates
+  # would not fit the 10 GB cache budget beside Linux's. The lint legs keep no cache
+  # (`lint-cache: false`) for the same reason; a cold lint leg is still shorter than its gate leg.
   native:
     name: Workspace
     needs: platforms
@@ -75,7 +78,8 @@ jobs:
     with:
       os: '["ubuntu-latest"]'
       cache-workspace-crates: true
-      cold-build: ${{ github.event.schedule == '17 0 * * *' }}
+      cache-save-on-dispatch: true
+      cold-build: ${{ github.event.schedule == '17 0 * * *' || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/next' }}
       lint-cache: false
       # The vendored crates are on the workspace `exclude` list, so unreached-rs has no module tree for them.
       unreached-rs-allow: |
@@ -183,14 +187,15 @@ jobs:
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
-  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
-  # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
-  # done, instead of leaving them to the 10 GB budget's eviction, which would evict other entries
-  # too. The only job with `actions: write`; it checks out and runs nothing from the repository.
+  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), as
+  # does the daily manual run on next, and every run restores only the newest. This deletes the
+  # older ones of the run's branch as soon as the Linux leg is done, instead of leaving them to the
+  # 10 GB budget's eviction, which would evict other entries too. The only job with
+  # `actions: write`; it checks out and runs nothing from the repository.
   cache-prune:
     name: cache prune
     needs: native
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -204,10 +209,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
-          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
+          gh cache list --repo "$REPO" --ref "$REF" --limit 100 --sort created_at --order desc --json id,key \
             --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
           declare -A kept
           while read -r id key; do
