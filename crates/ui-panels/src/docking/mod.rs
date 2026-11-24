@@ -30,7 +30,7 @@ mod commands;
 pub mod cross_window;
 pub mod native;
 
-pub use config::{DockConfig, DockSides, GroupMenuButton};
+pub use config::{DockConfig, DockSides};
 #[doc(hidden)]
 pub use drop::{Arrangement, end_replaced_drags};
 pub use drop::{DockDrag, DockDropTarget, DockDropped, DragUnit, float_drop, resolve_drop, start_group_drag, start_icon_drag};
