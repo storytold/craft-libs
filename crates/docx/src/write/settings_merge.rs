@@ -171,9 +171,9 @@ fn tag_end(s: &str) -> Option<usize> {
     None
 }
 
-/// The root start tag's span end and the root's direct children, or `None` for anything the
-/// scanner doesn't expect (CDATA, DOCTYPE, a different root).
-fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
+/// The root start tag's span start, span end, close tag start, and the root's direct children,
+/// or `None` for anything the scanner doesn't expect (CDATA, DOCTYPE, a different root).
+fn children(xml: &str, root: &str) -> Option<(usize, usize, usize, Vec<Child>)> {
     let open = xml.find(&format!("<{root}"))?;
     let open_end = open + tag_end(xml.get(open..)?)? + 1;
     if xml.get(open_end - 2..open_end)? == "/>" {
@@ -273,11 +273,8 @@ where
     F: FnOnce(&quick_xml::events::BytesStart<'_>, &quick_xml::NsReader<&[u8]>, &[u8]) -> bool,
 {
     let Some(child_str) = compat_s.get(k.start..k.end) else { return false };
-    let root = if root_tag.starts_with('<') {
-        root_tag
-    } else {
-        r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#
-    };
+    let root =
+        if root_tag.starts_with('<') { root_tag } else { r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"# };
     let Some(compat_open_end) = tag_end(compat_s).map(|e| e + 1) else { return false };
     let Some(compat_open) = compat_s.get(..compat_open_end) else { return false };
     let mut xml = String::with_capacity(root.len() + compat_open.len() + child_str.len() + 32);
@@ -449,11 +446,8 @@ fn is_wml_compat_switch(root_tag: &str, compat_s: &str, k: &Child) -> bool {
 
 fn is_wml_compat_container(root_tag: &str, orig: &str, k: &Child) -> bool {
     let Some(child_str) = orig.get(k.start..k.end) else { return false };
-    let root = if root_tag.starts_with('<') {
-        root_tag
-    } else {
-        r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#
-    };
+    let root =
+        if root_tag.starts_with('<') { root_tag } else { r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"# };
     let Some(open_end) = tag_end(child_str).map(|e| e + 1) else { return false };
     let Some(open_tag) = child_str.get(..open_end) else { return false };
     let mut xml = String::with_capacity(root.len() + open_tag.len() + 64);
@@ -758,11 +752,8 @@ fn merge_compat(root_tag: &str, orig: &str, orig_tag: &str, generated: &str) -> 
 }
 
 fn tag_has_rel_id(root_tag: &str, tag_str: &str) -> bool {
-    let root = if root_tag.starts_with('<') {
-        root_tag
-    } else {
-        r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#
-    };
+    let root =
+        if root_tag.starts_with('<') { root_tag } else { r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"# };
     let mut xml = String::with_capacity(root.len() + tag_str.len() + 32);
     xml.push_str(root);
     xml.push_str(tag_str);
@@ -798,11 +789,8 @@ fn tag_has_rel_id(root_tag: &str, tag_str: &str) -> bool {
 }
 
 fn child_has_rel_id(root_tag: &str, compat_open: &str, child_str: &str) -> bool {
-    let root = if root_tag.starts_with('<') {
-        root_tag
-    } else {
-        r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#
-    };
+    let root =
+        if root_tag.starts_with('<') { root_tag } else { r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"# };
     let mut xml = String::with_capacity(root.len() + compat_open.len() + child_str.len() + 32);
     xml.push_str(root);
     xml.push_str(compat_open);
@@ -837,11 +825,8 @@ fn child_has_rel_id(root_tag: &str, compat_open: &str, child_str: &str) -> bool 
 }
 
 fn compat_has_unmodeled_attrs(root_tag: &str, compat_tag: &str) -> bool {
-    let root = if root_tag.starts_with('<') {
-        root_tag
-    } else {
-        r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#
-    };
+    let root =
+        if root_tag.starts_with('<') { root_tag } else { r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"# };
     let mut xml = String::with_capacity(root.len() + compat_tag.len() + 32);
     xml.push_str(root);
     xml.push_str(compat_tag);
