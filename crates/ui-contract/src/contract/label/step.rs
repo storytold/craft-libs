@@ -253,6 +253,8 @@ fn decide_step(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Decided {
     }
     leaf.colon = colon(env, input).filter(|_| leaf.named);
     leaf.after = input.side.layout == FieldLayout::After;
+    let linked = input.side.press == super::props::LabelPress::Link;
+    leaf.link = linked;
     leaf.claimed = input.claims;
     leaf.trailing = input.trailing;
     if let Some(tooltip) = input.side.tooltip.clone() {
@@ -296,7 +298,7 @@ fn show(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, decided: Decided, trailing:
     let label_id = sub(input.scope, "label");
     let Decided { placed, leaf, .. } = decided;
     let Some(DecidedLeaf { leaf, mut kids, installed, reset }) = leaf else {
-        scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
+        scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING).shown(false)));
         scope::place_controls(&ctx, input.scope, placed.control.top());
         return placed;
     };
@@ -317,7 +319,12 @@ fn show(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, decided: Decided, trailing:
     if let Some(trailing) = trailing {
         (trailing.show)(ui, placed.trailing);
     }
-    let label = field_label(env, input, label_id, placed.label).with_press(shown.press).with_hover(shown.hovered).activated(shown.activated);
+    let linked = input.side.press == super::props::LabelPress::Link;
+    let label = field_label(env, input, label_id, placed.label)
+        .with_press(shown.press)
+        .with_hover(shown.hovered)
+        .activated(shown.activated && !linked)
+        .linked(shown.activated && linked);
     scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(label));
     scope::place_controls(&ctx, input.scope, placed.control.top());
     if input.claims {
@@ -514,5 +521,9 @@ pub(crate) fn show_leaf_in_flow<C: Show>(mut child: C, ui: &mut Ui) -> C::Output
     let facts = crate::contract::run::TypeFacts::of::<C>();
     let id = crate::contract::steps::id(ui, &child.common(crate::contract::Internal::new()).id, false, true, facts.style_key, facts.name);
     let side = SideLabel::new().layout(FieldLayout::After);
+    let side = match child.label_detail() {
+        Some(detail) => side.detail(detail),
+        None => side,
+    };
     flow_leaf(ui, (id, id), (env.enabled, env.size), label, side, child, None)
 }

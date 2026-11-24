@@ -2,6 +2,7 @@
 //! docking the whole window by dragging its title row. A context menu opened in a palette places its popup window as
 //! it places the menu in the main window.
 
+use craft_behavior::Intent;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
@@ -14,13 +15,16 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
-use craft_ui::runtime::drag;
+use craft_ui::runtime::env::RootEnv;
+use craft_ui::runtime::{drag, keys};
 use craft_ui::testing::access::AccessTree;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::trial;
-use craft_ui::testing::windows::FakeSystem;
-use craft_ui_test_kit::windows::{AppKitWindow, Out, Windows};
+use craft_ui::testing::windows::{FakeSystem, HeldButtons};
+use craft_ui::text::NumberField;
+use craft_ui_test_kit::windows::{AppKitWindow, FilesOver, Out, Windows};
 use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
@@ -266,6 +270,8 @@ struct NativeDock {
     palette: Option<ViewportId>,
     /// The tree the palette window's pass produced in the last frame.
     palette_tree: Option<AccessTree>,
+    /// Whether Auto-Collapse Iconic Panels is on in the frames of a collapsed palette.
+    auto_collapse: bool,
 }
 
 impl NativeDock {
@@ -287,7 +293,7 @@ impl NativeDock {
         windows.child_info(info(true, FLOAT_AT));
         let workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])));
         let specs = Tracked::new(Specs { rights: Permissions::ALL, least: false, stepped });
-        let mut dock = NativeDock { windows, workspace, stepped, specs, builder: None, palette: None, palette_tree: None };
+        let mut dock = NativeDock { windows, workspace, stepped, specs, builder: None, palette: None, palette_tree: None, auto_collapse: false };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -431,17 +437,17 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
     let mut dock = NativeDock::on(Os::Mac, system.clone());
     let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     dock.frame(vec![moved(ROW_AT)]);
     let (_, commands) = dock.frame(vec![press(ROW_AT)]);
     assert!(commands.contains(&ViewportCommand::StartDrag), "the press hands the move to the OS: {commands:?}");
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     let mut clicked = false;
     for _ in 0..3 {
         clicked |= docks_window(&dock.frame(vec![]).0);
     }
     assert!(!clicked && drag::mark(&dock.windows.ctx).is_none(), "a click on the row docks nothing");
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     dock.frame(vec![press(ROW_AT)]);
     dock.frame(vec![]);
     system.set_pointer(Some([OVER_GROUP.x, OVER_GROUP.y]));
@@ -460,7 +466,7 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
         docked |= docks_window(&dock.frame(vec![]).0);
     }
     assert!(!docked, "nothing docks while the system holds the button");
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     for _ in 0..3 {
         docked |= docks_window(&dock.frame(vec![]).0);
     }
@@ -481,7 +487,7 @@ fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_wher
     dock.frame_with(vec![moved(STALE)], vec![]);
     let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     dock.frame(vec![moved(ROW_AT)]);
     dock.frame(vec![press(ROW_AT)]);
     dock.frame(vec![]);
@@ -497,7 +503,7 @@ fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_wher
         matches!(mark, Some(DropMark::Region { area, .. }) if area == group),
         "the middle of the group under the system pointer is marked, the whole group: {mark:?}"
     );
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     for _ in 0..3 {
         docked |= docks_window(&dock.frame(vec![]).0);
     }
@@ -871,9 +877,9 @@ fn appkit_click(dock: &mut NativeDock, system: &FakeSystem, window: &mut AppKitW
     let desktop = window.rect.min + at.to_vec2();
     system.set_pointer(Some([desktop.x, desktop.y]));
     let mut actions = appkit_frame(dock, window, vec![moved(at)]).0;
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     actions.extend(appkit_frame(dock, window, vec![press(at)]).0);
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     actions.extend(appkit_frame(dock, window, vec![release(at)]).0);
     for _ in 0..3 {
         actions.extend(appkit_frame(dock, window, vec![]).0);
@@ -933,7 +939,7 @@ fn docks(actions: &[Action<u32>]) -> bool {
 fn appkit_drag_over_group(dock: &mut NativeDock, system: &FakeSystem, window: &mut AppKitWindow, from: Pos2) -> (Vec<ViewportCommand>, bool) {
     let pressed_at = window.rect.min + from.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     appkit_frame(dock, window, vec![moved(from)]);
     let (actions, pressed) = appkit_frame(dock, window, vec![press(from)]);
     let mut docked = docks(&actions);
@@ -972,7 +978,7 @@ fn dragging_a_collapsed_native_palette_by_its_title_row_docks_it_on_macos() {
     assert!(pressed.contains(&ViewportCommand::StartDrag), "the press hands the move to the OS: {pressed:?}");
     assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the system pointer shows the drop mark");
     assert!(!docked, "nothing docks while the system holds the button");
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     let mut docked = false;
     for _ in 0..3 {
         docked |= docks(&appkit_frame(&mut dock, &mut window, vec![]).0);
@@ -992,7 +998,7 @@ fn dragging_the_group_grip_of_a_collapsed_native_palette_docks_it_on_macos() {
     assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the pointer shows the drop mark");
     assert!(!docked, "nothing docks while the button is held");
     let release_at = OVER_GROUP - window.rect.min.to_vec2();
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     let mut docked = docks(&appkit_frame(&mut dock, &mut window, vec![release(release_at)]).0);
     for _ in 0..2 {
         docked |= docks(&appkit_frame(&mut dock, &mut window, vec![]).0);
@@ -1034,10 +1040,10 @@ fn collapsed_palette() -> (NativeDock, Rect) {
 /// One frame of `dock` with `panels`, `root` events for the main window and `child` events for the palette's window,
 /// whose OS window follows its commands at `at`: the frame's output.
 fn collapsed_frame(dock: &mut NativeDock, panels: &mut dyn DockPanels<u32>, at: &mut Rect, root: Vec<Event>, child: Vec<Event>) -> Out {
-    let workspace = &mut dock.workspace;
-    let specs = &dock.specs;
+    let (workspace, specs, auto_collapse) = (&mut dock.workspace, &dock.specs, dock.auto_collapse);
     let out = dock.windows.frame(root, child, |ui| {
-        let _ = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default()).show(ui);
+        let area = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default());
+        let _ = if auto_collapse { area.auto_collapse() } else { area }.show(ui);
     });
     let palette = dock.palette;
     let commands: Vec<ViewportCommand> =
@@ -1222,22 +1228,26 @@ fn a_tooltip_from_a_native_palette_opens_in_a_popup_os_window() {
     assert!(rect.width() > at.width() && rect.height() < rect.width(), "the tooltip's text runs on one line, wider than the strip: {rect:?}");
 }
 
-/// A press in the main window closes the flyout a collapsed native palette opened in a popup window.
+/// With Auto-Collapse Iconic Panels on, a press in the main window closes the flyout a collapsed native palette opened
+/// in a popup window; with it off the flyout stays open.
 #[trial]
-fn a_press_in_the_main_window_closes_a_native_palettes_flyout() {
-    let (mut dock, mut at) = collapsed_palette();
-    let mut probe = BodyProbe::default();
-    let popup = open_flyout(&mut dock, &mut probe, &mut at);
-    let over = OVER_GROUP - MAIN_AT.min.to_vec2();
-    for root in [vec![moved(over)], vec![press(over)], vec![release(over)]] {
-        collapsed_frame(&mut dock, &mut probe, &mut at, root, vec![]);
+fn a_press_in_the_main_window_closes_a_native_palettes_flyout_with_auto_collapse() {
+    for auto_collapse in [true, false] {
+        let (mut dock, mut at) = collapsed_palette();
+        dock.auto_collapse = auto_collapse;
+        let mut probe = BodyProbe::default();
+        let popup = open_flyout(&mut dock, &mut probe, &mut at);
+        let over = OVER_GROUP - MAIN_AT.min.to_vec2();
+        for root in [vec![moved(over)], vec![press(over)], vec![release(over)]] {
+            collapsed_frame(&mut dock, &mut probe, &mut at, root, vec![]);
+        }
+        // The flyout fades out, then its window closes.
+        let closed = (0..60).any(|_| {
+            let out = collapsed_frame(&mut dock, &mut probe, &mut at, vec![], vec![]);
+            !popups(&dock, &out).contains(&popup)
+        });
+        assert_eq!(closed, auto_collapse, "auto-collapse {auto_collapse}: the flyout's window closed only with it on");
     }
-    // The flyout fades out, then its window closes.
-    let closed = (0..60).any(|_| {
-        let out = collapsed_frame(&mut dock, &mut probe, &mut at, vec![], vec![]);
-        !popups(&dock, &out).contains(&popup)
-    });
-    assert!(closed, "the flyout's window closed");
 }
 
 /// Palettes no smaller than `PALETTE_LEAST`.
@@ -1335,12 +1345,13 @@ struct Veiled;
 
 impl DockPanels<u32> for Veiled {
     fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let _ = DropVeil::new("Drop").show(ui, |_, _| {});
+        let _ = DropVeil::new("Drop").show_with_files(ui, |_, _| {});
     }
 }
 
 /// Files dropped on a native float's own OS window reach `DockAreaOutput::window_files` once, unless a target inside
-/// that window took them.
+/// that window took them. The main window, whose pass runs first, sees none of them, as the OS sends them only to the
+/// window under the pointer: it must not end the drag of files over the float's window.
 #[trial]
 fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     let reached = |veiled: bool| {
@@ -1350,7 +1361,7 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
         let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
         let mut frame = |hovered: Vec<HoveredFile>, dropped: Vec<String>| {
             let mut files = 0;
-            windows.frame_with_files(vec![], vec![], hovered, dropped, |ui| {
+            windows.frame_with_files(vec![], vec![], FilesOver::Child, hovered, dropped, |ui| {
                 let config = DockConfig::default();
                 let shown = if veiled {
                     DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Veiled, config).show(ui)
@@ -1373,6 +1384,78 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     };
     assert_eq!(reached(false), 1, "a file no target took arrives once");
     assert_eq!(reached(true), 0, "a file a target in the window took does not");
+}
+
+/// A palette whose panel holds an Opacity field, then reads the keys its OS window's pass left, as an app passes a
+/// panel window's leftover Enter and Escape on to its main window: how many of each it read.
+#[derive(Default)]
+struct FieldPalette {
+    opacity: Option<f64>,
+    submits: usize,
+    cancels: usize,
+}
+
+impl DockPanels<u32> for FieldPalette {
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        NumberField::new("Opacity", Bind::bound(&mut self.opacity)).show(ui);
+        if ui.ctx().viewport_id() != ViewportId::ROOT {
+            self.submits += usize::from(keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Submit)));
+            self.cancels += usize::from(keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Cancel)));
+        }
+    }
+}
+
+/// Enter and Escape in a field of a native palette are the field's, with `RootEnv::escape_leaves_fields` off or on:
+/// neither reaches the palette window's leftover keys. A press on the field once it has the focus, which egui gives the
+/// field's text widget, is no press on the group's empty body, which would hand the focus to the panel's tab. Once
+/// Escape has taken the focus from the field, Enter is the window's.
+#[trial]
+fn enter_and_escape_in_a_native_palettes_field_stay_the_fields() {
+    for leaves in [false, true] {
+        let windows = Windows::new();
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let mut root = RootEnv::new();
+        root.escape_leaves_fields = leaves;
+        windows.root_env(root);
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+        let mut palette = FieldPalette { opacity: Some(50.0), ..FieldPalette::default() };
+        let mut frame = |palette: &mut FieldPalette, child: Vec<Event>| {
+            windows.frame(vec![], child, |ui| {
+                let _ =
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut *palette, DockConfig::default())
+                        .show(ui);
+            })
+        };
+        let mut out = frame(&mut palette, vec![]);
+        for _ in 0..3 {
+            out = frame(&mut palette, vec![]);
+        }
+        let child = out.trees.iter().find(|(viewport, _)| *viewport != ViewportId::ROOT).expect("the palette has an OS window");
+        let tree = &child.1;
+        let field = tree
+            .keys()
+            .into_iter()
+            .find(|key| tree.name_of(*key) == Some("Opacity") && tree.role_of(*key) != Some(Role::LABEL))
+            .and_then(|key| tree.bounds_of(key))
+            .expect("the palette shows the field")
+            .center();
+        for key in [Key::Enter, Key::Escape] {
+            for events in [vec![moved(field), press(field)], vec![release(field)], vec![], vec![]] {
+                frame(&mut palette, events);
+            }
+            for events in [vec![key_press(key, Modifiers::NONE)], vec![key_release(key, Modifiers::NONE)], vec![], vec![]] {
+                frame(&mut palette, events);
+            }
+            assert_eq!((palette.submits, palette.cancels), (0, 0), "leaves {leaves}: {key:?} in the field is the field's");
+        }
+        if leaves {
+            for events in [vec![key_press(Key::Enter, Modifiers::NONE)], vec![key_release(Key::Enter, Modifiers::NONE)], vec![]] {
+                frame(&mut palette, events);
+            }
+            assert_eq!(palette.submits, 1, "an Enter after Escape left the field is the window's");
+        }
+    }
 }
 
 /// A palette float made in the app window.

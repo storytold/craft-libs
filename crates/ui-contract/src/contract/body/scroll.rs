@@ -279,6 +279,33 @@ impl BodyHooks<'_> {
 }
 
 impl<'b> BodyHooks<'b> {
+    /// The offset a drag held in an edge band of the view scrolls the body to from `from`, by the frame's time. The
+    /// body takes the step only while no scroller inside it took one this pass (`reorder::edge_step_taken`), and marks
+    /// it taken so a body around it does not step too. `None` when nothing moves, a rerun pass of a frame included: it
+    /// has no elapsed time.
+    pub(super) fn edge_step_body(&self, scroll: Scroll, ctx: &Context, from: ScrollPos) -> Option<ScrollPos> {
+        use crate::contract::reorder;
+        if !crate::runtime::drag::running(ctx) || reorder::edge_step_taken(ctx) {
+            return None;
+        }
+        let pos = crate::runtime::pointer::frame(ctx).pos?;
+        let view = self.shown_view(scroll, rect_of(self.last.view?));
+        if !view.contains(pos) {
+            return None;
+        }
+        let max = self.max_offset(view.size());
+        let unit = |on: bool, at: f32, len: f32, room: f64| if on && room > 0.0 { reorder::edge_step(len, self.row, at, 1.0) } else { 0.0 };
+        let x = unit(scroll.horizontal_on(), pos.x - view.min.x, view.width(), max.x);
+        let y = unit(scroll.vertical_on(), pos.y - view.min.y, view.height(), max.y);
+        if x == 0.0 && y == 0.0 {
+            return None;
+        }
+        reorder::mark_edge_step(ctx);
+        let dt = crate::runtime::frame::facts(ctx).elapsed.clamp(0.0, 0.1);
+        let to = self.clamped(scroll, view.size(), ScrollPos { x: from.x + f64::from(x) * dt, y: from.y + f64::from(y) * dt });
+        (to != from).then_some(to)
+    }
+
     /// The scroll strips over the body rect `at`, from the content's last extent.
     pub(super) fn strips(&self, scroll: Scroll, at: Rect) -> Option<(Rect, Rect)> {
         strips_of(scroll, Vec2::new(self.last_extent.0, self.last_extent.1), at, self.strip)

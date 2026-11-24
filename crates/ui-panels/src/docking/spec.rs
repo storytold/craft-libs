@@ -3,6 +3,8 @@
 use super::DockSizes;
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
+use crate::rails::RailDensity;
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
 use egui::Vec2;
@@ -70,8 +72,8 @@ enum GridWidths {
     /// `first`: the content's width at one column, a cell and the content's own padding on both sides; `step`: the
     /// width each further column adds, a cell and the gap before it.
     Content { first: f32, step: f32 },
-    /// A tool rail's cells, sized by the dock's style.
-    Rail,
+    /// A tool rail's cells at a density, sized by the dock's style.
+    Rail(RailDensity),
 }
 
 impl DockGrid {
@@ -83,14 +85,25 @@ impl DockGrid {
     /// The grid of a tool rail of `cells` cells: a rail button and the control padding on both sides at one column,
     /// a button and the tight gap for each further column, in the style the dock shows it in.
     pub fn rail(cells: usize) -> Self {
-        DockGrid { widths: GridWidths::Rail, most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+        DockGrid { widths: GridWidths::Rail(RailDensity::Regular), most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+    }
+
+    /// A [`rail`](Self::rail) grid whose cells are the buttons of a rail at `density`, as the rail shows them
+    /// ([`ToolRail::density`](crate::rails::ToolRail::density)); a content grid is left as it is.
+    #[must_use]
+    pub fn density(mut self, density: RailDensity) -> Self {
+        if let GridWidths::Rail(at) = &mut self.widths {
+            *at = density;
+        }
+        self
     }
 
     /// The grid with its widths in points: a [`rail`](Self::rail) grid takes the rail widths of `sizes`.
     pub fn resolved(self, sizes: &DockSizes) -> Self {
         match self.widths {
             GridWidths::Content { .. } => self,
-            GridWidths::Rail => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Regular) => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Dense) => DockGrid::new(sizes.dense_rail_first, sizes.dense_rail_step, self.most),
         }
     }
 
@@ -99,7 +112,7 @@ impl DockGrid {
     fn first_step(self) -> (f32, f32) {
         match self.widths {
             GridWidths::Content { first, step } => (first, step),
-            GridWidths::Rail => (0.0, 0.0),
+            GridWidths::Rail(_) => (0.0, 0.0),
         }
     }
 
@@ -167,6 +180,17 @@ pub struct PanelSpec {
     /// The grid the panel lays its content in, which makes a column with steps whole content columns wide and as
     /// tall as its content. `None` for a panel that fills the width it gets.
     pub grid: Option<DockGrid>,
+    /// The panel's toggle command: an iconic cell's face is `IconButton::command` of it, so the marker and the hint
+    /// follow the command.
+    pub command: Option<CommandRef>,
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills: it stays in view while the
+    /// body scrolls.
+    pub footer: bool,
+    /// A number after the panel's name on its tab, in faint type and in its accessible name ("Comments, 3"): what
+    /// the panel lists.
+    pub count: Option<usize>,
+    /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
+    pub caption: Option<Label>,
 }
 
 impl PanelSpec {
@@ -182,7 +206,39 @@ impl PanelSpec {
             window_kind: WindowKind::Tool,
             canvas: false,
             grid: None,
+            command: None,
+            footer: false,
+            count: None,
+            caption: None,
         }
+    }
+
+    /// Shows `n` after the panel's name on its tab.
+    #[must_use]
+    pub fn count(mut self, n: usize) -> Self {
+        self.count = Some(n);
+        self
+    }
+
+    /// Shows `text` under the header row while the panel is shown.
+    #[must_use]
+    pub fn caption(mut self, text: impl Into<Label>) -> Self {
+        self.caption = Some(text.into());
+        self
+    }
+
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills.
+    #[must_use]
+    pub fn footer(mut self) -> Self {
+        self.footer = true;
+        self
+    }
+
+    /// The panel's toggle command.
+    #[must_use]
+    pub fn command(mut self, command: impl Into<CommandRef>) -> Self {
+        self.command = Some(command.into());
+        self
     }
 
     /// The panel's icon.

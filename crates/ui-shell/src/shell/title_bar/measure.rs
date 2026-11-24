@@ -34,15 +34,18 @@ impl Ends {
     }
 
     /// The ends of a bar in `frame`. A window in full screen (`shown` false) has none. The macOS lights and the
-    /// Windows captions stay where the platform puts them: the lights on the physical left, the Windows captions
+    /// Windows captions stay where the platform puts them: the lights on the physical left (the right under a
+    /// right-to-left titlebar, [`MacInset::lights_right`](crate::shell::MacInset)), the Windows captions
     /// mirrored, the Linux layouts as the user set them (see [`CaptionPlan::new`]).
     pub(super) fn of(frame: &Frame, shown: bool, rtl: bool) -> Ends {
         if !shown {
             return Ends::bare();
         }
         match frame {
-            Frame::Inset(inset) if rtl => Ends { end: End::inset(inset.leading), ..Ends::bare() },
-            Frame::Inset(inset) => Ends { start: End::inset(inset.leading), ..Ends::bare() },
+            // The lights' room is at the physical end AppKit lays them out from: the start end when the bar reads from
+            // that side.
+            Frame::Inset(inset) if inset.lights_right == rtl => Ends { start: End::inset(inset.leading), ..Ends::bare() },
+            Frame::Inset(inset) => Ends { end: End::inset(inset.leading), ..Ends::bare() },
             Frame::Integrated(captions) => {
                 let plan = CaptionPlan::new(captions, rtl);
                 let total = plan.left_width() + plan.right_width();

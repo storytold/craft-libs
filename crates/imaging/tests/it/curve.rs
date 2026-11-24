@@ -86,6 +86,18 @@ impl Rig {
         self.fixture.frame(vec![press(pos)]);
     }
 
+    /// Presses `px` screen pixels from the position of levels `q`.
+    fn press_near(&mut self, q: [f32; 2], px: Vec2) {
+        let pos = self.at(q) + px;
+        self.fixture.frame(vec![moved(pos)]);
+        self.fixture.frame(vec![press(pos)]);
+    }
+
+    fn release_near(&mut self, q: [f32; 2], px: Vec2) {
+        self.fixture.frame(vec![release(self.at(q) + px)]);
+        self.fixture.idle(1);
+    }
+
     fn move_to(&mut self, q: [f32; 2]) {
         self.fixture.frame(vec![moved(self.at(q))]);
     }
@@ -136,6 +148,53 @@ fn a_point_dragged_off_the_graph_goes_and_comes_back_within_one_gesture() {
     rig.release_at([140.0, 140.0]);
     assert_eq!(rig.points(), vec![[0.0, 0.0], [140.0, 140.0], [255.0, 255.0]]);
     assert_eq!(rig.kinds().iter().filter(|k| **k == "begin").count(), 1);
+
+    // Past the grab radius below the plot it is removed too.
+    let mut rig = self::rig(&[[0.0, 0.0], [100.0, 0.0], [255.0, 255.0]]);
+    rig.press_at([100.0, 0.0]);
+    rig.move_to([100.0, 0.0]);
+    rig.fixture.frame(vec![moved(rig.at([100.0, 0.0]) + vec2(0.0, 40.0))]);
+    assert_eq!(rig.points().len(), 2, "removed past the radius");
+}
+
+/// A press up to 15 px from a point (straight or diagonal) grabs it; a press 30 px away adds a new one.
+#[trial]
+fn a_press_near_a_point_grabs_it_and_a_press_far_from_it_adds_one() {
+    for offset in [vec2(15.0, 0.0), vec2(0.0, -15.0), vec2(10.0, 10.0)] {
+        let mut rig = rig(&THREE);
+        rig.press_near([100.0, 100.0], offset);
+        rig.release_near([100.0, 100.0], offset);
+        assert_eq!(rig.points().len(), 3, "grabbed at {offset:?}");
+        assert_eq!(rig.selected.get(), Some(1), "grabbed at {offset:?}");
+    }
+    let mut rig = rig(&THREE);
+    rig.press_near([100.0, 100.0], vec2(30.0, 0.0));
+    rig.release_near([100.0, 100.0], vec2(30.0, 0.0));
+    assert_eq!(rig.points().len(), 4, "a press 30 px away adds a point");
+}
+
+/// Where two points are closer than the grab radius, a press nearer the second grabs the second.
+#[trial]
+fn where_grab_areas_overlap_the_nearest_point_is_grabbed() {
+    let per_px = 1.0 / rig(&THREE).scale.x;
+    let points = [[0.0, 0.0], [100.0, 100.0], [100.0 + 8.0 * per_px, 100.0], [255.0, 255.0]];
+    let mut rig = rig(&points);
+    rig.press_near(points[2], vec2(3.0, 0.0));
+    rig.release_near(points[2], vec2(3.0, 0.0));
+    assert_eq!(rig.points().len(), 4);
+    assert_eq!(rig.selected.get(), Some(2));
+}
+
+/// A stationary click that grabs a point outside the plot keeps the point.
+#[trial]
+fn a_click_that_grabs_a_point_outside_the_plot_keeps_it() {
+    let points = [[0.0, 0.0], [100.0, 0.0], [255.0, 255.0]];
+    let mut rig = rig(&points);
+    let below = vec2(0.0, 15.0);
+    rig.press_near([100.0, 0.0], below);
+    rig.release_near([100.0, 0.0], below);
+    assert_eq!(rig.points().len(), 3);
+    assert_eq!(rig.selected.get(), Some(1));
 }
 
 /// Shown in a panel, the editor's rect holds the whole editor: the Input and Output fields and the hint lie under the

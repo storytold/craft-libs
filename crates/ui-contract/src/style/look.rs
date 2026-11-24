@@ -25,8 +25,12 @@ impl Mix for StyleColor {
 }
 
 /// A colour from data (a swatch, a layer label dot).
-#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
-pub struct DataColor(#[doc(hidden)] pub Color32);
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
+pub struct DataColor(
+    #[doc(hidden)]
+    #[plain_data(assume = "a colour is four bytes")]
+    pub Color32,
+);
 
 impl DataColor {
     /// A data colour.

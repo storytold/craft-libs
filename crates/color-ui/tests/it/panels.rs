@@ -4,14 +4,14 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_behavior::{EditEvent, Selection};
+use craft_behavior::{EditEvent, Mixed, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
-    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand,
-    SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
+    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyWheel, PanelTarget, PickedColor, SwatchEdit, SwatchKey,
+    SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
-use craft_theme::Srgba;
+use craft_theme::{ColorModel as _, HsbModel, Srgba};
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
@@ -176,6 +176,84 @@ fn the_slider_modes_show_a_channel_on_one_line() {
     assert!(k(&rig).bottom() <= short.y + 0.5 && k(&rig).top() >= 0.0, "CMYK in {short:?}: the K row scrolls into view ({:?})", k(&rig));
 }
 
+/// A step of one channel leaves the others as they were: the fields round what they show, the edit does not.
+#[trial]
+fn a_channel_step_keeps_the_other_channels_unrounded() {
+    let start = Srgba::rgb(0.2, 0.5, 0.7);
+    let mut rig = PanelRig::new(ColorPanelMode::HsbSliders);
+    rig.set_colors([start, BLUE]);
+    let hue = rig.fixture.by_role(Role::SLIDER).into_iter().next().expect("the hue slider");
+    rig.fixture.access(AccessActionKind::Focus, &hue).settle();
+    rig.fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    let edits = rig.edits.borrow();
+    let edited = edits.iter().rev().find_map(|(_, edit)| edit.value()).expect("the step's edit").color;
+    let [before, after] = [start, edited].map(|color| HsbModel.from_srgb(color).values);
+    assert_ne!(before[0], after[0], "the hue moved");
+    for channel in [1, 2] {
+        assert!((before[channel] - after[channel]).abs() < 0.01, "channel {channel} kept ({before:?}, {after:?})");
+    }
+}
+
+/// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
+fn spectrum_rect(color: Srgba) -> egui::Rect {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = ColorPanelState { mode: ColorPanelMode::WebColorSliders, ..Default::default() };
+        let _ = ColorPanel::new(Bind::bound(&mut state), [color, BLUE]).layout(ColorPanelLayout::FillStroke).show(ui);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    for tip in ["Out of gamut for printing: click for the nearest printable color", "Not a web color: click for the nearest web color"] {
+        assert_eq!(fixture.by_label(tip).is_some(), color != Srgba::rgb(0.0, 0.0, 0.0), "{tip} for {color:?}");
+    }
+    fixture.by_label("Color Ramp").expect("the spectrum").rect
+}
+
+/// The warnings of the FillStroke layout keep their room: the spectrum is where it was whether the colour has no
+/// warning (black) or both (a printable-out, non-web teal), so a drag across white and black does not move it.
+#[trial]
+fn a_fill_stroke_panels_warnings_keep_their_room_so_the_spectrum_holds_still() {
+    let (clean, warned) = (spectrum_rect(Srgba::rgb(0.0, 0.0, 0.0)), spectrum_rect(Srgba::rgb(0.07, 0.85, 0.58)));
+    assert_eq!(clean, warned, "the spectrum with no warning and with both");
+}
+
+/// The spectrum's tooltip is the shown mode's name, and a Shift click on it moves the state to the next mode without
+/// editing a paint.
+#[trial]
+fn the_fill_stroke_spectrums_tooltip_names_the_shown_mode_and_shift_click_cycles_the_mode() {
+    let state = Rc::new(RefCell::new(ColorPanelState::default()));
+    let edits: Edits = Default::default();
+    let mode = Rc::new(Cell::new(ColorPanelMode::RgbSliders));
+    let (held, seen, shown) = (Rc::clone(&state), Rc::clone(&edits), Rc::clone(&mode));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = *held.borrow();
+        let out = ColorPanel::new(Bind::bound(&mut current), [RED, BLUE])
+            .layout(ColorPanelLayout::FillStroke)
+            .shown(ColorPanelShown::Mode(shown.get()))
+            .show(ui);
+        *held.borrow_mut() = current;
+        seen.borrow_mut().extend(out.edits);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let tip_of = |fixture: &mut Fixture| {
+        let ramp = fixture.by_label("Color Ramp").expect("the spectrum");
+        fixture.frame(vec![moved(egui::pos2(1.0, 1.0))]);
+        fixture.frame(vec![moved(ramp.center())]);
+        fixture.advance(DELAY);
+        fixture.settle();
+        ["RGB Sliders", "HSB Sliders"].map(|name| fixture.texts().iter().any(|run| run.text == name))
+    };
+    assert_eq!(tip_of(&mut fixture), [true, false], "the RGB mode's name");
+    mode.set(ColorPanelMode::HsbSliders);
+    fixture.settle();
+    assert_eq!(tip_of(&mut fixture), [false, true], "the HSB mode's name");
+
+    let ramp = fixture.by_label("Color Ramp").expect("the spectrum");
+    fixture.hold(Modifiers::SHIFT);
+    fixture.click(&ramp).settle();
+    fixture.hold(Modifiers::NONE).settle();
+    assert_eq!(state.borrow().mode, ColorPanelMode::HsbSliders.fill_stroke_next(), "the next mode of the shown one");
+    assert!(edits.borrow().is_empty(), "a Shift click picks nothing: {:?}", edits.borrow());
+}
+
 const SWATCHES: [(&str, [f32; 3]); 6] = [
     ("Red", [0.90, 0.28, 0.30]),
     ("Orange", [0.97, 0.42, 0.08]),
@@ -242,6 +320,131 @@ fn the_palette_arrows_walk_the_wrapped_grid() {
         assert_eq!(rig.focused().as_deref(), Some(expected), "{key:?}");
     }
     assert_eq!(rig.events.get(), 0);
+}
+
+/// What a palette reported over the passes since the last `take`.
+#[derive(Default)]
+struct PaletteReports {
+    edits: Vec<EditEvent<Srgba>>,
+    requests: Vec<ColorRequest>,
+    picked: Vec<Srgba>,
+}
+
+type Reports = Rc<RefCell<PaletteReports>>;
+
+/// Collects what one pass of a palette reported.
+fn collect(reports: &Reports, shown: craft_color_ui::ui::SwatchPaletteOutput) {
+    let mut reports = reports.borrow_mut();
+    reports.edits.extend(shown.edit);
+    reports.requests.extend(shown.pick_color);
+    reports.picked.extend(shown.picked);
+}
+
+fn palette_swatches() -> Vec<(Label, Srgba)> {
+    SWATCHES.iter().map(|(name, [r, g, b])| (Label::from(*name), Srgba::rgb(*r, *g, *b))).collect()
+}
+
+/// The colour of `SWATCHES` named `name`.
+fn swatch(name: &str) -> Srgba {
+    SWATCHES.iter().find(|(n, _)| *n == name).map(|(_, [r, g, b])| Srgba::rgb(*r, *g, *b)).unwrap_or_else(|| panic!("no swatch {name}"))
+}
+
+const RECENT: [Srgba; 1] = [Srgba::rgb(0.40, 0.10, 0.50)];
+
+/// Activating the Other… cell files a request keyed by the host's key at the bound colour and sets nothing; a pick in
+/// the recent row is one `Set` of its colour; a click on the swatch of the bound colour reports `picked` and no edit.
+#[trial]
+fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
+    let swatches = palette_swatches();
+    let green = swatch("Green");
+    let bound = Rc::new(Cell::new(green));
+    let reports = Reports::default();
+    let (c, r) = (bound.clone(), reports.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = c.get();
+        let shown = SwatchPalette::new("Swatches", Bind::bound(&mut current), &swatches)
+            .other("custom", "Other colour…")
+            .recent("Recent colours", &RECENT)
+            .show(ui);
+        c.set(current);
+        collect(&r, shown);
+    });
+    fixture.room(PALETTE_WIDE).settle();
+    let other = fixture.by_label("Other colour…").expect("the Other… cell is named by its label");
+    let palette = fixture.by_label("Swatches").expect("the palette's list box");
+    assert!(palette.rect.contains_rect(other.rect), "the Other… cell is a cell of the palette's table: {other:?} in {palette:?}");
+
+    fixture.click(&other).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.requests.len(), 1, "one request for one activation");
+    assert_eq!(taken.requests[0].key, "custom", "the request carries the host's key");
+    assert_eq!(taken.requests[0].color.map(Srgba::to_rgba), Some(green.to_rgba()), "the picker opens at the bound colour");
+    assert!(taken.edits.is_empty() && taken.picked.is_empty(), "the Other… cell sets nothing");
+    assert_eq!(bound.get().to_rgba(), green.to_rgba(), "the bound colour stays");
+
+    let recent = fixture.by_label(&RECENT[0].to_hex()).expect("a recent colour is named by its hex");
+    fixture.click(&recent).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert!(taken.requests.is_empty(), "a recent pick files no request");
+    assert_eq!(taken.edits.len(), 1, "one edit for one recent pick");
+    assert!(
+        matches!(&taken.edits[0], EditEvent::Set { before: Mixed::Same(before), after, .. }
+            if before.to_rgba() == green.to_rgba() && after.to_rgba() == RECENT[0].to_rgba()),
+        "a Set from the bound colour to the recent one: {:?}",
+        taken.edits[0]
+    );
+    assert_eq!(bound.get().to_rgba(), RECENT[0].to_rgba(), "the recent pick is written");
+
+    let violet = fixture.by_label("Violet").expect("violet");
+    fixture.click(&violet).settle();
+    let _ = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(bound.get().to_rgba(), swatch("Violet").to_rgba());
+    // Past the double-click time, so the repeat is a single click of its own.
+    fixture.advance(1.0);
+    let violet = fixture.by_label("Violet").expect("violet");
+    fixture.click(&violet).settle();
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert!(taken.edits.is_empty(), "a click on the bound colour changes nothing: {:?}", taken.edits);
+    assert_eq!(taken.picked.iter().map(|c| c.to_rgba()).collect::<Vec<_>>(), [swatch("Violet").to_rgba()], "and still reports the pick");
+}
+
+/// A palette over a colour that may be none, bound to no colour: no swatch is selected and Tab enters on the first;
+/// a click writes `Same(Some(colour))` and reports one `Set` from `Mixed`.
+#[trial]
+fn an_optional_palette_bound_to_no_colour_selects_nothing_and_a_pick_writes_a_colour() {
+    let swatches = palette_swatches();
+    let bound = Rc::new(Cell::new(Mixed::<Option<Srgba>>::Same(None)));
+    let reports = Reports::default();
+    let (c, r) = (bound.clone(), reports.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = c.get();
+        let shown = SwatchPalette::optional("Swatches", Bind::bound_mixed(&mut current), &swatches).show(ui);
+        let _ = craft_ui::buttons::Button::new("After").show(ui);
+        c.set(current);
+        collect(&r, shown);
+    });
+    fixture.room(PALETTE_WIDE).settle();
+    for (name, _) in SWATCHES {
+        let cell = fixture.by_label(name).unwrap_or_else(|| panic!("the {name} cell"));
+        assert_ne!(fixture.tree().selected_of(cell.node), Some(true), "no colour selects no swatch, {name} is selected");
+    }
+    fixture.key(Key::Tab, Modifiers::NONE);
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("Red"), "Tab enters on the first swatch");
+
+    let blue = fixture.by_label("Blue").expect("blue");
+    fixture.click(&blue).settle();
+    let written = bound.get();
+    assert!(matches!(written, Mixed::Same(Some(color)) if color.to_rgba() == swatch("Blue").to_rgba()), "the pick is written: {written:?}");
+    let taken = std::mem::take(&mut *reports.borrow_mut());
+    assert_eq!(taken.edits.len(), 1, "one edit for one pick");
+    assert!(
+        matches!(&taken.edits[0], EditEvent::Set { before: Mixed::Mixed, after, .. } if after.to_rgba() == swatch("Blue").to_rgba()),
+        "a Set from no colour, reported as from Mixed: {:?}",
+        taken.edits[0]
+    );
+    let blue = fixture.by_label("Blue").expect("blue");
+    assert_eq!(fixture.tree().selected_of(blue.node), Some(true), "the written colour's swatch is selected");
 }
 
 /// The Swatches panel over two groups, collecting the edits it reports and never applying them.
@@ -328,7 +531,7 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert!(library.find("Red").is_some_and(|at| library.groups[at.group].name == "Other"), "Red is in Other");
 
     let mut state = SwatchesState::default();
-    state.selected = Some(SwatchKey::Swatch("Red".to_owned()));
+    state.selection = Selection::single(SwatchKey::Swatch("Red".to_owned()));
     let made = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::NewSwatch, RED, &Default::default());
     assert_eq!(
         made.edit,
@@ -338,7 +541,93 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
 }
 
+/// Tb-8 (5): a click uses any swatch, as production applied every one: a colour swatch reports its colour, and a
+/// gradient, pattern or None swatch reports where it is with no colour, for the host to apply its paint. The panel
+/// reported only colour swatches.
+#[trial]
+fn a_click_uses_every_kind_of_swatch() {
+    use craft_color_ui::palette::{SwatchEntry, SwatchPaint};
+    let groups = vec![SwatchGroup {
+        name: "Basics".to_owned(),
+        entries: vec![
+            SwatchEntry::new("Red".to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0])),
+            SwatchEntry::with_paint("Fade", SwatchPaint::Gradient),
+            SwatchEntry::with_paint("Dots", SwatchPaint::Pattern),
+            SwatchEntry::with_paint("None", SwatchPaint::None),
+        ],
+    }];
+    let used = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&used);
+    let mut state = SwatchesState::default();
+    let shown = groups.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = SwatchesPanel::new(&shown, Bind::bound(&mut state), RED).show(ui);
+        seen.borrow_mut().extend(out.used.map(|(at, color, _)| (at.index, color.is_some())));
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    for name in ["Red, #ff0000", "Fade", "Dots", "None"] {
+        let swatch = fixture.by_label(name).expect("the swatch");
+        fixture.click(&swatch).settle();
+    }
+    assert_eq!(*used.borrow(), [(0, true), (1, false), (2, false), (3, false)], "each click uses its swatch, a colour only where it holds one");
+}
+
 /// `count` entries of a colour table, each named by its index.
+/// A swatch dragged out of the panel carries the host's payload to the host's drop target (the app's paint, which a
+/// gradient's stops take), and the panel's own drag still moves a swatch onto another group.
+#[trial]
+fn a_dragged_swatch_carries_the_hosts_payload_beside_the_panels_own_move() {
+    use craft_ui::contract::{ListDrag, ShowContainer as _};
+    use craft_ui::display::Text;
+    use craft_ui::sections::DropAction;
+    use egui::{Pos2, Rect, UiBuilder};
+    #[derive(Clone, Debug, PartialEq)]
+    struct Paint(String);
+    const PANEL: Rect = Rect { min: Pos2::new(0.0, 0.0), max: Pos2::new(320.0, 300.0) };
+    const TARGET: Rect = Rect { min: Pos2::new(0.0, 320.0), max: Pos2::new(320.0, 400.0) };
+    let entry = |name: &str| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0]));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red"), entry("Rose")] },
+        SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue")] },
+    ];
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let dropped = Rc::new(RefCell::new(Vec::new()));
+    let (seen, taken) = (Rc::clone(&edits), Rc::clone(&dropped));
+    let mut state = SwatchesState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(PANEL), |ui| {
+            let out = SwatchesPanel::new(&groups, Bind::bound(&mut state), RED)
+                .drag_payload(|drag: &ListDrag<SwatchKey>| match &drag.grabbed {
+                    SwatchKey::Swatch(name) => Some(Paint(name.clone())),
+                    _ => None,
+                })
+                .show(ui);
+            seen.borrow_mut().extend(out.edits);
+        });
+        ui.scope_builder(UiBuilder::new().max_rect(TARGET), |ui| {
+            let out = DropAction::<Paint>::new(|_| true).show(ui, |ui, _| {
+                Text::new("Gradient").show(ui);
+            });
+            taken.borrow_mut().extend(out.output.dropped);
+        });
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    let red = fixture.by_label("Red, #ff0000").expect("the Red swatch").center();
+    let other = fixture.by_label("Other").expect("the Other group's header").center();
+    fixture.drag_at(red, other - red);
+    fixture.settle();
+    let reported = edits.borrow().clone();
+    assert!(matches!(&reported[..], [SwatchEdit::MoveTo { swatch, group, .. }] if swatch == "Red" && group == "Other"), "{reported:?}");
+    assert!(dropped.borrow().is_empty(), "the move within the panel reaches no host target");
+
+    let rose = fixture.by_label("Rose, #ff0000").expect("the Rose swatch").center();
+    let target = fixture.by_label("Gradient").expect("the host's drop target").center();
+    fixture.drag_at(rose, target - rose);
+    fixture.settle();
+    assert_eq!(*dropped.borrow(), [Paint("Rose".to_owned())], "the host's target takes the swatch's paint");
+    assert_eq!(edits.borrow().len(), 1, "a drop outside the panel edits nothing: {:?}", edits.borrow());
+}
+
 fn table_entries(count: usize) -> Vec<(Label, Srgba)> {
     (0..count).map(|i| (Label::from(format!("Index {i}")), Srgba::rgb(i as f32 / count as f32, 0.5, 0.25))).collect()
 }
@@ -460,4 +749,22 @@ fn the_info_panel_shows_the_rulers_measure_while_it_has_one() {
     for value in ["45.0°", "200.00", "141.42"] {
         assert!(fixture.by_label(value).is_some(), "the protractor's {value} shows");
     }
+}
+
+/// A click on a harmony wheel's marker reports that marker, as the disc under it does.
+#[trial]
+fn a_click_on_a_harmony_wheel_marker_reports_it() {
+    let colors = [Srgba::rgb(0.86, 0.24, 0.16), Srgba::rgb(0.16, 0.86, 0.24)];
+    let clicked = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&clicked);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = HarmonyWheel::new("Harmony", &colors).selected_marker(Some(0)).base(Some(0)).show(ui);
+        if let Some(hit) = out.clicked {
+            seen.set(Some(hit.marker));
+        }
+    });
+    fixture.settle();
+    let marker = fixture.by_label(&colors[1].to_hex()).expect("the second marker is in the tree");
+    fixture.click(&marker).idle(1);
+    assert_eq!(clicked.get(), Some(Some(1)), "the click names the second marker");
 }

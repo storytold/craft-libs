@@ -1,24 +1,34 @@
 //! Trials of `IconicColumn`: the letter of a panel without an icon, the names a wide column shows, the grips of its
-//! groups, and the resizes of its flyouts.
+//! groups, the resizes of its flyouts, and a flyout that a command leaves open.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::GRIP;
+use crate::buttons::Button;
+use crate::contract::overlay::{self, OpenFilter};
 use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
     DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
 };
+use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
 use crate::runtime::drag;
 use crate::runtime::env::Direction;
+use crate::runtime::focus::{FocusTarget, request};
+use crate::runtime::frame::take_output;
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
+use crate::testing::relations::{equals_token, grows_with};
 use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
 use craft_behavior::overlay::Side;
-use egui::{Pos2, Rect, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, UiBuilder, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+
+/// The float slack of the grip comparisons: paint positions are sums of token values.
+const EPS: f32 = 0.01;
 
 fn spec(panel: &u8) -> PanelSpec {
     PanelSpec::new(if *panel == 0 { "Brushes" } else { "Swatches" })
@@ -135,6 +145,11 @@ struct Flyouts {
 impl Flyouts {
     /// A column of `groups` on the right window edge when `right`, else the left one; its flyouts stay in `within`.
     fn new(groups: &[&[u8]], right: bool, within: Rect) -> Self {
+        Self::with(groups, right, within, false)
+    }
+
+    /// [`Flyouts::new`] with Auto-Collapse Iconic Panels on when `auto_collapse`.
+    fn with(groups: &[&[u8]], right: bool, within: Rect, auto_collapse: bool) -> Self {
         let mut column = Column::new(groups.iter().map(|panels| Group::new(panels.to_vec(), 0)).collect());
         column.iconic = true;
         let edge = if right { DockEdge::End } else { DockEdge::Start };
@@ -154,6 +169,7 @@ impl Flyouts {
                 .edge(edge)
                 .opens(if right { Side::Start } else { Side::End })
                 .within(within)
+                .auto_collapse(auto_collapse)
                 .show_flyouts_at(ui, place, |group, at, ui, _| {
                     let GroupAt::Show(rect) = at else { return None };
                     let panel = *group.active_panel()?;
@@ -212,6 +228,65 @@ impl Flyouts {
     /// How far a resize grip reaches in from the edge it moves.
     fn grip_reach(&self) -> f32 {
         StyleCx::with_root(self.fixture.ctx(), |cx| crate::contract::grip_band(cx.tokens))
+    }
+}
+
+/// A press outside the open flyout leaves it open; with Auto-Collapse Iconic Panels on it closes it.
+#[trial]
+fn a_press_outside_closes_the_flyout_only_with_auto_collapse() {
+    for auto_collapse in [false, true] {
+        let mut d = Flyouts::with(&[&[1, 2]], false, screen(), auto_collapse);
+        d.open("Brushes");
+        let away = d.rect().right_center() + Vec2::new(100.0, 0.0);
+        d.fixture.click_at(away).settle();
+        assert_eq!(d.shown.get().is_none(), auto_collapse, "auto-collapse {auto_collapse}: a press outside closes the flyout only with it on");
+    }
+}
+
+/// The app command the trials bind to a key.
+const NUDGE: &str = "flyoutTrial.nudge";
+
+/// A key that runs an app command, with a stop in the open flyout focused, leaves the flyout open and live in every
+/// pass and the stop focused, with Auto-Collapse Iconic Panels off or on: the host's binding opens and closes a flyout,
+/// and a command closes only the transient popups (menus, dropdowns, lists).
+#[trial]
+fn a_key_command_leaves_the_open_flyout_and_the_focus_in_it() {
+    for auto_collapse in [false, true] {
+        let (open, stop, faded) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+        let (seen, shown, fade) = (Rc::clone(&open), Rc::clone(&stop), Rc::clone(&faded));
+        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+        let mut fixture = Fixture::new(move |ui| {
+            let column = Column::new(vec![Group::new(vec![0, 1], 0)]);
+            let mut now = seen.get();
+            IconicColumn::new("Panels", global("iconic column", "commands"), &column, Bind::bound(&mut now), &spec)
+                .within(screen())
+                .auto_collapse(auto_collapse)
+                .show_flyouts_at(ui, place, |_, at, ui, _| {
+                    let GroupAt::Show(rect) = at else { return None };
+                    shown.set(Some(ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| Button::new("Snap").show(ui).id).inner));
+                    None
+                });
+            // Last pass the open flyout was not among the live layers that take keys: it played its exit.
+            fade.set(fade.get() || (now.is_some() && !overlay::any_open(ui.ctx(), OpenFilter::Keys)));
+            seen.set(now);
+        });
+        let binding = Binding::parse("F9").expect("the trial's chord parses");
+        let catalog = AppCatalog::new(vec![CommandDef::new(NUDGE, NUDGE, Scope::app()).with_default(binding)], 1).expect("the catalog is taken");
+        fixture.commands(CommandInput::new().catalog(catalog)).room(SCREEN).settle();
+        let icon = fixture.by_label("Swatches").expect("the Swatches icon").rect.center();
+        fixture.click_at(icon).settle();
+        let button = stop.get().expect("the flyout shows its stop");
+        request(fixture.ctx(), FocusTarget::Id(button));
+        fixture.settle();
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(button), "auto-collapse {auto_collapse}: the flyout's stop has the focus");
+        faded.set(false);
+        take_output(fixture.ctx());
+        fixture.key(Key::F9, Modifiers::NONE).settle();
+        let fired = take_output(fixture.ctx()).fired;
+        assert!(fired.iter().any(|fired| fired.command.id == NUDGE), "auto-collapse {auto_collapse}: the key runs its command");
+        assert_eq!(open.get(), Some(1), "auto-collapse {auto_collapse}: the flyout stays open");
+        assert!(!faded.get(), "auto-collapse {auto_collapse}: and never plays its exit");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(button), "auto-collapse {auto_collapse}: and its stop keeps the focus");
     }
 }
 
@@ -435,30 +510,48 @@ pub(crate) fn grip_ticks(shapes: &[egui::Shape], strip: Rect) -> Option<(Vec<Rec
     shapes.iter().find_map(|shape| {
         let egui::Shape::Mesh(mesh) = shape else { return None };
         let quads: Vec<Rect> = mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
-        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(0.01).contains_rect(*quad));
+        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(EPS).contains_rect(*quad));
         inside.then(|| (quads, mesh.vertices.first().map_or(egui::Color32::TRANSPARENT, |v| v.color)))
     })
 }
 
-/// Checks the ticks of a grip strip: ten upright marks, one point wide, four tall, one point apart, centred on the
-/// strip and darker than the panel `panel`.
-pub(crate) fn assert_grip_ticks(ticks: &[Rect], ink: egui::Color32, strip: Rect, panel: craft_theme::Rgba, what: &str) {
-    assert_eq!(ticks.len(), 10, "{what}: ten ticks: {ticks:?}");
+/// Checks the marks of a grip strip: the theme's `shape.grip` (photocraft#16426), so many marks of its width and height
+/// (a tick's length, a dot's side) its gap apart, centred on the strip and in the theme's `grip` ink, which stands
+/// apart from the panel `panel` (photocraft#16406).
+pub(crate) fn assert_grip_ticks(
+    ticks: &[Rect],
+    ink: egui::Color32,
+    strip: Rect,
+    panel: craft_theme::Rgba,
+    grip: craft_theme::Rgba,
+    shape: craft_theme::GripShape,
+    what: &str,
+) {
+    let height = if shape.mark == craft_theme::GripMark::Ticks { shape.length } else { shape.width };
+    assert_eq!(ticks.len(), usize::from(shape.count), "{what}: {} marks: {ticks:?}", shape.count);
     for tick in ticks {
-        assert!((tick.width() - 1.0).abs() < 0.01 && (tick.height() - 4.0).abs() < 0.01, "{what}: a tick is 1 x 4 points: {tick:?}");
+        assert!(
+            (tick.width() - shape.width).abs() < EPS && (tick.height() - height).abs() < EPS,
+            "{what}: a mark is {} x {height} points: {tick:?}",
+            shape.width
+        );
     }
-    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 1.0).abs() < 0.01), "{what}: one point apart: {ticks:?}");
+    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < EPS), "{what}: {} points apart: {ticks:?}", shape.gap);
     let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
     assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
-    assert!((run.center().y - strip.center().y).abs() <= 0.5, "{what}: centred in the strip's height: {run:?} in {strip:?}");
-    let [r, g, b, _] = panel.0;
-    assert!(ink.r() < r && ink.g() < g && ink.b() < b && ink.r() >= r / 2, "{what}: the ticks are a little darker than the panel {panel:?}: {ink:?}");
+    assert!(
+        (run.center().y - (strip.center().y + 1.0)).abs() <= 0.5,
+        "{what}: a point below the strip's middle, keeping 2 points more above: {run:?} in {strip:?}"
+    );
+    let [r, g, b, a] = grip.0;
+    assert_eq!(ink, egui::Color32::from_rgba_unmultiplied(r, g, b, a), "{what}: the ticks are in the theme's line.grip {grip:?}");
+    assert_ne!(grip.0[..3], panel.0[..3], "{what}: the grip ink {grip:?} stands apart from the panel {panel:?}");
 }
 
-/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks a little
-/// darker than the panel, the same under the pointer.
+/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks in the
+/// theme's grip ink, the same under the pointer.
 #[trial]
-fn a_groups_grip_is_a_row_of_upright_ticks_darker_than_the_panel() {
+fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
     let mut fixture =
         Fixture::hosted(|ui| {
             let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
@@ -471,15 +564,72 @@ fn a_groups_grip_is_a_row_of_upright_ticks_darker_than_the_panel() {
         });
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
-    let panel = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.panel);
+    let (panel, grip, shape, tight) = StyleCx::with_root(fixture.ctx(), |cx| {
+        (cx.tokens.color.surface.panel, cx.tokens.color.line.grip, cx.tokens.shape.grip, cx.tokens.space.gap.tight)
+    });
+    assert_eq!(shape, craft_theme::GripShape::DEFAULT, "the fixture's theme sets no grip shape");
     for group in [0, 1] {
         let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip");
         let shapes = fixture.frame_shapes();
         let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
-        assert_grip_ticks(&ticks, ink, strip, panel, &format!("group {group}"));
+        assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
+        let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+        let (above, below) = (run.top() - strip.top(), strip.bottom() - run.bottom());
+        assert!(
+            grows_with(tight, below) && equals_token(above - below, GRIP_ABOVE),
+            "group {group}: the marks keep space.gap.tight ({tight}) off the strip's bottom and {GRIP_ABOVE} points more off its top: {run:?} in {strip:?}"
+        );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
         let (_, hover_ink) = grip_ticks(&hovered, strip).expect("the grip paints its ticks under the pointer");
         assert_eq!(hover_ink, ink, "group {group}: the ticks keep their ink under the pointer");
     }
+}
+
+/// A theme's `shape.grip` reaches the grips (photocraft#16426): six dots, two points on a side and three apart, in the
+/// theme's grip ink.
+#[trial]
+fn a_themes_grip_shape_reaches_the_grips() {
+    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 };
+    let mut def = craft_theme::builtins().first().expect("a built-in theme").clone();
+    let mut seed = def.shape.unwrap_or(craft_theme::ShapeSeed {
+        radius: None,
+        radius_offset: None,
+        button_radius: None,
+        edge: None,
+        knob: None,
+        wells: None,
+        grip: None,
+    });
+    seed.grip = Some(craft_theme::GripSeed {
+        mark: Some(shape.mark),
+        count: Some(shape.count),
+        length: None,
+        width: Some(shape.width),
+        gap: Some(shape.gap),
+    });
+    def.shape = Some(seed);
+    let def = std::sync::Arc::new(def);
+    let mut fixture = Fixture::hosted(move |ui| {
+        let mut out = None;
+        crate::layout_components::Stack::new().theme(crate::runtime::env::ThemeScope::new().theme(std::sync::Arc::clone(&def))).show(ui, |ui, _| {
+            let mut column = Column::new(vec![Group::new(vec![1, 2], 0)]);
+            column.iconic = true;
+            let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+            let output = IconicColumn::new("Panels", global("iconic column", "themed grip"), &column, Bind::kept(), &named)
+                .within(screen())
+                .show_flyouts_at(ui, place, |_, _, _, _| None);
+            out = Some(output.into());
+        });
+        out
+    });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let strip = fixture.part_rect(id, GRIP.at(0)).expect("the group has its grip");
+    let shapes = fixture.frame_shapes();
+    let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
+    assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
+    assert!(marks.iter().all(|m| equals_token(m.width(), shape.width) && equals_token(m.height(), shape.width)), "two-point dots: {marks:?}");
+    assert!(marks.windows(2).all(|w| equals_token(w[1].min.x - w[0].max.x, shape.gap)), "three points apart: {marks:?}");
+    assert_ne!(ink, egui::Color32::TRANSPARENT);
 }

@@ -27,6 +27,13 @@ craft_ui::words! {
         pixels_per_centimetre: unit "units.pixelsPerCentimetre" = "{n} ppcm";
         lines_per_inch: unit "units.linesPerInch" = "{n} lpi";
         lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
+        feet: unit "units.feet" = "{n} ft";
+        yards: unit "units.yards" = "{n} yd";
+        metres: unit "units.metres" = "{n} m";
+        q: unit "units.q" = "{n} Q";
+        ha: unit "units.ha" = "{n} H";
+        letters: unit "units.letters" = "{n} letters";
+        hyphens: unit "units.hyphens" = "{n} hyphens";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
         pixels_name: "units.pixelsName" = "Pixels";
@@ -44,6 +51,13 @@ craft_ui::words! {
         columns_name: "units.columnsName" = "Columns";
         lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
         lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
+        feet_name: "units.feetName" = "Feet";
+        yards_name: "units.yardsName" = "Yards";
+        metres_name: "units.metresName" = "Metres";
+        q_name: "units.qName" = "Q";
+        ha_name: "units.haName" = "Ha";
+        letters_name: "units.lettersName" = "Letters";
+        hyphens_name: "units.hyphensName" = "Hyphens";
     }
 }
 
@@ -76,6 +90,12 @@ impl PointSize {
 impl EnvValue for PointSize {
     fn root() -> Self {
         PointSize::default()
+    }
+}
+
+impl EnvValue for craft_behavior::ZoomScheme {
+    fn root() -> Self {
+        craft_behavior::ZoomScheme::PHOTOSHOP
     }
 }
 
@@ -114,10 +134,25 @@ pub enum UnitKind {
     LinesPerInch,
     /// `{n} lpcm`: a halftone screen's frequency.
     LinesPerCentimetre,
+    /// `{n} ft`.
+    Feet,
+    /// `{n} yd`.
+    Yards,
+    /// `{n} m`.
+    Metres,
+    /// `{n} Q`.
+    Q,
+    /// `{n} H`.
+    Ha,
+    /// `{n} letters`: a hyphenation setting counted in letters.
+    Letters,
+    /// `{n} hyphens`: a hyphenation setting counted in hyphens.
+    Hyphens,
 }
 
 impl UnitKind {
-    /// The kinds that measure a length, which [`per_inch`](Self::per_inch) answers for: what a length field offers.
+    /// The lengths a unit choice offers. [`per_inch`](Self::per_inch) answers for more kinds (feet, yards, metres, Q,
+    /// Ha), which a typed number still reads.
     pub const LENGTHS: [UnitKind; 5] = [UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
     /// The kind a [`Reader`](craft_behavior::Reader) tag names: the tags `reader_over` registers are indexes of `ALL`.
@@ -126,7 +161,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 15] = [
+    const ALL: [UnitKind; 22] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -142,13 +177,22 @@ impl UnitKind {
         UnitKind::Columns,
         UnitKind::LinesPerInch,
         UnitKind::LinesPerCentimetre,
+        UnitKind::Feet,
+        UnitKind::Yards,
+        UnitKind::Metres,
+        UnitKind::Q,
+        UnitKind::Ha,
+        UnitKind::Letters,
+        UnitKind::Hyphens,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
     pub const fn decimals(self) -> RangeInclusive<usize> {
         match self {
-            UnitKind::Pixels | UnitKind::Minutes => 0..=0,
+            UnitKind::Pixels | UnitKind::Minutes | UnitKind::Letters | UnitKind::Hyphens => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
+            UnitKind::Q | UnitKind::Ha => 0..=2,
+            UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0..=4,
             UnitKind::Times
             | UnitKind::Centimetres
             | UnitKind::Millimetres
@@ -165,7 +209,7 @@ impl UnitKind {
     /// the kind steps by the kind's rule.
     pub const fn step(self) -> f64 {
         match self {
-            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres => 0.1,
+            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres | UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0.1,
             _ => 1.0,
         }
     }
@@ -182,6 +226,10 @@ impl UnitKind {
             UnitKind::Millimetres => Some(25.4),
             UnitKind::Points => Some(points_per_inch),
             UnitKind::Picas => Some(points_per_inch / 12.0),
+            UnitKind::Feet => Some(1.0 / 12.0),
+            UnitKind::Yards => Some(1.0 / 36.0),
+            UnitKind::Metres => Some(0.0254),
+            UnitKind::Q | UnitKind::Ha => Some(101.6),
             _ => None,
         }
     }
@@ -274,8 +322,8 @@ impl ColumnSize {
 }
 
 /// A length kept in one unit and shown in another: what a length field reads and writes (`stored`, the document's
-/// unit) and what it shows and parses bare numbers in (`shown`, the user's unit). Both are `UnitKind::Pixels` or one
-/// of [`UnitKind::LENGTHS`]; the document's resolution sizes pixels.
+/// unit) and what it shows and, unless `bare` names another unit, parses bare numbers in (`shown`, the user's unit). Both are `UnitKind::Pixels` or any
+/// kind [`UnitKind::per_inch`] answers; the document's resolution sizes pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct LengthUnits {
@@ -285,12 +333,22 @@ pub struct LengthUnits {
     pub shown: UnitKind,
     /// Pixels per inch of the document, for `Pixels` on either side.
     pub pixels_per_inch: f64,
+    /// The unit a number typed without a unit is in; `None` for `shown` ([`LengthUnits::bare_in`]).
+    pub bare: Option<UnitKind>,
 }
 
 impl LengthUnits {
     /// A length kept in `stored` and shown in `shown`, with `pixels_per_inch` sizing pixels.
     pub const fn new(stored: UnitKind, shown: UnitKind, pixels_per_inch: f64) -> Self {
-        LengthUnits { stored, shown, pixels_per_inch }
+        LengthUnits { stored, shown, pixels_per_inch, bare: None }
+    }
+
+    /// A number typed without a unit is in `unit` rather than in the shown unit (a preference such as "numbers
+    /// without units are points").
+    #[must_use]
+    pub const fn bare_in(mut self, unit: UnitKind) -> Self {
+        self.bare = Some(unit);
+        self
     }
 }
 
@@ -364,6 +422,13 @@ impl Units {
             UnitKind::Columns => words.columns.as_str(),
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
+            UnitKind::Feet => words.feet.as_str(),
+            UnitKind::Yards => words.yards.as_str(),
+            UnitKind::Metres => words.metres.as_str(),
+            UnitKind::Q => words.q.as_str(),
+            UnitKind::Ha => words.ha.as_str(),
+            UnitKind::Letters => words.letters.as_str(),
+            UnitKind::Hyphens => words.hyphens.as_str(),
         }
     }
 
@@ -386,6 +451,13 @@ impl Units {
             UnitKind::Columns => &words.columns_name,
             UnitKind::LinesPerInch => &words.lines_per_inch_name,
             UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
+            UnitKind::Feet => &words.feet_name,
+            UnitKind::Yards => &words.yards_name,
+            UnitKind::Metres => &words.metres_name,
+            UnitKind::Q => &words.q_name,
+            UnitKind::Ha => &words.ha_name,
+            UnitKind::Letters => &words.letters_name,
+            UnitKind::Hyphens => &words.hyphens_name,
         };
         name.clone()
     }
@@ -393,6 +465,12 @@ impl Units {
     /// The unit's spelling in the user's language without the number: `mm`, `px`.
     pub fn symbol(&self, kind: UnitKind) -> String {
         self.template(kind).replace("{n}", "").trim().to_owned()
+    }
+
+    /// The text before and after the number in the user's language, spacing included: `("", " mm")`, `("", "%")`.
+    pub fn affixes(&self, kind: UnitKind) -> (String, String) {
+        let template = self.template(kind);
+        template.split_once("{n}").map_or_else(|| (String::new(), template.to_owned()), |(before, after)| (before.to_owned(), after.to_owned()))
     }
 
     /// The digits after the decimal mark `n` needs within `decimals`: the fewest that show it as it rounds at the most.
@@ -503,10 +581,16 @@ impl Units {
     }
 
     /// A reader for lengths shown in `lengths.shown`: the spellings of every length unit and of pixels convert to it,
-    /// and a bare number is in it. Plain numbers when `lengths` is not a pixel or length pair.
+    /// and a bare number is in it, or in `lengths.bare` when set. Plain numbers when `lengths` is not a pixel or length
+    /// pair.
     pub fn length_reader(&self, lengths: LengthUnits) -> Reader {
         let Some(shown) = self.length_per_inch(lengths.shown, lengths.pixels_per_inch) else { return self.reader(None) };
-        self.reader_over(|other| Some(shown / self.length_per_inch(other, lengths.pixels_per_inch)?))
+        let factor = |other: UnitKind| Some(shown / self.length_per_inch(other, lengths.pixels_per_inch)?);
+        let reader = self.reader_over(factor);
+        match lengths.bare.and_then(factor) {
+            Some(bare) => reader.bare(bare),
+            None => reader,
+        }
     }
 
     /// The index of the reader for `kind` in `readers`: 0 for plain numbers, then one per unit kind.
@@ -542,12 +626,19 @@ impl Units {
             reader = reader.group(group);
         }
         let english = Units::new(self.format.clone(), english_words(), Arc::new(Words::english()), self.point_size);
+        let points = factor(UnitKind::Points);
         for (tag, other) in UnitKind::ALL.into_iter().enumerate() {
             let Some(factor) = factor(other) else { continue };
             for spelling in [self.symbol(other), english.symbol(other)] {
                 if is_unit_spelling(&spelling) {
                     reader = reader.unit_tagged(&spelling, factor, tag as u32);
                 }
+            }
+            if other == UnitKind::Picas
+                && let Some(points) = points
+            {
+                // Picas and points as print apps read them: `2p6` is two picas and six points.
+                reader = reader.split_unit("p", factor, points, tag as u32);
             }
         }
         reader

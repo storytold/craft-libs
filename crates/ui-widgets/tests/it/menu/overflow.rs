@@ -336,3 +336,15 @@ fn a_dropdown_in_a_menu_bar_menu_keeps_its_cap() {
     let window = fixture.ctx().content_rect();
     assert!(list.height() <= window.height() * 0.5, "the list {list:?} keeps the dropdown's share of the window {window:?}");
 }
+
+#[trial]
+fn a_long_menu_and_its_submenu_keep_their_rects_from_frame_to_frame() {
+    let mut fixture = low_submenu(18, 8);
+    let rects = |fixture: &Fixture| fixture.by_role(Role::MENU).iter().map(|menu| menu.rect).collect::<Vec<_>>();
+    let settled = rects(&fixture);
+    assert!(settled.len() >= 2, "the menu and its submenu are open: {settled:?}");
+    for frame in 0..3 {
+        fixture.frame(vec![]);
+        assert_eq!(rects(&fixture), settled, "frame {frame}: the menu and its submenu keep their rects");
+    }
+}

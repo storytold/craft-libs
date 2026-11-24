@@ -115,6 +115,10 @@ pub struct ThemeChip<'a> {
     /// Whether the chip shows the favourite star.
     #[prop]
     favorite: bool,
+    /// Whether the chip offers the favourite star (default on). Off, for an app that keeps no favourites, the chip has
+    /// no badge and says nothing of favourites.
+    #[prop]
+    can_favorite: bool,
     checked: bool,
     sampled: [Color32; 3],
     star: Option<Rect>,
@@ -129,6 +133,7 @@ impl<'a> ThemeChip<'a> {
             theme,
             dark,
             favorite: false,
+            can_favorite: true,
             checked: false,
             sampled: [Color32::TRANSPARENT; 3],
             star: None,
@@ -178,7 +183,7 @@ impl Component for ThemeChip<'_> {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.star = None;
-        if !(self.favorite || cx.hovered()) {
+        if !self.can_favorite || !(self.favorite || cx.hovered()) {
             return;
         }
         // The badge sits in the chip's top end corner, inside its rect: overhanging it would reach into the next chip.
@@ -213,7 +218,7 @@ impl Component for ThemeChip<'_> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let words = cx.words::<AppearanceWords>();
-        if self.favorite {
+        if self.favorite && self.can_favorite {
             access.value(words.favorite.as_str());
         }
         if self.star.is_some() {

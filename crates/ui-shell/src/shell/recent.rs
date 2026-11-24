@@ -27,12 +27,35 @@ pub struct RecentFile {
     pub opened: Option<i64>,
     /// Created, in seconds since the Unix epoch, for sorting by Created.
     pub created: Option<i64>,
+    /// A note the app gives ("12 pages · 2.4 MB"), shown in place of the age line.
+    pub note: Option<String>,
 }
 
 impl RecentFile {
     /// A recent file at `path` shown as `name`, with no dates.
     pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
-        RecentFile { path: path.into(), name: name.into(), opened: None, created: None }
+        RecentFile { path: path.into(), name: name.into(), opened: None, created: None, note: None }
+    }
+
+    /// This file last opened at `opened`, in seconds since the Unix epoch.
+    #[must_use]
+    pub fn opened(mut self, opened: i64) -> Self {
+        self.opened = Some(opened);
+        self
+    }
+
+    /// This file created at `created`, in seconds since the Unix epoch.
+    #[must_use]
+    pub fn created(mut self, created: i64) -> Self {
+        self.created = Some(created);
+        self
+    }
+
+    /// This file with `note` shown in place of its age line.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
     }
 }
 

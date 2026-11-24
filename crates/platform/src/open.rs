@@ -2,8 +2,7 @@
 //!
 //! - [`FileIntake`]: one queue for the OS requests: files the OS asks the app to open (Finder
 //!   double-click, Open With, a Dock drop, a second launch handing its paths to the first), files
-//!   dropped on the window with where they were dropped ([`DropTarget`]), and the OS asking the
-//!   app to quit.
+//!   dropped on the window, and the OS asking the app to quit.
 //! - `apple_events` (macOS, feature `apple-events`): the open-documents and quit Apple events,
 //!   fed into a [`FileIntake`].
 //! - [`natural_cmp`], [`same_file`]: the order files open in and the check that keeps an open
@@ -11,9 +10,9 @@
 //! - [`OPEN_FAILED`] and the other [`PlatformText`]s: the open errors every app words the same way.
 //! - [`reveal`], [`open_external`]: show a file in the system file manager; open a file or URL
 //!   with the system's handler.
+//! - [`open_with`], [`is_application`]: open a file in a chosen application; whether a path is one.
 //!
-//! No egui: the app converts egui's dropped files into [`DroppedFile`]s and reads the pointer
-//! position for [`DropTarget`] itself.
+//! No egui: the app converts egui's dropped files into [`DroppedFile`]s itself.
 
 use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,21 +48,6 @@ pub const REVEAL_FAILED: PlatformText = PlatformText { id: "open.revealFailed", 
 /// Every [`PlatformText`] of this module, for the missing-translation report ([`crate::texts`]).
 pub const TEXTS: &[PlatformText] = &[OPEN_FAILED, PLACE_FAILED, PATH_NOT_UNICODE_OPEN, PATH_NOT_UNICODE_SAVE, FILE_GONE, REVEAL_FAILED];
 
-/// Where files dropped on the window land. winit's drops carry no position, so the app finds it
-/// from the pointer (PhotoCraft asks the OS while files hover); unknown counts as
-/// [`Elsewhere`](DropTarget::Elsewhere).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum DropTarget {
-    /// The active document's canvas: each file is placed as a layer, one at a time, each in Free
-    /// Transform (Photoshop's Place Embedded). Preset files (brushes, gradients) still open into
-    /// their libraries.
-    Canvas,
-    /// The tab strip: opened with their tabs from this position.
-    Tabs(usize),
-    /// Anywhere else (panels, a dialog, no document): opened like File › Open.
-    Elsewhere,
-}
-
 /// A dropped file as the app got it. On the web there is no path, only the name and bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DroppedFile {
@@ -81,15 +65,27 @@ pub enum Intake {
     /// The OS asked to open these absolute paths: open them like File › Open, focusing a
     /// document that is already open instead of opening it again.
     Open(Vec<PathBuf>),
-    /// Files dropped on the window, in drop order, with where they landed.
+    /// Files dropped on the window, in drop order.
     Dropped {
         /// The dropped files.
         files: Vec<DroppedFile>,
-        /// Where they landed.
-        target: DropTarget,
     },
     /// The OS asked the app to quit.
     Quit,
+    /// The OS asked to open these absolute paths for the app's own action.
+    OpenFor {
+        /// The files, absolute and sorted.
+        paths: Vec<PathBuf>,
+        /// The app's action name.
+        action: String,
+    },
+    /// A file that arrived as bytes, with no path.
+    Bytes {
+        /// The file's name.
+        name: String,
+        /// The contents.
+        bytes: Arc<[u8]>,
+    },
 }
 
 /// The sending side of a [`FileIntake`]: `Send + Clone`, for the threads that hear the OS (the
@@ -154,18 +150,38 @@ impl IntakeSender {
         if paths.is_empty() {
             return;
         }
-        let mut paths: Vec<PathBuf> = paths.iter().map(|p| absolute(p)).collect();
-        paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
-        push(&self.queue, Intake::Open(paths));
+        self.send(Intake::Open(ordered(paths)));
+    }
+
+    /// Queues an open request for the app's own `action`, made absolute and sorted as [`open`](Self::open) does, and
+    /// wakes the UI. Empty input is ignored.
+    pub fn open_for(&self, paths: Vec<PathBuf>, action: impl Into<String>) {
+        if paths.is_empty() {
+            return;
+        }
+        self.send(Intake::OpenFor { paths: ordered(paths), action: action.into() });
+    }
+
+    /// Queues a file that arrived as bytes, and wakes the UI. A file with neither a name nor bytes is ignored.
+    pub fn open_bytes(&self, name: String, bytes: Arc<[u8]>) {
+        if name.is_empty() && bytes.is_empty() {
+            return;
+        }
+        self.send(Intake::Bytes { name, bytes });
+    }
+
+    /// Queues `batch` after every batch sent before it, then wakes the UI.
+    fn send(&self, batch: Intake) {
+        push(&self.queue, batch);
         self.wake.wake();
     }
 
     /// Queues files dropped on the window and wakes the UI; an empty list is ignored.
-    pub fn dropped(&self, files: Vec<DroppedFile>, target: DropTarget) {
+    pub fn dropped(&self, files: Vec<DroppedFile>) {
         if files.is_empty() {
             return;
         }
-        push(&self.queue, Intake::Dropped { files, target });
+        push(&self.queue, Intake::Dropped { files });
         self.wake.wake();
     }
 
@@ -176,13 +192,20 @@ impl IntakeSender {
     }
 }
 
+/// `paths` made absolute and sorted by [`natural_cmp`] of the path text, the order an OS open request opens in.
+fn ordered(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = paths.iter().map(|p| absolute(p)).collect();
+    paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    paths
+}
+
 /// OS requests waiting for the app (files to open, files dropped, quit), read once per frame on
 /// the UI thread (spec Q-S4F-7).
 ///
 /// The app makes one at startup, gives [`sender`](Self::sender) to whatever hears the OS
 /// (`apple_events::install` on macOS, its single-instance socket elsewhere), pushes drops
 /// through a sender's [`dropped`](IntakeSender::dropped), and takes the requests with
-/// [`take`](Self::take). An [`Intake::Open`] batch comes made absolute and sorted by
+/// [`take`](Self::take). An [`Intake::Open`] or [`Intake::OpenFor`] batch comes made absolute and sorted by
 /// [`natural_cmp`] of the path text; the app focuses documents already open ([`same_file`]) and
 /// opens the rest, then brings its window to the front (on Wayland, a user-attention request).
 /// [`Intake::Quit`] closes the app the way its own Quit command does.
@@ -192,7 +215,7 @@ impl IntakeSender {
 /// #[cfg(target_os = "macos")]
 /// let _events = craft_platform::open::apple_events::install(sender.clone());
 /// // each frame:
-/// intake.sender().dropped(ctx.input(|i| i.raw.dropped_files.iter().map(to_dropped).collect()), target);
+/// intake.sender().dropped(ctx.input(|i| i.raw.dropped_files.iter().map(to_dropped).collect()));
 /// for request in intake.take() { app.handle(request); }
 /// ```
 pub struct FileIntake {
@@ -281,11 +304,18 @@ pub fn path_text(path: &Path, saving: bool) -> Result<String, String> {
 /// Whether `reveal` can show a file on this platform.
 pub const CAN_REVEAL: bool = cfg!(not(target_arch = "wasm32"));
 
+/// Whether [`open_with`] can open a file in an application on this platform.
+pub const CAN_OPEN_WITH: bool = cfg!(not(target_arch = "wasm32"));
+
 /// Shows `path` selected in the system file manager: `open -R` on macOS, Explorer's
 /// `/select,"<path>"` on Windows (raw arguments; a path containing `"` is refused), and on Linux
-/// and FreeBSD the FileManager1 D-Bus call through `dbus-send` on a thread of its own, falling back
-/// to `xdg-open` on the folder. The path is made absolute first (so a name starting with `-` is
-/// never an option); a path that no longer exists is [`FILE_GONE`]. Not on wasm.
+/// and FreeBSD the FileManager1 D-Bus call through `dbus-send`, falling back to `xdg-open` on the
+/// folder. The path is made absolute first (so a name starting with `-` is never an option); a
+/// path that no longer exists is [`FILE_GONE`]. Not on wasm.
+///
+/// It runs on the caller's thread and returns the real result. On Linux and FreeBSD it can block
+/// up to the D-Bus reply timeout (2 s) before the fallback runs, so call it from the host's
+/// `Jobs`, never from the UI thread.
 // pdfcraft: crates/ui-egui/src/menus/tab_context.rs:51 reveal, :77 reveal_process, :92 reveal_via
 #[cfg(not(target_arch = "wasm32"))]
 pub fn reveal(path: &Path) -> Result<(), String> {
@@ -294,20 +324,8 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     if !path.try_exists().map_err(|e| e.to_string())? {
         return Err(FILE_GONE.english.into());
     }
-    let platform = std::env::consts::OS;
     let run = |program: &str, args: &[OsString]| reveal_process(program, args).output().map(|o| o.status.success()).map_err(|e| e.to_string());
-    if matches!(platform, "linux" | "freebsd") {
-        // `dbus-send --print-reply` waits up to 2 s for the file manager (then xdg-open may run),
-        // so it runs off the UI thread; a failure there has nobody to tell.
-        return std::thread::Builder::new()
-            .name("craft-reveal".into())
-            .spawn(move || {
-                let _ = reveal_via(platform, &path, run);
-            })
-            .map(|_| ())
-            .map_err(|e| e.to_string());
-    }
-    reveal_via(platform, &path, run)
+    reveal_via(std::env::consts::OS, &path, run)
 }
 
 /// The process that runs `program` with `args`. Windows: the arguments go on the command line as
@@ -385,9 +403,21 @@ fn reveal_command(platform: &str, path: &Path) -> Result<(&'static str, Vec<OsSt
     }
 }
 
+/// Opens `target` in a new browser tab with `window.open(target, "_blank", "noopener,noreferrer")`; a `null` return
+/// is success. The one web opener. Not on native targets (see the native `open_external`).
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+pub fn open_external(target: &str) -> Result<(), String> {
+    let window = web_sys::window().ok_or("There is no browser window to open the link in")?;
+    // With `noopener` the browser hands back no window, so `None` is the usual success.
+    window
+        .open_with_url_and_target_and_features(target, "_blank", "noopener,noreferrer")
+        .map(|_| ())
+        .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+}
+
 /// Opens a file or an `http(s)` URL with the system's handler (`open`, `rundll32
-/// url.dll,FileProtocolHandler`, `xdg-open`), without waiting for it. Not on wasm (the browser
-/// module opens URLs there).
+/// url.dll,FileProtocolHandler`, `xdg-open`), without waiting for it. On wasm the browser
+/// build's `open_external` opens the URL in a new tab instead.
 ///
 /// No shell sees the target: on Windows `cmd` would run the part of a link after a `&`, and on
 /// macOS and Linux a target that starts with `-` would be read as an option, so `--` precedes it.
@@ -397,6 +427,92 @@ pub fn open_external(target: &str) -> Result<(), String> {
     let mut command = open_command(target);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     command.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Opens `target` in the application at `app` (Edit Original's chosen application), never through a shell: on
+/// macOS `open -a app target`, waiting at most 2 s for Launch Services to refuse; elsewhere `app` runs with
+/// `target` as its only argument, without waiting. A path holding `"` is refused on Windows.
+///
+/// A missing `app` is [`ErrorKind::NotFound`](std::io::ErrorKind::NotFound), so a caller can fall back to its default
+/// editor; a path that is not an application ([`is_application`]) is `InvalidInput`, and nothing is started.
+// PLAN: the contract row sh.B2a says `Result<(), String>`; the app needs the `NotFound` kind, so the error is `io::Error`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_with(app: &Path, target: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    if cfg!(windows) && target.as_os_str().as_encoded_bytes().contains(&b'"') {
+        return Err(Error::new(ErrorKind::InvalidInput, "the file name can't be passed to an application on Windows"));
+    }
+    std::fs::metadata(app)?;
+    if !is_application(app) {
+        return Err(Error::new(ErrorKind::InvalidInput, format!("{} isn't an application files can be opened in", app.display())));
+    }
+    launch(app, target)
+}
+
+/// `open` returns once Launch Services has the request, so a short wait reports an app it can't open (a folder named
+/// `.app` that isn't a bundle). The wait is capped so a stalled `open` never holds the window: past it, the launch is
+/// left to run.
+#[cfg(target_os = "macos")]
+fn launch(app: &Path, target: &Path) -> std::io::Result<()> {
+    use std::time::{Duration, Instant};
+    const WAIT: Duration = Duration::from_secs(2);
+    let mut child = Command::new("open").arg("-a").arg(app).arg(target).stderr(Stdio::piped()).spawn()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => {
+                let mut why = String::new();
+                if let Some(mut err) = child.stderr.take() {
+                    // Best effort: without its message the exit status says why.
+                    let _ = std::io::Read::read_to_string(&mut err, &mut why);
+                }
+                let why = why.trim();
+                return Err(std::io::Error::other(if why.is_empty() { status.to_string() } else { why.to_owned() }));
+            }
+            None if started.elapsed() < WAIT => std::thread::sleep(Duration::from_millis(20)),
+            None => {
+                // Reaped off the UI thread once it ends.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// The editor itself runs, so waiting would last until it closes.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+fn launch(app: &Path, target: &Path) -> std::io::Result<()> {
+    Command::new(app).arg(target).spawn().map(|_| ())
+}
+
+/// Whether `path` names an application the platform can launch: an `.app` folder on macOS, an `.exe` file on
+/// Windows, an executable file elsewhere; `false` on wasm.
+pub fn is_application(path: &Path) -> bool {
+    if cfg!(target_arch = "wasm32") {
+        return false;
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        ext == "app" && path.is_dir()
+    } else if cfg!(windows) {
+        ext == "exe" && path.is_file()
+    } else {
+        executable_file(path)
+    }
+}
+
+#[cfg(unix)]
+fn executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// The command that opens `target`; see [`open_external`].
