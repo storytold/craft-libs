@@ -126,17 +126,33 @@ fn trailing_spaces_keep_sections_and_eof() {
 #[test]
 fn integer_groups_reject_non_finite_and_clamp() {
     let t = parse(b"70\ninf\n70\nNaN\n70\n1e30\n70\n-1e30\n90\n1e30\n160\n1e30\n160\n-inf\n62\n12.0\n0\nEOF\n").unwrap();
-    assert_eq!(t[0], Tag::i(70, 0));
-    assert_eq!(t[1], Tag::i(70, 0));
+    assert_eq!(t[0], Tag::invalid(70, "inf"));
+    assert_eq!(t[0].i64(), 0);
+    assert_eq!(t[1], Tag::invalid(70, "NaN"));
+    assert_eq!(t[1].i64(), 0);
     // Clamped to what the group's width holds, unsigned values included (the binary writer
     // keeps up to 65535 and 4294967295 as their bit patterns).
     assert_eq!(t[2], Tag::i(70, i64::from(u16::MAX)));
     assert_eq!(t[3], Tag::i(70, i64::from(i16::MIN)));
     assert_eq!(t[4], Tag::i(90, i64::from(u32::MAX)));
     assert_eq!(t[5], Tag::i(160, i64::MAX));
-    assert_eq!(t[6], Tag::i(160, 0));
+    assert_eq!(t[6], Tag::invalid(160, "-inf"));
+    assert_eq!(t[6].i64(), 0);
     assert_eq!(t[7], Tag::i(62, 12));
     assert_eq!(Value::Str("inf".into()).as_i64(), 0);
+}
+
+#[test]
+fn tag_f_non_finite_creates_invalid() {
+    let nan_tag = Tag::f(10, f64::NAN);
+    assert!(nan_tag.is_invalid());
+    assert_eq!(nan_tag.f64(), 0.0);
+    assert_eq!(nan_tag.invalid_str(), Some("NaN"));
+
+    let inf_tag = Tag::f(20, f64::INFINITY);
+    assert!(inf_tag.is_invalid());
+    assert_eq!(inf_tag.f64(), 0.0);
+    assert_eq!(inf_tag.invalid_str(), Some("inf"));
 }
 
 /// An unsigned value spelled as a float reads as the same spelled as an integer (#1026 review):

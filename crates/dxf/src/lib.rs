@@ -113,7 +113,7 @@ impl Tag {
         Tag { code, value: Value::Str(v.into()) }
     }
     pub fn f(code: i32, v: f64) -> Self {
-        Tag { code, value: Value::Real(if v.is_finite() { v } else { 0.0 }) }
+        Tag { code, value: if v.is_finite() { Value::Real(v) } else { Value::Invalid(v.to_string()) } }
     }
     pub fn i(code: i32, v: i64) -> Self {
         Tag { code, value: Value::Int(v) }
@@ -180,14 +180,19 @@ fn typed(code: i32, text: &str) -> Value {
         Kind::Int16 | Kind::Int32 | Kind::Int64 => {
             // A float spelling ("1e3", "12.0") is accepted when finite, clamped to what the
             // group's width holds, signed or unsigned (files write 16-bit flags up to 65535, as
-            // the integer spelling reads them); NaN, inf and text become 0.
+            // the integer spelling reads them); NaN, inf and non-numeric text become Value::Invalid.
             let (lo, hi) = match kind_of(code) {
                 Kind::Int16 => (i64::from(i16::MIN), i64::from(u16::MAX)),
                 Kind::Int32 => (i64::from(i32::MIN), i64::from(u32::MAX)),
                 _ => (i64::MIN, i64::MAX),
             };
-            t.parse::<i64>()
-                .map_or_else(|_| Value::Int(t.parse::<f64>().ok().filter(|f| f.is_finite()).map_or(0, |f| (f as i64).clamp(lo, hi))), Value::Int)
+            match t.parse::<i64>() {
+                Ok(i) => Value::Int(i),
+                Err(_) => match t.parse::<f64>() {
+                    Ok(f) if f.is_finite() => Value::Int((f as i64).clamp(lo, hi)),
+                    _ => Value::Invalid(t.to_string()),
+                },
+            }
         }
         Kind::Bool => Value::Bool(t.parse::<i64>().unwrap_or(0) != 0),
         Kind::Hex => Value::Hex(normalize_hex(t)),
