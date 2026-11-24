@@ -1,10 +1,10 @@
 //! The intents routed to a component and what it leaves untaken: Submit, Cancel, Escape and context requests.
 
 use super::route::push;
-use super::{Stage, current};
+use super::{Nudge, Source, Stage, current};
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
-use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, PartRef};
+use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, OwnerClass, PartRef};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Context, Id, Vec2};
 use std::sync::Arc;
@@ -13,11 +13,11 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default)]
 pub struct Intents {
     items: Vec<(Intent, bool)>,
-    /// The place among the frame's events of each of `items` that came from one press or text (`keys::Item::place`);
-    /// read by index, so an item pushed without one has none.
-    places: Vec<Option<usize>>,
+    /// The press or text each of `items` came from (`keys::Item::source`); read by index, so an item pushed without
+    /// one has none.
+    sources: Vec<Option<Source>>,
     took_arrows: Vec<NavMove>,
-    nudge: Option<(Vec2, Mods)>,
+    nudge: Option<Nudge>,
     chords: Vec<Chord>,
     set_value: Option<(Option<PartRef>, f64)>,
     whole_reset: bool,
@@ -157,7 +157,14 @@ impl Intents {
 
     /// Takes the physical arrow nudge for canvas content: a unit direction and the modifiers.
     pub fn take_nudge(&mut self) -> Option<(Vec2, Mods)> {
-        self.nudge.take()
+        self.nudge.take().map(|nudge| (nudge.direction, nudge.mods))
+    }
+
+    /// The keys that were down when the arrow of the nudge not yet taken went down, the arrow not among them; empty
+    /// without one. Unlike `keys::held`, which is the state after the frame's input, it keeps the order of the frame's
+    /// events: a key let go after the arrow in the same frame was held with it, and one pressed after it was not.
+    pub fn nudge_held(&self) -> &[Key] {
+        self.nudge.as_ref().map_or(&[], |nudge| &nudge.held)
     }
 
     /// Takes the chords this pass's presses spell, for a component whose key use is `KeyUse::RECORDER`; empty for any
@@ -192,10 +199,10 @@ impl Intents {
     }
 
     /// Takes the next intent an editor reads as input: typed text, a move, a delete, an edit command, Enter as a
-    /// newline, Tab and Shift+Tab, and Escape as a cancel. An arrow move the editor's `keep` does not keep stays for the
-    /// component's navigation (18.4), and with `KeepKeys::None` so do Home, End and the page keys: the editor is
-    /// a part of a grid that navigates until a cell opens. With it, the place among the frame's events of the press or
-    /// text it came from, `None` for an intent of no one event.
+    /// newline with its Shift, Tab and Shift+Tab, and Escape as a cancel. An arrow move the editor's `keep` does not
+    /// keep stays for the component's navigation (18.4), and with `KeepKeys::None` so do Home, End and the page keys:
+    /// the editor is a part of a grid that navigates until a cell opens. With it, the place among the frame's events of
+    /// the press or text it came from, `None` for an intent of no one event.
     pub(crate) fn take_editor_input(&mut self, keep: focus::KeepKeys) -> Option<(EditorInput, Option<usize>)> {
         let kept = |item: &Intent| match item {
             Intent::Move(NavMove::Up | NavMove::Down, _) => matches!(keep, focus::KeepKeys::BlockArrows | focus::KeepKeys::Tab),
@@ -203,9 +210,10 @@ impl Intents {
             Intent::Move(NavMove::Start | NavMove::End | NavMove::PageUp | NavMove::PageDown, _) => keep != focus::KeepKeys::None,
             _ => true,
         };
-        let at = self.items.iter().position(|(item, taken)| !taken && kept(item) && editor_input_of(item).is_some())?;
+        let at = self.items.iter().position(|(item, taken)| !taken && kept(item) && editor_input_of(item, false).is_some())?;
         self.items[at].1 = true;
-        editor_input_of(&self.items[at].0).map(|input| (input, self.places.get(at).copied().flatten()))
+        let source = self.sources.get(at).copied().flatten();
+        editor_input_of(&self.items[at].0, source.is_some_and(|source| source.shift)).map(|input| (input, source.map(|source| source.place)))
     }
 
     /// Takes the next `Intent::Access` request that `wanted` accepts.
@@ -230,13 +238,14 @@ impl Intents {
     }
 }
 
-fn editor_input_of(intent: &Intent) -> Option<EditorInput> {
+/// The editor input of `intent`, from a press with Shift held when `shift`.
+fn editor_input_of(intent: &Intent, shift: bool) -> Option<EditorInput> {
     match intent {
         Intent::Text(text) => Some(EditorInput::Text(Arc::clone(text))),
         Intent::Move(mv, mods) => Some(EditorInput::Move(*mv, *mods)),
         Intent::Delete { forward, by, shift, .. } => Some(EditorInput::delete_with_shift(*forward, *by, *shift)),
         Intent::Edit(command) => Some(EditorInput::Edit(*command)),
-        Intent::Submit => Some(EditorInput::Newline),
+        Intent::Submit => Some(EditorInput::newline(shift)),
         Intent::Tab => Some(EditorInput::Tab),
         Intent::BackTab => Some(EditorInput::BackTab),
         Intent::Cancel => Some(EditorInput::Cancel),
@@ -253,7 +262,7 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
         (true, NavMove::Forward) => NavMove::Back,
         (_, mv) => mv,
     };
-    let places = routed.items.iter().map(|item| item.place).collect();
+    let sources = routed.items.iter().map(|item| item.source).collect();
     let items = routed
         .items
         .into_iter()
@@ -264,7 +273,7 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
         .collect();
     Intents {
         items,
-        places,
+        sources,
         took_arrows: Vec::new(),
         nudge: routed.nudge,
         chords: routed.chords,
@@ -278,7 +287,7 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
 /// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with a framework
-/// stop focused, its unused Escape. A component or a
+/// stop focused, its unused Escape, unless it is a text field. A component or a
 /// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
 /// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
 /// component took. `rtl` reads horizontal moves in the window's direction.
@@ -296,7 +305,11 @@ pub fn with_canvas_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&m
 }
 
 fn offer_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
-    let focused = focus::focused_rec(ctx).map(|rec| rec.stop.id);
+    // A focused text field keeps the Escape it does not use, so typing in a palette's field never closes the
+    // palette; the document's editor and a canvas control lend it as any other control does.
+    let focused = focus::focused_rec(ctx)
+        .filter(|rec| rec.stop.keys.owner != OwnerClass::Text || rec.stop.keys.is_document_editor() || focus::is_canvas_member(ctx, rec))
+        .map(|rec| rec.stop.id);
     let mut window = intents_of(ctx, None, rtl);
     // The focused stop's leftover Escape stays in its slot until taken.
     let lent_cancel =

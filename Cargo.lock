@@ -1935,6 +1935,7 @@ dependencies = [
  "craft-vectordrawable",
  "craft-video",
  "craft-wasm",
+ "craft-wayland",
  "craft-web-api",
  "craft-web-host",
  "craft-webp",
@@ -2029,6 +2030,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-appkit"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -4503,6 +4513,7 @@ dependencies = [
  "egui",
  "raw-window-handle",
  "serde",
+ "serde_json",
  "web-time",
 ]
 
@@ -4626,6 +4637,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wayland"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "wayland-backend",
+ "wayland-client",
+]
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 dependencies = [
@@ -4668,6 +4688,7 @@ dependencies = [
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-host",
@@ -4684,6 +4705,7 @@ dependencies = [
  "tempfile",
  "wayland-client",
  "winsafe",
+ "x11rb",
 ]
 
 [[package]]

@@ -11,5 +11,7 @@ craft_ui::words! {
         drawer_close: "toolbarDrawer.close" = "Close";
         drawer_restore: "toolbarDrawer.restore" = "Restore Defaults";
         in_toolbar: "toolbarDrawer.inToolbar" = "In toolbar";
+        tear_off: "toolRail.tearOff" = "Tear Off Group";
+        drawer_menu: "toolbarDrawer.menu" = "Drawer Menu";
     }
 }

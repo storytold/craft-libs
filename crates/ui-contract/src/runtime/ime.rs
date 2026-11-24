@@ -47,6 +47,8 @@ struct Engine {
     preedit: String,
     caret: Option<(Id, Rect, Rect, bool)>,
     interrupt: Option<Id>,
+    /// An interrupt asked the platform to discard its marked text; `take_discard` reads it once.
+    discard: bool,
     /// What the editor that owns the IME reported at its last pass.
     editor: Option<EditorFacts>,
 }
@@ -164,6 +166,7 @@ impl Engine {
         self.preedit.clear();
         self.stale = true;
         self.interrupt = Some(owner);
+        self.discard = true;
     }
 }
 
@@ -189,6 +192,12 @@ pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: Vie
         engine.queue.extend(taken);
         engine.guard = engine.guard.saturating_sub(1);
     });
+}
+
+/// Whether an `interrupt` of the engine of `viewport` asks the platform to discard the marked text: once for each
+/// interrupt. The engine is per viewport and the caller runs before any pass, so it names the viewport.
+pub(crate) fn take_discard(ctx: &Context, viewport: ViewportId) -> bool {
+    with(ctx, viewport, |engine| std::mem::take(&mut engine.discard))
 }
 
 /// The begin hook, after pending focus moves are applied: resolves the owner and turns the queue into edits.

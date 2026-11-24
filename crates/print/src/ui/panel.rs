@@ -37,6 +37,7 @@ craft_ui::words! {
         portrait: "printPanel.portrait" = "Portrait";
         landscape: "printPanel.landscape" = "Landscape";
         page_in_driver: "printPanel.pageInDriver" = "set in Print Settings…";
+        setup: "printPanel.setup" = "Setup…";
         collate: "printPanel.collate" = "Collate";
         properties: "printPanel.properties" = "Properties…";
         save_as_pdf: "printPanel.saveAsPdf" = "Save as PDF";
@@ -96,6 +97,17 @@ impl Outcome for PrintPanelOutput {
     }
 }
 
+/// Which controls the print panel shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintPanelLayout {
+    /// Printer, copies, two-sided mode and grayscale.
+    #[default]
+    Full,
+    /// The printer choice and its Refresh and Print Settings… buttons only.
+    PrinterOnly,
+}
+
 /// The destination choice with a Refresh button, the number of copies, collation, the grayscale option and the
 /// two-sided mode of one print job, over the job's [`Settings`].
 ///
@@ -140,6 +152,9 @@ pub struct PrintPanel<'a> {
     /// Why the driver gave no page.
     #[prop]
     page_error: Option<String>,
+    /// Which controls the panel shows.
+    #[prop]
+    layout: PrintPanelLayout,
     /// The printer list is for a long fleet: a "Search printers" field heads it, focused as it opens, and narrows the
     /// printers by their names (case and accents ignored) while Save as PDF stays at the end; typing changes no choice,
     /// only a pick does, and the open list is wide enough for long names (PRINTER_LIST_WIDTH, within the screen).
@@ -164,14 +179,27 @@ impl<'a> PrintPanel<'a> {
             inline: false,
             page: None,
             page_error: None,
+            layout: PrintPanelLayout::default(),
             printer_search: false,
         }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, inline, page, page_error, printer_search } =
-            self;
+        let PrintPanel {
+            settings,
+            printers,
+            discovering,
+            busy,
+            driver,
+            destinations,
+            duplex_by_layout,
+            inline,
+            page,
+            page_error,
+            layout,
+            printer_search,
+        } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let mut queues: Vec<Entry<Destination>> = printers
@@ -234,8 +262,15 @@ impl<'a> PrintPanel<'a> {
                         let button = Button::new(words.properties.clone()).enabled(queue).id_salt("properties").show(ui);
                         settings_clicked |= clicked(&button);
                     }
+                    if layout == PrintPanelLayout::PrinterOnly && driver != DriverControls::None {
+                        let button = Button::new(words.setup.clone()).id_salt("setup").show(ui);
+                        settings_clicked |= clicked(&button);
+                    }
                 });
             });
+            if layout == PrintPanelLayout::PrinterOnly {
+                return (now != before).then_some((before, now));
+            }
             // The chosen printer's own dialog decides the job controls: they show the settings, disabled, with its note.
             let own_dialog = match &now.destination {
                 Destination::Printer(name) => printers.iter().find(|printer| printer.name == *name).and_then(|printer| printer.own_dialog.clone()),

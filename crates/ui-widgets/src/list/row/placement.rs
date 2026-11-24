@@ -46,6 +46,8 @@ pub(super) struct Sizes {
     pub(super) cell_inset: f32,
     /// The vertical room around a wrapped cell's text, in total.
     pub(super) cell_pad: f32,
+    /// The side of a corner mark: `size.handle.sm`.
+    pub(super) handle: f32,
 }
 
 impl Sizes {
@@ -72,6 +74,7 @@ impl Sizes {
             cell_inset: control.pad_x,
             // A text row's wrapped cell keeps the room a text row has around its line.
             cell_pad: if rows == RowHeight::Text { tokens.space.gap.tight } else { control.gap },
+            handle: tokens.size.handle.sm,
         }
     }
 
@@ -173,6 +176,8 @@ pub(super) struct Placed {
     pub(super) statuses: Vec<(usize, usize, Rect)>,
     pub(super) dividers: Vec<f32>,
     pub(super) disclosure: Option<Rect>,
+    /// The row's content past its leading toggle cells and before its trailing ones.
+    pub(super) band: Rect,
     pub(super) marker: Option<Rect>,
     /// The mark column of an option of a value list.
     pub(super) check: Option<Rect>,
@@ -196,6 +201,11 @@ impl ListRow<'_> {
     /// Whether the leading part holds thumbnails; without a first thumbnail or a thumbnail side none are placed.
     fn shows_thumbs(&self, sizes: &Sizes) -> bool {
         self.first.is_some() && sizes.side(self.thumb) > 0.0
+    }
+
+    /// The size of a row that is its thumbnails (`thumbnails_only`): the leading part wide, a thumbnail high.
+    pub(super) fn thumbs_extent(&self, sizes: &Sizes, widths: &Widths) -> Vec2 {
+        Vec2::new(self.leading(sizes, widths).unwrap_or(0.0), self.thumb_size(sizes).y)
     }
 
     /// The width of the leading part: every thumbnail and what is between them, the leading text's slot, or the icon;
@@ -434,6 +444,14 @@ impl ListRow<'_> {
     }
 
     pub(super) fn place_in(&self, columns: &[(ColumnKey, Rect)], sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
+        // A row that is its thumbnails has no padding, label room or trailing room.
+        let bare;
+        let sizes = if self.thumbnails_only {
+            bare = Sizes { pad: 0.0, min_label: 0.0, trailing_pad: 0.0, ..*sizes };
+            &bare
+        } else {
+            sizes
+        };
         let items = &widths.items;
         let moved;
         let cells_of = if self.sub_row {
@@ -555,6 +573,7 @@ impl ListRow<'_> {
             statuses,
             dividers,
             disclosure: disclosure_rect,
+            band,
             marker: marker_rect,
             check: check_rect,
             icon,
@@ -613,6 +632,7 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
         detail_line: 12.0,
         cell_inset: 6.0,
         cell_pad: 4.0,
+        handle: 8.0,
     };
     let widths = row.widths(&sizes, &|run| FIXED_ADVANCE * run.full_text().chars().count() as f32);
     let placed = row.place(&sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, sizes.row)), rtl);

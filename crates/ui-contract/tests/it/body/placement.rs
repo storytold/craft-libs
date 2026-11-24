@@ -295,3 +295,29 @@ fn a_float_places_its_corner_at_the_position() {
         }
     }
 }
+
+/// An anchored layer that stays open takes the side its host asks for now: asked for End after Above, it hangs at the
+/// anchor's end; asked for Above again, it sits above. Guards against a layer that kept the side an earlier pass took
+/// while it stayed open, whatever side the host asked for since.
+#[trial]
+fn an_open_layer_takes_the_side_its_host_asks_for_now() {
+    let anchor = Rect::from_min_size(Pos2::new(200.0, 300.0), Vec2::new(40.0, 20.0));
+    let (shown, asked, log, seen) = (Cell::new(Rect::NOTHING), Cell::new(Side::Above), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+    let mut show = |ui: &mut Ui| {
+        let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), asked.get(), Align::Start));
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
+        let out = Pane { common: Common::new(), props, log: &log }.id_salt("bar").show(ui, |ui, _| {
+            Probe::new(&seen).size(Vec2::new(60.0, 20.0)).show(ui);
+        });
+        shown.set(out.output.rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, &mut show);
+    assert!(shown.get().bottom() <= anchor.top() + SLACK, "asked for Above, the layer sits above: {:?}", shown.get());
+    asked.set(Side::End);
+    frames.idle(4, &mut show);
+    assert!(shown.get().left() >= anchor.right() - SLACK, "asked for End, the layer hangs at the anchor's end: {:?}", shown.get());
+    asked.set(Side::Above);
+    frames.idle(4, &mut show);
+    assert!(shown.get().bottom() <= anchor.top() + SLACK, "asked for Above again, the layer sits above: {:?}", shown.get());
+}
