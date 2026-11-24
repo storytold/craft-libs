@@ -507,3 +507,124 @@ fn auxiliary_tail_work_refusal_retries_without_losing_name_storage_or_mislabelin
     assert!(matches!(xcf.effect_mask_header(&record(&broken), &mut available, &|| true), Err(EffectMaskError::Source(Error::Invalid(_)))));
     assert_eq!(available.retained_remaining(), 4096);
 }
+
+fn fixture_with_tiles_around_envelope(version: u32) -> Fixture {
+    let mut w = W::new(version);
+    for value in [2, 1, 1, 150] {
+        w.u32(value);
+    }
+    w.prop(17, &[0]);
+    w.end();
+    for _ in 0..3 {
+        w.ptr(0);
+    }
+    w.out.extend([17, 29]); // Complete tile immediately before the effect.
+    let effect = w.out.len();
+    for value in ["Effect", "", "gegl:exposure", "1:0"] {
+        w.string(value);
+    }
+    w.end();
+    let mask_slot = w.slot();
+    w.out.extend([39, 87]); // Complete tile between effect and channel.
+    let mask = w.out.len();
+    w.patch(mask_slot, mask);
+    w.u32(2);
+    w.u32(1);
+    w.string("Coverage");
+    w.end();
+    let pixels = w.slot();
+    let effects_slot = if version >= 26 {
+        let at = w.out.len();
+        w.ptr(0);
+        Some(at)
+    } else {
+        None
+    };
+    let hierarchy = hierarchy(&mut w, 2, 1, 1, &[11, 23], Compression::None);
+    w.patch(pixels, hierarchy);
+    Fixture { version, effects_slot, bytes: w.out, effect, mask, hierarchy, mask_slot }
+}
+
+#[test]
+fn auxiliary_tiles_exclude_authenticated_effect_and_channel_spans_but_keep_adjacent_gaps() {
+    for version in [22, 26] {
+        let original = fixture_with_tiles_around_envelope(version);
+        for (tile, expected) in [
+            (original.effect - 2, Some([17, 29])),
+            (original.effect - 1, None),
+            (original.effect, None),
+            (original.effect + 1, None),
+            (original.mask_slot, None),
+            (original.mask - 3, None),
+            (original.mask - 2, Some([39, 87])),
+            (original.mask - 1, None),
+            (original.mask, None),
+        ] {
+            let mut f = fixture_with_tiles_around_envelope(version);
+            let level = u64::from_be_bytes(f.bytes[f.hierarchy + 12..f.hierarchy + 20].try_into().unwrap()) as usize;
+            f.bytes[level + 8..level + 16].copy_from_slice(&(tile as u64).to_be_bytes());
+            let xcf = Xcf::parse(&f.bytes).unwrap();
+            let header = xcf.effect_mask_header(&record(&f), &mut records::Budget::default(), &|| true).unwrap().unwrap();
+            let mut actual = Vec::new();
+            let result = xcf.visit_effect_mask_tiles(&header, SampleOptions::default(), &mut 2, &|| true, |tile| {
+                actual.extend_from_slice(tile.data);
+                Ok(())
+            });
+            if let Some(expected) = expected {
+                assert!(result.is_ok(), "v{version} tile {tile}: {result:?}");
+                assert_eq!(actual, expected);
+            } else {
+                assert!(result.is_err(), "v{version} tile {tile} must not decode record bytes");
+                assert!(actual.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn auxiliary_validation_excludes_the_effect_envelope_from_fixed_level_headers() {
+    // An unknown property belongs to the authenticated effect, not available
+    // hierarchy storage. Embed a matching fixed level solely as inert data.
+    let mut w = W::new(26);
+    for value in [2, 1, 1, 150] {
+        w.u32(value);
+    }
+    w.prop(17, &[0]);
+    w.end();
+    for _ in 0..3 {
+        w.ptr(0);
+    }
+    let effect = w.out.len();
+    for value in ["Effect", "", "gegl:exposure", "1:0"] {
+        w.string(value);
+    }
+    w.u32(9999);
+    w.u32(16);
+    let fixed = w.out.len();
+    w.u32(2);
+    w.u32(1);
+    w.ptr(0);
+    w.end();
+    let mask_slot = w.slot();
+    let mask = w.out.len();
+    w.patch(mask_slot, mask);
+    w.u32(2);
+    w.u32(1);
+    w.string("");
+    w.end();
+    let hierarchy_slot = w.slot();
+    w.ptr(0);
+    let hierarchy = w.out.len();
+    w.patch(hierarchy_slot, hierarchy);
+    w.u32(2);
+    w.u32(1);
+    w.u32(1);
+    w.ptr(fixed);
+    w.ptr(0);
+    let f = Fixture { bytes: w.out, version: 26, effect, mask, hierarchy, mask_slot, effects_slot: None };
+    let xcf = Xcf::parse(&f.bytes).unwrap();
+    let mut metadata = records::Budget::new(4096, 4096);
+    let error = xcf.effect_mask_header(&record(&f), &mut metadata, &|| true).unwrap_err();
+    assert!(error.to_string().contains("level header overlaps its source record"));
+    assert_eq!(metadata.retained_remaining(), 4096);
+}

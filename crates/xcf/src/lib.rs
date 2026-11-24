@@ -807,7 +807,8 @@ impl<'a> Xcf<'a> {
             return Ok(None);
         }
         let (source_channels, indexed) = layer.source_layout(self.image.base_type)?;
-        let px = self.hierarchy_excluding(layer.hierarchy, source_channels, indexed, Some(&layer.source_record), budget, keep_going)?;
+        let px =
+            self.hierarchy_excluding(layer.hierarchy, source_channels, indexed, std::slice::from_ref(&layer.source_record), budget, keep_going)?;
         if (px.width, px.height) != (layer.width, layer.height) {
             let (name, lw, lh) = (&layer.name, layer.width, layer.height);
             return Err(invalid(format!("layer '{name}' pixels are {}x{} where {lw}x{lh} were declared", px.width, px.height)));
@@ -861,7 +862,7 @@ impl<'a> Xcf<'a> {
             let hptr = c.ptr()?;
             self.channel_effects_tail(&mut c, hptr, keep_going, None)?;
             // Channels are always one plain sample per pixel, even in indexed images.
-            let px = self.hierarchy_excluding(hptr, 1, false, Some(&(ptr..c.pos)), budget, keep_going)?;
+            let px = self.hierarchy_excluding(hptr, 1, false, std::slice::from_ref(&(ptr..c.pos)), budget, keep_going)?;
             Ok((Channel { name, selection }, px))
         })();
         if result.is_err() {
@@ -876,7 +877,7 @@ impl<'a> Xcf<'a> {
     /// (indexed pixels expand to RGB here).
     #[cfg(test)]
     fn hierarchy(&self, hptr: usize, source_channels: usize, indexed: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Pixels> {
-        self.hierarchy_excluding(hptr, source_channels, indexed, None, budget, keep_going)
+        self.hierarchy_excluding(hptr, source_channels, indexed, &[], budget, keep_going)
     }
 
     fn hierarchy_excluding(
@@ -884,7 +885,7 @@ impl<'a> Xcf<'a> {
         hptr: usize,
         source_channels: usize,
         indexed: bool,
-        excluded: Option<&std::ops::Range<usize>>,
+        excluded: &[std::ops::Range<usize>],
         budget: &mut usize,
         keep_going: &dyn Fn() -> bool,
     ) -> Result<Pixels> {

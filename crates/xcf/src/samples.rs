@@ -184,14 +184,14 @@ impl SourceTile<'_> {
     }
 }
 
-struct VisitTarget {
+struct VisitTarget<'r> {
     pointer: usize,
     channels: usize,
     indexed: bool,
     dimensions: Option<(u32, u32)>,
     coverage: bool,
     transfer_is_assumed: bool,
-    excluded_source: Option<std::ops::Range<usize>>,
+    excluded_source: &'r [std::ops::Range<usize>],
 }
 
 pub(super) struct HierarchyHead {
@@ -263,7 +263,7 @@ impl Xcf<'_> {
                 dimensions: Some((layer.width, layer.height)),
                 coverage,
                 transfer_is_assumed,
-                excluded_source: Some(layer.source_record.clone()),
+                excluded_source: std::slice::from_ref(&layer.source_record),
             },
             options,
             budget,
@@ -428,7 +428,7 @@ impl Xcf<'_> {
                     dimensions: Some(dimensions),
                     coverage: owner.is_some() || selection || !nonlinear_u8,
                     transfer_is_assumed: owner.is_none() && (!selection || nonlinear_u8),
-                    excluded_source: Some(ptr..cursor.pos),
+                    excluded_source: std::slice::from_ref(&(ptr..cursor.pos)),
                 },
                 options,
                 budget,
@@ -565,7 +565,7 @@ impl Xcf<'_> {
         start: usize,
         next: Option<usize>,
         raw_bytes: usize,
-        excluded: Option<&std::ops::Range<usize>>,
+        excluded: &[std::ops::Range<usize>],
     ) -> Result<&[u8]> {
         if head.header.contains(&start) {
             return Err(invalid("a tile pointer is inside its hierarchy header"));
@@ -594,7 +594,7 @@ impl Xcf<'_> {
                 end = end.min(begin);
             }
         }
-        if let Some(range) = excluded {
+        for range in excluded {
             if range.contains(&start) {
                 return Err(invalid("a tile pointer is inside its source record"));
             }
@@ -609,14 +609,14 @@ impl Xcf<'_> {
         &self,
         head: &mut HierarchyHead,
         allow_empty: bool,
-        excluded: Option<&std::ops::Range<usize>>,
+        excluded: &[std::ops::Range<usize>],
         keep_going: &dyn Fn() -> bool,
     ) -> Result<Vec<usize>> {
         if !keep_going() {
             return Err(Error::Cancelled);
         }
         self.validate_first_level(head)?;
-        let overlaps = |start: usize, end: usize| excluded.is_some_and(|range| start < range.end && end > range.start);
+        let overlaps = |start: usize, end: usize| excluded.iter().any(|range| start < range.end && end > range.start);
         if overlaps(head.header.start, head.header.end) {
             return Err(invalid("a hierarchy overlaps its source record"));
         }
@@ -652,7 +652,7 @@ impl Xcf<'_> {
 
     fn visit_hierarchy(
         &self,
-        target: VisitTarget,
+        target: VisitTarget<'_>,
         options: SampleOptions,
         budget: &mut usize,
         keep_going: &dyn Fn() -> bool,
@@ -678,7 +678,7 @@ impl Xcf<'_> {
             return Err(invalid("drawable exceeds the source pixel limit"));
         }
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the source pixel limit"))?;
-        let offsets = self.hierarchy_tiles(&mut head, true, excluded_source.as_ref(), keep_going)?;
+        let offsets = self.hierarchy_tiles(&mut head, true, excluded_source, keep_going)?;
         let mut precision = self.source_precision();
         if coverage {
             // Layer masks contain coverage, not color in the image's transfer.
@@ -698,13 +698,8 @@ impl Xcf<'_> {
             let width = (head.width - x).min(TILE);
             let height = (head.height - y).min(TILE);
             let raw = if let Some(&start) = offsets.get(index) {
-                let input = self.tile_input(
-                    &head,
-                    start,
-                    offsets.get(index + 1).copied(),
-                    width as usize * height as usize * head.bpp,
-                    excluded_source.as_ref(),
-                )?;
+                let input =
+                    self.tile_input(&head, start, offsets.get(index + 1).copied(), width as usize * height as usize * head.bpp, excluded_source)?;
                 tiles::decode(input, self.image.compression, head.bpp, width as usize * height as usize)?
             } else {
                 let length = (width as usize)

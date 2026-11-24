@@ -23,6 +23,8 @@ pub struct EffectMaskHeader<'a> {
     source: &'a [u8],
     version: u32,
     channel_header: Range<usize>,
+    // The authenticated whole effect envelope, including properties and mask pointer.
+    effect_header: Range<usize>,
     dimensions: (u32, u32),
     channel: Channel,
     properties: Vec<records::Property<'a>>,
@@ -75,7 +77,7 @@ impl<'a> Xcf<'a> {
         if !keep_going() {
             return Err(Error::Cancelled.into());
         }
-        let Some(offset) = effect.source_mask(self.c.b, self.image.version)? else { return Ok(None) };
+        let Some((offset, effect_header)) = effect.source_mask(self.c.b, self.image.version)? else { return Ok(None) };
         let pointer = usize::try_from(offset).map_err(|_| invalid("effect mask offset does not fit in memory"))?;
         // This shared traversal admits the name/property work before decoding or
         // copying it; never rescan an unmetered property list after it stops.
@@ -90,7 +92,7 @@ impl<'a> Xcf<'a> {
             let hierarchy = channel_end.ptr()?;
             // V26 channel records also own their effect list, including its
             // terminator. Those bytes must never become mask coverage samples.
-            self.channel_effects_tail(&mut channel_end, keep_going, Some(metadata)).map_err(|error| match error {
+            self.channel_effects_tail(&mut channel_end, hierarchy, keep_going, Some(metadata)).map_err(|error| match error {
                 super::ChannelTailError::Source(error) => EffectMaskError::Source(error),
                 super::ChannelTailError::Metadata(reason) => EffectMaskError::Metadata(reason),
             })?;
@@ -109,11 +111,11 @@ impl<'a> Xcf<'a> {
             self.validate_first_level(&head)?;
             let fixed_end = head.level.checked_add(if self.c.wide { 16 } else { 12 }).ok_or_else(|| invalid("level header overflow"))?;
             // Header validation cannot publish metadata for a hierarchy/level
-            // borrowed from the channel record and defer failure until pixels.
-            if head.header.start < channel_header.end && head.header.end > channel_header.start {
+            // borrowed from either source record and defer failure until pixels.
+            if [&channel_header, &effect_header].into_iter().any(|range| head.header.start < range.end && head.header.end > range.start) {
                 return Err(invalid("a hierarchy overlaps its source record").into());
             }
-            if head.level < channel_header.end && fixed_end > channel_header.start {
+            if [&channel_header, &effect_header].into_iter().any(|range| head.level < range.end && fixed_end > range.start) {
                 return Err(invalid("a level header overlaps its source record").into());
             }
             if !keep_going() {
@@ -137,6 +139,7 @@ impl<'a> Xcf<'a> {
                 source: self.c.b,
                 version: self.image.version,
                 channel_header,
+                effect_header,
                 dimensions,
                 channel,
                 properties: properties.records,
@@ -171,7 +174,7 @@ impl<'a> Xcf<'a> {
                 dimensions: Some(header.dimensions),
                 coverage: true,
                 transfer_is_assumed: false,
-                excluded_source: Some(header.channel_header.clone()),
+                excluded_source: &[header.channel_header.clone(), header.effect_header.clone()],
             },
             options,
             budget,

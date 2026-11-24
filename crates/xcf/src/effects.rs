@@ -188,7 +188,7 @@ impl PartialEq for SourceSpan<'_> {
 }
 
 impl<'a> StoredEffect<'a> {
-    pub(crate) fn source_mask(&self, bytes: &[u8], version: u32) -> crate::Result<Option<u64>> {
+    pub(crate) fn source_mask(&self, bytes: &[u8], version: u32) -> crate::Result<Option<(u64, std::ops::Range<usize>)>> {
         let span = &self.source_span;
         let raw = span.bytes.get(span.start..span.end).ok_or_else(|| crate::invalid("effect source range is invalid"))?;
         if !std::ptr::eq(span.bytes, bytes)
@@ -199,7 +199,7 @@ impl<'a> StoredEffect<'a> {
         {
             return Err(crate::invalid("effect mask does not belong to this source record"));
         }
-        Ok((span.mask != 0).then_some(span.mask))
+        Ok((span.mask != 0).then_some((span.mask, span.start..span.end)))
     }
 }
 
