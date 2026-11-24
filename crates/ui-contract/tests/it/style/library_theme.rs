@@ -28,3 +28,23 @@ fn a_library_theme_resolves_from_its_definition_and_an_unknown_id_from_the_defau
     let renamed = panel(dark(RootEnv::new().library_theme(Arc::new(mine.clone())).theme(mine.id.clone())));
     assert_eq!(renamed, unknown, "naming a theme by id drops the earlier definition");
 }
+
+/// A root accent replaces the accent fill of the theme that resolves, the built-in default and a library theme alike;
+/// without one the theme keeps its own.
+#[trial]
+fn a_root_accent_replaces_the_accent_fill_of_the_theme() {
+    let fill = |root: RootEnv| {
+        let mut frames = Frames::new();
+        frames.root(root);
+        let mut seen = None;
+        frames.frame(Vec::new(), |ui| seen = Some(Env::of(ui).tokens.tokens().color(ColorToken::AccentSolid)));
+        seen.expect("a pass ran")
+    };
+    let (yellow, navy) = (Some(craft_theme::Rgba::rgb(0xff, 0xd8, 0x00)), Some(craft_theme::Rgba::rgb(0x12, 0x18, 0x60)));
+    let library = Arc::new(builtins().iter().find(|theme| theme.id.as_str() == "craft.studio").expect("a built-in").clone());
+    for root in [RootEnv::new(), RootEnv::new().library_theme(library)] {
+        let own = fill(root.clone());
+        assert_eq!(fill(root.clone().accent(None)), own, "no accent keeps the theme's");
+        assert_ne!(fill(root.clone().accent(yellow)), fill(root.accent(navy)), "the fill follows the accent");
+    }
+}

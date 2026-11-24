@@ -231,6 +231,7 @@ const CONTAINER: &[Forwarded] = &[
     ("end", "$ui::contract::EndRegion", "The region at the line's end edge, outside the body scroll."),
     ("position", "$ui::contract::SetPosition", "The component's place in its set, for assistive technology."),
     ("collection_body", "", "The body holds one collection that owns the scroll: a layer's own body scroll is off."),
+    ("fit_rank", "u8", "A member of a shrinking row that leaves it whole, lowest rank first, when the row is short."),
     ("fallback_collection", "egui::Id", "The collection that receives move intents left unused by a focused control in this region."),
     ("least_width", "$ui::contract::LeastWidth", "The least width of the content, from a size role."),
 ];

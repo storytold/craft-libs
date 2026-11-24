@@ -6,7 +6,7 @@ use crate::primitives::PartResult;
 use crate::runtime::drag::{self, DragPreview, DropTarget, DropZone, Typed, WindowDropTarget};
 use crate::runtime::egui::areas;
 use crate::runtime::{cursor, frame, pointer, wheel};
-use craft_behavior::{Cursor, CursorPriority, DropOperation, PartKey, PartRef, PressCancel, PressState, Wheel};
+use craft_behavior::{Cursor, CursorPriority, DropOperation, MultiTap, PartKey, PartRef, PressCancel, PressState, Wheel};
 use egui::{Id, Pos2, Vec2};
 use std::any::{Any, TypeId};
 use std::ops::Range;
@@ -37,6 +37,9 @@ pub trait Pointer {
     fn activated_member(&self) -> Option<Id>;
     /// This pass's wheel share, once, with the pointer it came at (`Wheel::at`) in this component's egui layer space (8.3).
     fn take_wheel(&mut self) -> Option<Wheel>;
+    /// This pass's tap, once, when it lies in this component's rect and this component (an arena root with its members)
+    /// wins a press there.
+    fn take_multi_tap(&mut self) -> Option<MultiTap>;
     /// Marks the wheel gesture this component owns, while it runs, as moved (its view changed): later shares of the
     /// gesture report `Wheel::moved`.
     fn mark_wheel_moved(&mut self);
@@ -51,8 +54,14 @@ pub trait Pointer {
     fn cancel_press(&mut self, reason: PressCancel);
     /// Starts the drag session with `payload`; the context holds one session at a time, and a running one stays.
     fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview);
-    /// Starts the drag session with `payload`, which also carries `also`: targets of either type see the one drag.
-    fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview);
+    /// Starts the drag session with `payload`, which also carries the payloads `also`, one per type: targets of any of
+    /// these types see the one drag.
+    fn start_drag_also<P: Clone + Send + Sync + 'static>(
+        &mut self,
+        payload: P,
+        also: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        preview: DragPreview,
+    );
     /// The active drag payload of type `P` and the pointer position in this component's egui layer space (8.3), from any
     /// viewport.
     fn dragging<P: Send + Sync + 'static>(&self) -> Option<(Arc<P>, Pos2)>;
@@ -125,6 +134,14 @@ impl Pointer for CxCore<'_> {
         Some(wheel)
     }
 
+    fn take_multi_tap(&mut self) -> Option<MultiTap> {
+        let map = areas::layer_map(&self.ctx, self.response.layer_id);
+        let to_layer = |at: Pos2| map.as_ref().map_or(at, |map| map.to_layer(at));
+        let rect = self.response.rect;
+        let tap = pointer::take_multi_tap(&self.ctx, self.id, |at| rect.contains(to_layer(at)))?;
+        Some(MultiTap::new(tap.fingers, to_layer(tap.at)))
+    }
+
     fn mark_wheel_moved(&mut self) {
         wheel::mark_moved(&self.ctx, self.id);
     }
@@ -150,11 +167,16 @@ impl Pointer for CxCore<'_> {
     }
 
     fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview) {
-        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), None, preview);
+        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), Vec::new(), preview);
     }
 
-    fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview) {
-        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), Some(also), preview);
+    fn start_drag_also<P: Clone + Send + Sync + 'static>(
+        &mut self,
+        payload: P,
+        also: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        preview: DragPreview,
+    ) {
+        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), also, preview);
     }
 
     fn dragging<P: Send + Sync + 'static>(&self) -> Option<(Arc<P>, Pos2)> {
@@ -170,11 +192,13 @@ impl Pointer for CxCore<'_> {
         if target.requires_pointer() && self.dragging::<P>().is_none() {
             return None;
         }
-        let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx))?;
+        // A target under the pointer in another window takes the drop of a drag that left this one.
+        let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx) && !drag::held_elsewhere(&self.ctx))?;
         let op = drag::current_operation(&self.ctx, craft_behavior::CopyKeys::Alt);
         let drop = target.accept(&payload, op)?;
         let ordinal = drag::next_ordinal(&self.ctx, self.id);
-        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), op, self.env.shared_tokens(), true);
+        let reach = drag::TargetReach { window: true, under_modal: target.under_modal() };
+        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), op, self.env.shared_tokens(), reach);
         drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
     }
 
@@ -235,6 +259,10 @@ impl<C: Component> Pointer for Cx<'_, C> {
         self.core.take_wheel()
     }
 
+    fn take_multi_tap(&mut self) -> Option<MultiTap> {
+        self.core.take_multi_tap()
+    }
+
     fn mark_wheel_moved(&mut self) {
         self.core.mark_wheel_moved();
     }
@@ -259,7 +287,12 @@ impl<C: Component> Pointer for Cx<'_, C> {
         self.core.start_drag(payload, preview);
     }
 
-    fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview) {
+    fn start_drag_also<P: Clone + Send + Sync + 'static>(
+        &mut self,
+        payload: P,
+        also: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        preview: DragPreview,
+    ) {
         self.core.start_drag_also(payload, also, preview);
     }
 

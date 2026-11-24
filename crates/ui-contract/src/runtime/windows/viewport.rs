@@ -4,7 +4,7 @@ use super::host::monitors;
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
 use super::shell::{app_id, base_shell, os_of, refresh};
-use super::spec::{WindowSpec, frame_of_spec};
+use super::spec::{WindowLevel, WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
@@ -78,6 +78,10 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
     if standing.lowered {
         shared(ctx, |shared| shared.lowered = true);
     }
+    // A palette also yields to an app-modal or popup layer of the root window: hidden while one shows.
+    let yields = shared(ctx, |shared| shared.palettes_yield)
+        && PerViewport::<Record>::with(ctx, viewport, |record| record.level == Some(WindowLevel::Palette));
+    let hidden = !standing.shown || yields;
     let app = app_id(ctx);
     let opens = viewports::Spec {
         title: open.title,
@@ -94,7 +98,9 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         level: standing.level,
         resizable: open.resizable,
         taskbar: spec.taskbar,
-        hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
+        // The builder's visibility opens a window the app's state hides already hidden, and only opens it: egui would
+        // send each later change of it as a command beside the one below.
+        hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint || (hidden && record.facts.is_none())),
         active: spec.takes_focus,
         passes_pointer: spec.passes_pointer,
         app_id: &app,
@@ -122,7 +128,6 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
     });
     // A window opened hidden appears once its first pass ran; a window the app's state hides goes and comes back with
     // it. The builder's visibility only opens the window: egui sends no change of it once the window is open.
-    let hidden = !standing.shown;
     let (reveal, changed) = PerViewport::<Record>::with(ctx, viewport, |record| {
         let first = std::mem::take(&mut record.awaiting_first_paint);
         let changed = std::mem::replace(&mut record.hidden, hidden) != hidden;

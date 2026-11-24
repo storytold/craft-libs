@@ -47,8 +47,8 @@ impl Files for StubFiles {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).answered.retain(|a| a.id != id);
     }
 
-    fn pick_pending(&self) -> bool {
-        false
+    fn pending_pick(&self) -> Option<craft_host::PendingPick> {
+        None
     }
 
     fn read(&self, _path: &Path) -> Result<Vec<u8>, FileError> {

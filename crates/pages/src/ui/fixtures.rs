@@ -21,7 +21,7 @@ const FIT_MARGIN: f64 = 24.0;
 /// screen whatever the size of `view.rect`.
 pub fn fitted_page(view: &mut CanvasView, pixels_per_point: f32) -> PlacedPage {
     let size = Size::new(LETTER_WIDTH, LETTER_HEIGHT);
-    craft_behavior::canvas::zoom::fit(view, size, pixels_per_point, FIT_MARGIN);
+    craft_behavior::canvas::zoom::fit(view, size, pixels_per_point, FIT_MARGIN, &craft_behavior::ZoomScheme::PHOTOSHOP);
     let rect = Rect::from_min_max(view.to_screen(kurbo::Point::ZERO), view.to_screen(kurbo::Point::new(LETTER_WIDTH, LETTER_HEIGHT)));
     PlacedPage::new(0, rect, view.zoom, (0.0, rect.height()))
 }

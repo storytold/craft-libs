@@ -14,7 +14,9 @@ use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};
 
-use super::{FontFilters, FontPicker, FontPickerKind, FontPickerSettings, HostFontGroup, HostFontRow, MissingAdvice};
+use super::{
+    FamilySet, FilterLayout, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontScript, HostFontGroup, HostFontRow, MissingAdvice,
+};
 use crate::Catalog;
 use crate::craft_font_catalog::{Limits, Source};
 use crate::panel::fixtures::story_catalog;
@@ -78,6 +80,9 @@ fn cjk_catalog() -> Arc<Catalog> {
 struct Extras<'a> {
     served: &'a [String],
     banner: Option<&'a str>,
+    sets: &'a [FamilySet<'a>],
+    scripts: &'a [FontScript],
+    layout: FilterLayout,
     kind: FontPickerKind,
     actions: &'a [Label],
     shown_as: Option<&'a str>,
@@ -91,6 +96,9 @@ fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalo
         .settings(Bind::bound(settings))
         .filters(Bind::bound(filters))
         .served(extras.served)
+        .sets(extras.sets)
+        .scripts(extras.scripts)
+        .filter_layout(extras.layout)
         .kind(extras.kind)
         .actions(extras.actions)
         .advice(extras.advice)
@@ -212,6 +220,30 @@ fn font_picker_arabic_sample_text(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     let settings = FontPickerSettings { preview: crate::picker::FontPreviewSize::Large, ..FontPickerSettings::default() };
     let extras = Extras { banner: Some(ARABIC_SAMPLE_TEXT), ..Extras::default() };
     show_with(ui, data, demo("Inter", settings, FontFilters::default()), &arabic_catalog(), &extras)
+}
+
+/// The `Chips` filter area: the script row, a host set that is on and one that is disabled with its reason, the
+/// classes, Variable and the preview size row.
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
+fn font_picker_filter_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let document = ["ubuntu".to_owned(), "hack".to_owned()];
+    let added: [String; 0] = [];
+    let sets = [
+        FamilySet::new("document", "Document", &document),
+        FamilySet::new("added", "Recently Added", &added).ordered().enabled(false).hint("No fonts were added recently"),
+    ];
+    let scripts = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
+    let filters = FontFilters { sets: vec!["document".to_owned()], ..FontFilters::default() };
+    let extras = Extras { sets: &sets, scripts: &scripts, layout: FilterLayout::Chips, ..Extras::default() };
+    show_with(ui, data, demo("Hack", FontPickerSettings::default(), filters), &catalog(), &extras)
+}
+
+/// The "≈ family ✕" chip while Show Similar Fonts is on, and the Show Similar part on each row.
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
+fn font_picker_filter_chips_similar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let filters = FontFilters { similar: Some("Inter".to_owned()), ..FontFilters::default() };
+    let extras = Extras { layout: FilterLayout::Chips, ..Extras::default() };
+    show_with(ui, data, demo("Inter", FontPickerSettings::default(), filters), &styled_catalog(), &extras)
 }
 
 /// A Chinese sample text, at Large: Noto Sans CJK SC (a subset in the repository) draws it in its row and the banner,

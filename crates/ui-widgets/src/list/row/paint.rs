@@ -1,18 +1,18 @@
 //! Painting a row's trailing items, toggles, thumbnails, text and cells.
 
-use super::ListRow;
 use super::placement::{Placed, StatusMeasure, action_link};
 use super::show::{LINK, STATUS_ACTION, TEXT_CELL, TOGGLE};
 use super::style::{ListRowStyle, RowForm, row_ink_of};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
+use super::{LabelUnderline, ListRow, RowRun};
 use crate::buttons::IconButton;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
+use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Role, Styled as _, item_part_open};
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::notices::tone_icon;
-use crate::primitives::{DocText, Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
+use crate::primitives::{DocText, Draw, IconSpec, PaintShape, RectSide, RuleKind, Span, StrokeWidth, TextRun, Wrap};
 use crate::style::{Flags, GlyphRole, Ink, StateMix, StateSet, StyleColor};
 use craft_behavior::{Flow, IconId, Mixed, PartRef};
 use craft_theme::ControlSize;
@@ -159,6 +159,35 @@ impl ListRow<'_> {
         }
     }
 
+    /// Paints the stripe at the start of the content, the corner mark in the trailing top corner (in `ink`) and the
+    /// outline of the row's run.
+    pub(super) fn paint_marks(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, placed: &Placed, ink: StyleColor) {
+        let rtl = cx.env.direction().is_rtl();
+        let rect = cx.rect;
+        if let Some((color, width)) = self.stripe {
+            let bar = Flow::new(placed.band, rtl).span(0.0, draw.width(width));
+            draw.data_fill(&PaintShape::Rect(bar, CornerRadius::ZERO), color);
+        }
+        if self.corner_mark {
+            let side = cx.style.sizes.handle;
+            let (edge, inward) = if rtl { (rect.left(), 1.0) } else { (rect.right(), -1.0) };
+            let corner = vec![Pos2::new(edge, rect.top()), Pos2::new(edge + inward * side, rect.top()), Pos2::new(edge, rect.top() + side)];
+            draw.fill(&PaintShape::Polygon(corner), ink);
+        }
+        if let Some(run) = self.run {
+            // PLAN: `ListRowStyle` (style.rs) holds no outline radius, so the run's ends are square, not `radius.control`.
+            let sides: &[RectSide] = match run {
+                RowRun::Alone => &[RectSide::Top, RectSide::Bottom, RectSide::Left, RectSide::Right],
+                RowRun::First => &[RectSide::Top, RectSide::Left, RectSide::Right],
+                RowRun::Middle => &[RectSide::Left, RectSide::Right],
+                RowRun::Last => &[RectSide::Bottom, RectSide::Left, RectSide::Right],
+            };
+            for side in sides {
+                draw.edge_rule(RuleKind::Divider, rect, *side);
+            }
+        }
+    }
+
     /// Paints the label, detail and wrapped lines in the label band; returns the bottom of the text, where the component
     /// under it (`below`) starts after a gap. `hue` is the label's ink when a colour from data inks it; `document` is
     /// the height of the label laid out as document text, for a row of `document_rows`.
@@ -198,7 +227,17 @@ impl ListRow<'_> {
                 }
                 _ => {
                     let run = self.label_run(cx.resolved.label).role(look.role).color(ink).elide();
-                    draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(width, sizes.label_line)), &run);
+                    let room = Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(width, sizes.label_line));
+                    if self.underline == LabelUnderline::Dashed {
+                        // The line runs under the shown (elided) text only.
+                        let shown = draw.layout(&run, room.width());
+                        let x = draw.text_x(room, &run, &shown);
+                        draw.galley(Pos2::new(x, room.top()), &shown);
+                        let y = room.top() + shown.size().y;
+                        draw.dashed(&[Pos2::new(x, y), Pos2::new(x + shown.size().x, y)], draw.dashes(), StrokeWidth::Thin, ink);
+                    } else {
+                        draw.text(room, &run);
+                    }
                 }
             }
         }
@@ -218,11 +257,13 @@ impl ListRow<'_> {
 
 impl ListRow<'_> {
     /// The label as a run without its role and colour: its styled spans (`label_spans`) when it has them, else `label`
-    /// as one span, every span italic under `italic`.
+    /// as one span, every span italic under `italic` and underlined under a solid `underline`.
     pub(super) fn label_run<'s>(&'s self, label: &'s str) -> TextRun<'s> {
         let mut spans: Vec<Span<'s>> = if self.label_spans.is_empty() { vec![Span::new(label)] } else { self.label_spans.clone() };
-        if self.italic {
-            spans.iter_mut().for_each(|span| span.italic = true);
+        let underline = self.underline == LabelUnderline::Solid;
+        for span in &mut spans {
+            span.italic |= self.italic;
+            span.underline |= underline;
         }
         TextRun::spans(spans)
     }
@@ -320,7 +361,8 @@ impl ListRow<'_> {
     }
 
     /// Shows each cell field in its column's cell, or in the label's room in the label's column, at its own height up to
-    /// the row's, centred on the row's band.
+    /// the row's, centred on the row's band. A link is as wide as its text, at the room's start, as a text cell's text
+    /// is: a press past it acts on the row.
     pub(super) fn paint_cell_fields(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let sizes = &cx.style.sizes;
         let rtl = cx.env.direction().is_rtl();
@@ -337,6 +379,7 @@ impl ListRow<'_> {
             .collect();
         for (at, (column, field)) in self.cell_fields.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (field.item.take(), field.size) else { continue };
+            let link = item.role() == Role::LINK;
             let room = if label.as_ref() == Some(column) {
                 placed.label
             } else {
@@ -346,7 +389,9 @@ impl ListRow<'_> {
             };
             let room = suffixes.iter().find(|(key, _)| key == column).map_or(room, |(_, width)| split_field_text(room, rtl, *width, sizes.gap).0);
             let height = size.ideal.y.min(room.height());
-            item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
+            let width = if link { size.ideal.x.min(room.width()) } else { room.width() };
+            let slot = Flow::new(room, rtl).take_start(width).0;
+            item.show(ui, cell_key(at), Rect::from_center_size(Pos2::new(slot.center().x, room.center().y), Vec2::new(width, height)));
         }
     }
 }

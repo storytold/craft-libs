@@ -108,6 +108,20 @@ pub enum CloseReason {
     AnchorGone,
 }
 
+/// What a layer is for, beyond its rank.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LayerRole {
+    /// An ordinary layer.
+    #[default]
+    Plain,
+    /// A progress window: `any_open` leaves it out, as it blocks nothing the user waits on.
+    Progress,
+    /// A field over its owner's own content that edits it in place (a page's rename field): it is part of the owner,
+    /// so the owner reports no open or expanded state and no popup it controls while it shows.
+    InPlaceEditor,
+}
+
 /// What `any_open` counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -132,6 +146,8 @@ pub struct OpenEntry {
     pub rank: Rank,
     /// Its key class.
     pub keys: OwnerClass,
+    /// What the layer is for.
+    pub role: LayerRole,
     /// The anchor in screen space.
     pub anchor: Option<Rect>,
     /// The rects in screen space of the other parts of the owner that open popups: a press on one is not outside,
@@ -141,6 +157,8 @@ pub struct OpenEntry {
     pub rect: Rect,
     /// The side of the anchor it took by its size; `None` for a float and while its size is unknown.
     pub side: Option<Side>,
+    /// The side its host asked for when it took `side`: a later pass keeps `side` only while the host asks for the same.
+    pub(crate) asked: Option<Side>,
     /// It is fading out: not `top`, not counted by `any_open`, taking no input.
     pub exiting: bool,
     /// The layer's egui id and the cover under it, listed in the order.
@@ -196,10 +214,12 @@ impl OpenEntry {
             parent: None,
             rank,
             keys,
+            role: LayerRole::default(),
             anchor: None,
             peers: Vec::new(),
             rect,
             side: None,
+            asked: None,
             exiting: false,
             layer,
             cover: None,
@@ -251,6 +271,8 @@ pub(crate) struct Pass {
     pressed_outside: Vec<Id>,
     /// The popup a press that opened it ended on, and where, this pass.
     dragged_release: Option<(Id, Pos2)>,
+    /// The layers asked to come to the front this pass (`raise`).
+    raise: Vec<Id>,
     /// The dialog stack place of the layers recorded now, and the dialog they show for (`stack_place`).
     place: Option<usize>,
     dialog: Option<Id>,
@@ -311,6 +333,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
             pass.claimed.clear();
             pass.pressed_outside.clear();
             pass.dragged_release = None;
+            pass.raise.clear();
             pass.place = None;
             pass.dialog = None;
         },
@@ -401,7 +424,7 @@ pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| {
-        pass.last.iter().filter(|entry| !entry.exiting).any(|entry| match filter {
+        pass.last.iter().filter(|entry| !entry.exiting && entry.role != LayerRole::Progress).any(|entry| match filter {
             OpenFilter::Any => true,
             OpenFilter::Modal => entry.blocks_window(),
             OpenFilter::Keys => entry.takes_keys(),
@@ -622,6 +645,12 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
     with_pass(ctx, |pass| pass.dragged_release.is_some_and(|(popup, at)| pass.drawing.iter().any(|(id, _)| *id == popup) && rect.contains(at)))
 }
 
+/// Brings the family of the open layer `id` in front of the other families of its class at the end of this pass, as a
+/// press on it does.
+pub fn raise(ctx: &Context, id: Id) {
+    with_pass(ctx, |pass| pass.raise.push(id));
+}
+
 /// Ends the body `begin_layer` started.
 pub(crate) fn end_layer(ctx: &Context) {
     with_pass(ctx, |pass| {
@@ -724,6 +753,13 @@ pub fn stack_place<R>(ctx: &Context, place: usize, dialog: Id, show: impl FnOnce
     out
 }
 
+/// The host's dialog whose `stack_place` runs now: a component inside it tells one dialog from the next one a host
+/// shows at the same place with the same ids.
+#[doc(hidden)]
+pub fn running_dialog(ctx: &Context) -> Option<Id> {
+    with_pass(ctx, |pass| pass.dialog)
+}
+
 /// A dialog host opened a dialog in this pass: it is the top layer from now on, so the Escape that arrived in this
 /// pass is its, and nothing beneath it gets a Cancel or a claimed Escape, wherever focus is now.
 #[doc(hidden)]
@@ -814,7 +850,8 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
 /// open-modal fact.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let (current, last_ids) = with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>()));
+    let (current, last_ids, raise) =
+        with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>(), pass.raise.clone()));
     let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
     let order = with_persist(ctx, viewport, |persist| {
         let stamp = |id: Id, persist: &mut Persist| {
@@ -830,6 +867,15 @@ pub(crate) fn end_pass(ctx: &Context) {
         for root in &roots {
             if !last_ids.contains(root) {
                 stamp(*root, persist);
+            }
+        }
+        for id in raise {
+            let mut at = current.iter().find(|entry| entry.id == id);
+            while let Some(parent) = at.and_then(|entry| entry.parent).and_then(|parent| current.iter().find(|other| other.id == parent)) {
+                at = Some(parent);
+            }
+            if let Some(root) = at {
+                stamp(root.id, persist);
             }
         }
         persist.raised.retain(|id, _| roots.contains(id));

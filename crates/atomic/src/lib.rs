@@ -491,7 +491,6 @@ fn name_taken(e: &io::Error, tmp: &Path) -> bool {
 /// The Windows attributes a replaced file passes on to its stage: hidden and system, the two that
 /// say who should see the file. A read-only file is never replaced, the archive bit is the
 /// system's to set on a changed file, and the others describe how the volume stores it.
-
 #[cfg(windows)]
 const KEPT_ATTRIBUTES: u32 = 0x2 | 0x4;
 
