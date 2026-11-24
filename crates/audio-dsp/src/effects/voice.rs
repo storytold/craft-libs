@@ -394,7 +394,7 @@ impl AudioEffect for VoicePitch {
     fn tail_samples(&self) -> usize {
         // A tap reads up to `latency + max_spacing` samples back and the cubic read two samples
         // more, which is twice the latency in all. Keep Formants spreads a frame over up to the
-        // formant stage's size more.
+        // formant stage's size more. A render drains `latency() + tail_samples()` samples.
         self.latency + if self.follow_on { self.follow.n } else { 0 }
     }
     fn reset(&mut self) {
@@ -416,9 +416,11 @@ impl AudioEffect for VoicePitch {
         let back = (1.0 / self.ratio) as f32;
         for i in 0..len {
             let mut sum = 0.0f32;
-            for (line, io) in self.lines.iter_mut().zip(channels.iter()) {
-                // A non-finite sample is stored as silence, so it never reaches the output.
-                let x = flush32(io[i]);
+            for (c, line) in self.lines.iter_mut().enumerate() {
+                // A non-finite sample is stored as silence, so it never reaches the output. A
+                // channel the block leaves out is stored as silence too, so its line holds none
+                // of its earlier audio when it comes back.
+                let x = channels.get(c).map_or(0.0, |io| flush32(io[i]));
                 line[self.pos] = x;
                 sum += x;
             }
@@ -449,6 +451,9 @@ impl AudioEffect for VoicePitch {
                 // before the other comes in instead of mixing them.
                 let out = if mix < 0.5 { (1.0 - 2.0 * mix) * y } else { (2.0 * mix - 1.0) * z as f64 };
                 io[i] = out.clamp(-f32::MAX as f64, f32::MAX as f64) as f32;
+            }
+            for c in ch..self.lines.len() {
+                self.follow.tick(c, 0.0, warp);
             }
             self.pos = (self.pos + 1) & self.mask;
         }
@@ -708,9 +713,16 @@ impl AudioEffect for VoiceFormant {
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let len = block_len(channels);
         for i in 0..len {
-            for (c, io) in channels.iter_mut().take(self.stage.stft.len()).enumerate() {
-                // A non-finite sample is taken as silence, so it never reaches the output.
-                io[i] = self.stage.tick(c, flush32(io[i]), self.ratio);
+            for c in 0..self.stage.stft.len() {
+                // A non-finite sample is taken as silence, so it never reaches the output. A
+                // channel the block leaves out is fed silence, so it holds none of its earlier
+                // audio when it comes back.
+                match channels.get_mut(c) {
+                    Some(io) => io[i] = self.stage.tick(c, flush32(io[i]), self.ratio),
+                    None => {
+                        self.stage.tick(c, 0.0, self.ratio);
+                    }
+                }
             }
         }
     }
@@ -1116,6 +1128,33 @@ mod tests {
         let y = run(&mut p, &x);
         assert!(y.iter().all(|v| v.is_finite()));
         assert!(rms(settled(&y)) > 0.01);
+    }
+
+    /// A block that leaves channels out feeds them silence, so when they come back without a
+    /// reset none of their earlier audio sounds. Checked for the formant shifter and for the
+    /// pitch shifter with and without Keep Formants.
+    #[test]
+    fn channels_left_out_of_a_block_come_back_silent() {
+        let mut rng = Rng::new(19);
+        let noise: Vec<f32> = (0..4_000).map(|_| 0.5 * rng.uniform()).collect();
+        let mut f = VoiceFormant::new(SR, 3);
+        assert!(f.set_param("semitones", 4.0));
+        let mut plain = VoicePitch::new(SR, 3);
+        assert!(plain.set_param("semitones", 5.0));
+        plain.reset();
+        let mut keep = VoicePitch::new(SR, 3);
+        assert!(keep.set_param("semitones", 5.0) && keep.set_param("formant_follow", 1.0));
+        keep.reset();
+        let fxs: [&mut dyn AudioEffect; 3] = [&mut f, &mut plain, &mut keep];
+        for fx in fxs {
+            let (mut a, mut b, mut c) = (noise.clone(), noise.clone(), noise.clone());
+            fx.process(&mut [&mut a, &mut b, &mut c]);
+            let mut a = noise.clone();
+            fx.process(&mut [&mut a]);
+            let (mut a, mut b, mut c) = (vec![0.0f32; 4_000], vec![0.0f32; 4_000], vec![0.0f32; 4_000]);
+            fx.process(&mut [&mut a, &mut b, &mut c]);
+            assert!(b.iter().chain(&c).all(|v| *v == 0.0), "{}: earlier audio came back", fx.id());
+        }
     }
 
     /// The tracker finds a voice's period down to 70 Hz and reports nothing for silence.
