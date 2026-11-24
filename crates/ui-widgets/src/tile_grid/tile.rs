@@ -1137,11 +1137,12 @@ impl Component for Tile<'_> {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
             if let Some(face) = face {
-                let zoom = clean_zoom(self.icon_zoom, if !self.flat_thumbnail && self.paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
+                let paper = if !self.flat_thumbnail && self.action_place != TileActionPlace::Band { self.paper } else { None };
+                let zoom = clean_zoom(self.icon_zoom, if paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
                 let max_side = picture.width().min(picture.height()).max(0.0);
                 let side = (style.face.side * zoom).min(max_side);
                 let icon = Rect::from_center_size(picture.center(), Vec2::splat(side));
-                let color = match (face.color, self.paper) {
+                let color = match (face.color, paper) {
                     (Some(color), _) => color,
                     (None, Some(paper)) => ui.with_style(Variant::SECONDARY, |cx| cx.icon_ink_on(paper)),
                     (None, None) => face_ink,

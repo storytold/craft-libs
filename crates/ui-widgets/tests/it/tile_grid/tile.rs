@@ -305,26 +305,44 @@ fn card_tile_icon_zoom_hostile_values_handled_safely() {
     assert!(!glyphs_non_card.is_empty(), "non-card negative zoom renders icon");
 }
 
-/// A flat_thumbnail tile with paper does not paint paper fill or frame, and keeps standard icon zoom.
+/// A flat_thumbnail tile with paper does not paint paper fill or frame, and keeps standard icon zoom and proper contrast across themes.
 #[trial]
 fn flat_thumbnail_with_paper_keeps_standard_icon_and_no_paper_surface() {
-    let mut frames = Frames::new();
-    let mut shapes = Vec::new();
-    for _ in 0..3 {
-        shapes = frames.frame_shapes(|ui| {
-            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
-            in_region(ui, region, |ui| {
-                Tile::new("Flat Preset").card().flat_thumbnail().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).show(ui);
+    use craft_theme::{Contrast, Mode};
+    use craft_ui::runtime::env::RootEnv;
+
+    for (mode, contrast) in [(Mode::Light, Contrast::Standard), (Mode::Dark, Contrast::Standard), (Mode::Dark, Contrast::High)] {
+        let mut frames = Frames::new();
+        frames.root(RootEnv::default().mode(mode).contrast(contrast));
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = frames.frame_shapes(|ui| {
+                let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+                in_region(ui, region, |ui| {
+                    Tile::new("Flat Preset").card().flat_thumbnail().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).show(ui);
+                });
             });
-        });
+        }
+        // No white paper fill painted
+        assert!(!shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::WHITE)), "{mode:?} {contrast:?}: no paper fill painted on flat thumbnail");
+        // Standard icon is clamped to tokens.size.icon.lg (22 pt max side)
+        let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+        assert!(!glyphs.is_empty(), "{mode:?} {contrast:?}: icon glyph is painted");
+        let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+        assert!(icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0, "{mode:?} {contrast:?}: icon bounds {icon_bounds:?} <= 22 pt on flat thumbnail");
+
+        // In dark mode, icon ink must NOT be dark text chosen against white paper; it must be light against the dark surface
+        if mode == Mode::Dark {
+            let icon_colors: Vec<Color32> = shapes.iter().filter_map(|s| match s {
+                Shape::Mesh(m) if !m.vertices.is_empty() => Some(m.vertices[0].color),
+                _ => None,
+            }).collect();
+            for color in icon_colors {
+                let lum = f32::from(color.r()) * 0.2126 + f32::from(color.g()) * 0.7152 + f32::from(color.b()) * 0.0722;
+                assert!(lum > 100.0, "{mode:?} {contrast:?}: icon color {color:?} on flat thumbnail should be light in dark mode (lum {lum})");
+            }
+        }
     }
-    // No white paper fill painted
-    assert!(!shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::WHITE)), "no paper fill painted on flat thumbnail");
-    // Standard icon is clamped to tokens.size.icon.lg (22 pt max side)
-    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
-    assert!(!glyphs.is_empty(), "icon glyph is painted");
-    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
-    assert!(icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0, "icon bounds {icon_bounds:?} <= 22 pt on flat thumbnail");
 }
 
 /// In a narrow room, zoom does not paint the icon outside the paper rect.
