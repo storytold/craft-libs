@@ -13,10 +13,10 @@ use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
-    ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
-    DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, GroupGrip,
-    HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea,
-    Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
+    ColumnArrow, ColumnBar, DividerKind, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels,
+    DockRoot, DockScene, DockSizes, DockSource, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt,
+    GroupDrag, GroupGrip, HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing,
+    SourceKind, SpecSource, SplitArea, Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
 };
 use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
@@ -68,7 +68,8 @@ pub struct DockAreaOutput<P> {
     pub events: Vec<DockEvent<P>>,
     /// The shown panel of the group that holds key focus: focus is on the group or on a control inside it.
     pub focused: Option<P>,
-    /// The panel whose tab the user clicked or picked this pass.
+    /// The panel whose tab the user clicked or picked this pass; a pick of the host's `DockArea::focus` is not the
+    /// user's and shows only in `actions`.
     pub picked: Option<P>,
     /// Why nothing was drawn, when the workspace is invalid.
     pub error: Option<InvalidGeometry>,
@@ -96,6 +97,11 @@ pub struct DockAreaOutput<P> {
     pub forwarded_events: Vec<egui::Event>,
     /// The modifiers held in the window that forwarded the last of `forwarded_events`; `None` when it is empty.
     pub forwarded_modifiers: Option<egui::Modifiers>,
+    /// Every place the area drew this pass where a press starts a dock gesture: each tab, each group's drag bar, each
+    /// floating window's grip and resize grips, and each divider, with its rect, its OS window and the id of its
+    /// accessibility node. Nothing the area did not draw reports: a hidden panel, the groups of a column collapsed to
+    /// icons, a minimized window's resize grips.
+    pub sources: Vec<DockSource<P>>,
     /// The area's response.
     pub response: Response,
 }
@@ -118,6 +124,7 @@ impl<P> Outcome for DockAreaOutput<P> {
 ///   actions the workspace took, divider sizes and window moves included. A given workspace is not written.
 /// - Requests: while the pass runs, a body changes the workspace through
 ///   [`request_actions`](crate::docking::request_actions); the output returns those actions unapplied in `requested`.
+///   The host moves key focus to a panel's group with [`focus`](DockArea::focus).
 /// - Hiding: [`hide`](DockArea::hide), the shell's panel visibility and [`maximized`](DockArea::maximized) prune
 ///   what shows; a pruned panel keeps its place for restore.
 /// - Drops: the area is the drop target of tab and group drags. Ctrl or Cmd held at the release floats the drop, and
@@ -162,6 +169,13 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// nothing.
     #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
+    /// Moves key focus to the group that shows the panel and picks its tab, as a click on the tab does: the group's
+    /// stop takes focus in this pass, and the pick is one of the pass's `actions`. A request of the pass: a host that
+    /// focuses a panel itself (it opened something in it) sets it for one pass. A panel the area does not show in this
+    /// pass (hidden, pruned by a maximize, in a closed flyout, or in a group the host's `group_view` draws) takes
+    /// neither; `DockAreaOutput::focused` tells the host where focus is.
+    #[prop]
+    focus: Option<P>,
     /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
     /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
     /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
@@ -194,6 +208,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked: false,
             flyout: None,
             continue_move: None,
+            focus: None,
             rail_footer: None,
             top_inset: 0.0,
         }
@@ -305,6 +320,8 @@ struct Report<P> {
     /// left any.
     forwarded_events: Vec<egui::Event>,
     forwarded_modifiers: Option<egui::Modifiers>,
+    /// The gesture sources the parts drew, in the order they showed.
+    sources: Vec<DockSource<P>>,
 }
 
 /// The inputs of the workspace's derived values: the workspace, the panels' specs and the lock.
@@ -331,6 +348,8 @@ struct Scene<'s, P> {
     auto_collapse: bool,
     /// The panel whose window takes over the held press, with its grab point (`DockArea::continue_move`).
     continue_move: Option<(&'s P, Vec2)>,
+    /// The panel whose group takes key focus in this pass (`DockArea::focus`).
+    focus: Option<&'s P>,
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
@@ -430,6 +449,7 @@ struct Passed<P> {
     files: Vec<drag::OsFile>,
     forwarded_events: Vec<egui::Event>,
     forwarded_modifiers: Option<egui::Modifiers>,
+    sources: Vec<DockSource<P>>,
 }
 
 /// How a group is shown: minimized, whether it is an accordion section (with its open state), and whether it is in
@@ -508,6 +528,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked,
             mut flyout,
             continue_move,
+            focus,
             rail_footer,
             top_inset,
         } = self;
@@ -567,6 +588,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 maximized: maximized.as_ref(),
                 auto_collapse,
                 continue_move: continue_move.as_ref().map(|(panel, grab)| (panel, *grab)),
+                focus: focus.as_ref(),
                 sizes,
                 rtl,
                 rail_footer: rail_footer.as_ref(),
@@ -586,21 +608,35 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             passed = Some(result);
         });
         let requested = close_requests::<P>(&ctx);
-        let Passed { geometry, actions, events, focused, picked, edit, space, columns, windows, files, forwarded_events, forwarded_modifiers } =
-            passed.unwrap_or_else(|| Passed {
-                geometry: Vec::new(),
-                actions: Vec::new(),
-                events: Vec::new(),
-                focused: None,
-                picked: None,
-                edit: EditEvents::new(),
-                space: None,
-                columns: Vec::new(),
-                windows: Vec::new(),
-                files: Vec::new(),
-                forwarded_events: Vec::new(),
-                forwarded_modifiers: None,
-            });
+        let Passed {
+            geometry,
+            actions,
+            events,
+            focused,
+            picked,
+            edit,
+            space,
+            columns,
+            windows,
+            files,
+            forwarded_events,
+            forwarded_modifiers,
+            sources,
+        } = passed.unwrap_or_else(|| Passed {
+            geometry: Vec::new(),
+            actions: Vec::new(),
+            events: Vec::new(),
+            focused: None,
+            picked: None,
+            edit: EditEvents::new(),
+            space: None,
+            columns: Vec::new(),
+            windows: Vec::new(),
+            files: Vec::new(),
+            forwarded_events: Vec::new(),
+            forwarded_modifiers: None,
+            sources: Vec::new(),
+        });
         if shown.output.dropped.is_some() {
             cross_window::accept_cross_window(&ctx);
         }
@@ -619,6 +655,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             window_files: files,
             forwarded_events,
             forwarded_modifiers,
+            sources,
             response: shown.output.response,
         }
     }
@@ -677,6 +714,7 @@ struct Input<'i, P> {
     maximized: Option<&'i P>,
     auto_collapse: bool,
     continue_move: Option<(&'i P, Vec2)>,
+    focus: Option<&'i P>,
     sizes: DockSizes,
     rtl: bool,
     rail_footer: Option<&'i P>,
@@ -711,8 +749,24 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, continue_move, sizes, rtl, rail_footer, top_inset } =
-        *input;
+    let Input {
+        id,
+        ctx,
+        current,
+        config,
+        specs,
+        keys,
+        hide,
+        model,
+        maximized,
+        auto_collapse,
+        continue_move,
+        focus,
+        sizes,
+        rtl,
+        rail_footer,
+        top_inset,
+    } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
@@ -734,6 +788,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         bounds,
         auto_collapse,
         continue_move,
+        focus,
         rtl,
         floated: current.floated(),
         rail_footer,
@@ -753,6 +808,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             files: Vec::new(),
             forwarded_events: Vec::new(),
             forwarded_modifiers: None,
+            sources: Vec::new(),
         },
         dock: id,
     };
@@ -784,6 +840,9 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
         }
     });
+    let splits =
+        area.output.dividers.iter().map(|(path, rect, node)| DockSource::new(SourceKind::Divider(DividerKind::Split(path.clone())), *rect, *node));
+    pass.report.sources.extend(splits);
     let mut edit = area.output.edit.events.map(|edited| {
         let mut layout = current.layout().clone();
         view.write_back(&edited, &mut layout);
@@ -856,6 +915,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         files: report.files,
         forwarded_events: report.forwarded_events,
         forwarded_modifiers: report.forwarded_modifiers,
+        sources: report.sources,
     }
 }
 
@@ -1043,12 +1103,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
 
     /// The grip strip on top of a tool rail the host shows itself: the dock's grip marks over a band that drags the
     /// group, which floats at `size`, the group's size. A memoized view ([`rail_grip`]) held to the strip, so a frame
-    /// whose input is elsewhere replays it, as the column bars and the groups' tab rows replay.
-    fn rail_grip(&mut self, ui: &mut Ui, anchor: &P, shown: &P, strip: Rect, size: Vec2) {
+    /// whose input is elsewhere replays it, as the column bars and the groups' tab rows replay. Returns the grip's id.
+    fn rail_grip(&mut self, ui: &mut Ui, anchor: &P, shown: &P, strip: Rect, size: Vec2) -> Option<Id> {
         let scene = self.scene;
         let label = Label::from(scene.spec(shown).label.as_str().to_owned());
         let mut sent = Vec::new();
-        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+        let grip = ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
             let props = RailGrip {
                 unit: DragUnit::Group(anchor.clone()),
                 active: PanelKey::of(shown),
@@ -1057,7 +1117,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 sent: Outbox::new(&mut sent),
             };
             // Keyed by the rail's group: unique among the rails a dock area shows.
-            let _ = MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui);
+            MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui)
         });
         // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
         // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
@@ -1067,6 +1127,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 drag.press = Some(press);
             });
         }
+        grip.inner
     }
 
     /// One group, by the host's `group_view` when it takes the group, else as a `DockGroup` over the host's panels:
@@ -1084,6 +1145,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             return Some(height + grip);
         }
         let shown = &members[active];
+        // The host's focus request, when it names a panel of this group.
+        let focus = scene.focus.filter(|panel| members.contains(panel));
         let words = body.words::<MenuWords>();
         let ctx = ui.ctx().clone();
         let panels = RefCell::new(&mut *self.panels);
@@ -1174,17 +1237,29 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let taken = in_room(ui, view, |ui| panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body));
                 match taken {
                     Some(_) => None,
-                    None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output),
+                    None => {
+                        let group = make(active, look.minimized);
+                        let group = if focus.is_some() { group.take_focus() } else { group };
+                        Some(group.show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output)
+                    }
                 }
             })
             .inner;
         // A host view took the group: a rail's grip drags the group, as the band of a group's header does.
         let Some(output) = output else {
-            if strip.is_positive() {
-                self.rail_grip(ui, anchor, shown, strip, rect.size());
+            if strip.is_positive()
+                && let Some(node) = self.rail_grip(ui, anchor, shown, strip, rect.size())
+            {
+                self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), strip, node));
             }
             return None;
         };
+        let tabs =
+            output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(SourceKind::Tab(scene.panel(*key)?.clone()), *rect, *node)));
+        self.report.sources.extend(tabs);
+        if let Some((rect, node)) = output.grip {
+            self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));
+        }
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
@@ -1214,10 +1289,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let torn = torn.map(|(panel, pointer)| {
             float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel)), None, scene.rtl).action
         });
-        let picked = output.picked.and_then(|key| scene.panel(key));
+        let clicked = output.picked.and_then(|key| scene.panel(key));
+        if let Some(panel) = clicked {
+            self.report.picked = Some(panel.clone());
+        }
+        // The host's focus request picks its panel's tab as a click does; the user's click of the pass wins.
+        let picked = clicked.or(focus.filter(|panel| *panel != shown));
         if let Some(panel) = picked {
             self.report.actions.push(Action::activate(panel.clone()));
-            self.report.picked = Some(panel.clone());
         }
         // A tab picked in this pass is the group's shown panel from now on, though this pass drew the one before.
         if focus_within(ui.ctx(), output.response.id) {
@@ -1444,6 +1523,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
                 self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
             });
+            let dividers = output.dividers.into_iter().map(|(divider, rect, node)| DockSource::new(SourceKind::Divider(divider), rect, node));
+            self.report.sources.extend(dividers);
             let width = output.width.map(|width| width - inset);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width, flyout: None }
         };
@@ -1625,6 +1706,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 });
             }
             let area_dock = std::mem::replace(&mut self.dock, dock);
+            let drawn = self.report.sources.len();
             let shown = group.show_group(ui, |ui, body| {
                 for (command, state) in states.iter().cloned() {
                     body.publish(command, state);
@@ -1640,6 +1722,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             });
             self.dock = area_dock;
             let output = shown.output;
+            // The window's grips, then everything it drew, in the OS window it shows in, if it has one.
+            let grips = output.grip.map(|(rect, node)| DockSource::new(SourceKind::WindowGrip(anchor.clone()), rect, node));
+            let resize =
+                output.resize.iter().map(|(edge, rect, node)| DockSource::new(SourceKind::WindowResize(anchor.clone(), *edge), *rect, *node));
+            let inside = self.report.sources.split_off(drawn);
+            self.report.sources.extend(grips.into_iter().chain(resize).chain(inside));
+            if let Some(viewport) = opening.spec.as_ref().and_then(|_| WindowHost::of(&ctx).viewport_of(output.response.id)) {
+                for source in &mut self.report.sources[drawn..] {
+                    source.viewport = viewport;
+                }
+            }
             self.report.files.extend(output.files);
             if !output.forwarded_events.is_empty() {
                 self.report.forwarded_modifiers = output.forwarded_modifiers;
@@ -1804,7 +1897,8 @@ struct RailGrip<'a, P> {
 }
 
 /// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
-fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P>, ui: &mut Ui) {
+/// Returns the grip's id.
+fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P>, ui: &mut Ui) -> Id {
     let strip = ui.max_rect();
     let held = GroupGrip::new(props.unit.clone(), props.active)
         .ticks(true)
@@ -1817,4 +1911,5 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);
+    held.response.id
 }

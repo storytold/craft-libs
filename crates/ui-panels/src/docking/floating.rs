@@ -23,7 +23,7 @@ use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::WindowSpec;
+use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
@@ -203,6 +203,11 @@ pub struct FloatingGroupOutput {
     /// The modifiers held in the window when `forwarded_events` is not empty. A clipboard event stands for its chord
     /// without the key, so these tell Ctrl+C from the keyboard's own Copy key.
     pub forwarded_modifiers: Option<Modifiers>,
+    /// The band the group is moved by this pass, with the id of its accessibility node; `None` when it has none.
+    pub grip: Option<(Rect, Id)>,
+    /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
+    /// accessibility node; none while it does not resize (minimized).
+    pub resize: Vec<(ResizeEdge, Rect, Id)>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -330,6 +335,10 @@ impl<'a> FloatingGroup<'a> {
             .pad(Pad::None)
             .sizing(Sizing::Content)
             .header(HeaderRegion::new().band(DragBand::Move).rule(true));
+        let props = match <DockWords as craft_i18n::WordSet>::word("floatingGroup.resize") {
+            Some(word) => props.resize_name(Label::from(word)),
+            None => props,
+        };
         FloatingGroup {
             common: Common::new(),
             props,
@@ -577,6 +586,8 @@ impl Component for FloatingGroup<'_> {
             files: self.files,
             forwarded_events: Vec::new(),
             forwarded_modifiers: None,
+            grip: cx.move_band(),
+            resize: cx.resize_grips(),
         };
         native::raise(&cx.core.ctx, &output);
         native::fade(&cx.core.ctx, &output);
