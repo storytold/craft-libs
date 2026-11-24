@@ -138,6 +138,19 @@ pub enum PaintedCursor {
         /// A mark centred on the pointer.
         badge: Option<CursorBadge>,
     },
+    /// A brush tip too small to read on its own (under [`SMALL_TIP`](PaintedCursor::SMALL_TIP) points across): its
+    /// rings around the pointer, with four crosshair arms that start [`SMALL_TIP_GAP`](PaintedCursor::SMALL_TIP_GAP)
+    /// points beyond its farthest point and run [`SMALL_TIP_ARM`](PaintedCursor::SMALL_TIP_ARM) points, so the tip
+    /// stays in sight inside them.
+    #[non_exhaustive]
+    SmallTip {
+        /// The rings.
+        rings: Vec<Vec<Pos2>>,
+        /// The distance from the pointer to the rings' farthest point.
+        extent: f32,
+        /// A mark beside the pointer.
+        badge: Option<CursorBadge>,
+    },
     /// An open hand.
     Hand,
     /// A magnifier.
@@ -226,6 +239,18 @@ impl PaintedCursor {
     /// The arm of the centre mark of a circle or an outline, in points.
     pub const CENTRE_ARM: f32 = 3.0;
 
+    /// A brush tip narrower than this many points across shows as a [`SmallTip`](PaintedCursor::SmallTip).
+    pub const SMALL_TIP: f32 = 3.0;
+
+    /// The clear gap between a small tip and its crosshair arms, in points.
+    pub const SMALL_TIP_GAP: f32 = 5.0;
+
+    /// The length of a small tip's crosshair arms, in points.
+    pub const SMALL_TIP_ARM: f32 = 5.0;
+
+    /// The least radius a small tip's ring is drawn at, in points: a smaller tip shows as a dot of this radius.
+    pub const SMALL_TIP_DOT: f32 = 0.5;
+
     /// A circle of `radius` points, with no centre mark and no badge.
     pub const fn circle(radius: f32) -> Self {
         PaintedCursor::Circle { radius, centre: false, badge: None }
@@ -236,13 +261,19 @@ impl PaintedCursor {
         PaintedCursor::Outline { rings, centre: false, badge: None }
     }
 
-    /// A circle or an outline with the centre mark when `centre` and `badge` centred on the pointer; any other cursor
-    /// unchanged.
+    /// A small tip of `rings` whose farthest point lies `extent` points from the pointer, with no badge.
+    pub fn small_tip(rings: Vec<Vec<Pos2>>, extent: f32) -> Self {
+        PaintedCursor::SmallTip { rings, extent, badge: None }
+    }
+
+    /// A circle or an outline with the centre mark when `centre` and `badge` centred on the pointer, a small tip with
+    /// `badge` (its arms are its crosshair); any other cursor unchanged.
     #[must_use]
     pub fn marked(self, centre: bool, badge: Option<CursorBadge>) -> Self {
         match self {
             PaintedCursor::Circle { radius, .. } => PaintedCursor::Circle { radius, centre, badge },
             PaintedCursor::Outline { rings, .. } => PaintedCursor::Outline { rings, centre, badge },
+            PaintedCursor::SmallTip { rings, extent, .. } => PaintedCursor::SmallTip { rings, extent, badge },
             other => other,
         }
     }

@@ -423,11 +423,16 @@ Cursor requests as plain data and the rule that picks the winner (8.5).
 - `craft_behavior::cursor::IconId`: `pub struct IconId`. An icon's egui-free key (5.2), so plain data such as [`PaintedCursor::Tool`] names icons without egui.
   - `pub const fn new(name: &'static str) -> Self`. The icon named `name`.
   - `pub fn name(&self) -> &str`. The name.
-- `craft_behavior::cursor::PaintedCursor`: `pub enum PaintedCursor { Crosshair, Circle { radius: f32, centre: bool, badge: Option<CursorBadge> }, Outline { rings: Vec<Vec<Pos2>>, centre: bool, badge: Option<CursorBadge> }, Hand, Zoom { out: bool }, Tool { icon: IconId, hotspot: Vec2, badge: Option<CursorBadge> }, Badged { base: CursorIcon, badge: CursorBadge }, Turn { toward: Vec2 }, Distort { dir: Vec2 }, Skew { dir: Vec2 }, TypeOn { path: bool }, Locator, Arrow { hollow: bool, toward: Option<Vec2> }, PathText { start: bool, end: bool }, PointerTool { pointer: PointerGlyph, icon: IconId }, Hidden, IBeam }`. A cursor the overlay host paints. Geometry is in screen points around the pointer (a tool scales its brush
+- `craft_behavior::cursor::PaintedCursor`: `pub enum PaintedCursor { Crosshair, Circle { radius: f32, centre: bool, badge: Option<CursorBadge> }, Outline { rings: Vec<Vec<Pos2>>, centre: bool, badge: Option<CursorBadge> }, SmallTip { rings: Vec<Vec<Pos2>>, extent: f32, badge: Option<CursorBadge> }, Hand, Zoom { out: bool }, Tool { icon: IconId, hotspot: Vec2, badge: Option<CursorBadge> }, Badged { base: CursorIcon, badge: CursorBadge }, Turn { toward: Vec2 }, Distort { dir: Vec2 }, Skew { dir: Vec2 }, TypeOn { path: bool }, Locator, Arrow { hollow: bool, toward: Option<Vec2> }, PathText { start: bool, end: bool }, PointerTool { pointer: PointerGlyph, icon: IconId }, Hidden, IBeam }`. A cursor the overlay host paints. Geometry is in screen points around the pointer (a tool scales its brush
   - `pub const CENTRE_ARM: f32`. The arm of the centre mark of a circle or an outline, in points.
+  - `pub const SMALL_TIP: f32`. A brush tip narrower than this many points across shows as a [`SmallTip`](PaintedCursor::SmallTip).
+  - `pub const SMALL_TIP_GAP: f32`. The clear gap between a small tip and its crosshair arms, in points.
+  - `pub const SMALL_TIP_ARM: f32`. The length of a small tip's crosshair arms, in points.
+  - `pub const SMALL_TIP_DOT: f32`. The least radius a small tip's ring is drawn at, in points: a smaller tip shows as a dot of this radius.
   - `pub const fn circle(radius: f32) -> Self`. A circle of `radius` points, with no centre mark and no badge.
   - `pub fn outline(rings: Vec<Vec<Pos2>>) -> Self`. App shapes as closed rings, with no centre mark and no badge.
-  - `pub fn marked(self, centre: bool, badge: Option<CursorBadge>) -> Self`. A circle or an outline with the centre mark when `centre` and `badge` centred on the pointer; any other cursor
+  - `pub fn small_tip(rings: Vec<Vec<Pos2>>, extent: f32) -> Self`. A small tip of `rings` whose farthest point lies `extent` points from the pointer, with no badge.
+  - `pub fn marked(self, centre: bool, badge: Option<CursorBadge>) -> Self`. A circle or an outline with the centre mark when `centre` and `badge` centred on the pointer, a small tip with
   - `pub const fn zoom(out: bool) -> Self`. A magnifier, zooming out when `out`.
   - `pub const fn tool(icon: IconId, hotspot: Vec2, badge: Option<CursorBadge>) -> Self`. A tool's icon with its hotspot and an optional badge.
   - `pub const fn turn(toward: Vec2) -> Self`. The rotate pointer bent toward screen direction `toward`.

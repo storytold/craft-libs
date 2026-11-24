@@ -52,6 +52,13 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
             }
             tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
         }
+        PaintedCursor::SmallTip { rings, extent, badge, .. } => {
+            if !marks_only {
+                outline(&pen, rings);
+            }
+            small_tip_arms(&pen, *extent, edge, ink);
+            tip_marks(&pen, false, *badge, edge, ink);
+        }
         PaintedCursor::Crosshair => crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
         PaintedCursor::Hand => hand(&pen, closed),
         PaintedCursor::Zoom { out, .. } => zoom(&pen, *out),
@@ -269,6 +276,15 @@ pub(crate) fn circle(pen: &Pen, radius: f32, width: f32, color: Color32) {
 /// A crosshair with arms of `arm` points.
 pub(crate) fn crosshair(pen: &Pen, arm: f32, width: f32, color: Color32) {
     pen.lines(width, color, &[Line::Segment(v([-arm, 0.0]), v([arm, 0.0])), Line::Segment(v([0.0, -arm]), v([0.0, arm]))]);
+}
+
+/// The four crosshair arms of a small tip whose farthest point lies `extent` points from the pointer: each starts
+/// `PaintedCursor::SMALL_TIP_GAP` beyond it and runs `PaintedCursor::SMALL_TIP_ARM`, leaving the tip clear.
+pub(crate) fn small_tip_arms(pen: &Pen, extent: f32, width: f32, color: Color32) {
+    let from = extent.max(0.0) + PaintedCursor::SMALL_TIP_GAP;
+    let to = from + PaintedCursor::SMALL_TIP_ARM;
+    let arms = [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]].map(|[x, y]| Line::Segment(v([x * from, y * from]), v([x * to, y * to])));
+    pen.lines(width, color, &arms);
 }
 
 /// A brush tip's marks on the pointer: the centre mark when `centre`, a crosshair of `PaintedCursor::CENTRE_ARM` arms

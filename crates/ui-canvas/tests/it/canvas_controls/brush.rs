@@ -52,3 +52,54 @@ fn a_thin_stamp_on_a_large_document_still_shows() {
     assert!(mask.coverage_at(Point::new(5100.0, 5005.0)) > 0, "the line shows");
     assert_eq!(mask.coverage_at(Point::new(5100.0, 5025.0)), 0, "nothing past the restamped rect");
 }
+
+/// A small brush tip's window image (photocraft#13602): the tip's ring at the hotspot, a fully clear gap of
+/// `SMALL_TIP_GAP` points, then opaque crosshair arms on all four axes, at every display scale.
+#[trial]
+fn a_small_tips_image_leaves_a_clear_gap_between_the_tip_and_its_arms() {
+    use craft_behavior::PaintedCursor;
+    use craft_ui::primitives::painted_image;
+    use craft_ui::runtime::env::Env;
+    use craft_ui::testing::Fixture;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let env: Rc<RefCell<Option<Env>>> = Rc::default();
+    let seen = env.clone();
+    let mut fixture = Fixture::new(move |ui| *seen.borrow_mut() = Some(Env::of(ui)));
+    fixture.settle();
+    let env = env.borrow().clone().expect("the fixture ran");
+    let extent = 1.0;
+    let ring: Vec<egui::Pos2> = (0..16)
+        .map(|i| {
+            let a = i as f32 / 16.0 * std::f32::consts::TAU;
+            egui::pos2(a.cos() * extent, a.sin() * extent)
+        })
+        .collect();
+    let cursor = PaintedCursor::small_tip(vec![ring], extent);
+    let (gap, arm) = (PaintedCursor::SMALL_TIP_GAP, PaintedCursor::SMALL_TIP_ARM);
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let image = painted_image(&env, &cursor, scale).expect("a small tip fits a cursor image");
+        let [w, _] = image.size.map(i32::from);
+        let [hx, hy] = image.hotspot.map(i32::from);
+        let alpha = |x: i32, y: i32| image.rgba[((y * w + x) * 4 + 3) as usize];
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let at = |points: f32| {
+                let d = (points * scale).round() as i32;
+                alpha(hx + dx * d, hy + dy * d)
+            };
+            assert!(at(extent) > 0, "scale {scale} ({dx}, {dy}): the ring is drawn");
+            // Clear of the ring's and the arm's halo by two points on each side.
+            let mut p = extent + 2.0;
+            while p <= extent + gap - 2.0 {
+                assert_eq!(at(p), 0, "scale {scale} ({dx}, {dy}): the gap is clear at {p} points");
+                p += 0.25;
+            }
+            let mut p = extent + gap + 1.0;
+            while p <= extent + gap + arm - 1.0 {
+                assert_eq!(at(p), 255, "scale {scale} ({dx}, {dy}): the arm is opaque at {p} points");
+                p += 0.25;
+            }
+        }
+    }
+}
