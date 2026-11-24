@@ -78,9 +78,6 @@ impl PixelCache {
             return;
         }
         self.trim(limit - bytes);
-        if self.bytes + bytes > limit {
-            return;
-        }
         self.order.push_back(key);
         self.values.insert(key, (bytes, pixels.clone()));
         self.bytes += bytes;
@@ -777,11 +774,11 @@ mod tests {
                  turns[id.x] = vec4f(tc_turn(x.x), tc_turn(x.y), tc_turn(x.z), tc_turn(x.w));\n\
              }}"
         );
-        // Phases from a tenth of a radian to beyond the point where a turn has no fraction left, both signs
+        // Phases from a tenth of a radian to past 2^23 turns (about 5.3e7), where no fraction is left, both signs
         let inputs = (0..4096)
             .map(|i| {
                 let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-                sign * 10f32.powf(i as f32 / 512.0 - 1.0) * 1.000_123
+                sign * 10f32.powf(i as f32 / 400.0 - 1.0) * 1.000_123
             })
             .collect::<Vec<f32>>();
 
@@ -789,12 +786,52 @@ mod tests {
 
         let turns = bytemuck::cast_slice::<u8, f32>(&bytes);
         for (&x, &turn) in inputs.iter().zip(turns) {
-            // The reference: x / 2 pi with the single-precision product rounded toward zero
-            let product = f64::from(x) * f64::from(std::f32::consts::FRAC_1_PI / 2.0);
-            let near = product as f32;
-            let t = if f64::from(near).abs() > product.abs() { if near > 0.0 { near.next_down() } else { near.next_up() } } else { near };
-            assert_eq!(turn, (t - t.floor()) * 6.283_185_5, "phase of {x:e}");
+            assert_eq!(turn, reference_turn(x), "phase of {x:e}");
         }
+    }
+
+    /// The reference: x / 2 pi with the single-precision product rounded toward zero, as `func.rs` reads it
+    fn reference_turn(x: f32) -> f32 {
+        let product = f64::from(x) * f64::from(std::f32::consts::FRAC_1_PI / 2.0);
+        let near = product as f32;
+        let t = if f64::from(near).abs() > product.abs() { if near > 0.0 { near.next_down() } else { near.next_up() } } else { near };
+        (t - t.floor()) * 6.283_185_5
+    }
+
+    /// `tc_turn` of graph_pixel.wgsl step by step, to check its integer rounding test on every machine
+    fn shader_turn(x: f32) -> f32 {
+        let mantissa = |x: f32| {
+            let bits = x.abs().to_bits();
+            let (exponent, fraction) = (bits >> 23, bits & 0x7f_ffff);
+            if exponent == 0 { (fraction, 1) } else { (fraction | 0x80_0000, exponent) }
+        };
+        let rounded_away = |x: f32, near: f32| {
+            let (a, b, n) = (mantissa(x), mantissa(std::f32::consts::FRAC_1_PI / 2.0), mantissa(near));
+            let middle = (a.0 >> 12) * (b.0 & 0xfff) + (a.0 & 0xfff) * (b.0 >> 12);
+            let low_sum = (a.0 & 0xfff) * (b.0 & 0xfff) + ((middle & 0xfff) << 12);
+            let high = (a.0 >> 12) * (b.0 >> 12) + (middle >> 12) + (low_sum >> 24);
+            let low = low_sum & 0xff_ffff;
+            let shift = n.1 as i32 + 150 - a.1 as i32 - b.1 as i32;
+            if !(0..=48).contains(&shift) {
+                return false;
+            }
+            let (near_high, near_low) =
+                if shift > 24 { (n.0 << (shift - 24), 0) } else { (n.0 >> (24 - shift), (n.0 << shift) & 0xff_ffff) };
+            near_high > high || (near_high == high && near_low > low)
+        };
+        let near = x * (std::f32::consts::FRAC_1_PI / 2.0);
+        let t = if near != 0.0 && rounded_away(x, near) { f32::from_bits(near.to_bits() - 1) } else { near };
+        (t - t.floor()) * 6.283_185_5
+    }
+
+    #[test]
+    fn turn_rounding_test_matches_the_reference_without_a_gpu() {
+        let inputs = (1..0x7f00_0000_u32).step_by(40_009).flat_map(|bits| [f32::from_bits(bits), -f32::from_bits(bits)]);
+
+        let mismatch = inputs.clone().find(|&x| shader_turn(x).to_bits() != reference_turn(x).to_bits());
+
+        assert_eq!(mismatch, None, "first phase that differs from the reference");
+        assert!(inputs.clone().any(|x| x.abs() > 5.3e7), "the sweep reaches past 2^23 turns");
     }
 
     #[test]

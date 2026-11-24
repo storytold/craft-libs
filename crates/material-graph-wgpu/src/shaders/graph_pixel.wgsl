@@ -80,18 +80,48 @@ fn tc_div_large(p: f32, q: f32) -> f32 {
     return sign(p) * 1e30;
 }
 
-// 1 / 2 pi in single precision, split into two halves of 12 significant bits each
-const TC_INV_TAU_HIGH: f32 = 0.15911865234375;
-const TC_INV_TAU_LOW: f32 = 3.628432750701904e-5;
+// 1 / 2 pi in single precision
+const TC_INV_TAU: f32 = 0.15915494;
+
+// A finite |x| as integer mantissa and exponent: |x| = mantissa * 2^(exponent - 150)
+fn tc_mantissa(x: f32) -> vec2u {
+    let bits = bitcast<u32>(abs(x));
+    let exponent = bits >> 23u;
+    let fraction = bits & 0x7fffffu;
+    return select(vec2u(fraction | 0x800000u, exponent), vec2u(fraction, 1u), exponent == 0u);
+}
+
+// Whether `near`, the single-precision product x * TC_INV_TAU, lies farther from zero than the exact product.
+// Integer arithmetic only, so no float contraction or reassociation can change the answer
+fn tc_rounded_away(x: f32, near: f32) -> bool {
+    let a = tc_mantissa(x);
+    let b = tc_mantissa(TC_INV_TAU);
+    let n = tc_mantissa(near);
+
+    // The exact 48-bit product of the mantissas as two 24-bit words, from 12-bit halves
+    let middle = (a.x >> 12u) * (b.x & 0xfffu) + (a.x & 0xfffu) * (b.x >> 12u);
+    let low_sum = (a.x & 0xfffu) * (b.x & 0xfffu) + ((middle & 0xfffu) << 12u);
+    let high = (a.x >> 12u) * (b.x >> 12u) + (middle >> 12u) + (low_sum >> 24u);
+    let low = low_sum & 0xffffffu;
+
+    // The near mantissa on the product's scale
+    let shift = i32(n.y) + 150 - i32(a.y) - i32(b.y);
+    if (shift < 0 || shift > 48) {
+        return false;
+    }
+    var near_high = n.x >> u32(max(24 - shift, 0));
+    var near_low = (n.x << u32(min(shift, 24))) & 0xffffffu;
+    if (shift > 24) {
+        near_high = n.x << u32(shift - 24);
+        near_low = 0u;
+    }
+    return near_high > high || (near_high == high && near_low > low);
+}
 
 fn tc_turn(x: f32) -> f32 {
-    let near = x * (TC_INV_TAU_HIGH + TC_INV_TAU_LOW);
-    // The rounding error of the product from half-width parts whose products are exact, so it does not depend on fused multiply-add
-    let x_high = bitcast<f32>(bitcast<u32>(x) & 0xfffff000u);
-    let x_low = x - x_high;
-    let residual = ((x_high * TC_INV_TAU_HIGH - near) + x_high * TC_INV_TAU_LOW + x_low * TC_INV_TAU_HIGH) + x_low * TC_INV_TAU_LOW;
-    let rounded_away = (near > 0.0 && residual < 0.0) || (near < 0.0 && residual > 0.0);
-    let t = select(near, bitcast<f32>(bitcast<u32>(near) - 1u), rounded_away);
+    let near = x * TC_INV_TAU;
+    let toward_zero = near != 0.0 && tc_rounded_away(x, near);
+    let t = select(near, bitcast<f32>(bitcast<u32>(near) - 1u), toward_zero);
     return (t - floor(t)) * 6.2831855;
 }
 
