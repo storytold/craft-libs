@@ -8,8 +8,11 @@
 //! idle for [`IO_TIMEOUT`] is closed. Tokens are 64 hex characters in either case, kept
 //! lower-cased by the server and compared in constant time with hex letters folded. None of this depends on the transport: the TCP server and a test channel share it.
 
+#[cfg(not(windows))]
 use std::fs::OpenOptions;
-use std::io::{BufRead, Write};
+use std::io::BufRead;
+#[cfg(not(windows))]
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -323,26 +326,27 @@ fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| AutomationError::Io(format!("{}: {e}", parent.display())))?;
     }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
-    // On Windows the new file has its folder's access list: it is restricted to its user and SYSTEM before the token
-    // is written, and a file that cannot be restricted is removed rather than left for the token to go into later.
+    // On Windows the file is created with an access list of its user and SYSTEM only, so it never has its folder's
+    // access list, and the token is written through the handle that created it.
     #[cfg(windows)]
     {
         use craft_platform::owner_only;
-        if let Err(e) = owner_only::current_user_sid().and_then(|me| owner_only::restrict_to_owner(path, &me)) {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-            return Err(AutomationError::Io(format!("{}: cannot restrict the control token file to its owner: {e}", path.display())));
-        }
+        owner_only::current_user_sid()
+            .and_then(|me| owner_only::create_private_file(path, &me, format!("{token}\n").as_bytes()))
+            .map_err(|e| AutomationError::Io(format!("{}: cannot create the control token file for its owner only: {e}", path.display())))
     }
-    writeln!(file, "{token}").map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))
+    #[cfg(not(windows))]
+    {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
+        writeln!(file, "{token}").map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))
+    }
 }
 
 /// The server's token, lower-cased. Both given is

@@ -141,6 +141,12 @@ fn server_token_sources_and_validation() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
     }
+    #[cfg(windows)]
+    {
+        use craft_platform::owner_only;
+        let sddl = owner_only::sddl_of(&file).unwrap();
+        assert_eq!(owner_only::foreign_access(&sddl, &owner_only::current_user_sid().unwrap()), None, "{sddl}");
+    }
     assert_eq!(server_token(None, Some(&file)).unwrap(), created);
 
     // An existing file's content is trimmed and lower-cased.

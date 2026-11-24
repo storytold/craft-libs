@@ -205,6 +205,60 @@ pub fn create_private_dir(dir: &std::path::Path, me: &str) -> std::io::Result<()
     restricted
 }
 
+/// Create the file `path`, which must not exist yet, with user `me` (as for [`restrict_to_owner`])
+/// as its owner and an access list of that user and SYSTEM only, given to Windows in the call that
+/// creates the file, so the file never has its folder's access list, and write `contents` through
+/// that handle, opened unshared. Then check the file's descriptor as [`restrict_to_owner`] does.
+/// An existing `path` is an error of kind [`std::io::ErrorKind::AlreadyExists`] and is left as it
+/// is. A file that was created but could not be written or checked is removed again. `contents`
+/// reach PowerShell through its standard input, never as script text or an environment variable.
+#[cfg(windows)]
+pub fn create_private_file(path: &std::path::Path, me: &str, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    /// The exit code the script ends with when the file already exists.
+    const EXISTS: i32 = 3;
+    // No double quotes: the command line would strip them. -2147024816 and -2147024713 are the
+    // HRESULTs of ERROR_FILE_EXISTS and ERROR_ALREADY_EXISTS.
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        $s = New-Object Security.AccessControl.FileSecurity; \
+        $s.SetSecurityDescriptorSddlForm('O:' + $env:CRAFT_ACL_USER + 'D:P(A;;FA;;;' + $env:CRAFT_ACL_USER + ')(A;;FA;;;SY)'); \
+        try { $fs = New-Object IO.FileStream -ArgumentList @($env:CRAFT_ACL_PATH, [IO.FileMode]::CreateNew, \
+        [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $s) } \
+        catch { $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }; \
+        if ($e.HResult -eq -2147024816 -or $e.HResult -eq -2147024713) { exit 3 }; throw }; \
+        try { [Console]::OpenStandardInput().CopyTo($fs); $fs.Flush($true); $fs.Dispose() } \
+        catch { $fs.Dispose(); [IO.File]::Delete($env:CRAFT_ACL_PATH); throw }";
+    let mut child = system_tool(POWERSHELL)
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("CRAFT_ACL_PATH", path)
+        .env("CRAFT_ACL_USER", me)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    // A script that stops before reading (the file exists) closes the pipe; its exit code says why.
+    let sent = child.stdin.take().map(|mut stdin| stdin.write_all(contents));
+    let out = child.wait_with_output()?;
+    if out.status.code() == Some(EXISTS) {
+        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the file already exists"));
+    }
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!(
+            "PowerShell could not create the file for its owner only: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let checked = match sent {
+        Some(Ok(())) => sddl_of(path).and_then(|sddl| still_foreign(&sddl, me)),
+        Some(Err(e)) => Err(e),
+        None => Err(std::io::Error::other("PowerShell's standard input could not be opened")),
+    };
+    if checked.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    checked
+}
+
 /// `Err` naming the problem when the descriptor read back after restricting still isn't `me`'s
 /// alone, so a file that only looks restricted is never used as one.
 #[cfg(any(test, windows))]
@@ -492,6 +546,35 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         assert_eq!(foreign_access(&sddl, &me), None, "{sddl}");
         // The name is taken: the folder isn't reused.
         assert!(create_private_dir(&private, &user()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file created by `create_private_file` in a folder that lets Users read what's in it is the
+    /// user's alone as soon as it exists, with nothing written to it yet; one created with contents
+    /// holds them, and an existing file is refused and left as it is.
+    #[cfg(windows)]
+    #[test]
+    fn a_private_file_is_private_from_the_start() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-private-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let me = current_user_sid().unwrap();
+        let empty = dir.join("empty.token");
+        create_private_file(&empty, &user(), b"").unwrap();
+        let sddl = sddl_of(&empty).unwrap();
+        assert!(!sddl.contains(";BU)") && !sddl.contains(";S-1-5-32-545)"), "Users must not inherit read access: {sddl}");
+        assert_eq!((section(&sddl, "O:"), foreign_access(&sddl, &me)), (Some(me.as_str()), None), "{sddl}");
+        assert_eq!(std::fs::read(&empty).unwrap(), b"");
+        let file = dir.join("ctl.token");
+        create_private_file(&file, &user(), b"secret\n").unwrap();
+        let sddl = sddl_of(&file).unwrap();
+        assert_eq!((section(&sddl, "O:"), foreign_access(&sddl, &me)), (Some(me.as_str()), None), "{sddl}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"secret\n");
+        let again = create_private_file(&file, &user(), b"other\n").unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists, "{again}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"secret\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
