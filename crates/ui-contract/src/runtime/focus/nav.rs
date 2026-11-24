@@ -4,7 +4,6 @@
 use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
-use craft_behavior::focus::after_removal;
 use craft_behavior::nav::step;
 use craft_behavior::{Arrows, MoveMods, NavMove, NavOutline, NavStep, ScopeKind};
 use egui::{Context, Id};
@@ -193,6 +192,7 @@ impl State {
         self.open.clear();
         self.body_from.clear();
         self.entered = false;
+        self.asked = false;
     }
 
     /// The registrations of last pass, which Tab and the arrows move over.
@@ -240,8 +240,8 @@ impl State {
         self.focus_stop_from(rec, FocusOrigin::Request)
     }
 
-    /// [`focus_stop`](Self::focus_stop) with what moved focus there. A stop that inherits the focus from a removed one
-    /// is not revealed: nothing chose to show it.
+    /// [`focus_stop`](Self::focus_stop) with what moved focus there. A row that takes the focus back from its removed
+    /// child is not revealed: nothing chose to show it.
     fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         let key = rec.stop.key();
         let acts = self.enter_stop(rec, origin);
@@ -571,38 +571,26 @@ impl State {
         Some(self.focus_stop(member))
     }
 
-    /// The stop that takes focus when the focused stop was not registered this pass.
-    fn removed_focus(&self, focused: Option<Id>) -> Option<StopRec> {
+    /// The focus move when the focused stop was not registered this pass: a removed child of a collection row hands
+    /// focus back to the row, as Escape does; any other removed stop leaves focus nowhere, whatever stops are left
+    /// around it.
+    fn removed_focus(&mut self, focused: Option<Id>) -> Option<Vec<Act>> {
         let root = focused?;
         let key = *self.focused.get(&root)?;
         if self.stops.iter().any(|rec| rec.stop.key() == key) {
             return None;
         }
         let gone = self.last_stops.iter().find(|rec| rec.stop.key() == key)?;
-        // A removed child of a collection row hands focus back to the row, as Escape does, not to the next stop.
         let row = gone.stop.group.and_then(|group| self.group(group)).filter(|group| group.row);
-        if let Some(owner) =
-            row.and_then(|group| self.row_owner(&group)).filter(|owner| self.stops.iter().any(|rec| rec.stop.key() == owner.stop.key()))
-        {
-            return Some(owner);
-        }
+        let owner = row.and_then(|group| self.row_owner(&group)).filter(|owner| self.stops.iter().any(|rec| rec.stop.key() == owner.stop.key()));
         // A removed stop in an arena (an editor or control in a canvas body) hands focus back to the arena root's own
-        // stop (the canvas), not to the next stop after the arena.
-        if let Some(arena) = gone.stop.arena.and_then(|arena| self.stops.iter().find(|rec| rec.stop.id == arena && rec.stop.part.is_none())) {
-            return Some(arena.clone());
-        }
-        // Press-only stops (selectable text) are outside the Tab order, so focus never falls to them either.
-        let order: Vec<StopKey> = self
-            .last_stops
-            .iter()
-            .filter(|rec| rec.scope == gone.scope && (rec.stop.key() == key || !rec.stop.press_only))
-            .map(|rec| rec.stop.key())
-            .collect();
-        let registered = |candidate: &StopKey| self.stops.iter().any(|rec| rec.stop.key() == *candidate);
-        match after_removal(&order, &key, registered) {
-            Some(next) => self.stops.iter().find(|rec| rec.stop.key() == *next).cloned(),
-            None => self.stops.iter().find(|rec| rec.scope == gone.scope && !rec.stop.press_only).cloned(),
-        }
+        // stop (the canvas).
+        let target = owner
+            .or_else(|| gone.stop.arena.and_then(|arena| self.stops.iter().find(|rec| rec.stop.id == arena && rec.stop.part.is_none()).cloned()));
+        Some(match target {
+            Some(target) => self.focus_stop_from(target, FocusOrigin::Removal),
+            None => vec![Act::Surrender(root)],
+        })
     }
 
     /// The opener of a scope that went away while focus was inside it.
@@ -774,9 +762,19 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
         return Vec::new();
     }
     let stops = &state.stops[first.min(state.stops.len())..];
+    // A first stop in a roving group arrives at the group's arrival member, as Tab does.
+    let lists = state.this();
+    let entry = stops.first().map(|rec| {
+        rec.stop
+            .group
+            .and_then(|group| lists.group(group))
+            .filter(|group| !group.row)
+            .and_then(|group| lists.arrival(&group))
+            .unwrap_or_else(|| rec.clone())
+    });
     let pick = match policy.initial {
-        Initial::First => stops.first(),
-        Initial::Default => stops.iter().find(|rec| rec.stop.default).or_else(|| stops.first()),
+        Initial::First => entry.as_ref(),
+        Initial::Default => stops.iter().find(|rec| rec.stop.default).or(entry.as_ref()),
         Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)),
         Initial::Key(name) => stops.iter().find(|rec| rec.stop.name == Some(name)),
         _ => None,
@@ -827,18 +825,16 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
     // The moves below belong to the next frame's passes.
     state.frame = frame + 1;
     let mut acts = state.apply_press(focused, on_app_widget);
-    // A layer that appeared in this pass took focus already: the press that opened it does not take it back.
-    if state.entered {
+    // A layer that appeared in this pass took focus already, and a component that asked for it in this pass has it: the
+    // press of the pass does not take it back.
+    if state.entered || state.asked {
         acts.clear();
     }
     if acts.is_empty() {
-        let next = state
-            .restored_focus(focused)
-            .map(|rec| (rec, FocusOrigin::Request))
-            .or_else(|| state.removed_focus(focused).map(|rec| (rec, FocusOrigin::Removal)));
-        if let Some((rec, origin)) = next {
-            acts = state.focus_stop_from(rec, origin);
-        }
+        acts = match state.restored_focus(focused) {
+            Some(rec) => state.focus_stop(rec),
+            None => state.removed_focus(focused).unwrap_or_default(),
+        };
     }
     let now = acts.last().map_or(focused, |act| match act {
         Act::Focus(id, _) => Some(*id),
@@ -857,6 +853,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
         menu_bar_by_claim: std::mem::take(&mut state.menu_bar_by_claim),
+        canvas: if stop.is_none() { state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.id) } else { None },
         foreign: false,
         host_focus: false,
         host_text: false,

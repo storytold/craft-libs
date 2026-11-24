@@ -240,6 +240,8 @@ impl<C: Component> Edit for Cx<'_, C> {
         response.escaped = self.core.escaped || matches!(self.events.last(), Some(EditEvent::Cancel { reason: CancelReason::Escape, .. }));
         response.submitted = self.core.submitted;
         response.submit_mods = self.core.texts.as_ref().map_or(craft_keymap::Mods::NONE, |(_, text)| text.submit_mods());
+        response.activation_mods =
+            if self.events.is_empty() { craft_keymap::Mods::NONE } else { self.activation().map_or(craft_keymap::Mods::NONE, |a| a.mods) };
         response.left_by_tab = self.core.texts.as_ref().and_then(|(_, text)| text.left_by_tab());
         response.tab = self.core.texts.as_ref().and_then(|(_, text)| text.tab());
         response.caret = self.core.texts.as_ref().and_then(|(_, text)| text.caret());

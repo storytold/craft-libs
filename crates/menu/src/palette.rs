@@ -9,7 +9,7 @@ impl MenuBar {
     /// The commands of the menus as the help search and the command palette list them, in menu order.
     ///
     /// The menus are laid out for `target` first, so the paths are the titles the user sees in the bar
-    /// ("File › Export › PNG…"; on a Mac the app menu carries the app's name). Separators, submenu rows,
+    /// ("File › Export › PNG…"; on a Mac the app menu carries the app's name). Separators, headings, submenu rows,
     /// AppKit's own items and the [`Builtin`] commands (which the crate runs itself) are not listed; the open
     /// documents of the Window menu are. Chords and enabled state are the commands': the search shows each entry
     /// as a command row.
@@ -51,7 +51,7 @@ fn collect(nodes: &[Node], path: &mut Vec<String>, entries: &mut Vec<HelpEntry>)
                 collect(children, path, entries);
                 path.pop();
             }
-            Node::Item(_) | Node::Separator | Node::Standard { .. } => {}
+            Node::Item(_) | Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
     }
 }

@@ -1,17 +1,24 @@
 //! The parameter model: the spec-string parser, kinds, defaults and fit rules, and the rows' predicates, read-only
 //! text and tooltips.
 
+use craft_behavior::{EditEvent, GesturePhase};
 use craft_ui::contract::{Bind, LabelScheme, Role};
+use craft_ui::dialog::DialogHost;
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
+use craft_ui::patterns::form_dialogs::{
+    DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field,
+};
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::{Label, Scale, UnitKind};
+use craft_ui::testing::relations::{above, left_of};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
 use egui::{Key, Modifiers, Vec2};
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 const SPEC: &str = r#"{"radius":0.1..1000=1,"method":"spin|zoom"="zoom","monochromatic":bool,"seed":u32=0,"cellSize":px=4,"tint":color=#ff8000,"kernel":int[25],"layer":layer id,"curve":json,"note":text} -> {"x":1}"#;
 const KERNEL_CELLS: usize = 25;
@@ -136,6 +143,19 @@ fn rows_follow_their_predicates_and_carry_their_tooltip() {
     values.borrow_mut().set("source", FieldValue::Text("folder".into()));
     fixture.settle();
     assert!(fixture.by_label("Input Folder").is_some(), "shown once the source is a folder");
+
+    // A second condition on the same row (`visible_when_in`) narrows it: it shows only while both hold.
+    let params = vec![
+        Param::new("source", "Source", ParamKind::choice(vec![("file".into(), "File".into()), ("folder".into(), "Folder".into())], None)),
+        Param::new("both", "Both", ParamKind::bool(false)),
+        Param::new("extra", "Extra", ParamKind::text("")).visible_when_in("source", ["file", "folder"]).visible_when("both", true),
+    ];
+    let narrow = Rc::new(RefCell::new(DialogFields::new()));
+    let mut narrowed = rows(params, &narrow);
+    assert!(narrowed.by_label("Extra").is_none(), "hidden while one of its conditions fails");
+    narrow.borrow_mut().set("both", FieldValue::Bool(true));
+    narrowed.settle();
+    assert!(narrowed.by_label("Extra").is_some(), "shown once every condition holds");
 
     // A row enabled for two of three values takes input for both and greys out for the third.
     let detail = fixture.by_label("Detail").expect("the detail row");
@@ -565,6 +585,203 @@ fn typing_in_a_freshly_opened_parameter_dialog_replaces_its_first_field() {
     assert_eq!(values.borrow().number("radius"), Some(7.0), "typing replaced the radius");
 }
 
+/// A fixture showing `params` as rows over `values`, logging the edit events of every pass as `(phase, gesture)`. While
+/// `twice` is on, every frame runs a second pass.
+fn logged_rows(params: Vec<Param>, values: &Rc<RefCell<DialogFields>>, twice: bool) -> (Fixture, Rc<RefCell<Vec<EditEvent<DialogFields>>>>) {
+    let (shown, log) = (values.clone(), Rc::new(RefCell::new(Vec::new())));
+    let out = log.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        if twice && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("a second pass in the frame");
+        }
+        let shown = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        out.borrow_mut().extend(shown.events);
+    });
+    fixture.settle();
+    (fixture, log)
+}
+
+// A resettable row's label has a reset dot while the value differs from the default; a double press on the label (the
+// dot's gesture) restores the default as one edit, and one on an unchanged row changes nothing.
+#[trial]
+fn a_resettable_row_shows_its_dot_only_while_changed_and_its_press_restores_the_default() {
+    let params = vec![Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, SliderScale::Linear)).resettable()];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let (mut fixture, log) = logged_rows(params, &values, false);
+    let label_at =
+        |fixture: &Fixture| fixture.texts().iter().find(|text| text.text == "Radius").map(|text| text.rect.center()).expect("the row's label");
+    let reset = |fixture: &mut Fixture| {
+        let at = label_at(fixture);
+        fixture.click_at(at);
+        fixture.click_at(at).settle();
+    };
+    reset(&mut fixture);
+    assert_eq!(values.borrow().number("radius"), Some(10.0), "a reset of an unchanged row changes nothing");
+    assert!(log.borrow().is_empty(), "and files no edit");
+
+    values.borrow_mut().set("radius", FieldValue::Number(40.0));
+    fixture.settle();
+    reset(&mut fixture);
+    assert_eq!(values.borrow().number("radius"), Some(10.0), "the press restores the default");
+    assert_eq!(log.borrow().len(), 1, "as one edit: {:?}", log.borrow());
+}
+
+/// What a probe row saw: nothing yet, its key unmarked or its key marked mixed.
+const UNSEEN: u8 = 0;
+const SEEN_PLAIN: u8 = 1;
+const SEEN_MIXED: u8 = 2;
+
+/// A custom row that records whether its key was marked mixed when it drew.
+fn mixed_probe(seen: &Arc<AtomicU8>) -> Param {
+    let seen = Arc::clone(seen);
+    Param::custom("probe", "Probe", move |ui, fields, _| {
+        seen.store(if fields.is_mixed("probe") { SEEN_MIXED } else { SEEN_PLAIN }, Ordering::Relaxed);
+        ui.label("probe")
+    })
+}
+
+// A key marked mixed shows blank, stays out of the answer and the opening fill; an edit makes it concrete; Reset marks
+// it again; a custom row reads the mark from its fields until an edit.
+#[trial]
+fn a_mixed_key_shows_mixed_stays_out_of_the_answer_and_a_custom_row_sees_it_until_an_edit() {
+    let seen = Arc::new(AtomicU8::new(UNSEEN));
+    let params = vec![
+        Param::number("width", "Width", 640.0, 1.0, 0),
+        Param::new("method", "Method", ParamKind::choice(vec![("spin".into(), "Spin".into()), ("zoom".into(), "Zoom".into())], None)),
+        mixed_probe(&seen),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    for key in ["width", "method", "probe"] {
+        values.borrow_mut().set_mixed(key);
+    }
+    values.borrow_mut().snapshot();
+    let (mut fixture, _) = logged_rows(params, &values, false);
+    assert!(["width", "method"].iter().all(|key| !values.borrow().contains(key)), "the opening fill skips a marked key");
+    assert!(
+        serde_json::to_value(&*values.borrow()).is_ok_and(|answer| answer.as_object().is_some_and(|map| !map.contains_key("width"))),
+        "a marked key is absent from the answer"
+    );
+    assert_eq!(seen.load(Ordering::Relaxed), SEEN_MIXED, "a custom row reads the mark from its fields");
+
+    let field = fixture.by_label("Width").expect("the width row");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("5").key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("width"), Some(5.0), "an edit makes the key concrete");
+    assert!(!values.borrow().is_mixed("width"), "and clears its mark");
+
+    values.borrow_mut().set("probe", FieldValue::Int(1));
+    fixture.settle();
+    assert_eq!(seen.load(Ordering::Relaxed), SEEN_PLAIN, "the custom row sees the mark gone after an edit");
+
+    assert!(values.borrow_mut().reset(), "Reset changes the values");
+    assert!(values.borrow().is_mixed("width") && !values.borrow().contains("width"), "Reset marks the key again");
+}
+
+// A drag of a slider is one gesture: one begin, updates and one commit with one gesture id, a second pass of every
+// frame lifts nothing new, Escape cancels with the whole values from before, and a typed value, which applies as it is
+// typed, lifts as the field's one gesture.
+#[trial]
+fn a_row_drag_lifts_to_one_gesture_and_a_typed_value_to_the_fields_one() {
+    let params =
+        vec![Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, SliderScale::Linear)), Param::number("width", "Width", 640.0, 1.0, 0)];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let (mut fixture, log) = logged_rows(params, &values, true);
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the radius row has a slider");
+    fixture.drag(&slider, Vec2::new(60.0, 0.0)).settle();
+    let phases = |log: &Vec<EditEvent<DialogFields>>| log.iter().filter_map(EditEvent::phase).collect::<Vec<_>>();
+    let ids: std::collections::BTreeSet<_> = log.borrow().iter().filter_map(|event| event.id().map(|id| id.0)).collect();
+    let events = log.borrow();
+    let phases_seen = phases(&events);
+    let count = |wanted: GesturePhase| phases_seen.iter().filter(|phase| **phase == wanted).count();
+    assert_eq!((count(GesturePhase::Begin), count(GesturePhase::Commit)), (1, 1), "one begin and one commit: {phases_seen:?}");
+    assert_eq!(ids.len(), 1, "one gesture id");
+    assert_ne!(values.borrow().number("radius"), Some(10.0), "the drag moved the radius");
+    drop(events);
+
+    log.borrow_mut().clear();
+    let before = values.borrow().number("radius");
+    fixture.drag_hold_at(slider.rect.center(), Vec2::new(-30.0, 0.0));
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    let cancelled = log.borrow().iter().find(|event| event.phase() == Some(GesturePhase::Cancel)).cloned().expect("Escape cancels the gesture");
+    assert_eq!(cancelled.landed().and_then(|fields| fields.number("radius")), before, "the cancel carries the whole values from before");
+
+    log.borrow_mut().clear();
+    let field = fixture.by_label("Width").expect("the width row");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("7").key(Key::Enter, Modifiers::NONE).settle();
+    let typed = phases(&log.borrow());
+    let count = |wanted: GesturePhase| typed.iter().filter(|phase| **phase == wanted).count();
+    assert_eq!((count(GesturePhase::Begin), count(GesturePhase::Commit)), (1, 1), "a typed value is one gesture: {:?}", log.borrow());
+    assert_eq!(values.borrow().number("width"), Some(7.0), "that lands the typed value");
+}
+
+/// The rects of two rows' fields in a form of `params` shown in a room of `room`.
+fn placed(params: Vec<Param>, room: Vec2, first: &str, second: &str) -> [egui::Rect; 2] {
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    fixture.room(room).settle();
+    let first = fixture.by_label(first).expect("the first row").rect;
+    let second = fixture.by_label(second).expect("the second row").rect;
+    [first, second]
+}
+
+// A section beside the one before it, and a full-width custom row beside its section's rows, stand side by side with
+// room and fall under in a room that ends before the pair does.
+#[trial]
+fn a_beside_row_sits_beside_its_section_with_room_and_under_it_without() {
+    let sections = || {
+        vec![
+            Param::section("First"),
+            Param::number("a", "Alpha", 1.0, 1.0, 0),
+            Param::section("Second").beside(),
+            Param::number("b", "Beta", 2.0, 1.0, 0),
+        ]
+    };
+    let [alpha, beta] = placed(sections(), Vec2::new(1400.0, 600.0), "Alpha", "Beta");
+    assert!(left_of(alpha, beta), "with room the second section stands beside the first");
+    let [alpha, beta] = placed(sections(), Vec2::new(beta.max.x - 1.0, 900.0), "Alpha", "Beta");
+    assert!(above(alpha, beta), "without room it falls under");
+
+    let picture = || {
+        vec![Param::section("Size"), Param::number("a", "Alpha", 1.0, 1.0, 0), Param::custom("pic", "Pic", |ui, _, _| ui.button("Picture")).beside()]
+    };
+    let [alpha, pic] = placed(picture(), Vec2::new(1400.0, 600.0), "Alpha", "Picture");
+    assert!(left_of(alpha, pic), "with room the picture stands beside the rows");
+    let [alpha, pic] = placed(picture(), Vec2::new(pic.max.x - 1.0, 900.0), "Alpha", "Picture");
+    assert!(above(alpha, pic), "without room it falls under");
+}
+
+/// A dialog with one colour row.
+fn tinted(fields: &mut DialogFields) -> ParamDialog<'_> {
+    ParamDialog::new("tint", "Tint", vec![Param::new("tint", "Tint", ParamKind::color(None))]).values(Bind::bound(fields))
+}
+
+// A colour row's press goes to the host's one routing: the host names the top dialog and the request, and its answer is
+// written into the row's key in the next pass.
+#[trial]
+fn a_hosted_dialogs_colour_request_goes_through_the_host_and_its_answer_comes_back() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1200.0, 900.0));
+    let id = host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "tint", DialogFields::new(), tinted));
+    fixture.idle(6);
+    let swatch = fixture.by_label("Tint").expect("the colour row has a swatch");
+    fixture.click(&swatch).idle(4);
+    let (named, request) = host.borrow_mut().take_color_request().expect("the press filed a request");
+    assert_eq!((named, request.key.as_str()), (id, "tint"), "the host names the dialog and the row");
+    assert!(host.borrow_mut().take_color_request().is_none(), "the request comes once");
+
+    host.borrow_mut().answer_color(id, "tint", craft_theme::Srgba::new(1.0, 0.0, 0.0, 1.0));
+    fixture.idle(4);
+    assert_eq!(on_fields(&host, |fields| fields.color("tint")), Some([1.0, 0.0, 0.0]), "the answer is written into the row's key");
+}
+
+/// `read` of the open hosted dialog's values.
+fn on_fields<T>(host: &Rc<RefCell<DialogHost>>, read: impl FnOnce(&DialogFields) -> Option<T>) -> Option<T> {
+    host.borrow().get::<HostedParamDialog>().and_then(|dialog| read(dialog.fields()))
+}
+
 #[trial]
 fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
     let opacity = || Param::new("opacity", "Opacity", ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)).unit(UnitKind::Percent);
@@ -609,6 +826,111 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
             assert_eq!(held.int("copies"), Some(1));
         }
     }
+}
+
+/// Scale's merge: a `{w, h}` object keeps what it leaves out from the held value; anything else is refused.
+fn merge_scale(fields: &mut DialogFields, key: &str, value: serde_json::Value) -> Result<(), String> {
+    let serde_json::Value::Object(incoming) = value else { return Err(format!("{key} takes an object")) };
+    let mut merged = match fields.get(key) {
+        Some(FieldValue::Json(serde_json::Value::Object(held))) => held.clone(),
+        _ => serde_json::Map::new(),
+    };
+    merged.extend(incoming.into_iter().filter(|(_, v)| !v.is_null()));
+    fields.set(key, FieldValue::Json(merged.into()));
+    Ok(())
+}
+
+// A custom row's set-time rule writes a value set from outside in place of the default write, from the held values,
+// for its key and its companions; its refusal is the answer and leaves the values as they were.
+#[trial]
+fn a_custom_rows_set_rule_merges_a_set_value_with_the_held_one() {
+    let params = vec![
+        Param::custom("scale", "Scale", |ui, _, _| ui.label("scale")).companions(["link"]).on_set(merge_scale),
+        Param::custom("plain", "Plain", |ui, _, _| ui.label("plain")),
+    ];
+    let mut fields = DialogFields::new();
+    set_param_field(&params, &mut fields, "scale", json!({"w": 50, "h": 50})).expect("an object is taken");
+    set_param_field(&params, &mut fields, "scale", json!({"w": 80, "h": null})).expect("a partial object is taken");
+    assert_eq!(fields.get("scale"), Some(&FieldValue::Json(json!({"w": 80, "h": 50}))), "the rule kept the held height");
+    set_param_field(&params, &mut fields, "link", json!({"on": true})).expect("a companion goes through the rule");
+    assert_eq!(fields.get("link"), Some(&FieldValue::Json(json!({"on": true}))));
+    let refused = set_param_field(&params, &mut fields, "scale", json!(3));
+    assert!(refused.is_err_and(|why| why.contains("takes an object")), "the rule's refusal is the answer");
+    assert_eq!(fields.get("scale"), Some(&FieldValue::Json(json!({"w": 80, "h": 50}))), "a refusal changes nothing");
+    set_param_field(&params, &mut fields, "plain", json!({"w": 1})).expect("a row without a rule takes the value");
+    set_param_field(&params, &mut fields, "plain", json!({"h": 2})).expect("and replaces it");
+    assert_eq!(fields.get("plain"), Some(&FieldValue::Json(json!({"h": 2}))), "without a rule the value replaces the held one");
+}
+
+// `enabled_above` and `enabled_when_differs` disable a row from the values, for the rows and for automation; turning
+// the second switch on disables the constrained row.
+#[trial]
+fn rows_enabled_above_a_bound_or_while_two_keys_differ_follow_their_keys() {
+    let params = vec![
+        Param::new("width_on", "Width", ParamKind::bool(false)),
+        Param::new("height_on", "Height", ParamKind::bool(false)),
+        Param::new("constrain", "Constrain", ParamKind::bool(false)).enabled_when_differs("width_on", "height_on"),
+        Param::new("dashes", "Dashes", ParamKind::int(Some(0), None, 0)),
+        Param::new("gap", "Gap", ParamKind::number(Some(0.0), None, 1.0, 1.0, 1)).enabled_above("dashes", 0.0),
+    ];
+    let mut fields = DialogFields::from_pairs([("width_on", FieldValue::Bool(false)), ("height_on", FieldValue::Bool(false))]);
+    assert!(set_param_field(&params, &mut fields, "constrain", json!(true)).is_err(), "both off: refused");
+    assert!(set_param_field(&params, &mut fields, "gap", json!(2.0)).is_err(), "no dashes: refused");
+    set_param_field(&params, &mut fields, "dashes", json!(2)).expect("dashes");
+    set_param_field(&params, &mut fields, "gap", json!(2.0)).expect("an int above the bound enables the row");
+
+    let values = Rc::new(RefCell::new(fields));
+    let mut fixture = rows(params, &values);
+    let disabled = |fixture: &Fixture| fixture.tree().is_disabled_key(fixture.by_label("Constrain").expect("the row").node);
+    assert!(disabled(&fixture), "both switches off");
+    let width = fixture.by_label("Width").expect("the width switch");
+    fixture.click(&width).settle();
+    assert!(!disabled(&fixture), "exactly one switch on");
+    let height = fixture.by_label("Height").expect("the height switch");
+    fixture.click(&height).settle();
+    assert!(disabled(&fixture), "turning the second switch on disables the row");
+}
+
+// A disabled row shows its `disabled_value` and keeps its own value, which it shows again once enabled.
+#[trial]
+fn a_disabled_row_shows_its_disabled_value_and_keeps_its_own() {
+    let params = vec![
+        Param::new("paper", "Paper", ParamKind::bool(true)),
+        Param::new("ink", "Ink", ParamKind::bool(false)).enabled_when("paper", false).disabled_value(true),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::from_pairs([("paper", FieldValue::Bool(true)), ("ink", FieldValue::Bool(false))])));
+    let mut fixture = rows(params, &values);
+    let ink = |fixture: &Fixture| {
+        let tree = fixture.tree();
+        let check = tree.with_role(Role::CHECK_BOX).into_iter().find(|key| tree.name_of(*key) == Some("Ink")).expect("the ink check box");
+        tree.toggled_of(check)
+    };
+    assert_eq!(ink(&fixture), Some(craft_behavior::Mixed::Same(true)), "shown with the derived value while disabled");
+    assert_eq!(values.borrow().bool("ink"), Some(false), "its own value stays");
+    let paper = fixture.by_label("Paper").expect("the paper switch");
+    fixture.click(&paper).settle();
+    assert_eq!(ink(&fixture), Some(craft_behavior::Mixed::Same(false)), "enabled, it shows its own value again");
+}
+
+// A length row reads typed text with the row's codec when it has one, as a plain number row does.
+#[trial]
+fn a_length_row_reads_with_its_codec() {
+    let lengths = craft_ui::runtime::env::LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    // A codec that reads a bare number as twice itself.
+    let doubled = craft_behavior::NumberCodec::new(craft_behavior::Reader::new().bare(2.0), 2);
+    let params = vec![
+        Param::number("plain", "Plain", 0.0, 1.0, 2).length(lengths),
+        Param::number("coded", "Coded", 0.0, 1.0, 2).length(lengths).codec(doubled),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    for label in ["Plain", "Coded"] {
+        let field = fixture.by_label(label).expect("the length row");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text("3").key(Key::Enter, Modifiers::NONE).settle();
+    }
+    let (plain, coded) = (values.borrow().number("plain"), values.borrow().number("coded"));
+    assert!(plain.zip(coded).is_some_and(|(plain, coded)| coded > plain), "the codec read the typed text: {plain:?} against {coded:?}");
 }
 
 /// A row marked `beside_previous` stands on the line of the row before it, where an unmarked one stands below.

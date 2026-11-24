@@ -14,7 +14,7 @@ mod words;
 use crate::contract::MemoProps;
 use crate::runtime::env::EnvValue;
 
-pub use button::{Button, ButtonOutput, ButtonStyle};
+pub use button::{Button, ButtonChord, ButtonOutput, ButtonStyle};
 pub use command_search::{CommandSearch, CommandSearchStyle};
 pub use face::Arrangement;
 pub use icon_button::{IconButton, IconButtonStyle, PopupMark, PressFocus};

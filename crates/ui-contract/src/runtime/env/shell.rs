@@ -280,10 +280,16 @@ impl ShellCx {
         self.inner.panels_hidden
     }
 
-    /// Whether the dock shows: in normal mode, during the Tab reveal and during the end-edge reveal, unless the panels
-    /// are hidden.
-    pub fn dock_visible(&self) -> bool {
-        !self.inner.panels_hidden && (self.inner.mode == BodyMode::Normal || self.inner.tab_reveal || self.edge_revealed(RevealEdge::End))
+    /// Whether the dock at `edge` shows: in normal mode and during the Tab reveal unless the panels are hidden, and the
+    /// `Start` and `End` docks also while that edge's reveal is on, in body-only mode or while the panels are hidden.
+    pub fn dock_visible(&self, edge: super::PaneEdge) -> bool {
+        let inner = &*self.inner;
+        let base = !inner.panels_hidden && (inner.mode == BodyMode::Normal || inner.tab_reveal);
+        base || match edge {
+            super::PaneEdge::Start => self.edge_revealed(RevealEdge::Start),
+            super::PaneEdge::End => self.edge_revealed(RevealEdge::End),
+            _ => false,
+        }
     }
 
     /// Whether floating frames show: in normal mode; in body-only mode only during the Tab reveal; never while the
@@ -337,16 +343,18 @@ impl ShellCx {
         self.inner.mode == BodyMode::Normal && self.inner.tabs
     }
 
-    /// Are slots shown by a reveal (Tab or edge) on this pass? Only body-only mode reveals.
+    /// Are slots shown by a reveal (Tab or edge) on this pass? Only body-only mode reveals with Tab; an edge reveals in
+    /// body-only mode and while the panels are hidden.
     pub fn revealed(&self) -> bool {
         let inner = &*self.inner;
-        inner.mode == BodyMode::Only && (inner.tab_reveal || inner.edges.iter().any(|on| *on))
+        let body_only = inner.mode == BodyMode::Only;
+        (body_only && inner.tab_reveal) || ((body_only || inner.panels_hidden) && inner.edges.iter().any(|on| *on))
     }
 
-    /// Is the edge reveal on for `edge`? False in normal mode and during the Tab reveal.
+    /// Is the edge reveal on for `edge`? False while the panels show in normal mode, and during the Tab reveal.
     pub fn edge_revealed(&self, edge: RevealEdge) -> bool {
         let inner = &*self.inner;
-        inner.mode == BodyMode::Only && !inner.tab_reveal && inner.edges[edge.index()]
+        (inner.mode == BodyMode::Only || inner.panels_hidden) && !inner.tab_reveal && inner.edges[edge.index()]
     }
 
     /// The body rect and the shown slots of this pass.

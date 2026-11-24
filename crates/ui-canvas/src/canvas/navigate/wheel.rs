@@ -8,7 +8,7 @@
 use super::{NavigationOptions, WheelScheme};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomLadder};
+use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomScheme};
 use craft_keymap::{Mods, Platform};
 use egui::{Pos2, Vec2};
 
@@ -44,6 +44,8 @@ pub struct WheelInput {
     pub rotation: f32,
     /// The twist of a two-finger touch, in radians.
     pub touch_rotation: f32,
+    /// The pan of a multi-finger touch, in points.
+    pub touch_pan: Vec2,
 }
 
 impl WheelInput {
@@ -61,6 +63,7 @@ impl WheelInput {
             touch_zoom: wheel.touch_zoom,
             rotation: wheel.rotation,
             touch_rotation: wheel.touch_rotation,
+            touch_pan: wheel.touch_pan,
         }
     }
 
@@ -142,6 +145,11 @@ impl WheelNavigation {
             self.residual = 0.0;
             return Some(WheelAction::Zoom(f64::from(factor)));
         }
+        // Two fingers moving together pan before any modifier rule reads the pass; the content follows them.
+        if options.touch_gestures && input.touch_pan != Vec2::ZERO && input.touch_pan.is_finite() {
+            self.residual = 0.0;
+            return Some(WheelAction::Pan(input.touch_pan));
+        }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
         let plain = !input.mods.cmd && !input.mods.ctrl;
         // Whether the modifiers zoom, the zoom factor of one line, and whether Shift turns the zoom into ladder steps.
@@ -201,12 +209,12 @@ impl WheelNavigation {
     /// [`zoom::wheel_anchor`], a ladder step at the pointer, both clamped to the ladder; a pan moves the view. At a
     /// zoom limit the view stays put. With Overscroll off the canvas clamps the result to the document. Returns
     /// whether the view changed.
-    pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32) -> bool {
+    pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
         let before = *view;
         match action {
             WheelAction::Zoom(factor) => {
                 let current = zoom::device(view, pixels_per_point);
-                let next = ZoomLadder::clamp(current * factor, size);
+                let next = scheme.clamp(current * factor, size);
                 if factor.is_finite() && factor > 0.0 && (next / current - 1.0).abs() > 1e-12 {
                     let at = zoom::wheel_anchor(view, pointer, size);
                     zoom::about(view, at, next, false, pixels_per_point);
@@ -215,7 +223,7 @@ impl WheelNavigation {
             WheelAction::SnapZoom(steps) => {
                 let dir = steps.signum();
                 let current = zoom::device(view, pixels_per_point);
-                let next = (0..steps.unsigned_abs()).fold(current, |z, _| ZoomLadder::step(z, dir, size));
+                let next = (0..steps.unsigned_abs()).fold(current, |z, _| scheme.step(z, dir, size));
                 if dir != 0 && (next / current - 1.0).abs() > 1e-12 {
                     zoom::about(view, pointer, next, false, pixels_per_point);
                 }

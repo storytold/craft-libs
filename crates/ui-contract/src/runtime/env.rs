@@ -36,6 +36,7 @@ mod app_values;
 mod host_words;
 mod overrides;
 mod root;
+mod scrub;
 pub(crate) mod system;
 pub(crate) mod tokens;
 mod values;
@@ -46,6 +47,7 @@ pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
 pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, in_room, with_env};
 pub use root::{ResolvedRoot, RootEnv};
+pub use scrub::ScrubDrags;
 pub use system::{SystemState, system_appearance, system_text_scale};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
@@ -259,6 +261,14 @@ pub struct Inherited {
     pub(crate) today: Option<CalendarDate>,
     /// `RootEnv::tab_toggles_chrome`.
     pub(crate) tab_toggles_chrome: bool,
+    /// `RootEnv::escape_leaves_fields`.
+    pub(crate) escape_leaves_fields: bool,
+    /// `RootEnv::shortcuts_repeat`: the key stage reads only it, so no view's key covers it.
+    pub(crate) shortcuts_repeat: bool,
+    /// `RootEnv::cursor_follows_zoom`: painted cursor images follow the interface zoom.
+    pub(crate) cursor_follows_zoom: bool,
+    /// `RootEnv::tooltips`: tooltips show.
+    pub(crate) tooltips: bool,
     /// `RootEnv::canvas_pattern`: the canvas surround shows the theme's pattern.
     #[doc(hidden)]
     pub canvas_pattern: bool,
@@ -300,7 +310,7 @@ pub(crate) enum Shrink {
     /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
     /// at the level the row gave it.
     Apply(Id),
-    /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
+    /// A `Stack` body or a wrapping `Row`: each leaf shows at most the room (a whole line), never below its least.
     Fit,
 }
 
@@ -491,9 +501,10 @@ impl Scoped {
         }
     }
 
-    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body,
-    /// whose leaves show at most its room, and as one of the units a shrinking `Row` narrows. In a `Grid` cell, a
-    /// wrapping `Row` or a `Ui` with no body around it a leaf keeps its measured width, and so does the view's content.
+    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body
+    /// and a wrapping `Row`, whose leaves show at most its room (a whole line), and as one of the units a shrinking
+    /// `Row` narrows. In a `Grid` cell or a `Ui` with no body around it a leaf keeps its measured width, and so does the
+    /// view's content.
     pub(crate) const fn view_fits(&self) -> bool {
         matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_) | Shrink::Fit))
     }
@@ -520,7 +531,13 @@ impl Scoped {
             for id in self.commands.ids() {
                 id.key(&mut key);
             }
-            key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
+            key.feed_hash(&(
+                std::mem::discriminant(&self.motion.mode),
+                self.canvas_pattern,
+                self.tab_toggles_chrome,
+                self.escape_leaves_fields,
+                self.today,
+            ));
             (&self.format, &self.dates, &self.host).key(&mut key);
             let value_bytes = self.values.key(&mut key);
             #[cfg(feature = "testing")]
@@ -645,6 +662,10 @@ impl Env {
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
                     tab_toggles_chrome: root.tab_toggles_chrome,
+                    escape_leaves_fields: root.escape_leaves_fields,
+                    shortcuts_repeat: root.shortcuts_repeat,
+                    cursor_follows_zoom: root.cursor_follows_zoom,
+                    tooltips: root.tooltips,
                     canvas_pattern: root.canvas_pattern,
                     host,
                     values: root.values.clone(),
