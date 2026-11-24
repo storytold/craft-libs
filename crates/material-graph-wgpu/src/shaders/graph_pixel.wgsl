@@ -119,6 +119,11 @@ fn tc_rounded_away(x: f32, near: f32) -> bool {
 }
 
 fn tc_turn(x: f32) -> f32 {
+    let bits = bitcast<u32>(x);
+    if ((bits & 0x7f800000u) == 0x7f800000u) {
+        // The turn reduction is undefined for infinities and NaNs.
+        return bitcast<f32>(bits | 0x00400000u);
+    }
     let near = x * TC_INV_TAU;
     let toward_zero = near != 0.0 && tc_rounded_away(x, near);
     let t = select(near, bitcast<f32>(bitcast<u32>(near) - 1u), toward_zero);

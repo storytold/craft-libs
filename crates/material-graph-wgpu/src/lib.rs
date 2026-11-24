@@ -3,6 +3,9 @@
 
 //! Native GPU execution for material graphs. The host supplies an existing wgpu device,
 //! queue and a memory-budget callback, then installs the accelerator on a graph evaluation context.
+//!
+//! Metal uses the reference evaluator for packed affine transforms and nonzero directional warps
+//! because GPU sample positions can cross texel boundaries. Other operations can still run on GPU.
 
 mod gpu_graph;
 mod gpu_graph_color;

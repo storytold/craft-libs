@@ -257,6 +257,8 @@ mod tests {
     use craft_material_graph::{context::EvalContext, graph::Graph, profile::Profiler, tex::Tex};
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
+    use crate::GraphAccelerator;
+
     #[derive(Default)]
     struct Nodes {
         resident: AtomicUsize,
@@ -284,8 +286,14 @@ mod tests {
     #[test]
     fn imported_grayscale_filters_match_the_cpu() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        for (accelerator, cpu_sampling) in gpu.spatial_sampling_modes() {
+            check_imported_grayscale_filters(accelerator, cpu_sampling);
+        }
+    }
+
+    fn check_imported_grayscale_filters(accelerator: GraphAccelerator, cpu_sampling: bool) {
         let nodes = Arc::new(Nodes::default());
-        let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
+        let context = EvalContext { accelerator: Some(Arc::new(accelerator)), profiler: Some(nodes.clone()), ..Default::default() };
         let size = 256_usize;
         let make_inputs = |map_size| {
             [
@@ -327,7 +335,7 @@ mod tests {
             let inputs = make_inputs(map_size);
             let cpu = &graph.evaluate_with_inputs(None, &inputs).unwrap()["out"];
             let gpu = &graph.evaluate_in(&context, None, &inputs).unwrap()["out"];
-            assert_eq!(nodes.resident.load(Relaxed), 1, "{filter} {options}");
+            assert_eq!(nodes.resident.load(Relaxed), usize::from(!(cpu_sampling && filter == "dir_warp")), "{filter} {options}");
             assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()), "{filter} {options}");
             let errors = cpu.px.iter().zip(&gpu.px).map(|(a, b)| ((a[0] - b[0]).abs() * div as f32).round() as u32);
             let (max, sum) = errors.fold((0, 0), |(max, sum), error| (max.max(error), sum + error));
@@ -429,10 +437,16 @@ mod tests {
     }
 
     #[test]
-    fn affine_transform_keeps_packed_grey_and_alpha_on_the_gpu() {
+    fn affine_transform_keeps_packed_grey_and_alpha() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        for (accelerator, cpu_sampling) in gpu.spatial_sampling_modes() {
+            check_packed_grey_affine_transform(accelerator, cpu_sampling);
+        }
+    }
+
+    fn check_packed_grey_affine_transform(accelerator: GraphAccelerator, cpu_sampling: bool) {
         let nodes = Arc::new(Nodes::default());
-        let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
+        let context = EvalContext { accelerator: Some(Arc::new(accelerator)), profiler: Some(nodes.clone()), ..Default::default() };
         let source = [Some(Tex::gray_fn(256, 256, |u, v| 0.5 + 0.5 * (u * 39.0).sin() * (v * 53.0).cos()))];
         for (log2, transform) in [
             (10, "offset_x=-0.0009765625"),
@@ -453,7 +467,7 @@ mod tests {
             .unwrap();
             let cpu = &graph.evaluate_with_inputs(None, &source).unwrap()["out"];
             let gpu = &graph.evaluate_in(&context, None, &source).unwrap()["out"];
-            assert_eq!(nodes.resident.load(Relaxed), 2, "{transform}");
+            assert_eq!(nodes.resident.load(Relaxed), if cpu_sampling { 1 } else { 2 }, "{transform}");
             assert_eq!(nodes.readbacks.load(Relaxed), 1, "{transform}");
             assert_eq!((gpu.w, gpu.h, gpu.px.len()), (1 << log2, 1 << log2, cpu.px.len()));
             assert!(cpu.px.iter().zip(&gpu.px).all(|(a, b)| a[3] == 0.0 && b[3] == 0.0 && (a[0] - b[0]).abs() <= 1.01 / 65535.0), "{transform}");

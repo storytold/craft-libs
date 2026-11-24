@@ -217,6 +217,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use crate::GraphAccelerator;
     use craft_material_graph::{context::EvalContext, graph::Graph, profile::Profiler, tex::Tex};
 
     #[derive(Default)]
@@ -306,10 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn compiled_color_warps_keep_rgba_resident_through_blends() {
+    fn compiled_color_warps_match_the_cpu_through_blends() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        for (accelerator, cpu_sampling) in gpu.spatial_sampling_modes() {
+            check_color_warps_through_blends(accelerator, cpu_sampling);
+        }
+    }
+
+    fn check_color_warps_through_blends(accelerator: GraphAccelerator, cpu_sampling: bool) {
         let nodes = Arc::new(Nodes::default());
-        let ctx = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
+        let ctx = EvalContext { accelerator: Some(Arc::new(accelerator)), profiler: Some(nodes.clone()), ..Default::default() };
         let source = Tex::from_fn(1024, 1024, |u, v| [u, v, (u * 19.0 + v * 12.0).cos() * 0.5 + 0.5, u * v]);
         for log2 in [9, 10] {
             let graph = Graph::parse(&format!(
@@ -327,7 +334,7 @@ mod tests {
             let cpu = &graph.evaluate_with_inputs(None, &inputs).unwrap()["out"];
             let gpu = &graph.evaluate_in(&ctx, None, &inputs).unwrap()["out"];
             let seen = nodes.0.lock().unwrap();
-            assert_eq!(seen.get("dir_warp"), Some(&2), "map {width}²: {seen:?}");
+            assert_eq!(seen.get("dir_warp"), (!cpu_sampling).then_some(&2), "map {width}²: {seen:?}");
             assert_eq!(seen.get("blend"), Some(&1));
             assert_eq!(seen.get("readback"), Some(&1));
             assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()));
@@ -343,10 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_color_transforms_keep_the_compiled_sample_and_alpha_on_gpu() {
+    fn wrapped_color_transforms_keep_the_compiled_sample_and_alpha() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        for (accelerator, cpu_sampling) in gpu.spatial_sampling_modes() {
+            check_wrapped_color_transform(accelerator, cpu_sampling);
+        }
+    }
+
+    fn check_wrapped_color_transform(accelerator: GraphAccelerator, cpu_sampling: bool) {
         let nodes = Arc::new(Nodes::default());
-        let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
+        let context = EvalContext { accelerator: Some(Arc::new(accelerator)), profiler: Some(nodes.clone()), ..Default::default() };
         let graph = Graph::parse(
             r#"format 3
 size 1024
@@ -372,7 +385,7 @@ output out 4
         let gpu = &graph.evaluate_in(&context, None, &inputs).unwrap()["out"];
         let seen = nodes.0.lock().unwrap();
         assert_eq!(seen.get("blend"), Some(&1), "{seen:?}");
-        assert_eq!(seen.get("transform_matrix"), Some(&2), "{seen:?}");
+        assert_eq!(seen.get("transform_matrix"), (!cpu_sampling).then_some(&2), "{seen:?}");
         assert_eq!(seen.get("readback"), Some(&1), "{seen:?}");
         assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()));
         let mismatch = cpu.px.iter().zip(&gpu.px).position(|(a, b)| a != b);

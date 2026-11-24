@@ -38,6 +38,12 @@ impl Headless {
         GraphAccelerator::new(&self.device, &self.queue, || 4 << 30)
     }
 
+    /// Exercise the native policy and also the Metal fallback on hosts with another backend.
+    pub(crate) fn spatial_sampling_modes(&self) -> impl Iterator<Item = (GraphAccelerator, bool)> {
+        let metal = self.device.adapter_info().backend == wgpu::Backend::Metal;
+        std::iter::once((self.accelerator(), metal)).chain((!metal).then(|| (self.accelerator().without_gpu_spatial_sampling(), true)))
+    }
+
     /// Run the `main` entry of `source` once per workgroup for `invocations` workgroups. It reads `input` at binding 0 and writes
     /// `output_bytes` at binding 1, which come back.
     pub(crate) fn run_compute(&self, source: &str, input: &[u8], output_bytes: u64, invocations: u32) -> Vec<u8> {

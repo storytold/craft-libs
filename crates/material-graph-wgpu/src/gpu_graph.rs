@@ -5,8 +5,8 @@ use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use craft_material_graph::accelerator::{
-    Accelerator, GreyInput, GreyPass, HalfTransform, PixelImageInput, PixelOutput, PixelRequest, ResidentColorOutput, ResidentColorPass,
-    ResidentFilter, ResidentGrey16, ResidentGreyFloat, ResidentGreyPass,
+    Accelerator, FilterOperation, GreyInput, GreyPass, HalfTransform, PixelImageInput, PixelOutput, PixelRequest, ResidentColorOutput,
+    ResidentColorPass, ResidentFilter, ResidentGrey16, ResidentGreyFloat, ResidentGreyPass,
 };
 use craft_material_graph::context::Cancel;
 use craft_material_graph::func::PixelShader;
@@ -42,6 +42,8 @@ pub struct GraphAccelerator {
     device: wgpu::Device,
     queue: wgpu::Queue,
     memory_budget_bytes: fn() -> u64,
+    // Metal can produce different texel coordinates for packed affine transforms and directional warps.
+    spatial_sampling_on_gpu: bool,
     pipelines: Mutex<Pipelines>,
     pixels: Mutex<PixelCache>,
     hashers: [RandomState; 2],
@@ -75,6 +77,7 @@ impl PixelCache {
 
     fn put(&mut self, key: [u64; 2], bytes: usize, pixels: &PixelOutput, limit: usize) {
         if bytes > limit || self.values.contains_key(&key) {
+            self.trim(limit);
             return;
         }
         self.trim(limit - bytes);
@@ -101,6 +104,7 @@ impl GraphAccelerator {
             device: device.clone(),
             queue: queue.clone(),
             memory_budget_bytes,
+            spatial_sampling_on_gpu: device.adapter_info().backend != wgpu::Backend::Metal,
             pipelines: Mutex::default(),
             pixels: Mutex::default(),
             hashers: std::array::from_fn(|_| RandomState::new()),
@@ -110,6 +114,12 @@ impl GraphAccelerator {
             filters: OnceLock::new(),
             half: OnceLock::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn without_gpu_spatial_sampling(mut self) -> Self {
+        self.spatial_sampling_on_gpu = false;
+        self
     }
 
     fn pixel_cache_limit(&self) -> usize {
@@ -525,7 +535,7 @@ impl GraphAccelerator {
 
 impl Accelerator for GraphAccelerator {
     fn cache_tag(&self) -> &str {
-        "wgpu-graph-v9"
+        if self.spatial_sampling_on_gpu { "wgpu-graph-v10" } else { "wgpu-graph-v10-metal" }
     }
 
     fn pixel(&self, request: PixelRequest<'_>) -> Result<Option<PixelOutput>, String> {
@@ -598,6 +608,13 @@ impl Accelerator for GraphAccelerator {
     }
 
     fn resident_color(&self, pass: ResidentColorPass<'_>, cancel: &Cancel) -> Result<Option<ResidentColorOutput>, String> {
+        if !self.spatial_sampling_on_gpu {
+            match &pass {
+                ResidentColorPass::WrappedAffine { .. } => return Ok(None),
+                ResidentColorPass::DirectionalWarp { settings, .. } if settings.intensity != 0.0 => return Ok(None),
+                _ => {}
+            }
+        }
         let Some(pool) = self.grey_rasterizer() else { return Ok(None) };
         let rasterizer = self
             .color
@@ -617,6 +634,13 @@ impl Accelerator for GraphAccelerator {
     }
 
     fn resident_filter(&self, filter: ResidentFilter<'_>, cancel: &Cancel) -> Result<Option<ResidentGrey16>, String> {
+        if !self.spatial_sampling_on_gpu {
+            match &filter.operation {
+                FilterOperation::Affine { .. } => return Ok(None),
+                FilterOperation::DirectionalWarp { intensity, .. } if *intensity != 0.0 => return Ok(None),
+                _ => {}
+            }
+        }
         let Some(pool) = self.grey_rasterizer() else { return Ok(None) };
         let rasterizer = self
             .filters
@@ -768,6 +792,25 @@ mod tests {
     }
 
     #[test]
+    fn a_lowered_budget_evicts_old_pixels_even_when_the_next_result_cannot_be_cached() {
+        let pixels = PixelOutput::Grey(Grey::from_fn(2, 2, |u, v| u * v));
+        let bytes = 4 * size_of::<f32>();
+        let mut cache = PixelCache::default();
+        cache.put([1, 2], bytes, &pixels, 2 * bytes);
+        cache.put([3, 4], bytes, &pixels, 2 * bytes);
+
+        cache.put([3, 4], bytes, &pixels, bytes);
+        assert!(cache.get([1, 2]).is_none());
+        assert!(cache.get([3, 4]).is_some());
+        assert_eq!(cache.bytes, bytes);
+
+        cache.put([5, 6], bytes, &pixels, bytes / 2);
+        assert!(cache.values.is_empty());
+        assert!(cache.order.is_empty());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
     fn turn_reduction_rounds_the_product_toward_zero_like_the_reference() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let source = format!(
@@ -783,13 +826,19 @@ mod tests {
                 let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
                 sign * 10f32.powf(i as f32 / 400.0 - 1.0) * 1.000_123
             })
+            .chain([f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -f32::NAN])
             .collect::<Vec<f32>>();
 
         let bytes = gpu.run_compute(&source, bytemuck::cast_slice(&inputs), (inputs.len() * 4) as u64, (inputs.len() / 4) as u32);
 
         let turns = bytemuck::cast_slice::<u8, f32>(&bytes);
         for (&x, &turn) in inputs.iter().zip(turns) {
-            assert_eq!(turn, reference_turn(x), "phase of {x:e}");
+            let expected = reference_turn(x);
+            if expected.is_nan() {
+                assert!(turn.is_nan(), "phase of {x:e} must be NaN, got {turn:e}");
+            } else {
+                assert_eq!(turn, expected, "phase of {x:e}");
+            }
         }
     }
 
