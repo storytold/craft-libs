@@ -1,11 +1,14 @@
-//! `PreferencesPage` over a model with no draft: each edit reaches the model in the pass it lands in.
+//! `PreferencesPage` over a model with no draft: each edit reaches the model in the pass it lands in. With
+//! [`PreferencesLayout::Cards`] the page is one scrolling column of cards: every page is shown at once, short choices
+//! are segmented and the search counts its matches.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::patterns::preferences::{
-    GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, PreferencesWords, RowKind, RowSpec,
+    GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesLayout, PreferencesModel, PreferencesPage, PreferencesState, PreferencesWindow,
+    PreferencesWords, RowKind, RowSpec,
 };
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::runtime::words::CommonWords;
@@ -36,9 +39,13 @@ impl PreferencesModel for Live {
         self.sets.push((key.to_owned(), value, self.pass));
     }
 
-    fn custom_row(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
     fn reset_page(&mut self, _: &str) {}
 }
@@ -105,13 +112,16 @@ impl PreferencesModel for Grouped {
 
     fn set(&mut self, _: &str, _: PrefValue) {}
 
-    fn custom_row(&mut self, ui: &mut Ui, _: &str) {
+    fn custom_row(&mut self, ui: &mut Ui, _: &str) -> bool {
         let _ = Field::new("Hosted").show(ui, |ui, _| {
             Text::new("hosted value").show(ui);
         });
+        false
     }
 
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
     fn reset_page(&mut self, _: &str) {}
 }
@@ -154,11 +164,14 @@ impl PreferencesModel for HelpedRows {
 
     fn set(&mut self, _: &str, _: PrefValue) {}
 
-    fn custom_row(&mut self, ui: &mut Ui, _: &str) {
+    fn custom_row(&mut self, ui: &mut Ui, _: &str) -> bool {
         Button::new("Hosted button").show(ui);
+        false
     }
 
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
     fn reset_page(&mut self, _: &str) {}
 }
@@ -187,9 +200,9 @@ impl PreferencesModel for Counted {
     fn pages(&self) -> Vec<PageSpec<'_>> {
         let rows = vec![
             RowSpec::new("output.size", "Brush size", RowKind::int(24, 1..=64).counting(UnitKind::Pixels)),
-            RowSpec::new("output.bitrate", "Bitrate", RowKind::int(6000, 100..=200_000).unit_label("kbps")),
-            RowSpec::new("output.delay", "Delay", RowKind::int(250, 0..=2000).counting(UnitKind::Milliseconds).unit_label("msec")),
-            RowSpec::new("output.buffer", "Buffer", RowKind::float(1.5, 0.5..=64.0, 1).unit_label("GiB")),
+            RowSpec::new("output.bitrate", "Bitrate", RowKind::int(6000, 100..=200_000).unit_text("kbps")),
+            RowSpec::new("output.delay", "Delay", RowKind::int(250, 0..=2000).counting(UnitKind::Milliseconds).unit_text("msec")),
+            RowSpec::new("output.buffer", "Buffer", RowKind::float(1.5, 0.5..=64.0, 1).unit_text("GiB")),
         ];
         vec![PageSpec::new("output", "Output", rows)]
     }
@@ -198,15 +211,19 @@ impl PreferencesModel for Counted {
         self.sets.push((key.to_owned(), value));
     }
 
-    fn custom_row(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
     fn reset_page(&mut self, _: &str) {}
 }
 
-/// An integer or number row shows its counted kind's symbol after the field, or its unit text in place of the symbol,
-/// and typed text is still read by the counted kind.
+/// An integer or number row shows its counted kind's symbol after the field, or its unit text when it counts no kind;
+/// the counted kind wins over unit text, and reads the typed text.
 #[trial]
 fn number_rows_show_their_unit_or_unit_text_after_the_field() {
     let counted = Rc::new(RefCell::new(Counted::default()));
@@ -216,7 +233,7 @@ fn number_rows_show_their_unit_or_unit_text_after_the_field() {
         PreferencesPage::new(Bind::bound(&mut state)).show(ui, &mut *shown.borrow_mut());
     });
     fixture.room(Vec2::new(1280.0, 800.0)).settle();
-    for (label, unit) in [("Brush size", "px"), ("Bitrate", "kbps"), ("Delay", "msec"), ("Buffer", "GiB")] {
+    for (label, unit) in [("Brush size", "px"), ("Bitrate", "kbps"), ("Delay", "ms"), ("Buffer", "GiB")] {
         let field = fixture.by_label(label).expect("the number field");
         let painted = fixture
             .texts()
@@ -225,10 +242,81 @@ fn number_rows_show_their_unit_or_unit_text_after_the_field() {
             .count();
         assert_eq!(painted, 1, "one visible {unit} on {label}");
     }
-    assert!(!fixture.texts().iter().any(|text| text.text == "ms"), "unit text replaces the counted kind's symbol");
+    assert!(!fixture.texts().iter().any(|text| text.text == "msec"), "the counted kind's symbol wins over unit text");
     let field = fixture.by_label("Delay").expect("the delay field");
     fixture.click(&field).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text("120ms").key(Key::Tab, Modifiers::NONE).settle();
     let last = counted.borrow().sets.last().cloned();
     assert_eq!(last, Some(("output.delay".to_owned(), PrefValue::Int(120))), "the counted kind reads the typed text");
+}
+
+struct Model {
+    side: String,
+}
+
+impl PreferencesModel for Model {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        let sides = vec![Entry::new("left", "Left"), Entry::new("right", "Right")];
+        vec![
+            PageSpec::new("general", "General", vec![RowSpec::new("side", "Tools side", RowKind::choice(&self.side, sides))]),
+            PageSpec::new("canvas", "Canvas", vec![RowSpec::new("snap", "Snap", RowKind::Bool(true))]),
+        ]
+    }
+    fn set(&mut self, _: &str, value: PrefValue) {
+        if let PrefValue::Choice(side) = value {
+            self.side = side;
+        }
+    }
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+    fn reset_page(&mut self, _: &str) {}
+}
+
+impl PreferencesDraft for Model {
+    fn differs(&self) -> bool {
+        false
+    }
+    fn apply(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn cancel(&mut self) {}
+}
+
+/// A window of cards ([`PreferencesLayout::Cards`]) over two pages.
+fn fixture() -> Fixture {
+    let mut model = Model { side: "left".into() };
+    let mut state = PreferencesState::default();
+    Fixture::new(move |ui| {
+        let _ = PreferencesWindow::new(Bind::bound(&mut state)).layout(PreferencesLayout::Cards).embedded().show(ui, &mut model);
+    })
+}
+
+#[trial]
+fn every_page_is_a_card_on_one_scrolling_page() {
+    let mut fixture = fixture();
+    fixture.room(egui::vec2(700.0, 900.0)).settle();
+    assert!(fixture.by_label("General").is_some() && fixture.by_label("Canvas").is_some(), "both cards show at once");
+}
+
+#[trial]
+fn a_short_choice_is_a_row_of_segments() {
+    let mut fixture = fixture();
+    fixture.room(egui::vec2(700.0, 900.0)).settle();
+    let right = fixture.by_label("Right").expect("a segment for each option");
+    fixture.click(&right).settle();
+    assert!(fixture.texts().iter().any(|t| t.text == "Left"), "the other option stays shown beside it");
+}
+
+#[trial]
+fn the_search_shows_how_many_settings_match() {
+    let mut fixture = fixture();
+    fixture.room(egui::vec2(700.0, 900.0)).settle();
+    assert!(!fixture.texts().iter().any(|t| t.text.contains("match")), "no count without a search");
+    let search = fixture.by_label("Search settings").expect("the search field");
+    fixture.click(&search).type_text("snap").settle();
+    assert!(fixture.texts().iter().any(|t| t.text == "1 match"), "{:?}", fixture.texts().iter().map(|t| &t.text).collect::<Vec<_>>());
 }

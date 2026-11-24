@@ -278,7 +278,7 @@ impl Container for FullWindowDialog<'_> {
         if self.props.outer_edit {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable));
+        frame::header(ui, cx, frame::close_action(self.closable), None, None);
     }
 
     fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

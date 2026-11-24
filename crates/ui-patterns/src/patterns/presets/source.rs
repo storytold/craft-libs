@@ -1,7 +1,7 @@
 //! `PresetSource`: the presets a browser or a picker shows, as the host's inputs and the `fn`s that build the rows
 //! from them, so a memoized view keys on the inputs and builds the rows in its own run.
 
-use super::model::{PresetRow, ThumbInfo};
+use super::model::{PresetKind, PresetRow, ThumbInfo};
 use crate::contract::{ListDrag, MemoKey, MemoProps};
 use crate::primitives::ContentPainterCx;
 use crate::runtime::derived::derived;
@@ -142,6 +142,29 @@ impl<'a, K: Clone + PartialEq + Send + Sync + 'static> PresetSource<'a, K> {
     /// Paints a thumbnail with the host's painter; `false` when it has none, and the row's `preview` paints.
     pub fn thumb(&self, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, K>) -> bool {
         self.0.thumb(cx, rect, info)
+    }
+}
+
+impl<'a, K: Clone + PartialEq + MemoProps + Send + Sync + 'static> PresetSource<'a, K> {
+    /// The prebuilt `rows`, for a host that builds them itself. Keyed by each row's key, name, depth and kind, which
+    /// are all a named preset row shows.
+    pub fn listed(rows: &'a [PresetRow<K>]) -> Self {
+        PresetSource::new(ListedRows(rows), PresetFns::new(|listed: &ListedRows<'_, K>, _| listed.0.to_vec()))
+    }
+}
+
+/// The inputs of [`PresetSource::listed`].
+struct ListedRows<'a, K>(&'a [PresetRow<K>]);
+
+impl<K: MemoProps> MemoProps for ListedRows<'_, K> {
+    fn key(&self, key: &mut MemoKey) {
+        for row in self.0 {
+            row.key.key(key);
+            row.label.key(key);
+            row.depth.key(key);
+            (row.kind == PresetKind::Item).key(key);
+        }
+        self.0.len().key(key);
     }
 }
 

@@ -66,8 +66,10 @@ craft-ui = { workspace = true, optional = true }
 craft-aaf = { workspace = true, optional = true }
 craft-aep = { workspace = true, optional = true }
 craft-affinity = { workspace = true, optional = true }
+craft-android-res = { workspace = true, optional = true }
 craft-assuan = { workspace = true, optional = true }
 craft-captions = { workspace = true, optional = true }
+craft-cdr = { workspace = true, optional = true }
 craft-cfb = { workspace = true, optional = true }
 craft-codepage = { workspace = true, optional = true }
 craft-crs = { workspace = true, optional = true }
@@ -125,6 +127,7 @@ craft-pdn = { workspace = true, optional = true }
 craft-penpot = { workspace = true, optional = true }
 craft-pkcs7 = { workspace = true, optional = true }
 craft-plotter = { workspace = true, optional = true }
+craft-png = { workspace = true, optional = true }
 craft-pptx = { workspace = true, optional = true }
 craft-prc = { workspace = true, optional = true }
 craft-psd = { workspace = true, optional = true }
@@ -204,6 +207,7 @@ craft-jsonc = { workspace = true, optional = true }
 craft-pcap = { workspace = true, optional = true }
 craft-sourcemap = { workspace = true, optional = true }
 craft-wasm = { workspace = true, optional = true }
+craft-wayland = { workspace = true, optional = true }
 craft-xfdf = { workspace = true, optional = true }
 craft-color-transform = { workspace = true, optional = true }
 craft-develop = { workspace = true, optional = true }
@@ -303,6 +307,8 @@ ai-local = ["ai", "craft-ai/local"]
 
 ai-core = ["dep:craft-ai-core"]
 
+android-res = ["dep:craft-android-res"]
+
 anicraft-format = ["dep:craft-anicraft-format"]
 
 assuan = ["dep:craft-assuan"]
@@ -360,6 +366,9 @@ browse = ["dep:craft-browse"]
 
 captions = ["dep:craft-captions"]
 captions-mov-text = ["captions", "craft-captions/mov-text"]
+
+cdr = ["dep:craft-cdr"]
+cdr-synth = ["cdr", "craft-cdr/synth"]
 
 cfb = ["dep:craft-cfb"]
 
@@ -449,6 +458,7 @@ ews = ["dep:craft-ews"]
 
 exr = ["dep:craft-exr"]
 exr-decode = ["exr", "craft-exr/decode"]
+exr-zlib-inflate = ["exr", "craft-exr/zlib-inflate"]
 
 fcproj-format = ["dep:craft-fcproj-format"]
 
@@ -621,6 +631,7 @@ media-serde = ["media", "craft-media/serde"]
 media-vmd = ["media", "craft-media/vmd"]
 
 media-source = ["dep:craft-media-source"]
+media-source-y4m = ["media-source", "craft-media-source/y4m"]
 
 menu = ["dep:craft-menu"]
 
@@ -710,6 +721,8 @@ plist = ["dep:craft-plist"]
 
 plotter = ["dep:craft-plotter"]
 plotter-serde = ["plotter", "craft-plotter/serde"]
+
+png = ["dep:craft-png"]
 
 ppt-binary = ["dep:craft-ppt-binary"]
 
@@ -902,6 +915,7 @@ theme-editor = ["dep:craft-theme-editor"]
 theme-store = ["dep:craft-theme-store"]
 
 tiff = ["dep:craft-tiff"]
+tiff-plain-rgba16 = ["tiff", "craft-tiff/plain-rgba16"]
 
 time = ["dep:craft-time"]
 
@@ -968,6 +982,8 @@ video-vp9-decode = ["video", "craft-video/vp9-decode"]
 video-vp9-encode = ["video", "craft-video/vp9-encode"]
 
 wasm = ["dep:craft-wasm"]
+
+wayland = ["dep:craft-wayland"]
 
 web-api = ["dep:craft-web-api"]
 

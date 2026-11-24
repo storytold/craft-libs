@@ -351,6 +351,8 @@ pub enum CursorPriority {
     DropTarget,
     /// A drag in progress.
     Drag,
+    /// Hides the pointer over everything, links included, while a presentation runs.
+    Hidden,
 }
 
 /// The winning request: the highest priority, the later request on a tie.

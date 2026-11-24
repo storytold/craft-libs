@@ -569,13 +569,15 @@ impl StackDialog for HostedExportAs {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ExportAsResult>> {
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let dialog = ExportAsDialog {
             formats: self.formats.clone(),
             methods: self.methods.clone(),
             title: self.title.clone(),
             defaults: self.defaults,
             preview: self.preview.clone(),
-            answers: self.requests.take_answers(),
+            answers,
             saving: self.saving,
             open: Some(Bind::bound(&mut self.open)),
             presets: self.with_presets.then(|| Bind::bound(&mut self.presets)),

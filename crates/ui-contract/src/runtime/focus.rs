@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use crate::runtime::keys::Intents;
 pub use craft_behavior::{Letters, Roving};
-pub use policy::{ActivateKeys, EditSet, EndKey, EnterRule, FocusPolicy, FocusTarget, Initial, KeepKeys, KeyUse, TabReach};
+pub use policy::{ActivateKeys, EditSet, EndKey, EnterRule, FocusPolicy, FocusRequest, FocusTarget, Initial, KeepKeys, KeyUse, NudgeMods, TabReach};
 
 /// The shape the focus ring takes around a part.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,7 +62,7 @@ pub(crate) struct ScopeRec {
     /// The stop that held focus when the scope was first pushed, or for a scope that does not trap the stop focus last
     /// entered it from, which `restore` returns to.
     pub(crate) opener: Option<StopKey>,
-    /// The scope's layer is playing its exit: focus inside it already returns to the opener.
+    /// The scope's layer is playing its exit: focus inside it leaves at once, to the opener or nowhere.
     pub(crate) closing: bool,
     /// For a layer's scope: whether this is its first pass since the layer appeared, as the layer's memory says;
     /// none for other scopes, which are new after a gap of a frame.
@@ -89,6 +89,10 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu_bar: Option<Id>,
     /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics (`register_menu_bar_by_claim`).
     pub(crate) menu_bar_by_claim: bool,
+    /// The window's document canvas (`KeyUse::chrome_key`) the last pass registered, while no stop has focus and no
+    /// modal layer is open: its state-dependent claims hold, as its tool takes the arrows, Enter and Escape with nothing
+    /// focused.
+    pub(crate) canvas: Option<Id>,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
@@ -160,6 +164,8 @@ pub(crate) struct State {
     pub(super) seen: FastMap<Id, u64>,
     /// A scope moved focus to its initial stop in the running pass.
     pub(super) entered: bool,
+    /// A component asked for the focus in the running pass (`request`), as an editor that appears under a press does.
+    pub(super) asked: bool,
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
     pub(super) menu_bar: Option<Id>,
@@ -235,8 +241,8 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// nudges, Escape as its `Intent::Cancel`). `keys` is `KeyUse::CANVAS`, or a variant such as
 /// `KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(..)` while the canvas edits text in place and Tab and the
 /// clipboard are its own. With nothing focused the canvas is the key target: a bare Tab it keeps, and the clipboard
-/// events and edit chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them.
-/// With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
+/// events and edit chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them;
+/// Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus. With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
 /// (`keys::intents_of`), as for any focused stop. Call it each pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
@@ -246,6 +252,12 @@ pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
 /// app's own. Read before the begin hook rotates the registrations, by the input hook and the begin hook's Tab moves.
 pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse> {
     with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
+}
+
+/// The document canvas the running viewport registered in its last pass (`KeyUse::chrome_key`): the window's key
+/// target while nothing has the focus. Read by the begin hook, after it rotated the registrations.
+pub(crate) fn document_canvas(ctx: &Context) -> Option<StopRec> {
+    with(ctx, |state| state.last_stops.iter().find(|rec| rec.stop.keys.chrome_key).cloned())
 }
 
 /// Whether `rec`, the focused stop, is a canvas control's: a non-text member of the document canvas's arena, as the
@@ -425,11 +437,28 @@ pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<Fo
         if state.stop_ids.contains(&id) {
             return None;
         }
-        let rec = state.stops.get(from..)?.first()?;
-        Some(match rec.stop.part {
-            Some(part) => FocusTarget::Part(rec.stop.id, part),
-            None => FocusTarget::Id(rec.stop.id),
-        })
+        state.stops.get(from..)?.first().map(target_of)
+    })
+}
+
+/// The first stop the running pass registered in `range` (of `stop_count`s) that Tab and a request reach.
+pub(crate) fn first_stop_in(ctx: &Context, range: std::ops::Range<usize>) -> Option<FocusTarget> {
+    with(ctx, |state| state.stops.get(range.start..range.end.min(state.stops.len()))?.iter().find(|rec| !rec.stop.press_only).map(target_of))
+}
+
+/// The request target of the stop `rec`.
+fn target_of(rec: &StopRec) -> FocusTarget {
+    match rec.stop.part {
+        Some(part) => FocusTarget::Part(rec.stop.id, part),
+        None => FocusTarget::Id(rec.stop.id),
+    }
+}
+
+/// Whether focus is on a stop the running pass registered in `range` (of `stop_count`s).
+pub(crate) fn focus_in(ctx: &Context, range: std::ops::Range<usize>) -> bool {
+    let Some(focused) = focused_stop(ctx) else { return false };
+    with(ctx, |state| {
+        state.stops.get(range.start..range.end.min(state.stops.len())).is_some_and(|recs| recs.iter().any(|rec| rec.stop.key() == focused))
     })
 }
 
@@ -595,6 +624,16 @@ pub(crate) fn bar_return_of(ctx: &Context, focused: Id) -> Option<StopKey> {
     with(ctx, |state| state.bar_return.as_ref().filter(|(bar, _)| *bar == focused).map(|(_, key)| *key))
 }
 
+/// The stop the keyboard goes back to while `focused` holds it inside open menus or on a menu bar, and whether a menu
+/// bar took it from that stop: a shortcut pressed there matches at that stop, and a text part keeps its selection for
+/// the menus' picks. `None` when the focus is in neither, or a menu opened with nothing focused.
+pub(crate) fn returning(ctx: &Context, focused: Id) -> Option<(StopKey, bool)> {
+    match focused_rec(ctx).and_then(|rec| out_of_menus(ctx, rec.scope)) {
+        Some(out) => Some((out.to, out.bar)),
+        None => bar_return_of(ctx, focused).map(|held| (held, true)),
+    }
+}
+
 /// Where focus goes once every menu around the scope `from` closes, as `out_of_menus` finds it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OutOfMenus {
@@ -672,19 +711,41 @@ pub(crate) fn register_doc(ctx: &Context, key: DocKey, id: Id) {
 
 /// Moves focus to `target`, leaves modality unchanged and asks the enclosing scroll owner to reveal it. Called
 /// while a pass runs, it moves focus in that pass, so the rest of the pass reads the new focus; called between
-/// passes, it moves focus at the next pass's begin hook. The one public path to programmatic focus. `false` in a measuring
+/// passes, it moves focus at the next pass's begin hook; a pointer press of the pass moves it no further at the pass's
+/// end. The one public path to programmatic focus. `false` in a measuring
 /// run, which moves nothing: a caller that keeps a pending request keeps it until a run takes it.
 pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     if !crate::runtime::measure::effect(ctx, "focus::request") {
         return false;
     }
     if crate::runtime::frame::in_pass(ctx) {
+        with(ctx, |state| state.asked = true);
         request_now(ctx, target);
         return true;
     }
     with(ctx, |state| state.pending = Some(target));
     crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
     true
+}
+
+/// Takes the one-shot request of the component `id` (`Props::request_focus`) right after its stops registered in the
+/// running pass: its own stop, else its first part stop, takes the focus as a layer's initial stop does, so the press
+/// of the pass does not take it back. A component with no stop this pass (a disabled one) takes none, and a
+/// measuring run moves nothing.
+pub(crate) fn take_request(ctx: &Context, id: Id, request: FocusRequest) {
+    if !crate::runtime::measure::effect(ctx, "focus::take_request") {
+        return;
+    }
+    if request == FocusRequest::WhenNone && egui_focus::focused(ctx).is_some() {
+        return;
+    }
+    let acts = with(ctx, |state| {
+        let own = state.stops.iter().find(|rec| rec.stop.key() == (id, None));
+        let Some(rec) = own.or_else(|| state.stops.iter().find(|rec| rec.stop.id == id)).cloned() else { return Vec::new() };
+        state.entered = true;
+        state.focus_stop(rec)
+    });
+    apply(ctx, acts);
 }
 
 /// Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
@@ -770,7 +831,7 @@ pub(crate) fn is_row_child(ctx: &Context, stop: &Stop) -> bool {
 
 /// Whether the focus stop is the component `id`: the focused member or item of its arena, or a root that
 /// holds focus while none of its members is the stop. A root's own focused part counts as the root.
-pub(crate) fn is_focused(ctx: &Context, id: Id) -> bool {
+pub fn is_focused(ctx: &Context, id: Id) -> bool {
     focused_stop(ctx).is_some_and(|(focused, _)| focused == id)
 }
 
@@ -784,9 +845,8 @@ pub(crate) enum FocusOrigin {
     /// A scope shown for the first time moved focus to its initial stop (a dialog's first field): a request too, so
     /// it counts as an arrival by key, and a text part selects its whole text so typing replaces it.
     Open,
-    /// The focused stop went away and handed focus to its neighbour: neither the keyboard nor a request chose it, so
-    /// it is no arrival by key (a deleted guide selects no other guide) and no scroll owner reveals it (a closed canvas
-    /// text editor does not pan the canvas to the stop before it).
+    /// The focused child of a collection row went away and handed focus back to its row: neither the keyboard nor a
+    /// request chose it, so it is no arrival by key and no scroll owner reveals it.
     Removal,
 }
 
@@ -976,7 +1036,10 @@ pub(crate) fn end(ctx: &Context) {
     let foreign = host_focus || (!captured && crate::runtime::egui::areas::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
     let host_text = host_focus && ctx.text_edit_focused();
+    // A modal layer keeps the canvas's claims from it, as it keeps the arrows (`overlay::end_pass` ran before).
+    let modal = crate::runtime::overlay::top_modal_in(ctx, viewport).is_some();
     with(ctx, |state| {
+        state.record.canvas = state.record.canvas.filter(|_| !modal);
         state.record.foreign = foreign;
         state.record.host_focus = host_focus;
         state.record.host_text = host_text;
@@ -1030,23 +1093,39 @@ pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
 /// and which is the top layer, so the dialog's own Escape rule decides this pass's Escape. A text field holding a
 /// draft there passes Escape on: one Escape cancels the dialog and its typing goes with it, as Word's dialogs do. A
 /// field in a popup or menu inside the dialog, or in no dialog (a ribbon box), keeps the Escape to revert its draft.
+/// Only a modal dialog counts: a modeless window's edits belong to the app, so its field reverts its own draft first
+/// and the next Escape closes the window.
 pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
-    let Some(rec) = focused_rec(ctx) else {
-        return false;
-    };
-    let dialog = with(ctx, |state| {
+    escaping_dialog(ctx).is_some()
+}
+
+/// Whether the dialog that [`escape_closes_dialog`] finds keeps the focused field's typing on Escape
+/// (`FocusPolicy::escape_keeps_typing`): the field then commits its draft instead of cancelling it.
+pub(crate) fn escape_keeps_typing(ctx: &Context) -> bool {
+    escaping_dialog(ctx).is_some_and(|policy| policy.escape_keeps_typing)
+}
+
+/// The policy of the modal dialog on top whose Escape closes it and which holds the focused stop
+/// ([`escape_closes_dialog`]).
+fn escaping_dialog(ctx: &Context) -> Option<FocusPolicy> {
+    let rec = focused_rec(ctx)?;
+    let (id, policy) = with(ctx, |state| {
         let mut at = rec.scope;
         while let Some(id) = at {
             let scope = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id))?;
             match scope.policy.kind {
                 craft_behavior::ScopeKind::Group | craft_behavior::ScopeKind::Pane => at = scope.parent,
-                craft_behavior::ScopeKind::Dialog => return (scope.policy.cancel == craft_behavior::CancelRule::Close).then_some(id),
+                craft_behavior::ScopeKind::Dialog => {
+                    return (scope.policy.cancel == craft_behavior::CancelRule::Close).then_some((id, scope.policy));
+                }
                 _ => return None,
             }
         }
         None
-    });
-    dialog.is_some_and(|id| crate::runtime::overlay::top(ctx) == Some(id))
+    })?;
+    let modal_on_top =
+        crate::runtime::overlay::top(ctx) == Some(id) && crate::runtime::overlay::entry(ctx, id).is_some_and(|entry| entry.rank.is_modal());
+    modal_on_top.then_some(policy)
 }
 
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop
