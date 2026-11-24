@@ -24,6 +24,7 @@
 
 mod index;
 mod pin;
+mod preview_service;
 mod source;
 mod sources;
 mod verify;
@@ -42,6 +43,7 @@ pub use index::{
     MAX_FILE_BYTES, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Sample, Script, SourceProblem, Unavailable, parse_style,
 };
 pub use pin::{IndexPin, PINNED_INDEX};
+pub use preview_service::{BadServiceUrl, LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, PreviewStore, check_preview_service};
 pub use sources::{SourceEntry, SourcesFile};
 pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
 
@@ -67,10 +69,7 @@ pub use language_packs::{
     MAX_PACK_INDEX_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, PackIndex, PackIndexPin, language_pack_index_overridden,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{
-    Caller, Error, FontStore, InstalledFamily, InstalledFile, LegalText, Network, PREVIEW_SERVICE_ENV, PreviewServiceSource, Problem, Progress,
-    check_preview_service,
-};
+pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress};
 
 #[cfg(test)]
 mod tests;

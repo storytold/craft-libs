@@ -22,7 +22,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use crate::{Cancel, Client, FetchError, Timeouts, is_font, sha256_hex};
+use crate::{Cancel, Client, FetchError, PreviewStore, Timeouts, is_font, sha256_hex};
 
 /// The most codepoints one request may name; the service rejects more.
 pub const MAX_CODEPOINTS: usize = 256;
@@ -244,32 +244,6 @@ pub struct Preview {
     pub key: PreviewKey,
     /// The decoded font file (TrueType or OpenType), ready to register.
     pub font: Result<Vec<u8>, PreviewError>,
-}
-
-/// What [`Previews`] reads from the font store: the service and the user's setting on each request, the client and
-/// the cache folder when the pool is made. The font manager's `Installer` builds on it.
-pub trait PreviewStore: Send + Sync {
-    /// The preview service's base URL, if one is set: [`PREVIEW_SERVICE_ENV`](crate::PREVIEW_SERVICE_ENV), else the
-    /// font store's `preview_service` setting, else the host's default. Installs try it as a mirror first.
-    fn preview_service(&self) -> Option<String> {
-        None
-    }
-
-    /// The store's HTTP client, if it has one. [`Previews`] fetches with it, so a preview service that installs
-    /// found unreachable is skipped by previews too, and the reverse.
-    fn http_client(&self) -> Option<Client> {
-        None
-    }
-
-    /// Whether previews may be fetched from the preview service: the user's setting, on by default.
-    fn previews_enabled(&self) -> bool {
-        true
-    }
-
-    /// The folder [`Previews`] caches preview subsets in; none keeps them only for as long as the caller holds them.
-    fn preview_cache(&self) -> Option<PathBuf> {
-        None
-    }
 }
 
 /// How the pool downloads: the store's [`Client`], or a stand-in in tests.

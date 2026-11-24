@@ -30,6 +30,9 @@ use crate::index::{
     Face, Family, FontFile, GOOGLE_FONTS, Index, IndexError, LicenseFile, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, SourceProblem, Unavailable,
 };
 use crate::pin::IndexPin;
+use crate::preview_service::{
+    BadServiceUrl, LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, check_preview_service, normalize_service_url, resolve_preview_source,
+};
 use crate::source::{is_source_url, safe_dir, safe_file_name, slug};
 use crate::sources::{MAX_SOURCES_BYTES, SourceEntry, SourcesFile};
 use crate::verify::{VerifyError, is_font, sha256_hex, verify_font};
@@ -87,8 +90,8 @@ pub enum Error {
     #[error("{0} is not an https URL")]
     BadUrl(String),
     /// Not a usable preview service address.
-    #[error("{0} is not an https URL, or an http URL to 127.0.0.1 or [::1]")]
-    BadServiceUrl(String),
+    #[error(transparent)]
+    BadServiceUrl(#[from] BadServiceUrl),
     /// No exact match in the index.
     #[error(transparent)]
     Unavailable(#[from] Unavailable),
@@ -235,15 +238,6 @@ pub struct Problem {
     pub file: String,
     /// What is wrong; `None` when the file is missing.
     pub error: Option<VerifyError>,
-}
-
-/// Which of a family's legal texts [`FontStore::legal_text`] reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LegalText {
-    /// The licence file (`OFL.txt`, `LICENSE.txt`).
-    License,
-    /// An Apache family's `NOTICE` file.
-    Notice,
 }
 
 /// A licence or NOTICE file's size and sha256, when the index has them. A format 1.0 index has
@@ -688,74 +682,6 @@ pub(crate) fn read_limited(path: &Path, max: u64) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(path).ok()
-}
-
-/// The environment variable that sets the preview service's base URL; it beats the saved setting.
-pub const PREVIEW_SERVICE_ENV: &str = "CRAFT_FONT_PREVIEW_URL";
-
-/// Where the preview service in effect comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreviewServiceSource {
-    /// [`PREVIEW_SERVICE_ENV`]; the setting can't change it.
-    Env,
-    /// The `preview_service` setting in `settings.json`.
-    Saved,
-    /// The host's default, [`FontStore::with_default_preview_service`].
-    Default,
-    /// There is no service.
-    None,
-}
-
-/// The environment value when set and not empty, else the setting; an unusable value counts as
-/// unset.
-#[cfg(test)]
-pub(crate) fn resolve_preview_service(env: Option<&str>, setting: Option<&str>) -> Option<String> {
-    resolve_preview_source(env, setting, None).0
-}
-
-/// The service in effect and where it came from: the environment value when set and not empty
-/// (alone: an unusable one means no service), else the setting when usable, else the host's
-/// default.
-pub(crate) fn resolve_preview_source(env: Option<&str>, setting: Option<&str>, default: Option<&str>) -> (Option<String>, PreviewServiceSource) {
-    let (url, source) = match env.map(str::trim).filter(|e| !e.is_empty()) {
-        Some(e) => (normalize_service_url(e), PreviewServiceSource::Env),
-        None => match setting.and_then(normalize_service_url) {
-            Some(url) => (Some(url), PreviewServiceSource::Saved),
-            None => (default.and_then(normalize_service_url), PreviewServiceSource::Default),
-        },
-    };
-    if url.is_some() { (url, source) } else { (None, PreviewServiceSource::None) }
-}
-
-/// The preview-service address `url` stands for: without a trailing slash, when it is an https URL,
-/// or an http one for a loopback host, with no credentials, query or fragment. [`Error::BadServiceUrl`]
-/// otherwise.
-pub fn check_preview_service(url: &str) -> Result<String, Error> {
-    normalize_service_url(url).ok_or_else(|| Error::BadServiceUrl(url.trim().chars().take(200).collect()))
-}
-
-/// `url` without a trailing slash, when it is an https URL, or an http one for a loopback host,
-/// with no credentials, query or fragment.
-fn normalize_service_url(url: &str) -> Option<String> {
-    let url = url.trim().trim_end_matches('/');
-    if url.len() > 2000 || url.chars().any(|c| c.is_control() || c.is_whitespace() || c == '\\') {
-        return None;
-    }
-    let (https, rest) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
-        (Some(r), _) => (true, r),
-        (None, Some(r)) => (false, r),
-        _ => return None,
-    };
-    let authority = rest.split('/').next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') || url.contains(['?', '#']) {
-        return None;
-    }
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
-    };
-    let loopback = matches!(host.to_ascii_lowercase().as_str(), "127.0.0.1" | "::1");
-    (https || loopback).then(|| url.to_string())
 }
 
 fn host(url: &str) -> &str {

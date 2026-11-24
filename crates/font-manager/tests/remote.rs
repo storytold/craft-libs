@@ -15,10 +15,8 @@ use std::time::{Duration, Instant};
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::store::{FakeStore, Installer, SuiteStore};
 use craft_font_manager::{Catalog, FontEnv};
-use craft_font_store::preview::{
-    Codepoints, DiskCache, Instance, MAX_CODEPOINTS, Preview, PreviewError, PreviewKey, PreviewStore, Previews, SampleHash, Subset,
-};
-use craft_font_store::{Client, is_font};
+use craft_font_store::preview::{Codepoints, DiskCache, Instance, MAX_CODEPOINTS, Preview, PreviewError, PreviewKey, Previews, SampleHash, Subset};
+use craft_font_store::{Client, PreviewStore, is_font};
 
 const WOFF2: &[u8] = include_bytes!("data/Tiny-glyf.woff2");
 
