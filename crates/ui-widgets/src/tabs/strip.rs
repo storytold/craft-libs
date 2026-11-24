@@ -516,6 +516,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// The strip's taller form with the body type.
     #[prop(flag)]
     large: bool,
+    /// The look of a panel strip's tabs ([`TabKind::Panel`]).
+    #[prop]
+    panel_look: super::PanelTabLook,
     /// The tab the host shows. A click, Space, Enter or a drop reports the new one in the output.
     #[prop]
     shown: Option<K>,
@@ -586,6 +589,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
                 .primary_picks(TabKind::Document.primary_shows()),
             kind: TabKind::Document,
             large: false,
+            panel_look: super::PanelTabLook::Plain,
             shown: None,
             tear_off: false,
             wheel_selects: false,
@@ -1023,9 +1027,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 
-    /// Every tab takes the strip's kind and size.
+    /// Every tab takes the strip's kind, panel look and size.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
-        let tab = tab.kind(self.kind);
+        let tab = tab.kind(self.kind).panel_look(self.panel_look);
         if self.large { tab.large() } else { tab }
     }
 
