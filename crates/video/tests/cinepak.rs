@@ -1146,3 +1146,53 @@ fn test_decode_with_palette_from_sample_entry_and_codec_params() {
     assert_eq!(frame.pixel_rgb(2, 2).expect("pixel"), [60, 40, 20]);
     assert_eq!(frame.pixel_rgb(3, 3).expect("pixel"), [60, 40, 20]);
 }
+
+/// An 8 bpp frame of two 4x4 blocks: a V1 codebook of one vector, and the block updates.
+fn indexed_frame(key: bool, vector: u8, blocks: &[u8]) -> Vec<u8> {
+    let (strip_id, update): (u16, Vec<u8>) = if key {
+        (0x1000, [&[0x32u8][..], &(4 + blocks.len() as u32).to_be_bytes()[1..4], blocks].concat())
+    } else {
+        (0x1100, [&[0x31u8][..], &(4 + 4 + blocks.len() as u32).to_be_bytes()[1..4], &0x4000_0000u32.to_be_bytes(), blocks].concat())
+    };
+    let book = [&[0x26u8][..], &8u32.to_be_bytes()[1..4], &[vector; 4]].concat();
+    let strip_len = (12 + book.len() + update.len()) as u16;
+    let mut f = vec![u8::from(!key)];
+    f.extend_from_slice(&(10 + u32::from(strip_len)).to_be_bytes()[1..4]);
+    f.extend_from_slice(&[0, 8, 0, 4, 0, 1]); // 8x4, one strip
+    f.extend_from_slice(&strip_id.to_be_bytes());
+    f.extend_from_slice(&strip_len.to_be_bytes());
+    f.extend_from_slice(&[0, 0, 0, 0, 0, 4, 0, 8]);
+    f.extend(book);
+    f.extend(update);
+    f
+}
+
+/// A palette change between two frames reaches the blocks an inter frame skips as well as the ones it
+/// decodes: no picture mixes two palettes.
+#[test]
+fn test_palette_change_recolors_the_blocks_an_inter_frame_skips() {
+    let palette = |entries: &[(u8, [u8; 3])]| {
+        let mut p = [0u8; 768];
+        for (i, c) in entries {
+            p[usize::from(*i) * 3..usize::from(*i) * 3 + 3].copy_from_slice(c);
+        }
+        p
+    };
+    let (red, green, blue) = ([255, 0, 0], [0, 255, 0], [0, 0, 255]);
+    let mut decoder = Decoder::with_palette(palette(&[(7, red), (9, green)]));
+    let first = decoder.decode(&indexed_frame(true, 7, &[0, 0])).expect("keyframe");
+    assert_eq!((first.pixel_rgb(0, 0), first.pixel_rgb(4, 0)), (Some(red), Some(red)));
+
+    // Index 7 is blue now, index 9 still green.
+    decoder.set_palette(Some(palette(&[(7, blue), (9, green)])));
+    // Block 0 is skipped and keeps index 7; block 1 takes a new vector, index 9.
+    let second = decoder.decode(&indexed_frame(false, 9, &[0])).expect("inter frame");
+    assert_eq!(second.pixel_rgb(0, 0), Some(blue), "the skipped block is in the new palette");
+    assert_eq!(second.pixel_rgb(4, 0), Some(green));
+    assert_eq!(second.y[0], 7, "the indices are untouched");
+
+    // Clearing the palette shows the indices as gray levels, skipped blocks included.
+    decoder.set_palette(None);
+    let third = decoder.decode(&indexed_frame(false, 200, &[0])).expect("inter frame");
+    assert_eq!((third.pixel_rgb(0, 0), third.pixel_rgb(4, 0)), (Some([7, 7, 7]), Some([200, 200, 200])));
+}

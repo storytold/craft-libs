@@ -151,11 +151,18 @@ impl Decoder {
     }
 
     /// Set or clear the 8-bit color palette.
+    ///
+    /// An 8 bpp picture is stored as palette indices (`Frame::y`) next to the RGB it produced, and
+    /// an inter frame keeps the pixels of its skipped blocks. So that those pixels and the blocks
+    /// the next frame decodes share one palette, changing the palette recolors the retained
+    /// reference picture from its indices. 12 bpp color pictures do not use the palette and are
+    /// left as they are.
     pub fn set_palette(&mut self, palette: Option<[u8; 768]>) {
         self.palette = palette;
+        self.recolor_reference();
     }
 
-    /// Set or clear the 8-bit color palette from a slice (up to 768 bytes).
+    /// Set or clear the 8-bit color palette from a slice (up to 768 bytes); see [`Self::set_palette`].
     pub fn set_palette_slice(&mut self, palette: Option<&[u8]>) {
         self.palette = palette.map(|p| {
             let mut pal = [0u8; 768];
@@ -163,6 +170,19 @@ impl Decoder {
             pal[..n].copy_from_slice(&p[..n]);
             pal
         });
+        self.recolor_reference();
+    }
+
+    /// Rebuild the RGB of an indexed reference picture with the current palette.
+    fn recolor_reference(&mut self) {
+        let Some(frame) = self.last_frame.as_mut().filter(|f| !f.is_color) else { return };
+        for (index, rgb) in frame.y.iter().zip(frame.rgb.chunks_exact_mut(3)) {
+            let i = usize::from(*index) * 3;
+            match self.palette.as_ref().and_then(|p| p.get(i..i + 3)) {
+                Some(entry) => rgb.copy_from_slice(entry),
+                None => rgb.fill(*index),
+            }
+        }
     }
 
     /// Reset internal state, clearing references and codebooks.
