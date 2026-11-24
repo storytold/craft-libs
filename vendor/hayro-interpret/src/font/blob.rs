@@ -375,13 +375,19 @@ impl OpenTypeFontBlob {
                 let Some(name_indices) = post.glyph_name_index() else {
                     return glyph_names;
                 };
-                let Some(string_data) = post.string_data() else {
-                    return glyph_names;
-                };
-                let custom_names = string_data
-                    .iter()
-                    .map(|entry| entry.ok().map(|name| name.as_str()))
-                    .collect::<Vec<_>>();
+                // PdfCraft patch (#7407): a table whose glyphs all have standard Macintosh
+                // names has no name strings of its own, and read-fonts gives it no string data.
+                // Every name was dropped with it, though each index still names a standard glyph,
+                // so a symbolic TrueType font named that way had no names for patch 79 to read
+                // and its codes read as WinAnsi (PdfCraft #7406).
+                let custom_names = post
+                    .string_data()
+                    .map(|data| {
+                        data.iter()
+                            .map(|entry| entry.ok().map(|name| name.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
 
                 for (gid, idx) in name_indices.iter().enumerate() {
                     let idx = idx.get() as usize;
@@ -450,6 +456,49 @@ struct CFFYoke<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TrueType program holding only a version 2.0 `post` table: one name index per glyph,
+    /// then `strings`, each a Pascal string. The table ends where its data does.
+    fn font_with_post(name_indices: &[u16], strings: &[&str]) -> Vec<u8> {
+        let mut post = vec![0, 2, 0, 0];
+        post.extend_from_slice(&[0; 28]);
+        post.extend_from_slice(&(name_indices.len() as u16).to_be_bytes());
+        for index in name_indices {
+            post.extend_from_slice(&index.to_be_bytes());
+        }
+        for string in strings {
+            post.push(string.len() as u8);
+            post.extend_from_slice(string.as_bytes());
+        }
+        let mut font = vec![0, 1, 0, 0, 0, 1, 0, 16, 0, 0, 0, 0];
+        font.extend_from_slice(b"post");
+        font.extend_from_slice(&[0; 4]);
+        font.extend_from_slice(&28_u32.to_be_bytes());
+        font.extend_from_slice(&(post.len() as u32).to_be_bytes());
+        font.extend_from_slice(&post);
+        font
+    }
+
+    // PdfCraft patch (#7407).
+    /// A `post` table whose glyphs all have standard Macintosh names has no strings, and its
+    /// names are still read; a table with strings reads both kinds.
+    #[test]
+    fn a_post_table_naming_only_standard_glyphs_keeps_their_names() {
+        let names = |data: Vec<u8>| {
+            OpenTypeFontBlob::new(Arc::new(data), 0)
+                .expect("the test font parses")
+                .glyph_names()
+        };
+        // Standard indices 54, 82 and 71 are `S`, `o` and `d`.
+        let standard = names(font_with_post(&[0, 54, 82, 71], &[]));
+        for (name, gid) in [(".notdef", 0), ("S", 1), ("o", 2), ("d", 3)] {
+            assert_eq!(standard.get(name), Some(&GlyphId::new(gid)), "{name}");
+        }
+        let mixed = names(font_with_post(&[0, 54, 258], &["Solid"]));
+        for (name, gid) in [("S", 1), ("Solid", 2)] {
+            assert_eq!(mixed.get(name), Some(&GlyphId::new(gid)), "{name}");
+        }
+    }
 
     /// A CFF font with glyphs `.notdef`, `Alpha`, `Alpha` (a duplicate name) and `Beta`.
     fn cff_with_names() -> Vec<u8> {
