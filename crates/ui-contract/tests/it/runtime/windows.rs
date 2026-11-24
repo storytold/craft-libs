@@ -779,21 +779,28 @@ fn a_full_window_viewport_keeps_its_window_size() {
         })
     };
     let (dialog, _) = builder_titled(&frame(), "Workspace");
-    let given = Rect::from_min_size(Pos2::new(100.0, 100.0), GIVEN);
-    windows.child_info(ViewportInfo {
-        inner_rect: Some(given),
-        outer_rect: Some(given),
-        native_pixels_per_point: Some(1.0),
-        ..ViewportInfo::default()
-    });
-    let sent: Vec<Vec2> = (0..6)
-        .flat_map(|_| frame().commands)
-        .filter_map(|(id, command)| match command {
-            ViewportCommand::InnerSize(size) if id == dialog => Some(size),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(sent, Vec::<Vec2>::new(), "the workspace's window keeps the size it has");
+    let report = |size: Vec2| {
+        let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), size);
+        windows.child_info(ViewportInfo {
+            inner_rect: Some(rect),
+            outer_rect: Some(rect),
+            native_pixels_per_point: Some(1.0),
+            ..ViewportInfo::default()
+        });
+    };
+    let sizes_sent = || -> Vec<Vec2> {
+        (0..6)
+            .flat_map(|_| frame().commands)
+            .filter_map(|(id, command)| match command {
+                ViewportCommand::InnerSize(size) if id == dialog => Some(size),
+                _ => None,
+            })
+            .collect()
+    };
+    report(GIVEN);
+    assert_eq!(sizes_sent(), Vec::<Vec2>::new(), "the workspace's window keeps the size it has");
+    report(Vec2::new(1200.0, 820.0));
+    assert_eq!(sizes_sent(), Vec::<Vec2>::new(), "a size the user gives the window is kept too");
 }
 
 /// Placing a minimized window below its smallest inner size restores it and lowers that size to the placed one, so the
