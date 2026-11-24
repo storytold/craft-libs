@@ -1,7 +1,5 @@
 //! The reader on small packages written by hand.
 
-use std::sync::Arc;
-
 use craft_opc::{PackageOut, RelsOut};
 use craft_pptx::text::{LevelStyle, ListStyle, RunProps};
 use craft_pptx::{Defaults, Geom, LayoutType, Master, PhType, Plain, Presentation, ShapeKind, Size};
@@ -131,7 +129,7 @@ fn omitted_and_empty_master_body_styles_stay_distinct_through_saves() {
         }
         assert!(p.masters[0].body_style.is_empty());
 
-        Arc::make_mut(&mut p.masters[0])
+        std::sync::Arc::make_mut(&mut p.masters[0])
             .body_style
             .set(0, LevelStyle { run: RunProps { size: Some(24.0), ..Default::default() }, ..Default::default() });
         let output = craft_pptx::export(&p, &WithBodyDefault).unwrap();
