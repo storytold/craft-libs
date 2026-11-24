@@ -24,6 +24,7 @@
     "line.border": "#d0d5dd",
     "line.control_edge": "#c3c9d3",
     "line.divider": "#dde1e8",
+    "line.outline": "#a4abb8",
     "seeds": {
       "accent": "#d9472f",
       "neutral": "#f3f5f8"
@@ -48,6 +49,7 @@
     "line.border": "#06070a",
     "line.control_edge": "#2c323e",
     "line.divider": "#232832",
+    "line.outline": "#4a5363",
     "state.hover": "#262b35",
     "state.pressed": "#593330",
     "state.selected": "#4c2e2e",

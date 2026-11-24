@@ -225,6 +225,7 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::LineDivider => Anchored(6),
         T::LineBorder => Anchored(7),
         T::LineControlEdge => Anchored(8),
+        T::LineOutline => Same(T::TextMuted),
         // A light knob needs an outline on a light panel (PhotoCraft's `text_dim`); on a dark one
         // its face is the edge. The Pro themes pin PhotoCraft's dark ring.
         T::LineKnobEdge => {

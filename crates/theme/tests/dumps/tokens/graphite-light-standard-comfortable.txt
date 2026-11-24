@@ -23,6 +23,7 @@ text.on_inverse = #fcfcfdff
 line.divider = #d9d9d9ff
 line.border = #dadadeff
 line.control_edge = #b2b2b2ff
+line.outline = #5e5e66ff
 line.knob_edge = #5e5e66ff
 line.frame = #b2b2b2ff
 line.mark = #89898eff

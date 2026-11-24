@@ -144,7 +144,7 @@ impl ToneTokens {
                 soft_fill: T::SurfaceSunken,
                 on_soft: T::TextNormal,
                 fg: T::TextNormal,
-                edge: T::TextMuted,
+                edge: T::LineOutline,
                 solid: T::TextMuted,
                 solid_hover: T::TextMuted,
                 solid_pressed: T::TextNormal,

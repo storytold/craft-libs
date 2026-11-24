@@ -115,6 +115,8 @@ pub struct LineColors {
     pub border: Rgba,
     /// The boundary of a control that must be seen to be used (fields, checkboxes).
     pub control_edge: Rgba,
+    /// The edge of an outlined neutral control (an outline or soft button); follows `text.muted` unless pinned.
+    pub outline: Rgba,
     /// The outline of a `surface.knob` face; clear where the face stands out on its own (dark
     /// mode).
     pub knob_edge: Rgba,
@@ -331,7 +333,7 @@ impl ColorTokens {
                 shadow: c,
             },
             text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c, on_inverse: c },
-            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
+            line: LineColors { divider: c, border: c, control_edge: c, outline: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
             accent: AccentColors {
                 solid: c,
                 hover: c,
@@ -476,6 +478,8 @@ color_tokens! {
     LineBorder = "line.border" => line.border;
     /// `line.control_edge`
     LineControlEdge = "line.control_edge" => line.control_edge;
+    /// `line.outline`
+    LineOutline = "line.outline" => line.outline;
     /// `line.knob_edge`
     LineKnobEdge = "line.knob_edge" => line.knob_edge;
     /// `line.frame`
