@@ -3,7 +3,7 @@
 
 use super::Numbered;
 use craft_behavior::Axis;
-use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, SplitSize, Workspace};
+use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, SplitSize, StackEntry, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Tracked};
 use craft_ui::docking::{DividerKind, DockConfig, DockPanels, DockSource, HidePanels, PanelKey, SourceKind};
 use craft_ui::patterns::dock::DockArea;
@@ -146,4 +146,23 @@ fn a_panel_the_shell_hides_reports_no_source() {
     for hidden in [RIGHT, FLOATING] {
         assert!(sources.iter().all(|source| named(source) != Some(hidden)), "the hidden panel {hidden} reports no tab, bar or grip: {sources:#?}");
     }
+}
+
+/// Each section of a stack is a group of one panel whose header holds that panel's tab: an open section and a closed
+/// one each report it.
+#[trial]
+fn each_stack_section_reports_its_panels_tab() {
+    let mut closed = StackEntry::new(LOWER);
+    closed.open = false;
+    let layout = Layout::new(Some(Node::stack(vec![StackEntry::new(UPPER), closed])), Vec::new());
+    let reported: Rc<RefCell<Vec<DockSource<usize>>>> = Rc::default();
+    let seen = Rc::clone(&reported);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = Arc::new(Workspace::new(layout.clone()));
+        let specs = Tracked::new(Numbered);
+        *seen.borrow_mut() = DockArea::new("Stack", Bind::bound(&mut workspace), &specs, &mut Bodies, DockConfig::default()).show(ui).sources;
+    });
+    fixture.room(ROOM).settle();
+    let tabs = panels(&reported.borrow(), |kind| if let SourceKind::Tab(panel) = kind { Some(*panel) } else { None });
+    assert_eq!(tabs, [UPPER, LOWER], "{:?}", reported.borrow());
 }
