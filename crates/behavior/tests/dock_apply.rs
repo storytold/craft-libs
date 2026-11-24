@@ -3,7 +3,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, DockPlacement, DockSide, Floating, Group, Layout, NamedWorkspace, Node, PanelPlace, PanelState, Permissions,
-    SplitSize, Target, Workspace, WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
+    SplitSize, StackEntry, Target, Workspace, WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
 };
 use emath::{Rect, pos2, vec2};
 
@@ -638,7 +638,7 @@ fn window_ids_stay_unique_within_each_layout_and_are_never_reused() {
 fn revealing_a_panel_in_a_collapsed_column_opens_the_column_with_the_panel_in_front() {
     let mut layout = docked();
     layout.apply(Action::set_iconic(2, true)).unwrap();
-    assert_eq!(layout.panel_state(&2), PanelState::Open, "hidden behind the collapsed column");
+    assert_eq!(layout.panel_state(&2), PanelState::Open, "its tab is behind 3 and the column is collapsed");
     layout.apply(Action::reveal(2)).unwrap();
     assert!(!column_of(&layout, 2).iconic, "the column opens");
     assert_eq!(front(&layout, 2), 2, "and its tab is the group's active one");
@@ -722,6 +722,38 @@ fn revealing_a_closed_panel_is_refused_and_changes_nothing() {
     let before = layout.clone();
     assert_eq!(layout.apply(Action::reveal(5)), Err(DockError::MissingPanel));
     assert_eq!(layout, before);
+}
+
+/// A group minimized to its tab strip hides all its panels: reveal expands the group as well as selecting
+/// the tab, so the panel ends showing, and the group keeps the height the user gave it.
+#[test]
+fn revealing_a_panel_expands_its_minimized_group() {
+    let mut layout = docked();
+    layout.apply(Action::set_minimized(2, true)).unwrap();
+    layout.apply(Action::resize_group(2, Some(120.0))).unwrap();
+    assert_eq!(layout.panel_state(&2), PanelState::Open, "the group shows only its tab strip");
+    layout.apply(Action::reveal(2)).unwrap();
+    let group = layout.group(&layout.place(&2).unwrap()).unwrap();
+    assert!(!group.minimized, "the group expands");
+    assert_eq!(front(&layout, 2), 2, "and its tab is the active one");
+    assert_eq!(group.height, Some(120.0), "the group keeps the height the user gave it");
+    assert_eq!(layout.panel_state(&2), PanelState::Front);
+}
+
+/// A panel of the docked tree hidden as a closed accordion entry: reveal opens the entry, leaves the other
+/// entries as they are, and ends with the panel showing.
+#[test]
+fn revealing_a_panel_opens_its_closed_accordion_entry() {
+    let root = Node::stack(vec![StackEntry { panel: 11, open: false, height: Some(80.0) }, StackEntry { panel: 12, open: true, height: None }]);
+    let mut layout = Layout::new(Some(root), Vec::new());
+    assert_eq!(layout.panel_state(&11), PanelState::Open, "the closed entry");
+    layout.apply(Action::reveal(11)).unwrap();
+    let place = layout.place(&11).unwrap();
+    let Some(Node::Stack { entries }) = layout.node_of(&place) else { panic!("11 stays an accordion entry") };
+    assert!(entries[0].open, "the entry opens");
+    assert_eq!(entries[0].height, Some(80.0), "and keeps its height");
+    assert!(entries[1].open, "the entry that was open stays open");
+    assert_eq!(layout.panel_state(&11), PanelState::Front);
 }
 
 /// Today's `Activate` keeps its meaning: it selects the tab but leaves the column collapsed, which is what the
