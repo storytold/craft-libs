@@ -429,10 +429,14 @@ const ROOM_BELOW: f32 = 200.0;
 /// How much shorter than that room the body of the flyout that fits measures, and how much taller the one that does not.
 const OVERFLOW: f32 = 40.0;
 
+/// What [`tall_flyouts`] returns: the fixture, the panel whose flyout is open (the trial sets it) and the rect the open
+/// flyout's body showed in, last pass.
+type TallFlyouts = (Fixture, Rc<Cell<Option<u8>>>, Rc<Cell<Option<Rect>>>);
+
 /// A column of the [`TALL`] panels, each in a group of its own, on the left window edge; its flyouts stay inside the
 /// bounds `within` holds and their bodies measure the height `body` holds. Returns the fixture, the panel whose flyout
 /// is open (the trial sets it) and the rect the open flyout's body showed in, last pass.
-fn tall_flyouts(within: &Rc<Cell<Rect>>, body: &Rc<Cell<f32>>) -> (Fixture, Rc<Cell<Option<u8>>>, Rc<Cell<Option<Rect>>>) {
+fn tall_flyouts(within: &Rc<Cell<Rect>>, body: &Rc<Cell<f32>>) -> TallFlyouts {
     let (open, shown) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
     let (bounds, measures, now, seen) = (Rc::clone(within), Rc::clone(body), Rc::clone(&open), Rc::clone(&shown));
     let mut column = Column::new((0..TALL.len() as u8).map(|panel| Group::new(vec![panel], 0)).collect());
