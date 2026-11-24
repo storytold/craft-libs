@@ -1,6 +1,6 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme};
+use super::props::{FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk};
 use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
@@ -174,10 +174,13 @@ impl Component for LabelLeaf {
             name: {
                 let text = &cx.tokens.color.text;
                 let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
-                if key.link {
+                let neutral = cx.env::<LinkLabelInk>() == LinkLabelInk::Neutral;
+                if key.link && !neutral {
                     // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
                     TextLook { role, ..cx.link_look(true) }
                 } else {
+                    // A neutral link label reads in the body ink; its underline still marks it.
+                    let ink = if key.link { text.normal } else { ink };
                     let (ink, off) = (cx.color(ink), cx.color(text.disabled));
                     TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
                 }
