@@ -289,7 +289,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 strip = strip
                     .reorder(ReorderRule::new())
                     // The held tab is the preview; production shows no filename badge beside the pointer.
-                    .drag_badge(false)
+                    .drag_preview(crate::contract::RowPreview::None)
                     .can_drag(move |key: &D| tabs.iter().find(|tab| &tab.id == key).is_none_or(|tab| tab.movable))
                     .accepts(move |drag: &ListDrag<D>, _, insert| {
                         // `insert` counts every tab; `keeps_fixed` takes the place among the tabs left without the dragged ones.
