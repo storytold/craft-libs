@@ -452,15 +452,20 @@ impl<'b, 's> Decoder<'b, 's> {
         }
         Ok(word)
     }
-    fn declaration(&mut self, operation: &str) -> Result<Option<Operation<'s>>> {
+    fn declaration(
+        declarations: &'s [Operation<'s>],
+        operation: &str,
+        budget: &mut Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<Option<Operation<'s>>> {
         // GEGL's default namespace is optional. Other namespaces stay exact, and the
         // node continues to retain the operation spelling written in the source.
         let unqualified = if operation.contains(':') { operation.strip_prefix("gegl:").filter(|name| !name.contains(':')) } else { Some(operation) };
-        for (index, declaration) in self.declarations.iter().enumerate() {
+        for (index, declaration) in declarations.iter().enumerate() {
             if index % 64 == 0 {
-                check(self.keep_going)?;
+                check(keep_going)?;
             }
-            self.budget.work.charge(declaration.name.len().min(operation.len()).saturating_add(1).saturating_mul(3))?;
+            budget.work.charge(declaration.name.len().min(operation.len()).saturating_add(1).saturating_mul(3))?;
             if declaration.name == operation
                 || unqualified.is_some_and(|name| declaration.name == name || declaration.name.strip_prefix("gegl:") == Some(name))
             {
@@ -550,67 +555,28 @@ impl<'b, 's> Decoder<'b, 's> {
                 }
                 continue;
             }
+            if self.assignment() {
+                let Some(Input::Node(index)) = current else { return Err(invalid("graph assignment has no referenced operation")) };
+                let node = self.nodes.get_mut(index).ok_or_else(|| invalid("missing referenced graph operation"))?;
+                let declaration = Self::declaration(self.declarations, &node.operation, self.budget, self.keep_going)?;
+                let source_ordinal = node.source_ordinal;
+                let mut properties = std::mem::take(&mut node.properties);
+                self.properties(&mut properties, declaration, source_ordinal, None)?;
+                self.nodes.get_mut(index).ok_or_else(|| invalid("missing referenced graph operation"))?.properties = properties;
+                continue;
+            }
             let operation = self.name()?;
             if self.source_nodes >= MAX_NODES {
                 return Err(invalid("graph exceeds 64 source nodes"));
             }
             let source_ordinal = self.source_nodes;
             self.source_nodes += 1;
-            let declaration = self.declaration(&operation)?;
+            let declaration = Self::declaration(self.declarations, &operation, self.budget, self.keep_going)?;
             if declaration.is_none() {
                 push(&mut self.diagnostics, Diagnostic::UnknownOperation { source_ordinal }, self.budget)?;
             }
-            let mut properties: Vec<Property> = Vec::new();
-            while self.assignment() {
-                check(self.keep_going)?;
-                if matches!(self.peek(), Some(Token::Word(word)) if word == "ref") {
-                    break;
-                }
-                if matches!(self.peek(), Some(Token::Word(word)) if word == "id") {
-                    self.word()?;
-                    self.equal()?;
-                    let name = self.name()?;
-                    // Keep source-order labels visible, but do not publish this node's
-                    // final dependency-first index until all of its inputs are complete.
-                    self.define_label(name, Input::Source, Some(source_ordinal))?;
-                    continue;
-                }
-                let name = self.name()?;
-                self.equal()?;
-                if self.assignments >= MAX_ARGUMENTS {
-                    return Err(invalid("excessive graph assignments"));
-                }
-                for property in &properties {
-                    self.budget.work.charge(property.name.len().min(name.len()).saturating_add(1))?;
-                    if property.name == name {
-                        return Err(invalid("duplicate graph assignment"));
-                    }
-                }
-                self.assignments += 1;
-                let kind = self.kind(declaration, &name)?;
-                if kind.is_none() {
-                    push(&mut self.diagnostics, Diagnostic::UnknownProperty { source_ordinal, property: properties.len() }, self.budget)?;
-                }
-                let (literal, value) = if matches!(self.peek(), Some(Token::Open)) {
-                    self.take()?;
-                    let input = self.block(None, depth + 1)?;
-                    if !matches!(self.take()?, Token::Close) {
-                        return Err(invalid("unterminated graph auxiliary block"));
-                    }
-                    if kind.is_some_and(|kind| !matches!(kind, FieldType::Input)) {
-                        return Err(invalid("scalar graph property has an auxiliary block"));
-                    }
-                    (String::new(), Value::Input(input))
-                } else {
-                    let literal = self.word()?;
-                    let value = typed_value(&literal, kind, self.budget)?;
-                    (literal, value)
-                };
-                if matches!(kind, Some(FieldType::Integer | FieldType::UnsignedInteger)) && matches!(value, Value::Unknown) {
-                    push(&mut self.diagnostics, Diagnostic::UnsupportedInteger { source_ordinal, property: properties.len() }, self.budget)?;
-                }
-                push(&mut properties, Property { name, literal, value }, self.budget)?;
-            }
+            let mut properties = Vec::new();
+            self.properties(&mut properties, declaration, source_ordinal, Some(depth))?;
             let index = self.nodes.len();
             push(&mut self.nodes, Node { source_ordinal, operation, input: current, properties }, self.budget)?;
             self.finish_labels(source_ordinal, index)?;
@@ -618,12 +584,101 @@ impl<'b, 's> Decoder<'b, 's> {
         }
         current.ok_or_else(|| invalid("graph auxiliary block has no input or operation"))
     }
+    /// A new node may bind labels and introduce auxiliary dependencies. A
+    /// resolved node accepts scalar edits only, preserving dependency order.
+    fn properties(
+        &mut self,
+        properties: &mut Vec<Property>,
+        declaration: Option<Operation<'s>>,
+        source_ordinal: usize,
+        depth: Option<usize>,
+    ) -> Result<()> {
+        while self.assignment() {
+            check(self.keep_going)?;
+            if matches!(self.peek(), Some(Token::Word(word)) if word == "ref") {
+                break;
+            }
+            if matches!(self.peek(), Some(Token::Word(word)) if word == "id") {
+                if depth.is_none() {
+                    break; // The block already has the resolved input for this label.
+                }
+                self.word()?;
+                self.equal()?;
+                let name = self.name()?;
+                // Finalize the index only after the pending node's dependencies.
+                self.define_label(name, Input::Source, Some(source_ordinal))?;
+                continue;
+            }
+            let name = self.name()?;
+            self.equal()?;
+            if self.assignments >= MAX_ARGUMENTS {
+                return Err(invalid("excessive graph assignments"));
+            }
+            let mut slot = properties.len();
+            for (index, property) in properties.iter().enumerate() {
+                self.budget.work.charge(property.name.len().min(name.len()).saturating_add(1))?;
+                if property.name == name {
+                    if depth.is_some() {
+                        return Err(invalid("duplicate graph assignment"));
+                    }
+                    if matches!(property.value, Value::Input(_)) {
+                        return Err(invalid("a scalar assignment cannot replace an auxiliary input"));
+                    }
+                    slot = index;
+                    break;
+                }
+            }
+            self.assignments += 1;
+            let kind = self.kind(declaration, &name)?;
+            if slot < properties.len() {
+                // A resolved scalar reassignment replaces the value and its
+                // diagnostic. Graph::raw retains the original source sequence.
+                self.budget.work.charge(self.diagnostics.len())?;
+                self.diagnostics.retain(|entry| {
+                    !matches!(entry,
+                        Diagnostic::UnknownProperty { source_ordinal: owner, property }
+                        | Diagnostic::UnsupportedInteger { source_ordinal: owner, property }
+                        if *owner == source_ordinal && *property == slot
+                    )
+                });
+            }
+            if kind.is_none() {
+                push(&mut self.diagnostics, Diagnostic::UnknownProperty { source_ordinal, property: slot }, self.budget)?;
+            }
+            let (literal, value) = if matches!(self.peek(), Some(Token::Open)) {
+                let Some(depth) = depth else { return Err(invalid("a referenced graph node cannot acquire an auxiliary block")) };
+                self.take()?;
+                let input = self.block(None, depth + 1)?;
+                if !matches!(self.take()?, Token::Close) {
+                    return Err(invalid("unterminated graph auxiliary block"));
+                }
+                if kind.is_some_and(|kind| !matches!(kind, FieldType::Input)) {
+                    return Err(invalid("scalar graph property has an auxiliary block"));
+                }
+                (String::new(), Value::Input(input))
+            } else {
+                let literal = self.word()?;
+                let value = typed_value(&literal, kind, self.budget)?;
+                (literal, value)
+            };
+            if matches!(kind, Some(FieldType::Integer | FieldType::UnsignedInteger)) && matches!(value, Value::Unknown) {
+                push(&mut self.diagnostics, Diagnostic::UnsupportedInteger { source_ordinal, property: slot }, self.budget)?;
+            }
+            let property = Property { name, literal, value };
+            if let Some(previous) = properties.get_mut(slot) {
+                *previous = property;
+            } else {
+                push(properties, property, self.budget)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) -> Result<Value> {
-    if matches!(kind, Some(FieldType::Number | FieldType::Integer | FieldType::UnsignedInteger))
-        && let Some(coefficient) = literal.strip_suffix("rel")
-    {
+    let numeric = matches!(kind, Some(FieldType::Number | FieldType::Integer | FieldType::UnsignedInteger));
+    let number = if numeric { literal.trim_ascii() } else { literal };
+    if numeric && let Some(coefficient) = number.strip_suffix("rel") {
         let coefficient = coefficient.parse::<f64>().map_err(|_| invalid("relative graph coefficient is not a number"))?;
         if !coefficient.is_finite() {
             return Err(invalid("relative graph coefficient is not finite"));
@@ -633,21 +688,21 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
     // A numeric coefficient followed by malformed relative syntax is not an absolute
     // integer fallback. Keep its existing syntax error instead of disguising it as data.
     if matches!(kind, Some(FieldType::Integer | FieldType::UnsignedInteger))
-        && literal.find("rel").is_some_and(|at| literal.get(..at).is_some_and(|prefix| prefix.parse::<f64>().is_ok()))
+        && number.find("rel").is_some_and(|at| number.get(..at).is_some_and(|prefix| prefix.parse::<f64>().is_ok()))
     {
         return Err(invalid("malformed relative graph coefficient"));
     }
     Ok(match kind {
         None => Value::Unknown,
         Some(FieldType::Number) => {
-            let value = literal.parse::<f64>().map_err(|_| invalid("graph scalar is not a number"))?;
+            let value = number.parse::<f64>().map_err(|_| invalid("graph scalar is not a number"))?;
             if !value.is_finite() {
                 return Err(invalid("graph scalar is not finite"));
             }
             Value::Number(value)
         }
-        Some(FieldType::Integer) => signed_integer(literal).map_or(Value::Unknown, Value::Integer),
-        Some(FieldType::UnsignedInteger) => unsigned_integer(literal).map_or(Value::Unknown, Value::UnsignedInteger),
+        Some(FieldType::Integer) => signed_integer(number).map_or(Value::Unknown, Value::Integer),
+        Some(FieldType::UnsignedInteger) => unsigned_integer(number).map_or(Value::Unknown, Value::UnsignedInteger),
         // GEGL 0.4.62's public chain API uses this explicit true set, not general
         // case folding (for example, "on" is true but "ON" is false).
         Some(FieldType::Boolean) => Value::Boolean(matches!(literal, "true" | "True" | "TRUE" | "1" | "yes" | "Yes" | "YES" | "on" | "y" | "Y")),

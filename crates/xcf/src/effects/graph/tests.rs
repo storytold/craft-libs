@@ -813,3 +813,44 @@ fn auxiliary_references_to_pending_nodes_reject_cycles_without_retained_debt() {
     assert_eq!(graph.nodes[1].input, Some(Input::Node(0)));
     check_edges(&graph);
 }
+
+#[test]
+fn reference_scalar_edits_target_the_selected_node_and_keep_later_edges() {
+    let raw = "gain n=0 signed=unrepresentable id=base invert-linear ref=base n=1.25 signed=7 invert-linear";
+    let graph = read(raw);
+    assert_eq!(graph.raw, raw);
+    assert_eq!(graph.nodes.len(), 3);
+    assert_eq!(graph.labels[0].input, Input::Node(0));
+    assert_eq!(graph.nodes[0].properties.len(), 2);
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Number(1.25));
+    assert_eq!(graph.nodes[0].properties[1].value, Value::Integer(7));
+    assert!(graph.diagnostics.is_empty());
+    assert_eq!(graph.nodes[1].input, Some(Input::Node(0)));
+    assert_eq!(graph.nodes[2].input, Some(Input::Node(0)));
+    assert_eq!(graph.output, Input::Node(2));
+    check_edges(&graph);
+
+    let graph = read("gain id=base ref=base n=1.25");
+    assert_eq!(graph.output, Input::Node(0));
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Number(1.25));
+    for invalid in ["ref=missing n=1.25", "id=source ref=source n=1.25", "over id=base ref=base aux=[ ref=base ]", "gain n=0 n=1"] {
+        assert!(parse(invalid, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn quoted_ascii_padding_changes_only_the_numeric_view() {
+    let plain = read("gain n=1.25 signed=-7 seed=17");
+    let raw = "gain n=' \t1.25 \t' signed=' -7 ' seed=' 17 '";
+    let padded = read(raw);
+    assert_eq!(padded.raw, raw);
+    for (property, unpadded) in padded.nodes[0].properties.iter().zip(&plain.nodes[0].properties) {
+        assert_eq!(property.value, unpadded.value);
+        assert_eq!(property.literal.trim_ascii(), unpadded.literal);
+        assert_ne!(property.literal, unpadded.literal);
+    }
+    for literal in [" NaN ", " inf ", " 1.25tail ", "\u{a0}1.25\u{a0}"] {
+        let raw = format!("gain n='{literal}'");
+        assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
+    }
+}
