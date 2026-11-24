@@ -431,7 +431,7 @@ impl<'a> FloatingGroup<'a> {
             }
             let inner = (!minimized).then(|| body(ui, cx));
             if native && !ui.is_sizing_pass() && ui.ctx().viewport_id() != viewport {
-                keys.extend(crate::runtime::keys::unclaimed(ui.ctx()));
+                keys.extend(crate::runtime::keys::leftover_events(ui.ctx()));
                 if !keys.is_empty() {
                     shown_modifiers = Some(ui.input(|input| input.modifiers));
                 }

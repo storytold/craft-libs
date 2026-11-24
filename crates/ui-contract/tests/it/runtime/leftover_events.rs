@@ -1,0 +1,40 @@
+//! `runtime::keys::leftover_events`: the keys of a pass that nothing took, for a host that runs shortcuts of its own on
+//! a window's input.
+
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
+use craft_ui::runtime::frame::take_output;
+use craft_ui::runtime::keys::leftover_events;
+use craft_ui::testing::focus::key_release;
+use craft_ui::testing::input::key_press;
+use craft_ui::testing::{Frames, trial};
+use egui::{Event, Key, Modifiers, Ui};
+use std::cell::RefCell;
+
+/// With nothing focused, a host reading the leftover events after the window's content gets the press and release of
+/// a key no command is bound to, and neither the press nor the release of a key whose command fired.
+#[trial]
+fn leftover_events_holds_the_keys_no_command_took() {
+    let mut frames = Frames::new();
+    let binding = Binding::parse("F1").expect("the trial's chord parses");
+    let help = CommandDef::new("leftoverTrial.help", "Help", Scope::app()).with_default(binding);
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid")));
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+    let keys = |events: Vec<Event>| -> Vec<(Key, bool)> {
+        events.into_iter().filter_map(|event| if let Event::Key { key, pressed, .. } = event { Some((key, pressed)) } else { None }).collect()
+    };
+
+    frames.frame(vec![key_press(Key::F1, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::F1, Modifiers::NONE)], &mut show);
+    assert_eq!(take_output(&frames.ctx).fired.len(), 1, "the command fired");
+    assert!(keys(left.take()).is_empty(), "its press and release are the command's");
+
+    frames.frame(vec![key_press(Key::F4, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::F4, Modifiers::NONE)], &mut show);
+    assert_eq!(keys(left.take()), [(Key::F4, true), (Key::F4, false)], "an unbound key's are left over");
+}

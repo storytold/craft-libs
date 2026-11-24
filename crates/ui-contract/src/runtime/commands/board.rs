@@ -2251,7 +2251,7 @@ pub(crate) fn begin(ctx: &Context) {
                 }
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, true, &enabled)));
                 if let Some(repeated) = tap.and_then(|tap| press(tap, None, time, Some(shortcut.place))) {
-                    // A host that reads the keys nothing took (`keys::unclaimed`) leaves this repeat to the command. A
+                    // A host that reads the keys nothing took (`keys::leftover_events`) leaves this repeat to the command. A
                     // repeat that fires nothing goes the way of its press: the command's while a fired press holds the
                     // key, else left over, as a declined press is.
                     keys::note_fired(ctx, &shortcut.input, true);
@@ -2269,13 +2269,13 @@ pub(crate) fn begin(ctx: &Context) {
                 match (hold, tap) {
                     (Some((key, hold)), tap) => {
                         // The wait fires the tap or the hold for this key in a later event or pass: a host that reads
-                        // the keys nothing took (`keys::unclaimed`) leaves the press, its repeats and its release to it.
+                        // the keys nothing took (`keys::leftover_events`) leaves the press, its repeats and its release to it.
                         keys::note_fired(ctx, &shortcut.input, false);
                         wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport });
                     }
                     (None, Some(tap)) => {
                         if let Some(pressed) = press(tap, key, time, Some(shortcut.place)) {
-                            // A host that reads the keys nothing took (`keys::unclaimed`) leaves this press to the command.
+                            // A host that reads the keys nothing took (`keys::leftover_events`) leaves this press to the command.
                             keys::note_fired(ctx, &shortcut.input, false);
                             fired.push(pressed);
                         }

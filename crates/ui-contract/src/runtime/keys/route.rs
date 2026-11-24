@@ -534,7 +534,7 @@ pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
 }
 
 /// Records that the shortcut dispatcher fired a command for the press `input` in the running pass, or holds it for a
-/// hold binding's wait, so [`unclaimed`] leaves the press, its auto-repeats until its release, the release and the
+/// hold binding's wait, so [`leftover_events`] leaves the press, its auto-repeats until its release, the release and the
 /// clipboard event that stood for it to the command. With `repeat`, the command fired for an auto-repeat of a press
 /// the dispatcher left (`RootEnv::shortcuts_repeat`): that repeat alone is the command's, and the press's release goes
 /// the way of the press.
@@ -548,21 +548,25 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
     });
 }
 
-/// The key, text and clipboard events of the running pass that nothing took: no component of the viewport has
-/// keyboard focus (a framework stop or an app's own widget), and the key stage neither stripped an event for itself
-/// (Escape, Tab and focus moves, claimed and edit chords, the menu bar's keys) nor handed it to a component
-/// (typing, a list's keys), and no widget has read it from egui's input since, nor has the shortcut dispatcher fired a
-/// command for it (`note_fired`) or for the press of a key still held, whose auto-repeats are the command's too, whether
-/// or not they fire it again. A press the dispatcher declined is left over, and so are its repeats that fire nothing. Call
-/// it once the viewport's content has run, for a host that runs its own shortcuts on the input of a window the
-/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only. The release of
-/// a key a command took is the command's only while that press holds it: the hold ends at any release of the key,
-/// wherever focus is, so the next press and release of the key are left over.
+/// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the running pass that
+/// nothing took, in the order they arrived, for a host that runs shortcuts of its own on the input of a window the
+/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only. Call it once
+/// the viewport's content has run. Other events (pointer, IME, window events) are never in it.
+///
+/// An event is left over when no component of the viewport has keyboard focus (a framework stop or an app's own
+/// widget), the key stage neither took it for itself (Escape, Tab and focus moves, claimed and edit chords, the menu
+/// bar's keys) nor handed it to a component (typing, a list's keys), no widget has read it from egui's input since,
+/// and the shortcut dispatcher fired no command for it. A press a command fired for holds its key: the key's
+/// auto-repeats are the command's too, whether or not they fire it again (`RootEnv::shortcuts_repeat`), and so is its
+/// release. The hold ends at any release of the key, wherever it lands, so the next press and release of the key are
+/// left over. A press the dispatcher declined (a chord whose commands are all disabled) is left over, and so are its
+/// repeats that fire nothing.
 ///
 /// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
-/// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image). Empty while a component has focus, as that component owns the keys then.
-#[doc(hidden)]
-pub fn unclaimed(ctx: &Context) -> Vec<Event> {
+/// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events. Empty
+/// while a component has focus, as that component owns the keys then. The same in every call of a pass: it reads the
+/// pass and changes nothing.
+pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let record = focus::record(ctx, viewport);
     if record.focused.is_some() || record.foreign || crate::runtime::egui::focus::focused(ctx).is_some() {
@@ -625,7 +629,7 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
     left
 }
 
-/// Puts `clip` in `left` in [`unclaimed`] when no command took the press it stands for (`took`); a press a command
+/// Puts `clip` in `left` in [`leftover_events`] when no command took the press it stands for (`took`); a press a command
 /// took holds its key in `down` until its release, as a key's own press does.
 fn leave_clip(clip: LeftClip, took: impl Fn(&KeyInput) -> bool, down: &mut Vec<Key>, left: &mut Vec<Event>) {
     if !took(&clip.input) {

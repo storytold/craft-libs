@@ -47,12 +47,10 @@ pub(crate) use intents::{
 };
 pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
-#[doc(hidden)]
-pub use route::unclaimed;
 pub(crate) use route::{
     activated_member, begin, focus_in_modal_dialog, layout_of, note_fired, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts,
 };
-pub use route::{escape_mods, focus_holds};
+pub use route::{escape_mods, focus_holds, leftover_events};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -354,7 +352,7 @@ pub(crate) struct Stage {
     /// key stage drops a key at any release of it, whatever has focus, at a press of it that is no repeat (the earlier
     /// release went to another window) and when the window loses focus.
     fired_down: Vec<Key>,
-    /// The keys of `fired_down` held over from earlier passes, as `unclaimed` reads this pass's events by them:
+    /// The keys of `fired_down` held over from earlier passes, as `leftover_events` reads this pass's events by them:
     /// `fired_down` before this pass's events, less each key pressed again (no repeat) in this pass.
     fired_before: Vec<Key>,
     /// The paste the focused component reads through its clipboard handle.

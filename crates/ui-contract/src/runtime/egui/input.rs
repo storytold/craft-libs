@@ -174,7 +174,7 @@ pub(crate) enum KeyEvent {
     Other,
 }
 
-/// A raw event as a host that reads what nothing took (`keys::unclaimed`) sorts it.
+/// A raw event as a host that reads what nothing took (`keys::leftover_events`) sorts it.
 pub(crate) enum Leftover {
     /// A key press (an auto-repeat when `repeat`) or release.
     Key { pressed: bool, repeat: bool },
@@ -184,7 +184,7 @@ pub(crate) enum Leftover {
     Other,
 }
 
-/// How `unclaimed` sorts `event`.
+/// How `leftover_events` sorts `event`.
 pub(crate) fn leftover(event: &Event) -> Leftover {
     match event {
         Event::Key { pressed, repeat, .. } => Leftover::Key { pressed: *pressed, repeat: *repeat },
