@@ -13,6 +13,9 @@ const DASH: f32 = 0.5;
 /// The radius of the radio dot, as a share of the mark's side.
 const DOT_RADIUS: f32 = 0.25;
 
+/// The radius of the radio ring, as a share of the mark's side.
+const RING_RADIUS: f32 = 0.38;
+
 /// The check mark in `square`; stroke it.
 #[doc(hidden)]
 pub fn check(square: Rect) -> PaintShape {
@@ -31,4 +34,10 @@ pub fn dash(mark: Rect) -> PaintShape {
 #[doc(hidden)]
 pub fn dot(center: Pos2, side: f32) -> PaintShape {
     PaintShape::Circle(center, side * DOT_RADIUS)
+}
+
+/// The empty ring of a radio mark that is not the choice, at `center` in a mark `side` points wide; stroke it.
+#[doc(hidden)]
+pub fn ring(center: Pos2, side: f32) -> PaintShape {
+    PaintShape::Circle(center, side * RING_RADIUS)
 }

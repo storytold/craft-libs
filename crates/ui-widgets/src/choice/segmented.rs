@@ -194,6 +194,8 @@ impl Segment {
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
+            chord: None,
+            detail: None,
         }
     }
 }

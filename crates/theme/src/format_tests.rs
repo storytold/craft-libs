@@ -185,3 +185,45 @@ fn reference_cycles_are_errors() {
     let e = errors(&with_light(json!({ "text.muted": "{text.muted}" })));
     assert_eq!(e.len(), 1, "{e:?}");
 }
+
+/// photocraft#16426: `shape.grip` sets the dock grips' marks. Each value is optional and keeps the default's when
+/// left out; the theme's tokens take them, the file writes them back, and a value of the wrong kind or out of range
+/// is an error at its key.
+#[test]
+fn the_grip_shape_is_read_resolved_written_and_checked() {
+    let appearance = super::semantic_tests::app(Mode::Dark, Contrast::Standard);
+    let plain = parse_value(&full()).unwrap();
+    assert_eq!(crate::resolve(&plain.theme, appearance, None).tokens.shape.grip, GripShape::DEFAULT, "no grip: the default");
+    assert_eq!(
+        GripShape::DEFAULT,
+        GripShape { mark: GripMark::Ticks, count: 11, length: 5.0, width: 1.0, gap: 1.0 },
+        "eleven ticks, five points tall: apart from the reference application's ten of four"
+    );
+
+    let mut v = full();
+    v["shape"]["grip"] = json!({ "mark": "dots", "count": 6, "width": 2, "gap": 3, "x_grip": 1 });
+    let file = parse_value(&v).unwrap();
+    let grip = crate::resolve(&file.theme, appearance, None).tokens.shape.grip;
+    assert_eq!(grip, GripShape { mark: GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 }, "set values over the default");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/shape/grip/mark"), Some(&json!("dots")));
+    assert_eq!(written.pointer("/shape/grip/count"), Some(&json!(6)));
+    assert_eq!(written.pointer("/shape/grip/length"), None, "an unset value is not written");
+    assert_eq!(written.pointer("/shape/grip/x_grip"), Some(&json!(1)), "unknown keys stay");
+    assert_eq!(format::parse(format::write(&file).unwrap().as_bytes()).unwrap().theme, file.theme);
+
+    for (key, bad) in [
+        ("mark", json!("stripes")),
+        ("count", json!(0)),
+        ("count", json!(2.5)),
+        ("count", json!(33)),
+        ("length", json!(-1)),
+        ("width", json!("thin")),
+        ("gap", json!(100)),
+    ] {
+        let mut v = full();
+        v["shape"]["grip"] = json!({ key: bad });
+        let found = errors(&v);
+        assert!(found.iter().any(|e| e.contains(&format!("shape.grip.{key}")) || e.contains(key)), "{key} = {bad}: {found:?}");
+    }
+}

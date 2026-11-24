@@ -497,7 +497,7 @@ impl Sheet {
                     };
                     SampleFace::Face { catalog, owner: *owner, face }
                 }
-                None => SampleFace::Interface,
+                None => SampleFace::Missing,
             };
             StyleRow::new(line, &self.title, &self.sample, points, face, words)
         });

@@ -207,6 +207,9 @@ pub enum TextureState {
     Loading {
         /// The key's picture of another revision, shown until the new one lands.
         stand_in: Option<CachedTexture>,
+        /// Seconds since the key's job was queued by the pass clock; `None` when the state does not know of a queued
+        /// job (`Thumbnails::state` fills it).
+        waited: Option<f64>,
     },
     /// The picture for this revision.
     Ready(CachedTexture),
@@ -244,6 +247,21 @@ pub struct TextureStatistics {
     pub upload_bytes: usize,
     /// Entries evicted since the store was made.
     pub evicted: usize,
+}
+
+impl std::ops::Add for TextureStatistics {
+    type Output = TextureStatistics;
+
+    /// The field-wise sum, for the statistics of several stores taken together.
+    fn add(self, other: TextureStatistics) -> TextureStatistics {
+        TextureStatistics {
+            entries: self.entries + other.entries,
+            bytes: self.bytes + other.bytes,
+            uploads: self.uploads + other.uploads,
+            upload_bytes: self.upload_bytes + other.upload_bytes,
+            evicted: self.evicted + other.evicted,
+        }
+    }
 }
 
 /// One key's picture.
@@ -736,7 +754,7 @@ impl<K: TextureKey> Inner<K> {
         let same = entry.revision == revision;
         match (&entry.picture, shown(&self.pages, &entry.picture)) {
             (_, Some(texture)) if same => TextureState::Ready(texture),
-            (_, Some(texture)) => TextureState::Loading { stand_in: Some(texture) },
+            (_, Some(texture)) => TextureState::Loading { stand_in: Some(texture), waited: None },
             (Picture::Empty, _) if same => TextureState::Empty,
             (Picture::Failed(failure), _) if same => TextureState::Failed { failure: failure.clone() },
             _ => TextureState::Missing,

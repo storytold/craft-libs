@@ -205,12 +205,15 @@ pub struct PathSelection {
     /// The subpaths of that path whose anchors and handles show; `None` shows every subpath's. A Delete Anchor
     /// click narrows it to the subpath it acts on (Photoshop's Delete Anchor Point, #12769); the outlines always show.
     pub shown: Option<Vec<usize>>,
+    /// Anchors of other paths, by the host key of each path: they draw selected, with their handles under
+    /// [`HandlesShown`](super::HandlesShown), and declare no part: the overlay edits only `path`'s.
+    pub others: Vec<(u64, Vec<KnotRef>)>,
 }
 
 impl PathSelection {
     /// The selection of `anchors` of the path keyed `path`, and of a segment, with every subpath's anchors shown.
     pub fn new(path: Option<u64>, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> Self {
-        Self { path, anchors, segment, shown: None }
+        Self { path, anchors, segment, shown: None, others: Vec::new() }
     }
 
     /// The selection with the anchors of only the `shown` subpaths drawn (`None`: every subpath's).
@@ -218,6 +221,26 @@ impl PathSelection {
     pub fn shown(mut self, shown: Option<Vec<usize>>) -> Self {
         self.shown = shown;
         self
+    }
+
+    /// The selection with the anchors `anchors` of the other path keyed `path` drawn selected.
+    #[must_use]
+    pub fn also(mut self, path: u64, anchors: Vec<KnotRef>) -> Self {
+        match self.others.iter_mut().find(|(key, _)| *key == path) {
+            Some((_, held)) => held.extend(anchors),
+            None => self.others.push((path, anchors)),
+        }
+        self
+    }
+
+    /// Whether `knot` of `path` draws selected: a selected anchor of the path being edited, or one listed in `others`.
+    pub fn draws_selected(&self, path: u64, knot: KnotRef) -> bool {
+        self.has_anchor(path, knot) || self.others.iter().any(|(key, anchors)| *key == path && anchors.contains(&knot))
+    }
+
+    /// The number of selected anchors over the edited path and every path in `others`.
+    pub fn selected_len(&self) -> usize {
+        self.anchors.len() + self.others.iter().map(|(_, anchors)| anchors.len()).sum::<usize>()
     }
 
     /// Whether `knot` of `path` is a selected anchor.
