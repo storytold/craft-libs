@@ -91,6 +91,7 @@ pass_state! {
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,
+        row_shortfalls: crate::layout::body::RowShortfalls,
         bar_rules: crate::contract::BarRules,
         surface_frames: crate::primitives::SurfaceFrames,
         fill_counts: crate::layout::body::FillCounts,

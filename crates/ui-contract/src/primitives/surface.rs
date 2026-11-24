@@ -136,9 +136,10 @@ impl SurfaceSlot {
         SurfaceSlot { painter, slot }
     }
 
-    /// Paints the surface `kind` over `rect`.
+    /// Paints the surface `kind` over `rect`, kept to its layer's frame ([`frame_surfaces`]).
     pub(crate) fn paint(&self, tokens: &UiTokens, kind: SurfaceKind, rect: Rect, direction: Direction) {
-        let shapes = Surface::shapes(&surface_style(tokens, kind), None, rect, Corners::All, direction, self.painter.pixels_per_point());
+        let mut shapes = Surface::shapes(&surface_style(tokens, kind), None, rect, Corners::All, direction, self.painter.pixels_per_point());
+        fit_to_frame(self.painter.ctx(), self.painter.layer_id(), &mut shapes);
         self.painter.set(self.slot, Shape::Vec(shapes));
     }
 }
