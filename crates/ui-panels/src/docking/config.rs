@@ -3,7 +3,7 @@
 
 use super::IconicMode;
 use super::targets::ZoneRule;
-use craft_behavior::DockSide;
+use craft_behavior::{DockSide, IconId};
 
 /// A set of the sides of the layout's outer edge or of a group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -80,6 +80,12 @@ pub struct DockConfig {
     /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
     /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
     pub floating_rounded_body: bool,
+    /// A docked column of a tool rail (a stepped column whose panel has a [`DockGrid::rail`](super::DockGrid::rail))
+    /// shows as a card: inset by `space.gap.stack` on its outer, top and bottom sides, where the dock's background
+    /// shows, and painted `surface.panel` with `shape.radius.surface` corners and no frame. The column is wider by the
+    /// inset, so it keeps its steps; its dividers, drop bands and edge handle stay on its outer rect. Off: the column
+    /// fills its cell.
+    pub rail_cards: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -96,6 +102,11 @@ pub struct DockConfig {
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// Every group shows its panel menu button, whose menu holds the dock's own rows when the shown panel has none of
+    /// its own (`DockPanels::panel_rows`). Off: only a group whose shown panel has rows of its own shows the button.
+    pub panel_menu_always: bool,
+    /// The panel menu button's icon: `more` (the default), or `menu` for the three-line mark.
+    pub panel_menu_icon: IconId,
     /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
     /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
     pub iconic_mode: IconicMode,
@@ -115,11 +126,14 @@ impl Default for DockConfig {
             close_button: true,
             floating_grip: false,
             floating_rounded_body: false,
+            rail_cards: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
+            panel_menu_always: false,
+            panel_menu_icon: IconId::new("more"),
             iconic_mode: IconicMode::Flyouts,
         }
     }
@@ -137,6 +151,20 @@ impl DockConfig {
     #[must_use]
     pub fn group_order_items(mut self, on: bool) -> Self {
         self.group_order_items = on;
+        self
+    }
+
+    /// The panel menu button on every group on or off ([`panel_menu_always`](Self::panel_menu_always)).
+    #[must_use]
+    pub fn panel_menu_always(mut self, on: bool) -> Self {
+        self.panel_menu_always = on;
+        self
+    }
+
+    /// The panel menu button's icon ([`panel_menu_icon`](Self::panel_menu_icon)).
+    #[must_use]
+    pub fn panel_menu_icon(mut self, icon: IconId) -> Self {
+        self.panel_menu_icon = icon;
         self
     }
 
@@ -214,6 +242,13 @@ impl DockConfig {
     #[must_use]
     pub fn floating_rounded_body(mut self, on: bool) -> Self {
         self.floating_rounded_body = on;
+        self
+    }
+
+    /// Docked tool rails as cards on or off ([`rail_cards`](Self::rail_cards)).
+    #[must_use]
+    pub fn rail_cards(mut self, on: bool) -> Self {
+        self.rail_cards = on;
         self
     }
 

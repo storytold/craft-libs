@@ -113,15 +113,25 @@ pub(crate) struct OsFiles {
     pub given: Vec<(String, Vec<u8>)>,
 }
 
-/// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
-/// reports both, and the fact stays until the next such event. Before any event the focus is unknown.
-fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: Option<f32>) -> egui::ViewportIdMap<egui::ViewportInfo> {
+/// The viewport facts a frame reports: the root window's inner rect when the frame is the root's (`inner`), and its
+/// focus: a window-focus event also sets the root viewport's focus fact, as a host reports both, and the fact stays
+/// until the next such event. Before any event the focus is unknown.
+fn window_facts(
+    ctx: &Context,
+    events: &[Event],
+    native_pixels_per_point: Option<f32>,
+    inner: Option<Rect>,
+) -> egui::ViewportIdMap<egui::ViewportInfo> {
     let last = events.iter().rev().find_map(|event| if let Event::WindowFocused(focused) = event { Some(*focused) } else { None });
     let focused = Service::<WindowFocus>::run(ctx, |state| {
         state.0 = last.or(state.0);
         state.0
     });
-    std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { focused, native_pixels_per_point, ..egui::ViewportInfo::default() })).collect()
+    std::iter::once((
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { focused, native_pixels_per_point, inner_rect: inner, ..egui::ViewportInfo::default() },
+    ))
+    .collect()
 }
 
 /// The focus the fixture's window last reported; unset before any focus event.
@@ -245,7 +255,7 @@ pub(crate) fn run_frame(
         super::files::open_reads(ctx, viewport, files.read.len());
     }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
-    let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
+    let mut viewports = window_facts(ctx, &events, native_pixels_per_point, (viewport == egui::ViewportId::ROOT).then_some(screen));
     let children = open_children(ctx, viewport);
     for child in &children {
         viewports

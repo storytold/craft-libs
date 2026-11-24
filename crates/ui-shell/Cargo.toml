@@ -58,6 +58,7 @@ craft-theme = { workspace = true }
 craft-ui-test-kit = { workspace = true, features = ["suite"] }
 craft-window = { workspace = true }
 egui = { workspace = true }
+serde_json = { workspace = true }
 
 [[test]]
 name = "it"

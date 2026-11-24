@@ -962,7 +962,7 @@ fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
     let nan = Pos2::new(f32::NAN, 10.0);
     host.inject_click(ViewportId::ROOT, nan, PointerButton::Primary, 1, Mods::NONE, false);
     host.inject_move(ViewportId::ROOT, Pos2::new(f32::INFINITY, 0.0), Mods::NONE, 0.0);
-    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), Mods::NONE);
+    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), egui::MouseWheelUnit::Point, Mods::NONE);
     host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Primary, nan, Mods::NONE, None));
     frames(6);
     assert_eq!(presses.get(), 0, "no non-finite press reaches egui");
@@ -1093,6 +1093,122 @@ fn a_floating_panel_opened_from_a_full_window_container_takes_input() {
     let probe = fixture.by_label("Probe").expect("the panel's probe is in the access tree");
     fixture.click(&probe).idle(2);
     assert_eq!(seen.borrow().activations, 1, "the click reaches the panel above the full-window container");
+}
+
+/// A button the platform reports up while egui holds it (the window never got the release) is let go once, at the
+/// pointer's last position so no click results. Nothing is released while the platform reports the button down, while
+/// injected input holds it, or while the platform tells nothing.
+#[trial]
+fn a_button_the_platform_reports_up_is_released_once() {
+    use craft_ui::runtime::windows::InjectedPointer;
+    use craft_ui::testing::windows::HeldButtons;
+
+    let system = Arc::new(FakeSystem::new());
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system.clone()));
+    let host = WindowHost::of(&windows.ctx);
+    let secondary = egui::PointerButton::Secondary;
+    let down = Cell::new(false);
+    let clicked = Cell::new(false);
+    let releases = RefCell::new(Vec::new());
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            ui.ctx().input(|input| {
+                down.set(input.pointer.button_down(secondary));
+                clicked.set(clicked.get() || input.pointer.button_clicked(secondary));
+                releases.borrow_mut().extend(input.raw.events.iter().filter_map(|event| match event {
+                    Event::PointerButton { pos, pressed: false, .. } => Some(*pos),
+                    _ => None,
+                }));
+            });
+        });
+    };
+    let at = Pos2::new(20.0, 20.0);
+    frame(vec![]);
+    frame(vec![moved(at)]);
+    system.set_buttons_held(Some(HeldButtons::SECONDARY));
+    frame(vec![Event::PointerButton { pos: at, button: secondary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+    assert!(down.get(), "the press is down");
+
+    frame(vec![moved(Pos2::new(60.0, 20.0))]);
+    assert!(down.get() && releases.borrow().is_empty(), "the system reports the button down: nothing is released");
+    system.set_buttons_held(None);
+    frame(vec![moved(Pos2::new(80.0, 20.0))]);
+    assert!(down.get() && releases.borrow().is_empty(), "the platform tells nothing: nothing is released");
+
+    system.set_buttons_held(Some(HeldButtons::NONE));
+    let away = Pos2::new(120.0, 20.0);
+    frame(vec![moved(away)]);
+    frame(vec![moved(Pos2::new(140.0, 20.0))]);
+    assert!(!down.get(), "the system reports the button up: egui lets it go");
+    assert_eq!(*releases.borrow(), [away], "one release, at the pointer's position in the frame");
+    assert!(!clicked.get(), "a release away from the press is no click");
+
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Secondary, at, Mods::NONE, None));
+    for _ in 0..4 {
+        frame(vec![]);
+    }
+    assert!(down.get(), "the injected press is held");
+    for _ in 0..3 {
+        frame(vec![moved(Pos2::new(160.0, 20.0))]);
+    }
+    assert!(down.get(), "an injected hold between steps is no lost button");
+}
+
+/// A palette window hides while the root window shows an app-modal layer, returns in the frames after it closes, and
+/// one that opens meanwhile opens hidden.
+#[trial]
+fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_closes() {
+    let windows = Windows::new();
+    let frame = |modal: bool, second: bool| {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            if second {
+                Palette::new("second", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            }
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("modal").show(ui, |_, _| {});
+            }
+        })
+    };
+    let visibility = |out: &Out| {
+        out.commands.iter().rev().find_map(|(id, command)| match command {
+            ViewportCommand::Visible(visible) if *id != ViewportId::ROOT => Some(*visible),
+            _ => None,
+        })
+    };
+    for _ in 0..4 {
+        frame(false, false);
+    }
+    assert_eq!((0..2).find_map(|_| visibility(&frame(false, false))), None, "no layer: the palette stays as it is");
+    let hidden = (0..3).filter_map(|_| visibility(&frame(true, false))).reduce(|_, latest| latest);
+    assert_eq!(hidden, Some(false), "the palette hides under the modal");
+    let out = frame(true, true);
+    assert_eq!(builder_titled(&out, "second").1.visible, Some(false), "a palette opened meanwhile opens hidden");
+    let back = (0..3).filter_map(|_| visibility(&frame(false, false))).reduce(|_, latest| latest);
+    assert_eq!(back, Some(true), "the palette returns once the modal closed");
+}
+
+/// A key automation holds is in `keys::held` while it is held and not after its release.
+#[trial]
+fn a_key_held_by_automation_reads_as_held() {
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let seen = RefCell::new(Vec::new());
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| *seen.borrow_mut() = craft_ui::runtime::keys::held(ui.ctx()));
+    };
+    frame();
+    host.inject_hold(ViewportId::ROOT, Key::A);
+    for _ in 0..3 {
+        frame();
+    }
+    assert_eq!(*seen.borrow(), [Key::A], "the held key reads as down");
+    host.inject_let_go(ViewportId::ROOT, Key::A);
+    for _ in 0..3 {
+        frame();
+    }
+    assert!(seen.borrow().is_empty(), "the released key reads as up");
 }
 
 /// SG-30: X11 rejects a window title that holds a NUL, so `act` drops every NUL before it compares the title with the

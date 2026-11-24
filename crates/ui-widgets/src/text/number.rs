@@ -16,11 +16,13 @@ use crate::contract::{
     PartsCx, Pointer as _, Props as _, Role, Scrub, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{TextOptions, TextRun};
-use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
+use crate::runtime::env::{EnvView, Label, LengthUnits, UnitKind, Units};
+use crate::runtime::frame;
 use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
-    Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
+    Codec, ColumnKey, Granularity, HitLevel, HitPriority, HoldRepeat, Metrics, MoveMods, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag,
+    decimals_for_step, wheel_step,
 };
 use craft_theme::{Rgba, Stateful, States};
 use egui::{CornerRadius, Rect, Vec2};
@@ -54,6 +56,48 @@ pub enum UnitPlacement {
     /// After the field, outside its box: the field draws no unit and keeps the unit's spellings for typed text and its
     /// decimals, and the host draws the unit text beside it (a column of units in a grid of fields).
     After,
+}
+
+/// Whether a number field shows step arrows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StepArrows {
+    /// No arrows.
+    #[default]
+    Hidden,
+    /// Up and down halves at the start edge. A press steps once as ArrowUp or ArrowDown, one edit step each; a held
+    /// press repeats after the hold delay at the hold interval; disabled or read-only arrows take no press.
+    Leading,
+}
+
+/// How a number field sets its value and unit. An app sets it once at its root (`RootEnv::values`); the default is
+/// the centred number.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum NumberLook {
+    /// The number centred in the mono face, the unit apart at the end of the value area in caption text, so a column
+    /// of fields lines its units up; a percentage stands against its sign at the end.
+    #[default]
+    Centred,
+    /// The number and its unit as one run ("720 pt", "0°", "100%") at the field's start, in the interface face and
+    /// the value's colour: editing shows the same text, and the caret and the selection go through the whole run.
+    Inline,
+}
+
+/// How many decimals a number field without a codec, fixed or maximum decimals of its own shows. An app sets it once
+/// at its root (`RootEnv::values`); the default is the standard precision.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum NumberPrecision {
+    /// A percentage reads one decimal, written in full ("100.0%"); other numbers their unit kind's decimals.
+    #[default]
+    Standard,
+    /// A percentage reads whole ("60%"), and a length field to a thousandth of points, pixels, picas, Q and Ha and a
+    /// ten-thousandth of the larger units, without trailing zeros ("357.114 pt", "8.2677 in"): a drawing app's
+    /// positions and sizes.
+    Measured,
 }
 
 /// The placeholder of a mixed field.
@@ -124,7 +168,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     scrub_step: Option<f64>,
     /// Where an arrow press, a Page key and a wheel notch go from the current value, for values on a ladder (the zoom
     /// ladder); the step is ignored for them. The range still holds the result.
-    #[prop(func = "Fn(f64, i32) -> f64")]
+    #[prop(func = "Fn(f64, i32, f64) -> f64")]
     stepper: Option<NumberStepper<'a>>,
     /// A unit shown after the number.
     #[prop(into)]
@@ -132,6 +176,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// Whether the unit is drawn inside the field or left to the host to draw after it.
     #[prop]
     unit_placement: UnitPlacement,
+    /// Up and down step halves at the start edge: a press steps once, a held press repeats; no Tab stop.
+    #[prop]
+    step_arrows: StepArrows,
     #[style_key]
     status_zoom: bool,
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
@@ -160,6 +207,12 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
+    /// The number the held name stands for: while the value is a name, the field shows this number in parentheses in
+    /// place of the name's label; the presets row keeps the label.
+    #[prop(quantity = "field value")]
+    #[allow(dead_code)]
+    // PLAN: `Ruled::format`'s named arm (rule.rs, appearance-w3) must show this number; the field passes it on once `Ruled` carries it
+    name_number: Option<f64>,
     /// The most decimals shown without trailing zeroes when the field has no codec or fixed precision, capped at 12.
     #[prop]
     max_decimals: Option<usize>,
@@ -167,6 +220,10 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     lengths: Option<LengthUnits>,
     /// How many shown units make one stored unit, read from the env in measure and parts; 1 for a plain field.
     scale: f64,
+    /// The scope's look, read from the env in measure and parts.
+    look: NumberLook,
+    /// The scope's precision, read from the env in measure and parts.
+    precision: NumberPrecision,
     options: TextOptions,
     positive_only: bool,
     scrub: bool,
@@ -183,6 +240,11 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
 }
 
 impl<'a> NumberField<'a, Option<f64>> {
+    /// The up half of the step arrows ([`step_arrows`](Self::step_arrows)): a press steps the value up once.
+    pub const STEP_UP: PartKey = PartKey::new("step_up");
+    /// The down half of the step arrows: a press steps the value down once.
+    pub const STEP_DOWN: PartKey = PartKey::new("step_down");
+
     /// A number field named `label`; empty text is `None`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<f64>>) -> Self {
         Self::of(label, value)
@@ -226,6 +288,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             stepper: None,
             unit: None,
             unit_placement: UnitPlacement::Inside,
+            step_arrows: StepArrows::Hidden,
             status_zoom: false,
             presets: None,
             popup_slider: None,
@@ -235,9 +298,12 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             mixed_word: false,
             commit_decimals: None,
             fixed_decimals: None,
+            name_number: None,
             max_decimals: None,
             lengths: None,
             scale: 1.0,
+            look: NumberLook::Centred,
+            precision: NumberPrecision::Standard,
             options: TextOptions::default(),
             positive_only: false,
             scrub: false,
@@ -255,6 +321,15 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     #[must_use]
     pub fn own_context_menu(mut self) -> Self {
         self.options.own_menu = true;
+        self
+    }
+
+    /// Enter acts in the field itself (it runs a search): the field takes it, and an enclosing dialog's default button
+    /// does not. `EditResponse::submitted` and `submit_mods` tell the submitting Enter, as for
+    /// [`TextField::submits`](crate::text::TextField::submits).
+    #[must_use]
+    pub fn submits(mut self) -> Self {
+        self.options.submits = true;
         self
     }
 
@@ -287,20 +362,64 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Rule::new(range.as_ref(), self.step)
     }
 
-    /// Reads a length field's scale from stored to shown from the env.
-    fn settle_lengths(&mut self, units: &Units) {
+    /// Reads the scope's look and precision and a length field's scale from stored to shown from the env. The status bar's zoom
+    /// well keeps its own look.
+    fn settle(&mut self, env: &EnvView<'_>) {
+        self.look = if self.status_zoom { NumberLook::Centred } else { env.get() };
+        self.precision = env.get();
         if let Some(lengths) = self.lengths {
-            self.scale = units.length_scale(lengths).unwrap_or(1.0);
+            self.scale = env.units().length_scale(lengths).unwrap_or(1.0);
         }
     }
 
-    /// The unit drawn inside the field after the number: the field's own, else the symbol of its unit kind; none when
-    /// the host draws it after the field.
+    /// Whether the field draws its unit inside the box, not the host after the field.
+    fn unit_inside(&self) -> bool {
+        !self.status_zoom && self.unit_placement == UnitPlacement::Inside
+    }
+
+    /// The unit drawn apart inside the field after the number: the field's own, else the symbol of its unit kind;
+    /// none when the host draws it after the field or the number's run holds it.
     fn shown_unit(&self, units: &Units) -> Option<Label> {
-        if self.status_zoom || self.unit_placement == UnitPlacement::After {
+        if !self.unit_inside() || self.look == NumberLook::Inline {
             return None;
         }
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
+    }
+
+    /// The text the number's run holds around the number: the status zoom's sign; in the inline look the unit kind's
+    /// unit word, else the field's own unit, against the number when it is one sign ("%", "°") and after a space
+    /// otherwise.
+    fn affixes(&self, env: &EnvView<'_>) -> Option<(String, String)> {
+        if self.status_zoom {
+            return Some((String::new(), env.units().symbol(UnitKind::Percent)));
+        }
+        if !self.unit_inside() || self.look != NumberLook::Inline {
+            return None;
+        }
+        match (&self.unit, self.unit_kind) {
+            (Some(unit), _) => {
+                let unit = env.resolve(unit);
+                let mut chars = unit.as_str().chars();
+                let sign = chars.next().is_some_and(|c| !c.is_alphanumeric()) && chars.next().is_none();
+                Some((String::new(), if sign { unit.as_str().to_owned() } else { format!(" {}", unit.as_str()) }))
+            }
+            (None, Some(kind)) => Some(env.units().affixes(kind)),
+            (None, None) => None,
+        }
+    }
+
+    /// The face the number is set in: the mono face, or the interface's label face in the inline look.
+    fn value_role(&self) -> TypeRole {
+        match self.look {
+            NumberLook::Centred => TypeRole::Mono,
+            NumberLook::Inline => TypeRole::Label,
+        }
+    }
+
+    /// The unit drawn this pass. A mixed value shows the dash alone: a unit beside it would claim a measure the
+    /// selection does not have.
+    fn painted_unit(&self, cx: &Cx<'_, Self>) -> Option<Label> {
+        self.shown_unit(&cx.env.units()).filter(|_| cx.value().is_some_and(|value| !non_finite(Some(value))))
     }
 
     /// `stored` in the shown unit.
@@ -323,7 +442,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
-    /// Whether the field counts percent: it shows one decimal and its sign right after the number.
+    /// Whether the field counts percent: it writes its precision's decimals in full, its sign right after the number.
     fn is_percent(&self) -> bool {
         self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
     }
@@ -350,11 +469,19 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     fn shown_decimals(&self) -> RangeInclusive<usize> {
         match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
             (Some(codec), _, _, _) => 0..=codec.decimals(),
-            // A percentage reads "100.0%": one decimal, written in full.
-            (None, _, _, Some(UnitKind::Percent)) => 1..=1,
+            // A percentage reads "100.0%": one decimal, written in full; whole at the measured precision.
+            (None, _, _, Some(UnitKind::Percent)) => match self.precision {
+                NumberPrecision::Standard => 1..=1,
+                NumberPrecision::Measured => 0..=0,
+            },
             (None, Some(fixed), _, _) => fixed..=fixed,
             (None, None, Some(max), _) => 0..=max.min(12),
-            (None, None, None, Some(kind)) => kind.decimals(),
+            (None, None, None, Some(kind)) => match (self.precision, self.lengths) {
+                (NumberPrecision::Measured, Some(_)) => {
+                    0..=if matches!(kind, UnitKind::Points | UnitKind::Pixels | UnitKind::Picas | UnitKind::Q | UnitKind::Ha) { 3 } else { 4 }
+                }
+                _ => kind.decimals(),
+            },
             (None, None, None, None) => 0..=DEFAULT_DECIMALS,
         }
     }
@@ -375,16 +502,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             .collect()
     }
 
-    fn ruled(&self, units: &Units, mixed: bool, names: Vec<(u32, String)>) -> Ruled<V> {
+    fn ruled(&self, env: &EnvView<'_>, mixed: bool, names: Vec<(u32, String)>) -> Ruled<V> {
         Ruled {
-            inner: self.number_codec(units),
+            inner: self.number_codec(&env.units()),
             rule: self.rule(),
             snap: self.snap_typed,
             decimals: self.commit_decimals,
             mixed,
             positive_only: self.positive_only,
             names,
-            suffix: self.status_zoom.then(|| units.symbol(UnitKind::Percent)),
+            affixes: self.affixes(env),
             scale: self.scale,
             value: PhantomData,
         }
@@ -418,15 +545,42 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         unit.into_iter().chain(chevrons).collect()
     }
 
-    /// The inside label's glyph, measured: what sits before the text.
-    fn before_text(cx: &MeasureCx<'_, Self>) -> Vec<Adornment> {
-        let Some(inside) = cx.env.inside_label() else { return Vec::new() };
-        let glyph = match (inside.icon(), inside.text()) {
-            (Some(icon), _) => Adornment::glyph(icon.clone()),
-            (None, Some(text)) => Adornment::text(text.clone(), TypeRole::Body).apart().measured(cx),
-            (None, None) => return Vec::new(),
+    /// The step strip, then the inside label's glyph, measured: what sits before the text. The glyph stays last, next
+    /// to the text.
+    fn before_text(cx: &MeasureCx<'_, Self>, arrows: StepArrows) -> Vec<Adornment> {
+        let mut before = Vec::new();
+        if arrows == StepArrows::Leading {
+            before.push(Adornment::steps(NumberField::STEP_UP, NumberField::STEP_DOWN));
+        }
+        if let Some(inside) = cx.env.inside_label() {
+            match (inside.icon(), inside.text()) {
+                (Some(icon), _) => before.push(Adornment::glyph(icon.clone())),
+                (None, Some(text)) => before.push(Adornment::text(text.clone(), TypeRole::Body).apart().measured(cx)),
+                (None, None) => {}
+            }
+        }
+        before
+    }
+
+    /// The leading adornment that is the step strip (`steps`) or the inside label's glyph, with its rect.
+    fn leading_at(&self, placed: &Placed, steps: bool) -> Option<(&Adornment, Rect)> {
+        self.leading.iter().zip(&placed.leading).find(|(adornment, _)| adornment.is_steps() == steps).map(|(adornment, at)| (adornment, *at))
+    }
+
+    /// One step of `notches` (up positive) scaled by `scale`, from the applied value or from blank, by the stepper when
+    /// the field has one and by the rule otherwise. A wheel run commits first and the step starts from the value it
+    /// showed.
+    fn step_by(&self, cx: &mut Cx<'_, Self>, notches: i32, scale: f64) {
+        if cx.in_wheel_run() {
+            cx.commit();
+        }
+        let rule = self.rule();
+        let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
+        let next = match &self.stepper {
+            Some(stepper) => rule.settle(stepper.next(from, notches, scale)),
+            None => rule.stepped(from, notches, scale),
         };
-        vec![glyph]
+        cx.set(V::of_number(self.to_stored(next)));
     }
 
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
@@ -513,8 +667,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        self.settle_lengths(&cx.env.units());
-        let codec = self.ruled(&cx.env.units(), false, self.names(|row| cx.env.resolve(&row.label().clone())));
+        self.settle(&cx.env);
+        let codec = self.ruled(&cx.env, false, self.names(|row| cx.env.resolve(&row.label().clone())));
         // The value area holds the widest value the field shows (the range's ends at the codec's precision, or at the
         // places it commits when it rounds what it commits, or the value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
         // inside it. The inside label and the chevrons take their own room beside it, each as `place` gives it. The
@@ -529,14 +683,14 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             // Text editors draw their hint in the proportional face.
             (Cow::Borrowed(BLANK), self.options.role)
         } else {
-            (codec.sample(shown.unwrap_or(&blank)), TypeRole::Mono)
+            (codec.sample(shown.unwrap_or(&blank)), self.value_role())
         };
         let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(role));
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
         let chevrons = self.chevrons(&cx.words::<TextWords>());
-        self.leading = Self::before_text(cx);
+        self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let unit = &self.trailing[..self.trailing.len() - chevrons.len()];
         let value = text.x + reserve(&cx.style.field, &[], unit);
@@ -550,26 +704,36 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
-        self.settle_lengths(&cx.env.units());
+        self.settle(&cx.env);
         self.track = cx.tokens.size.length.track;
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
-        self.leading = Self::before_text(cx);
+        self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
         self.value_width = cx.value().map_or(0.0, |value| {
-            let text = self.ruled(&cx.env.units(), false, names).format(value);
-            cx.field_text(&TextRun::new(&text).role(TypeRole::Mono)).x
+            let text = self.ruled(&cx.env, false, names).format(value);
+            cx.field_text(&TextRun::new(&text).role(self.value_role())).x
         });
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
-        if let Some(slot) = placed.leading.first() {
-            cx.label_part(*slot);
+        if let Some((_, slot)) = self.leading_at(&placed, false) {
+            cx.label_part(slot);
+        }
+        // The halves take a press without the focus: ArrowUp and ArrowDown in the field step the same way.
+        let halves = self.leading_at(&placed, true).and_then(|(strip, at)| strip.halves(at));
+        for (key, half) in halves.into_iter().flatten() {
+            cx.part(key, half).sense(Sense::CLICK | Sense::KEEP_FOCUS).pointer_only("ArrowUp and ArrowDown step the value");
         }
         let text = placed.text;
-        // A percentage reads "100.0%": the number stands against its sign, not in the middle of the room.
-        self.options.centred = !self.is_percent();
-        self.options.end_aligned = self.is_percent();
-        self.options.mono = true;
+        // A percentage reads "100.0%": the number stands against its sign, not in the middle of the room. The inline
+        // run starts at the field's start.
+        let centred = self.look == NumberLook::Centred;
+        self.options.centred = centred && !self.is_percent();
+        self.options.end_aligned = centred && self.is_percent();
+        self.options.mono = centred;
+        if !centred {
+            self.options.role = self.value_role();
+        }
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
@@ -583,7 +747,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        cx.text(text_part::<V>(), text, &self.ruled(&cx.env.units(), shown.is_none(), names), shown.unwrap_or(&blank), &self.options);
+        cx.text(text_part::<V>(), text, &self.ruled(&cx.env, shown.is_none(), names), shown.unwrap_or(&blank), &self.options);
         let slider_reason =
             if self.presets.is_some() { "Alt+Down opens the presets list; the slider opens by pointer" } else { "Alt+Down opens the slider" };
         let chevron_rects = &placed.trailing[placed.trailing.len() - chevrons.len()..];
@@ -647,6 +811,27 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         let rule = self.rule();
         let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
+        // A press on a half steps in the pass it goes down; while it is held the steps due since the last pass
+        // repeat, from the press's own start time and the pass's time, so a rerun pass (no time elapsed) steps none.
+        for (key, notches) in [(NumberField::STEP_UP, 1), (NumberField::STEP_DOWN, -1)] {
+            let Some(press) = cx.part_if_declared(key).map(|part| part.press) else { continue };
+            let (start, first) = match press.phase {
+                PressPhase::Down { start, .. } => (start, true),
+                PressPhase::Held { start, .. } => (start, false),
+                _ => continue,
+            };
+            if cx.resolved.read_only || !cx.resolved.enabled {
+                continue;
+            }
+            let ctx = cx.response.ctx.clone();
+            let hold = HoldRepeat::new(start.time);
+            let (now, elapsed) = frame::running(&ctx).map_or((start.time, 0.0), |facts| (facts.now, facts.elapsed));
+            let scale = key_scale(MoveMods::new(press.mods.shift, false, Granularity::Unit).fine(press.mods.alt), fine_shows);
+            for _ in 0..if first { 1 } else { hold.due(now, elapsed) } {
+                self.step_by(cx, notches, scale);
+            }
+            frame::request_repaint_after(&ctx, hold.next_repeat(now) - now);
+        }
         while let Some((mv, mods)) = cx.intents().take_move() {
             let (notches, scale) = match mv {
                 NavMove::Up => (1, key_scale(mods, fine_shows)),
@@ -658,15 +843,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
                 NavMove::Back => (-1, 1.0),
                 _ => continue,
             };
-            if cx.in_wheel_run() {
-                cx.commit();
-            }
-            let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
-            let next = match &self.stepper {
-                Some(stepper) => rule.settle(stepper.next(from, notches)),
-                None => rule.stepped(from, notches, scale),
-            };
-            cx.set(V::of_number(self.to_stored(next)));
+            self.step_by(cx, notches, scale);
         }
         if let Some(wheel) = cx.take_wheel() {
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
@@ -676,7 +853,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
                 StepResult::Set(next) => {
                     let next = match &self.stepper {
-                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }),
+                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }, 1.0),
                         _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
                     };
                     let next = rule.settle(next);
@@ -705,8 +882,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
     }
 
-    /// The numeric value, and a button node per chevron named by its word (the painted face). The text part adds the
-    /// text value, the selection and the text actions to the same node.
+    /// The numeric value, the painted unit, and a button node per chevron named by its word (the painted face). The
+    /// text part adds the text value, read with the unit, the selection and the text actions to the same node.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let rule = self.rule();
         // A value that is not finite shows the dash, as a mixed one does, and has no number to read.
@@ -715,6 +892,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             None => Numeric::empty(rule.bounds()),
         };
         access.numeric(numeric.step(rule.step));
+        if let Some(unit) = self.painted_unit(cx) {
+            access.unit(cx.env.resolve(&unit).as_str());
+        }
         for (key, shown) in [(PRESETS, self.presets.is_some()), (SLIDER, self.popup_slider.is_some())] {
             if shown {
                 access.node(key, Role::BUTTON);
@@ -726,15 +906,15 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
-        // A mixed value shows the dash alone: a unit beside it would claim a measure the selection does not have.
-        if self.shown_unit(&cx.env.units()).is_some()
-            && cx.value().is_some_and(|value| !non_finite(Some(value)))
+        if self.painted_unit(cx).is_some()
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
             unit.paint(ui, *at, cx.resolve(&cx.style.unit.color), self.options.role);
         }
-        if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
-            glyph.paint(ui, *at, cx.resolve(&cx.style.handle), self.options.role);
+        for steps in [true, false] {
+            if let Some((adornment, at)) = self.leading_at(&placed, steps) {
+                adornment.paint(ui, at, cx.resolve(&cx.style.handle), self.options.role);
+            }
         }
         for (key, name) in chevrons {
             ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown_of(cx.env.get())).label(name));
@@ -744,7 +924,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     /// The value as the field shows it: its ruled codec's text, in the shown unit, a name as its presets row's label.
     fn word_value(&self, value: &V, cx: &Cx<'_, Self>) -> Option<String> {
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
-        Some(self.ruled(&cx.env.units(), false, names).format(value))
+        Some(self.ruled(&cx.env, false, names).format(value))
     }
 
     /// The edit, the preset picked, and what the committed text's parse learned: its unit, whether the range held it
@@ -759,6 +939,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             typed_unit: committed.and_then(|note| note.unit).and_then(UnitKind::from_tag),
             out_of_range,
             cut: committed.is_some_and(|note| note.cut),
+            link: cx.link_activated(),
         }
     }
 }

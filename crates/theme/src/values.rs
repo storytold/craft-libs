@@ -168,6 +168,19 @@ pub(super) fn panel_step(mode: Mode) -> usize {
     }
 }
 
+/// Whether `token`'s default in `mode` comes from the accent ramp, directly or through the tokens it derives from (the
+/// text on an accent fill, a faded accent).
+pub(super) fn follows_accent(token: ColorToken, mode: Mode) -> bool {
+    match source(token, mode) {
+        ColorSource::Accent(_) | ColorSource::AccentMix { .. } => true,
+        ColorSource::Same(other) | ColorSource::Faded(other, _) | ColorSource::SolidFrom(other) | ColorSource::ShiftedFrom { base: other, .. } => {
+            follows_accent(other, mode)
+        }
+        ColorSource::OnSolid(solids) => solids.iter().any(|&solid| follows_accent(solid, mode)),
+        _ => false,
+    }
+}
+
 /// The default source of `token` in `mode`.
 pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
     use ColorSource::{
@@ -188,6 +201,8 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::SurfaceChrome => Same(T::SurfacePanel),
         T::SurfaceRaised => Anchored(pick(4, 1)),
         T::SurfaceSunken => Anchored(1),
+        // A filled tile rests on the theme's own hover fill, so the pointer adds only its edge.
+        T::SurfaceControl => Same(T::StateHover),
         // Near white in both modes (dark: about 236/255), as macOS, GNOME and PhotoCraft knobs. A
         // knob face is not a background grey, so it stays on the curve.
         T::SurfaceKnob => Neutral(pick(12, 1)),
@@ -210,6 +225,7 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::LineDivider => Anchored(6),
         T::LineBorder => Anchored(7),
         T::LineControlEdge => Anchored(8),
+        T::LineOutline => Same(T::TextMuted),
         // A light knob needs an outline on a light panel (PhotoCraft's `text_dim`); on a dark one
         // its face is the edge. The Pro themes pin PhotoCraft's dark ring.
         T::LineKnobEdge => {
@@ -372,6 +388,7 @@ const TEXT_BGS: &[Bg] = &[
     Token(T::SurfaceChrome),
     Token(T::SurfaceRaised),
     Token(T::SurfaceSunken),
+    Token(T::SurfaceControl),
     Token(T::StateHover),
     Token(T::StatePressed),
 ];

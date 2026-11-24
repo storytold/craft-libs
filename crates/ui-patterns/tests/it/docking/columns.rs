@@ -4,11 +4,14 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights};
+use craft_ui::docking::{
+    DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupAt, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights,
+};
 use craft_ui::patterns::dock::DockArea;
+use craft_ui::runtime::env::Direction;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -469,4 +472,86 @@ fn a_menu_opens_from_the_rail_footer() {
     fixture.frame(vec![pointer::moved(egui::pos2(100.0, 100.0))]);
     fixture.frame(vec![pointer::moved(at), pointer::press(at), pointer::release(at)]).settle();
     assert!(fixture.by_label("Rail option").is_some(), "a same-frame click opens the menu");
+}
+
+/// A toolbar of six rail cells beside a side panel.
+#[derive(PlainData)]
+struct RailTools;
+
+impl PanelSpecs<u32> for RailTools {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        if *panel == TOOLS { PanelSpec::new("Tools").grid(DockGrid::rail(6)) } else { PanelSpec::new("Side") }
+    }
+
+    fn permissions(&self, panel: &u32) -> Permissions {
+        if *panel == TOOLS { Permissions::ALL.collapses(false).shares_column(false) } else { Permissions::ALL }
+    }
+}
+
+/// Panels that record the rect the toolbar's group gets, the rail's stage.
+struct RailStage(Rc<Cell<Option<Rect>>>);
+
+impl DockPanels<u32> for RailStage {
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn group_view(&mut self, panels: &[u32], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if !panels.contains(&TOOLS) {
+            return None;
+        }
+        Some(match at {
+            GroupAt::Measure(_) => 0.0,
+            GroupAt::Show(rect) => {
+                self.0.set(Some(rect));
+                rect.height()
+            }
+        })
+    }
+}
+
+/// A start dock in `direction` of a toolbar column of two rail steps, at the window edge, and a side column beside it,
+/// with `DockConfig::rail_cards` set to `cards`: the toolbar's cell, the side column's cell and the rail's stage.
+fn rail_dock(cards: bool, direction: Direction) -> (Rect, Rect, Rect) {
+    let columns = vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2), Column::new(vec![Group::new(vec![2], 0)]).with_width(150.0)];
+    let root = Node::split(Axis::X, SplitSize::FixedFirst(300.0), Node::dock(DockEdge::Start, columns), Node::tabs(vec![1], 0));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let placed: Rc<RefCell<Vec<(u32, Rect)>>> = Rc::default();
+    let stage: Rc<Cell<Option<Rect>>> = Rc::default();
+    let (held, seen, shown, specs) = (Rc::clone(&workspace), Rc::clone(&placed), Rc::clone(&stage), Tracked::new(RailTools));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = held.borrow().clone();
+        let config = DockConfig::default().rail_cards(cards);
+        let out = DockArea::new("Rail dock", Bind::bound(&mut workspace), &specs, &mut RailStage(Rc::clone(&shown)), config).show(ui);
+        *held.borrow_mut() = workspace;
+        *seen.borrow_mut() = out.columns;
+    });
+    fixture.direction(direction).room(Vec2::new(800.0, 500.0)).settle();
+    let cell = |panel: u32| placed.borrow().iter().find(|(at, _)| *at == panel).map(|(_, rect)| *rect).expect("the column shows");
+    (cell(TOOLS), cell(2), stage.get().expect("the rail's group shows"))
+}
+
+/// A docked tool rail shown as a card is inset alike on its outer side, the window edge's, and on its top and bottom,
+/// its bar and grip on the card above the rail as without one, and flush with its inner edge; the column beside it starts past its cell; and its
+/// rail gets the same width as without the card, so it shows the same steps, its column wider by the inset. Right to
+/// left mirrors the outer side.
+#[trial]
+fn a_rail_card_is_inset_alike_on_three_sides_and_keeps_its_steps() {
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let rtl = direction == Direction::Rtl;
+        let (plain_cell, _, plain) = rail_dock(false, direction);
+        let (cell, side, card) = rail_dock(true, direction);
+        let (outer, inner) =
+            if rtl { (cell.right() - card.right(), card.left() - cell.left()) } else { (card.left() - cell.left(), cell.right() - card.right()) };
+        let top = (card.top() - cell.top()) - (plain.top() - plain_cell.top());
+        let bottom = (cell.bottom() - card.bottom()) - (plain_cell.bottom() - plain.bottom());
+        assert!(outer > 0.5, "{direction:?}: the card is inset from the window edge: {card:?} in {cell:?}");
+        assert!((top - outer).abs() <= 0.5 && (bottom - outer).abs() <= 0.5, "{direction:?}: insets outer {outer}, top {top}, bottom {bottom}");
+        assert!(inner.abs() <= 0.5, "{direction:?}: the card keeps to the inner edge: {card:?} in {cell:?}");
+        let clear = if rtl { side.right() <= cell.left() + 0.5 } else { side.left() >= cell.right() - 0.5 };
+        assert!(clear, "{direction:?}: the side column {side:?} overlaps the toolbar {cell:?}");
+        assert!((card.width() - plain.width()).abs() <= 0.5, "{direction:?}: the rail's stage {card:?} differs from {plain:?} without the card");
+        assert!(
+            (cell.width() - plain_cell.width() - outer).abs() <= 0.5,
+            "{direction:?}: the column {cell:?} grows by the inset from {plain_cell:?}"
+        );
+    }
 }

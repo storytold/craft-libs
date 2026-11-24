@@ -48,17 +48,26 @@ pub(super) enum Glyph {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphLabel {
     shown: Glyph,
+    /// The text stands for a word caption ([`GlyphLabel::caption`]).
+    pub(super) caption: bool,
 }
 
 impl GlyphLabel {
     /// Shows `icon`, as large as the control's icons.
     pub fn icon(icon: impl Into<IconSpec<'static>>) -> Self {
-        GlyphLabel { shown: Glyph::Icon(icon.into()) }
+        GlyphLabel { shown: Glyph::Icon(icon.into()), caption: false }
     }
 
     /// Shows `text`, resolved in the scope's language.
     pub fn text(text: impl Into<Label>) -> Self {
-        GlyphLabel { shown: Glyph::Text(text.into()) }
+        GlyphLabel { shown: Glyph::Text(text.into()), caption: false }
+    }
+
+    /// Shows `text` that stands for a word caption: X for the horizontal position, W for the width. It is a glyph text
+    /// in every way, and under [`GlyphColon::Form`] it takes a form's colon as a word label does ("X:"). A glyph that
+    /// is a mark of its own ("#" before a hex value, a colour channel's letter) is [`GlyphLabel::text`].
+    pub fn caption(text: impl Into<Label>) -> Self {
+        GlyphLabel { caption: true, ..GlyphLabel::text(text) }
     }
 
     /// What the label leaf draws: the icon, or the text resolved in `env`.
@@ -76,7 +85,8 @@ impl GlyphLabel {
 #[non_exhaustive]
 pub enum LabelScheme {
     /// A dialog or a form: a beside label sits against its control and ends with a colon; the control keeps its own
-    /// width. In a bar a glyph text takes the colon as well ("X:").
+    /// width. In a bar a glyph text takes the colon as well ("X:"), and so does a glyph caption under
+    /// [`GlyphColon::Form`].
     #[default]
     Form,
     /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
@@ -89,6 +99,25 @@ pub enum LabelScheme {
 impl crate::runtime::env::EnvValue for LabelScheme {
     fn root() -> Self {
         LabelScheme::Form
+    }
+}
+
+/// Which glyph labels take the colon of a scheme whose word labels take one. An app sets it once at its root
+/// (`RootEnv::values`); the default is [`GlyphColon::Bar`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum GlyphColon {
+    /// A glyph text takes the colon in a bar only ("X:"), and shows bare elsewhere.
+    #[default]
+    Bar,
+    /// A glyph caption ([`GlyphLabel::caption`]) takes the colon wherever a word label does, so a form's X/Y/W/H read
+    /// "X:"; every other glyph text keeps the bar's rule. VectorCraft's panels.
+    Form,
+}
+
+impl crate::runtime::env::EnvValue for GlyphColon {
+    fn root() -> Self {
+        GlyphColon::Bar
     }
 }
 
@@ -200,6 +229,18 @@ pub(crate) fn inside(env: EnvView<'_>, side: &SideLabel, enabled: bool) -> Optio
 /// The width of a caption's cell.
 pub type CellWidth = ColumnWidth;
 
+/// What a click on a control's side label does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LabelPress {
+    /// A click focuses the control.
+    #[default]
+    Focus,
+    /// The label shows in the link look, and a click reports to the control's host and leaves focus alone. It is no
+    /// Tab stop of its own, and a drag still scrubs when `scrub` is on.
+    Link,
+}
+
 /// What `ContainerProps.label` holds: how the label is shown and what it does. The text is `Common.label`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -220,6 +261,8 @@ pub struct SideLabel {
     pub detail: Option<Label>,
     /// The label's tooltip, in place of its text: a hint a short or glyph label has no room for.
     pub tooltip: Option<Tooltip>,
+    /// What a click on the label does.
+    pub press: LabelPress,
 }
 
 impl SideLabel {
@@ -246,6 +289,7 @@ impl SideLabel {
             icon: None,
             detail: None,
             tooltip: None,
+            press: LabelPress::Focus,
         }
     }
 
@@ -267,6 +311,13 @@ impl SideLabel {
     #[must_use]
     pub const fn role(mut self, role: FieldLabelRole) -> Self {
         self.role = role;
+        self
+    }
+
+    /// Shows the label as a link: a click reports to the control's host (`Cx::link_activated`) and leaves focus alone.
+    #[must_use]
+    pub const fn link(mut self) -> Self {
+        self.press = LabelPress::Link;
         self
     }
 

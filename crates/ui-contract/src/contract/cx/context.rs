@@ -101,9 +101,9 @@ pub struct CxCore<'a> {
     pub(crate) state: StateSet,
     /// True once step 12 wrote `state` in this pass.
     pub(crate) stated: bool,
-    /// True once the run reached step 7. A measuring run, a sizing pass of the parent or host `Ui`, and a host that
-    /// shows nothing (a layer in its parent's sizing pass) stop before it: their core is blank and every part reads
-    /// idle.
+    /// True once the run reached step 7 with something to show. A measuring run, a sizing pass of the parent or host
+    /// `Ui`, and a host that shows nothing (a layer in its parent's sizing pass) stop before it, and an inert run (a
+    /// size the guard refuses) declares no parts: their core is blank and every part reads idle.
     pub(crate) parted: bool,
     /// Read with `Styled::ink`, valid from step 12.
     pub(crate) ink: Ink,
@@ -202,8 +202,9 @@ pub struct CxCore<'a> {
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.
     pub(crate) editor: Option<crate::contract::editor::EditorInfo>,
-    /// The editor part's inputs of this pass, until `editor_input` takes them.
-    pub(crate) editor_inputs: Vec<craft_behavior::EditorInput>,
+    /// The editor part's inputs of this pass, each with its order among the pass's events, until `editor_input` or
+    /// `editor_steps` takes them.
+    pub(crate) editor_inputs: Vec<(crate::contract::editor::Order, craft_behavior::EditorInput)>,
     /// The text part's draft is not a value of its codec.
     pub(crate) text_invalid: bool,
     /// The text part's `TextOptions::unparsed` while its draft does not parse: the refusal the pass reports when the
@@ -240,6 +241,11 @@ impl<C: Component> Cx<'_, C> {
         text.layout(&self.core.ctx, &Env::of_root(&self.core.ctx).tokens, craft_i18n::Direction::Ltr)
     }
 
+    /// Whether the control's link label was clicked in this pass.
+    pub fn link_activated(&self) -> bool {
+        crate::runtime::access::scope::field_label(&self.core.ctx).is_some_and(|label| label.link)
+    }
+
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
     pub fn open_url(&mut self, url: &str, new_tab: bool) {
         crate::runtime::egui::output::open_url(&self.core.ctx, url, new_tab);
@@ -264,7 +270,8 @@ impl<C: Component> Cx<'_, C> {
     /// activation came from (`part_activated` gives it). Returns whether the command was queued.
     pub fn fire(&mut self, command: impl Into<CommandRef>, source: FireSource) -> bool {
         let Some(resolved) = commands::resolve_scoped(&self.core.ctx, self.core.env.command_chain(), &command.into()) else { return false };
-        commands::fire_resolved(&self.core.ctx, &resolved, source)
+        let mods = self.core.activation.map_or(craft_keymap::Mods::NONE, |activation| activation.mods);
+        commands::fire_resolved(&self.core.ctx, &resolved, source, mods)
     }
 
     /// Where an activation of `part` came from this pass: `Key` for a keyboard activation while `part` is the
