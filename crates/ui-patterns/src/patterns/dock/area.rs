@@ -159,7 +159,9 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
     /// Moves key focus to the group that shows the panel and picks its tab, as a click on the tab does: the group's
-    /// stop takes focus in this pass, and the pick is one of the pass's `actions`. A request of the pass: a host that
+    /// stop takes focus in this pass, and the pick is one of the pass's `actions`. A floating window that holds the
+    /// panel comes to the front of the windows it overlaps (`FloatingGroup::raise`); that order is the view's, and
+    /// the workspace does not keep it. A request of the pass: a host that
     /// focuses a panel itself (it opened something in it) sets it for one pass. A panel the area does not show in this
     /// pass (hidden, pruned by a maximize, in a closed flyout, or in a group the host's `group_view` draws) takes
     /// neither; `DockAreaOutput::focused` tells the host where focus is.
@@ -1650,6 +1652,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .id(group_id);
             if let Some(scale) = scale {
                 group = group.scale(scale);
+            }
+            // The host's focus request brings the window that holds its panel to the front.
+            if scene.focus.is_some_and(|focus| window.panels().any(|held| held == focus)) {
+                group = group.raise();
             }
             if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
                 group = group.continue_move(grab);
