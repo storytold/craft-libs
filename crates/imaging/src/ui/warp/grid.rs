@@ -26,12 +26,12 @@ use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
 
-/// How far from an anchor or a handle end a press takes it, in hit targets (11.75 at an 8 target), measured from
-/// where the pointer acts ([`POINTER_OFFSET`]). The reach probe on the reference application (2026-11-23, 2 px steps
-/// at 100 %): a handle end is taken from 12 px below or to the right (11.5 from where the pointer acts) and not from
-/// 12 above (12.5); an anchor from 6 px out on its diagonal (9.2) and not from 8 (12.0); a suite press 12.1 from a
-/// handle under a perspective is not taken. So the reach lies in 11.5..12.0.
-const REACH_IN_TARGETS: f32 = 1.46875;
+/// How far from an anchor or a handle end a press takes it, in hit targets (12.25 at an 8 target), measured from
+/// where the pointer acts ([`POINTER_OFFSET`]), on an unplaced mesh ([`WarpGrid::reach_scale`] scales it under a
+/// placement). The reach probes on the reference application (2026-11-23..25, 2 px steps): straight above a handle end
+/// 10 px reaches it and 12 does not at 100 % and 66.7 % (10.5 and 12.5 from where the pointer acts); 12 reaches and 14
+/// does not at 50 % and 33.3 % (12.25 and 12.17 from there).
+const REACH_IN_TARGETS: f32 = 1.53125;
 
 /// Where the pointer acts in the document: half a document pixel up and left of it. A dragged point
 /// goes there and a split cuts there.
@@ -52,6 +52,16 @@ craft_ui::words! {
         handle_left: template "warp.handleLeft" = "Row {row}, column {column}, left handle";
         handle_right: template "warp.handleRight" = "Row {row}, column {column}, right handle";
         handle_down: template "warp.handleDown" = "Row {row}, column {column}, down handle";
+    }
+}
+
+/// The host's scale of a point's reach at a document point: [`WarpGrid::reach_scale`].
+pub struct WarpReachScale<'a>(Box<dyn Fn(Point) -> f64 + 'a>);
+
+impl<'a> WarpReachScale<'a> {
+    /// The scale `scale`.
+    pub fn new(scale: impl Fn(Point) -> f64 + 'a) -> Self {
+        WarpReachScale(Box::new(scale))
     }
 }
 
@@ -148,7 +158,7 @@ struct Report {
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
 ///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
 ///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
-/// - Pointer: the nearest anchor or handle within the hit reach (11.75 at an 8 target, from where the pointer acts) drags that
+/// - Pointer: the nearest anchor or handle within the hit reach (12.25 at an 8 target, from where the pointer acts) drags that
 ///   point, which jumps to the pointer, half a document pixel up and left of it; elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
@@ -179,6 +189,13 @@ pub struct WarpGrid<'a> {
     /// [`WarpMesh::surface_at`].
     #[prop(func = "Fn(Point) -> Option<(f64, f64)>")]
     surface: Option<WarpSurface<'a>>,
+    /// How far a point's reach goes at the point's document position, as a share of the hit reach; 1 by default. A host
+    /// whose mesh lies under a projective placement gives the placement's local scale there: the reference application
+    /// measures a point's reach in the warp's own contents as the view would show them unplaced (2026-11-25: under a
+    /// Perspective that shrank the right side to about 0.65, a press 10 px from a handle there missed it, 7.6 at a third
+    /// reached it; at rest 12 reached and 14 did not).
+    #[prop(func = "Fn(Point) -> f64")]
+    reach_scale: Option<WarpReachScale<'a>>,
     /// The mesh an edit makes of the mesh at the press; by default [`WarpMesh::edited`].
     #[prop(func = "Fn(&WarpMesh, &WarpEdit) -> WarpMesh")]
     rule: Option<WarpRule<'a>>,
@@ -197,6 +214,7 @@ impl<'a> WarpGrid<'a> {
             preset: false,
             split: None,
             surface: None,
+            reach_scale: None,
             rule: None,
             report: Report::default(),
         }
@@ -445,8 +463,10 @@ impl Component for WarpGrid<'_> {
             // The reach is measured from where the pointer acts (half a pixel up and left of it), so the circle
             // sits half a pixel down and right of the point.
             let at = space.view.to_screen(mesh.points[index] - POINTER_OFFSET);
+            let scale = self.reach_scale.as_ref().map_or(1.0, |scale| (scale.0)(mesh.points[index]));
+            let scale = if scale.is_finite() && scale > 0.0 { scale.clamp(0.05, 4.0) as f32 } else { 1.0 };
             let part = cx
-                .part(POINT.at(index as u64), HitShape::circle(at, cx.style.reach))
+                .part(POINT.at(index as u64), HitShape::circle(at, cx.style.reach * scale))
                 .sense(sense)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .focusable();

@@ -139,7 +139,7 @@ impl Harness {
 
 #[trial]
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
-    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.46875;
+    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.53125;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
         let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it. The reach is measured from
@@ -595,4 +595,43 @@ fn a_surface_pull_follows_the_document_point_under_the_pointer_when_the_view_scr
         other => panic!("a surface pull: {other:?}"),
     }
     fixture.frame(vec![pointer::release(at + egui::vec2(21.0, 0.0))]);
+}
+
+/// A host's reach scale shrinks (or grows) a point's reach at its position: at half scale a press three quarters of
+/// the reach from an anchor misses it, one at four tenths takes it.
+#[trial]
+fn the_reach_scale_shrinks_a_points_reach() {
+    let reach = f64::from(craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.53125);
+    for (share, taken) in [(0.75, false), (0.4, true)] {
+        let view = Rc::new(Cell::new(None::<CanvasView>));
+        let edit = Rc::new(Cell::new(None::<WarpEdit>));
+        let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+        let shown = (Rc::clone(&view), Rc::clone(&edit), Rc::clone(&mesh));
+        let mut fixture = Fixture::new(move |ui| {
+            let (view, edit, mesh) = &shown;
+            let room = ui.available_rect_before_wrap();
+            let shown_view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+            view.set(Some(shown_view));
+            let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+                let mut held = mesh.borrow_mut();
+                WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).reach_scale(|_| 0.5).show_at(ui, body.rect)
+            });
+            if let Some(output) = canvas.inner
+                && output.edit.is_some()
+            {
+                edit.set(output.edit);
+            }
+        });
+        fixture.settle();
+        // Out of the mesh along the bottom right anchor's diagonal, measured from where the pointer acts.
+        let v = view.get().expect("drawn");
+        let anchor = v.to_screen(Point::new(RECT.x1 + 0.5, RECT.y1 + 0.5));
+        let out = (anchor - v.to_screen(RECT.center())).normalized();
+        let at = anchor + out * (reach * 0.5 * share * 2.0) as f32;
+        drag_frames(&mut fixture, at, at + out * 20.0);
+        match edit.get() {
+            Some(WarpEdit::Point { index, .. }) => assert!(taken && index == 15, "{share}: point {index}"),
+            other => assert!(!taken && !matches!(other, Some(WarpEdit::Point { .. })), "{share}: {other:?}"),
+        }
+    }
 }
