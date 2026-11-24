@@ -428,7 +428,10 @@ impl Component for CommandRow<'_> {
             Line::Row(line) => {
                 let mut cell = self.measure_chips(cx, line, false);
                 if line.chips.is_empty() {
-                    cell += cx.child(("chip", "none"), &mut ChordChip::new(self.env.words.none.as_str().to_owned()), Proposal::Ideal).x + gap;
+                    let none = self.env.words.none.as_str().to_owned();
+                    let width = cx.child(("chip", "none"), &mut ChordChip::new(none.clone()), Proposal::Ideal).x;
+                    self.widths.insert((Shown::Chip, none), width);
+                    cell += width + gap;
                 }
                 for text in &line.unparsed {
                     let width = cx.child(("unparsed", text), &mut unparsed_note(text, String::new()), Proposal::Ideal).x;
@@ -578,14 +581,15 @@ impl CommandRow<'_> {
             }
         }
         if cells.is_empty() && !hold {
-            let rect = band(&flow, cell, 0.0, chips_end.max(height));
             let none = words.none.as_str();
+            let width = width_of(Shown::Chip, none).min(chips_end.max(0.0));
+            let rect = band(&flow, cell, 0.0, width);
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", none)]);
             let chip = ChordChip::new(none.to_owned()).label(name).id_salt(("chip", line.key.as_str(), 0)).enabled(editable);
             if ui.child(("chip", line.key.as_str(), 0), rect, chip).pressed {
                 act = Some(RowAct::Record(None));
             }
-            at = chips_end.max(height) + gap;
+            at = width + gap;
         }
         let unparsed: &[String] = if hold { &[] } else { &line.unparsed };
         for (n, text) in unparsed.iter().enumerate() {
@@ -746,7 +750,7 @@ pub(super) fn stamp_of(area: &AreaId, query: &str, filter: &str) -> u64 {
     hasher.finish()
 }
 
-/// The style of a shortcut chip: no look of its own (the keys are drawn as keycaps), the focus edge.
+/// The style of a shortcut chip: no look of its own (the chord is written as one text, `Ctrl+N`), the focus edge.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub(crate) struct ChordChipStyle {
@@ -756,8 +760,8 @@ pub(crate) struct ChordChipStyle {
     focus: FocusLook,
 }
 
-/// One shortcut of a row: its chord as keycaps, the look the framework gives a chord. A click, Enter or Space asks
-/// to record over it.
+/// One shortcut of a row: its chord as text, the way the framework writes a chord. A click, Enter or Space asks to
+/// record over it.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(sample = ChordChip::sample)]
 struct ChordChip {
@@ -778,7 +782,7 @@ impl ChordChip {
     }
 
     fn face(&self) -> Kbd {
-        Kbd::new(self.chord.clone()).keycap(true)
+        Kbd::new(self.chord.clone())
     }
 }
 

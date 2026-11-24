@@ -129,7 +129,7 @@ fn publish(cx: &mut BodyCx<'_>, env: &Env<'_>, idle: bool, builtin: bool, modifi
 
 /// The strip's items. An app that writes other formats gets its own Export menu in place of the Export item.
 fn items(env: &Env<'_>, formats: bool) -> Vec<BarItem> {
-    let item = |command: SetCommand| BarItem::new(command).display(ItemDisplay::Text);
+    let item = |command: SetCommand| BarItem::new(command).display(ItemDisplay::Button);
     let mut items = vec![item(SetCommand::New), item(SetCommand::Rename), item(SetCommand::Delete), item(SetCommand::Save), item(SetCommand::Revert)];
     if !formats {
         items.push(item(SetCommand::Export));
