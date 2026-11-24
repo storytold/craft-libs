@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use craft_host::{FileError, Files, PickId, PickKind, PickRequest, Picked, Wake};
+use craft_host::{FileError, Files, PendingPick, PickId, PickKind, PickRequest, Picked, Wake, WriteIntent};
 use js_sys::{Array, Function, Object, Promise, Reflect};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
@@ -33,15 +33,23 @@ pub struct BrowserFiles {
     state: Arc<Mutex<State>>,
     wake: Wake,
     limits: PickLimits,
+    page_save: Option<PageSave>,
 }
+
+/// An embedding page's save ([`BrowserFiles::page_saves`]): given the file name, the bytes and whether the user asked
+/// for Save As, `None` when no page hosts the app, else the page's answer.
+pub type PageSave = Arc<PageSaveFn>;
+
+/// The callback behind a [`PageSave`].
+pub type PageSaveFn = dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync;
 
 /// Tickets of one service, shared with the tasks that answer them.
 #[derive(Default)]
 struct State {
     next: u64,
     /// Picks and saves whose task has not finished, forgotten or not: a save already writing
-    /// still holds the page.
-    running: Vec<PickId>,
+    /// still holds the page. Oldest first.
+    running: Vec<(PickId, PickRequest)>,
     /// Running tickets whose owner gave them up; their answer is dropped when it comes.
     forgotten: Vec<PickId>,
     /// Answers not yet taken.
@@ -56,7 +64,7 @@ impl State {
 
     /// Records the answer of `id`, unless its owner forgot it.
     fn finish(&mut self, id: PickId, picked: Picked) {
-        self.running.retain(|r| *r != id);
+        self.running.retain(|(r, _)| *r != id);
         if let Some(at) = self.forgotten.iter().position(|f| *f == id) {
             self.forgotten.swap_remove(at);
             return;
@@ -89,7 +97,14 @@ fn finish(state: &Mutex<State>, wake: &Wake, id: PickId, picked: Picked) {
 impl BrowserFiles {
     /// A service whose late answers call `wake`.
     pub fn new(wake: impl Fn() + Send + Sync + 'static) -> Self {
-        Self { state: Arc::new(Mutex::new(State::default())), wake: Wake::new(wake), limits: PickLimits::DEFAULT }
+        Self { state: Arc::new(Mutex::new(State::default())), wake: Wake::new(wake), limits: PickLimits::DEFAULT, page_save: None }
+    }
+
+    /// The service whose [`Files::write`] goes to the page embedding the app (a host that saves the document back
+    /// itself, as a file manager's viewer does) whenever `save` answers; otherwise, and with no `save`, a write
+    /// downloads the bytes.
+    pub fn page_saves(self, save: impl Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync + 'static) -> Self {
+        Self { page_save: Some(Arc::new(save)), ..self }
     }
 
     /// The service with `limits` in place of [`PickLimits::DEFAULT`].
@@ -97,11 +112,11 @@ impl BrowserFiles {
         Self { limits, ..self }
     }
 
-    /// A ticket whose task is about to start.
-    fn start(&self) -> PickId {
+    /// A ticket for `request` whose task is about to start.
+    fn start(&self, request: PickRequest) -> PickId {
         let mut state = lock(&self.state);
         let id = state.issue();
-        state.running.push(id);
+        state.running.push((id, request));
         id
     }
 
@@ -157,6 +172,27 @@ fn downloaded(name: &str, result: Result<(), String>) -> Picked {
 }
 
 /// One download of `bytes` as `name`.
+/// The name a write of `path` goes out under: its last part without control characters, `document` when that is empty.
+fn write_name(path: &Path) -> String {
+    let base: String = path.file_name().map(|n| n.to_string_lossy().chars().filter(|c| !c.is_control()).collect()).unwrap_or_default();
+    let base = base.trim();
+    if base.is_empty() { "document".to_owned() } else { base.to_owned() }
+}
+
+/// A write's route: the embedding page when `page` answers (`Ok(true)`), else `download` (`Ok(false)`).
+pub(crate) fn page_or_download(
+    page: Option<&PageSaveFn>,
+    name: &str,
+    bytes: &[u8],
+    save_as: bool,
+    download: impl FnOnce() -> Result<(), String>,
+) -> Result<bool, FileError> {
+    match page.and_then(|save| save(name, bytes, save_as)) {
+        Some(answer) => answer.map(|()| true).map_err(FileError::Other),
+        None => download().map(|()| false).map_err(FileError::Other),
+    }
+}
+
 fn download(name: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {
     download_bytes(name, mime, bytes, DownloadOptions { revoke_after_ms: REVOKE_AFTER_MS }).map_err(|e| js_text(&e))
 }
@@ -253,7 +289,7 @@ impl Files for BrowserFiles {
         for filter in &request.filters {
             dialog = dialog.add_filter(filter.name.as_str(), &filter.extensions);
         }
-        let id = self.start();
+        let id = self.start(request);
         let (state, wake, limits) = (Arc::clone(&self.state), self.wake.clone(), self.limits);
         spawn_local(async move {
             let handles = if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
@@ -287,21 +323,24 @@ impl Files for BrowserFiles {
     fn forget(&self, id: PickId) {
         let mut state = lock(&self.state);
         state.answered.retain(|(a, _)| *a != id);
-        if state.running.contains(&id) && !state.forgotten.contains(&id) {
+        if state.running.iter().any(|(r, _)| *r == id) && !state.forgotten.contains(&id) {
             state.forgotten.push(id);
         }
     }
 
-    fn pick_pending(&self) -> bool {
-        !lock(&self.state).running.is_empty()
+    // The browser's pickers are never sheets: closing the page drops them.
+    fn pending_pick(&self) -> Option<PendingPick> {
+        lock(&self.state).running.first().map(|(_, request)| PendingPick { request: request.clone(), sheet: false })
     }
 
     fn read(&self, _path: &Path) -> Result<Vec<u8>, FileError> {
         Err(FileError::Unsupported)
     }
 
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
-        Err(FileError::Unsupported)
+    /// `Ok(true)` when the embedding page saved the bytes, `Ok(false)` when they were downloaded.
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        let name = write_name(path);
+        page_or_download(self.page_save.as_deref(), &name, bytes, intent == WriteIntent::SaveAs, || download(&name, mime_for(&name), bytes))
     }
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
@@ -323,13 +362,13 @@ impl Files for BrowserFiles {
             // A picker that threw in the call is refused like one that rejected later.
             Err(error) => return self.answer_now(rejected(&error_name(&error), &name, || download(&name, mime, &bytes))),
         };
-        let id = self.start();
+        let id = self.start(request);
         let (state, wake) = (Arc::clone(&self.state), self.wake.clone());
         spawn_local(async move {
             let picked = match JsFuture::from(promise).await {
                 // A failed write or close is the save's failure; it never downloads.
                 Ok(handle) => match write_handle(&handle, &bytes).await {
-                    Ok(()) => Picked::Paths(vec![PathBuf::from(&name)]),
+                    Ok(()) => Picked::Saved { path: PathBuf::from(&name), file_type: None },
                     Err(error) => Picked::Failed(error),
                 },
                 Err(error) => rejected(&error_name(&error), &name, || download(&name, mime, &bytes)),

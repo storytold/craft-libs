@@ -7,14 +7,16 @@ use super::tree::FrameRules;
 use super::{
     DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows,
 };
+use crate::buttons::Button;
 use crate::contract::SizeLimits;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Message;
+use crate::tabs::PanelTabLook;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Layout, Node, SplitSize};
-use craft_behavior::{Axis, Mixed};
+use craft_behavior::{Axis, IconId, Mixed};
 use egui::{Ui, Vec2};
 
 const LAYERS: usize = 0;
@@ -96,6 +98,26 @@ fn a_group_in_a_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).in_window().show(ui, |_, _| ()).output.into()
 }
 
+/// A group whose panel has a footer of actions pinned under its body, which stays in view while the body scrolls.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_group_with_a_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
+        .footer(|ui, _| {
+            Button::new("Apply All").show(ui);
+        })
+        .show(ui, |_, _| ())
+        .output
+        .into()
+}
+
+/// A group whose shown panel counts what it lists after its name and says more in a caption under the header.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = vec![title_of(LAYERS).count(Some(3)).caption(Some("2 hidden".into())), title_of(CHANNELS).count(Some(4))];
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
+}
+
 /// A click on the panel menu button opens the group's panel menu.
 fn open_panel_menu(fixture: &mut Fixture) {
     if let Some(button) = fixture.root_id().and_then(|id| fixture.part(id, MENU)) {
@@ -109,6 +131,21 @@ fn panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).menu(move || rows.clone()).show(ui, |_, _| ()).output.into()
+}
+
+/// VectorCraft's group header (`DockConfig::tab_look(PanelTabLook::Pill)`): the shown tab on a filled pill in the
+/// strip's middle, and the panel menu button, the three-line mark, level with it at the strip's end.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn pill_tabs_and_the_panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
+        .menu(move || rows.clone())
+        .panel_menu_icon(IconId::new("menu"))
+        .tab_look(PanelTabLook::Pill)
+        .show(ui, |_, _| ())
+        .output
+        .into()
 }
 
 #[story(GroupGrip<usize>, covers = [Default])]

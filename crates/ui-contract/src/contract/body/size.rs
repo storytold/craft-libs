@@ -5,7 +5,7 @@ use super::placement::overlay_of;
 use super::regions::{RegionSizes, end_full_height, footer_in_body, footer_in_end};
 use super::scroll::scroll_of;
 use crate::contract::run::ShowAt;
-use crate::contract::{ContainerProps, Mount, PadEdges, ShellPane, Sizing};
+use crate::contract::{ContainerProps, Mount, PadEdges, PaneEdge, ShellPane, Sizing};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
@@ -57,10 +57,12 @@ pub(crate) struct EnvFacts {
     given_column: bool,
     unbounded: (bool, bool),
     row_room: Option<f32>,
+    rank_short: Option<f32>,
     row_line: Option<crate::runtime::env::RowLine>,
     offered: Option<f32>,
     measure: Option<f32>,
     grid: Option<Id>,
+    egui_cell: bool,
 }
 
 impl EnvFacts {
@@ -76,10 +78,12 @@ impl EnvFacts {
             given_column: env.given_column,
             unbounded: env.unbounded,
             row_room: env.row_room,
+            rank_short: env.rank_short,
             row_line: env.row_line,
             offered: env.offered,
             measure: env.measure,
             grid: env.grid,
+            egui_cell: env.egui_cell,
         }
     }
 }
@@ -103,7 +107,8 @@ impl<'b> BodyHooks<'b> {
     /// from its content until the user sizes it; an inline container follows its props.
     pub(super) fn sizing(&self, props: &ContainerProps) -> Sizing {
         match &props.mount {
-            Mount::Pane(pane) if pane.content_height => Sizing::FillWidth,
+            Mount::Pane(pane) if pane.content_extent && matches!(pane.edge, PaneEdge::Start | PaneEdge::End) => Sizing::FillHeight,
+            Mount::Pane(pane) if pane.content_extent => Sizing::FillWidth,
             Mount::Pane(_) | Mount::Window { .. } => Sizing::Fill,
             Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow if self.fixed => Sizing::Fill,
             Mount::Layer(_) | Mount::Viewport { .. } => Sizing::Content,
@@ -266,7 +271,7 @@ impl<'b> BodyHooks<'b> {
         } else {
             ((line.x + gap(end.x, end_gap)).max(across.x), line.y.max(end.y) + across.y)
         };
-        let above = self.rules.above;
+        let above = self.rules.above_band();
         if inline {
             Vec2::new(width, height + above)
         } else {
@@ -278,8 +283,7 @@ impl<'b> BodyHooks<'b> {
     pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
         self.measured_body.map(|body| {
             let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
-            let wanted = self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width);
-            overlay_of(props).map_or(wanted, |overlay| wanted.max(crate::contract::overlay::anchor_floor(overlay)))
+            self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width)
         })
     }
 
@@ -327,9 +331,9 @@ impl<'b> BodyHooks<'b> {
                     None => room,
                 }
             }
-            // A pane as tall as its content runs in the rect its caller laid out.
+            // A pane as large as its content runs in the rect its caller laid out.
             _ => match (&props.mount, at) {
-                (Mount::Pane(ShellPane { at: Some(rect), content_height: true, .. }), _) => rect.size(),
+                (Mount::Pane(ShellPane { at: Some(rect), content_extent: true, .. }), _) => rect.size(),
                 (_, ShowAt::Rect(rect)) => rect.size(),
                 (_, ShowAt::Flow) => {
                     let room = crate::layout::flow_room(ui);

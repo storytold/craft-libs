@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions};
+use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions, QueueOrder};
 use crate::{ManualJobs, Wake};
 
 fn queue(lanes: usize) -> (JobQueue<&'static str, &'static str>, Arc<ManualJobs>, Arc<AtomicUsize>) {
@@ -15,8 +15,22 @@ fn queue(lanes: usize) -> (JobQueue<&'static str, &'static str>, Arc<ManualJobs>
     let wake = Wake::new(move || {
         counter.fetch_add(1, Ordering::Relaxed);
     });
-    let queue = JobQueue::new(jobs.clone(), wake, QueueOptions { lanes, name: "test" });
+    let queue = JobQueue::new(jobs.clone(), wake, QueueOptions { lanes, name: "test", ..QueueOptions::default() });
     (queue, jobs, wakes)
+}
+
+/// A queue without lanes in `order`: jobs run one at a time through `run_inline`.
+fn inline_queue(order: QueueOrder) -> JobQueue<&'static str, &'static str> {
+    JobQueue::new(Arc::new(ManualJobs::new()), Wake::new(|| {}), QueueOptions { lanes: 0, name: "test", order })
+}
+
+/// Runs the waiting jobs one `run_inline(1)` at a time and returns their results in run order.
+fn run_one_by_one(queue: &JobQueue<&'static str, &'static str>) -> Vec<&'static str> {
+    let mut ran = Vec::new();
+    while queue.run_inline(1) == 1 {
+        ran.extend(drain(queue));
+    }
+    ran
 }
 
 fn drain(queue: &JobQueue<&'static str, &'static str>) -> Vec<&'static str> {
@@ -88,7 +102,11 @@ fn queue_gives_back_a_lane_the_host_dropped() {
         }
     }
     let jobs = Arc::new(Refusing(AtomicUsize::new(0), ManualJobs::new()));
-    let queue = JobQueue::<&'static str, &'static str>::new(jobs.clone(), Wake::new(|| {}), QueueOptions { lanes: 1, name: "test" });
+    let queue = JobQueue::<&'static str, &'static str>::new(
+        jobs.clone(),
+        Wake::new(|| {}),
+        QueueOptions { lanes: 1, name: "test", ..QueueOptions::default() },
+    );
     queue.submit("a", Priority::VISIBLE, |_| "a");
     jobs.0.store(1, Ordering::Relaxed);
     queue.submit("b", Priority::VISIBLE, |_| "b");
@@ -112,4 +130,32 @@ fn queue_finish_runs_the_waiting_jobs_inline() {
     let mut done = drain(&queue);
     done.sort_unstable();
     assert_eq!(done, ["a", "b"], "each job ran once");
+}
+
+// Among equal priorities `OldestFirst` runs jobs in arrival order and the default runs the newest first; a tie rule
+// flipped or ignored would reorder an app's file opens or its thumbnails.
+#[test]
+fn a_queue_ordered_oldest_first_runs_equal_priorities_in_arrival_order() {
+    let oldest = inline_queue(QueueOrder::OldestFirst);
+    let newest = inline_queue(QueueOrder::default());
+    for queue in [&oldest, &newest] {
+        queue.submit("one", Priority::NEAR, |_| "one");
+        queue.submit("two", Priority::NEAR, |_| "two");
+        queue.submit("three", Priority::NEAR, |_| "three");
+    }
+    assert_eq!(run_one_by_one(&oldest), ["one", "two", "three"]);
+    assert_eq!(run_one_by_one(&newest), ["three", "two", "one"]);
+}
+
+// Priority decides before arrival in both orders: background work submitted first never runs before visible work
+// submitted later, nor does newer background work outrank older visible work.
+#[test]
+fn a_higher_priority_runs_before_a_lower_one_in_either_order() {
+    for order in [QueueOrder::NewestFirst, QueueOrder::OldestFirst] {
+        let queue = inline_queue(order);
+        queue.submit("background", Priority::BACKGROUND, |_| "background");
+        queue.submit("visible", Priority::VISIBLE, |_| "visible");
+        queue.submit("near", Priority::NEAR, |_| "near");
+        assert_eq!(run_one_by_one(&queue), ["visible", "near", "background"], "{order:?}");
+    }
 }

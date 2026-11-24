@@ -72,7 +72,58 @@ pub enum WellShape {
     Round,
 }
 
-/// Corner radii, edge style, knob shape and well shape.
+/// The marks a dock grip's row is made of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GripMark {
+    /// Upright ticks, [`GripShape::width`] wide and [`GripShape::length`] tall.
+    #[default]
+    Ticks,
+    /// Square dots, [`GripShape::width`] on a side.
+    Dots,
+    /// One level bar, [`GripShape::length`] long and [`GripShape::width`] thick: a tick turned on its side. The count
+    /// and the gap do not apply.
+    Bar,
+}
+
+impl GripMark {
+    /// The mark's name in a theme file and a token dump.
+    pub fn name(self) -> &'static str {
+        match self {
+            GripMark::Ticks => "ticks",
+            GripMark::Dots => "dots",
+            GripMark::Bar => "bar",
+        }
+    }
+}
+
+/// The row of marks a dock grip shows (the grip above an icon group, under a tool rail's column bar, at a floating
+/// panel's edge): what the marks are, how many, how large and how far apart, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GripShape {
+    /// Ticks, dots or a bar.
+    pub mark: GripMark,
+    /// How many marks the row has, at every display scale.
+    pub count: u16,
+    /// How tall a tick is, or how long the bar is; dots ignore it.
+    pub length: f32,
+    /// How wide a tick is, a dot's side, or how thick the bar is.
+    pub width: f32,
+    /// The space between two marks.
+    pub gap: f32,
+}
+
+impl GripShape {
+    /// Eleven upright ticks, 1 point wide, 5 points tall and 1 point apart.
+    pub const DEFAULT: GripShape = GripShape { mark: GripMark::Ticks, count: 11, length: 5.0, width: 1.0, gap: 1.0 };
+}
+
+impl Default for GripShape {
+    fn default() -> Self {
+        GripShape::DEFAULT
+    }
+}
+
+/// Corner radii, edge style, knob shape, well shape and grip marks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -83,6 +134,8 @@ pub struct ShapeTokens {
     pub knob: KnobShape,
     /// How colour wells that stand on their own are drawn.
     pub wells: WellShape,
+    /// The marks of the dock grips.
+    pub grip: GripShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.
@@ -137,6 +190,13 @@ pub struct SpaceTokens {
 pub struct Insets {
     /// The gap a floating layer (a dialog, a floating window) keeps from the screen edge.
     pub screen: f32,
+    /// The page view's side margin: kept clear at each side of the pages, so a page fitted to the width stands this far
+    /// from the view's edges.
+    pub page_side: f32,
+    /// The page view's margin above the first and below the last row of pages.
+    pub page_margin: f32,
+    /// The gap between pages and rows of pages.
+    pub page_gap: f32,
 }
 
 /// One length per control size, in logical pixels: control heights, field widths.
@@ -179,6 +239,8 @@ pub struct BarSizes {
     pub title: f32,
     /// Tab strip.
     pub tab: f32,
+    /// Tab strip in its large form: large document tabs.
+    pub tab_large: f32,
     /// Status bar.
     pub status: f32,
     /// Tool options bar.
@@ -375,6 +437,8 @@ pub struct StrokeTokens {
     pub thick: f32,
     /// Heaviest line: an arc or indicator that must read at a glance.
     pub heavy: f32,
+    /// The keyboard focus ring.
+    pub focus: f32,
     /// Length of a dash.
     pub dash: f32,
     /// Gap between dashes.

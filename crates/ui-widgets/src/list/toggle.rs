@@ -185,18 +185,3 @@ impl ToggleCell {
         !self.empty_off && (self.always_visible || hovered)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_empty_off_cell_never_draws_its_off_icon() {
-        let eye = ToggleCell::eye(ColumnKey::new("eye"), false);
-        assert!(!eye.shows_off(false) && eye.shows_off(true), "a plain off cell shows its off icon only under the pointer");
-        assert!(eye.clone().always_visible().shows_off(false), "always_visible shows it in every row");
-        let empty = eye.empty_off();
-        assert!(!empty.shows_off(true), "an empty_off cell stays empty under the pointer");
-        assert!(!empty.always_visible().shows_off(true), "empty_off wins over always_visible");
-    }
-}

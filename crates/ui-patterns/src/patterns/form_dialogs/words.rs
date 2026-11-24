@@ -14,5 +14,6 @@ craft_ui::words! {
         grid_cell: template "param.gridCell" = "{name} {row}, {column}";
         opacity: template "param.opacity" = "{name} opacity";
         choose_color: "param.chooseColor" = "Choose…";
+        help: "param.help" = "Help";
     }
 }

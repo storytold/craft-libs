@@ -5,8 +5,11 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::BitOr;
 
-use craft_keymap::{Chord, CommandRef, Mods};
+use craft_keymap::{Chord, CommandRef};
 use craft_theme::Srgba;
+use craft_ui::list::ThumbAspect;
+use craft_ui::menu::Alternate;
+use craft_ui::primitives::FacePaint;
 
 /// The app's menus, in order, and its open documents.
 #[derive(Clone, Debug, Default, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
@@ -156,7 +159,12 @@ pub enum Node {
         role: Option<ItemRole>,
         /// The platforms it is shown on.
         platforms: Platforms,
+        /// Whether it can be opened. A disabled submenu shows its row greyed and never opens
+        /// (Open Recent with nothing to list); one whose rows are all disabled is greyed too.
+        enabled: bool,
     },
+    /// A caption over the rows that follow it. Never a command.
+    Heading(String),
     /// An item AppKit provides and runs itself (Services, Zoom, …), with the label to show.
     #[non_exhaustive]
     Standard {
@@ -203,31 +211,10 @@ pub struct Item {
     pub tooltip: Option<String>,
     /// The command the item runs instead while its modifiers are held as it is chosen.
     pub alternate: Option<Alternate>,
-}
-
-/// The command a row runs while `mods` are held as it is chosen (Alt on Merge Visible runs Stamp
-/// Visible).
-#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
-#[non_exhaustive]
-pub struct Alternate {
-    /// The modifiers that select the alternate.
-    pub mods: Mods,
-    /// The command a pick runs while they are held.
-    pub command: CommandRef,
-}
-
-impl Alternate {
-    /// The alternate that runs `command` while `mods` are held.
-    pub fn new(mods: Mods, command: impl Into<CommandRef>) -> Alternate {
-        Alternate { mods, command: command.into() }
-    }
-
-    /// Whether `held` includes every modifier of the alternate. The one rule the in-window row and
-    /// the native dispatch share.
-    pub(crate) fn selected_by(&self, held: Mods) -> bool {
-        let m = self.mods;
-        (!m.cmd || held.cmd) && (!m.ctrl || held.ctrl) && (!m.alt || held.alt) && (!m.shift || held.shift)
-    }
+    /// A small painted sample shown in the row, its width `aspect` times the row's text height
+    /// (in-window bar only; the native menu ignores it, as it ignores `tint`).
+    // PLAN: mn.M6 gives `Option<FacePaint>`, but the row's cell (mn.M14) needs the aspect too; the sheet follows q182.
+    pub sample: Option<(ThumbAspect, FacePaint)>,
 }
 
 /// A plain item, or one with a checked state.
@@ -372,6 +359,7 @@ impl Item {
             tint: None,
             tooltip: None,
             alternate: None,
+            sample: None,
         }
     }
 
@@ -434,6 +422,12 @@ impl Item {
         self.tooltip = Some(text.into());
         self
     }
+
+    /// Show `face` in the row, painted by the in-window bar in a cell `aspect` times as wide as the row's text is high.
+    pub fn sample(mut self, aspect: ThumbAspect, face: FacePaint) -> Item {
+        self.sample = Some((aspect, face));
+        self
+    }
 }
 
 impl From<Item> for Node {
@@ -448,9 +442,9 @@ impl Node {
         Node::Standard { kind, label: label.into() }
     }
 
-    /// A submenu shown on every platform.
+    /// An enabled submenu shown on every platform.
     pub fn submenu(label: impl Into<String>, children: Vec<Node>) -> Node {
-        Node::Submenu { label: label.into(), english: None, children, role: None, platforms: Platforms::ALL }
+        Node::Submenu { label: label.into(), english: None, children, role: None, platforms: Platforms::ALL, enabled: true }
     }
 
     /// Set the English name of an item's label or a submenu's title.
@@ -458,7 +452,23 @@ impl Node {
         match &mut self {
             Node::Item(it) => it.english = Some(english.into()),
             Node::Submenu { english: e, .. } => *e = Some(english.into()),
-            Node::Separator | Node::Standard { .. } => {}
+            Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
+        }
+        self
+    }
+
+    /// A caption over the rows that follow it.
+    pub fn heading(label: impl Into<String>) -> Node {
+        Node::Heading(label.into())
+    }
+
+    /// Set whether an item can be chosen or a submenu opened:
+    /// `Node::submenu("Open Recent", rows).enabled(!recent.is_empty())`.
+    pub fn enabled(mut self, on: bool) -> Node {
+        match &mut self {
+            Node::Item(it) => it.enabled = on,
+            Node::Submenu { enabled, .. } => *enabled = on,
+            Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
         self
     }
@@ -468,7 +478,7 @@ impl Node {
         match &mut self {
             Node::Item(it) => it.role = Some(role),
             Node::Submenu { role: r, .. } => *r = Some(role),
-            Node::Separator | Node::Standard { .. } => {}
+            Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
         self
     }
@@ -478,7 +488,7 @@ impl Node {
         match &mut self {
             Node::Item(it) => it.platforms = platforms,
             Node::Submenu { platforms: p, .. } => *p = platforms,
-            Node::Separator | Node::Standard { .. } => {}
+            Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
         self
     }
@@ -522,7 +532,7 @@ impl MenuBar {
                 match n {
                     Node::Item(it) => out.push(it),
                     Node::Submenu { children, .. } => walk(children, out),
-                    Node::Separator | Node::Standard { .. } => {}
+                    Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
                 }
             }
         }
@@ -540,7 +550,7 @@ impl MenuBar {
                 match n {
                     Node::Item(it) => f(it),
                     Node::Submenu { children, .. } => walk(children, f),
-                    Node::Separator | Node::Standard { .. } => {}
+                    Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
                 }
             }
         }
@@ -747,18 +757,35 @@ pub fn from_items(tops: &[&str], rows: &[Row]) -> MenuBar {
     MenuBar { menus, documents: Vec::new() }
 }
 
-/// Drop separators at the start or end of a level and collapse runs of them, and drop empty
-/// submenus, at every depth, in place. A submenu holding only a disabled placeholder (`No Recent Files`)
-/// stays.
+/// Drop separators at the start or end of a level and collapse runs of them, drop empty
+/// submenus, and drop a heading with no item or submenu after it before the next separator or the
+/// end of its level, at every depth, in place. A submenu holding only a disabled placeholder (`No Recent
+/// Files`) stays.
 pub fn tidy(nodes: &mut Vec<Node>) {
-    let mut previous_separator = true;
-    nodes.retain_mut(|node| {
-        if let Node::Submenu { children, .. } = node {
+    // Back to front, so a heading knows whether an item follows it in its group.
+    nodes.reverse();
+    let mut item_after = false;
+    nodes.retain_mut(|node| match node {
+        Node::Submenu { children, .. } => {
             tidy(children);
-            if children.is_empty() {
-                return false;
-            }
+            item_after |= !children.is_empty();
+            !children.is_empty()
         }
+        Node::Item(_) => {
+            item_after = true;
+            true
+        }
+        Node::Separator => {
+            item_after = false;
+            true
+        }
+        Node::Heading(_) => item_after,
+        Node::Standard { .. } => true,
+    });
+    nodes.reverse();
+    // Separators last, so one left first or doubled by a dropped heading or submenu collapses too.
+    let mut previous_separator = true;
+    nodes.retain(|node| {
         let separator = matches!(node, Node::Separator);
         let keep = !(separator && previous_separator);
         previous_separator = separator;
@@ -770,7 +797,7 @@ pub fn tidy(nodes: &mut Vec<Node>) {
 }
 
 /// A hash of everything a native menu can only change by rebuilding: menus, roles, item
-/// commands, kinds (plain, check or radio), shortcuts, submenu labels and the labels of AppKit's items. Item
+/// commands, kinds (plain, check or radio), shortcuts, submenu labels, headings and the labels of AppKit's items. Item
 /// labels, enabled and checked are updated in place. Window's open documents (the items running a
 /// [`MenuBar::documents`] command) are left out: opening or closing a document rebuilds only the
 /// Window menu ([`window_key`]).
@@ -811,12 +838,16 @@ fn hash_nodes(nodes: &[Node], h: &mut DefaultHasher) {
                 it.alternate.as_ref().map(|a| (a.command.key(), a.mods)).hash(h);
             }
             Node::Separator => '-'.hash(h),
-            Node::Submenu { label, children, role, .. } => {
-                ('[', label, role).hash(h);
+            // A native submenu is enabled only through its children (see `mac::lower_nodes`), so its
+            // enabled state is structure.
+            Node::Submenu { label, children, role, enabled, .. } => {
+                ('[', label, role, enabled).hash(h);
                 hash_nodes(children, h);
                 ']'.hash(h);
             }
             Node::Standard { kind, label } => ('s', kind, label).hash(h),
+            // A heading's native item has no target to update in place, so its label is structure.
+            Node::Heading(label) => ('h', label).hash(h),
         }
     }
 }

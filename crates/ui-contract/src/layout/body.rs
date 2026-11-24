@@ -92,7 +92,10 @@ impl BodyLayout {
         BodyLayout::Row { wrap: false, align: RowAlign::Start }
     }
 
-    /// Children row-major over `columns`: a `'static` slice, or columns built in the pass.
+    /// Children row-major over `columns`: a `'static` slice, or columns built in the pass. The cells are the body's
+    /// craft children: an egui container shown in the body is no cell, and egui places it below the cells placed so
+    /// far. The rows after it are placed over it: show it as the last child, or put it in a craft body (`Row`), which
+    /// takes a cell.
     pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self {
         BodyLayout::Grid { columns: columns.into(), fit: GridFit::Stack, cells: CellAlign::Center }
     }
@@ -137,6 +140,11 @@ pub(crate) struct Cursors(IdMap<Cursor>);
 /// The number of children that fill the main axis of each `Stack` or `Row` body measured this pass, by body id.
 #[derive(Default)]
 pub(crate) struct FillCounts(IdMap<u32>);
+
+/// The memoized views running this pass whose content holds a direct child that fills the axis the body around the
+/// view shares (`Scoped::fill_view`), by view id, with that axis.
+#[derive(Default)]
+pub(crate) struct ViewFills(IdMap<Axis>);
 
 /// What makes a child of a content-sized `Stack` column a held child: it measures at its own width while the column
 /// settles its width from the others, and the column's second sweep gives it the settled width.
@@ -207,6 +215,91 @@ impl LineTook {
     /// The height of the row once every child sits on the line.
     fn height(self) -> f32 {
         self.centre.map_or(0.0, |centre| centre + self.below).max(self.block)
+    }
+}
+
+/// The children of each wrapping `Row` body in the sweep or run under way, by body id.
+#[derive(Default)]
+pub(crate) struct WrapRows(IdMap<WrapTook>);
+
+/// What the children of a wrapping row took so far, and the lines the real run sets them on.
+#[derive(Default)]
+struct WrapTook {
+    /// Each child placed so far: its line, counted from the row's first, and its height.
+    children: Vec<(usize, f32)>,
+    /// The top of the last child's slot.
+    top: Option<f32>,
+    /// In a real run, each child's line and that line's height in this pass's measuring run, while every child so far
+    /// went on the line it went on there: `None` in a measuring run, without one, and once a child did not.
+    planned: Option<Vec<(usize, f32)>>,
+}
+
+/// Starts the children of the wrapping `Row` body `id` afresh; a real run reads the lines this pass's measuring run
+/// found for them.
+fn open_wraps(ctx: &egui::Context, sizing: bool, id: Id) {
+    let count = this_pass(ctx, sizing, sub(id, "wraps")).map_or(0, |count| count.x as usize);
+    let planned =
+        (count > 0).then(|| (0..count).map(|i| this_pass(ctx, sizing, sub(id, ("wrap", i))).map(|at| (at.x as usize, at.y))).collect()).flatten();
+    pass_state::with::<WrapRows, _>(ctx, |rows| rows.0.insert(id, WrapTook { planned, ..WrapTook::default() }));
+}
+
+/// Ends the children of the wrapping `Row` body `id`, `room` wide; a measuring run records each child's line and the
+/// height of its tallest child.
+fn close_wraps(ctx: &egui::Context, sizing: bool, id: Id, room: Vec2) {
+    let took = pass_state::with::<WrapRows, _>(ctx, |rows| rows.0.remove(&id)).unwrap_or_default();
+    if !sizing {
+        return;
+    }
+    let mut heights: Vec<f32> = Vec::new();
+    for &(line, height) in &took.children {
+        heights.resize(heights.len().max(line + 1), 0.0);
+        if let Some(tallest) = heights.get_mut(line) {
+            *tallest = tallest.max(height);
+        }
+    }
+    found(ctx, true, sub(id, "wraps"), room, Vec2::new(took.children.len() as f32, 0.0));
+    for (i, &(line, _)) in took.children.iter().enumerate() {
+        found(ctx, true, sub(id, ("wrap", i)), room, Vec2::new(line as f32, heights.get(line).copied().unwrap_or_default()));
+    }
+}
+
+/// Whether egui puts the next child `width` wide in `ui`, a wrapping row's block, on a new line (`Layout::next_frame`):
+/// the line holds something already and the child does not fit the rest of it.
+fn wraps(ui: &Ui, width: f32) -> bool {
+    let (cursor, max) = (ui.cursor(), ui.max_rect());
+    let begun = if ui.layout().main_dir() == egui::Direction::RightToLeft { cursor.right() < max.right() } else { max.left() < cursor.left() };
+    begun && ui.available_rect_before_wrap().width() < width
+}
+
+/// Counts the next child of `size` placed in `ui`, the block of the wrapping `Row` body that places the children under
+/// `env`, on its line: the line egui sets it on, or a line another allocation started. Returns the height of that line
+/// in this pass's measuring run while each child so far went on the line it went on there; `None` outside a wrapping
+/// row, in a measuring run, and once the lines differ.
+fn wrap_line(ui: &Ui, env: &Env, size: Vec2) -> Option<f32> {
+    let body = env.flow_body.filter(|_| ui.layout().main_wrap)?;
+    let (starts, top) = (wraps(ui, size.x), ui.cursor().top());
+    pass_state::with::<WrapRows, _>(ui.ctx(), |rows| {
+        let took = rows.0.get_mut(&body)?;
+        let line = match (took.children.last(), took.top) {
+            (Some(&(last, _)), Some(was)) if starts || top > was + ONE_LINE_SLACK => last + 1,
+            (Some(&(last, _)), _) => last,
+            (None, _) => 0,
+        };
+        let i = took.children.len();
+        took.children.push((line, size.y));
+        let planned = took.planned.as_ref().and_then(|planned| planned.get(i)).filter(|(at, _)| *at == line).map(|(_, height)| *height);
+        if planned.is_none() {
+            took.planned = None;
+        }
+        planned
+    })
+}
+
+/// Notes the top of the `slot` a child took in `ui`, the block of the wrapping `Row` body that places the children
+/// under `env`.
+fn wrap_took(ui: &Ui, env: &Env, slot: Rect) {
+    if let Some(body) = env.flow_body.filter(|_| ui.layout().main_wrap) {
+        pass_state::with::<WrapRows, _>(ui.ctx(), |rows| rows.0.get_mut(&body).map(|took| took.top = Some(slot.top())));
     }
 }
 
@@ -335,6 +428,9 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
     if !given {
         return measured;
     }
+    if let Some((view, along)) = env.fill_view.filter(|(_, along)| *along == axis) {
+        pass_state::with::<ViewFills, _>(ui.ctx(), |fills| fills.0.insert(view, along));
+    }
     // In a body that shares the axis and scrolls along it, a share never cuts the child's content: what is past the
     // view scrolls.
     if env.fill_body.is_some_and(|(_, along)| along == axis) && view_room(ui, axis).is_some() {
@@ -364,10 +460,34 @@ fn main_fill(ui: &Ui, id: Id, axis: Axis) -> MainFill {
         return MainFill::Share(share, layout_memory::fill_least(ui.ctx(), id, axis));
     }
     if measure::active(ui.ctx()) {
-        pass_state::with::<FillCounts, _>(ui.ctx(), |counts| *counts.0.entry(body).or_insert(0) += 1);
+        count_fill(ui.ctx(), body);
         return MainFill::Measuring;
     }
     MainFill::Room(layout_memory::fill_least(ui.ctx(), id, axis))
+}
+
+/// Counts one child that fills the main axis of the sharing body `body`, in the first sweep of its measuring run.
+fn count_fill(ctx: &egui::Context, body: Id) {
+    pass_state::with::<FillCounts, _>(ctx, |counts| *counts.0.entry(body).or_insert(0) += 1);
+}
+
+/// Counts the memoized view whose content fills the main axis of `ui`'s sharing body as one child that fills it, in the
+/// first sweep of the body's measuring run (`counting_fills`), as a child shown there directly is counted.
+pub(crate) fn count_fill_view(ui: &Ui) {
+    if let Some((body, _)) = Env::of(ui).fill_body {
+        count_fill(ui.ctx(), body);
+    }
+}
+
+/// Opens the record of whether the content of the memoized view `view` fills the axis its body shares, before its run.
+pub(crate) fn open_view_fill(ctx: &egui::Context, view: Id) {
+    pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view));
+}
+
+/// The axis the content of the memoized view `view` filled in the run that just ended, as `fill_size` noted it; closes
+/// the record.
+pub(crate) fn take_view_fill(ctx: &egui::Context, view: Id) -> Option<Axis> {
+    pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view))
 }
 
 /// The share a child of `ui`'s body that fills along `axis` takes there, once its body knows it: the room the child
@@ -396,6 +516,8 @@ struct Reported {
     whole: f32,
     body: bool,
     cut_first: bool,
+    /// The rank by which the unit leaves whole before the cut-first drops; `None` never leaves by rank.
+    rank: Option<u8>,
     levels: Vec<f32>,
 }
 
@@ -424,12 +546,36 @@ pub(crate) struct ShrinkReports(IdMap<Vec<Reported>>);
 #[derive(Default)]
 pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
 
+/// How far the units of each `Row` body asked for one this pass reach past the row's room at their ideal widths, by
+/// row id: `None` for a row whose units fit.
+#[derive(Default)]
+pub(crate) struct RowShortfalls(IdMap<Option<f32>>);
+
+/// Asks the `Row` body `row` for its shortfall in this pass's measuring run (`take_shortfall`).
+pub(crate) fn ask_shortfall(ctx: &egui::Context, row: Id) {
+    pass_state::with::<RowShortfalls, _>(ctx, |asked| asked.0.insert(row, None));
+}
+
+/// How far the units of the `Row` body `row` reached past its room at their ideal widths in the measuring run since
+/// `ask_shortfall`: `None` when they fit or the row did not run.
+pub(crate) fn take_shortfall(ctx: &egui::Context, row: Id) -> Option<f32> {
+    pass_state::with::<RowShortfalls, _>(ctx, |asked| asked.0.remove(&row).flatten())
+}
+
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's whole and least widths, or `None`
-/// for a body.
-pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, whole_least: Option<(f32, f32)>, cut_first: bool) {
+/// for a body, and how it leaves a row too narrow for it: whether its content is made to be cut, and its rank.
+pub(crate) fn report_shrink(
+    ctx: &egui::Context,
+    row: Id,
+    leaf: Id,
+    took: f32,
+    ideal: f32,
+    whole_least: Option<(f32, f32)>,
+    (cut_first, rank): (bool, Option<u8>),
+) {
     let (whole, least) = whole_least.map_or((ideal, ideal), |(whole, least)| (whole.min(ideal), least.min(ideal)));
     let widths = ShrinkUnit { ideal, least: least.min(whole) };
-    let leaf = Reported { leaf, took, widths, whole, body: whole_least.is_none(), cut_first, levels: Vec::new() };
+    let leaf = Reported { leaf, took, widths, whole, body: whole_least.is_none(), cut_first, rank, levels: Vec::new() };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
 }
 
@@ -438,7 +584,8 @@ pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, i
 fn report_levels(ctx: &egui::Context, row: Id, unit: Id, levels: Vec<f32>) {
     let ideal = levels.first().copied().unwrap_or_default();
     let least = levels.last().copied().unwrap_or_default().min(ideal);
-    let leaf = Reported { leaf: unit, took: ideal, widths: ShrinkUnit { ideal, least }, whole: ideal, body: false, cut_first: false, levels };
+    let leaf =
+        Reported { leaf: unit, took: ideal, widths: ShrinkUnit { ideal, least }, whole: ideal, body: false, cut_first: false, rank: None, levels };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
 }
 
@@ -521,13 +668,13 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
             });
             let width = ui.max_rect().width();
             for level in 0..levels.max(1) {
-                let installed = Env::install_for(ui, no_room.clone());
                 // Every level shows the same bodies under the same ids: each measures as a probe, so no level reuses a
                 // record another level left, and none serves the sweep at the levels given, which records its own.
                 let (_, took) = layout_memory::probing(&ctx, || {
-                    crate::runtime::egui::sizing::run_sized(ui, width, child::column_layout(rtl), |ui| show(ui, level))
+                    crate::runtime::egui::sizing::run_sized(ui, width, child::column_layout(rtl), |ui| {
+                        Env::run_in(ui, no_room.clone(), |ui| show(ui, level))
+                    })
                 });
-                Env::restore(&ctx, installed);
                 if level == 0 {
                     widest = took;
                 }
@@ -687,20 +834,32 @@ fn shrink_in_turns(units: &[ShrinkUnit], whole: &[f32], first: &[bool], fixed: f
 /// to be cut (`first`) drop out from the end, each with one `gap`, until the rest fits at their least. A unit that
 /// drops gets no width and takes no place, so nothing overflows into a neighbour; controls never drop. A row that
 /// scrolls keeps every unit and scrolls instead.
+///
+/// Before those drops, the units that carry a rank (`ranks`) leave whole, scrolling row or not: the lowest rank first,
+/// the last of a rank first, until the kept units fit at their ideal widths in `rank_room` (at most `room`). A unit
+/// with no rank never leaves by rank.
 fn shrink_or_drop(
     units: &[ShrinkUnit],
     whole: &[f32],
-    first: &[bool],
+    (first, ranks): (&[bool], &[Option<u8>]),
     (fixed, gap): (f32, f32),
-    room: f32,
+    (room, rank_room): (f32, f32),
     order: ShrinkOrder,
     drops: bool,
 ) -> Vec<ShrinkCap> {
     let mut kept = vec![true; units.len()];
     let mut fixed = fixed;
     // Half a point: less than a pixel shows at any scale the box runs.
-    let fits =
-        |kept: &[bool], fixed: f32| fixed + units.iter().zip(kept).filter(|(_, kept)| **kept).map(|(unit, _)| unit.least).sum::<f32>() - room < 0.5;
+    let fits_at = |kept: &[bool], fixed: f32, width: fn(&ShrinkUnit) -> f32, room: f32| {
+        fixed + units.iter().zip(kept).filter(|(_, kept)| **kept).map(|(unit, _)| width(unit)).sum::<f32>() - room < 0.5
+    };
+    let fits = |kept: &[bool], fixed: f32| fits_at(kept, fixed, |unit| unit.least, room);
+    while !fits_at(&kept, fixed, |unit| unit.ideal, rank_room.min(room)) {
+        let Some(rank) = (0..units.len()).filter(|at| kept[*at]).filter_map(|at| ranks[at]).min() else { break };
+        let Some(at) = (0..units.len()).rev().find(|at| kept[*at] && ranks[*at] == Some(rank)) else { break };
+        kept[at] = false;
+        fixed -= gap;
+    }
     while drops && !fits(&kept, fixed) {
         let Some(at) = (0..units.len()).rev().find(|at| kept[*at] && first[*at]) else { break };
         kept[at] = false;
@@ -762,8 +921,10 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     let layout = *ui.layout();
     let mut env = Env::of(ui);
     let inherited = (env.unbounded.0, env.least);
+    let rank_short = env.rank_short;
     let mut sweep = |ui: &mut Ui, shrink: Shrink, body: &mut dyn FnMut(&mut Ui) -> R| {
         let scoped = env.local_mut();
+        scoped.rank_short = None;
         scoped.shrink = Some(shrink);
         let least = matches!(shrink, Shrink::Least(_));
         scoped.unbounded.0 = inherited.0 || least;
@@ -787,6 +948,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let units: Vec<ShrinkUnit> = continuous.iter().map(|leaf| leaf.widths).collect();
         let whole: Vec<f32> = continuous.iter().map(|leaf| leaf.whole).collect();
         let first: Vec<bool> = continuous.iter().map(|leaf| leaf.cut_first).collect();
+        let ranks: Vec<Option<u8>> = continuous.iter().map(|leaf| leaf.rank).collect();
         let level_widths: Vec<Vec<f32>> = levelled.iter().map(|leaf| leaf.levels.clone()).collect();
         let levels = if room.is_finite() {
             plan_levels(&level_widths, room - fixed - units.iter().map(|unit| unit.least).sum::<f32>())
@@ -795,8 +957,12 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         };
         let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
         let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(leaf, *level)).sum();
-        let widths = if room.is_finite() {
-            shrink_or_drop(&units, &whole, &first, (fixed + held, gap), room, order, drops)
+        // The ranked units give up `rank_short` of the row's ideal width; a row offered no bound (a content-sized row's
+        // measuring run) still drops them for it.
+        let ideal = fixed + held + units.iter().map(|unit| unit.ideal).sum::<f32>();
+        let rank_room = rank_short.map_or(f32::INFINITY, |short| ideal - short);
+        let widths = if room.is_finite() || rank_room.is_finite() {
+            shrink_or_drop(&units, &whole, (&first, &ranks), (fixed + held, gap), (room, rank_room), order, drops)
         } else {
             units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false, narrowed: false }).collect()
         };
@@ -819,13 +985,17 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         again
     };
     let (inner, rect, mut leaves, fixed, probe, again) = crate::contract::keeping_ids(&ctx, || {
-        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+        let mut first = laid_out_child(ui, layout);
         pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
         let inner = sweep(&mut first, Shrink::Count(id), &mut body);
         let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
         let rect = first.min_rect();
         let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
-        let short = fixed + leaves.iter().map(|leaf| leaf.widths.ideal).sum::<f32>() - room >= 0.5;
+        let shortfall = fixed + leaves.iter().map(|leaf| leaf.widths.ideal).sum::<f32>() - room;
+        let short = shortfall >= 0.5;
+        if short {
+            pass_state::with::<RowShortfalls, _>(&ctx, |asked| asked.0.get_mut(&id).map(|slot| *slot = Some(shortfall)));
+        }
         let probe = room.is_finite() && short && leaves.iter().any(|leaf| leaf.body);
         let again = !probe && settle(&leaves, fixed);
         ((inner, rect, leaves, fixed, probe, again), probe || again)
@@ -837,7 +1007,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.insert(id, IdMap::default()));
         crate::contract::keeping_ids(&ctx, || {
             layout_memory::probing(&ctx, || {
-                let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
+                let mut least = laid_out_child(ui, layout);
                 sweep(&mut least, Shrink::Least(id), &mut body);
             });
             ((), true)
@@ -889,7 +1059,7 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
         return inner;
     }
     if !shares_along(env, axis) {
-        return child::block(ui, None, layout, body).0;
+        return child::block(ui, None, layout, |ui| Env::run_in(ui, env.clone(), body)).0;
     }
     let key = sub(id, "share");
     child::block(ui, None, layout, |ui| {
@@ -902,9 +1072,10 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     .0
 }
 
-/// A child of `ui` with `layout`, built outside the generic sweeps that run a body in it.
-fn laid_out_child(ui: &mut Ui, layout: egui::Layout) -> Ui {
-    ui.new_child(egui::UiBuilder::new().layout(layout))
+/// A child of `ui` with `layout`, built outside the generic sweeps that run a body in it, on the heap: the body's
+/// children run in it.
+fn laid_out_child(ui: &mut Ui, layout: egui::Layout) -> Box<Ui> {
+    Box::new(ui.new_child(egui::UiBuilder::new().layout(layout)))
 }
 
 /// Whether a body given `axis` shares it among the children that fill it.
@@ -943,7 +1114,7 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
     let ctx = ui.ctx().clone();
     let in_child = |ui: &mut Ui, body: &mut dyn FnMut(&mut Ui) -> R| {
         let mut child = laid_out_child(ui, layout);
-        let inner = body(&mut child);
+        let inner = Env::run_in(&mut child, env.clone(), body);
         (inner, child.min_rect())
     };
     if !shares_along(env, axis) {
@@ -1158,10 +1329,12 @@ impl Spread {
 fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(&mut Ui) -> R) -> (R, Option<f32>) {
     let ctx = ui.ctx().clone();
     let layout = child::row_layout(rtl, false);
-    let sweep = |ui: &mut Ui, last: Option<Vec2>, leasts: Vec<f32>, probe: bool, body: &mut dyn FnMut(&mut Ui) -> R| {
+    let env = Env::of(ui);
+    let sweep = |ui: &mut Ui, env: &Env, last: Option<Vec2>, leasts: Vec<f32>, probe: bool, body: &mut dyn FnMut(&mut Ui) -> R| {
         let flow = Flow::new(ui.available_rect_before_wrap(), rtl);
         pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Spread(Spread::new(flow, gap, last, leasts, probe))));
-        let inner = body(ui);
+        // The children run in the sweep's own `Ui`: the row's env is installed for it, so they are its direct children.
+        let inner = Env::run_in(ui, env.clone(), body);
         let spread = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
             Some(Cursor::Spread(spread)) => Some(spread),
             _ => None,
@@ -1174,13 +1347,13 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
         let count = this_pass(&ctx, false, leasts_id).map_or(0, |count| count.x as usize);
         let leasts = (0..count).map(|i| this_pass(&ctx, false, sub(id, ("least", i))).map_or(0.0, |least| least.x)).collect();
         let last = this_pass(&ctx, false, id);
-        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, last, leasts, false, body)).0;
+        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, &env, last, leasts, false, body)).0;
         return (inner, natural(&spread));
     }
     let room = ui.available_rect_before_wrap().size();
     let ((inner, spread), rect, short) = crate::contract::keeping_ids(&ctx, || {
-        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
-        let (inner, spread) = sweep(&mut first, None, Vec::new(), false, body);
+        let mut first = laid_out_child(ui, layout);
+        let (inner, spread) = sweep(&mut first, &env, None, Vec::new(), false, body);
         // Half a point: less than a pixel shows at any scale the box runs.
         let short = spread.as_ref().is_some_and(|spread| spread.count >= 2 && room.x.is_finite() && spread.natural > room.x + 0.5);
         (((inner, spread), first.min_rect(), short), short)
@@ -1188,21 +1361,19 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
     let (inner, spread, leasts) = if short {
         #[cfg(feature = "testing")]
         measure::count_least(&ctx, id);
-        let probe = Env::of(ui).derive_local(|scoped| {
+        let probe = env.derive_local(|scoped| {
             scoped.unbounded.0 = true;
             scoped.least = true;
         });
         let leasts = crate::contract::keeping_ids(&ctx, || {
             let leasts = layout_memory::probing(&ctx, || {
-                let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
-                let installed = Env::install_for(&least, probe.clone());
-                let (_, spread) = sweep(&mut least, None, Vec::new(), true, body);
-                Env::restore(&ctx, installed);
+                let mut least = laid_out_child(ui, layout);
+                let (_, spread) = sweep(&mut least, &probe, None, Vec::new(), true, body);
                 spread.map_or_else(Vec::new, |spread| spread.widths)
             });
             (leasts, true)
         });
-        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, None, leasts.clone(), false, body)).0;
+        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, &env, None, leasts.clone(), false, body)).0;
         (inner, spread, leasts)
     } else {
         ui.advance_cursor_after_rect(rect);
@@ -1250,7 +1421,8 @@ fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
 /// The rect a child of measured `size` takes in flow in `ui`: the next cell of the `Grid` or spread `Row` body that
 /// encloses it directly, else the next allocation of `ui`'s layout. A direct child of an unwrapped `Row` that is one
 /// line sits with its centre on the row's line; a child of more than one line (a column, a field with a help line)
-/// sits at the row's top. In a `Grid` cell a child that `fill`s takes the
+/// sits at the row's top. A direct child of a wrapping `Row` takes the height of its line, at the line's middle when it
+/// is one line, else at its top. In a `Grid` cell a child that `fill`s takes the
 /// cell's whole height from the cell's top, so the cards of one row share their top and bottom edges; any other child
 /// sits at the vertical centre of its cell.
 #[doc(hidden)]
@@ -1272,16 +1444,21 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     });
     let centre = bracket.and_then(|(_, centre)| centre).or_else(|| line.and_then(|line| line.centre));
     let above = centre.zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
-    let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
+    // A child of a wrapping row takes the height of its line; a one-line child sits at its middle.
+    let wrapped = if line.is_none() { wrap_line(ui, &env, size) } else { None };
+    let height = line.and_then(|line| line.height).or(wrapped);
+    let slot = Vec2::new(size.x, height.map_or(above + size.y, |height| height.max(above + size.y)));
     let (rect, in_cell) = take_in(ui, &env, slot);
+    wrap_took(ui, &env, rect);
     let placed = if child.fill && in_cell {
         rect
     } else {
+        let spare = (rect.height() - size.y).max(0.0);
         let (above, below) = match line {
             Some(_) => (above, (rect.height() - above - size.y).max(0.0)),
             None => {
-                let spare = (rect.height() - size.y).max(0.0);
-                if env.grid_top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
+                let top = if wrapped.is_some() { one_line(child.first, size.y).is_none() } else { env.grid_top };
+                if top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
             }
         };
         Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
@@ -1615,7 +1792,7 @@ fn run_grid<R>(
     });
     let least = crate::contract::keeping_ids(&ctx, || {
         let least = layout_memory::probing(&ctx, || {
-            let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
+            let mut least = laid_out_child(ui, layout);
             sweep(&mut least, &probe, None, columns, &|flow| GridCursor::unbounded(flow, columns, gap)).1.columns
         });
         (least, true)
@@ -1820,6 +1997,7 @@ fn run_stack<R>(ui: &mut Ui, env: &Env, at: &RowIn, body: impl FnMut(&mut Ui) ->
     let env = env.derive_local(|scoped| {
         scoped.shrink = Some(Shrink::Fit);
         scoped.flow_body = Some(at.id);
+        scoped.stack_gap = Some((at.id, at.gap.y));
     });
     let installed = Env::install_for(ui, env.clone());
     // A held child of a column whose own room is unbounded keeps the width it measured at.
@@ -1907,9 +2085,10 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
             })
         }
     };
-    // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
-    // first line.
+    // A wrapped row has a line per wrap, whose height this pass's measuring run finds (`wrap_line`), and its first
+    // child gives its first line.
     let line = (!wrap).then(|| on_line(id, row_line(&ctx, sizing, id, shared), shared));
+    let lines = wrap && !env.least;
     // Where its least is asked, a wrapping row is as narrow as its widest child at its least: every child on a
     // line of its own.
     let block_layout = if wrap && env.least { child::column_layout(rtl) } else { child::row_layout(rtl, wrap) };
@@ -1923,9 +2102,19 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
                 if line.is_some() {
                     scoped.first_line = None;
                 }
+                // A leaf wider than a whole line takes the line, never below its least, as in a stack.
+                if wrap {
+                    scoped.shrink = Some(Shrink::Fit);
+                }
             }),
         );
+        if lines {
+            open_wraps(&ctx, sizing, id);
+        }
         let inner = if wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };
+        if lines {
+            close_wraps(&ctx, sizing, id, room.size());
+        }
         Env::restore(&ctx, installed);
         if !wrap {
             record_line(ui, sizing, id, shared);

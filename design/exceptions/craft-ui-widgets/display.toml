@@ -1,9 +1,1 @@
 config_version = 1
-
-[[exception]]
-name = "divider-length-content-extent"
-kind = "marker"
-rule = "props/point-size"
-path = "crates/ui-widgets/src/display/divider.rs"
-reason = "The length is the measured extent of the owner's content (a group as tall as its content and title), not a chosen size."
-count = 1

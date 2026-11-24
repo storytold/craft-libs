@@ -17,6 +17,7 @@ pub(crate) enum Toggle {
 pub(crate) enum NodeAction {
     Focus,
     Click,
+    ContextMenu,
     Increment,
     Decrement,
     SetValue,
@@ -34,6 +35,7 @@ impl NodeAction {
         match self {
             NodeAction::Focus => accesskit::Action::Focus,
             NodeAction::Click => accesskit::Action::Click,
+            NodeAction::ContextMenu => accesskit::Action::ShowContextMenu,
             NodeAction::Increment => accesskit::Action::Increment,
             NodeAction::Decrement => accesskit::Action::Decrement,
             NodeAction::SetValue => accesskit::Action::SetValue,

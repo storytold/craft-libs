@@ -33,6 +33,29 @@ fn appearance_page_without_text_size(ui: &mut Ui, data: &mut StoryData) -> Story
         .into()
 }
 
+/// The page of an app that keeps its own appearance: the mode, the two theme rows without favourite stars, and Motion.
+#[story(AppearancePage<'static>, covers = [], drive = Drive::Never)]
+fn appearance_page_with_kept_rows_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let client = SuiteClient::memory().view();
+    let draft = data.bind("kept", SelectionChange::default());
+    AppearancePage::new(&client, draft).can_favorite(false).size(false).text_size(false).contrast(false).show(ui).into()
+}
+
+/// Chips that offer no favourite star, for an app that keeps no favourites.
+#[story(ThemeChip<'static>, covers = [], drive = Drive::Never)]
+fn theme_chips_without_favorites(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let themes = builtins();
+    RadioGroup::new("Light Theme", data.bind("chosen", Some(themes[1].id.clone())))
+        .show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                for theme in themes.iter().take(4) {
+                    ThemeChip::new(theme, false).can_favorite(false).id_salt(theme.id.as_str()).show(ui);
+                }
+            });
+        })
+        .into()
+}
+
 /// One theme's chips in a group: plain, chosen, favourite, and both. A click on a star toggles the chip's favourite.
 #[story(ThemeChip<'static>, covers = [Default], drive = Drive::Never)]
 fn theme_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

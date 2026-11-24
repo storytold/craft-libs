@@ -2,15 +2,16 @@
 //! dims the body, frames it and shows a card with the label; a drop is reported in the output.
 
 use crate::contract::{
-    Access, Accessible as _, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, MeasureCx, NoValue, OsFiles, Outcome, Pad,
-    PaintUi, PartsCx, Pointer as _, Politeness, Props as _, Remember as _, Role, Sizing, WindowDropTarget, WordSetCx as _,
+    Access, Accessible as _, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, Inner, MeasureCx, NoValue, OsFiles, Outcome,
+    Pad, PaintUi, PartsCx, Pointer as _, Politeness, Props as _, Remember as _, Role, ShowContainer, Sizing, WindowDropTarget, WordSetCx as _,
 };
 use crate::display::Text;
 use crate::runtime::drag;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Corners, Insets, Stateful, StyleCx, SurfaceKind, SurfaceLook, TypeRole, UiTokens};
 use craft_behavior::{Metrics, Proposal, Sense};
-use egui::{Rect, Response};
+use egui::{Rect, Response, Ui};
+use std::sync::{Arc, Mutex, PoisonError};
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -116,17 +117,29 @@ impl Outcome for DropVeilOutput {
 /// the files nothing else in their window took use it too.
 pub struct WholeWindow {
     rect: Rect,
+    positional: bool,
 }
 
 impl WholeWindow {
     /// A target over the window, marked with `rect` while files hover.
     pub fn new(rect: Rect) -> Self {
-        WholeWindow { rect }
+        WholeWindow { rect, positional: false }
+    }
+
+    /// Waits for the pointer so a more specific target can take the drop at that position.
+    #[must_use]
+    pub fn positional(mut self) -> Self {
+        self.positional = true;
+        self
     }
 }
 
 impl WindowDropTarget<OsFiles> for WholeWindow {
     type Drop = OsFiles;
+
+    fn requires_pointer(&self) -> bool {
+        self.positional
+    }
 
     fn accept(&self, payload: &OsFiles, _op: DropOperation) -> Option<OsFiles> {
         (!payload.files.is_empty()).then(|| payload.clone())
@@ -142,7 +155,7 @@ impl WindowDropTarget<OsFiles> for WholeWindow {
 struct Announced(bool);
 
 /// A body that dims and shows `label` on a card while the OS drags files over the window, and reports the files
-/// dropped on the window.
+/// dropped on the window. The body gets the files dropped in the pass that runs it, so it acts on them in that pass.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct DropVeil {
@@ -151,7 +164,10 @@ pub struct DropVeil {
     #[container]
     props: ContainerProps,
     hovering: bool,
-    dropped: Option<OsFiles>,
+    positional: bool,
+    /// The files dropped this pass: `update` writes them before the body runs, the body and `finish` read them. A veil
+    /// is built anew every pass, so nothing outlives it.
+    dropped: Arc<Mutex<Option<OsFiles>>>,
     /// The card's rect, from the card child's measured size.
     card: Option<Rect>,
 }
@@ -160,7 +176,23 @@ impl DropVeil {
     /// A veil saying `label` ("Import 3 photos") while files hover.
     pub fn new(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new().sizing(Sizing::Fill).pad(Pad::None);
-        DropVeil { common: Common::new(), props, hovering: false, dropped: None, card: None }.label(label)
+        DropVeil { common: Common::new(), props, hovering: false, positional: false, dropped: Arc::default(), card: None }.label(label)
+    }
+
+    /// Waits for the pointer before accepting a drop, allowing a target under it to take the files first.
+    #[must_use]
+    pub fn positional(mut self) -> Self {
+        self.positional = true;
+        self
+    }
+
+    /// Shows the veil over `body`, which gets the files dropped on the window in this pass, if any.
+    pub fn show_with_files<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, Option<&OsFiles>) -> R) -> Inner<DropVeilOutput, R> {
+        let dropped = Arc::clone(&self.dropped);
+        ShowContainer::show(self, ui, move |ui, _| {
+            let files = dropped.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            body(ui, files.as_ref())
+        })
     }
 }
 
@@ -194,10 +226,12 @@ impl Component for DropVeil {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let held = drag::active::<OsFiles>(&cx.ctx).is_some_and(|files| !files.files.is_empty());
         let target = WholeWindow::new(cx.rect);
+        let target = if self.positional { target.positional() } else { target };
         let (id, ordinal) = (cx.id, drag::next_ordinal(&cx.ctx, cx.id));
-        self.dropped = cx.window_drop_target::<OsFiles, _>(&target);
+        let dropped = cx.window_drop_target::<OsFiles, _>(&target);
         // The veil shows only while it is the target that would take the drop.
-        self.hovering = held && self.dropped.is_none() && drag::winning(&cx.ctx, id, ordinal);
+        self.hovering = held && dropped.is_none() && drag::winning(&cx.ctx, id, ordinal);
+        *self.dropped.lock().unwrap_or_else(PoisonError::into_inner) = dropped;
         let announced = cx.memory::<Announced>();
         let first = self.hovering && !announced.0;
         announced.0 = self.hovering;
@@ -219,7 +253,8 @@ impl Component for DropVeil {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> DropVeilOutput {
-        DropVeilOutput { response: cx.response.clone(), dropped: self.dropped }
+        let dropped = self.dropped.lock().unwrap_or_else(PoisonError::into_inner).take();
+        DropVeilOutput { response: cx.response.clone(), dropped }
     }
 }
 

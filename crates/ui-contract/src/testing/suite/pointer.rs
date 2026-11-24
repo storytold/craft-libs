@@ -47,7 +47,7 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                     let target = target(&fixture);
                     fixture.take_outputs();
                     gesture(&mut fixture, &target, by);
-                    let clicks = fixture.take_outputs().iter().filter(|output| output.clicked).count();
+                    let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
                     if clicks != expected {
                         return Err(format!("{}: a press moved {by} points (slop {slop}) gave {clicks} clicks, expected {expected}", story.name));
                     }

@@ -388,3 +388,41 @@ fn read_system() -> Region {
 fn read_system() -> Region {
     Region::from_tag(&sys_locale::get_locale().unwrap_or_default())
 }
+
+#[cfg(all(test, unix, not(any(target_vendor = "apple", target_os = "android"))))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_locale_category_decides_its_own_part_and_lc_all_all_of_them() {
+        let env =
+            |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
+        fn none() -> Option<String> {
+            None
+        }
+        // `LC_ALL` decides every part, `C` included.
+        let all = from_posix(env(&[("LC_ALL", "de_DE.UTF-8"), ("LC_PAPER", "en_US"), ("LC_TIME", "en_US"), ("LANG", "en_US")]), none);
+        assert_eq!(all, Region::from_tag("de_DE.UTF-8"));
+        assert_eq!(from_posix(env(&[("LC_ALL", "C"), ("LANG", "de_DE")]), none), Region::from_tag("C"));
+        // An empty `LC_ALL` is unset: each category decides its own part.
+        let split = from_posix(
+            env(&[
+                ("LC_ALL", ""),
+                ("LC_NUMERIC", "pl_PL"),
+                ("LC_TIME", "en_GB"),
+                ("LC_MEASUREMENT", "en_US"),
+                ("LC_PAPER", "en_US"),
+                ("LANG", "de_DE"),
+            ]),
+            none,
+        );
+        assert_eq!((split.numbers.as_str(), split.time.as_str(), split.measurement, split.paper), ("pl-PL", "en-GB", Measurement::Us, Paper::Letter));
+        // `LANG` fills every category not set.
+        let lang = from_posix(env(&[("LC_PAPER", "en_US"), ("LANG", "de_DE")]), none);
+        assert_eq!((lang.numbers.as_str(), lang.time.as_str(), lang.measurement, lang.paper), ("de-DE", "de-DE", Measurement::Metric, Paper::Letter));
+        // `LANG` set to `C`, or unset, gives way to the platform's locale.
+        let platform = from_posix(env(&[("LANG", "C.UTF-8")]), || Some("en-CA".to_owned()));
+        assert_eq!((platform.numbers.as_str(), platform.measurement, platform.paper), ("en-CA", Measurement::Metric, Paper::Letter));
+        assert_eq!(from_posix(env(&[]), none), Region::default());
+    }
+}
