@@ -548,6 +548,14 @@ mod tests {
         // Nothing stored: somewhere inside the overlap, never outside the pair.
         let none = crossfade_cut(&a, &b);
         assert!((b.start..=a.end()).contains(&none));
+        // ... and in the middle of it: as far from one end as from the other, give or take a sample.
+        assert!(none > b.start && none < a.end());
+        assert!(((none - b.start) - (a.end() - none)).abs() <= 1);
+        // An odd overlap is still split evenly to within a sample.
+        let mut odd = b.clone();
+        odd.start += 1;
+        let at = crossfade_cut(&a, &odd);
+        assert!(((at - odd.start) - (a.end() - at)).abs() <= 1);
         // Stored inside the overlap: honoured; later offsets never cut earlier.
         let mut last = b.start - 1;
         for c in 0..=overlap {
@@ -573,7 +581,8 @@ mod tests {
         let mut a = a;
         a.start = i64::MIN;
         a.length = i64::MAX;
-        let _ = crossfade_cut(&a, &b);
+        let at = crossfade_cut(&a, &b);
+        assert!(at >= b.start && at <= a.end().max(b.start));
     }
 
     #[test]

@@ -1215,6 +1215,26 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_crossfade_round_trips_is_omitted_when_unset_and_a_session_without_it_loads() {
+        let mut s = Session::default();
+        // Unset: the key is not written at all.
+        assert_eq!(s.edit.selected_crossfade, None);
+        assert!(!s.to_json().unwrap().contains("selected_crossfade"));
+        // Set: written, and read back equal.
+        s.edit.selected_crossfade = Some(ClipId(7));
+        let text = s.to_json().unwrap();
+        assert!(text.contains("selected_crossfade"));
+        let back = Session::from_json(&text).unwrap();
+        assert_eq!(back.edit.selected_crossfade, s.edit.selected_crossfade);
+        assert_eq!(back, s);
+        // A session saved before the field existed has no key and loads with none selected.
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(v["edit"].as_object_mut().unwrap().remove("selected_crossfade").is_some());
+        let old = Session::from_json(&v.to_string()).unwrap();
+        assert_eq!(old.edit.selected_crossfade, None);
+    }
+
+    #[test]
     fn unique_track_names_take_the_first_free_number() {
         let mut s = Session::default();
         for name in ["Piano", "Piano 1", "Piano 3", "Piano 02", "Pianos 2"] {
