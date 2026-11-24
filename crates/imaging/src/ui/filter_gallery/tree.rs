@@ -238,6 +238,7 @@ impl<'a> FilterTree<'a> {
                         .thumb_size(ThumbSize::Large)
                         .aspect(1.0 / THUMB_HEIGHT_SHARE)
                         .card_columns(COLUMNS)
+                        .caption_lines(2)
                         .sizing(Sizing::Content)
                         .select(SelectMode::Single)
                         .activate(ActivateOn::Click)

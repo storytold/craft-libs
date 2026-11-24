@@ -148,10 +148,17 @@ pub(super) struct AroundPicture {
 }
 
 impl AroundPicture {
-    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool, action_place: TileActionPlace) -> AroundPicture {
+    fn of(
+        cx: &StyleCx<'_>,
+        card: bool,
+        text: CardText,
+        regular_card_padding: bool,
+        action_place: TileActionPlace,
+        caption_lines: u8,
+    ) -> AroundPicture {
         let around = |place: CaptionPlace, detail: bool| {
             let sizes = Sizes::of(cx, card, text, place, regular_card_padding);
-            let mut around = sizes.around(place, detail);
+            let mut around = sizes.around(place, detail, caption_lines);
             if action_place == TileActionPlace::Band {
                 around.start = sizes.glyph + sizes.column(place);
                 around.end = sizes.glyph;
@@ -213,19 +220,23 @@ impl Sizes {
     }
 
     /// What the tile adds around its picture with its caption in `place`, with a detail line reserved or not.
-    fn around(&self, place: CaptionPlace, detail: bool) -> Around {
-        Around::new(self.inset + self.column(place), self.inset, self.inset, self.inset + self.caption(place, detail))
+    fn around(&self, place: CaptionPlace, detail: bool, caption_lines: u8) -> Around {
+        Around::new(self.inset + self.column(place), self.inset, self.inset, self.inset + self.caption(place, detail, caption_lines))
     }
 
     /// The height of the caption band under the picture.
-    fn caption(&self, place: CaptionPlace, detail: bool) -> f32 {
+    fn caption(&self, place: CaptionPlace, detail: bool, caption_lines: u8) -> f32 {
         match place {
             CaptionPlace::Below => {
                 let gaps = if self.card { self.inset } else { 2.0 * self.tight };
-                gaps + self.name_line + if detail { self.detail_line } else { 0.0 }
+                gaps + self.name_height(caption_lines) + if detail { self.detail_line } else { 0.0 }
             }
             _ => 0.0,
         }
+    }
+
+    fn name_height(&self, caption_lines: u8) -> f32 {
+        self.name_line * f32::from(caption_lines.max(1))
     }
 
     fn column(&self, place: CaptionPlace) -> f32 {
@@ -346,6 +357,9 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop]
     caption: CaptionPlace,
+    /// Names below the picture can wrap into this many lines. The default is one line.
+    #[prop]
+    caption_lines: u8,
     /// The grid asked for the theme's regular padding around a framed card.
     #[style_key]
     #[prop]
@@ -455,6 +469,7 @@ impl<'a> Tile<'a> {
         Tile {
             common: Common::new(),
             caption: CaptionPlace::Below,
+            caption_lines: 1,
             regular_card_padding: false,
             detail_line: false,
             card: false,
@@ -564,12 +579,19 @@ impl<'a> Tile<'a> {
     /// What a tile adds around its picture: its padding, the caption band under the picture or the column at its
     /// reading start. A tile grid sizes a tile as the picture plus this.
     pub fn around_picture(cx: &StyleCx<'_>, place: CaptionPlace, detail: bool) -> Around {
-        Sizes::of(cx, false, CardText::File, place, false).around(place, detail)
+        Sizes::of(cx, false, CardText::File, place, false).around(place, detail, 1)
     }
 
     /// What a tile adds around its picture for every caption arrangement.
-    pub(super) fn around(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool, action_place: TileActionPlace) -> AroundPicture {
-        AroundPicture::of(cx, card, text, regular_card_padding, action_place)
+    pub(super) fn around(
+        cx: &StyleCx<'_>,
+        card: bool,
+        text: CardText,
+        regular_card_padding: bool,
+        action_place: TileActionPlace,
+        caption_lines: u8,
+    ) -> AroundPicture {
+        AroundPicture::of(cx, card, text, regular_card_padding, action_place, caption_lines)
     }
 
     /// Whether the caption band holds a detail line.
@@ -610,7 +632,7 @@ impl<'a> Tile<'a> {
     fn place(&self, sizes: &Sizes, area: Rect, rtl: bool, bar_shown: bool, faces: &Faces, pill_widths: &[f32]) -> Placed {
         let flow = Flow::new(area, rtl);
         let column = sizes.column(self.caption);
-        let band_height = sizes.caption(self.caption, self.has_detail_line());
+        let band_height = sizes.caption(self.caption, self.has_detail_line(), self.caption_lines);
         let (start, rest) = flow.take_start(column);
         let controls = if self.action_place == TileActionPlace::Band { sizes.bar } else { 0.0 };
         let picture = Rect::from_min_max(rest.rect().min + Vec2::new(0.0, controls), rest.rect().max - Vec2::new(0.0, band_height + controls));
@@ -618,7 +640,8 @@ impl<'a> Tile<'a> {
         let (caption, name, detail, marks) = match self.caption {
             CaptionPlace::Below => {
                 let above = if sizes.card { sizes.inset } else { sizes.tight };
-                let name = Rect::from_min_size(egui::pos2(band.left(), band.top() + above), Vec2::new(band.width(), sizes.name_line));
+                let name =
+                    Rect::from_min_size(egui::pos2(band.left(), band.top() + above), Vec2::new(band.width(), sizes.name_height(self.caption_lines)));
                 let detail = self.detail.as_ref().map(|_| Rect::from_min_size(name.left_bottom(), Vec2::new(band.width(), sizes.detail_line)));
                 (band, name, detail, Vec::new())
             }
@@ -885,7 +908,7 @@ impl Component for Tile<'_> {
             return Vec2::new(width, sizes.face + sizes.name_line + 2.0 * sizes.detail_line + 3.0 * sizes.tight);
         }
         let ratio = self.aspect.of(1.0);
-        let caption = sizes.caption(self.caption, self.has_detail_line());
+        let caption = sizes.caption(self.caption, self.has_detail_line(), self.caption_lines);
         let column = sizes.column(self.caption);
         // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
         // side, with what the density adds around it. A narrower room shrinks the picture to fit.
@@ -1293,7 +1316,9 @@ impl Tile<'_> {
         let look = if failed { &style.name_failed } else { &style.name };
         let ink = cx.resolve(&look.color);
         if !self.renaming {
-            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElideMiddle);
+            let wrap =
+                if self.caption == CaptionPlace::Below && self.caption_lines > 1 { Wrap::Clamp(self.caption_lines) } else { Wrap::ElideMiddle };
+            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(wrap);
             let layout = draw.layout(&run, placed.name.width());
             let at = Pos2::new(Self::text_x(placed.name, layout.size().x, cx), placed.name.top());
             draw.galley(at, &layout);

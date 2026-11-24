@@ -359,3 +359,33 @@ fn session_field_change_maps_each_automation_field_and_refuses_the_rest() {
 
 // OK and Cancel sit at the top of the settings column, in the platform's order, over the Filter select and the
 // stack.
+
+// Folder tiles use the full filter name in both the caption and the keyboard stop's accessible name.
+#[trial]
+fn folder_tiles_wrap_long_filter_names() {
+    const NAME: &str = "Colored Pencil";
+    struct LongLabel;
+    impl FilterCatalog for LongLabel {
+        fn categories(&self) -> Vec<FilterCategory> {
+            vec![FilterCategory::new("artistic", "Artistic", vec!["pencil".into()])]
+        }
+
+        fn filter(&self, key: &str) -> Option<GalleryFilter> {
+            (key == "pencil").then(|| GalleryFilter::new(key, NAME, "artistic", Vec::new()))
+        }
+    }
+
+    let mut fixture = Fixture::new(|ui| {
+        let index = FilterIndex::of(&LongLabel);
+        let thumbs = Thumbnails::in_context(ui.ctx(), "trial-folder-thumbs", ThumbnailOptions::default());
+        FilterTree::new(&index, "pencil", &thumbs, &FakeThumbSource::<GalleryThumb>::new()).show(ui);
+    });
+    fixture.host(host());
+    fixture.room(Vec2::new(220.0, 200.0)).pixels_per_point(1.25).record_paint().settle();
+    let output = fixture.take_paint().expect("the folder was painted");
+    assert!(
+        output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == NAME && !text.galley.elided)),
+        "the tile paints the full filter name"
+    );
+    assert!(fixture.by_label(NAME).is_some(), "the tile exposes the same name");
+}
