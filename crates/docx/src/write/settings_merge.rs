@@ -243,16 +243,25 @@ fn merge_compat(root_tag: &str, orig: &str, generated: &str) -> Option<String> {
         } else {
             r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#
         };
+        let compat_open_end = tag_end(s)? + 1;
+        let compat_open = s.get(..compat_open_end)?;
         for k in kids {
             let child_str = s.get(k.start..k.end)?;
-            let mut xml = String::with_capacity(root.len() + child_str.len() + 16);
+            let mut xml = String::with_capacity(root.len() + compat_open.len() + child_str.len() + 32);
             xml.push_str(root);
+            xml.push_str(compat_open);
             xml.push_str(child_str);
-            xml.push_str("</w:settings>");
+            xml.push_str("</w:compat></w:settings>");
             let mut reader = quick_xml::NsReader::from_str(&xml);
+            let mut depth = 0;
             loop {
                 match reader.read_resolved_event().ok()? {
-                    (_, quick_xml::events::Event::Start(_)) => break,
+                    (_, quick_xml::events::Event::Start(_)) => {
+                        depth += 1;
+                        if depth == 2 {
+                            break;
+                        }
+                    }
                     (_, quick_xml::events::Event::Eof) => return None,
                     _ => {}
                 }
@@ -282,9 +291,13 @@ fn merge_compat(root_tag: &str, orig: &str, generated: &str) -> Option<String> {
                         quick_xml::name::ResolveResult::Unbound => true,
                         _ => false,
                     };
-                    if is_wml_attr && local.as_ref() == b"name" && attr.value.as_ref() == b"compatibilityMode" {
+                    if !is_wml_attr {
+                        continue;
+                    }
+                    let val = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0).ok();
+                    if local.as_ref() == b"name" && val.as_deref() == Some("compatibilityMode") {
                         is_compat_mode = true;
-                    } else if is_wml_attr && local.as_ref() == b"uri" && attr.value.as_ref() != b"http://schemas.microsoft.com/office/word" {
+                    } else if local.as_ref() == b"uri" && val.as_deref() != Some("http://schemas.microsoft.com/office/word") {
                         uri_ok = false;
                     }
                 }
@@ -443,7 +456,7 @@ pub fn merge(original: &[u8], generated: &[u8]) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    const GEN: &str = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:zoom w:percent="100"/><w:defaultTabStop w:val="720"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"/></w:compat></w:settings>"#;
+    const GEN: &str = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:zoom w:percent="100"/><w:defaultTabStop w:val="720"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>"#;
 
     #[test]
     fn odd_or_hostile_originals_fall_back_or_merge_without_panicking() {
@@ -561,5 +574,18 @@ mod tests {
         let out_foreign = String::from_utf8(merge(orig_foreign.as_bytes(), gen_foreign.as_bytes()).unwrap()).unwrap();
         assert!(out_foreign.contains("x:compatSetting"), "{out_foreign}");
         assert!(!out_foreign.contains(r#"w:name="compatibilityMode""#), "{out_foreign}");
+
+        // Namespace declared directly on w:compat (not root) with mode replacement
+        let orig_compat_ns = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="m" xmlns:r="r"><w:compat xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><a:compatSetting a:name="compatibilityMode" a:uri="http://schemas.microsoft.com/office/word" a:val="15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:val="1"/></w:compat></w:settings>"#;
+        let gen_new_mode = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="14"/></w:compat></w:settings>"#;
+        let out_ns = String::from_utf8(merge(orig_compat_ns.as_bytes(), gen_new_mode.as_bytes()).unwrap()).unwrap();
+        assert_eq!(out_ns.matches("compatibilityMode").count(), 1, "{out_ns}");
+        assert!(out_ns.contains(r#"w:val="14""#), "{out_ns}");
+
+        // Escaped XML entities in attribute values
+        let orig_escaped = r#"<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibility&#x4d;ode" w:uri="http:&#47;&#47;schemas.microsoft.com/office/word" w:val="15"/><w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:val="1"/></w:compat></w:settings>"#;
+        let out_esc = String::from_utf8(merge(orig_escaped.as_bytes(), gen_no_mode.as_bytes()).unwrap()).unwrap();
+        assert!(!out_esc.contains("compatibility"), "{out_esc}");
+        assert!(out_esc.contains("overrideTableStyleFontSizeAndJustification"), "{out_esc}");
     }
 }

@@ -363,7 +363,7 @@ impl Reader<'_> {
         let (base, base_props) = part("w:rubyBase");
         let (ruby, ruby_props) = part("w:rt");
         let mut bp = base_props.unwrap_or_default();
-        (bp.link, bp.ins, bp.del) = (props.link.clone(), props.ins, props.del);
+        (bp.link, bp.link_history, bp.ins, bp.del) = (props.link.clone(), props.link_history, props.ins, props.del);
         if base.is_empty() {
             return;
         }
