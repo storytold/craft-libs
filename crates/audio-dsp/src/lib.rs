@@ -182,7 +182,9 @@ pub trait AudioEffect: Send {
     /// Process one block in place. All channel slices must have the same length (the shortest
     /// length is used otherwise). Zero-length blocks are allowed.
     fn process(&mut self, channels: &mut [&mut [f32]]);
-    /// Processing latency in samples (look-ahead / STFT delay) for delay compensation.
+    /// Processing latency in samples (look-ahead / STFT delay) for delay compensation. It does
+    /// not change with the parameters, except for `voice_pitch`'s `formant_follow` (Keep
+    /// Formants), which adds the formant stage's latency while it is on.
     fn latency(&self) -> usize {
         0
     }
