@@ -585,15 +585,32 @@ impl<K: TextureKey> TextureStore<K> {
     /// in the pixels of the image last put (the navigator's damage updates). The id stays. Returns `None` and
     /// changes nothing when the key has no picture, or when the region does not fit the stored image.
     ///
+    /// If `baseline` is `Some`, the update is rejected and returns `None` unless the resident texture's current
+    /// revision equals `baseline`.
+    ///
     /// An image that was reduced by the whole factor `f` on put is updated reduced the same way: the region's
     /// origin must be a multiple of `f`, and its far edges multiples of `f` or the image's own edges; it is
     /// box-averaged by `f` and written at `origin / f`. A region off that grid returns `None`, and the app puts the
     /// whole image. A picture on a packed store's page also returns `None`, as for a key with no texture, so the
     /// caller puts the whole picture: packed pictures are small.
-    pub fn put_region(&self, ctx: &Context, key: &K, revision: Revision, origin: [u32; 2], image: ColorImage) -> Option<CachedTexture> {
+    pub fn put_region(
+        &self,
+        ctx: &Context,
+        key: &K,
+        baseline: Option<Revision>,
+        revision: Revision,
+        origin: [u32; 2],
+        image: ColorImage,
+    ) -> Option<CachedTexture> {
         let frame = pass::root_frame_nr(ctx);
         let extent = texels(image.size);
         let (mut handle, source, factor, filter) = self.with(ctx, |inner| {
+            if let Some(base) = baseline {
+                let entry = inner.entries.get(key)?;
+                if entry.revision != base {
+                    return None;
+                }
+            }
             inner.roll_uploads(frame);
             inner.region_target(key, origin, extent)
         })?;
@@ -605,6 +622,11 @@ impl<K: TextureKey> TextureStore<K> {
         let texture = cached(&handle, source, factor);
         self.with(ctx, |inner| {
             let entry = inner.entries.get_mut(key)?;
+            if let Some(base) = baseline
+                && entry.revision != base
+            {
+                return None;
+            }
             entry.revision = revision;
             entry.seen = frame;
             inner.uploads += 1;

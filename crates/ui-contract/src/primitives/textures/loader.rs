@@ -77,6 +77,9 @@ pub enum LoadedPicture {
     Image(ColorImage),
     /// Replaces the part of the existing picture at `origin` with `image` in place (TextureStore::put_region).
     Region {
+        /// Expected baseline revision of the resident texture. When `Some`, rejected if the texture's revision
+        /// has changed.
+        baseline: Option<Revision>,
         /// Top-left texel [x, y] of the region to replace in the stored image.
         origin: [u32; 2],
         /// The new pixels for the region.
@@ -289,6 +292,21 @@ impl<K: TextureKey> TextureLoader<K> {
         TextureState::Loading { stand_in, waited: None }
     }
 
+    /// Runs this frame's work if not yet run in this frame: receiving finished jobs from the queue and uploading
+    /// results to the store within the frame upload allowance.
+    pub fn poll(&self, ctx: &Context) {
+        self.run_frame_work(ctx);
+    }
+
+    /// Discards any pending asked or waiting request for `key`, and cancels its running queue job.
+    pub fn cancel(&self, ctx: &Context, key: &K) {
+        self.with(ctx, |pool| {
+            pool.asked.remove(key);
+            pool.waiting.retain(|(k, _, _)| k != key);
+            pool.queue.reprioritize(|k, priority| if k == key { None } else { Some(priority) });
+        });
+    }
+
     /// Stops the loader's queue: waiting jobs are dropped, running ones are cancelled, and the call waits up to
     /// `timeout` for them to end. Returns whether every job has. For an app about to exit the process.
     pub fn shutdown(&self, timeout: std::time::Duration) -> bool {
@@ -343,14 +361,14 @@ impl<K: TextureKey> TextureLoader<K> {
                     }
                     self.store.put(ctx, key.clone(), revision, image);
                 }
-                Ok(LoadedPicture::Region { origin, image }) => {
+                Ok(LoadedPicture::Region { baseline, origin, image }) => {
                     if !self.store.allow_upload(ctx, image.pixels.len() * size_of::<Color32>()) {
-                        deferred.push((key, revision, Ok(LoadedPicture::Region { origin, image })));
+                        deferred.push((key, revision, Ok(LoadedPicture::Region { baseline, origin, image })));
                         deferred.extend(batch);
                         repaint::request(ctx);
                         break;
                     }
-                    if self.store.put_region(ctx, &key, revision, origin, image).is_none() {
+                    if self.store.put_region(ctx, &key, baseline, revision, origin, image).is_none() {
                         repaint::request(ctx);
                     }
                 }

@@ -357,6 +357,7 @@ impl<K: TextureKey> Thumbnails<K> {
     }
 
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
+        self.loader.poll(ctx);
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
         let resident_revision = self.loader.cache().texture_revision(ctx, key);
@@ -384,13 +385,15 @@ impl<K: TextureKey> Thumbnails<K> {
         }
         match source.render(key, &request) {
             ThumbRender::Ready(image) => {
+                self.loader.cancel(ctx, key);
                 let texture = self.loader.cache().put(ctx, key.clone(), revision, image);
                 let mut inner = self.lock();
                 inner.renders += 1;
                 TextureState::Ready(texture)
             }
             ThumbRender::Region { origin, image } => {
-                if let Some(texture) = self.loader.cache().put_region(ctx, key, revision, origin, image) {
+                if let Some(texture) = self.loader.cache().put_region(ctx, key, resident_revision, revision, origin, image) {
+                    self.loader.cancel(ctx, key);
                     let mut inner = self.lock();
                     inner.renders += 1;
                     TextureState::Ready(texture)
@@ -400,6 +403,7 @@ impl<K: TextureKey> Thumbnails<K> {
                 }
             }
             ThumbRender::Blank => {
+                self.loader.cancel(ctx, key);
                 self.loader.cache().put_empty(ctx, key.clone(), revision);
                 TextureState::Empty
             }

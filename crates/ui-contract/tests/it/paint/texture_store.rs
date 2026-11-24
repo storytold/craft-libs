@@ -258,7 +258,7 @@ fn a_region_update_patches_the_existing_texture_in_place_and_advances_revision()
     // Request region update to revision 2
     frame(&mut frames, || {
         loader.request(&ctx, &1, Revision::new(2), Priority::VISIBLE, || {
-            move |_| Ok(LoadedPicture::Region { origin: [0, 2], image: square(SMALL, shade(200)) })
+            move |_| Ok(LoadedPicture::Region { baseline: Some(Revision::new(1)), origin: [0, 2], image: square(SMALL, shade(200)) })
         });
     });
     jobs.run_all();
@@ -328,4 +328,113 @@ fn thumbnails_routes_region_render_in_place_and_reports_patchable() {
         }
         other => panic!("expected Ready, got {other:?}"),
     }
+}
+
+struct PendingBThenInstalledCSource {
+    phase: Cell<usize>,
+}
+
+impl ThumbSource<u32> for PendingBThenInstalledCSource {
+    fn revision(&self, _key: &u32, _request: &ThumbRequest) -> Revision {
+        Revision::new(self.phase.get() as u64)
+    }
+
+    fn render(&self, _key: &u32, request: &ThumbRequest) -> ThumbRender {
+        match self.phase.get() {
+            1 => ThumbRender::Ready(square(LARGE, shade(10))),
+            2 => ThumbRender::Later(Box::new(|_| Ok(LoadedPicture::Image(square(LARGE, shade(100)))))),
+            3 => {
+                assert!(request.patchable, "phase 3 must see resident texture");
+                assert!(request.resident_revision.is_some(), "phase 3 has resident revision");
+                ThumbRender::Region { origin: [0, 2], image: square(SMALL, shade(200)) }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[trial]
+fn pending_job_does_not_overwrite_installed_region_update() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let jobs = Arc::new(ManualJobs::new());
+    let opts = ThumbnailOptions::new().jobs(jobs.clone());
+    let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-pending-b", opts);
+    let source = PendingBThenInstalledCSource { phase: Cell::new(1) };
+    let req = ThumbRequest::for_cell(LARGE as f32, 1.0);
+
+    // Frame 1: Install A (rev 1) synchronously
+    let mut orig_id = None;
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        if let TextureState::Ready(tex) = state {
+            orig_id = Some(tex.id);
+        }
+    });
+    let orig_id = orig_id.expect("phase 1 ready");
+    let rev_a = thumbs.cache().texture_revision(&ctx, &1).expect("rev a");
+
+    // Frame 2: Request B (rev 2), which queues a background job in `jobs`
+    source.phase.set(2);
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        assert!(matches!(state, TextureState::Loading { stand_in: Some(_), .. }), "phase 2 is loading stand-in");
+    });
+    // Note: jobs.run_all() is NOT called yet. Job B is pending!
+
+    // Frame 3: While job B is still pending, an edit C (rev 3) arrives and renders a Region update
+    source.phase.set(3);
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        match state {
+            TextureState::Ready(tex) => {
+                assert_eq!(tex.id, orig_id, "texture patched in place");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+    });
+    let rev_c = thumbs.cache().texture_revision(&ctx, &1).expect("rev c");
+    assert_ne!(rev_a, rev_c, "revision changed to C");
+
+    // Now job B finishes late in the worker thread:
+    jobs.run_all();
+
+    // Frame 4: Run next frame. Verify obsolete job B did NOT overwrite rev C!
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        match state {
+            TextureState::Ready(tex) => {
+                assert_eq!(tex.id, orig_id, "texture is still rev C");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+    });
+    assert_eq!(thumbs.cache().texture_revision(&ctx, &1), Some(rev_c), "job B did not overwrite revision C");
+}
+
+#[trial]
+fn put_region_rejects_update_when_baseline_mismatches() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let (loader, jobs) = loader_with(&ctx, 1, 16);
+
+    // Put initial full picture at revision 1
+    frame(&mut frames, || {
+        loader.request(&ctx, &1, Revision::new(1), Priority::VISIBLE, || move |_| Ok(LoadedPicture::Image(square(LARGE, shade(10)))));
+    });
+    jobs.run_all();
+    frame(&mut frames, || {
+        loader.ask(&ctx, &1, Revision::new(1), Priority::VISIBLE);
+    });
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(1)));
+
+    // Try put_region with mismatched baseline (expecting revision 999 instead of 1)
+    let res = loader.cache().put_region(&ctx, &1, Some(Revision::new(999)), Revision::new(2), [0, 0], square(SMALL, shade(200)));
+    assert!(res.is_none(), "mismatched baseline must be rejected");
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(1)), "texture revision unchanged");
+
+    // Try put_region with matching baseline (expecting revision 1)
+    let res = loader.cache().put_region(&ctx, &1, Some(Revision::new(1)), Revision::new(2), [0, 0], square(SMALL, shade(200)));
+    assert!(res.is_some(), "matching baseline is accepted");
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(2)), "texture revision advanced to 2");
 }
