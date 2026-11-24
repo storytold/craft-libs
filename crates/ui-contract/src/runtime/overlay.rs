@@ -452,6 +452,11 @@ pub fn top(ctx: &Context) -> Option<Id> {
     })
 }
 
+/// Whether `layer` is an open popup's.
+pub(crate) fn is_popup(ctx: &Context, layer: Layer) -> bool {
+    with_pass(ctx, |pass| pass.last.iter().any(|entry| entry.layer == layer && entry.rank == Rank::Popup && !entry.exiting))
+}
+
 /// Whether `layer` is the layer of a popup open above `below` in last pass's overlay stack: `layer` belongs to a
 /// non-exiting popup entry, and `below` is the window's base layer (no entry's layer) or the layer of an entry
 /// opened before it. The stack, not egui's area order, says which layer was opened above which.

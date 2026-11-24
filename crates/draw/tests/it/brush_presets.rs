@@ -305,7 +305,7 @@ fn a_small_scale_shows_the_grid_of_tips_and_a_larger_one_the_chosen_parts() {
 
 /// Thirty presets, Brush 0 to Brush 29.
 fn many_rows(parts: &BrushCardParts, env: &Env) -> Vec<PresetRow<u32>> {
-    let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
+    let paint = BrushRowPaint::new(FacePaint::new(1, |_, _| {}), FacePaint::new(2, |_, _| {}));
     (0..30).map(|n| brush_row(n, format!("Brush {n}"), 0, 12.0, *parts, env, &paint)).collect()
 }
 
