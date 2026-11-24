@@ -313,11 +313,13 @@ fn compound(info: &[u8], package: &[u8]) -> Vec<u8> {
 
 proptest! {
     // Each case that parses runs the 50,000-spin key derivation, so fewer cases.
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig { cases: (48 / craft_testkit::hostile::divisor() as u32).max(6), ..ProptestConfig::default() })]
 
     #[test]
     fn mutated_standard_encryption_never_panics(ops in proptest::collection::vec((0u8..3, any::<prop::sample::Index>(), any::<u8>(), any::<bool>()), 1..8)) {
-        let (mut info, mut package) = standard_streams();
+        // Encrypting runs the key derivation too: once for every case.
+        static STREAMS: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
+        let (mut info, mut package) = STREAMS.get_or_init(standard_streams).clone();
         for (k, idx, byte, in_package) in ops {
             let x = if in_package { &mut package } else { &mut info };
             let at = idx.index(x.len() + 1);
