@@ -43,7 +43,7 @@ pub use panels::{DockPanels, PanelSpecs, SpecSource, request_actions};
 pub use panels::{close_requests, open_requests};
 pub use placed::{Placing, placed_rect, with_area_rules};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
-pub use spec::{DockGrid, DockHeights, PanelSpec};
+pub use spec::{DockGrid, DockHeights, FlyoutHeight, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};
 pub use targets::{DockSizes, DockSpot, DockTargets, GroupDrag, ZoneRule};
 pub use words::DockWords;
