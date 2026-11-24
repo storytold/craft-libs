@@ -451,8 +451,9 @@ struct ColumnAt<P> {
     bar: ColumnBar,
     within: Rect,
     open: Option<P>,
-    /// The outer inset of the column's card, a docked column's in a dock that shows cards ([`DockSizes::card_inset`]).
-    card: Option<f32>,
+    /// The column's place from the window edge, a docked column's in a dock that shows cards: its card's outer inset
+    /// is [`DockSizes::card_outer`] at that place.
+    card: Option<usize>,
 }
 
 /// What a column reported.
@@ -1239,7 +1240,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
             // tall as its content.
             self.report.placed.push((first.clone(), cell));
-            let card = scene.sizes.column_cards.then(|| scene.sizes.card_inset(at));
+            let card = scene.sizes.column_cards.then_some(at);
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone(), card };
             self.column(ui, body, column, at);
         }
@@ -1342,8 +1343,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // Only a docked column's icons are a rail; a floating window's open flyouts.
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
         // The width the user gives a column by its inner edge leaves out its card's inset.
-        let inset = card.unwrap_or(0.0);
-        let mut icons = |cell: Rect, open: Option<P>, card: Option<f32>| {
+        let inset = card.map_or(0.0, |place| scene.sizes.card_outer(place));
+        let mut icons = |cell: Rect, open: Option<P>, card: Option<usize>| {
             let footer = scene.rail_footer.filter(|panel| mode == IconicMode::Rail && column.panels().any(|item| item == *panel));
             let pass = RefCell::new(&mut *self);
             let draw = |ui: &mut Ui, rect: Rect, open: Option<P>| {
@@ -1355,7 +1356,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .auto_collapse(scene.auto_collapse)
                     .mode(mode);
                 let shown = match card {
-                    Some(inset) => shown.card(inset),
+                    Some(place) => shown.card(place),
                     None => shown,
                 };
                 shown.show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window))
@@ -1412,7 +1413,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .within(within)
                 .auto_collapse(scene.auto_collapse);
             let shown = match card {
-                Some(inset) => shown.card(inset),
+                Some(place) => shown.card(place),
                 None => shown,
             };
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
