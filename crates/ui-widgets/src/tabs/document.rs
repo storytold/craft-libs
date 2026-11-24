@@ -145,13 +145,13 @@ pub enum DocumentTabsEvent<D> {
         /// The tab they now sit before.
         before: Option<D>,
     },
-    /// Tabs of another group dropped on this strip, on the tab `over`.
+    /// Tabs of another group dropped on this strip, on the tab `over` or on none.
     #[non_exhaustive]
     DroppedInto {
         /// The dropped documents in the order they had.
         documents: Vec<D>,
-        /// The tab the drop landed on.
-        over: D,
+        /// The tab the drop landed on; `None` in the room after the tabs, or on a strip with no tabs.
+        over: Option<D>,
     },
     /// The tab was dragged out and released over no strip: float it at `at`.
     #[non_exhaustive]
@@ -390,7 +390,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         let response = shown.response.response.clone();
         for event in shown.response.events {
             match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => events.extend(keys.last().cloned().map(DocumentTabsEvent::Selected)),
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                    events.extend(keys.last().cloned().map(DocumentTabsEvent::Selected))
+                }
                 CollectionEvent::Activate(key) => events.push(DocumentTabsEvent::Activated(key)),
                 CollectionEvent::Reorder(edit) => {
                     if let (Some(moved), true) = (edit.value(), matches!(edit, EditEvent::Set { .. } | EditEvent::Commit { .. })) {
@@ -407,8 +409,8 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                     if let Some(files) = payload.get::<OsFiles>() {
                         events
                             .push(DocumentTabsEvent::FilesDropped { files: files.files.clone(), before: tabs.get(insert).map(|tab| tab.id.clone()) });
-                    } else if let (Some(drag), Some(over)) = (payload.get::<ListDrag<D>>(), key) {
-                        events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over });
+                    } else if let Some(drag) = payload.get::<ListDrag<D>>() {
+                        events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over: key });
                     }
                 }
                 _ => {}

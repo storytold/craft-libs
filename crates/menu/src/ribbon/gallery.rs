@@ -341,7 +341,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
     for event in out.response.events {
         match event {
             CollectionEvent::Activate(key) => result.picked = Some(key),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(key) = keys.last() {
                     result.picked = Some(*key);
                 }

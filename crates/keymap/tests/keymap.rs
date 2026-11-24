@@ -2,7 +2,7 @@
 
 use craft_keymap::{
     Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides,
-    Platform, Policy, Press, Problem, Scope, Scopes,
+    Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
 };
 use serde_json::json;
 
@@ -295,4 +295,101 @@ fn a_command_description_is_written_only_when_set_and_round_trips() {
     let text = serde_json::to_value(&described).unwrap();
     assert_eq!(text["description"], json!("Paints with the brush tip."));
     assert_eq!(serde_json::from_value::<CommandDef>(text).unwrap().description.as_deref(), Some("Paints with the brush tip."));
+}
+
+/// A hold is `Hold X` in text, serde and display.
+#[test]
+fn hold_triggers_read_and_write_as_hold_and_the_chord() {
+    for &key in Key::ALL {
+        let hold = Trigger::hold(Chord::plain(key));
+        let text = format!("Hold {}", key.name());
+        assert_eq!(Trigger::parse(&text), Ok(hold), "{text}");
+        assert_eq!(hold.to_string(), text);
+        assert_eq!(serde_json::from_str::<Trigger>(&serde_json::to_string(&hold).unwrap()).unwrap(), hold, "{text} serde");
+        assert!(hold.display(Platform::Windows).starts_with("Hold "), "{text} display");
+    }
+    for text in ["Hold", "Hold A B", "Hold Hold A"] {
+        assert!(Trigger::parse(text).is_err(), "{text}");
+    }
+}
+
+/// `edit.b` holds H (and presses F5); `app.hold` and the Timeline's `timeline.hold` both hold J. Holds start off.
+fn hold_keymap() -> Keymap {
+    let catalog =
+        vec![app("edit.a", &["Cmd+K"]), app("edit.b", &[]), app("edit.c", &[]), app("app.hold", &[]), in_scope("timeline.hold", "Timeline", &[])];
+    let mut o = Overrides::new();
+    o.insert("edit.b", vec!["Hold H".into(), "F5".into()]);
+    o.insert("app.hold", vec!["Hold J".into()]);
+    o.insert("timeline.hold", vec!["Hold J".into()]);
+    Keymap::new(catalog, scopes(), Platform::Mac).with_overrides(o)
+}
+
+/// While holds are off they stay in the overrides, through edits made without seeing them, but leave every reader;
+/// turning holds on brings them back with one rebuild.
+#[test]
+fn hold_bindings_hide_while_off_and_survive_edits() {
+    let mut km = hold_keymap();
+    assert!(!km.holds());
+    assert_eq!(km.bindings(&cmd("edit.b")), vec![b("F5")]);
+    assert_eq!(km.hold_of(&chord("H"), &Active::NONE), None);
+    assert_eq!(press(&km, "H", &Active::NONE), Lookup::None);
+    assert!(km.conflicts().is_empty() && km.conflicts_with(&cmd("app.hold")).is_empty());
+    assert_eq!(km.holder(&chord("H")), None);
+    assert_eq!(km.shown_chord(&cmd("edit.b")), Some(chord("F5")));
+    assert_eq!(km.overrides().get("edit.b"), Some(&["Hold H".to_string(), "F5".to_string()][..]), "the text stays");
+
+    // Edits made without seeing the hold keep it.
+    km.assign(&cmd("edit.b"), b("F6"), Policy::Steal).expect("assign");
+    km.set_bindings(&cmd("edit.b"), vec![b("F7")], Policy::Steal).expect("set");
+    assert!(km.clear(&cmd("edit.b")));
+    assert_eq!(km.bindings(&cmd("edit.b")), vec![]);
+    assert!(km.overrides().get("edit.b").is_some_and(|texts| texts.contains(&"Hold H".to_string())));
+
+    let built = km.shown_builds();
+    km.set_holds(true);
+    assert_eq!(km.shown_builds(), built + 1, "one rebuild");
+    km.set_holds(true);
+    assert_eq!(km.shown_builds(), built + 1, "no change, no rebuild");
+    assert_eq!(km.bindings(&cmd("edit.b")), vec![b("Hold H")]);
+    assert_eq!(km.hold_of(&chord("H"), &Active::NONE), Some(cmd("edit.b")));
+    assert_eq!(press(&km, "H", &Active::NONE), Lookup::None, "a hold is not a single press");
+    assert_eq!(km.shown_chord(&cmd("edit.b")), None, "only single presses are shown");
+    assert_eq!(km.hold_of(&chord("J"), &Active::NONE), Some(cmd("app.hold")));
+    assert_eq!(km.hold_of(&chord("J"), &Active::panel("Timeline")), Some(cmd("timeline.hold")));
+}
+
+/// Holds clash only with holds, and only a chord that types a character can be held.
+#[test]
+fn hold_bindings_clash_only_with_holds() {
+    use craft_keymap::AssignError;
+    let mut km = hold_keymap();
+    km.set_holds(true);
+    let hold = |text: &str| Binding::new(Trigger::hold(chord(text)));
+    assert!(matches!(km.assign(&cmd("edit.c"), hold("H"), Policy::Refuse), Err(AssignError::Taken(_))), "two holds on one chord clash");
+    km.assign(&cmd("edit.c"), b("H"), Policy::Refuse).expect("a single press on a held chord does not clash");
+    km.assign(&cmd("edit.c"), hold("Shift+H"), Policy::Refuse).expect("Shift keeps a chord holdable");
+    for text in ["Space", "`", "Cmd+K", "Ctrl+K", "Alt+K"] {
+        let binding = match Chord::parse(text) {
+            Ok(c) => Binding::new(Trigger::hold(c)),
+            Err(_) => Binding::new(Trigger::hold(Chord::plain(Key::Backtick))),
+        };
+        assert!(matches!(km.assign(&cmd("edit.c"), binding, Policy::Steal), Err(AssignError::NotHoldable(_))), "{text}");
+    }
+    assert!(matches!(
+        km.assign(&cmd("edit.c"), Binding::new(Trigger::hold(Chord::plain(Key::Space))), Policy::Steal),
+        Err(AssignError::NotHoldable(_))
+    ));
+}
+
+/// Two command references are equal when their binding keys are: no parameters and an empty object are the same
+/// command, other parameters tell commands apart. Guards against equality and the key disagreeing.
+#[test]
+fn command_refs_are_equal_when_their_keys_are() {
+    let bare = CommandRef::new("tool.move");
+    let empty = CommandRef::with_params("tool.move", json!({}));
+    let given = CommandRef::with_params("tool.move", json!({"copy": true}));
+    assert_eq!(bare.key(), empty.key());
+    assert_eq!(bare, empty, "no parameters and an empty object are one command");
+    assert_ne!(bare.key(), given.key());
+    assert_ne!(bare, given, "parameters tell commands apart");
 }

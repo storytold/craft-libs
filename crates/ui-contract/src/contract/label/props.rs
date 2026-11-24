@@ -200,6 +200,18 @@ pub(crate) fn inside(env: EnvView<'_>, side: &SideLabel, enabled: bool) -> Optio
 /// The width of a caption's cell.
 pub type CellWidth = ColumnWidth;
 
+/// What a click on a control's side label does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LabelPress {
+    /// A click focuses the control.
+    #[default]
+    Focus,
+    /// The label shows in the link look, and a click reports to the control's host and leaves focus alone. It is no
+    /// Tab stop of its own, and a drag still scrubs when `scrub` is on.
+    Link,
+}
+
 /// What `ContainerProps.label` holds: how the label is shown and what it does. The text is `Common.label`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -220,6 +232,8 @@ pub struct SideLabel {
     pub detail: Option<Label>,
     /// The label's tooltip, in place of its text: a hint a short or glyph label has no room for.
     pub tooltip: Option<Tooltip>,
+    /// What a click on the label does.
+    pub press: LabelPress,
 }
 
 impl SideLabel {
@@ -246,6 +260,7 @@ impl SideLabel {
             icon: None,
             detail: None,
             tooltip: None,
+            press: LabelPress::Focus,
         }
     }
 
@@ -267,6 +282,13 @@ impl SideLabel {
     #[must_use]
     pub const fn role(mut self, role: FieldLabelRole) -> Self {
         self.role = role;
+        self
+    }
+
+    /// Shows the label as a link: a click reports to the control's host (`Cx::link_activated`) and leaves focus alone.
+    #[must_use]
+    pub const fn link(mut self) -> Self {
+        self.press = LabelPress::Link;
         self
     }
 

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use craft_host::{FileError, Files, PickId, PickRequest, Picked, Wake, WriteIntent};
+use craft_host::{FileError, Files, PendingPick, PickId, PickRequest, Picked, Wake, WriteIntent};
 use craft_platform::browser_files::{BrowserFiles as PlatformFiles, PickLimits};
 
 /// The hosting page's save, for [`PlatformFiles::page_saves`]: posts `bytes` to the page `Host::connect` connected
@@ -46,8 +46,8 @@ impl Files for BrowserFiles {
         self.inner.forget(id);
     }
 
-    fn pick_pending(&self) -> bool {
-        self.inner.pick_pending()
+    fn pending_pick(&self) -> Option<PendingPick> {
+        self.inner.pending_pick()
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {

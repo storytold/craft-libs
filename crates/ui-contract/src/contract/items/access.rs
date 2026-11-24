@@ -1,7 +1,7 @@
 //! AccessKit nodes and requests of item rows, section rows and toggle cells.
 
 use super::{ITEM_NODE, ItemsHooks, Placement, SECTION, TOGGLE_CELL, key_hash, section_part};
-use crate::contract::collection::{CollectionEvent, LeadSource, OpenChange};
+use crate::contract::collection::{ActivateOn, CollectionEvent, LeadSource, OpenChange};
 use crate::contract::cx::Pointer as _;
 use crate::contract::{Collection, Cx};
 use crate::runtime::access::{self, Role};
@@ -115,8 +115,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         if self.source.section_stop(at) {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
-                            self.pick(comp, at, false, false);
-                            if matches!(props.activate, crate::contract::ActivateOn::Click) {
+                            self.click_pick(comp, at, false, false, craft_keymap::Mods::NONE);
+                            if props.activate == ActivateOn::Click {
+                                self.activation_clicks = 1;
                                 self.events.push(CollectionEvent::Activate(key));
                             }
                         }

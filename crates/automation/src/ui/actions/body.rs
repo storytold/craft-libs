@@ -17,7 +17,7 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Id, Response, Ui};
 
 use super::menu::OpenMenu;
-use super::panel::{ActionSelection, ActionsEvent, ActionsHost, ActionsPanelState, Session};
+use super::panel::{ActionSelection, ActionsEvent, ActionsHost, ActionsPanelState, Session, StepCells};
 use super::rows::{ActionRows, DIALOG_COLUMN, INCLUDE_COLUMN, NAME_COLUMN, build_row, cells};
 use super::words::ActionsWords;
 use crate::actions::{ActionList, moved_index};
@@ -32,6 +32,8 @@ pub(super) struct Body<'a> {
     pub(super) env: &'a Env,
     /// The id the tree's list shows under, which its drags carry as `ListDrag::list`.
     pub(super) list_id: Id,
+    /// Which step cells the rows show.
+    pub(super) step_cells: StepCells,
 }
 
 /// Where a moved row goes.
@@ -82,8 +84,9 @@ pub struct ActionMove {
 pub(super) struct BodyOutput {
     pub(super) events: Vec<ActionsEvent>,
     pub(super) response: Response,
-    /// The selection the list ended on, for the caller to store after the container; `None` when the body did not show the tree.
-    pub(super) selected: Option<Option<ActionSelection>>,
+    /// The selected row and the range of sets the list ended on, for the caller to store after the container; `None`
+    /// when the body did not show the tree.
+    pub(super) selected: Option<(Option<ActionSelection>, Vec<String>)>,
 }
 
 /// The part of the panel above the footer: the empty notice, Button Mode's buttons or the tree.
@@ -149,19 +152,24 @@ fn show_tree(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanelState, sessio
     let recording = host.and_then(|host| host.recording());
     let rows = ActionRows::build(list, state, host);
     let order = rows.keys();
-    let mut selection = Selection::new(state.selected.iter().cloned().collect(), state.selected.clone(), state.selected.clone());
+    let items = if state.selected_sets.is_empty() {
+        state.selected.iter().cloned().collect()
+    } else {
+        state.selected_sets.iter().cloned().map(ActionSelection::Set).collect()
+    };
+    let mut selection = Selection::new(items, state.selected.clone(), state.selected.clone());
     if let Some(index) = rename.filter(|_| editable) {
         request_rename(ui.ctx(), list_id, &ActionSelection::Action(index));
     }
-    let columns = vec![
-        ColumnSpec::toggle(INCLUDE_COLUMN, Label::Empty, ToggleColumn::sweepable()),
-        ColumnSpec::toggle(DIALOG_COLUMN, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("note")),
-        ColumnSpec::new(NAME_COLUMN, Label::Empty, ColumnWidth::fill(1.0)),
-    ];
+    let mut columns = vec![ColumnSpec::toggle(INCLUDE_COLUMN, Label::Empty, ToggleColumn::sweepable())];
+    if body.step_cells == StepCells::IncludeAndDialog {
+        columns.push(ColumnSpec::toggle(DIALOG_COLUMN, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("note")));
+    }
+    columns.push(ColumnSpec::new(NAME_COLUMN, Label::Empty, ColumnWidth::fill(1.0)));
     let mut widget = List::new(words.name.clone())
         .id(list_id)
         .tree(true)
-        .select(SelectMode::Single)
+        .select(SelectMode::Multi)
         .allow_empty(true)
         .space(SpaceAction::ToggleCell)
         .deletable(true)
@@ -224,17 +232,37 @@ fn show_tree(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanelState, sessio
                 }
             }
             CollectionEvent::Delete(keys) if editable => {
-                events.extend(keys.first().and_then(|key| delete_event(key, recording.is_some())));
+                if state.selected_sets.is_empty() {
+                    events.extend(keys.first().and_then(|key| delete_event(key, recording.is_some())));
+                } else if recording.is_none() {
+                    events.push(ActionsEvent::DeleteSets(state.selected_sets.clone()));
+                }
             }
             CollectionEvent::ContextMenu(request) => session.menu = OpenMenu::opened(request, list, host),
             _ => {}
         }
     }
-    let mut selected = selection.items.first().cloned();
+    let (mut selected, sets) = kept(list, &selection);
     for (source, to) in &moves {
         selected = selected.map(|selected| remapped(selected, source, to));
     }
-    BodyOutput { events, response: out.response, selected: Some(selected) }
+    BodyOutput { events, response: out.response, selected: Some((selected, sets)) }
+}
+
+/// The selection the panel keeps after the list applied this pass's input: the lead row, and the range of sets in list
+/// order when the lead and the range's other end (the anchor) are both set rows. The list's range runs over the shown
+/// rows, so one across an expanded set holds that set's action rows too; only the set rows are kept. A lead that is an
+/// action or step, or a set reached from one of those, is the whole selection. A range of fewer than two sets is none.
+fn kept(list: &ActionList, selection: &Selection<ActionSelection>) -> (Option<ActionSelection>, Vec<String>) {
+    let lead = selection.lead.clone().filter(|lead| selection.items.contains(lead));
+    let range = matches!((&lead, &selection.anchor), (Some(ActionSelection::Set(_)), Some(ActionSelection::Set(_))));
+    let sets: Vec<String> = if range {
+        let chosen = |set: &str| selection.items.iter().any(|key| matches!(key, ActionSelection::Set(name) if name == set));
+        list.sets().into_iter().filter(|set| chosen(set)).map(str::to_owned).collect()
+    } else {
+        Vec::new()
+    };
+    (lead, if sets.len() > 1 { sets } else { Vec::new() })
 }
 
 /// The `Delete` event for `selected`: a step always; a set or an action not while recording.
