@@ -37,6 +37,9 @@ pub enum HeaderStrength {
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
+    /// A sub-heading inside a section, over a group of its controls: label text in the normal ink, as written, with no
+    /// rule.
+    Subheading,
     /// A window's drag bar: one text row high (`size.row.text`), with label text; its action parts shrink to the row.
     Bar,
     /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
@@ -349,6 +352,7 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
+            HeaderStrength::Subheading => (cx.control().height, TypeRole::Label, text.normal),
             HeaderStrength::Bar => (cx.tokens.size.row.text, TypeRole::Label, text.normal),
             HeaderStrength::Overline => (cx.control().height, TypeRole::Caption, text.faint),
         };
