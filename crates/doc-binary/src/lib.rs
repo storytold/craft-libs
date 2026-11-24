@@ -166,8 +166,14 @@ thread_local! {
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
 /// `sprmCFData`: the character's `sprmCPicLocation` is a legacy form field's `FFData` in the
-/// Data stream ([MS-DOC] §2.6.1), not a picture.
+/// Data stream ([MS-DOC] §2.6.1), not a picture. Its operand is a Bool8 (0 or 1), not a
+/// ToggleOperand.
 const C_FDATA: u16 = 0x0806;
+/// The isprm of `sprmCFData` in a Prm0 ([MS-DOC] §2.9.215). A Prm0's operand is one byte, so it
+/// can't carry `sprmCPicLocation`; only a Prm1's grpprl can. Kept out of [`sprm::from_prm0`],
+/// which feeds character formatting. A Word 6/95 Prm0 holds an opcode instead of an isprm, but
+/// those documents go to `read_word6`, which never reaches this check.
+const PRM0_C_FDATA: u8 = 0x47;
 /// `sprmCSymbol`: the record font and character of a symbol character ([MS-DOC] §2.6.1); the
 /// text stream holds the placeholder U+0028 at its position.
 const C_SYMBOL: u16 = 0x6A09;
@@ -827,7 +833,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
                 // In a field's code this character holds the field's legacy form definition,
                 // not a picture.
-                if take_form_data(ctx, field.as_mut(), chpx) {
+                if take_form_data(ctx, field.as_mut(), chpx, ctx.pieces.piece_prm(cp)) {
                     cp = cp.saturating_add(units);
                     continue;
                 }
@@ -1002,18 +1008,44 @@ fn form_matches(instr: &str, form: &str) -> bool {
     }
 }
 
-/// Takes a legacy form field's definition from the U+0001 character whose CHPX is `chpx`, when
-/// it is one: `sprmCFData` is on, and the character is in the code of the open field `field`
-/// (after the instruction, before the separator). Its `sprmCPicLocation` points at the
-/// `FFData`. True when the character was a definition, whether or not it could be read, so it
-/// is not taken for a picture.
-fn take_form_data(ctx: &WalkCtx<'_>, field: Option<&mut FieldBuild>, chpx: &[u8]) -> bool {
-    let flagged = sprm::iter(chpx).any(|prl| prl.op == C_FDATA && prl.operand.first() == Some(&1));
-    let Some(f) = field.filter(|f| flagged && f.depth == 1 && f.sep.is_none()) else { return false };
+/// Takes a legacy form field's definition from the U+0001 character whose CHPX is `chpx` and
+/// whose piece's Prm is `prm`, when it is one: `sprmCFData` is on, and the character is in the
+/// code of the open field `field` (after the instruction, before the separator). Its
+/// `sprmCPicLocation` points at the `FFData`. The piece's Prm applies after the CHPX, so a
+/// `sprmCFData` or `sprmCPicLocation` it carries wins over the CHPX's. True when the character
+/// was a definition, whether or not it could be read, so it is not taken for a picture.
+fn take_form_data(ctx: &WalkCtx<'_>, field: Option<&mut FieldBuild>, chpx: &[u8], prm: PrmRef<'_>) -> bool {
+    let Some(f) = field.filter(|f| f.depth == 1 && f.sep.is_none()) else { return false };
+    // A Prm1 grpprl is charged to the work budget, as for `apply_prm`; once that is spent only
+    // the CHPX is read.
+    let (prm_flag, prm_at) = match prm {
+        PrmRef::Sprm0 { isprm: PRM0_C_FDATA, val } => (Some(val == 1), None),
+        PrmRef::Grpprl { grpprl: Some(g), .. } if ctx.work.charge(g.len() as u64, Cost::Formatting) => form_sprms(g),
+        _ => (None, None),
+    };
+    let flagged = prm_flag.unwrap_or_else(|| sprm::iter(chpx).any(|prl| prl.op == C_FDATA && prl.operand.first() == Some(&1)));
+    if !flagged {
+        return false;
+    }
     if f.form.is_empty() {
-        f.form = pic_location(chpx).and_then(|at| ffdata::read(ctx.data, at, ctx.work)).unwrap_or_default();
+        let at = prm_at.or_else(|| pic_location(chpx));
+        f.form = at.and_then(|at| ffdata::read(ctx.data, at, ctx.work)).unwrap_or_default();
     }
     true
+}
+
+/// The last `sprmCFData` (on when its operand is 1) and the last whole `sprmCPicLocation` in a
+/// piece's Prm1 grpprl: applied in order, the last of each wins.
+fn form_sprms(grpprl: &[u8]) -> (Option<bool>, Option<u32>) {
+    let (mut flag, mut at) = (None, None);
+    for prl in sprm::iter(grpprl) {
+        match (prl.op, prl.operand) {
+            (C_FDATA, _) => flag = Some(prl.operand.first() == Some(&1)),
+            (C_PIC_LOCATION, [b0, b1, b2, b3, ..]) => at = Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
+            _ => {}
+        }
+    }
+    (flag, at)
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.

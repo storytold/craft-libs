@@ -928,9 +928,35 @@ struct StructSpec {
 }
 
 fn struct_doc(spec: &StructSpec) -> Vec<u8> {
+    struct_doc_with_prm(spec, &[], None)
+}
+
+/// A [`struct_doc`] whose main text is split around the character at CP `cp` of `anchor`
+/// (`(cp, prm)`), which gets a piece of its own with the Prm `prm`; the other pieces have none.
+/// `prcs` are the Clx's Prcs (what a Prm1 indexes).
+fn struct_doc_with_prm(spec: &StructSpec, prcs: &[Vec<u8>], anchor: Option<(u32, u16)>) -> Vec<u8> {
     let text: String = spec.text.into();
     let ccp = text.chars().count() as u32;
-    let mut all: Vec<Piece> = vec![Piece { compressed: false, text: text.clone() }];
+    let mut all: Vec<Piece> = Vec::new();
+    // Index of the anchor's piece in `all`.
+    let mut anchor_piece = None;
+    match anchor {
+        Some((cp, _)) => {
+            let chars: Vec<char> = text.chars().collect();
+            let cp = cp as usize;
+            let before: String = chars[..cp].iter().collect();
+            if !before.is_empty() {
+                all.push(Piece { compressed: false, text: before });
+            }
+            anchor_piece = Some(all.len());
+            all.push(Piece { compressed: false, text: chars[cp].to_string() });
+            let after: String = chars[cp + 1..].iter().collect();
+            if !after.is_empty() {
+                all.push(Piece { compressed: false, text: after });
+            }
+        }
+        None => all.push(Piece { compressed: false, text: text.clone() }),
+    }
     let mut story_ends = Vec::new();
     let mut ftn_len = 0u32;
     for s in &spec.note_stories {
@@ -951,8 +977,19 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
         edn_len += t.chars().count() as u32;
         all.push(Piece { compressed: false, text: t });
     }
-    let plc = plcpcd(&all, TEXT_FC);
-    let mut clx = vec![0x02u8];
+    let mut plc = plcpcd(&all, TEXT_FC);
+    // The Pcds (eight bytes each) follow the n + 1 CPs; a Pcd's Prm is its last two bytes.
+    if let (Some(k), Some((_, prm))) = (anchor_piece, anchor) {
+        let pcd = (all.len() + 1) * 4 + k * 8;
+        plc[pcd + 6..pcd + 8].copy_from_slice(&prm.to_le_bytes());
+    }
+    let mut clx = Vec::new();
+    for g in prcs {
+        clx.push(0x01u8);
+        clx.extend_from_slice(&(g.len() as u16).to_le_bytes());
+        clx.extend_from_slice(g);
+    }
+    clx.push(0x02u8);
     clx.extend_from_slice(&(plc.len() as u32).to_le_bytes());
     clx.extend_from_slice(&plc);
 

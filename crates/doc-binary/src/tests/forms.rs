@@ -1,7 +1,7 @@
 //! Legacy form fields (`FORMTEXT`, `FORMCHECKBOX`, `FORMDROPDOWN`): their `FFData` in the Data
 //! stream ([MS-DOC] §2.9.78), built here byte by byte, comes back as the field's `w:ffData`, and
 //! survives conversion to `.docx`.
-use super::{StructSpec, grpprl, struct_doc, structured_spec};
+use super::{StructSpec, grpprl, struct_doc, struct_doc_with_prm, structured_spec};
 use crate::{Cost, Work, ffdata, read};
 use craft_wordmodel::para::InlineObject;
 
@@ -341,6 +341,59 @@ fn a_hostile_definition_leaves_the_form_empty() {
 fn a_character_not_marked_as_form_data_gets_no_form() {
     let doc = read(&doc_with("FORMTEXT", with_picf(&ffdata_bytes(&TEXT)), false, 0)).expect("opens");
     assert_eq!(field_of(&doc).2, "");
+}
+
+/// The form of a `FORMTEXT` field whose form character has the CHPX sprms `chpx` (with
+/// `sprmCFSpec` on, as for any special character) and a piece of its own with the Prm `prm`,
+/// with `prcs` as the Prcs a Prm1 indexes. The other pieces have no Prm. The definition is at 0.
+fn form_with_prm(chpx: &[(u16, &[u8])], prcs: &[Vec<u8>], prm: u16) -> String {
+    let text = "\u{13} FORMTEXT \u{1}\u{14}Result\u{15}\r";
+    let at = text.chars().position(|c| c == '\u{1}').unwrap_or(0) as u32;
+    let mut chpx = chpx.to_vec();
+    chpx.push((0x0855, &[1]));
+    let spec = StructSpec {
+        data_stream: with_picf(&ffdata_bytes(&TEXT)),
+        chpx_runs: vec![(0, Vec::new()), (at, grpprl(&chpx)), (at + 1, Vec::new())],
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc_with_prm(&spec, prcs, Some((at, prm)))).expect("opens");
+    field_of(&doc).2
+}
+
+/// The piece's Prm applies after the CHPX ([MS-DOC] §2.9.215, §2.9.216), so it can mark the
+/// character as form data, unmark it, or give the definition's location.
+#[test]
+fn the_pieces_prm_can_mark_the_form_data() {
+    let (here_at, elsewhere_at) = (0u32.to_le_bytes(), 0x0010_0000u32.to_le_bytes());
+    let (here, elsewhere): (&[u8], &[u8]) = (&here_at, &elsewhere_at);
+    let on: &[u8] = &[1];
+    // Prm0: isprm 0x47 (sprmCFData) in bits 1-7, the operand in bits 8-15.
+    let prm0 = |val: u16| (0x47 << 1) | (val << 8);
+    assert_eq!(form_with_prm(&[(0x6A03, here)], &[], prm0(1)), TEXT_XML, "Prm0 marks it; the CHPX has the location");
+    assert_eq!(form_with_prm(&[(0x0806, on), (0x6A03, here)], &[], prm0(0)), "", "Prm0 unmarks what the CHPX marks");
+    // Prm1 0x0001 names Prc 0.
+    let prc = grpprl(&[(0x0806, on), (0x6A03, here)]);
+    assert_eq!(form_with_prm(&[], std::slice::from_ref(&prc), 0x0001), TEXT_XML, "Prm1 carries both");
+    assert_eq!(form_with_prm(&[(0x6A03, elsewhere)], &[prc], 0x0001), TEXT_XML, "Prm1's location wins over the CHPX's");
+    let unmark = grpprl(&[(0x0806, &[0])]);
+    assert_eq!(form_with_prm(&[(0x0806, on), (0x6A03, here)], &[unmark], 0x0001), "", "Prm1 unmarks what the CHPX marks");
+    // A Prm0 for another sprm leaves the CHPX's mark alone (isprm 0x55 is sprmCFBold).
+    assert_eq!(form_with_prm(&[(0x0806, on), (0x6A03, here)], &[], (0x55 << 1) | (1 << 8)), TEXT_XML, "other Prm0");
+    // Within a Prm1 the last of each sprm wins.
+    let twice = grpprl(&[(0x0806, on), (0x6A03, elsewhere), (0x6A03, here)]);
+    assert_eq!(form_with_prm(&[], &[twice], 0x0001), TEXT_XML, "the last location");
+    let off_on = grpprl(&[(0x0806, &[0]), (0x0806, on), (0x6A03, here)]);
+    assert_eq!(form_with_prm(&[], &[off_on], 0x0001), TEXT_XML, "the last mark: on");
+    let on_off = grpprl(&[(0x0806, on), (0x0806, &[0]), (0x6A03, here)]);
+    assert_eq!(form_with_prm(&[(0x0806, on)], &[on_off], 0x0001), "", "the last mark: off");
+    // A Prm1 without sprmCFData leaves the mark to the CHPX, and may still give the location.
+    let bold = grpprl(&[(0x0835, on)]);
+    assert_eq!(form_with_prm(&[(0x0806, on), (0x6A03, here)], &[bold], 0x0001), TEXT_XML, "Prm1 with other sprms only");
+    let location = grpprl(&[(0x6A03, here)]);
+    assert_eq!(form_with_prm(&[(0x0806, on), (0x6A03, elsewhere)], &[location], 0x0001), TEXT_XML, "Prm1 with the location only");
+    // Prm1 0x0003 names Prc 1, which does not exist: the CHPX decides.
+    let prc = grpprl(&[(0x0806, &[0])]);
+    assert_eq!(form_with_prm(&[(0x0806, on), (0x6A03, here)], &[prc], 0x0003), TEXT_XML, "Prm1 past the Prcs");
 }
 
 #[test]
