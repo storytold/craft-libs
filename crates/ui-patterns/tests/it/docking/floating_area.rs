@@ -261,6 +261,34 @@ fn a_window_asked_to_continue_the_held_press_follows_the_pointer() {
     assert!(!followed, "no window holds the docked panel, so none takes the press");
 }
 
+/// A floating window that took over a panel's drag docks on release as that drag would, though the window's title row
+/// does not dock (`title_bar_docks(false)`): dropped on the docked group's tab strip, the panel joins the group. Its own
+/// title row dragged there only moves the window.
+#[trial]
+fn a_window_that_took_over_a_panel_drag_docks_on_a_tab_strip_though_its_title_row_does_not() {
+    let config = DockConfig::default().title_bar_docks(false);
+    let joins = |handed_over: bool| {
+        let mut bed = bed_with(with_window(Some(Node::tabs(vec![DOCKED], 0))), config.clone());
+        let tab = bed.fixture.by_role(Role::TAB).into_iter().find(|tab| !WINDOW_AT.contains(tab.center())).expect("the docked tab shows");
+        let over = Pos2::new(tab.rect.right() + 20.0, tab.center().y);
+        let from = if handed_over { tab.center() } else { window_title() };
+        bed.fixture.frame(vec![moved(from)]);
+        bed.fixture.frame(vec![press(from)]);
+        if handed_over {
+            bed.hand_over.set(Some((WINDOW, Vec2::new(40.0, 12.0))));
+            bed.fixture.frame(Vec::new());
+        }
+        for step in 1..=4 {
+            bed.fixture.frame(vec![moved(from + (over - from) * (step as f32 / 4.0))]);
+        }
+        bed.fixture.frame(vec![release(over)]).settle();
+        let layout = bed.workspace.borrow().layout().clone();
+        layout.floating.is_empty() && layout.place(&WINDOW).is_some_and(|place| layout.place(&DOCKED).is_some_and(|docked| docked == place))
+    };
+    assert!(joins(true), "the handed-over drag joins the docked group");
+    assert!(!joins(false), "the title row only moves the window");
+}
+
 /// A dock area's first pass leaves a drag running in another area alone.
 #[trial]
 fn an_areas_first_pass_keeps_a_running_drag() {

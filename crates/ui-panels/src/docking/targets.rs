@@ -677,4 +677,8 @@ pub struct GroupDrag<P> {
     pub press: Option<egui::Pos2>,
     /// The arrangement the drag started on, when it started in a dock area.
     pub(crate) started: Option<super::drop::Arrangement>,
+    /// The drag is a floating window's move by its title row, which docks only with `DockConfig::title_bar_docks`. A
+    /// window that took over a panel's drag ([`FloatingGroup::continue_move`](super::FloatingGroup::continue_move))
+    /// docks as that drag would.
+    pub title_row: bool,
 }
