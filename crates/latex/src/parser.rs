@@ -1007,8 +1007,30 @@ pub fn parse_with(src: &str, images: Option<ImageLoader<'_>>) -> Flow {
         None => (&toks[..], &[]),
     };
     let mut pre = Parser::new(preamble, 0);
+    // Groups in the preamble scope `\graphicspath` as in the body: the folders saved where each
+    // of the first MAX_NEST open groups starts, restored where it ends.
+    let (mut depth, mut saved) = (0usize, Vec::new());
     while let Some(t) = pre.t.get(pre.pos) {
         pre.pos += 1;
+        if let Some(i) = &images {
+            match t {
+                Tok::Open => {
+                    depth += 1;
+                    if saved.len() < MAX_NEST {
+                        saved.push(i.saved_paths());
+                    }
+                }
+                Tok::Close if depth > 0 => {
+                    if depth == saved.len()
+                        && let Some(paths) = saved.pop()
+                    {
+                        i.restore_paths(paths);
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
         if let Tok::Cmd(c) = t {
             match c.as_str() {
                 "title" => meta.title = pre.arg_text(),

@@ -823,6 +823,12 @@ fn includegraphics_follows_latex_scoping_and_braced_values() {
         "\\graphicspath{{out/}}\\begin{document}{\\graphicspath{{in/}}\\includegraphics{a.png}}\\begin{center}\\graphicspath{{env/}}\\end{center}\\includegraphics{b.png}\\end{document}",
     );
     assert_eq!(scoped, vec!["b.png".to_string(), "out/b.png".to_string()]);
+    let preamble = folders("\\graphicspath{{outer/}}{\\graphicspath{{inner/}}}\\begin{document}\\includegraphics{b.png}\\end{document}");
+    assert_eq!(preamble, vec!["b.png".to_string(), "outer/b.png".to_string()]);
+    let cells = folders(
+        "\\graphicspath{{outer/}}\\begin{document}\\begin{tabular}{ll}\\graphicspath{{inner/}}\\includegraphics{a.png} & \\includegraphics{b.png}\\end{tabular}\\end{document}",
+    );
+    assert_eq!(cells, vec!["b.png".to_string(), "outer/b.png".to_string()]);
     let defined =
         folders("\\graphicspath{{real/}}\\newcommand{\\unused}{\\graphicspath{{other/}}}\\begin{document}\\includegraphics{b.png}\\end{document}");
     assert_eq!(defined, vec!["b.png".to_string(), "real/b.png".to_string()]);

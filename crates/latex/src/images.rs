@@ -1,6 +1,7 @@
 //! Pictures `\includegraphics` names, loaded through the caller's [`ImageLoader`].
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::export::LINE_WIDTH;
@@ -23,15 +24,16 @@ const COLUMN: f32 = 468.0;
 /// parser of one document.
 pub(super) struct Images<'a> {
     load: ImageLoader<'a>,
-    /// `\graphicspath` folders, each ending in `/` or empty.
-    paths: RefCell<Vec<String>>,
+    /// `\graphicspath` folders, each ending in `/` or empty. Shared, so saving them when a
+    /// group starts copies a pointer, not the folders.
+    paths: RefCell<Rc<[String]>>,
     /// Loader calls left for the document.
     probes: Cell<usize>,
 }
 
 impl<'a> Images<'a> {
     pub(super) fn new(load: ImageLoader<'a>) -> Images<'a> {
-        Images { load, paths: RefCell::new(Vec::new()), probes: Cell::new(MAX_IMAGE_PROBES) }
+        Images { load, paths: RefCell::new(Rc::from([])), probes: Cell::new(MAX_IMAGE_PROBES) }
     }
 
     /// `\graphicspath{{a/}{b/}}`, given as its argument's source (`{a/}{b/}`).
@@ -42,17 +44,17 @@ impl<'a> Images<'a> {
             .filter(|p| !p.is_empty())
             .take(MAX_GRAPHICS_PATHS)
             .map(|p| if p.ends_with('/') { p.to_string() } else { format!("{p}/") })
-            .collect();
-        *self.paths.borrow_mut() = paths;
+            .collect::<Vec<_>>();
+        *self.paths.borrow_mut() = Rc::from(paths);
     }
 
     /// The `\graphicspath` folders in effect, to restore when a group or environment ends
     /// (`\graphicspath` is local to it, as in LaTeX).
-    pub(super) fn saved_paths(&self) -> Vec<String> {
-        self.paths.borrow().clone()
+    pub(super) fn saved_paths(&self) -> Rc<[String]> {
+        Rc::clone(&self.paths.borrow())
     }
 
-    pub(super) fn restore_paths(&self, paths: Vec<String>) {
+    pub(super) fn restore_paths(&self, paths: Rc<[String]>) {
         *self.paths.borrow_mut() = paths;
     }
 

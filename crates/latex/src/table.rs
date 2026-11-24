@@ -153,7 +153,12 @@ pub(super) fn table<'a>(toks: &'a [Tok], spec: &str, depth: usize, images: Optio
                 cell.covered = true;
             }
             if !cell.covered && depth < MAX_NEST {
+                // Each cell is a group: a `\graphicspath` in it ends with it.
+                let saved_paths = images.map(Images::saved_paths);
                 sub.run(None);
+                if let (Some(i), Some(paths)) = (images, saved_paths) {
+                    i.restore_paths(paths);
+                }
                 let (blocks, _) = sub.finish();
                 cell.blocks = blocks;
             }
