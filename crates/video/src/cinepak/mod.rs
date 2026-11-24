@@ -176,11 +176,11 @@ impl Decoder {
     /// Rebuild the RGB of an indexed reference picture with the current palette.
     fn recolor_reference(&mut self) {
         let Some(frame) = self.last_frame.as_mut().filter(|f| !f.is_color) else { return };
-        for (index, rgb) in frame.y.iter().zip(frame.rgb.chunks_exact_mut(3)) {
+        for (index, rgb) in frame.y.iter().zip(frame.rgb.as_chunks_mut::<3>().0) {
             let i = usize::from(*index) * 3;
             match self.palette.as_ref().and_then(|p| p.get(i..i + 3)) {
                 Some(entry) => rgb.copy_from_slice(entry),
-                None => rgb.fill(*index),
+                None => *rgb = [*index; 3],
             }
         }
     }
