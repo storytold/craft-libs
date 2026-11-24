@@ -194,7 +194,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// A typed value goes to the nearest multiple of the step when it commits.
     #[prop]
     snap_typed: bool,
-    /// The decimals a committed value is rounded to; the display keeps the codec's.
+    /// The decimals a committed value is rounded to; the display keeps the codec's, except that a percent field with no
+    /// decimals of its own shows none when this is 0 ("10%").
     #[prop]
     commit_decimals: Option<usize>,
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
@@ -442,9 +443,19 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
-    /// Whether the field counts percent: it writes its precision's decimals in full, its sign right after the number.
+    /// Whether the field counts percent: it shows its sign right after the number.
     fn is_percent(&self) -> bool {
         self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
+    }
+
+    /// The decimals a percent field writes in full when the caller sets none of its own: one at the standard precision
+    /// ("100.0%"), none at the measured precision ("100%") or for a field whose committed values carry none
+    /// (`commit_decimals(0)`).
+    fn percent_decimals(&self) -> Option<usize> {
+        (self.is_percent() && self.fixed_decimals.is_none() && self.max_decimals.is_none()).then(|| match self.precision {
+            NumberPrecision::Standard => self.commit_decimals.unwrap_or(1).min(1),
+            NumberPrecision::Measured => 0,
+        })
     }
 
     /// Whether the field uses the dash for a missing or invalid value.
@@ -461,19 +472,18 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 None => units.reader(self.unit_kind),
             };
             let codec = NumberCodec::new(reader, self.decimals());
-            if self.fixed_decimals.is_some() || self.is_percent() { codec.fixed() } else { codec }
+            if self.fixed_decimals.is_some() || self.percent_decimals().is_some() { codec.fixed() } else { codec }
         })
     }
 
-    /// The decimals the field shows: its codec's, fixed or maximum precision, else its unit kind's.
+    /// The decimals the field shows: its codec's, fixed or maximum precision, a percent field's own, else its unit
+    /// kind's.
     fn shown_decimals(&self) -> RangeInclusive<usize> {
+        if let Some(percent) = self.percent_decimals() {
+            return percent..=percent;
+        }
         match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
             (Some(codec), _, _, _) => 0..=codec.decimals(),
-            // A percentage reads "100.0%": one decimal, written in full; whole at the measured precision.
-            (None, _, _, Some(UnitKind::Percent)) => match self.precision {
-                NumberPrecision::Standard => 1..=1,
-                NumberPrecision::Measured => 0..=0,
-            },
             (None, Some(fixed), _, _) => fixed..=fixed,
             (None, None, Some(max), _) => 0..=max.min(12),
             (None, None, None, Some(kind)) => match (self.precision, self.lengths) {

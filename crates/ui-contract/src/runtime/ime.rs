@@ -159,6 +159,23 @@ impl Engine {
         self.observed.map(|(target, _)| target).filter(|target| target.owner == owner)
     }
 
+    /// Hands the IME to `owner`. The old owner, if it was composing, keeps its preedit for its adapter and is
+    /// interrupted. The tracker starts the new owner's context when the end hook observes it.
+    fn set_owner(&mut self, owner: Option<Id>) {
+        if self.owner == owner {
+            return;
+        }
+        if self.composing
+            && let Some(old) = self.owner
+        {
+            self.leaving = Some((old, std::mem::take(&mut self.preedit)));
+            self.interrupt(old);
+        }
+        self.composing = false;
+        self.edits.clear();
+        self.owner = owner;
+    }
+
     /// Ends the composition of `owner` here and has the end hook interrupt the OS composition; its late events are
     /// dropped until the reset completes.
     fn interrupt(&mut self, owner: Id) {
@@ -203,18 +220,7 @@ pub(crate) fn take_discard(ctx: &Context, viewport: ViewportId) -> bool {
 /// The begin hook, after pending focus moves are applied: resolves the owner and turns the queue into edits.
 pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
     current(ctx, |engine| {
-        if engine.owner != owner {
-            if engine.composing
-                && let Some(old) = engine.owner
-            {
-                engine.leaving = Some((old, std::mem::take(&mut engine.preedit)));
-                engine.interrupt(old);
-            }
-            engine.composing = false;
-            engine.edits.clear();
-            // The tracker starts the new owner's context when the end hook observes it.
-            engine.owner = owner;
-        }
+        engine.set_owner(owner);
         for (raw, place) in std::mem::take(&mut engine.queue) {
             match raw {
                 // A completion of an earlier request is stale: the latest request still fences.
@@ -404,8 +410,18 @@ pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (frame_nr, pass_nr) = (ctx.cumulative_frame_nr_for(viewport), ctx.cumulative_pass_nr_for(viewport));
     let (owner, interrupt, caret, update, published) = with(ctx, viewport, |engine| {
-        if !std::mem::take(&mut engine.ran) {
+        let ran = std::mem::take(&mut engine.ran);
+        if !ran {
             engine.edits.clear();
+        }
+        // An owner that neither took its edits nor noted its caret was not shown this pass (a replay notes the caret
+        // again). egui keeps its focus until after this hook, so it loses the IME here: the interrupt goes out in the
+        // pass it vanished, not at the next begin.
+        if let Some(owner) = engine.owner
+            && !ran
+            && engine.caret.is_none_or(|(id, ..)| id != owner)
+        {
+            engine.set_owner(None);
         }
         // The fence has no request the integration can answer: the owner's output asks again.
         if engine.stale
