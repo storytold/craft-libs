@@ -104,7 +104,7 @@ enum Inner {
     #[cfg(feature = "vp8-encode")]
     Vp8 { width: u32, height: u32, params: crate::vp8::Vp8Params },
     #[cfg(feature = "mpeg2-encode")]
-    Mpeg2 { enc: Box<crate::mpeg2::encode::Encoder>, width: u32, height: u32, fps_den: i64, next_pts: i64 },
+    Mpeg2 { enc: Box<crate::mpeg2::encode::Encoder>, width: u32, height: u32 },
     #[cfg(feature = "mpeg4-encode")]
     Mpeg4(Box<crate::mpeg4::Encoder>),
     #[cfg(feature = "prores")]
@@ -127,6 +127,19 @@ pub struct TrackEncoder {
     codec: CodecId,
     width: u32,
     height: u32,
+    /// Colour signalling of the output stream, which RGB input is converted to.
+    #[cfg(any(
+        feature = "h264-encode",
+        feature = "hevc-encode",
+        feature = "av1-encode",
+        feature = "vp9-encode",
+        feature = "mpeg2-encode",
+        feature = "mpeg4-encode",
+        feature = "prores",
+        feature = "dnx",
+        feature = "apv-encode"
+    ))]
+    color: ColorTags,
 }
 
 impl std::fmt::Debug for TrackEncoder {
@@ -145,8 +158,14 @@ impl TrackEncoder {
         if cfg.width == 0 || cfg.height == 0 {
             return Err(VideoError::Malformed("frame dimensions must be non-zero".into()));
         }
-        let fps_num = cfg.fps_num.max(1);
-        let fps_den = cfg.fps_den.max(1);
+        if cfg.fps_num == 0 {
+            return Err(VideoError::Malformed("frame rate numerator must be non-zero".into()));
+        }
+        if cfg.fps_den == 0 {
+            return Err(VideoError::Malformed("frame rate denominator must be non-zero".into()));
+        }
+        let fps_num = cfg.fps_num;
+        let fps_den = cfg.fps_den;
         let width = cfg.width;
         let height = cfg.height;
         let codec = cfg.codec;
@@ -179,7 +198,10 @@ impl TrackEncoder {
                     if b > 3 {
                         return Err(VideoError::Unsupported(format!("H.264: supports at most 3 B-frames, requested {b}")));
                     }
-                    hcfg.bframes = if hcfg.profile == crate::h264::Profile::Baseline { 0 } else { b };
+                    if b > 0 && hcfg.profile == crate::h264::Profile::Baseline {
+                        return Err(VideoError::Unsupported("H.264: the baseline profile has no B-frames".into()));
+                    }
+                    hcfg.bframes = b;
                 }
                 if cfg.color != ColorTags::UNSPECIFIED {
                     hcfg.color = crate::h264::ColorConfig {
@@ -253,6 +275,9 @@ impl TrackEncoder {
             }
             #[cfg(feature = "vp8-encode")]
             CodecId::Vp8 => {
+                if let Some(profile) = cfg.profile.as_deref() {
+                    return Err(VideoError::Unsupported(format!("VP8: profile `{profile}` cannot be selected")));
+                }
                 if width > crate::vp8::MAX_SIDE || height > crate::vp8::MAX_SIDE {
                     return Err(VideoError::Malformed(format!("VP8: dimensions {width}x{height} exceed {}", crate::vp8::MAX_SIDE)));
                 }
@@ -263,8 +288,11 @@ impl TrackEncoder {
                 let (m_num, m_den) = nearest_mpeg2_fps(fps_num, fps_den);
                 let mut mcfg = crate::mpeg2::encode::EncoderConfig::new(width, height, m_num, m_den);
                 mcfg.chroma = crate::mpeg2::ChromaFormat::Yuv420;
-                mcfg.aspect =
-                    if width * 9 == height * 16 { crate::mpeg2::encode::AspectRatio::Dar16x9 } else { crate::mpeg2::encode::AspectRatio::Square };
+                mcfg.aspect = if u64::from(width) * 9 == u64::from(height) * 16 {
+                    crate::mpeg2::encode::AspectRatio::Dar16x9
+                } else {
+                    crate::mpeg2::encode::AspectRatio::Square
+                };
                 mcfg.gop_size = cfg.keyframe_interval.unwrap_or(12).clamp(1, 1023);
                 mcfg.b_pictures = u32::from(cfg.bframes.unwrap_or(0).min(4));
                 let kbps = cfg.bitrate_kbps.unwrap_or(6000).clamp(400, 80_000);
@@ -276,8 +304,12 @@ impl TrackEncoder {
                     }
                     (RateControlMode::Auto, Some(_)) => crate::mpeg2::encode::RateControl::Abr { kbps },
                 };
-                let enc = Box::new(crate::mpeg2::encode::Encoder::new(mcfg)?);
-                Inner::Mpeg2 { enc, width, height, fps_den: i64::from(m_den), next_pts: 0 }
+                let enc = crate::mpeg2::encode::Encoder::new(mcfg).map_err(|e| match e {
+                    crate::mpeg2::encode::EncodeError::Config(_) => VideoError::Malformed(format!("MPEG-2: {e}")),
+                    other => VideoError::from(other),
+                })?;
+                let enc = Box::new(enc);
+                Inner::Mpeg2 { enc, width, height }
             }
             #[cfg(feature = "mpeg4-encode")]
             CodecId::Mpeg4Video => {
@@ -347,7 +379,7 @@ impl TrackEncoder {
                         full_range: cfg.color.full_range,
                     };
                 }
-                if let Some(kbps) = cfg.bitrate_kbps {
+                if let (Some(kbps), false) = (cfg.bitrate_kbps, cfg.rate_mode == RateControlMode::ConstantQuality) {
                     let bytes = (u64::from(kbps) * 1000 / 8).saturating_mul(u64::from(fps_den)) / u64::from(fps_num);
                     acfg.target_frame_bytes = bytes.clamp(512, 64_000_000) as u32;
                 }
@@ -359,6 +391,11 @@ impl TrackEncoder {
                     .ok()
                     .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
                     .ok_or_else(|| VideoError::Malformed("FFV1: dimensions overflow".into()))?;
+                // The template holds three planes of 16-bit samples; refuse sizes the decode budget would refuse.
+                let template_bytes = len.checked_mul(3 * std::mem::size_of::<u16>());
+                if template_bytes.is_none_or(|b| b as u64 > crate::budget::DECODE_MEMORY_BUDGET) {
+                    return Err(VideoError::Malformed(format!("FFV1: dimensions {width}x{height} exceed the memory budget")));
+                }
                 let template = crate::ffv1::Frame {
                     width,
                     height,
@@ -378,7 +415,24 @@ impl TrackEncoder {
             other => return Err(VideoError::Unsupported(format!("no {} encoder in this build", other.name()))),
         };
 
-        Ok(Self { inner, codec, width, height })
+        Ok(Self {
+            inner,
+            codec,
+            width,
+            height,
+            #[cfg(any(
+                feature = "h264-encode",
+                feature = "hevc-encode",
+                feature = "av1-encode",
+                feature = "vp9-encode",
+                feature = "mpeg2-encode",
+                feature = "mpeg4-encode",
+                feature = "prores",
+                feature = "dnx",
+                feature = "apv-encode"
+            ))]
+            color: cfg.color,
+        })
     }
 
     /// The track's codec.
@@ -400,7 +454,15 @@ impl TrackEncoder {
     pub fn codec_params(&self) -> CodecParams {
         match &self.inner {
             #[cfg(feature = "h264-encode")]
-            Inner::H264(enc) => enc.codec_params(),
+            Inner::H264(enc) => {
+                if matches!(enc.config().format, crate::h264::PacketFormat::AnnexB) {
+                    // Annex B packets carry their own parameter sets; an `avcC` record would
+                    // describe length-prefixed packets and mislead a decoder.
+                    CodecParams::new(CodecId::H264).with_size(self.width, self.height)
+                } else {
+                    enc.codec_params()
+                }
+            }
             #[cfg(feature = "hevc-encode")]
             Inner::Hevc(enc) => enc.codec_params(),
             #[cfg(feature = "av1-encode")]
@@ -445,11 +507,11 @@ impl TrackEncoder {
             #[cfg(feature = "h264-encode")]
             Inner::H264(enc) => {
                 let packets = if enc.config().bit_depth > 8 {
-                    let yuv = frame_to_yuv420_u16(frame, enc.config().bit_depth)?;
+                    let yuv = frame_to_yuv420_u16(frame, enc.config().bit_depth, self.color)?;
                     let input = crate::h264::YuvFrame16 { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: yuv.y_stride, uv_stride: yuv.uv_stride };
                     enc.encode16(&input, pts)?
                 } else {
-                    let yuv = frame_to_yuv420_u8(frame)?;
+                    let yuv = frame_to_yuv420_u8(frame, self.color)?;
                     let (ys, cs) = packed_420_strides(frame);
                     let input = crate::h264::YuvFrame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: ys, uv_stride: cs };
                     enc.encode(&input, pts)?
@@ -459,7 +521,7 @@ impl TrackEncoder {
             #[cfg(feature = "hevc-encode")]
             Inner::Hevc(enc) => {
                 let depth = enc.config().profile.bit_depth();
-                let yuv = frame_to_yuv420_u16(frame, depth)?;
+                let yuv = frame_to_yuv420_u16(frame, depth, self.color)?;
                 let input = crate::hevc::Frame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: yuv.y_stride, uv_stride: yuv.uv_stride };
                 let pkt = enc.encode(&input)?;
                 Ok(vec![EncodedPacket { data: pkt.data, pts, dts: pts, keyframe: pkt.keyframe }])
@@ -467,14 +529,14 @@ impl TrackEncoder {
             #[cfg(feature = "av1-encode")]
             Inner::Av1(enc) => {
                 let depth = enc.config().bit_depth;
-                let yuv = frame_to_yuv420_u16(frame, depth)?;
+                let yuv = frame_to_yuv420_u16(frame, depth, self.color)?;
                 let input = crate::av1::Frame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: yuv.y_stride, uv_stride: yuv.uv_stride };
                 let pkt = enc.encode(&input)?;
                 Ok(vec![EncodedPacket { data: pkt.data, pts, dts: pts, keyframe: pkt.keyframe }])
             }
             #[cfg(feature = "vp9-encode")]
             Inner::Vp9(enc) => {
-                let yuv = frame_to_yuv420_u8(frame)?;
+                let yuv = frame_to_yuv420_u8(frame, self.color)?;
                 let pkt = enc.encode_frame(&yuv.y, &yuv.u, &yuv.v, false);
                 if pkt.is_empty() {
                     return Err(VideoError::Malformed("VP9: input planes shorter than configured frame size".into()));
@@ -488,18 +550,16 @@ impl TrackEncoder {
                 Ok(vec![EncodedPacket { data: pkt.data, pts, dts: pts, keyframe: true }])
             }
             #[cfg(feature = "mpeg2-encode")]
-            Inner::Mpeg2 { enc, fps_den, next_pts, .. } => {
-                let yuv = frame_to_yuv420_u8(frame)?;
+            Inner::Mpeg2 { enc, .. } => {
+                let yuv = frame_to_yuv420_u8(frame, self.color)?;
                 let (ys, cs) = packed_420_strides(frame);
                 let input = crate::mpeg2::encode::YuvFrame { y: &yuv.y, cb: &yuv.u, cr: &yuv.v, y_stride: ys, c_stride: cs };
-                let use_pts = if *next_pts == 0 { pts } else { (*next_pts).max(pts) };
-                *next_pts = use_pts.saturating_add((*fps_den).max(1));
-                let packets = enc.encode(&input, use_pts)?;
+                let packets = enc.encode(&input, pts)?;
                 Ok(packets.into_iter().map(|p| EncodedPacket { data: p.data, pts: p.pts, dts: p.dts, keyframe: p.keyframe }).collect())
             }
             #[cfg(feature = "mpeg4-encode")]
             Inner::Mpeg4(enc) => {
-                let yuv = frame_to_yuv420_u8(frame)?;
+                let yuv = frame_to_yuv420_u8(frame, self.color)?;
                 let (ys, cs) = packed_420_strides(frame);
                 let input = crate::mpeg4::YuvFrame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: ys, uv_stride: cs };
                 let pkt = enc.encode(&input)?;
@@ -507,7 +567,7 @@ impl TrackEncoder {
             }
             #[cfg(feature = "prores")]
             Inner::ProRes(enc) => {
-                let yuv = frame_to_yuv422_u16(frame, 10)?;
+                let yuv = frame_to_yuv422_u16(frame, 10, self.color)?;
                 let pframe = crate::prores::Frame {
                     width: self.width,
                     height: self.height,
@@ -529,7 +589,7 @@ impl TrackEncoder {
             Inner::Dnx(enc) => {
                 let depth = enc.config().bit_depth;
                 let profile = enc.config().profile;
-                let yuv = frame_to_yuv422_u16(frame, depth)?;
+                let yuv = frame_to_yuv422_u16(frame, depth, self.color)?;
                 let dframe = crate::dnx::Frame {
                     width: self.width,
                     height: self.height,
@@ -553,7 +613,7 @@ impl TrackEncoder {
                 let depth = enc.config().bit_depth;
                 let profile = enc.config().profile;
                 let color = enc.config().color;
-                let yuv = frame_to_yuv422_u16(frame, depth)?;
+                let yuv = frame_to_yuv422_u16(frame, depth, self.color)?;
                 let mut aframe = crate::apv::Frame::new(self.width, self.height, crate::apv::ChromaFormat::Yuv422, depth, false);
                 aframe.profile_idc = profile.idc();
                 aframe.y = yuv.y;
@@ -565,6 +625,9 @@ impl TrackEncoder {
             }
             #[cfg(feature = "ffv1")]
             Inner::Ffv1 { enc, width, height } => {
+                if frame.family() == ColorFamily::Rgb && (0..3).any(|i| frame.plane(i).is_some_and(|p| p.bit_depth() > 8)) {
+                    return Err(VideoError::Unsupported("FFV1: the track encoder writes 8-bit samples and would quantise deeper RGB".into()));
+                }
                 let [r, g, b] = frame_to_rgb_planes_u16(frame)?;
                 let fframe = crate::ffv1::Frame {
                     width: *width,
@@ -713,6 +776,87 @@ fn sample_at_depth(plane: &Plane, x: u32, y: u32, target_depth: u8) -> u16 {
     }
 }
 
+/// Read sample `(x, y)` scaled to `target_depth` bits. Limited-range code values keep their
+/// nominal levels when widened (`128 << 2 == 512`), so neutral chroma stays neutral.
+#[cfg(any(feature = "h264-encode", feature = "hevc-encode", feature = "av1-encode", feature = "prores", feature = "dnx", feature = "apv-encode"))]
+fn sample_ranged(plane: &Plane, x: u32, y: u32, target_depth: u8, limited: bool) -> u16 {
+    let src_depth = plane.bit_depth().clamp(1, 16);
+    if !limited || target_depth <= src_depth {
+        return sample_at_depth(plane, x, y, target_depth);
+    }
+    let raw = sample_at_depth(plane, x, y, src_depth);
+    let max_out = (1u32 << target_depth) - 1;
+    (u32::from(raw) << (target_depth - src_depth)).min(max_out) as u16
+}
+
+#[cfg(any(
+    feature = "h264-encode",
+    feature = "hevc-encode",
+    feature = "av1-encode",
+    feature = "vp9-encode",
+    feature = "mpeg2-encode",
+    feature = "mpeg4-encode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-encode"
+))]
+/// Code-value ranges of a sample format at one bit depth.
+struct RangeSpec {
+    y_min: f64,
+    y_max: f64,
+    y_span: f64,
+    c_mid: f64,
+    c_min: f64,
+    c_max: f64,
+    c_span: f64,
+}
+
+#[cfg(any(
+    feature = "h264-encode",
+    feature = "hevc-encode",
+    feature = "av1-encode",
+    feature = "vp9-encode",
+    feature = "mpeg2-encode",
+    feature = "mpeg4-encode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-encode"
+))]
+fn range_spec(full_range: bool, depth: u8) -> RangeSpec {
+    let scale = f64::from(1u32 << depth.saturating_sub(8));
+    if full_range {
+        let max = f64::from((1u32 << depth) - 1);
+        RangeSpec { y_min: 0.0, y_max: max, y_span: max, c_mid: 128.0 * scale, c_min: 0.0, c_max: max, c_span: max }
+    } else {
+        RangeSpec {
+            y_min: 16.0 * scale,
+            y_max: 235.0 * scale,
+            y_span: 219.0 * scale,
+            c_mid: 128.0 * scale,
+            c_min: 16.0 * scale,
+            c_max: 240.0 * scale,
+            c_span: 224.0 * scale,
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "h264-encode",
+    feature = "hevc-encode",
+    feature = "av1-encode",
+    feature = "vp9-encode",
+    feature = "mpeg2-encode",
+    feature = "mpeg4-encode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-encode"
+))]
+/// Colour tags that decide the RGB to YCbCr conversion: the output stream's matrix when it
+/// signals one, otherwise the input frame's.
+fn output_matrix(input: ColorTags, out: ColorTags) -> ColorTags {
+    if matches!(out.matrix, 0 | 2) { input } else { ColorTags { matrix: out.matrix, ..input } }
+}
+
 fn luma_matrix(color: ColorTags) -> (f64, f64, f64) {
     let (kr, kb) = match color.matrix {
         5 | 6 => (0.299, 0.114),
@@ -723,7 +867,7 @@ fn luma_matrix(color: ColorTags) -> (f64, f64, f64) {
 }
 
 #[cfg(any(feature = "h264-encode", feature = "vp9-encode", feature = "mpeg2-encode", feature = "mpeg4-encode"))]
-fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
+fn frame_to_yuv420_u8(frame: &VideoFrame, out: ColorTags) -> Result<PlanarYuv8, VideoError> {
     use crate::frame::Subsampling;
     let w = frame.width();
     let h = frame.height();
@@ -773,7 +917,8 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
             let pr = frame.plane(0).ok_or_else(|| VideoError::Malformed("missing R plane".into()))?;
             let pg = frame.plane(1).ok_or_else(|| VideoError::Malformed("missing G plane".into()))?;
             let pb = frame.plane(2).ok_or_else(|| VideoError::Malformed("missing B plane".into()))?;
-            let (kr, kg, kb) = luma_matrix(frame.color);
+            let (kr, kg, kb) = luma_matrix(output_matrix(frame.color, out));
+            let rs = range_spec(out.full_range, 8);
             let mut y = Vec::with_capacity(w_usize * h_usize);
             for ry in 0..h {
                 for rx in 0..w {
@@ -781,7 +926,7 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
                     let g = f64::from(sample_at_depth(pg, rx, ry, 8));
                     let b = f64::from(sample_at_depth(pb, rx, ry, 8));
                     let luma = kr * r + kg * g + kb * b;
-                    let y_val = (16.0 + 219.0 * luma / 255.0).round().clamp(16.0, 235.0) as u8;
+                    let y_val = (rs.y_min + rs.y_span * luma / 255.0).round().clamp(rs.y_min, rs.y_max) as u8;
                     y.push(y_val);
                 }
             }
@@ -805,8 +950,8 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
                     let g = g_sum * 0.25;
                     let b = b_sum * 0.25;
                     let luma = kr * r + kg * g + kb * b;
-                    let u_val = (128.0 + 224.0 * (b - luma) / (2.0 * (1.0 - kb) * 255.0)).round().clamp(16.0, 240.0) as u8;
-                    let v_val = (128.0 + 224.0 * (r - luma) / (2.0 * (1.0 - kr) * 255.0)).round().clamp(16.0, 240.0) as u8;
+                    let u_val = (rs.c_mid + rs.c_span * (b - luma) / (2.0 * (1.0 - kb) * 255.0)).round().clamp(rs.c_min, rs.c_max) as u8;
+                    let v_val = (rs.c_mid + rs.c_span * (r - luma) / (2.0 * (1.0 - kr) * 255.0)).round().clamp(rs.c_min, rs.c_max) as u8;
                     u.push(u_val);
                     v.push(v_val);
                 }
@@ -817,7 +962,7 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
 }
 
 #[cfg(any(feature = "h264-encode", feature = "hevc-encode", feature = "av1-encode"))]
-fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv16, VideoError> {
+fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8, out: ColorTags) -> Result<PlanarYuv16, VideoError> {
     use crate::frame::Subsampling;
     let w = frame.width();
     let h = frame.height();
@@ -827,6 +972,7 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
     let cw_usize = cw as usize;
     let ch_usize = ch as usize;
     let shift = u32::from(target_depth.saturating_sub(8));
+    let limited = !frame.color.full_range;
     let neutral = 128u16 << shift;
 
     match frame.family() {
@@ -837,7 +983,7 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
             let mut y = Vec::with_capacity(w_usize * h_usize);
             for ry in 0..h {
                 for rx in 0..w {
-                    y.push(sample_at_depth(py, rx, ry, target_depth));
+                    y.push(sample_ranged(py, rx, ry, target_depth, limited));
                 }
             }
             let sub = frame.subsampling();
@@ -847,8 +993,8 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
                 let ly = (cy << 1) >> sub.y;
                 for cx in 0..cw {
                     let lx = (cx << 1) >> sub.x;
-                    u.push(sample_at_depth(pu, lx, ly, target_depth));
-                    v.push(sample_at_depth(pv, lx, ly, target_depth));
+                    u.push(sample_ranged(pu, lx, ly, target_depth, limited));
+                    v.push(sample_ranged(pv, lx, ly, target_depth, limited));
                 }
             }
             Ok(PlanarYuv16 { y, u, v, y_stride: w_usize, uv_stride: cw_usize })
@@ -858,7 +1004,7 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
             let mut y = Vec::with_capacity(w_usize * h_usize);
             for ry in 0..h {
                 for rx in 0..w {
-                    y.push(sample_at_depth(py, rx, ry, target_depth));
+                    y.push(sample_ranged(py, rx, ry, target_depth, limited));
                 }
             }
             let u = vec![neutral; cw_usize * ch_usize];
@@ -869,16 +1015,9 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
             let pr = frame.plane(0).ok_or_else(|| VideoError::Malformed("missing R plane".into()))?;
             let pg = frame.plane(1).ok_or_else(|| VideoError::Malformed("missing G plane".into()))?;
             let pb = frame.plane(2).ok_or_else(|| VideoError::Malformed("missing B plane".into()))?;
-            let (kr, kg, kb) = luma_matrix(frame.color);
+            let (kr, kg, kb) = luma_matrix(output_matrix(frame.color, out));
             let max_in = f64::from((1u32 << target_depth) - 1);
-            let scale = f64::from(1u32 << shift);
-            let y_min = 16.0 * scale;
-            let y_max = 235.0 * scale;
-            let y_span = 219.0 * scale;
-            let c_mid = 128.0 * scale;
-            let c_min = 16.0 * scale;
-            let c_max = 240.0 * scale;
-            let c_span = 224.0 * scale;
+            let RangeSpec { y_min, y_max, y_span, c_mid, c_min, c_max, c_span } = range_spec(out.full_range, target_depth);
 
             let mut y = Vec::with_capacity(w_usize * h_usize);
             for ry in 0..h {
@@ -922,7 +1061,7 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
 }
 
 #[cfg(any(feature = "prores", feature = "dnx", feature = "apv-encode"))]
-fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv422_16, VideoError> {
+fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8, out: ColorTags) -> Result<PlanarYuv422_16, VideoError> {
     use crate::frame::Subsampling;
     let w = frame.width();
     let h = frame.height();
@@ -932,6 +1071,7 @@ fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
     let cw_usize = cw as usize;
     let ch_usize = ch as usize;
     let shift = u32::from(target_depth.saturating_sub(8));
+    let limited = !frame.color.full_range;
     let neutral = 128u16 << shift;
 
     match frame.family() {
@@ -942,7 +1082,7 @@ fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
             let mut y = Vec::with_capacity(w_usize * h_usize);
             for ry in 0..h {
                 for rx in 0..w {
-                    y.push(sample_at_depth(py, rx, ry, target_depth));
+                    y.push(sample_ranged(py, rx, ry, target_depth, limited));
                 }
             }
             let sub = frame.subsampling();
@@ -952,8 +1092,8 @@ fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
                 let ly = cy >> sub.y;
                 for cx in 0..cw {
                     let lx = (cx << 1) >> sub.x;
-                    u.push(sample_at_depth(pu, lx, ly, target_depth));
-                    v.push(sample_at_depth(pv, lx, ly, target_depth));
+                    u.push(sample_ranged(pu, lx, ly, target_depth, limited));
+                    v.push(sample_ranged(pv, lx, ly, target_depth, limited));
                 }
             }
             Ok(PlanarYuv422_16 { y, u, v })
@@ -963,7 +1103,7 @@ fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
             let mut y = Vec::with_capacity(w_usize * h_usize);
             for ry in 0..h {
                 for rx in 0..w {
-                    y.push(sample_at_depth(py, rx, ry, target_depth));
+                    y.push(sample_ranged(py, rx, ry, target_depth, limited));
                 }
             }
             let u = vec![neutral; cw_usize * ch_usize];
@@ -974,16 +1114,9 @@ fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
             let pr = frame.plane(0).ok_or_else(|| VideoError::Malformed("missing R plane".into()))?;
             let pg = frame.plane(1).ok_or_else(|| VideoError::Malformed("missing G plane".into()))?;
             let pb = frame.plane(2).ok_or_else(|| VideoError::Malformed("missing B plane".into()))?;
-            let (kr, kg, kb) = luma_matrix(frame.color);
+            let (kr, kg, kb) = luma_matrix(output_matrix(frame.color, out));
             let max_in = f64::from((1u32 << target_depth) - 1);
-            let scale = f64::from(1u32 << shift);
-            let y_min = 16.0 * scale;
-            let y_max = 235.0 * scale;
-            let y_span = 219.0 * scale;
-            let c_mid = 128.0 * scale;
-            let c_min = 16.0 * scale;
-            let c_max = 240.0 * scale;
-            let c_span = 224.0 * scale;
+            let RangeSpec { y_min, y_max, y_span, c_mid, c_min, c_max, c_span } = range_spec(out.full_range, target_depth);
 
             let mut y = Vec::with_capacity(w_usize * h_usize);
             let mut u = Vec::with_capacity(cw_usize * ch_usize);
@@ -1028,7 +1161,8 @@ fn pixel_rgb8(frame: &VideoFrame, x: u32, y: u32) -> Result<[u8; 3], VideoError>
         }
         ColorFamily::Gray => {
             let py = frame.plane(0).ok_or_else(|| VideoError::Malformed("missing gray plane".into()))?;
-            let v = sample_at_depth(py, x, y, 8) as u8;
+            let v = sample_at_depth(py, x, y, 8);
+            let v = if frame.color.full_range { v as u8 } else { ((f64::from(v) - 16.0) * (255.0 / 219.0)).round().clamp(0.0, 255.0) as u8 };
             Ok([v, v, v])
         }
         ColorFamily::YCbCr => {
@@ -1222,5 +1356,97 @@ mod tests {
         let packets = enc.encode(&frame, 0).unwrap();
         assert_eq!(packets.len(), 1);
         assert!(packets[0].keyframe);
+    }
+
+    #[cfg(feature = "h264-encode")]
+    #[test]
+    fn track_encoder_rejects_requests_it_cannot_honour() {
+        let mut cfg = TrackEncoderConfig::new(CodecId::H264, 64, 64, 30, 0);
+        assert!(matches!(TrackEncoder::new(cfg.clone()), Err(VideoError::Malformed(_))), "zero frame-rate denominator");
+        cfg.fps_den = 1;
+        cfg.fps_num = 0;
+        assert!(matches!(TrackEncoder::new(cfg.clone()), Err(VideoError::Malformed(_))), "zero frame-rate numerator");
+        cfg.fps_num = 30;
+        cfg.profile = Some("baseline".into());
+        cfg.bframes = Some(1);
+        assert!(matches!(TrackEncoder::new(cfg.clone()), Err(VideoError::Unsupported(_))), "baseline has no B-frames");
+        cfg.bframes = Some(0);
+        assert!(TrackEncoder::new(cfg).is_ok(), "baseline without B-frames is fine");
+    }
+
+    #[cfg(feature = "mpeg2-encode")]
+    #[test]
+    fn track_encoder_mpeg2_reports_bad_sizes_without_overflow() {
+        for (w, h) in [(63, 64), (500_000_000, 64)] {
+            let err = TrackEncoder::new(TrackEncoderConfig::new(CodecId::Mpeg2Video, w, h, 25, 1)).unwrap_err();
+            assert!(matches!(err, VideoError::Malformed(_)), "{w}x{h}: {err:?}");
+        }
+    }
+
+    #[cfg(all(feature = "h264-encode", feature = "h264-decode"))]
+    #[test]
+    fn annex_b_h264_track_decodes_from_its_own_params() {
+        let mut cfg = TrackEncoderConfig::new(CodecId::H264, 64, 64, 25, 1);
+        cfg.annex_b = true;
+        let mut enc = TrackEncoder::new(cfg).unwrap();
+        let mut packets = enc.encode(&test_ycbcr_frame(64, 64), 0).unwrap();
+        packets.extend(enc.flush().unwrap());
+        let mut dec = crate::TrackDecoder::new(&enc.codec_params()).unwrap();
+        let mut decoded = dec.decode(&packets[0].data, 0).unwrap();
+        decoded.extend(dec.flush().unwrap());
+        assert_eq!(decoded.len(), 1);
+    }
+
+    #[cfg(any(feature = "h264-encode", feature = "vp9-encode", feature = "mpeg2-encode", feature = "mpeg4-encode"))]
+    fn rgb_frame(rgb: [u8; 3], color: ColorTags) -> VideoFrame {
+        let planes = rgb.iter().map(|&v| Plane::packed(4, 4, 8, Samples::U8(vec![v; 16])).unwrap()).collect();
+        let mut frame = VideoFrame::new(4, 4, ColorFamily::Rgb, Subsampling::S444, planes, None).unwrap();
+        frame.color = color;
+        frame
+    }
+
+    #[cfg(any(feature = "h264-encode", feature = "vp9-encode", feature = "mpeg2-encode", feature = "mpeg4-encode"))]
+    #[test]
+    fn rgb_input_follows_the_output_range_and_matrix() {
+        let out_limited = ColorTags { primaries: 1, transfer: 1, matrix: 1, full_range: false };
+        let out_full = ColorTags { full_range: true, ..out_limited };
+        let black = rgb_frame([0, 0, 0], ColorTags::UNSPECIFIED);
+        assert_eq!(frame_to_yuv420_u8(&black, out_limited).unwrap().y[0], 16);
+        assert_eq!(frame_to_yuv420_u8(&black, out_full).unwrap().y[0], 0);
+
+        let red = rgb_frame([255, 0, 0], ColorTags::UNSPECIFIED);
+        let bt601 = ColorTags { matrix: 6, ..out_limited };
+        let y601 = frame_to_yuv420_u8(&red, bt601).unwrap().y[0];
+        let y709 = frame_to_yuv420_u8(&red, out_limited).unwrap().y[0];
+        assert!(y601 > y709, "BT.601 weighs red more than BT.709 ({y601} vs {y709})");
+    }
+
+    #[cfg(feature = "h264-encode")]
+    #[test]
+    fn limited_range_neutral_chroma_stays_neutral_when_widened() {
+        let frame = VideoFrame::new(
+            4,
+            4,
+            ColorFamily::YCbCr,
+            Subsampling::S420,
+            vec![
+                Plane::packed(4, 4, 8, Samples::U8(vec![128; 16])).unwrap(),
+                Plane::packed(2, 2, 8, Samples::U8(vec![128; 4])).unwrap(),
+                Plane::packed(2, 2, 8, Samples::U8(vec![128; 4])).unwrap(),
+            ],
+            None,
+        )
+        .unwrap();
+        let wide = frame_to_yuv420_u16(&frame, 10, ColorTags::UNSPECIFIED).unwrap();
+        assert!(wide.u.iter().chain(&wide.v).all(|&c| c == 512), "neutral chroma");
+    }
+
+    #[cfg(feature = "mjpeg")]
+    #[test]
+    fn limited_range_gray_white_reaches_full_range_white() {
+        let gray =
+            VideoFrame::new(2, 2, ColorFamily::Gray, Subsampling::S444, vec![Plane::packed(2, 2, 8, Samples::U8(vec![235; 4])).unwrap()], None)
+                .unwrap();
+        assert_eq!(pixel_rgb8(&gray, 0, 0).unwrap(), [255, 255, 255]);
     }
 }
