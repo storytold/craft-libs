@@ -1,11 +1,11 @@
 //! Stories of `NumberField`.
 
-use super::{NamedOr, NumberField, NumberName, NumberPick, StepArrows, UnitPlacement};
+use super::{NamedOr, NumberField, NumberLook, NumberName, NumberPick, NumberPrecision, StepArrows, UnitPlacement};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::Row;
-use crate::runtime::env::{Env, LengthUnits, Message, UnitKind};
+use crate::runtime::env::{Env, LengthUnits, Message, UnitKind, with_env};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
 use craft_behavior::{Mixed, NumberCodec, Reader};
 use craft_theme::ControlSize;
@@ -205,4 +205,80 @@ fn number_field_named_length(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(NumberField<'static>, covers = [], drive = Drive::Type("7"))]
 fn number_field_snapped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", data.bind("snapped", Some(SIZE))).range(RANGE).step(5.0).snap_typed(true).show(ui).edit.into()
+}
+
+/// Fields in the inline look ([`NumberLook::Inline`]): the number and its unit one run at the field's start, at rest,
+/// mixed and disabled. The drive types into the first, so its caret and selection run through the unit too.
+fn inline_fields(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    let out = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(NumberLook::Inline);
+        },
+        |ui| {
+            FieldGroup::new("Inline number fields")
+                .show(ui, |ui, _| {
+                    let first = row("Length").show(ui, |ui, _| NumberField::length("Width", data.bind("width", Some(720.0)), lengths).show(ui).edit);
+                    row("Angle").show(ui, |ui, _| {
+                        NumberField::new("Angle", data.bind("angle", Some(0.0))).range(0.0..=360.0).unit_kind(UnitKind::Degrees).show(ui);
+                    });
+                    row("Percent").show(ui, |ui, _| {
+                        NumberField::new("Opacity", data.bind("opacity", Some(100.0))).range(RANGE).unit("%").popup_slider(RANGE).show(ui);
+                    });
+                    row("Mixed").show(ui, |ui, _| {
+                        NumberField::length("Height", data.bind_mixed("mixed", Mixed::<Option<f64>>::Mixed), lengths).show(ui);
+                    });
+                    row("Disabled").show(ui, |ui, _| {
+                        NumberField::length("Depth", Bind::bound(&mut Some(64.0)), lengths).enabled(false).show(ui);
+                    });
+                    first.inner
+                })
+                .inner
+        },
+    );
+    out.flatten().map(StoryOutput::from).unwrap_or_default()
+}
+
+#[story(NumberField<'static>, covers = [], drive = Drive::Type("42"), title = "Inline unit")]
+fn number_field_inline(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    inline_fields(ui, data)
+}
+
+/// Focuses the first field with Tab: its whole run selected.
+fn focus_first(fixture: &mut Fixture) {
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(2);
+}
+
+#[story(NumberField<'static>, covers = [], drive = Drive::Custom(focus_first), title = "Inline unit, focused")]
+fn number_field_inline_focused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    inline_fields(ui, data)
+}
+
+/// Fields at the measured precision ([`NumberPrecision::Measured`]): a percentage reads whole, a length to a thousandth
+/// of a point.
+#[story(NumberField<'static>, covers = [], drive = Drive::Never, title = "Measured precision")]
+fn number_field_measured(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let out = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(NumberPrecision::Measured);
+        },
+        |ui| {
+            FieldGroup::new("Measured precision")
+                .show(ui, |ui, _| {
+                    let first = row("Percent").show(ui, |ui, _| {
+                        NumberField::new("Opacity", data.bind("opacity", Some(60.0))).range(RANGE).unit_kind(UnitKind::Percent).show(ui).edit
+                    });
+                    row("Length").show(ui, |ui, _| {
+                        let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+                        NumberField::length("X", data.bind("x", Some(357.1138)), lengths).show(ui);
+                    });
+                    first.inner
+                })
+                .inner
+        },
+    );
+    out.flatten().map(StoryOutput::from).unwrap_or_default()
 }
