@@ -364,7 +364,8 @@ fn owned_shortcuts(
             // Text an input method committed for the press goes to the text stop that has the IME.
             let typed = press.text.is_some_and(|at| taken_texts[at]) || (press.ime && target.is_some_and(|rec| rec.stop.text));
             scalar_owned.get(at).copied().unwrap_or(false)
-                || (!press.canvas && (matches!(*taken, Taken::Canvas | Taken::Hover) || holds_press(owner, target, press, *taken == Taken::Yes, typed)))
+                || (!press.canvas
+                    && (matches!(*taken, Taken::Canvas | Taken::Hover) || holds_press(owner, target, press, *taken == Taken::Yes, typed)))
         })
         .collect();
     // Only Up/Down are scalar presses. Summarize paired releases once rather than scanning all presses per shortcut.
