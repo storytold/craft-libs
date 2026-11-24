@@ -5,7 +5,7 @@
 //! measure is its natural width (`Proposal::Min` the room for the first letters of its title), and a narrower rect cuts the label
 //! first, then the detail, and shows the whole text as a tooltip.
 
-use super::rules::{CloseSide, TabKind, close_side};
+use super::rules::{CloseSide, PanelTabLook, TabKind, close_side};
 use super::words::TabWords;
 use std::borrow::Cow;
 
@@ -133,6 +133,8 @@ pub struct TabStyle {
     indicator: Option<StyleColor>,
     /// A divider at the tab's trailing edge.
     divider: bool,
+    /// The pill a panel tab in [`PanelTabLook::Pill`] shows under its label in place of the surface.
+    pill: Option<Pill>,
     close_side: CloseSide,
     sizes: Sizes,
     /// Document tabs in [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking): a name capped at
@@ -144,6 +146,15 @@ pub struct TabStyle {
     marker_color: StyleColor,
     /// The ring around the marker dot.
     marker_edge: StyleColor,
+}
+
+/// The pill of a panel tab in [`PanelTabLook::Pill`]: its fill in each state, its corners and its height, in the
+/// middle of the tab's height.
+#[derive(Clone, Debug, PartialEq)]
+struct Pill {
+    fill: Stateful<StyleColor>,
+    radius: egui::CornerRadius,
+    height: f32,
 }
 
 /// Where the parts of a tab lie in its content rect.
@@ -180,6 +191,10 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop(flag)]
     large: bool,
+    /// The look of a panel tab ([`TabKind::Panel`]); the other kinds have their own.
+    #[style_key]
+    #[prop]
+    panel_look: PanelTabLook,
     /// Secondary text after the label (a colour mode, a zoom).
     #[prop(into)]
     detail: Option<Label>,
@@ -220,6 +235,7 @@ impl<'a> Tab<'a> {
             kind: TabKind::Document,
             role: TabRole::default(),
             large: false,
+            panel_look: PanelTabLook::Plain,
             detail: None,
             icon: None,
             modified: false,
@@ -399,6 +415,18 @@ impl Component for Tab<'_> {
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
+        // A pill panel tab shows its fill as the pill instead of the surface.
+        let pill = (key.kind == TabKind::Panel && key.panel_look == PanelTabLook::Pill).then(|| {
+            let control = c(colors.surface.control);
+            Pill {
+                fill: Stateful::new(c(clear))
+                    .off(States::new(c(clear), control, control, c(clear)))
+                    .on(States::new(control, control, control, control)),
+                radius: UiTokens::corner(tokens.shape.radius.control),
+                height: size.control.sm,
+            }
+        });
+        let fill = if pill.is_some() { Stateful::new(c(clear)) } else { fill };
         let surface = if ribbon { SurfaceLook::new(fill).radius(UiTokens::corner(tokens.shape.radius.sm)) } else { SurfaceLook::new(fill) };
         let disabled = c(colors.text.disabled);
         let ink = |off: Rgba, on: Rgba| {
@@ -434,6 +462,7 @@ impl Component for Tab<'_> {
             underline: c(colors.text.normal),
             indicator: (!text_only && cx.contrast() == Contrast::High).then(|| c(colors.accent.solid)),
             divider: key.kind.trailing_divider(),
+            pill,
             close_side: close_side(cx.os, cx.direction.is_rtl()),
             sizes,
             shrinking: key.kind.shrinks_in(cx.env::<super::DocumentTabLook>()),
@@ -558,6 +587,10 @@ impl Component for Tab<'_> {
         let placed = self.place(style, cx.content_rect, cx.flow.is_rtl(), &shown, |run| draw.layout(run, f32::INFINITY).size().x);
         if style.divider {
             draw.edge_rule(RuleKind::Divider, rect, RectSide::end(cx.flow.is_rtl()));
+        }
+        if let Some(pill) = &style.pill {
+            let band = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), pill.height.min(rect.height())));
+            draw.fill(&PaintShape::Rect(band, pill.radius), cx.resolve(&pill.fill));
         }
         if let (Some(color), true) = (style.indicator, selected) {
             let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), sizes.indicator.min(rect.height())));
