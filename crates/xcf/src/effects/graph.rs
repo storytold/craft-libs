@@ -326,7 +326,9 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
         expect_value = false;
         let mut word = String::new();
         let mut started = false;
-        let mut decoded_equal = false;
+        // A scalar's '=' was already emitted by the outer lexer. Empty quotes
+        // still leave it awaiting its first value byte, just like a quoted prefix.
+        let mut decoded_equal = scalar;
         let mut decoded_value = false;
         let mut trailing_closes = 0usize;
         while let Some(ch) = next(at) {
@@ -334,8 +336,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 check(keep_going)?;
                 next_check = at.saturating_add(1024);
             }
-            if ch.is_ascii_whitespace()
-                || !scalar && ((!decoded_equal && matches!(ch, '=' | '[' | ']')) || (decoded_equal && !decoded_value && ch == '['))
+            if ch.is_ascii_whitespace() || !scalar && !decoded_equal && matches!(ch, '=' | '[' | ']') || decoded_equal && !decoded_value && ch == '['
             {
                 break;
             }
@@ -388,10 +389,10 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
         // Each removed character is an ASCII ']', so this remains a UTF-8 boundary.
         let length = word.len().checked_sub(trailing_closes).ok_or_else(|| invalid("invalid graph scalar boundary"))?;
         word.truncate(length);
-        if started || scalar {
-            // A quoted/escaped assignment prefix still accepts an unquoted opener when
-            // no value byte followed its first decoded '='. Do not invent an empty scalar.
-            let block_value = !scalar && decoded_equal && !decoded_value && next(at) == Some('[');
+        // An assignment prefix still accepts an unquoted opener while no value byte
+        // followed '='. If '=' is already a token, empty quotes emit no scalar here.
+        let block_value = decoded_equal && !decoded_value && next(at) == Some('[');
+        if (started || scalar) && !(scalar && block_value) {
             word_tokens(&mut tokens, word, scalar, block_value, budget, keep_going)?;
         }
         for index in 0..trailing_closes {

@@ -715,3 +715,32 @@ fn rgba_keeps_all_finite_written_alpha_values_without_hiding_later_nodes() {
         assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
     }
 }
+
+#[test]
+fn empty_value_quotes_do_not_hide_a_following_unquoted_auxiliary_opener() {
+    for quoted in ["''", "\"\"", "''\"\"", "\"\"''"] {
+        let raw = format!("over aux={quoted}[invert-linear ]");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes.len(), 2, "{raw}");
+        assert_eq!(graph.nodes[0].operation, "invert-linear");
+        assert_eq!(graph.nodes[1].properties[0].value, Value::Input(Input::Node(0)));
+        assert!(graph.diagnostics.is_empty());
+        check_edges(&graph);
+        let empty = format!("gain text={quoted}");
+        assert_eq!(read(&empty).nodes[0].properties[0].literal, "");
+        for bracket in ["'[literal]'", "\"[literal]\"", "\\[literal\\]"] {
+            let scalar = format!("gain text={quoted}{bracket}");
+            assert_eq!(read(&scalar).nodes[0].properties[0].literal, "[literal]", "{scalar}");
+        }
+        let scalar = format!("gain text={quoted}a[literal]b");
+        assert_eq!(read(&scalar).nodes[0].properties[0].literal, "a[literal]b");
+    }
+    let nested = read("over aux=''[over aux=\"\"[invert-linear]]");
+    assert_eq!(nested.nodes.len(), 3);
+    check_edges(&nested);
+    // No synthetic empty-value token may consume the exact lexical allowance.
+    let exact = format!("id=base {}over aux=''[invert-linear] invert-linear invert-linear", "ref=base ".repeat(679));
+    assert_eq!(tokenize(&exact, &mut Budget::default(), &|| true).unwrap().len(), 2048);
+    assert!(parse(&exact, SCHEMA, &mut Budget::default(), &|| true).is_ok());
+    assert!(parse(&format!("{exact} invert-linear"), SCHEMA, &mut Budget::default(), &|| true).is_err());
+}
