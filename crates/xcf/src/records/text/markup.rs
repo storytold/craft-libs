@@ -81,6 +81,7 @@ pub struct Context<'a> {
     pub name: &'a str,
     pub role: Role,
     pub attributes: Vec<Attribute<'a>>,
+    /// Opening-tag range; 0..0 identifies the implicit fragment root.
     pub source: Range<usize>,
 }
 
@@ -230,6 +231,7 @@ struct Parser<'a, 'b> {
     attributes: usize,
     root_seen: bool,
     root_closed: bool,
+    implicit_root: bool,
 }
 impl<'a> Parser<'a, '_> {
     fn check(&self) -> ReadResult<()> {
@@ -394,7 +396,7 @@ impl<'a> Parser<'a, '_> {
         if self.root_closed {
             return Err(StopReason::Malformed.into());
         }
-        if self.stack.len() >= self.limits.depth.min(64) {
+        if self.stack.len().saturating_sub(usize::from(self.implicit_root)) >= self.limits.depth.min(64) {
             return Err(StopReason::RecordLimit.into());
         }
         let mut attributes: Vec<Attribute<'a>> = Vec::new();
@@ -461,6 +463,9 @@ impl<'a> Parser<'a, '_> {
         Ok(())
     }
     fn closing(&mut self) -> ReadResult<()> {
+        if self.implicit_root && self.stack.len() == 1 {
+            return Err(StopReason::Malformed.into());
+        }
         self.at += 2;
         let name = self.name()?;
         self.space()?;
@@ -508,6 +513,15 @@ impl<'a> Parser<'a, '_> {
         Ok(())
     }
     fn parse(mut self) -> ReadResult<Markup<'a>> {
+        if !explicit_markup_root(self.raw, self.keep)? {
+            self.budget
+                .retain(&mut self.contexts, Context { parent: None, name: "markup", role: Role::Markup, attributes: Vec::new(), source: 0..0 })?;
+            let retained = self.budget.retained_left;
+            self.budget.retain(&mut self.stack, 0)?;
+            self.stack_charge = retained - self.budget.retained_left;
+            self.implicit_root = true;
+            self.root_seen = true;
+        }
         while self.at < self.raw.len() {
             self.check()?;
             // End tags do not create another source node or retained context.
@@ -545,7 +559,7 @@ impl<'a> Parser<'a, '_> {
                 self.text(start..self.at, true)?;
             }
         }
-        if !self.root_seen || !self.root_closed || !self.stack.is_empty() {
+        if if self.implicit_root { self.stack.len() != 1 } else { !self.root_seen || !self.root_closed || !self.stack.is_empty() } {
             return Err(StopReason::Malformed.into());
         }
         drop(self.stack);
@@ -562,9 +576,45 @@ impl<'a> Parser<'a, '_> {
     }
 }
 
+// Pango permits omitting the markup wrapper. Preserve the existing context
+// identities for an explicit wrapper, including one after comments/whitespace.
+// Only inspect the prefix; actual syntax validation remains in the parser.
+fn explicit_markup_root(raw: &str, keep: &dyn Fn() -> bool) -> ReadResult<bool> {
+    let bytes = raw.as_bytes();
+    let mut at = 0usize;
+    loop {
+        while bytes.get(at).is_some_and(|byte| whitespace(*byte)) {
+            if at.is_multiple_of(256) && !keep() {
+                return Err(Failure::Cancelled);
+            }
+            at += 1;
+        }
+        if !bytes.get(at..).is_some_and(|tail| tail.starts_with(b"<!--")) {
+            break;
+        }
+        at += 4;
+        while !bytes.get(at..).is_some_and(|tail| tail.starts_with(b"-->")) {
+            if at >= bytes.len() {
+                return Ok(false);
+            }
+            if at.is_multiple_of(256) && !keep() {
+                return Err(Failure::Cancelled);
+            }
+            at += 1;
+        }
+        at += 3;
+    }
+    Ok(raw
+        .get(at..)
+        .and_then(|tail| tail.strip_prefix("<markup"))
+        .is_some_and(|tail| tail.as_bytes().first().is_some_and(|byte| whitespace(*byte) || matches!(byte, b'>' | b'/'))))
+}
+
 /// Tokenize one decoded source markup string. No DTD, PI, custom entity or
 /// namespace interpretation is performed. Unsupported syntax declines the whole
 /// optional record; unknown ordinary vocabulary stays available with notices.
+/// Pango fragments may omit the markup wrapper; their contexts inherit a
+/// synthetic Markup root with an empty source range, without copying the input.
 pub fn tokenize<'a>(raw: &'a str, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<Scan<Markup<'a>>> {
     let retained = budget.retained_left;
     let result = (|| {
@@ -607,6 +657,7 @@ pub fn tokenize<'a>(raw: &'a str, limits: Limits, budget: &mut Budget, keep_goin
             attributes: 0,
             root_seen: false,
             root_closed: false,
+            implicit_root: false,
         };
         let markup = parser.parse()?;
         let mut records = Vec::new();
@@ -788,6 +839,11 @@ mod tests {
         assert_eq!(scan.records[0].notices.len(), 2);
         for (end, _) in raw.char_indices() {
             let scan = tokenize(&raw[..end], Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            if end == 0 {
+                assert_eq!(scan.stopped, None, "the empty Pango fragment is valid");
+                assert!(scan.records[0].text.is_empty());
+                continue;
+            }
             assert!(scan.stopped.is_some(), "truncated XML accepted at {end}");
         }
         let deep = format!("{}x{}", "<span>".repeat(65), "</span>".repeat(65));

@@ -1,5 +1,66 @@
 use super::*;
 
+#[test]
+fn wrapperless_fragments_keep_text_inheritance_and_original_ranges() {
+    for (raw, expected) in [("<b>A</b> &amp; <i>B</i>", "A & B"), ("<b>A</b><i>B</i>", "AB"), ("plain &lt;text&gt;", "plain <text>"), ("", "")] {
+        let scan = tokenize(raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None, "{raw}");
+        let markup = &scan.records[0];
+        assert_eq!(markup.text, expected);
+        assert_eq!(markup.raw, raw);
+        assert_eq!(markup.contexts[0].role, Role::Markup);
+        assert_eq!(markup.contexts[0].source, 0..0);
+        for run in &markup.runs {
+            assert!(raw.get(run.source.clone()).is_some());
+            let roles = markup.inherited(run.context).map(|context| context.role).collect::<Vec<_>>();
+            assert_eq!(roles.last(), Some(&Role::Markup));
+        }
+        if raw.starts_with("<b>") {
+            assert_eq!(markup.inherited(markup.runs[0].context).map(|context| context.role).collect::<Vec<_>>(), [Role::Bold, Role::Markup]);
+            assert_eq!(&raw[markup.runs[0].source.clone()], "A");
+            assert_eq!(markup.contexts[1].source, 0..3);
+        }
+    }
+    let raw = " <!-- comment --> <markup><b>A</b></markup>";
+    let scan = tokenize(raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped, None);
+    let markup = &scan.records[0];
+    assert_ne!(markup.contexts[0].source, 0..0, "explicit wrappers keep their existing context identities");
+    assert_eq!(markup.contexts.len(), 2);
+    assert_eq!(markup.text, "A");
+}
+
+#[test]
+fn fragments_keep_structural_resource_and_xml_dialect_guards() {
+    for (raw, reason) in [
+        ("<b>open", StopReason::Malformed),
+        ("text</markup>", StopReason::Malformed),
+        ("<b>A</i>", StopReason::Malformed),
+        ("<markup>A</markup><i>B</i>", StopReason::Malformed),
+        ("<!DOCTYPE b><b>A</b>", StopReason::Unsupported),
+        ("<?process?><b>A</b>", StopReason::Unsupported),
+        ("<x:b>A</x:b>", StopReason::Unsupported),
+    ] {
+        let mut budget = Budget::default();
+        let retained = budget.retained_remaining();
+        let scan = tokenize(raw, Limits::default(), &mut budget, &|| true).unwrap();
+        assert_eq!(scan.stopped.unwrap().reason, reason, "{raw}");
+        assert_eq!(budget.retained_remaining(), retained);
+    }
+    let single = tokenize("<b>A</b>", Limits { depth: 1, ..Limits::default() }, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(single.stopped, None);
+    let nested = tokenize("<b><i>A</i></b>", Limits { depth: 1, ..Limits::default() }, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(nested.stopped.unwrap().reason, StopReason::RecordLimit);
+    let prefixed = format!("<!--{}--><markup/>", "x".repeat(4096));
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 2
+    };
+    assert!(matches!(explicit_markup_root(&prefixed, &keep), Err(Failure::Cancelled)));
+    assert_eq!(calls.get(), 2);
+}
+
 fn parser<'a, 'b>(raw: &'a str, budget: &'b mut Budget, keep: &'b dyn Fn() -> bool) -> Parser<'a, 'b> {
     Parser {
         raw,
@@ -20,6 +81,7 @@ fn parser<'a, 'b>(raw: &'a str, budget: &'b mut Budget, keep: &'b dyn Fn() -> bo
         attributes: 0,
         root_seen: false,
         root_closed: false,
+        implicit_root: false,
     }
 }
 
@@ -102,8 +164,8 @@ fn optional_notices_do_not_displace_required_markup_storage() {
         let scan = tokenize(raw, Limits { notices, ..Limits::default() }, &mut budget, &|| true).unwrap();
         assert_eq!(scan.stopped, None, "notice allowance {notices}");
         let markup = &scan.records[0];
-        assert_eq!(markup.contexts.len(), 1);
-        assert_eq!(markup.contexts[0].name, "odd");
+        assert_eq!(markup.contexts.len(), 2);
+        assert_eq!(markup.contexts[1].name, "odd");
         assert!(markup.has_unhandled && markup.notices_truncated);
         assert!(markup.notices.is_empty());
         assert_eq!(budget.retained_remaining(), 0);
@@ -161,6 +223,7 @@ fn cancellation_inside_attribute_scan_follows_an_allocated_root() {
         attributes: 0,
         root_seen: false,
         root_closed: false,
+        implicit_root: false,
     };
     assert!(parser.opening().is_ok());
     assert_eq!(parser.contexts.len(), 1);

@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn single_quoted_configuration_strings_are_literal_and_keep_lexical_spans() {
+    let raw = br#"(text 'hello world\n "quoted"') (font 'Example Family')"#;
+    let scan = gimp(raw, 17, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped, None);
+    let record = &scan.records[0];
+    assert_eq!(record.text().unwrap(), Some("hello world\\n \"quoted\""));
+    let atom = &record.config().unwrap().field("text").unwrap().unwrap()[0];
+    assert!(matches!(atom, Value::Atom { bytes: Cow::Borrowed(_), quoted: true, .. }));
+    let span = atom.span();
+    assert_eq!(&raw[span.start - 17..span.end - 17], br#"'hello world\n "quoted"'"#);
+    let double = gimp(br#"(text "hello\nworld")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(double.records[0].text().unwrap(), Some("hello\nworld"));
+    let malformed = gimp(b"(text 'unclosed)", 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(malformed.stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
+fn equivalent_auto_boolean_spellings_preserve_direction_and_saved_policy() {
+    for (spellings, automatic) in [(["yes", "true", "TRUE", "YeS"], true), (["no", "false", "FALSE", "No"], false)] {
+        for spelling in spellings {
+            let raw = format!("(text 'hello') (base-direction ttb-rtl-upright) (base-dir-auto {spelling})");
+            let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(scan.stopped, None, "{spelling}");
+            let record = &scan.records[0];
+            assert_eq!(record.base_direction, Some(Direction::TtbRtlUpright));
+            assert_eq!(record.automatic_direction, Some(automatic));
+            assert_eq!(record.direction, if automatic { Direction::Auto } else { Direction::TtbRtlUpright });
+        }
+    }
+    for spelling in ["maybe", "1", "0"] {
+        let raw = format!("(base-dir-auto {spelling})");
+        let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+    }
+}
+
+#[test]
+fn equivalent_legacy_escape_spellings_decode_identically_without_losing_source() {
+    for content in [b"\\303\\251".to_vec(), [vec![0xc3], b"\\251".to_vec()].concat()] {
+        let mut raw = super::tests::legacy_bytes("?", "iso8859");
+        raw.splice(6..7, content.iter().copied());
+        let scan = gdyntext(&raw, 10, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        let record = &scan.records[0];
+        assert_eq!(record.text().unwrap(), Some("é"));
+        assert_eq!(record.raw, raw);
+        let Source::Gdyntext(legacy) = &record.source else { panic!("legacy") };
+        assert_eq!(legacy.encoding, LegacyEncoding::Utf8);
+        let span = legacy.spans[0];
+        assert_eq!(&raw[span.start - 10..span.end - 10], content);
+    }
+}
+
+#[test]
+fn legacy_separator_scans_poll_in_missing_and_final_fields() {
+    let bytes = vec![b'x'; 8192];
+    for tail in [bytes.clone(), [bytes, b"}{next".to_vec()].concat()] {
+        let calls = std::cell::Cell::new(0);
+        let keep = || {
+            calls.set(calls.get() + 1);
+            calls.get() < 2
+        };
+        assert!(matches!(legacy_separator(&tail, &keep), Err(Failure::Cancelled)));
+        assert_eq!(calls.get(), 2);
+    }
+    let missing = format!("GDT10{{{}}}", "x".repeat(8192)).into_bytes();
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 3
+    };
+    assert!(matches!(gdyntext(&missing, 0, Limits::default(), &mut Budget::default(), &keep), Err(Error::Cancelled)));
+    let malformed = gdyntext(&missing, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(malformed.stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
 fn explicit_vertical_directions_remain_distinct_from_automatic_direction() {
     for (name, expected) in [
         ("ttb-rtl", Direction::TtbRtl),

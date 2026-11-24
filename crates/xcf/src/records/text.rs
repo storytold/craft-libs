@@ -169,8 +169,8 @@ impl TextRecord<'_> {
             Source::Gdyntext(legacy) => Ok(Some(&legacy.text)),
         }
     }
-    /// Original Pango markup only. Inherited markup styles/runs are not decoded
-    /// in this first-pass API; markup-font resource forms remain in the Config.
+    /// Original Pango markup, including fragments without an explicit wrapper.
+    /// `markup::tokenize` can expose inert contexts/runs; no native style is applied.
     pub fn markup(&self) -> std::result::Result<Option<&str>, FieldError> {
         self.config()
             .map(|config| config.field("markup")?.map(|values| values.first().ok_or(FieldError::ExpectedScalar)?.text()).transpose())
@@ -314,9 +314,26 @@ impl<'a> Parser<'a, '_> {
                 let bytes = self.quoted(true)?;
                 Ok(Value::Atom { bytes: Cow::Owned(bytes), quoted: true, span: self.span(start, self.at)? })
             }
+            Some(b'\'') => {
+                self.at += 1;
+                let content = self.at;
+                while self.bytes.get(self.at).is_some_and(|byte| *byte != b'\'') {
+                    self.tick()?;
+                    if self.bytes.get(self.at) == Some(&0) {
+                        return Err(StopReason::Malformed.into());
+                    }
+                    self.at += 1;
+                }
+                if self.bytes.get(self.at) != Some(&b'\'') {
+                    return Err(StopReason::Malformed.into());
+                }
+                let bytes = self.bytes.get(content..self.at).ok_or(Failure::Stop(StopReason::Malformed))?;
+                self.at += 1;
+                Ok(Value::Atom { bytes: Cow::Borrowed(bytes), quoted: true, span: self.span(start, self.at)? })
+            }
             Some(b')') | None => Err(StopReason::Malformed.into()),
             Some(_) => {
-                while self.bytes.get(self.at).is_some_and(|byte| !byte.is_ascii_whitespace() && !b"()\"".contains(byte)) {
+                while self.bytes.get(self.at).is_some_and(|byte| !byte.is_ascii_whitespace() && !b"()\"'".contains(byte)) {
                     self.tick()?;
                     self.at += 1;
                 }
@@ -339,8 +356,8 @@ fn direction(config: &Config<'_>) -> ReadResult<(Direction, Option<Direction>, O
         _ => return Err(StopReason::Malformed.into()),
     };
     let automatic = match config.scalar("base-dir-auto")? {
-        Some("yes") => Some(true),
-        Some("no") => Some(false),
+        Some(value) if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") => Some(true),
+        Some(value) if value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false") => Some(false),
         None => None,
         _ => return Err(StopReason::Malformed.into()),
     };
@@ -424,6 +441,18 @@ pub fn gimp<'a>(
     finish(result, source_offset, retained, budget)
 }
 
+fn legacy_separator(bytes: &[u8], keep_going: &dyn Fn() -> bool) -> ReadResult<Option<usize>> {
+    for (index, byte) in bytes.iter().enumerate() {
+        if index.is_multiple_of(256) && !keep_going() {
+            return Err(Failure::Cancelled);
+        }
+        if *byte == b'}' && bytes.get(index + 1) == Some(&b'{') {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
 /// Decode GDyntext's escaped content and preserve its eight original fields.
 /// Latin-1 recovery is allowed only for an explicit ISO8859-1 XLFD declaration.
 pub fn gdyntext<'a>(
@@ -447,12 +476,12 @@ pub fn gdyntext<'a>(
             }
             let remaining = body.get(start..).ok_or(Failure::Stop(StopReason::Malformed))?;
             let length = if index == 7 {
-                if remaining.windows(2).any(|window| window == b"}{") {
+                if legacy_separator(remaining, keep_going)?.is_some() {
                     return Err(StopReason::Malformed.into());
                 }
                 remaining.len()
             } else {
-                remaining.windows(2).position(|window| window == b"}{").ok_or(Failure::Stop(StopReason::Malformed))?
+                legacy_separator(remaining, keep_going)?.ok_or(Failure::Stop(StopReason::Malformed))?
             };
             let end = start.checked_add(length).ok_or(Failure::Stop(StopReason::Malformed))?;
             if let Some(field) = fields.get_mut(index) {
@@ -481,6 +510,7 @@ pub fn gdyntext<'a>(
         if parts.next().is_some() {
             return Err(StopReason::Malformed.into());
         }
+        let latin1 = font_fields.get(12).is_some_and(|charset| charset.eq_ignore_ascii_case("iso8859")) && font_fields.get(13) == Some(&"1");
         let content = fields.first().copied().ok_or(Failure::Stop(StopReason::Malformed))?;
         let before = budget.retained_left;
         let mut parser = Parser { bytes: content, source_offset: 0, at: 0, checked_at: 0, nodes: 0, limits, budget, keep_going };
@@ -491,7 +521,7 @@ pub fn gdyntext<'a>(
         let decoded_storage = before - parser.budget.retained_left;
         let (text, encoding) = match String::from_utf8(decoded) {
             Ok(text) => (text, LegacyEncoding::Utf8),
-            Err(error) if font_fields.get(12).is_some_and(|charset| charset.eq_ignore_ascii_case("iso8859")) && font_fields.get(13) == Some(&"1") => {
+            Err(error) if latin1 => {
                 let decoded = error.into_bytes();
                 let mut output = Vec::new();
                 for byte in &decoded {
@@ -514,7 +544,7 @@ pub fn gdyntext<'a>(
         for (index, field) in fields.into_iter().enumerate() {
             let field = match std::str::from_utf8(field) {
                 Ok(field) => Cow::Borrowed(field),
-                Err(_) if index == 0 && encoding == LegacyEncoding::Latin1 => {
+                Err(_) if index == 0 && latin1 => {
                     let mut output = Vec::new();
                     for (offset, byte) in field.iter().enumerate() {
                         if offset.is_multiple_of(256) {
