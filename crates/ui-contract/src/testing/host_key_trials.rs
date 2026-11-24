@@ -236,6 +236,41 @@ fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     assert_eq!(seen(&host), (vec![Key::Escape], 0), "the field's Escape is egui's, and no window Cancel");
 }
 
+/// The Enter presses in egui's input and the window Submits taken after one Enter, with the host's field focused or
+/// nothing focused.
+fn enter_with(field_focused: bool) -> (usize, usize) {
+    let counts = Rc::new(Cell::new((0usize, 0usize)));
+    let counted = Rc::clone(&counts);
+    let (_host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        let enters = ui.input(|input| input.events.iter().filter(|event| matches!(event, Event::Key { key: Key::Enter, pressed: true, .. })).count());
+        let submit = with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Submit));
+        let (seen, taken) = counted.get();
+        counted.set((seen + enters, taken + usize::from(submit)));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if field_focused {
+        fixture::host_focus(&frames.ctx, field());
+        frames.frame(Vec::new(), &mut show);
+        assert_eq!(egui_focused(&frames.ctx), Some(field()), "the host's field holds egui focus");
+    }
+    counts.set((0, 0));
+    press_key(&mut frames, &mut show, Key::Enter);
+    frames.idle(2, &mut show);
+    counts.get()
+}
+
+/// An app's own focused widget keeps the plain Enter as it keeps Escape: it reads it from egui once, and no window
+/// Submit comes of it, so an app that turns the window's Submit back into an Enter does not get two. With nothing
+/// focused the plain Enter is the window's Submit and stays in egui's input too.
+#[trial]
+fn a_focused_egui_field_keeps_enter_and_the_window_gets_no_submit() {
+    assert_eq!(enter_with(true), (1, 0), "the field reads one Enter and the window takes no Submit");
+    assert_eq!(enter_with(false), (1, 1), "with nothing focused, Enter is the window's Submit and stays in egui");
+}
+
 #[trial]
 fn an_open_egui_popup_keeps_escape() {
     let popup = named_id("host popup");

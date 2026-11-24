@@ -97,7 +97,8 @@ pub(crate) struct FocusedRecord {
     pub(crate) canvas: Option<Id>,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
-    /// the clipboard events). Written by the end hook after its focus moves.
+    /// the plain Enter, the clipboard events), and no window intent comes of them. Written by the end hook after its
+    /// focus moves.
     pub(crate) foreign: bool,
     /// egui focus is on a widget no framework component made, and no framework press or drag is captured: egui
     /// moves focus among the app's own widgets with the arrows and the Tab it keeps. Written by the end hook.

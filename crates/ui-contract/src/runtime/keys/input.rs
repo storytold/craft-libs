@@ -42,8 +42,8 @@ struct Strip<'a> {
     holds_drafts: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
     canvas_space: bool,
-    /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
-    /// events are its own.
+    /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape, the plain Enter and the
+    /// clipboard events are its own, and no window intent comes of them.
     foreign: bool,
     /// The focused stop is the app's own egui widget (`Stop::host`, `FocusedRecord::host`), which reads its keys from
     /// egui: its Escape stays there, as an app's own focused widget's does. Tab and the arrows follow its `KeyUse`, as
@@ -348,6 +348,7 @@ impl Strip<'_> {
         let ctrl_tab = key == Key::Tab && (if self.os == Os::Mac { mods.ctrl && !mods.cmd } else { mods.cmd });
         let ctrl_tab = ctrl_tab && self.pages && !self.keeps_tab;
         let bare_tab = key == Key::Tab && !mods.cmd && !mods.ctrl && !mods.alt;
+        let plain_enter = key == Key::Enter && mods.is_none();
         // Alt and Shift ride along, as with Enter: a canvas tool reads them; Cmd and Ctrl chords are the app's. While
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
         // scope escape. Over an open press any Escape is the press's cancel: a borrowed tool's drag holds Cmd. Shift or
@@ -379,7 +380,7 @@ impl Strip<'_> {
             PressUse::Edit(*command)
         } else if key == Key::Space && self.canvas_space {
             PressUse::CanvasSpace
-        } else if (self.foreign && (bare_tab || escape)) || (self.host && escape && !self.press_captured) || canvas_tab || egui_edit {
+        } else if (self.foreign && (bare_tab || escape || plain_enter)) || (self.host && escape && !self.press_captured) || canvas_tab || egui_edit {
             PressUse::Egui
         } else if bare_tab && self.egui_tab && !self.keeps_tab {
             PressUse::TabToEgui
