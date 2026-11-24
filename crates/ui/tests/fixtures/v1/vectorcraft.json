@@ -1,0 +1,91 @@
+{
+  "dock_tab": "layers",
+  "docking": {
+    "root": {
+      "Split": {
+        "axis": "Vertical",
+        "size": {
+          "Ratio": 0.625
+        },
+        "first": {
+          "Tabs": {
+            "panels": [
+              "properties",
+              "layers",
+              "libraries"
+            ],
+            "active": 1
+          }
+        },
+        "second": {
+          "Stack": {
+            "entries": [
+              {
+                "panel": "color",
+                "open": true,
+                "height": 180.0
+              },
+              {
+                "panel": "swatches",
+                "open": false,
+                "height": null
+              },
+              {
+                "panel": "stroke",
+                "open": true,
+                "height": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    "floating": [
+      {
+        "panels": [
+          "brushes",
+          "symbols"
+        ],
+        "active": 0,
+        "rect": [
+          200.0,
+          140.0,
+          300.0,
+          400.0
+        ]
+      },
+      {
+        "panels": [
+          "gradient"
+        ],
+        "active": 0,
+        "rect": [
+          540.0,
+          180.0,
+          260.0,
+          320.0
+        ]
+      }
+    ]
+  },
+  "docking_hidden": {
+    "patternOptions": {
+      "floating": null,
+      "anchor": "color",
+      "placement": {
+        "Tab": {
+          "before": "swatches"
+        }
+      },
+      "size": null,
+      "stack": [
+        true,
+        240.0
+      ],
+      "sibling": []
+    }
+  },
+  "docking_icons": [
+    "stroke"
+  ]
+}

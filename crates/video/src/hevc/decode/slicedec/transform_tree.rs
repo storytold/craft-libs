@@ -1,0 +1,568 @@
+use super::{
+    CBF_CHROMA, CBF_LUMA, CODED_SUB_BLOCK, CU_QP_DELTA_ABS, ChromaFormat, E_TU_H, E_TU_V, F_CBF, F_INTRA, GT1, GT2, LAST_X_PREFIX, LAST_Y_PREFIX,
+    LEVEL_SCALE, PartMode, Result, SCAN_4, SIG_COEFF, SIG_CTX, SPLIT_TRANSFORM, Sample, SliceDecoder, TRANSFORM_SKIP, ensure, for_runs, intra,
+    scan_order, scan_pos, transform,
+};
+
+/// Significant scan positions of one sub-block, in decoding (descending) order.
+#[derive(Default)]
+struct SigList {
+    pos: [u8; 16],
+    n: usize,
+}
+
+impl SigList {
+    fn push(&mut self, p: u8) {
+        self.pos[self.n] = p;
+        self.n += 1;
+    }
+}
+
+/// Context of the significance map of one coded sub-block.
+struct SigMapParams {
+    log2: u32,
+    c: usize,
+    scan_idx: usize,
+    /// Sub-block position.
+    xs: usize,
+    ys: usize,
+    /// coded_sub_block_flag of the right neighbour plus twice that of the one below.
+    prev_csbf: u8,
+    /// inferSbDcSigCoeffFlag.
+    infer_dc: bool,
+    /// First scan position to decode (descending).
+    start: i32,
+}
+
+/// coeff_abs_level_greater1_flag / greater2_flag results of one sub-block.
+#[derive(Default)]
+struct GreaterFlags {
+    gt1: [u8; 16],
+    first_g1: Option<usize>,
+    gt2: u8,
+    /// Final greater1 context state, which selects the next sub-block's context set.
+    g1ctx: u32,
+}
+
+/// sigCtx increments (9.3.4.2.5) of the 16 scan positions of one sub-block.
+fn sig_ctx_table(p: &SigMapParams) -> [u8; 16] {
+    if p.log2 == 2 {
+        return SIG_CTX[p.scan_idx][4];
+    }
+    let off = if p.c == 0 {
+        (if p.xs + p.ys > 0 { 3 } else { 0 }) + if p.log2 == 3 { if p.scan_idx == 0 { 9 } else { 15 } } else { 21 }
+    } else if p.log2 == 3 {
+        9
+    } else {
+        12
+    };
+    let mut t = SIG_CTX[p.scan_idx][p.prev_csbf as usize];
+    for v in t.iter_mut() {
+        *v += off;
+    }
+    if p.xs + p.ys == 0 {
+        t[0] = 0;
+    }
+    t
+}
+
+/// A node of the transform tree: the block at (`x0`, `y0`) of size 2^`log2`, its parent's origin
+/// (`xb`, `yb`) and its index `blk_idx` among the parent's four children.
+#[derive(Clone, Copy)]
+pub(super) struct TtNode {
+    pub x0: i32,
+    pub y0: i32,
+    pub xb: i32,
+    pub yb: i32,
+    pub log2: u32,
+    pub blk_idx: u32,
+}
+
+impl<'a, S: Sample> SliceDecoder<'a, S> {
+    /// `parent_cbf_c[c][t]`: cbf_cb / cbf_cr (c) of the parent node, for the upper (t = 0) and, in
+    /// 4:2:2, the lower (t = 1) chroma block (7.3.8.8).
+    pub(super) fn transform_tree(&mut self, node: TtNode, depth: u32, parent_cbf_c: [[bool; 2]; 2]) -> Result<()> {
+        let TtNode { x0, y0, log2, .. } = node;
+        let split =
+            if log2 <= self.sps.log2_max_tb && log2 > self.sps.log2_min_tb && depth < self.max_trafo_depth && !(self.intra_split && depth == 0) {
+                self.dd(SPLIT_TRANSFORM + (5 - log2 as usize)) == 1
+            } else {
+                // interSplitFlag (7.4.9.8)
+                let inter_split = self.sps.max_th_depth_inter == 0 && !self.cu_intra && self.cu_part != PartMode::P2Nx2N && depth == 0;
+                log2 > self.sps.log2_max_tb || (self.intra_split && depth == 0) || inter_split
+            };
+        let mut cbf_c = [[false; 2]; 2];
+        if log2 > 2 {
+            // the second cbf of each chroma component (the lower block of the 4:2:2 chroma
+            // rectangle) is coded for a leaf, and at 8x8 (whose chroma is coded with the 4x4 luma
+            // blocks) also when split
+            let second = self.pic.chroma == ChromaFormat::C422 && (!split || log2 == 3);
+            for (c, cbf) in cbf_c.iter_mut().enumerate() {
+                if depth == 0 || parent_cbf_c[c][0] {
+                    cbf[0] = self.dd(CBF_CHROMA + depth as usize) == 1;
+                    if second {
+                        cbf[1] = self.dd(CBF_CHROMA + depth as usize) == 1;
+                    }
+                }
+            }
+        } else {
+            // 4x4 luma blocks: chroma cbfs are those of the parent (coded at blkIdx 3)
+            cbf_c = parent_cbf_c;
+            if depth == 0 {
+                cbf_c = [[false; 2]; 2];
+            }
+        }
+        if split {
+            let h = 1 << (log2 - 1);
+            for (blk_idx, (dx, dy)) in [(0, 0), (h, 0), (0, h), (h, h)].into_iter().enumerate() {
+                let child = TtNode { x0: x0 + dx, y0: y0 + dy, xb: x0, yb: y0, log2: log2 - 1, blk_idx: blk_idx as u32 };
+                self.transform_tree(child, depth + 1, cbf_c)?;
+            }
+            return Ok(());
+        }
+        let any_cbf_c = cbf_c.iter().flatten().any(|&b| b);
+        let cbf_luma = if self.cu_intra || depth != 0 || any_cbf_c { self.dd(CBF_LUMA + if depth == 0 { 1 } else { 0 }) == 1 } else { true };
+        let n = 1 << log2;
+        if depth > 0 {
+            self.mark_edges(x0, y0, n, n, E_TU_V, E_TU_H);
+        }
+        self.transform_unit(node, cbf_luma, cbf_c)
+    }
+
+    fn transform_unit(&mut self, node: TtNode, cbf_luma: bool, cbf_c: [[bool; 2]; 2]) -> Result<()> {
+        let TtNode { x0, y0, xb, yb, log2, blk_idx } = node;
+        let n = 1i32 << log2;
+        let chroma_here = log2 > 2 || blk_idx == 3;
+        let cbf_chroma = cbf_c.iter().flatten().any(|&b| b);
+        if (cbf_luma || cbf_chroma) && self.pps.cu_qp_delta_enabled && !self.is_cu_qp_delta_coded {
+            // cu_qp_delta_abs: prefix TU(5) with ctx 0,1,1,1,1, suffix EG0
+            let mut v = 0;
+            while v < 5 && self.dd(CU_QP_DELTA_ABS + if v == 0 { 0 } else { 1 }) == 1 {
+                v += 1;
+            }
+            if v == 5 {
+                let mut k = 0;
+                while self.bypass() == 1 {
+                    v += 1 << k;
+                    k += 1;
+                    ensure!(k < 32, "invalid cu_qp_delta_abs");
+                }
+                v += self.bypass_bits(k) as i32;
+            }
+            if v != 0 && self.bypass() == 1 {
+                v = -v;
+            }
+            let off = 6 * (self.pic.bd_y as i32 - 8);
+            ensure!(v >= -(26 + off / 2) && v <= 25 + off / 2, "CuQpDeltaVal out of range");
+            self.is_cu_qp_delta_coded = true;
+            self.cu_qp_delta = v;
+            self.update_qp();
+        }
+        // luma
+        if self.cu_intra {
+            let mode = self.pic.blk_at(x0, y0).ipm as u32;
+            self.intra_predict(x0, y0, log2, 0, mode);
+        }
+        if cbf_luma {
+            let qp_bd = 6 * (self.pic.bd_y as i32 - 8);
+            let qp = self.qp_y + qp_bd;
+            self.residual(x0, y0, log2, 0, qp)?;
+            self.fill_blk(x0, y0, n, n, |b| b.flags |= F_CBF);
+        }
+        if !chroma_here {
+            return Ok(());
+        }
+        // Chroma blocks of this transform unit (7.3.8.10): square blocks of (luma size) /
+        // SubWidthC at the chroma position of the unit (of the 8x8 parent for 4x4 luma blocks);
+        // in 4:2:2 the chroma rectangle is twice as tall and coded as two stacked square blocks,
+        // the lower one predicted from the reconstructed upper one (8.4.4.1).
+        let (sx, sy) = self.pic.chroma.shifts();
+        let (xc, yc, log2c) = if log2 > 2 { (x0 >> sx, y0 >> sy, log2 - 1) } else { (xb >> sx, yb >> sy, 2) };
+        let blocks = if self.pic.chroma == ChromaFormat::C422 { 2 } else { 1 };
+        for c in 1..3 {
+            for t in 0..blocks {
+                let yt = yc + ((t as i32) << log2c);
+                if self.cu_intra {
+                    let mode = self.intra_chroma_mode;
+                    self.intra_predict(xc, yt, log2c, c, mode);
+                }
+                if cbf_c[c - 1][t] {
+                    let qp = if c == 1 { self.qp_cb } else { self.qp_cr };
+                    self.residual(xc, yt, log2c, c, qp)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Intra prediction of an n x n block of component `c` at component position (x0, y0).
+    fn intra_predict(&mut self, x0: i32, y0: i32, log2: u32, c: usize, mode: u32) {
+        let n = 1usize << log2;
+        // shifts from component to luma positions (8.4.4.2.1: the availability of neighbouring
+        // samples is derived at the luma positions (xNbCmp * SubWidthC, yNbCmp * SubHeightC))
+        let (sx, sy) = if c == 0 { (0, 0) } else { self.pic.chroma.shifts() };
+        let (xl, yl) = (x0 << sx, y0 << sy);
+        // component samples per 4x4 luma block, down the left column and along the top row
+        // (4:2:2 chroma: 4 rows but 2 columns)
+        let (unit_y, unit_x) = (4usize >> sy, 4usize >> sx);
+        let stride = if c == 0 { self.pic.width } else { self.pic.cwidth };
+        let constrained = self.pps.constrained_intra_pred;
+        let mut al = [false; 129];
+        let mut at = [false; 129];
+        let addr = self.slice_addr;
+        let pic = &*self.pic;
+        let (units_l, units_t) = ((2 * n / unit_y) as u32, (2 * n / unit_x) as u32);
+        let mut ml = pic.zavail_run((xl, yl), (xl - 1, yl), true, units_l, addr);
+        let mut mt = pic.zavail_run((xl, yl), (xl, yl - 1), false, units_t, addr);
+        let mut corner = pic.zavail(xl, yl, xl - 1, yl - 1, addr);
+        if constrained {
+            let intra = |x: i32, y: i32| pic.blk_at(x, y).flags & F_INTRA != 0;
+            for k in 0..units_l {
+                if ml & (1 << k) != 0 && !intra(xl - 1, yl + 4 * k as i32) {
+                    ml &= !(1 << k);
+                }
+            }
+            for k in 0..units_t {
+                if mt & (1 << k) != 0 && !intra(xl + 4 * k as i32, yl - 1) {
+                    mt &= !(1 << k);
+                }
+            }
+            corner = corner && intra(xl - 1, yl - 1);
+        }
+        let plane = &pic.planes[c];
+        let r = &mut self.refs_buf;
+        if corner {
+            al[0] = true;
+            at[0] = true;
+            let v = plane[(y0 - 1) as usize * stride + (x0 - 1) as usize].to_u16();
+            r.left[0] = v;
+            r.top[0] = v;
+        }
+        for_runs(ml, unit_y, |a, b| {
+            let left = (y0 as usize + a) * stride + x0 as usize - 1;
+            al[1 + a..1 + b].fill(true);
+            for (k, v) in r.left[1 + a..1 + b].iter_mut().enumerate() {
+                *v = plane[left + k * stride].to_u16();
+            }
+        });
+        for_runs(mt, unit_x, |a, b| {
+            let top = (y0 as usize - 1) * stride + x0 as usize;
+            at[1 + a..1 + b].fill(true);
+            for (v, s) in r.top[1 + a..1 + b].iter_mut().zip(&plane[top + a..top + b]) {
+                *v = s.to_u16();
+            }
+        });
+        let bd = if c == 0 { self.pic.bd_y } else { self.pic.bd_c };
+        intra::substitute(r, &al, &at, n, bd);
+        if c == 0 {
+            intra::filter(r, mode, n, self.sps.strong_intra_smoothing, true, bd);
+        }
+        let off = y0 as usize * stride + x0 as usize;
+        intra::predict(r, mode, n, c == 0, bd, &mut self.pic.planes[c][off..], stride);
+    }
+
+    /// last_sig_coeff_{x,y}_{prefix,suffix}: the position of the last significant coefficient
+    /// (before the vertical-scan swap).
+    fn last_sig_coeff_pos(&mut self, log2: u32, c: usize) -> (u32, u32) {
+        let cmax = (log2 << 1) - 1;
+        let (off, shift) = if c == 0 { (3 * (log2 - 2) + ((log2 - 1) >> 2), (log2 + 1) >> 2) } else { (15, log2 - 2) };
+        let mut px = 0;
+        while px < cmax && self.dd(LAST_X_PREFIX + (off + (px >> shift)) as usize) == 1 {
+            px += 1;
+        }
+        let mut py = 0;
+        while py < cmax && self.dd(LAST_Y_PREFIX + (off + (py >> shift)) as usize) == 1 {
+            py += 1;
+        }
+        let mut lx = px;
+        if px > 3 {
+            let nb = (px >> 1) - 1;
+            lx = (1 << nb) * (2 + (px & 1)) + self.bypass_bits(nb);
+        }
+        let mut ly = py;
+        if py > 3 {
+            let nb = (py >> 1) - 1;
+            ly = (1 << nb) * (2 + (py & 1)) + self.bypass_bits(nb);
+        }
+        (lx, ly)
+    }
+
+    /// scanIdx (7.4.9.11): 0 diagonal, 1 horizontal, 2 vertical.
+    fn scan_idx(&self, x0: i32, y0: i32, log2: u32, c: usize) -> usize {
+        if !(self.cu_intra && (log2 == 2 || (log2 == 3 && c == 0))) {
+            return 0;
+        }
+        let m = if c == 0 { self.pic.blk_at(x0, y0).ipm as u32 } else { self.intra_chroma_mode };
+        if (6..=14).contains(&m) {
+            2
+        } else if (22..=30).contains(&m) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// sig_coeff_flag decoding of one coded sub-block, appending the significant scan positions
+    /// (descending) to `list`.
+    fn read_sig_map(&mut self, p: &SigMapParams, list: &mut SigList) {
+        let c_off_sig = if p.c == 0 { 0 } else { 27 };
+        let ctx_tab = sig_ctx_table(p);
+        let mut infer_dc = p.infer_dc;
+        let mut np = p.start;
+        while np >= 0 {
+            if np > 0 || !infer_dc {
+                let sig_ctx = ctx_tab[np as usize] as usize;
+                if self.c.decode_decision(SIG_COEFF + c_off_sig + sig_ctx) == 1 {
+                    list.push(np as u8);
+                    infer_dc = false;
+                }
+            } else {
+                // np == 0 with inferSbDcSigCoeffFlag
+                list.push(0);
+            }
+            np -= 1;
+        }
+    }
+
+    /// coeff_abs_level_greater1_flag / greater2_flag of one sub-block with `nsig` significant
+    /// coefficients; `ctx_set` as derived in 9.3.4.2.6.
+    fn read_greater_flags(&mut self, c: usize, ctx_set: usize, nsig: usize) -> GreaterFlags {
+        let mut g1ctx = 1u32;
+        let mut f = GreaterFlags::default();
+        let c_off_g1 = if c > 0 { 16 } else { 0 };
+        for k in 0..nsig.min(8) {
+            let inc = ctx_set * 4 + g1ctx.min(3) as usize + c_off_g1;
+            let flag = self.c.decode_decision(GT1 + inc);
+            f.gt1[k] = flag as u8;
+            if flag == 1 {
+                g1ctx = 0;
+                if f.first_g1.is_none() {
+                    f.first_g1 = Some(k);
+                }
+            } else if g1ctx > 0 {
+                g1ctx += 1;
+            }
+        }
+        f.g1ctx = g1ctx;
+        if f.first_g1.is_some() {
+            f.gt2 = self.c.decode_decision(GT2 + ctx_set + if c > 0 { 4 } else { 0 }) as u8;
+        }
+        f
+    }
+
+    /// Signs and remaining levels of one sub-block: the signed coefficient value of each
+    /// significant position, in the order of `list`.
+    fn read_levels(&mut self, list: &SigList, flags: &GreaterFlags, sdh: bool) -> Result<[i32; 16]> {
+        let nsig = list.n;
+        let last_sig_pos = list.pos[0] as i32;
+        let first_sig_pos = list.pos[nsig - 1] as i32;
+        let sign_hidden = sdh && last_sig_pos - first_sig_pos > 3;
+        let nsigns = if sign_hidden { nsig - 1 } else { nsig };
+        let mut signs = if nsigns > 0 { self.bypass_bits(nsigns as u32) << (32 - nsigns) } else { 0 };
+        let mut values = [0i32; 16];
+        let mut rice = 0u32;
+        let mut sum_abs = 0i32;
+        for k in 0..nsig {
+            let mut base = 1 + flags.gt1[k] as i32;
+            if Some(k) == flags.first_g1 {
+                base += flags.gt2 as i32;
+            }
+            let thresh = if k < 8 { if Some(k) == flags.first_g1 { 3 } else { 2 } } else { 1 };
+            let mut level = base;
+            if base == thresh {
+                let rem = self.coeff_abs_level_remaining(rice)?;
+                level = base + rem;
+                if level > 3 * (1 << rice) {
+                    rice = (rice + 1).min(4);
+                }
+            }
+            let mut v = level;
+            if !(sign_hidden && k == nsig - 1) {
+                if signs & 0x8000_0000 != 0 {
+                    v = -v;
+                }
+                signs <<= 1;
+            }
+            if sign_hidden {
+                sum_abs += level;
+                if k == nsig - 1 && sum_abs & 1 == 1 {
+                    v = -v;
+                }
+            }
+            values[k] = v;
+        }
+        Ok(values)
+    }
+
+    /// residual_coding() + scaling + transform + reconstruction for one transform block.
+    fn residual(&mut self, x0: i32, y0: i32, log2: u32, c: usize, qp: i32) -> Result<()> {
+        let n = 1usize << log2;
+        let bypass = self.cu_transquant_bypass;
+        let ts = if self.pps.transform_skip && !bypass && log2 == 2 { self.dd(TRANSFORM_SKIP + (c > 0) as usize) == 1 } else { false };
+        let (mut lx, mut ly) = self.last_sig_coeff_pos(log2, c);
+        let scan_idx = self.scan_idx(x0, y0, log2, c);
+        if scan_idx == 2 {
+            std::mem::swap(&mut lx, &mut ly);
+        }
+        ensure!((lx as usize) < n && (ly as usize) < n, "last significant coefficient outside the block");
+        let log2sb = log2 - 2;
+        let sb_scan = scan_order(log2sb, scan_idx);
+        let pos_scan = &SCAN_4[scan_idx];
+        let sb_w = 1usize << log2sb;
+        let last_sb = scan_pos(log2sb, scan_idx, lx >> 2, ly >> 2);
+        let last_pos = scan_pos(2, scan_idx, lx & 3, ly & 3);
+        // scaling (8.6.3), applied as each coefficient is decoded
+        let bd = if c == 0 { self.pic.bd_y } else { self.pic.bd_c };
+        let bd_shift = bd + log2 - 5;
+        let round = 1i64 << (bd_shift - 1);
+        let scale = (LEVEL_SCALE[(qp % 6) as usize] as i64) << (qp / 6);
+        let matrix = match &self.pic.scaling {
+            Some(s) if !(bypass || (ts && n > 4)) => {
+                let size_id = (log2 - 2) as usize;
+                let matrix_id = if self.cu_intra { c } else { 3 + c };
+                Some((s.clone(), size_id * 6 + matrix_id))
+            }
+            _ => None,
+        };
+        let m: Option<&[u8]> = matrix.as_ref().map(|(s, i)| &s[*i][..]);
+        let mut nnz = 0;
+        let mut csbf = [0u8; 64];
+        let mut prev_g1: Option<u32> = None;
+        let sdh = self.pps.sign_data_hiding && !bypass;
+        let (mut max_x, mut max_y) = (0usize, 0usize);
+        for i in (0..=last_sb).rev() {
+            let (xs, ys) = (sb_scan[i].0 as usize, sb_scan[i].1 as usize);
+            let mut infer_dc = false;
+            let right = if xs + 1 < sb_w { csbf[ys * 8 + xs + 1] } else { 0 };
+            let below = if ys + 1 < sb_w { csbf[(ys + 1) * 8 + xs] } else { 0 };
+            if i < last_sb && i > 0 {
+                let inc = (right | below).min(1) as usize + if c > 0 { 2 } else { 0 };
+                csbf[ys * 8 + xs] = self.c.decode_decision(CODED_SUB_BLOCK + inc) as u8;
+                infer_dc = true;
+            } else {
+                csbf[ys * 8 + xs] = 1;
+            }
+            // significance map
+            let mut list = SigList::default();
+            let start: i32 = if i == last_sb {
+                list.push(last_pos as u8);
+                last_pos as i32 - 1
+            } else {
+                15
+            };
+            if csbf[ys * 8 + xs] != 0 {
+                let params = SigMapParams { log2, c, scan_idx, xs, ys, prev_csbf: right + (below << 1), infer_dc, start };
+                self.read_sig_map(&params, &mut list);
+            }
+            if list.n == 0 {
+                continue;
+            }
+            // greater1 / greater2 flags
+            let mut ctx_set = if i == 0 || c > 0 { 0 } else { 2 };
+            if let Some(g) = prev_g1
+                && g == 0
+            {
+                ctx_set += 1;
+            }
+            let flags = self.read_greater_flags(c, ctx_set, list.n);
+            prev_g1 = Some(flags.g1ctx);
+            let values = self.read_levels(&list, &flags, sdh)?;
+            for k in 0..list.n {
+                let np = list.pos[k] as usize;
+                let (xc, yc) = (xs * 4 + pos_scan[np].0 as usize, ys * 4 + pos_scan[np].1 as usize);
+                let mut v = values[k];
+                if !bypass {
+                    let f = m.map_or(16, |m| m[yc * n + xc] as i64);
+                    v = ((v as i64 * f * scale + round) >> bd_shift).clamp(-32768, 32767) as i32;
+                }
+                self.nz[nnz] = ((yc * n + xc) as u16, v);
+                nnz += 1;
+                max_x = max_x.max(xc);
+                max_y = max_y.max(yc);
+            }
+        }
+        self.reconstruct((x0, y0), log2, c, ts, nnz, (max_x, max_y))
+    }
+
+    fn coeff_abs_level_remaining(&mut self, rice: u32) -> Result<i32> {
+        let mut prefix = 0u32;
+        while prefix < 32 && self.bypass() == 1 {
+            prefix += 1;
+        }
+        ensure!(prefix < 32, "invalid coeff_abs_level_remaining");
+        if prefix <= 3 {
+            Ok(((prefix << rice) + self.bypass_bits(rice)) as i32)
+        } else {
+            let nb = prefix - 3 + rice;
+            ensure!(nb <= 24, "coeff_abs_level_remaining too large");
+            Ok(((((1u32 << (prefix - 3)) + 2) << rice) + self.bypass_bits(nb)) as i32)
+        }
+    }
+
+    /// Transform of the scaled coefficients `nz[..nnz]` and addition to the prediction.
+    fn reconstruct(&mut self, (x0, y0): (i32, i32), log2: u32, c: usize, ts: bool, nnz: usize, (max_x, max_y): (usize, usize)) -> Result<()> {
+        let n = 1usize << log2;
+        let bd = if c == 0 { self.pic.bd_y } else { self.pic.bd_c };
+        let bypass = self.cu_transquant_bypass;
+        let dst = self.cu_intra && c == 0 && n == 4;
+        let (stride, max) = (if c == 0 { self.pic.width } else { self.pic.cwidth }, (1i32 << bd) - 1);
+        let off = y0 as usize * stride + x0 as usize;
+        let plane = &mut self.pic.planes[c];
+        let bd_shift = 20 - bd;
+        if !bypass && !ts && max_x == 0 && max_y == 0 && !dst {
+            let v = transform::inverse_dc(self.nz[0].1, bd_shift);
+            match n {
+                4 => add_dc::<S, 4>(plane, off, stride, v, max),
+                8 => add_dc::<S, 8>(plane, off, stride, v, max),
+                16 => add_dc::<S, 16>(plane, off, stride, v, max),
+                _ => add_dc::<S, 32>(plane, off, stride, v, max),
+            }
+            return Ok(());
+        }
+        // the inverse transform reads only the bounding box of the coefficients
+        let coeffs = &mut self.coeffs[..n * n];
+        if bypass || ts {
+            coeffs.fill(0);
+        } else {
+            for row in coeffs.chunks_exact_mut(n).take(max_y + 1) {
+                row[..=max_x].fill(0);
+            }
+        }
+        for &(p, v) in &self.nz[..nnz] {
+            coeffs[p as usize] = v;
+        }
+        if !bypass {
+            if ts {
+                transform::transform_skip(coeffs, n, bd_shift);
+            } else {
+                transform::inverse_transform(coeffs, n, dst, max_x, max_y, bd_shift);
+            }
+        }
+        match n {
+            4 => add_residual::<S, 4>(plane, off, stride, coeffs, max),
+            8 => add_residual::<S, 8>(plane, off, stride, coeffs, max),
+            16 => add_residual::<S, 16>(plane, off, stride, coeffs, max),
+            _ => add_residual::<S, 32>(plane, off, stride, coeffs, max),
+        }
+        Ok(())
+    }
+}
+
+#[inline(always)]
+fn add_residual<S: Sample, const N: usize>(plane: &mut [S], off: usize, stride: usize, res: &[i32], max: i32) {
+    for (y, r) in res.as_chunks::<N>().0.iter().take(N).enumerate() {
+        let row = &mut plane[off + y * stride..][..N];
+        for (s, &d) in row.iter_mut().zip(r) {
+            *s = S::from_i32((s.to_i32() + d).max(0).min(max));
+        }
+    }
+}
+
+#[inline(always)]
+fn add_dc<S: Sample, const N: usize>(plane: &mut [S], off: usize, stride: usize, v: i32, max: i32) {
+    for y in 0..N {
+        for s in &mut plane[off + y * stride..][..N] {
+            *s = S::from_i32((s.to_i32() + v).max(0).min(max));
+        }
+    }
+}

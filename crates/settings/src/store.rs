@@ -355,10 +355,13 @@ impl<T: Settings> SettingsStore<T> {
         merge_into(&mut self.doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
         set_schema_version(&mut self.doc, T::SCHEMA_VERSION);
         let text = document::render(&self.doc);
-        craft_atomic::atomic_write_with(&path, |file| {
-            restrict_permissions(file)?;
-            file.write_all(text.as_bytes())
-        })?;
+        craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private).atomic_write_with(
+            &path,
+            |file| {
+                restrict_permissions(file)?;
+                file.write_all(text.as_bytes())
+            },
+        )?;
         self.seen_text = Some(text);
         self.dirty = false;
         self.written = true;
@@ -382,6 +385,13 @@ impl<T: Settings> SettingsStore<T> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        // A blank file still parses, so adopting it below would replace this store's document --
+        // and with it every comment and unknown key the app does not manage -- with an empty one;
+        // blank text is never written as a backup either, so the content would be lost. A blank
+        // file is not an edit to adopt: keep what this store loaded and leave the file alone.
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
         let Ok(mut doc) = document::parse(&text) else {
             self.moved_aside.push(recovery::move_aside(path)?);
             return Ok(None);

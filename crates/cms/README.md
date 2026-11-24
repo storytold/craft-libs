@@ -1,0 +1,221 @@
+# Craft CMS
+
+`craft-cms` is a pure-Rust ICC colour management module for the Craft suite: profile parsing
+and writing, transforms between profiles, rendering intents, black point compensation, soft
+proofing, gamut checks, 3D LUTs and a set of built-in profiles. No C, no `unsafe`, and no
+dependency on other craft-libs crates. Implemented from the public ICC.1:2010 (v4.3) and
+ICC.1:2001-04 (v2) specifications, CIE 15, and Adobe's published black point compensation paper.
+
+Extracted from PhotoCraft's `crates/cms` at
+[`b3222ee`](https://github.com/storytold/photocraft/tree/b3222ee8e7e6bcb4799c37f904c595f20f9baf5e/crates/cms)
+(refs #36).
+
+## API
+
+```rust
+use craft_cms::{Builtin, Intent, Profile, Transform};
+
+let src = Profile::parse(&icc_bytes)?;                    // v2/v4: matrix/TRC, gray TRC, mft1/mft2/mAB/mBA
+let dst = Builtin::CoatedCmyk.profile();
+let t = Transform::new(&src, dst, Intent::RelativeColorimetric, /*bpc*/ true)?;
+t.convert_u8(&rgba8, 4, &mut cmyka8, 5, /*copy alpha*/ true)?;  // also convert_u16 / convert_f32 / apply (in place)
+let mut out = [0.0; 4];
+t.eval(&[1.0, 0.0, 0.0], &mut out)?;                       // exact single colour
+```
+
+Calls never panic on caller input: strides below the channel count, buffers that are not
+whole pixels, a destination with fewer pixels than the source, slices shorter than the
+channel count and out-of-range table or LUT dimensions return `CmsError::InvalidArgument`.
+Buffers are checked once per call, before any pixel is written.
+
+* `Transform::proof(src, proof, display, intent, bpc, simulate_paper)`: soft-proof chain.
+* `GamutCheck::new(src, proof, ΔE)`: out-of-gamut test (gamut warning).
+  `check.mask_rgba(&rgba, &mut mask)?` fills a whole mask (255 where alpha > 0 and out of gamut) on
+  the thread pool and returns the count; it needs an RGB source profile.
+* `Lut3d::from_transform(&t, 33)?.to_rgba16f_bytes()`: display transform as a 3D texture;
+  `Lut3d::from_fn(size, f)` samples any RGB function.
+* `Transform::gpu_matrix_shaper()`: accurate RGB input curves + matrix + output curves for
+  display shaders. Float tables retain near-black detail; unsupported chains return `None`
+  for the 3D LUT fallback. No GPU dependency is required by this crate.
+* `transform::cached(src, dst, opts)`: process-wide transform cache.
+* `builtin::cicp_rgb(primaries, transfer, linear)`: the RGB profile for an ITU-T H.273 colour
+  description (a HEIF `nclx` box, a video stream).
+* `lutfile::parse(name, bytes)` / `lutfile::write_cube(&lut)`: `.cube`, `.3dl` and `.look` LUT
+  files; `lutfile::builtin(id)` returns generated looks (`lutfile::BUILTIN`).
+* `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding
+  with its profile ID set.
+* `profile_id(bytes)`: the MD5 profile ID of any profile, to check a stored one.
+* `Builtin::from_profile_name(desc)`: the built-in with that description (exact match);
+  `Builtin::stand_in_for(desc)`: the built-in that approximates a profile a document names
+  when its ICC bytes are not available (see [Selecting by profile name](#selecting-by-profile-name)).
+* `Profile::same_colors(&other)`: the same colour space whatever the encoding (every sample of
+  a device grid within ΔE 0.5 through both), e.g. Photoshop's sRGB IEC61966-2.1 and the built-in
+  sRGB. `same_bytes(&other)` compares the ICC bytes. `content_hash()` is a 64-bit hash of them
+  that another profile can share: a cache key, confirmed with `same_bytes`.
+* `Profile::named_colors()`: a named-colour profile's `ncl2` table (spot-colour libraries), with
+  names joined from prefix, root and suffix, and Lab read in the legacy 16-bit encoding it uses in
+  every profile version. `NamedColors::to_device(name, dst)` converts one into a destination
+  profile, relative colorimetric.
+
+### Evaluation
+
+* Exact path: a float stage pipeline (curves, matrices, CLUTs, Lab↔XYZ, PCS encodings, BPC /
+  absolute scaling). Float buffers use it by default (`TransformOptions::precise_float`).
+* Integer buffers: matrix/TRC chains use per-code input tables + matrix + output tables indexed
+  by `x^(1/4)` (accurate near black even for pure gamma curves); chains containing a CLUT are
+  sampled into a device link (33³ for 3 inputs, 17⁴ for 4, 4096 for 1) evaluated with
+  tetrahedral interpolation (4D: linear on the first input between two tetrahedra); purely
+  analytic chains (e.g. Lab ↔ RGB) are evaluated exactly. Buffers ≥ 16k pixels run on rayon
+  (native only).
+* GPU matrix/TRC display transforms reuse the 4097-entry input curves, 3×3 matrix plus
+  offsets, and 4096-entry output curves indexed by `x^(1/4)`. Each channel is interpolated
+  separately using float texels; SDR input/output are clamped to `[0, 1]`. A final RGB
+  33³ table cannot resolve steep inverse gamma curves near black, even with float texels.
+* Rendering intents: AToB0/1/2 and BToA0/1/2 by intent with AToB0/BToA0 fallback; absolute
+  colorimetric scales by media white (`wtpt`; v2 display profiles treated as D50; a zero,
+  negative or non-finite white is refused with `CmsError::Invalid`); BPC uses
+  neutral black points (Y only) mapped linearly in XYZ.
+* White: except in absolute colorimetric (and soft proofs that simulate paper), the source's
+  device white comes out as exactly the destination's (no ink, or 1.0) on every path. LUT
+  profiles rarely put white on a grid node, so the device link's white node is set to it and
+  the exact and float paths compare each pixel with white; all other colours are left as the
+  profiles give them. With a profile whose white falls between its nodes (`coated-cmyk`: 0.4 %
+  C), the last step to white is that much larger than its neighbours.
+* Black preservation (opt-in, `BlackPreserving`): for CMYK → CMYK, a colour with exactly zero
+  C, M and Y comes out as exactly `(0, 0, 0, K')`, where `K'` is the destination black whose
+  K-only L* equals the source's (both K ramps sampled at 1024 points when the transform is
+  built, with its intent and BPC). The test is exact zero, so an input with any chromatic ink
+  takes the ordinary path. Absolute colorimetric, non-CMYK profiles and K ramps that reverse at
+  one of the 1024 samples are refused (a reversal between samples is not detected).
+
+## Built-in profiles (all CC0-1.0, generated by this crate)
+
+The profile descriptions and copyright text keep the PhotoCraft names they were first
+published with (spelled "PhotoCraft" since PhotoCraft's #5614), so profiles embedded in
+existing files still match byte for byte.
+
+| id | description |
+|---|---|
+| `srgb` | sRGB IEC61966-2.1 (Rec. 709 primaries, D65 Bradford-adapted, sRGB TRC) |
+| `display-p3` | Display P3 |
+| `adobe-rgb-compat` | Adobe RGB (1998)-compatible (published primaries, gamma 563/256) |
+| `prophoto-compat` | ProPhoto-compatible (ROMM primaries, D50, gamma 1.8) |
+| `linear-srgb` | sRGB primaries, linear |
+| `aces-cg` | ACEScg: AP1 primaries, ACES white (~D60), linear |
+| `rec2020` | Rec. 2020 primaries, Rec. 709 OETF |
+| `gray-gamma-2.2`, `sgray` | gray gamma 2.2; gray with the sRGB curve |
+| `dot-gain-20-compat` | gray, gamma 1.732, fitted to Photoshop's Dot Gain 20 % (default gray working space) |
+| `lab-d50` | Lab identity (v4 encoding) |
+| `coated-cmyk` | **PhotoCraft Coated CMYK (synthetic, 300% TAC, medium GCR)**: default CMYK |
+| `coated-fogra39` | Coated FOGRA39 (fitted, craft-cms): fitted to Fogra's FOGRA39 data, 330% TAC, medium GCR |
+
+### The CMYK profiles
+
+Adobe's CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39) are proprietary, and the freely
+downloadable characterisation-based profiles (ECI/FOGRA, colord, Ghostscript) carry
+redistribution conditions or unclear licences, so this crate generates its own. Both share the
+separation code in `src/synth.rs`: GCR black generation (starts at 20 % gray component, K max
+95 %), a bounded least-squares CMY solve under the total ink limit, and perceptual tables with
+L* black-point scaling and soft chroma compression against a sampled gamut boundary.
+
+**`coated-cmyk`** (`profiles/photocraft-coated-cmyk.icc`, 237 KB, AToB 11⁴ lut16, BToA 21³
+lut16) comes from a Yule–Nielsen modified Neugebauer model (n = 2) over the 16 overprints with
+ISO 12647-2 coated-paper Lab aims for paper/C/M/Y/RGB overprints, parabolic dot gain (14 % CMY,
+17 % K at 50 %) and a 300 % ink limit. It is a plausible coated-offset profile, not a measured
+characterisation: its midtones are darker than FOGRA39 (mean ΔE00 6.7 against the FOGRA39
+patches, oranges such as 0/50/100/0 about 5 ΔE00 off).
+
+**`coated-fogra39`** (`profiles/craft-coated-fogra39.icc`, 713 KB, AToB 11⁴ lut16, BToA 33³
+lut16, 330 % ink limit) reproduces the colours of documents set up for Coated FOGRA39 or ISO
+Coated v2. It is fitted to Fogra's FOGRA39 characterisation data (`tests/data/FOGRA39.txt`,
+1617 IT8.7/4 patches, CMYK with D50 XYZ and Lab; ISO 12647-2:2004 Amd 1 offset on paper type
+1/2): a Yule–Nielsen modified Neugebauer model with free overprints, per-ink tone curves and a
+fitted n (1.45) is solved by least squares against all patches (mean ΔE00 1.1 on its own), then
+a Gaussian-kernel ridge regression of the remaining Lab errors over CMYK (σ = 0.2, λ = 0.01)
+corrects it before the AToB table is sampled, with no ink mapped to exactly L* 100,
+a* = b* = 0. The BToA tables invert that AToB table; their input curves put that white on a
+grid node holding no ink (`CmykParams::white_on_node`), so the profile separates PCS white to
+within 2·10⁻⁵ ink on its own.
+
+| Through the AToB, relative colorimetric, against the 1617 FOGRA39 patches | mean ΔE00 | p95 | max |
+|---|---|---|---|
+| `coated-fogra39` | 0.07 | 0.18 | 0.53 |
+| `coated-fogra39` fit, against the 10 % of patches held out of it | 0.11 | 0.32 | 0.79 |
+| `coated-cmyk` | 6.67 | 13.4 | 16.1 |
+
+Lab → CMYK → Lab through the profile (relative colorimetric) returns colours inside the gamut
+within mean ΔE00 0.24 (p95 1.07, max 2.55). Converted to sRGB (relative colorimetric with black
+point compensation), process solids, overprints and oranges land within 0.8 ΔE00 of reference
+values for Coated FOGRA39 (`tests/fogra39.rs`).
+
+"FOGRA39" identifies the reference data the profile is fitted to; it does not imply
+certification, approval or endorsement by Fogra. The data file is Fogra's, distributed
+unmodified with Fogra identified as the source as Fogra's terms require (see `NOTICE`); it is
+left out of the published crate, as only the tests read it.
+
+Regenerate the profiles with
+
+```sh
+CRAFT_CMS_REGEN_PROFILES=1 cargo test -p craft-cms --release --test regen --test fogra39
+```
+
+Use your printer's profile for production print.
+
+### Selecting by profile name
+
+Use the ICC bytes a document embeds or a user loads whenever there are any. When a document
+only names its profile (its `desc` tag), two functions map the name to a built-in, ignoring
+case and whitespace:
+
+* `Builtin::from_profile_name`: exact matches only, a built-in's own description.
+* `Builtin::stand_in_for`: the exact match, else a built-in that approximates the named
+  profile.
+
+| Name in the document | `from_profile_name` | `stand_in_for` |
+|---|---|---|
+| each built-in's own description (e.g. sRGB IEC61966-2.1) | that built-in | that built-in |
+| Coated FOGRA39 (ISO 12647-2:2004), Coated FOGRA39 | `None` | `coated-fogra39` |
+| ISO Coated v2 (ECI) | `None` | `coated-fogra39` |
+| ISO Coated v2 300% (ECI) | `None` | `None` |
+| anything else | `None` | `None` |
+
+The stand-ins are made from the same characterisation data as the named profiles: ECI's ISO
+Coated v2 is made from FOGRA39L, the data of Adobe's Coated FOGRA39. They describe the same
+printed colours. The built-in separates to at most 330 % total ink, the limit of ISO Coated v2
+(Adobe doesn't publish Coated FOGRA39's). Black generation and ink distribution differ, so
+separations through a stand-in are not the named profile's. ISO Coated v2 300% (ECI) has no
+stand-in: the built-in separates to up to 330 % total ink.
+
+### Display transforms
+
+Page-layout and image editors usually convert CMYK for display with relative colorimetric and
+black point compensation. To match them, keep BPC on (the `TransformOptions` default):
+
+```rust
+use craft_cms::{Builtin, Intent, Profile, Transform};
+
+// The document's own profile first; a stand-in only when it carries no ICC bytes.
+let parsed;
+let cmyk: &Profile = match doc_icc_bytes {
+    Some(bytes) => {
+        parsed = Profile::parse(bytes)?;
+        &parsed
+    }
+    None => match Builtin::stand_in_for(&doc_profile_name) {
+        Some(b) => b.profile(),
+        None => return Err(UnknownProfile(doc_profile_name)), // e.g. ask the user for the profile
+    },
+};
+let t = Transform::new(cmyk, Builtin::Srgb.profile(), Intent::RelativeColorimetric, /*bpc*/ true)?;
+// or: transform::cached(src, dst, TransformOptions::default())
+```
+
+## Not implemented / approximate
+
+* v4.4 `mpet` (multiProcessElements, D2Bx/B2Dx) tags, named colour, device link and abstract
+  profiles as transform endpoints (a named-colour table is read through `named_colors()`, but
+  the profile is not a transform endpoint), `chad`-based adaptation of v2 absolute colorimetry.
+* BPC destination black uses the BToA/AToB round trip directly (Adobe's curve fit for
+  ill-behaved LUT profiles is not implemented); v2/v4 perceptual reference black mixing is not
+  modelled beyond the PRMG black for v4 LUT profiles.
+* Profile ID (MD5) is not computed when writing (left zero, which the spec allows).

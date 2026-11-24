@@ -1,0 +1,51 @@
+{
+  "id": "S10",
+  "title": "Isolated group: M100 Multiply over Y100, both over a C100 backdrop",
+  "source": "research S10",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "group",
+      "isolated": true,
+      "objects": [
+        {"type": "rect", "rect": [60, 50, 120, 116], "fill": {"cmyk": [0, 0, 100, 0]}},
+        {
+          "type": "rect",
+          "rect": [120, 50, 160, 116],
+          "fill": {"cmyk": [0, 100, 0, 0]},
+          "blend": "multiply"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [90, 108], "inks": {"Yellow": 100}, "tol": 2, "note": "yellow knocks out cyan"},
+      {
+        "at": [150, 108],
+        "inks": {"Yellow": 100, "Magenta": 100},
+        "tol": 6,
+        "note": "Multiply with a group member"
+      },
+      {
+        "at": [250, 108],
+        "inks": {"Magenta": 100},
+        "tol": 6,
+        "note": "Multiply over the group's transparent backdrop: no cyan (non-isolated would give C100 M100)"
+      },
+      {"at": [320, 108], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "isolated": true,
+    "group_cs": ["none"],
+    "blend_modes": ["Multiply"],
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

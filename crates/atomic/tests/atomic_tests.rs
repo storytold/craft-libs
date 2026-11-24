@@ -1,5 +1,5 @@
 #[cfg(unix)]
-use craft_atomic::{atomic_write, write_new};
+use craft_atomic::{NewFilePermissions, WriteOptions, atomic_write, write_new};
 use craft_atomic::{atomic_write_with, or_plain_fsync, write_new_with};
 use std::cell::Cell;
 use std::io::{self, Write};
@@ -204,11 +204,12 @@ fn private_staging_preserves_existing_modes_after_callback() -> io::Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn new_files_start_private_and_keep_callback_permissions() -> io::Result<()> {
+fn explicit_private_files_keep_callback_permissions() -> io::Result<()> {
     use std::fs::Permissions;
     use std::os::unix::fs::PermissionsExt;
 
     let d = TempDir::new("private_new");
+    let options = WriteOptions::default().with_new_file_permissions(NewFilePermissions::Private);
     for exclusive in [false, true] {
         let p = d.0.join(format!("new-{exclusive}.craft"));
         let fill = |f: &mut std::fs::File| {
@@ -218,9 +219,9 @@ fn new_files_start_private_and_keep_callback_permissions() -> io::Result<()> {
             f.set_permissions(Permissions::from_mode(0o640))
         };
         if exclusive {
-            write_new_with(&p, fill)?;
+            options.write_new_with(&p, fill)?;
         } else {
-            atomic_write_with(&p, fill)?;
+            options.atomic_write_with(&p, fill)?;
         }
         assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o777, 0o640);
         assert_eq!(std::fs::read(&p)?, b"new payload");
@@ -228,9 +229,9 @@ fn new_files_start_private_and_keep_callback_permissions() -> io::Result<()> {
     for exclusive in [false, true] {
         let p = d.0.join(format!("default-{exclusive}.craft"));
         if exclusive {
-            write_new(&p, b"private by default")?;
+            options.write_new(&p, b"explicitly private")?;
         } else {
-            atomic_write(&p, b"private by default")?;
+            options.atomic_write(&p, b"explicitly private")?;
         }
         assert_eq!(std::fs::metadata(&p)?.permissions().mode() & 0o777, 0o600);
     }
