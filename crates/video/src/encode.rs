@@ -2,7 +2,7 @@
 //! The encoding counterpart of [`crate::TrackDecoder`].
 
 use crate::error::VideoError;
-use crate::frame::{ColorFamily, ColorTags, Plane, Subsampling, VideoFrame};
+use crate::frame::{ColorFamily, ColorTags, Plane, VideoFrame};
 use craft_media::{CodecId, CodecParams};
 
 /// One encoded video packet produced by [`TrackEncoder`].
@@ -450,7 +450,8 @@ impl TrackEncoder {
                     enc.encode16(&input, pts)?
                 } else {
                     let yuv = frame_to_yuv420_u8(frame)?;
-                    let input = crate::h264::YuvFrame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: yuv.y_stride, uv_stride: yuv.uv_stride };
+                    let (ys, cs) = packed_420_strides(frame);
+                    let input = crate::h264::YuvFrame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: ys, uv_stride: cs };
                     enc.encode(&input, pts)?
                 };
                 Ok(packets.into_iter().map(|p| EncodedPacket { data: p.data, pts: p.pts, dts: p.dts, keyframe: p.keyframe }).collect())
@@ -489,7 +490,8 @@ impl TrackEncoder {
             #[cfg(feature = "mpeg2-encode")]
             Inner::Mpeg2 { enc, fps_den, next_pts, .. } => {
                 let yuv = frame_to_yuv420_u8(frame)?;
-                let input = crate::mpeg2::encode::YuvFrame { y: &yuv.y, cb: &yuv.u, cr: &yuv.v, y_stride: yuv.y_stride, c_stride: yuv.uv_stride };
+                let (ys, cs) = packed_420_strides(frame);
+                let input = crate::mpeg2::encode::YuvFrame { y: &yuv.y, cb: &yuv.u, cr: &yuv.v, y_stride: ys, c_stride: cs };
                 let use_pts = if *next_pts == 0 { pts } else { (*next_pts).max(pts) };
                 *next_pts = use_pts.saturating_add((*fps_den).max(1));
                 let packets = enc.encode(&input, use_pts)?;
@@ -498,7 +500,8 @@ impl TrackEncoder {
             #[cfg(feature = "mpeg4-encode")]
             Inner::Mpeg4(enc) => {
                 let yuv = frame_to_yuv420_u8(frame)?;
-                let input = crate::mpeg4::YuvFrame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: yuv.y_stride, uv_stride: yuv.uv_stride };
+                let (ys, cs) = packed_420_strides(frame);
+                let input = crate::mpeg4::YuvFrame { y: &yuv.y, u: &yuv.u, v: &yuv.v, y_stride: ys, uv_stride: cs };
                 let pkt = enc.encode(&input)?;
                 Ok(vec![EncodedPacket { data: pkt.data, pts, dts: pts, keyframe: pkt.keyframe }])
             }
@@ -657,8 +660,13 @@ struct PlanarYuv8 {
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
-    y_stride: usize,
-    uv_stride: usize,
+}
+
+/// Row strides of the packed 4:2:0 planes of `frame`: luma, then chroma.
+#[cfg(any(feature = "h264-encode", feature = "mpeg2-encode", feature = "mpeg4-encode"))]
+fn packed_420_strides(frame: &VideoFrame) -> (usize, usize) {
+    let w = frame.width() as usize;
+    (w, w.div_ceil(2))
 }
 
 #[cfg(any(feature = "h264-encode", feature = "hevc-encode", feature = "av1-encode"))]
@@ -716,6 +724,7 @@ fn luma_matrix(color: ColorTags) -> (f64, f64, f64) {
 
 #[cfg(any(feature = "h264-encode", feature = "vp9-encode", feature = "mpeg2-encode", feature = "mpeg4-encode"))]
 fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
+    use crate::frame::Subsampling;
     let w = frame.width();
     let h = frame.height();
     let (cw, ch) = Subsampling::S420.chroma_size(w, h);
@@ -746,7 +755,7 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
                     v.push(sample_at_depth(pv, lx, ly, 8) as u8);
                 }
             }
-            Ok(PlanarYuv8 { y, u, v, y_stride: w_usize, uv_stride: cw_usize })
+            Ok(PlanarYuv8 { y, u, v })
         }
         ColorFamily::Gray => {
             let py = frame.plane(0).ok_or_else(|| VideoError::Malformed("missing gray plane".into()))?;
@@ -758,7 +767,7 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
             }
             let u = vec![128u8; cw_usize * ch_usize];
             let v = vec![128u8; cw_usize * ch_usize];
-            Ok(PlanarYuv8 { y, u, v, y_stride: w_usize, uv_stride: cw_usize })
+            Ok(PlanarYuv8 { y, u, v })
         }
         ColorFamily::Rgb => {
             let pr = frame.plane(0).ok_or_else(|| VideoError::Malformed("missing R plane".into()))?;
@@ -802,13 +811,14 @@ fn frame_to_yuv420_u8(frame: &VideoFrame) -> Result<PlanarYuv8, VideoError> {
                     v.push(v_val);
                 }
             }
-            Ok(PlanarYuv8 { y, u, v, y_stride: w_usize, uv_stride: cw_usize })
+            Ok(PlanarYuv8 { y, u, v })
         }
     }
 }
 
 #[cfg(any(feature = "h264-encode", feature = "hevc-encode", feature = "av1-encode"))]
 fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv16, VideoError> {
+    use crate::frame::Subsampling;
     let w = frame.width();
     let h = frame.height();
     let (cw, ch) = Subsampling::S420.chroma_size(w, h);
@@ -913,6 +923,7 @@ fn frame_to_yuv420_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv
 
 #[cfg(any(feature = "prores", feature = "dnx", feature = "apv-encode"))]
 fn frame_to_yuv422_u16(frame: &VideoFrame, target_depth: u8) -> Result<PlanarYuv422_16, VideoError> {
+    use crate::frame::Subsampling;
     let w = frame.width();
     let h = frame.height();
     let (cw, ch) = Subsampling::S422.chroma_size(w, h);
@@ -1091,7 +1102,7 @@ fn frame_to_rgba8(frame: &VideoFrame) -> Result<Vec<u8>, VideoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::Samples;
+    use crate::frame::{Samples, Subsampling};
 
     fn test_ycbcr_frame(width: u32, height: u32) -> VideoFrame {
         let (cw, ch) = Subsampling::S420.chroma_size(width, height);
