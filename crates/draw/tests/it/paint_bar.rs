@@ -221,6 +221,18 @@ fn shows_digits(fixture: &Fixture, label: &str) -> bool {
     fixture.texts().iter().any(|run| field.rect.intersects(run.rect) && run.text.chars().any(|c| c.is_ascii_digit()))
 }
 
+/// The number the bar's percent control named `label` reports to assistive technology, in shown percent; `None` when
+/// the field has no number to read.
+fn shown_number(fixture: &Fixture, label: &str) -> Option<f64> {
+    fixture.tree().numeric_of(control(fixture, label).node).and_then(|numeric| numeric.value)
+}
+
+/// The middle of the bar's painted caption named `label`: the scrub handle a drag starts on.
+fn handle_of(fixture: &Fixture, label: &str) -> Pos2 {
+    let caption = fixture.texts().iter().find(|painted| painted.text == label).unwrap_or_else(|| panic!("the bar shows the {label} caption"));
+    caption.rect.center()
+}
+
 /// Types `text` into the bar's percent field named `label` and commits it with Enter.
 fn type_into(fixture: &mut Fixture, label: &str, text: &str) {
     let field = fixture.visible(&control(fixture, label)).expect("the field is on screen");
@@ -329,6 +341,8 @@ fn the_mixer_mix_field_blanks_and_closes_while_wet_is_zero_and_reopens_with_its_
     assert!(shows_digits(&fixture, "Wet"), "the trial reads a field that shows its number");
     assert!(fixture.tree().is_disabled_key(control(&fixture, "Mix").node), "Mix is greyed out while Wet is 0");
     assert!(!shows_digits(&fixture, "Mix"), "and shows an empty field");
+    assert_eq!(shown_number(&fixture, "Mix"), None, "while closed the field reports no number to assistive technology");
+    assert_eq!(fixture.tree().value_of(control(&fixture, "Mix").node), Some(""), "and its text value is empty");
     let held = host.borrow();
     assert_eq!(held.values.mixer.mix, 0.5, "the closed field keeps its value");
     assert!(held.edits.is_empty(), "showing a closed field edits nothing");
@@ -337,8 +351,38 @@ fn the_mixer_mix_field_blanks_and_closes_while_wet_is_zero_and_reopens_with_its_
     type_into(&mut fixture, "Wet", "40");
     assert!(!fixture.tree().is_disabled_key(control(&fixture, "Mix").node), "Mix opens again while Wet is above 0");
     assert!(shows_digits(&fixture, "Mix"), "and shows its number again");
+    assert_eq!(shown_number(&fixture, "Mix"), Some(50.0), "and reads 50 % out again");
     let host = host.borrow();
     assert_eq!((host.values.mixer.wet, host.values.mixer.mix), (0.4, 0.5), "Wet took the typed value, Mix kept its own");
+}
+
+/// The side handle is the other path a percent value moves by, and it follows the same two rules: the closed Mix
+/// handle scrubs nothing, and a Load handle dragged down from 5 % stops at 1 %. A scrub keeps its value inside the
+/// range without a range report, which only a typed entry past it earns.
+#[trial]
+fn a_scrub_on_the_side_handle_keeps_the_closed_field_still_and_stops_at_one_percent() {
+    let (mut fixture, host) = harness(PaintTool::MixerBrush, EraserMode::Brush, |v| {
+        v.mixer.wet = 0.0;
+        v.mixer.mix = 0.5;
+    });
+    page_to_end(&mut fixture);
+    fixture.drag_at(handle_of(&fixture, "Mix"), egui::Vec2::new(-120.0, 0.0)).settle();
+    fixture.idle(3);
+    let host = host.borrow();
+    assert_eq!(host.values.mixer.mix, 0.5, "a drag on the closed Mix handle changes nothing");
+    assert!(host.edits.is_empty(), "and asks for no edit: {} events", host.edits.len());
+    assert!(host.alerts.is_empty(), "nor reports a range: {:?}", host.alerts);
+    drop(host);
+
+    let (mut fixture, host) = harness(PaintTool::MixerBrush, EraserMode::Brush, |v| v.mixer.load = 0.05);
+    page_to_end(&mut fixture);
+    assert_eq!(shown_number(&fixture, "Load"), Some(5.0), "the field starts at 5 %");
+    fixture.drag_at(handle_of(&fixture, "Load"), egui::Vec2::new(-120.0, 0.0)).settle();
+    fixture.idle(3);
+    let host = host.borrow();
+    assert_eq!(host.values.mixer.load, 0.01, "a scrub down past 1 % stops at 1 %");
+    assert_eq!(shown_number(&fixture, "Load"), Some(1.0), "and the field reads 1 %");
+    assert!(host.alerts.is_empty(), "a scrub is not a typed entry past the range: {:?}", host.alerts);
 }
 
 /// Measured: the five Mixer Brush controls carry these tooltips, as the accessible description of the control and as
