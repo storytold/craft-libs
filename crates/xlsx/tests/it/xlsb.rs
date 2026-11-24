@@ -354,6 +354,11 @@ fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
 #[test]
 fn more_than_a_million_cells_open() {
     // storytold/gridcraft#2126: a million cells over the workbook was a quarter of what `.xls` allows.
+    assert!(Limits::default().binary_cells > 1_000_000);
+    // Reading that many cells: nightly only.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     let wb = read(&file(&worksheet(&bool_cells(1_000_001, 16), &[]))).unwrap();
     assert_eq!(wb.sheets[0].cells.len(), 1_000_001);
     assert_eq!(wb.sheets[0].value(CellRef::new(62_500, 0)), Value::Bool(true));

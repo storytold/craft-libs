@@ -179,7 +179,8 @@ fn many_fields_and_huge_attribute_values() {
 /// limit error, or the extras are dropped and the text survives (#3702, WC-06).
 #[test]
 fn millions_of_attributes_on_one_paragraph_are_capped() {
-    let attrs: String = (0..2_000_000).map(|i| format!(" a{i}=\"\"")).collect();
+    // The gate reads a fraction of the attributes; nightly all of them.
+    let attrs: String = (0..2_000_000 / craft_testkit::hostile::divisor()).map(|i| format!(" a{i}=\"\"")).collect();
     let x = format!("<w:document {W_NS}><w:body><w:p{attrs}><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
     // Only the read is timed: deflating the test input in a debug build is not what is bounded.
     let z = doc_zip(x.as_bytes());
@@ -253,7 +254,7 @@ fn malformed_or_hostile_bibliography_never_panics() {
 fn hostile_bibliography_source_count_is_capped() {
     let doc = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>body</w:t></w:r></w:p></w:body></w:document>");
     let mut sources = String::from(r#"<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography" StyleName="MLA">"#);
-    for i in 0..60_000 {
+    for i in 0..(60_000 / craft_testkit::hostile::divisor()).max(10_500) {
         sources.push_str(&format!("<b:Source><b:Tag>T{i}</b:Tag><b:Title>Title {i}</b:Title></b:Source>"));
         // Untagged duplicates all collapse into one source.
         sources.push_str("<b:Source><b:Title>Same</b:Title></b:Source>");
