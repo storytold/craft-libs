@@ -53,9 +53,6 @@ pub(super) fn parse_config<'a>(raw: &'a str, budget: &mut usize, keep_going: &dy
     }
     let mut reader = Reader { raw, pos: 0, nodes: 0, budget, keep_going, next_check: 0 };
     let forms = reader.sequence(0, false)?;
-    if forms.iter().any(|form| form.head().is_none()) {
-        return Err("effect configuration must contain named lists".into());
-    }
     Ok(Config { raw, forms })
 }
 
@@ -154,6 +151,9 @@ impl<'a> Reader<'a, '_> {
                 Some(')') => return Err("effect configuration has an unmatched closing parenthesis".into()),
                 _ => {}
             }
+            if depth == 0 && self.peek() != Some('(') {
+                return Err("effect configuration must contain named lists".into());
+            }
             self.nodes = self.nodes.checked_add(1).ok_or_else(|| "effect configuration node count overflow".to_string())?;
             if self.nodes > MAX_NODES {
                 return Err("effect configuration exceeds 8,192 syntax nodes".into());
@@ -164,10 +164,22 @@ impl<'a> Reader<'a, '_> {
                     self.advance('(')?;
                     ConfigExpr::List(self.sequence(depth + 1, true)?)
                 }
-                Some('"') => self.string()?,
+                Some('"') => {
+                    // Observed GimpConfig color tuples hold encoding, sample count,
+                    // sample bytes, profile count and optional profile bytes. Their
+                    // binary roles do not depend on whether octets happen to be UTF-8.
+                    let binary = matches!(items.first(), Some(ConfigExpr::Symbol("color")))
+                        && matches!(items.get(1), Some(ConfigExpr::String(_)))
+                        && ((items.len() == 3 && matches!(items.get(2), Some(ConfigExpr::Number(_))))
+                            || (items.len() == 5 && matches!(items.get(4), Some(ConfigExpr::Number(_)))));
+                    self.string(binary)?
+                }
                 Some(_) => self.atom()?,
                 None => return Err("effect configuration ended unexpectedly".into()),
             };
+            if (depth == 0 && item.head().is_none()) || (depth == 1 && items.is_empty() && !matches!(item, ConfigExpr::Symbol(_))) {
+                return Err("effect configuration must contain named lists".into());
+            }
             items.push(item);
         }
     }
@@ -198,13 +210,16 @@ impl<'a> Reader<'a, '_> {
     }
 
     /// Decodes bounded quoted text and octal bytes, preserving binary payloads instead of forcing invalid UTF-8 into text.
-    fn string(&mut self) -> std::result::Result<ConfigExpr<'a>, ConfigError> {
+    fn string(&mut self, binary: bool) -> std::result::Result<ConfigExpr<'a>, ConfigError> {
         self.advance('"')?;
         let mut text = Vec::new();
         loop {
             let character = self.peek().ok_or_else(|| "effect configuration has an unterminated string".to_string())?;
             self.advance(character)?;
             if character == '"' {
+                if binary {
+                    return Ok(ConfigExpr::Bytes(text));
+                }
                 return Ok(match String::from_utf8(text) {
                     Ok(text) if !text.contains('\0') => ConfigExpr::String(text),
                     Ok(text) => ConfigExpr::Bytes(text.into_bytes()),
@@ -296,5 +311,16 @@ mod tests {
             assert!(matches!(inner[1], ConfigExpr::Number(n) if n == index as f64));
         }
         assert_eq!(before - budget, slots * std::mem::size_of::<ConfigExpr<'_>>());
+    }
+    #[test]
+    fn color_sample_and_profile_roles_preserve_utf8_octets_without_retyping_text() {
+        // Wire shape observed in the archived producer's effect config color tuples.
+        let raw = r#"(foreground (color "RGB u8" 3 "\101\102\103" 3 "icc")) (label "\101\102\103")"#;
+        let parsed = parse_config(raw, &mut (1 << 20), &|| true).unwrap();
+        let tuple = parsed.forms[0].as_list().unwrap()[1].as_list().unwrap();
+        assert!(matches!(&tuple[1], ConfigExpr::String(v) if v == "RGB u8"));
+        assert!(matches!(&tuple[3], ConfigExpr::Bytes(v) if v == b"ABC"));
+        assert!(matches!(&tuple[5], ConfigExpr::Bytes(v) if v == b"icc"));
+        assert!(matches!(&parsed.forms[1].as_list().unwrap()[1], ConfigExpr::String(v) if v == "ABC"));
     }
 }

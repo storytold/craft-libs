@@ -247,7 +247,11 @@ fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize, work: &m
             }
             ArgumentValue::Float(value)
         }
-        4 => ArgumentValue::String(string(cursor, work)?),
+        4 => {
+            let null = cursor.b.get(cursor.pos..) == Some(&[0; 4]);
+            let text = string(cursor, work)?;
+            if null { ArgumentValue::NullString } else { ArgumentValue::String(text) }
+        }
         5 => ArgumentValue::Enum(cursor.u32()? as i32),
         6 => {
             let raw = string(cursor, work)?;
@@ -259,11 +263,14 @@ fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize, work: &m
         }
         7 => ArgumentValue::UInt(cursor.u32()?),
         // Before 3.2 a null color has no bytes; later files use a zero word.
-        8 if cursor.pos == cursor.b.len() => ArgumentValue::Color(None),
+        8 if cursor.b.get(cursor.pos..).is_some_and(|bytes| bytes.is_empty() || bytes == [0; 4]) => {
+            cursor.pos = cursor.b.len();
+            ArgumentValue::Color(None)
+        }
         8 => {
             let encoding = string(cursor, work)?;
             if encoding.is_empty() {
-                ArgumentValue::Color(None)
+                return Err(invalid("effect color has an empty encoding"));
             } else {
                 let count = cursor.u32()? as usize;
                 if count > 256 {

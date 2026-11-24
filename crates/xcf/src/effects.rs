@@ -221,12 +221,21 @@ pub enum ArgumentValue<'a> {
     UInt(u32),
     Bool(bool),
     Float(f32),
+    /// A zero-length wire string; distinct from a one-NUL empty string.
+    NullString,
     String(&'a str),
     Enum(i32),
     Config(Config<'a>),
     Color(Option<ColorLiteral<'a>>),
-    Unknown { kind: u32, bytes: &'a [u8] },
-    Invalid { kind: u32, bytes: &'a [u8], message: String },
+    Unknown {
+        kind: u32,
+        bytes: &'a [u8],
+    },
+    Invalid {
+        kind: u32,
+        bytes: &'a [u8],
+        message: String,
+    },
 }
 
 /// Typed source color bytes and their own profile. No implicit document ICC.

@@ -113,3 +113,19 @@ fn cancellation_is_checked_before_lookup_and_during_pointer_traversal() {
     assert!(budget.remaining_work() < 4096);
     assert!(budget.remaining_storage() < 4096, "fatal cancellation retains provisional charges");
 }
+
+#[test]
+fn pointer_retention_rolls_back_after_later_work_or_framing_failure() {
+    let (bytes, _, _) = fixture(26, &[8, 123]);
+    let xcf = crate::Xcf::parse(&bytes).unwrap();
+    // The lookup and first wide pointer are priced before the second attempt.
+    let mut budget = Budget::new(4096, 2 * std::mem::size_of::<usize>() + 24);
+    assert!(matches!(xcf.layer_effects(0, &mut budget, &|| true), Err(Error::Limit(Limit::Work))));
+    assert_eq!(budget.remaining_storage(), 4096);
+    assert_eq!(budget.remaining_work(), 0);
+    let bytes = 8u64.to_be_bytes(); // first pointer retained, missing terminator
+    let mut budget = Budget::new(4096, 4096);
+    assert!(matches!(Reader::new(&bytes, 26).pointers(0, &mut budget, &|| true), Err(Error::Source(_))));
+    assert_eq!(budget.remaining_storage(), 4096);
+    assert!(budget.remaining_work() < 4096);
+}

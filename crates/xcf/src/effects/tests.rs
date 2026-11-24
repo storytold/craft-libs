@@ -79,7 +79,7 @@ fn arguments_preserve_order_duplicate_names_types_and_borrowed_unknown_bytes() {
             ("label", 4, text_value("original")),
             ("enum", 5, (-3i32).to_be_bytes().to_vec()),
             ("raw", 999, vec![0xde, 0xad]),
-            ("missing-color", 8, text_value("")),
+            ("missing-color", 8, vec![0; 4]),
         ],
     );
     let parsed = read(&bytes, 26).record;
@@ -354,5 +354,39 @@ fn repeated_decodable_pointers_keep_both_applications_and_the_later_record() {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, [1, 1, 2]);
+    }
+}
+
+#[test]
+fn string_null_and_empty_and_color_empty_encoding_remain_distinct() {
+    for version in [20, 26] {
+        let bytes = effect(
+            version,
+            &[
+                ("null-text", 4, vec![0; 4]),
+                ("empty-text", 4, text_value("")),
+                ("empty-color-encoding", 8, text_value("")),
+                ("null-color", 8, vec![0; 4]),
+                ("later", 1, 7u32.to_be_bytes().to_vec()),
+            ],
+        );
+        let parsed = read(&bytes, version).record;
+        assert!(matches!(parsed.arguments[0].value, ArgumentValue::NullString));
+        assert!(matches!(parsed.arguments[1].value, ArgumentValue::String("")));
+        assert!(matches!(parsed.arguments[2].value, ArgumentValue::Invalid { .. }));
+        assert!(matches!(parsed.arguments[3].value, ArgumentValue::Color(None)));
+        assert!(matches!(parsed.arguments[4].value, ArgumentValue::Int(7)));
+        assert_eq!(parsed.raw, &bytes[8..]);
+    }
+}
+
+#[test]
+fn malformed_first_config_form_does_not_spend_retention_on_the_suffix() {
+    for first in ["()", "(1)", "not-a-list"] {
+        let raw = format!("{first} {}", "(x) ".repeat(100));
+        let bytes = effect(26, &[("config", 6, text_value(&raw)), ("later", 1, 7u32.to_be_bytes().to_vec())]);
+        let parsed = Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::new(2048, 1 << 20), &|| true).unwrap().record;
+        assert!(matches!(&parsed.arguments[0].value, ArgumentValue::Invalid { message, .. } if message.contains("named lists")));
+        assert!(matches!(parsed.arguments[1].value, ArgumentValue::Int(7)));
     }
 }
