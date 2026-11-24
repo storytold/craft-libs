@@ -663,3 +663,67 @@ fn a_user_unit_field_limit_precedes_utf8_and_nul_validation() {
         }
     }
 }
+
+/// A STRING field exactly as stored, including any intentionally absent terminator.
+fn parasite_with_wire_name(name: &[u8], payload: &[u8]) -> Vec<u8> {
+    [(name.len() as u32).to_be_bytes().as_slice(), name, &7u32.to_be_bytes(), (payload.len() as u32).to_be_bytes().as_slice(), payload].concat()
+}
+
+#[test]
+fn unterminated_parasite_names_cannot_replace_recognized_typed_evidence() {
+    let profile = parasite(b"icc-profile", b"kept profile");
+    let comment = parasite(b"gimp-comment", b"kept comment");
+    for name in [b"icc-profile".as_slice(), b"gimp-comment", b"exif-data", b"gimp-image-metadata", b"gimp-metadata"] {
+        let invalid = parasite_with_wire_name(name, b"must stay raw");
+        let payload = [profile.clone(), comment.clone(), invalid.clone()].concat();
+        let bytes = [property(21, &payload), property(0, &[])].concat();
+        let raw = properties(&bytes);
+        let nested = super::super::parasites(&payload, 8, RecordLimits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(nested.stopped.is_none());
+        assert_eq!(nested.records[2].name, name);
+        assert_eq!(nested.records[2].raw, invalid);
+        let result = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(result.complete());
+        assert_eq!(result.parasite_stopped, None);
+        assert_eq!(result.parasite_typed_stopped, None);
+        assert_eq!(result.profile.unwrap().value, b"kept profile");
+        assert_eq!(result.packets.len(), 1);
+        assert_eq!(result.packets[0].value.bytes, b"kept comment");
+        assert_eq!(result.issues, [Issue { offset: 0, property_kind: 21, kind: IssueKind::InvalidValue }]);
+    }
+}
+
+#[test]
+fn parasite_name_framing_keeps_empty_and_opaque_names_without_utf8_conversion() {
+    let payload = [
+        parasite_with_wire_name(b"", b"zero-length name"),
+        parasite_with_wire_name(b"\0", b"empty terminated name"),
+        parasite_with_wire_name(&[0xff, 0], b"opaque name"),
+        parasite(b"icc-profile", b"first profile"),
+        parasite(b"icc-profile", b"last valid profile"),
+    ]
+    .concat();
+    let bytes = [property(21, &payload), property(0, &[])].concat();
+    let result = image(&properties(&bytes), Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(result.complete());
+    assert!(result.issues.is_empty());
+    assert_eq!(result.profile.unwrap().value, b"last valid profile");
+    let raw = super::super::parasites(&payload, 8, RecordLimits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(raw.records[2].name, &[0xff]);
+    assert_eq!(raw.records[2].raw, parasite_with_wire_name(&[0xff, 0], b"opaque name"));
+}
+
+#[test]
+fn an_unretained_name_issue_preserves_separate_typed_and_raw_parasite_stops() {
+    let valid = parasite(b"icc-profile", b"kept");
+    let invalid = parasite_with_wire_name(b"icc-profile", b"not a replacement");
+    let payload = [valid.clone(), invalid.clone(), vec![0, 0, 0]].concat();
+    let bytes = [property(21, &payload), property(0, &[])].concat();
+    let result = image(&properties(&bytes), Limits { issues: 0, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+    assert!(!result.complete());
+    assert_eq!(result.profile.unwrap().value, b"kept");
+    assert!(result.issues.is_empty());
+    assert_eq!(result.stopped, Some(Diagnostic { offset: 0, ordinal: 0, reason: StopReason::RecordLimit }));
+    assert_eq!(result.parasite_typed_stopped, Some(Diagnostic { offset: 8 + valid.len(), ordinal: 1, reason: StopReason::RecordLimit }));
+    assert_eq!(result.parasite_stopped, Some(Diagnostic { offset: 8 + valid.len() + invalid.len(), ordinal: 2, reason: StopReason::Malformed }));
+}

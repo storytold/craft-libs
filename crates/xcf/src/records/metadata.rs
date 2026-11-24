@@ -178,7 +178,22 @@ impl Reader<'_> {
         self.retain(issues, Issue { offset: property.offset, property_kind: property.kind, kind }, self.limits.issues)
     }
 
+    fn parasite_name_terminated(&mut self, record: &super::Parasite<'_>) -> ReadResult<bool> {
+        // The raw scanner deliberately keeps malformed names. Check the original field,
+        // not the stripped alias, before it can replace recognized typed evidence.
+        self.charge(4)?;
+        let Some(length) = record.raw.first_chunk::<4>().copied().map(u32::from_be_bytes) else { return Ok(false) };
+        if length == 0 {
+            return Ok(true);
+        }
+        self.charge(1)?;
+        Ok(record.raw.get(4..).and_then(|bytes| bytes.get(..length as usize)).is_some_and(|name| name.last() == Some(&0)))
+    }
+
     fn image_parasite<'a>(&mut self, property: &Property<'a>, record: &super::Parasite<'a>, output: &mut ImageMetadata<'a>) -> ReadResult<()> {
+        if !self.parasite_name_terminated(record)? {
+            return self.issue(&mut output.issues, property, IssueKind::InvalidValue);
+        }
         if record.name == b"icc-profile" {
             if record.payload.is_empty() {
                 self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
