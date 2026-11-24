@@ -9,6 +9,8 @@ use crate::{Error, Result};
 pub mod markup;
 
 #[cfg(test)]
+mod config_regressions;
+#[cfg(test)]
 mod regressions;
 
 /// Limits for one optional configuration. Recursion has an absolute ceiling of
@@ -102,8 +104,46 @@ impl Config<'_> {
             .transpose()
     }
     pub fn number(&self, name: &str) -> std::result::Result<Option<f64>, FieldError> {
-        self.scalar(name)?.map(|value| value.parse::<f64>().ok().filter(|value| value.is_finite()).ok_or(FieldError::InvalidNumber)).transpose()
+        self.field(name)?
+            .map(|values| match values {
+                [Value::Atom { bytes, quoted, .. }] => {
+                    let value = std::str::from_utf8(bytes).map_err(|_| FieldError::InvalidUtf8)?;
+                    config_number(value, *quoted)
+                }
+                _ => Err(FieldError::ExpectedScalar),
+            })
+            .transpose()
     }
+}
+
+// GScanner's public lexical contract admits octal/hex integers. Only bare
+// integer tokens use radix decoding; decimal fractions and quoted values retain
+// their existing floating-point interpretation. Original atoms remain untouched.
+fn config_number(source: &str, quoted: bool) -> std::result::Result<f64, FieldError> {
+    if !quoted {
+        let (negative, unsigned) = match source.as_bytes().first() {
+            Some(b'-') => (true, source.get(1..).unwrap_or_default()),
+            Some(b'+') => (false, source.get(1..).unwrap_or_default()),
+            _ => (false, source),
+        };
+        let integer = if let Some(hex) = unsigned.strip_prefix("0x").or_else(|| unsigned.strip_prefix("0X")) {
+            Some((hex, 16))
+        } else if unsigned.len() > 1 && unsigned.starts_with('0') && !unsigned.contains(['.', 'e', 'E']) {
+            Some((unsigned, 8))
+        } else {
+            None
+        };
+        if let Some((digits, radix)) = integer {
+            // from_str_radix also accepts a sign; the lexical sign was already
+            // separated above, so require digits rather than accepting 0x+1.
+            if !digits.bytes().all(|byte| char::from(byte).is_digit(radix)) {
+                return Err(FieldError::InvalidNumber);
+            }
+            let value = u64::from_str_radix(digits, radix).map_err(|_| FieldError::InvalidNumber)? as f64;
+            return Ok(if negative { -value } else { value });
+        }
+    }
+    source.parse::<f64>().ok().filter(|value| value.is_finite()).ok_or(FieldError::InvalidNumber)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,17 +186,29 @@ pub enum Source<'a> {
 pub struct TextRecord<'a> {
     pub raw: &'a [u8],
     pub span: Span,
-    /// Effective paragraph policy, retaining the original compatibility behavior.
+    /// Effective paragraph policy. Duplicate direction forms use the safe Auto
+    /// default; call `interpreted_direction` before applying this interpretation.
     pub direction: Direction,
     /// Saved writing/gravity direction, independent of paragraph autodetection.
-    /// `None` means the source did not supply `base-direction`.
+    /// `None` means absent or uninterpretable; `interpreted_direction` distinguishes
+    /// duplicates from absence while the original forms remain in `Config`.
     pub base_direction: Option<Direction>,
     /// Explicit `base-dir-auto` setting; absence remains distinct from `no`.
+    /// Ambiguous direction forms leave both optional interpretations unset.
     pub automatic_direction: Option<bool>,
     pub source: Source<'a>,
 }
 
 impl TextRecord<'_> {
+    /// Checked paragraph interpretation. Duplicate source direction forms are
+    /// retained but cannot be interpreted singularly; no last-value policy is guessed.
+    pub fn interpreted_direction(&self) -> std::result::Result<Direction, FieldError> {
+        if let Some(config) = self.config() {
+            config.field("base-direction")?;
+            config.field("base-dir-auto")?;
+        }
+        Ok(self.direction)
+    }
     pub fn config(&self) -> Option<&Config<'_>> {
         match &self.source {
             Source::Gimp(config) => Some(config),
@@ -231,12 +283,26 @@ impl<'a> Parser<'a, '_> {
                 self.tick()?;
                 self.at += 1;
             }
-            if self.bytes.get(self.at) != Some(&b'#') {
+            if self.bytes.get(self.at..self.at.saturating_add(2)) == Some(b"/*") {
+                self.at += 2;
+                loop {
+                    self.tick()?;
+                    if self.bytes.get(self.at..self.at.saturating_add(2)) == Some(b"*/") {
+                        self.at += 2;
+                        break;
+                    }
+                    if self.bytes.get(self.at).is_none() {
+                        return Err(StopReason::Malformed.into());
+                    }
+                    self.at += 1;
+                }
+            } else if self.bytes.get(self.at) == Some(&b'#') {
+                while self.bytes.get(self.at).is_some_and(|byte| *byte != b'\n') {
+                    self.tick()?;
+                    self.at += 1;
+                }
+            } else {
                 return Ok(());
-            }
-            while self.bytes.get(self.at).is_some_and(|byte| *byte != b'\n') {
-                self.tick()?;
-                self.at += 1;
             }
         }
     }
@@ -274,8 +340,7 @@ impl<'a> Parser<'a, '_> {
                         b'f' => 12,
                         b'v' if !require_quote => 11,
                         b'\\' | b'"' => escape,
-                        _ if !require_quote => escape,
-                        _ => return Err(StopReason::Malformed.into()),
+                        _ => escape,
                     }
                 }
                 byte => byte,
@@ -334,7 +399,9 @@ impl<'a> Parser<'a, '_> {
             }
             Some(b')') | None => Err(StopReason::Malformed.into()),
             Some(_) => {
-                while self.bytes.get(self.at).is_some_and(|byte| !byte.is_ascii_whitespace() && !b"()\"'#".contains(byte)) {
+                while self.bytes.get(self.at).is_some_and(|byte| !byte.is_ascii_whitespace() && !b"()\"'#".contains(byte))
+                    && self.bytes.get(self.at..self.at.saturating_add(2)) != Some(b"/*")
+                {
                     self.tick()?;
                     self.at += 1;
                 }
@@ -476,7 +543,16 @@ pub fn gimp<'a>(
             parser.budget.retain(&mut forms, form)?;
         }
         let config = Config { forms };
-        let (direction, base_direction, automatic_direction) = direction(&config, keep_going)?;
+        let (direction, base_direction, automatic_direction) = match direction(&config, keep_going) {
+            Ok(policy) => policy,
+            Err(Failure::Stop(StopReason::Malformed))
+                if matches!(config.field("base-direction"), Err(FieldError::Duplicate))
+                    || matches!(config.field("base-dir-auto"), Err(FieldError::Duplicate)) =>
+            {
+                (Direction::Auto, None, None)
+            }
+            Err(error) => return Err(error),
+        };
         Ok(TextRecord {
             raw: bytes,
             span: parser.span(0, bytes.len())?,
@@ -675,7 +751,7 @@ mod tests {
             assert_eq!(scan.stopped, None, "{fields}");
             assert_eq!(scan.records[0].direction, expected, "{fields}");
         }
-        for raw in ["(base-dir-auto maybe)", "(base-direction sideways)", "(base-direction rtl) (base-direction ltr)"] {
+        for raw in ["(base-dir-auto maybe)", "(base-direction sideways)"] {
             let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut super::super::Budget::default(), &|| true).unwrap();
             assert!(scan.records.is_empty());
             assert_eq!(scan.stopped.unwrap().reason, super::super::StopReason::Malformed);
@@ -727,7 +803,7 @@ mod tests {
 
     #[test]
     fn malformed_depth_node_and_retention_failures_refund_storage_not_work() {
-        let raw = br#"(text "allocated") (bad "\q")"#;
+        let raw = br#"(text "allocated") (bad "unterminated)"#;
         let mut budget = super::super::Budget::default();
         let retained = budget.retained_remaining();
         let work = budget.work_remaining();

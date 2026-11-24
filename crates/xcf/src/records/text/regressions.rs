@@ -46,7 +46,8 @@ fn legacy_ordinary_character_escapes_preserve_decoded_text_and_original_fields()
         assert_eq!(&raw[span.start - 19..span.end - 19], input.as_bytes());
     }
     let modern = gimp(br#"(text "A\qB")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
-    assert_eq!(modern.stopped.unwrap().reason, StopReason::Malformed);
+    assert_eq!(modern.stopped, None);
+    assert_eq!(modern.records[0].text().unwrap(), Some("AqB"));
 }
 
 #[test]
@@ -267,7 +268,8 @@ fn gdyntext_vertical_tab_is_legacy_only() {
     assert_eq!(scan.stopped, None);
     assert_eq!(scan.records[0].text().unwrap(), Some("A\u{b}B"));
     let modern = gimp(br#"(text "A\vB")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
-    assert_eq!(modern.stopped.unwrap().reason, StopReason::Malformed);
+    assert_eq!(modern.stopped, None);
+    assert_eq!(modern.records[0].text().unwrap(), Some("AvB"));
 }
 
 #[test]
