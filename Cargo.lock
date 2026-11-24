@@ -2346,6 +2346,18 @@ name = "craft-http-url"
 version = "0.1.0"
 
 [[package]]
+name = "craft-hwp"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "craft-hwpx",
+ "craft-testkit",
+ "craft-wordmodel",
+ "miniz_oxide 0.8.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-hwpx"
 version = "0.1.0"
 dependencies = [

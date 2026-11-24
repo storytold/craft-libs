@@ -1,0 +1,21 @@
+[package]
+name = "craft-hwp"
+description = "HWP 5.0 reader for Hancom Hangul documents, on the craft-wordmodel document model."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+craft-hwpx = { workspace = true }
+craft-wordmodel = { workspace = true }
+miniz_oxide = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
