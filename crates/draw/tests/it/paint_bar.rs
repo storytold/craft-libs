@@ -356,11 +356,10 @@ fn the_mixer_mix_field_blanks_and_closes_while_wet_is_zero_and_reopens_with_its_
     assert_eq!((host.values.mixer.wet, host.values.mixer.mix), (0.4, 0.5), "Wet took the typed value, Mix kept its own");
 }
 
-/// The side handle is the other path a percent value moves by, and it follows the same two rules: the closed Mix
-/// handle scrubs nothing, and a Load handle dragged down from 5 % stops at 1 %. A scrub keeps its value inside the
-/// range without a range report, which only a typed entry past it earns.
+/// The caption handle is the other path a percent value moves by, and a closed field takes it not at all: a drag on
+/// the Mixer Brush's Mix handle while Wet is 0 leaves the stored mix alone and reports nothing.
 #[trial]
-fn a_scrub_on_the_side_handle_keeps_the_closed_field_still_and_stops_at_one_percent() {
+fn a_scrub_on_a_closed_mixer_fields_handle_scrubs_nothing() {
     let (mut fixture, host) = harness(PaintTool::MixerBrush, EraserMode::Brush, |v| {
         v.mixer.wet = 0.0;
         v.mixer.mix = 0.5;
@@ -372,8 +371,12 @@ fn a_scrub_on_the_side_handle_keeps_the_closed_field_still_and_stops_at_one_perc
     assert_eq!(host.values.mixer.mix, 0.5, "a drag on the closed Mix handle changes nothing");
     assert!(host.edits.is_empty(), "and asks for no edit: {} events", host.edits.len());
     assert!(host.alerts.is_empty(), "nor reports a range: {:?}", host.alerts);
-    drop(host);
+}
 
+/// And the same handle on an open field keeps the range: a Load handle dragged down from 5 % stops at 1 %. A scrub
+/// stays inside the range without a range report, which only a typed entry past the end earns.
+#[trial]
+fn a_scrub_on_the_mixer_load_handle_stops_at_one_percent() {
     let (mut fixture, host) = harness(PaintTool::MixerBrush, EraserMode::Brush, |v| v.mixer.load = 0.05);
     page_to_end(&mut fixture);
     assert_eq!(shown_number(&fixture, "Load"), Some(5.0), "the field starts at 5 %");
