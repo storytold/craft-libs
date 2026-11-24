@@ -13,6 +13,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// A list the trial and the body it hosts both see.
+type Shared<T> = Rc<RefCell<Vec<T>>>;
+
 const TIMELINE: u32 = 1;
 const OTHER: u32 = 2;
 
@@ -48,7 +51,7 @@ struct Bed {
 /// One group of the Timeline and Effects, Effects shown, in a room `width` wide.
 fn bed(width: f32) -> Bed {
     let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![TIMELINE, OTHER], 1)), Vec::new())))));
-    let (events, actions): (Rc<RefCell<Vec<DockEvent<u32>>>>, Rc<RefCell<Vec<Action<u32>>>>) = Default::default();
+    let (events, actions): (Shared<DockEvent<u32>>, Shared<Action<u32>>) = Default::default();
     let (held, seen, taken, specs) = (Rc::clone(&workspace), Rc::clone(&events), Rc::clone(&actions), Tracked::new(Specs));
     let sources: Rc<RefCell<Vec<DockSource<u32>>>> = Rc::default();
     let reported = Rc::clone(&sources);
@@ -151,9 +154,8 @@ fn a_tabs_swatch_comes_before_its_name_and_is_not_part_of_it() {
     fixture.room(Vec2::new(600.0, 300.0)).settle();
     let shown = tabs(&fixture);
     assert_eq!(shown.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["Comp", "Comp"], "both tabs have the same name");
-    let label_left = |tab: &Target| {
-        fixture.texts().into_iter().find(|text| text.text == "Comp" && tab.rect.contains(text.rect.center())).map(|text| text.rect.left())
-    };
+    let label_left =
+        |tab: &Target| fixture.texts().iter().find(|text| text.text == "Comp" && tab.rect.contains(text.rect.center())).map(|text| text.rect.left());
     let (with, without) = (&shown[0].1, &shown[1].1);
     assert!(with.rect.width() > without.rect.width(), "the tab with the swatch is wider: {with:?} {without:?}");
     let (with_text, without_text) = (label_left(with).expect("the first label shows"), label_left(without).expect("the second label shows"));
