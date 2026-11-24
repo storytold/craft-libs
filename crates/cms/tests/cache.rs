@@ -1,5 +1,6 @@
+use craft_cms::pipeline::{Pipeline, Stage};
 use craft_cms::{
-    Builtin, CacheLimits, Transform, TransformCache, TransformOptions, cache_limits, cache_stats, cached, clear_cache, set_cache_limits,
+    Builtin, CacheLimits, Curve, Transform, TransformCache, TransformOptions, cache_limits, cache_stats, cached, clear_cache, set_cache_limits,
 };
 
 #[test]
@@ -10,6 +11,17 @@ fn test_table_bytes() {
 
     let t = Transform::with_options(srgb, p3, opts).expect("transform");
     assert!(t.table_bytes() > 0);
+}
+
+#[test]
+fn test_exact_transform_charges_u8_lookup_tables() {
+    let opts = TransformOptions::default();
+    let analytic = Pipeline::new(3, vec![Stage::LabToXyz]).expect("Lab pipeline");
+    let sampled = Pipeline::new(3, vec![Stage::Curves(vec![Curve::Gamma(2.2); 3]), Stage::LabToXyz]).expect("gamma pipeline");
+    let analytic = Transform::from_pipeline(analytic, opts).expect("analytic transform");
+    let sampled = Transform::from_pipeline(sampled, opts).expect("gamma transform");
+
+    assert_eq!(sampled.table_bytes() - analytic.table_bytes(), 3 * std::mem::size_of::<[f32; 256]>());
 }
 
 #[test]

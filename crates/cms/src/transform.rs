@@ -283,7 +283,7 @@ impl Transform {
     }
     /// Returns the approximate memory footprint in bytes of the precomputed lookup tables, grids, and exact pipeline.
     pub fn table_bytes(&self) -> usize {
-        let mut bytes = self.pipeline.table_bytes();
+        let mut bytes = self.pipeline.table_bytes() + self.exact8.len() * std::mem::size_of::<[f32; 256]>();
         match &self.core {
             Core::Shaper { curves8, curves, matrix } => {
                 bytes += curves8.len() * 256 * std::mem::size_of::<f32>();
