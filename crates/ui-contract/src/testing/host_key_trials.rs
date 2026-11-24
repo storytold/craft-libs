@@ -1,7 +1,9 @@
 //! Trials of the keys and presses a host's own egui widgets keep while the runtime is installed on the whole window.
 
 use crate::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
-use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope, TypingRule};
+use crate::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, QuitCommand, Scope, TypingRule,
+};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
@@ -509,6 +511,66 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// What a host canvas with GridCraft's keys saw of a copy and an Escape while it held egui focus: whether the copy
+/// reached egui's input with no command fired, the keys that reached egui and the window cancels, and egui's focus
+/// after the Escape. `app_focus` gives it egui focus by the app's own request, else by the framework's `request`.
+fn focused_host_canvas_keys(app_focus: bool) -> (bool, (Vec<Key>, usize), Option<Id>) {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL);
+    let canvas = named_id("host canvas");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let seen_events = Rc::clone(&events);
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen_events.borrow_mut().extend(ui.input(|input| input.events.clone()));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KEYS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if app_focus {
+        fixture::host_focus(&frames.ctx, canvas);
+    } else {
+        request(&frames.ctx, FocusTarget::Id(canvas));
+    }
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas), "the canvas holds egui focus");
+    take_output(&frames.ctx);
+    seen(&host);
+    events.borrow_mut().clear();
+    frames.frame(vec![Event::Copy], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let copied = events.borrow().contains(&Event::Copy) && take_output(&frames.ctx).fired.is_empty();
+    press_key(&mut frames, &mut show, Key::Escape);
+    let escape = seen(&host);
+    frames.frame(Vec::new(), &mut show);
+    (copied, escape, egui_focused(&frames.ctx))
+}
+
+/// A host canvas holding egui focus is the app's own focused widget: its clipboard events and Escape stay in egui's
+/// input, and no window cancel comes of the Escape. With nothing focused, Escape is the window's cancel.
+#[trial]
+fn a_host_canvas_with_egui_focus_reads_escape_and_the_clipboard_from_egui() {
+    let canvas = named_id("host canvas");
+    let (copied, escape, focused) = focused_host_canvas_keys(false);
+    assert!(copied, "the copy of a canvas the framework focused stays in egui and fires nothing");
+    assert_eq!(escape, (vec![Key::Escape], 0), "its Escape is egui's, and no window cancel");
+    assert_eq!(focused, Some(canvas), "egui keeps the framework's focus on the canvas over its Escape");
+    let (copied, escape, _) = focused_host_canvas_keys(true);
+    assert!(copied, "the copy of a canvas the app focused stays in egui and fires nothing");
+    assert_eq!(escape, (vec![Key::Escape], 0), "and its Escape");
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL));
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(seen(&host), (Vec::new(), 1), "with nothing focused, Escape is the window's cancel");
+}
+
 /// Which of the arrow keys, Home and End reached egui's input, one press each, in a window whose host declares a canvas;
 /// with `focus_field` the host's text field has the focus; and whether Left moved the field's caret.
 fn navigation_keys_with_canvas(focus_field: bool) -> (Vec<Key>, bool) {
@@ -594,17 +656,22 @@ fn a_pasted_image_runs_the_paste_a_pasted_text_runs() {
 
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
-    let (host, mut show) = host_window();
+    let (host, show) = host_window();
+    f6_in(&host, show, overrides)
+}
+
+/// What an F6 press did under `overrides` in the window `show` draws, whose host records what reached egui in `host`.
+fn f6_in(host: &RefCell<Host>, mut show: impl FnMut(&mut Ui), overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let mut frames = Frames::new();
     if let Some(overrides) = overrides {
         frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
     }
     frames.frame(Vec::new(), &mut show);
     take_output(&frames.ctx);
-    seen(&host);
+    seen(host);
     press_key(&mut frames, &mut show, Key::F6);
     let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
-    (seen(&host).0.contains(&Key::F6), fired)
+    (seen(host).0.contains(&Key::F6), fired)
 }
 
 #[trial]
@@ -616,6 +683,62 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     let mut unbound = craft_keymap::Overrides::default();
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
+}
+
+/// What a ⌘Q (Ctrl+Q off the Mac) did in the host window under `overrides`: how many frames sent a close command, the
+/// app taking each frame's output before the next as `embed::before_input` does, and the ids of the commands it fired.
+fn quit_under(overrides: Option<craft_keymap::Overrides>) -> (usize, Vec<String>) {
+    let (_, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    let mut closes = usize::from(frames.frame_closing(vec![key_press(Key::Q, Modifiers::COMMAND)], &mut show));
+    let mut fired = Vec::new();
+    for _ in 0..3 {
+        fired.extend(take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id));
+        closes += usize::from(frames.frame_closing(Vec::new(), &mut show));
+    }
+    (closes, fired)
+}
+
+/// egui's own quit shortcut is cleared at install; the runtime's Quit command takes its place, through the root window's
+/// close path, and an app's own binding of the chord replaces it.
+#[trial]
+fn quit_asks_the_root_window_to_close_once_and_an_app_binding_replaces_it() {
+    assert_eq!(quit_under(None), (1, vec![QuitCommand::Quit.id().to_owned()]), "the quit chord asks the root window to close once");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Cmd+Q".to_owned()]);
+    assert_eq!(quit_under(Some(bound)), (0, vec![EditCommands::Delete.id().to_owned()]), "a command bound to the chord takes it");
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(QuitCommand::Quit.id(), Vec::new());
+    assert_eq!(quit_under(Some(unbound)), (0, Vec::new()), "with Quit unbound, nothing closes the window");
+}
+
+/// The Alt+digit chords the hosted canvas of `an_unbound_f6_reaches_a_host_canvas_with_claims` claims.
+const CANVAS_CLAIMS: [craft_keymap::Chord; 2] = [
+    craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num1),
+    craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num2),
+];
+
+/// A hosted app whose own egui canvas is the window's key target, with Tab, the edit chords and Alt+digit claims kept
+/// (SoundCraft's session view), and whose shortcut table uses F6: with both pane moves unbound, F6 reaches egui.
+#[trial]
+fn an_unbound_f6_reaches_a_host_canvas_with_claims() {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL).with_claims(&CANVAS_CLAIMS);
+    let canvas = named_id("host canvas");
+    let (host, mut base) = host_window();
+    let show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KEYS);
+    };
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(NavCommand::NextPane.id(), Vec::new());
+    unbound.insert(NavCommand::PreviousPane.id(), Vec::new());
+    assert_eq!(f6_in(&host, show, Some(unbound)), (true, Vec::new()), "the canvas's app reads F6 from egui");
 }
 
 /// What a press of Escape with `mods` did with nothing focused, under `overrides`: the window cancels it raised and the

@@ -627,6 +627,14 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         .label(label)
     }
 
+    /// A pointer press on a tab (primary or secondary, a drag's press too) leaves key focus where it is; the keyboard
+    /// still reaches the strip by Tab. A dock's panel tabs: clicking one leaves the document's keys working.
+    #[must_use]
+    pub fn keeps_focus(mut self) -> Self {
+        self.items = self.items.focus_on_press(false);
+        self
+    }
+
     /// A tab drag carries `map` of it, for the drop targets of type `P`; a tab the map gives `None` for does not drag
     /// unless a reorder rule is set. The drag stays one session with one ghost.
     #[must_use]

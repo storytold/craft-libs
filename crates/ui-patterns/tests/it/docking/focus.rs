@@ -1,5 +1,5 @@
-//! The host's focus request: `DockArea::focus` moves key focus to the group that shows a panel, as a click on its tab
-//! does.
+//! The host's focus request: `DockArea::focus` moves key focus to the group that shows a panel, as a press on the group's
+//! body does.
 
 use super::Numbered;
 use craft_behavior::dock::{Action, Column, Floating, Group, Layout, Node, SplitSize, Workspace};
@@ -51,19 +51,23 @@ fn two_groups(config: DockConfig) -> TwoGroups {
     (fixture, request, seen)
 }
 
-/// With the user's focus on group A's tabs, the host's request for panel 2 of group B moves key focus to B's stop (the
-/// one a click on B's tabs focuses) and picks 2's tab; a key there reaches B. Guards against a request that picked the
-/// tab but left key focus, and so the keys, on the tabs the user clicked last.
+/// With the user's focus on group A, the host's request for panel 2 of group B moves key focus to B's stop (the one a
+/// press on B's body focuses) and picks 2's tab; a key there reaches B. Guards against a request that picked the tab
+/// but left key focus, and so the keys, in the group the user pressed last.
 #[trial]
 fn the_hosts_focus_request_moves_key_focus_to_the_panels_group_and_picks_its_tab() {
     let (mut fixture, request, seen) = two_groups(DockConfig::default());
-    let tab = |fixture: &Fixture, name: &str| fixture.by_label(name).expect("a group's tab");
-    let b_tab = tab(&fixture, "Panel 1");
-    fixture.click(&b_tab).idle(1);
-    let b_stop = fixture.focused_stop().expect("a click on B's tab focuses B's stop");
-    let a_tab = tab(&fixture, "Panel 0");
-    fixture.click(&a_tab).idle(1);
-    assert_ne!(fixture.focused_stop(), Some(b_stop), "a click on A's tab moves focus to A's stop");
+    // A point in the empty body below a group's tab.
+    let body = |fixture: &Fixture, name: &str| {
+        let tab = fixture.by_label(name).expect("a group's tab").rect;
+        Pos2::new(tab.center().x, tab.bottom() + 200.0)
+    };
+    let b_body = body(&fixture, "Panel 1");
+    fixture.click_at(b_body).idle(1);
+    let b_stop = fixture.focused_stop().expect("a press on B's body focuses B's stop");
+    let a_body = body(&fixture, "Panel 0");
+    fixture.click_at(a_body).idle(1);
+    assert_ne!(fixture.focused_stop(), Some(b_stop), "a press on A's body moves focus to A's stop");
     assert_eq!(seen.borrow().last().and_then(|seen| seen.focused), Some(0), "A holds the focus");
     seen.borrow_mut().clear();
 

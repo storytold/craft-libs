@@ -27,7 +27,7 @@ mod binding;
 mod command;
 
 pub use binding::{Binding, BindingError};
-pub use command::{CommandDef, CommandKind, ModalRule, TypingRule};
+pub use command::{CommandDef, CommandKind, DeleteKeys, ModalRule, TypingRule};
 
 mod editing;
 pub use editing::text_editing_chords;
@@ -267,6 +267,7 @@ pub struct Keymap {
     scopes: Scopes,
     platform: Platform,
     typing: TypingRule,
+    delete_keys: DeleteKeys,
     reserved: Vec<Chord>,
     overrides: Overrides,
     /// Tools of different groups may share a chord ([`Keymap::with_shared_tool_keys`]).
@@ -294,6 +295,7 @@ impl Keymap {
             scopes,
             platform,
             typing: TypingRule::default(),
+            delete_keys: DeleteKeys::default(),
             reserved: Vec::new(),
             overrides: Overrides::new(),
             shared_tool_keys: false,
@@ -321,6 +323,12 @@ impl Keymap {
     /// Sets the [`TypingRule`] for presses while a text field is being typed in.
     pub fn with_typing_rule(mut self, rule: TypingRule) -> Keymap {
         self.typing = rule;
+        self
+    }
+
+    /// Sets how a press of Delete or Backspace finds its binding ([`DeleteKeys`]).
+    pub fn with_delete_keys(mut self, keys: DeleteKeys) -> Keymap {
+        self.delete_keys = keys;
         self
     }
 
@@ -365,6 +373,11 @@ impl Keymap {
     /// The rule for presses while a text field is being typed in.
     pub fn typing_rule(&self) -> TypingRule {
         self.typing
+    }
+
+    /// How a press of Delete or Backspace finds its binding.
+    pub fn delete_keys(&self) -> DeleteKeys {
+        self.delete_keys
     }
 
     /// Every command the user can bind, in catalog order.

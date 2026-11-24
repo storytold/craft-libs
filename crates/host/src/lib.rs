@@ -26,6 +26,7 @@ pub use ui::HostScope;
 #[derive(Clone)]
 pub struct Host {
     app: AppInfo,
+    icon_png: Option<&'static [u8]>,
     i18n: Option<Arc<I18n>>,
     lang: Lang,
     settings: Arc<dyn SectionStore>,
@@ -45,6 +46,7 @@ fn next_generation() -> u64 {
 /// Collects a [`Host`]'s services; each one defaults when not set.
 pub struct HostBuilder {
     app: AppInfo,
+    icon_png: Option<&'static [u8]>,
     i18n: Option<Arc<I18n>>,
     lang: Option<Lang>,
     settings: Option<Arc<dyn SectionStore>>,
@@ -56,7 +58,7 @@ pub struct HostBuilder {
 impl Host {
     /// Starts a host for `app`; every service not set on the builder gets its default.
     pub fn builder(app: AppInfo) -> HostBuilder {
-        HostBuilder { app, i18n: None, lang: None, settings: None, commands: None, jobs: None, files: None }
+        HostBuilder { app, icon_png: None, i18n: None, lang: None, settings: None, commands: None, jobs: None, files: None }
     }
 
     /// Which host this is: a host and its clones hold the same services and language, and one built anew
@@ -69,6 +71,11 @@ impl Host {
     /// The app's name and version.
     pub fn app(&self) -> &AppInfo {
         &self.app
+    }
+
+    /// The app's icon as PNG bytes ([`HostBuilder::icon_png`]); `None` when the app gave none.
+    pub fn icon_png(&self) -> Option<&'static [u8]> {
+        self.icon_png
     }
 
     /// The app's catalogs; `None` until the app uses craft-i18n (library words are English then).
@@ -151,6 +158,13 @@ impl Host {
 }
 
 impl HostBuilder {
+    /// The app's icon as PNG bytes, its 128 px app icon: the library dialogs that name the app (the update dialogs)
+    /// show it beside the name. Default: none; those dialogs then show the name's first letter in its place.
+    pub fn icon_png(mut self, png: &'static [u8]) -> Self {
+        self.icon_png = Some(png);
+        self
+    }
+
     /// Default: none (English).
     pub fn i18n(mut self, i18n: Arc<I18n>) -> Self {
         self.i18n = Some(i18n);
@@ -192,6 +206,7 @@ impl HostBuilder {
         let lang = self.lang.or_else(|| self.i18n.as_ref().map(|i18n| i18n.system_lang())).unwrap_or(Lang::EN);
         Host {
             app: self.app,
+            icon_png: self.icon_png,
             i18n: self.i18n,
             lang,
             settings: self.settings.unwrap_or_else(|| Arc::new(MemorySections::default())),
