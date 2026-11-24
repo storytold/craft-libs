@@ -381,6 +381,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// sides take no drop, and its top, bottom and middle zones reach across them.
     #[prop(flag)]
     in_window: bool,
+    /// The shown panel's body is the app's own egui code (`PanelSpec::host_body`): a press on the body is the app's,
+    /// and its widgets take egui focus themselves, so the press does not focus the group's tabs.
+    #[prop(flag)]
+    host_body: bool,
     /// The rows of the group menu, read while it is open: the panel menu button and a context request on a tab open
     /// it.
     #[prop(func = "FnMut() -> Vec<PanelRow>")]
@@ -428,6 +432,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
+            host_body: false,
             menu: None,
             panel_menu_shown: true,
             panel_menu_icon: IconId::new("more"),
@@ -449,7 +454,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         self
     }
 
-    /// The group takes key focus in this pass, as a click on its tabs gives it: its tab row's stop takes it while the
+    /// The group takes key focus in this pass, as a press on its body gives it: its tab row's stop takes it while the
     /// row runs, so the keys of the next pass route through the group; a titled header, which has no tab row, focuses
     /// its drag band. A request of the pass.
     #[must_use]
@@ -715,8 +720,11 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             })
             .inner;
         self.extra = extra;
-        // A press on the group's empty body focuses its panel, as in Photoshop.
-        if surface_pressed && let Some((strip, _)) = &strip {
+        // A press on the group's empty body focuses its panel, as in Photoshop; an app's own egui body keeps its presses.
+        if surface_pressed
+            && !self.host_body
+            && let Some((strip, _)) = &strip
+        {
             focus::request(ui.ctx(), FocusTarget::Id(*strip));
         }
         if let Some((strip, tabs)) = &strip {
@@ -814,8 +822,10 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
     let closes = |panel: &PanelTitle| closable && panel.closable;
     let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
+    // A press on a panel tab leaves key focus where it is, as in Photoshop: the document's keys keep working.
     let mut strip = TabStrip::new(name)
         .kind(kind)
+        .keeps_focus()
         .panel_look(row.look)
         .shown(active)
         .tear_off()

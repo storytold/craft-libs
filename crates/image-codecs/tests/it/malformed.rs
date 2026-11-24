@@ -6,7 +6,7 @@ use craft_image_codecs::*;
 use proptest::prelude::*;
 
 fn tight() -> DecodeOptions {
-    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 22, max_alloc: 64 << 20 }, ..Default::default() }
+    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 21, max_alloc: 16 << 20 }, ..Default::default() }
 }
 
 fn samples() -> Vec<(Format, Vec<u8>)> {

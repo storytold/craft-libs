@@ -338,22 +338,23 @@ fn blank_g4(h: u32) -> Vec<u8> {
 
 #[test]
 fn a_blank_fax_page_wider_than_4096_px_passes_the_bomb_guard() {
-    // A blank 600 dpi page (A4 landscape, A3) codes each row in one bit, past 4096:1: it must
-    // open, with or without the metadata and other pages that used to raise the bound.
-    for (w, h) in [(7016u32, 4961u32), (7016, 9921)] {
+    // A blank page codes each row in one bit, so a row wider than 4096 pixels is past 4096:1: it
+    // must open, with or without the metadata and other pages that used to raise the bound. The
+    // page has enough rows to hold more than the guard's fixed 1 MiB of slack.
+    for (w, h) in [(20_000u32, 800u32)] {
         let mut d = Dir { entries: base(w, h, 1, 1, 0), chunks: vec![blank_g4(h)], tiled: false }.tag(278, LONG, &[u64::from(h)]);
         d.entries.retain(|e| e.0 != 259);
         let d = d.tag(259, SHORT, &[4]);
-        let pages: Vec<Dir> = (0..3).map(|_| d.clone()).collect();
+        let pages: Vec<Dir> = (0..2).map(|_| d.clone()).collect();
         for (what, bytes) in
-            [("one page", build(true, false, std::slice::from_ref(&d), &[0]).bytes), ("three pages", build(true, false, &pages, &[0, 1, 2]).bytes)]
+            [("one page", build(true, false, std::slice::from_ref(&d), &[0]).bytes), ("two pages", build(true, false, &pages, &[0, 1]).bytes)]
         {
             let img = decode(&bytes).unwrap_or_else(|e| panic!("{w}x{h} {what}: {e}"));
             assert_eq!(img.dimensions(), (w, h), "{what}");
             assert!(img.data().iter().all(|&v| v == 255), "{w}x{h} {what}: not white");
         }
     }
-    let mut d = Dir { entries: base(7016, 4961, 1, 1, 0), chunks: vec![blank_g4(4961)], tiled: false }.tag(278, LONG, &[4961]);
+    let mut d = Dir { entries: base(20_000, 800, 1, 1, 0), chunks: vec![blank_g4(800)], tiled: false }.tag(278, LONG, &[800]);
     d.entries.retain(|e| e.0 != 259);
     let bytes = build(true, false, &[d.tag(259, SHORT, &[4])], &[0]).bytes;
     assert!(banded(&bytes, None, &Limits::banded(), true).unwrap().data() == decode(&bytes).unwrap().data());

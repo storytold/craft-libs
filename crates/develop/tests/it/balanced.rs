@@ -1,7 +1,7 @@
 //! Original synthetic RAW scenes from storytold/lightcraft#1463, generated in these tests.
 
 use craft_develop::raster::Rgb32f;
-use craft_develop::sensor::{Method, RawDevelopExt, highlight};
+use craft_develop::sensor::{self, Method, RawDevelopExt, highlight};
 use craft_raw::opcodes::{Opcode, OpcodeLists};
 use craft_raw::{BlackLevel, Cfa, ColorData, Orientation, RawData, RawFormat, RawImage, Rect};
 
@@ -353,6 +353,30 @@ fn the_clip_mask_marks_the_colours_interpolated_from_clipped_samples() {
     assert!(clean.develop_balanced_masked(Method::Ahd, DAYLIGHT, CLIP).unwrap().1.is_none());
     raw.opcodes.list3.push(Opcode::FixVignetteRadial { k: [0.0; 5], center: [0.5, 0.5] });
     assert!(raw.develop_balanced_masked(Method::Ahd, DAYLIGHT, CLIP).unwrap().1.is_none());
+}
+
+#[test]
+fn a_caller_demosaicking_its_own_mosaic_gets_the_same_clip_mask() {
+    let (w, h) = (40usize, 30usize);
+    let light = photograph(w, h, |x, y| if (x - 18.0).powi(2) + (y - 14.0).powi(2) < 49.0 { 6.0 } else { 0.4 });
+    let mut cases = layouts();
+    cases.push(("RGGB bilinear".into(), Cfa::bayer("RGGB").unwrap(), Method::Bilinear));
+    for (name, cfa, method) in cases {
+        let mut raw = raw_of(w, h, &cfa, DAYLIGHT, |x, y| [light[y * w + x]; 3]);
+        raw.crop = Rect::new(2, 1, 33, 27);
+        let (_, expected) = raw.develop_balanced_masked(method, DAYLIGHT, CLIP).unwrap();
+        let n = raw.normalized().unwrap();
+        let crop = raw.develop_crop(n.width, n.height);
+        assert_eq!(sensor::clip_mask(&n, crop, method, CLIP), expected, "{name}");
+        assert!(expected.is_some(), "{name}: clipped samples");
+        let outside = Rect::new(crop.x + 1, crop.y, n.width - crop.x, crop.height);
+        assert!(sensor::clip_mask(&n, outside, method, CLIP).is_none(), "{name}: a crop past the mosaic");
+        let mut four_colour = n.clone();
+        four_colour.cfa.as_mut().unwrap().pattern[0] = 3;
+        assert!(sensor::clip_mask(&four_colour, crop, method, CLIP).is_none(), "{name}: a colour index past blue");
+        let huge = sensor::Normalized { width: usize::MAX, height: 2, data: Vec::new(), ..n.clone() };
+        assert!(sensor::clip_mask(&huge, Rect::new(0, 0, 1, 1), method, CLIP).is_none(), "{name}: dimensions past usize");
+    }
 }
 
 #[test]

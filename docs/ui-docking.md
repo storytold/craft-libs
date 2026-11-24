@@ -56,7 +56,7 @@ The host keeps its panels' specs in a plain-data model that implements `PanelSpe
 
 | Method | Does |
 | --- | --- |
-| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`. |
+| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`, `host_body`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
 
 The area reads them only when the model's revision, the workspace's revision or the lock changes (`runtime::derived`), and keeps what it read otherwise, so an idle pass reads no spec. A host changes a label or a limit by editing the model. A spec reads no style: a tool rail's grid is `DockGrid::rail(cells)`, which the dock sizes from its own tokens.
@@ -69,6 +69,8 @@ The host implements `DockPanels<P>` for the views:
 | `group_view` | Takes a whole group in place of its tab strip and body, in a `Ui` held to the group's rect; a canvas group draws its document here. Default `None`. |
 | `group_header` | The host's controls in a group header, before the tab strip. |
 | `panel_rows` | The host's rows of a panel's menu, before the dock's own. |
+
+A body lays out with the group's spacing, which framework components expect. A panel whose body is the app's own egui code sets `PanelSpec::host_body()`: the dock then hands its `body`, `footer`, `group_header`, `rail_footer` and, while it is the panel its group shows, its group's `group_view` a `Ui` with the style of the `Ui` the area was shown in, so that code lays out as it does outside the dock. Its body also keeps the app's background and room: the dock fills the body with that style's panel fill (`Visuals::panel_fill`) and gives it no body padding, and a press on the body is the app's, so it does not focus the group's tabs. That code runs once per pass, in the pass's real run: where the framework measures a group before it shows it, the code's parts take the size they took when they last ran, and egui sees each of the app's widgets once (`HostStyle::show`). The dock's own parts keep the framework style. An app hosting its old egui panels moves onto the framework panel by panel, clearing `host_body` on each panel it ports.
 
 The binding decides who applies the edits. With `Bind::bound` the area writes every action to the workspace itself. With `Bind::given` it writes nothing, and the host applies `DockAreaOutput::actions` (or `edit`, the same changes as edit events) to its own copy: the actions hold every change of the pass, divider sizes and window moves included. `DockArea::read_only` shows a workspace locked, keyed by its revision.
 
@@ -121,6 +123,8 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A floating window's id comes from a counter its layout owns (`Layout::fresh_window_id`). It starts above every id the layout is built or loaded with and only grows while the layout lives; `Workspace::replace` gives the incoming windows ids the replaced layout never gave out, and a dock area keeps the windows its actions add above every id it has shown, so a workspace an undo brings back draws no id twice (`Workspace::raise_window_floor`). An OS window never passes to another window.
 - A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
 - Split handles are Tab stops, and the arrow keys move them. A divider drag is one gesture in `DockAreaOutput::edit`.
+- A pointer press on a panel tab (a click, a drag's press, the tab menu's secondary press) leaves key focus where it was, so the document's keys keep working; Tab still reaches the tab row.
+- Floating windows stack with the app's own egui windows in egui's area order: the one shown, pressed or raised last (`FloatingGroup::raise`, which the host's `DockArea::focus` request sets on the window holding the panel) is on top, so a dialog the app opens over a floating panel shows above it.
 - A panel command (`DockCommands`) acts on the shown panel of the group that takes it. A menu row, a key and the command palette run the same code: `actions` turns the command into `Action`s.
 
 ## Commands and workspaces

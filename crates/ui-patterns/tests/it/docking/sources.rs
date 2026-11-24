@@ -125,11 +125,13 @@ fn a_dock_area_reports_one_source_per_tab_bar_grip_and_divider_it_drew_and_the_s
     assert_eq!(*reported.borrow(), sources, "an idle pass, which replays the settled parts, reports the same sources");
 
     let left_two = sources.iter().find(|source| source.kind == SourceKind::Tab(LEFT_TWO)).cloned().expect("the tab of the second panel");
+    // A click on the tab picks it and leaves key focus; a press on the group's empty body then focuses its strip.
     fixture.click_at(left_two.rect.center()).settle();
+    fixture.click_at(Pos2::new(left_two.rect.center().x, left_two.rect.bottom() + 60.0)).settle();
     assert_eq!(
         craft_ui::runtime::access::focused_node(fixture.ctx()),
         Some(left_two.id),
-        "the clicked tab holds focus under the id its source reports"
+        "the picked tab holds focus under the id its source reports"
     );
 }
 
