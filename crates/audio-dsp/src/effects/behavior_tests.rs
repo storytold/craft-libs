@@ -993,6 +993,7 @@ fn direct_constructors_cap_the_channel_count() {
         character::RingMod,
         character::Bitcrusher,
         character::Tremolo,
+        character::Vibrato,
     );
 }
 

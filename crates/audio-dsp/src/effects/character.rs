@@ -20,6 +20,10 @@
 //!
 //! The tremolo (`tremolo`) lowers the gain of every channel by up to `depth` once per cycle of a
 //! sine, triangle or square LFO at `rate`.
+//!
+//! The vibrato (`vibrato`) reads the input through a delay that grows from 0 and shrinks back once
+//! per cycle of a sine or triangle LFO at `rate`, so the pitch swings by up to `depth` cents. The
+//! delay is 0 at the start of each cycle.
 
 use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tail, uni_sine, uni_tri};
 use crate::{AudioEffect, ParamSpec, ParamValues, Smoothed, Unit, block_len, flush32, param_plumbing};
@@ -44,6 +48,13 @@ const MAX_FRACTION: f32 = 0.45;
 const TREMOLO_SHAPES: &[&str] = &["Sine", "Triangle", "Square"];
 /// Length of each edge of the tremolo's square, in ms.
 const EDGE_MS: f64 = 2.0;
+const VIBRATO_SHAPES: &[&str] = &["Sine", "Triangle"];
+/// Lowest rate of the vibrato, in Hz.
+const VIBRATO_MIN_RATE: f32 = 1.0;
+/// Greatest depth of the vibrato, in cents.
+const VIBRATO_MAX_CENTS: f32 = 100.0;
+/// Most the vibrato's glide moves the delay per sample on top of the curve.
+const VIBRATO_GLIDE_SLOPE: f32 = 1.0 / 32.0;
 
 /// Ring modulation, frequency modulation and positive or negative comb resonators, with the
 /// frequency moved by an LFO, an envelope follower or a sample-and-hold source.
@@ -431,6 +442,149 @@ impl AudioEffect for Tremolo {
             for c in channels[..nch].iter_mut() {
                 // A non-finite sample is taken as silence.
                 c[i] = if c[i].is_finite() { c[i] * gain } else { 0.0 };
+            }
+        }
+    }
+}
+
+/// Pitch modulation. The input is read through a delay of `swing * m` samples, where the LFO value
+/// `m` runs from 0 at the start of each cycle to 1 at its middle and back, as a sine or a triangle.
+/// The swing is set so that the pitch falls by `depth` cents while the delay grows, and rises by a
+/// little less while it shrinks: the read moves at `1 -/+ d` samples per sample, with
+/// `d = 1 - 2^(-depth / 1200)`. A sine reaches `d` at its steepest point, and a triangle holds it
+/// for each half of the cycle. At the start of each cycle the delay is 0. Rate takes effect from
+/// the next sample with the phase kept. A change of Rate, Depth or Shape glides the delay from its
+/// last value to the new curve, moving it by at most 1/32 sample per sample on top of the curve, so
+/// the output neither clicks nor jumps in pitch.
+pub struct Vibrato {
+    pv: ParamValues,
+    sr: f32,
+    lines: Vec<DelayLine>,
+    lfo: Lfo,
+    /// Shape the delay follows.
+    shape: usize,
+    /// Peak delay of the curve, in samples, for the settings of the last block.
+    swing: f32,
+    /// Delay of the last sample, in samples.
+    last: f32,
+    /// Difference between the last delay and the new curve at a change of the settings. It fades
+    /// to zero over `glide_len` samples.
+    glide: f32,
+    glide_left: usize,
+    glide_len: usize,
+}
+
+impl Vibrato {
+    pub const PARAMS: &'static [ParamSpec] = &[
+        ParamSpec::log("rate", "Rate", VIBRATO_MIN_RATE, 14.0, 6.0, Unit::Hertz),
+        ParamSpec::new("depth", "Depth (cents)", 0.0, VIBRATO_MAX_CENTS, 40.0, Unit::None),
+        ParamSpec::choice("shape", "Shape", VIBRATO_SHAPES, 0),
+    ];
+
+    pub fn new(sample_rate: f32, channels: usize) -> Self {
+        let sample_rate = crate::sane_sample_rate(sample_rate);
+        let ch = crate::sane_channels(channels);
+        // The widest swing is the triangle's at the lowest rate and the greatest depth. A glide
+        // can add up to one more swing on top of the curve.
+        let widest_ms = (1000.0 * Self::slope(VIBRATO_MAX_CENTS) / (2.0 * f64::from(VIBRATO_MIN_RATE))) as f32;
+        let len = delay_line_len(2.0 * widest_ms + 1.0, sample_rate, ch);
+        let mut s = Vibrato {
+            pv: ParamValues::new(Self::PARAMS),
+            sr: sample_rate,
+            lines: vec![DelayLine::new(len); ch],
+            lfo: Lfo::default(),
+            shape: 0,
+            swing: 0.0,
+            last: 0.0,
+            glide: 0.0,
+            glide_left: 0,
+            glide_len: 1,
+        };
+        s.shape = s.pv.idx("shape");
+        s.swing = s.swing_len();
+        s
+    }
+
+    fn apply_params(&mut self, _snap: bool) {}
+
+    /// Samples the read moves per sample, away from 1, at a depth of `cents`.
+    fn slope(cents: f32) -> f64 {
+        1.0 - (-f64::from(cents) / 1200.0).exp2()
+    }
+
+    /// Peak delay of the curve for the current settings, in samples.
+    fn swing_len(&self) -> f32 {
+        let (d, rate, sr) = (Self::slope(self.pv.v("depth")), f64::from(self.pv.v("rate")), f64::from(self.sr));
+        // The sine's delay `swing * (1 - cos(2 pi p)) / 2` moves by at most `swing * pi * rate / sr`
+        // per sample, and the triangle's moves by `swing * 2 * rate / sr`.
+        let swing = if self.pv.idx("shape") == 1 { d * sr / (2.0 * rate) } else { d * sr / (std::f64::consts::PI * rate) };
+        (swing as f32).min(self.max_delay())
+    }
+
+    fn max_delay(&self) -> f32 {
+        self.lines.first().map_or(0.0, DelayLine::max_delay)
+    }
+
+    /// LFO value of `shape` at phase `p` (cycles).
+    fn shape_value(shape: usize, p: f64) -> f32 {
+        if shape == 1 { uni_tri(p) } else { uni_sine(p) }
+    }
+}
+
+impl AudioEffect for Vibrato {
+    param_plumbing!("vibrato");
+    /// The input sounds until the delay has passed it. The delay reaches at most the new curve's
+    /// swing plus the last delay, so the tail covers both.
+    fn tail_samples(&self) -> usize {
+        (self.swing_len() + self.last).min(self.max_delay()).ceil() as usize + 1
+    }
+    fn reset(&mut self) {
+        self.lines.iter_mut().for_each(DelayLine::reset);
+        self.lfo.reset();
+        self.shape = self.pv.idx("shape");
+        self.swing = self.swing_len();
+        self.last = 0.0;
+        self.glide = 0.0;
+        self.glide_left = 0;
+    }
+    fn process(&mut self, channels: &mut [&mut [f32]]) {
+        let n = block_len(channels);
+        let nch = channels.len().min(self.lines.len());
+        let rate = self.pv.v("rate");
+        let shape = self.pv.idx("shape");
+        let swing = self.swing_len();
+        if shape != self.shape || swing != self.swing {
+            self.glide = self.last - swing * Self::shape_value(shape, self.lfo.phase(0.0));
+            self.glide_len = ((self.glide.abs() / VIBRATO_GLIDE_SLOPE).ceil() as usize).max(1);
+            self.glide_left = if self.glide == 0.0 { 0 } else { self.glide_len };
+            self.shape = shape;
+            self.swing = swing;
+        }
+        let max = self.max_delay();
+        for i in 0..n {
+            let mut d = swing * Self::shape_value(shape, self.lfo.phase(0.0));
+            if self.glide_left > 0 {
+                d = (d + self.glide * self.glide_left as f32 / self.glide_len as f32).clamp(0.0, max);
+                self.glide_left -= 1;
+            }
+            self.last = d;
+            self.lfo.advance(rate, self.sr);
+            // The read interpolates in f64, so neighboring samples near the f32 limit with opposite
+            // signs do not overflow.
+            let d = if d.is_nan() { 0.0 } else { d.clamp(0.0, max) };
+            let (di, frac) = (d.floor() as usize, f64::from(d - d.floor()));
+            for (ch, line) in self.lines.iter_mut().enumerate() {
+                // A non-finite sample is taken as silence. A channel the block leaves out is fed
+                // silence, so it holds none of its earlier audio when it comes back.
+                let dry = match channels.get(ch).filter(|_| ch < nch) {
+                    Some(c) if c[i].is_finite() => c[i],
+                    _ => 0.0,
+                };
+                line.push(dry);
+                if ch < nch {
+                    let (a, b) = (f64::from(line.tap(di)), f64::from(line.tap(di + 1)));
+                    channels[ch][i] = (a + (b - a) * frac) as f32;
+                }
             }
         }
     }
@@ -889,5 +1043,198 @@ mod tests {
                 assert!(g.iter().all(|v| (0.0..=1.0).contains(v)), "{from} to {to} at {start}: {g:?}");
             }
         }
+    }
+
+    fn vibrato(params: &[(&str, f32)], channels: usize) -> Vibrato {
+        let mut v = Vibrato::new(SR, channels);
+        for (id, x) in params {
+            assert!(v.set_param(id, *x), "{id}");
+        }
+        v.reset();
+        v
+    }
+
+    /// Slope of the ramp the delay tests feed in, per sample.
+    const RAMP: f32 = 1e-3;
+    /// Most the delay moves per sample during a glide at a depth of 100 cents: the curve's
+    /// steepest slope plus the glide's, with room for the rounding of the ramp.
+    const GLIDE_STEP: f32 = 0.0562 + 1.0 / 32.0 + 0.002;
+
+    /// The delay of a vibrato over `n` samples, read from a ramp that starts at `start` samples.
+    fn delays(v: &mut Vibrato, start: usize, n: usize) -> Vec<f32> {
+        let x: Vec<f32> = (start..start + n).map(|i| i as f32 * RAMP).collect();
+        let mut y = x.clone();
+        v.process(&mut [&mut y]);
+        x.iter().zip(&y).map(|(a, b)| (a - b) / RAMP).collect()
+    }
+
+    /// Largest change of the delay between neighboring samples, averaged over 2 * `k` samples to
+    /// smooth out the rounding of the ramp.
+    fn steepest(d: &[f32], k: usize) -> f32 {
+        (k..d.len() - k).map(|i| (d[i + k] - d[i - k]).abs() / (2 * k) as f32).fold(0.0, f32::max)
+    }
+
+    /// The delay is 0 at the start of each cycle and follows the sine or the triangle, and its
+    /// steepest slope lowers the pitch by the depth: 100 cents at a depth of 100 for both shapes.
+    #[test]
+    fn vibrato_delay_follows_the_shape_and_the_depth() {
+        let d_max = 1.0 - 2f32.powf(-100.0 / 1200.0);
+        for (shape, rate) in [(0, 6.0f32), (1, 6.0), (0, 1.0), (1, 14.0)] {
+            let mut v = vibrato(&[("rate", rate), ("depth", 100.0), ("shape", shape as f32)], 1);
+            let period = (SR / rate) as usize;
+            let swing = v.swing;
+            let d = delays(&mut v, 0, 2 * period);
+            for (i, got) in d.iter().enumerate() {
+                let p = (i as f64 * f64::from(rate) / f64::from(SR)).fract();
+                let want = swing * if shape == 1 { uni_tri(p) } else { uni_sine(p) };
+                assert!((got - want).abs() < 0.05, "shape {shape} at {rate} Hz, sample {i}: {got}, want {want}");
+            }
+            assert!(d[0].abs() < 0.05 && d[period].abs() < 0.05, "shape {shape}: {} {}", d[0], d[period]);
+            let slope = steepest(&d, 40);
+            let cents = 1200.0 * (1.0 - slope).log2();
+            assert!((cents + 100.0).abs() < 2.0, "shape {shape} at {rate} Hz: the pitch falls by {cents} cents");
+            assert!((slope - d_max).abs() < 0.002, "shape {shape} at {rate} Hz: slope {slope}");
+        }
+    }
+
+    /// A lower depth set at the middle of the cycle, where the delay is longest, glides the delay
+    /// down to the new curve without jumping, and afterward the output matches a vibrato that had
+    /// the new depth from the start.
+    #[test]
+    fn vibrato_depth_change_glides_to_the_new_curve() {
+        let half = 4000;
+        let mut v = vibrato(&[("rate", 6.0), ("depth", 100.0)], 1);
+        let mut w = vibrato(&[("rate", 6.0), ("depth", 10.0)], 1);
+        let a = delays(&mut v, 0, half);
+        delays(&mut w, 0, half);
+        assert!(v.set_param("depth", 10.0));
+        let b = delays(&mut v, half, 16_000);
+        let want = delays(&mut w, half, 16_000);
+        // The new curve moves by up to 0.0058 per sample, and the glide by 1/32 more.
+        let step = (b[0] - a[half - 1]).abs();
+        assert!(step < 0.04, "the delay jumped by {step}");
+        assert!(b.windows(2).all(|p| (p[1] - p[0]).abs() < 0.04), "the glide moved too fast");
+        assert!(b[100] > want[100] + 100.0, "{} {}", b[100], want[100]);
+        let glide = v.glide_len;
+        assert!(glide < b.len() / 2, "the glide has not ended: {glide}");
+        assert_eq!(b[glide..], want[glide..]);
+    }
+
+    /// A new rate takes effect from the next sample with the phase kept, the delay glides to the
+    /// new curve without jumping, and afterward follows it.
+    #[test]
+    fn vibrato_rate_change_keeps_the_phase_and_glides() {
+        let mut v = vibrato(&[("rate", 6.0), ("depth", 100.0)], 1);
+        // A quarter of a cycle at 6 Hz.
+        let a = delays(&mut v, 0, 2000);
+        assert!(v.set_param("rate", 3.0));
+        let swing = v.swing_len();
+        let b = delays(&mut v, 2000, 12000);
+        let step = (b[0] - a[1999]).abs();
+        assert!(step < GLIDE_STEP, "the delay jumped by {step}");
+        assert!(b.windows(2).all(|p| (p[1] - p[0]).abs() < GLIDE_STEP), "the glide moved too fast");
+        let glide = v.glide_len;
+        assert!(glide < b.len() / 2, "the glide has not ended: {glide}");
+        for (k, got) in b.iter().enumerate().skip(glide) {
+            let p = (0.25 + k as f64 * 3.0 / f64::from(SR)).fract();
+            let want = swing * uni_sine(p);
+            assert!((got - want).abs() < 0.05, "sample {k}: {got}, want {want}");
+        }
+    }
+
+    /// A change of shape glides from the last delay to the new curve without jumping.
+    #[test]
+    fn vibrato_shape_change_glides() {
+        for (from, to) in [(0.0, 1.0), (1.0, 0.0)] {
+            for start in [600, 2000, 4000, 7000] {
+                let mut v = vibrato(&[("rate", 6.0), ("depth", 100.0), ("shape", from)], 1);
+                let a = delays(&mut v, 0, start);
+                assert!(v.set_param("shape", to));
+                let b = delays(&mut v, start, 8000);
+                assert!((b[0] - a[start - 1]).abs() < GLIDE_STEP, "{from} to {to} at {start}: jumped");
+                assert!(b.windows(2).all(|p| (p[1] - p[0]).abs() < GLIDE_STEP), "{from} to {to} at {start}: the glide moved too fast");
+                assert!(b.iter().all(|d| *d > -0.05), "{from} to {to} at {start}: the delay went below 0");
+            }
+        }
+    }
+
+    /// After the input ends, the output falls silent within the reported tail, for every shape and
+    /// for a depth lowered just before the end, while the delay is still gliding down.
+    #[test]
+    fn vibrato_tail_covers_the_delay() {
+        for (rate, depth, shape, lower) in
+            [(1.0f32, 100.0f32, 1.0f32, false), (14.0, 50.0, 0.0, false), (1.0, 100.0, 1.0, true), (2.0, 100.0, 0.0, true)]
+        {
+            for len in [5000usize, 12000, 24000] {
+                let mut v = vibrato(&[("rate", rate), ("depth", depth), ("shape", shape)], 1);
+                let mut x = vec![0.5f32; len];
+                v.process(&mut [&mut x]);
+                if lower {
+                    assert!(v.set_param("depth", 0.0));
+                }
+                let tail = v.tail_samples();
+                let mut z = vec![0.0f32; 96_000];
+                v.process(&mut [&mut z]);
+                let last = z.iter().rposition(|s| *s != 0.0).map_or(0, |i| i + 1);
+                assert!(last <= tail, "{rate} Hz {depth} ct shape {shape} lower {lower} len {len}: sound until {last} after a tail of {tail}");
+            }
+        }
+    }
+
+    /// At zero depth the input passes unchanged, a non-finite sample comes out as silence, and a
+    /// channel past the configured count is left alone.
+    #[test]
+    fn vibrato_depth_zero_non_finite_and_extra_channels() {
+        let x = sine(220.0, 0.5, SR as f64, 4800, 0.0);
+        let mut v = vibrato(&[("depth", 0.0), ("shape", 1.0)], 2);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        v.process(&mut [&mut l, &mut r]);
+        assert!(l == x && r == x);
+        let mut v = vibrato(&[("depth", 0.0)], 1);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        l[99] = f32::NAN;
+        l[200] = f32::INFINITY;
+        v.process(&mut [&mut l, &mut r]);
+        assert!(l[99] == 0.0 && l[200] == 0.0 && l.iter().all(|s| s.is_finite()));
+        assert_eq!(r, x);
+        let mut v = vibrato(&[("depth", 100.0)], 1);
+        let mut l = x.clone();
+        l[99] = f32::NAN;
+        v.process(&mut [&mut l]);
+        assert!(l.iter().all(|s| s.is_finite()));
+        // Neighboring samples at the f32 limit with opposite signs stay finite.
+        let edge: Vec<f32> = (0..4800).map(|i| if i % 2 == 0 { f32::MAX } else { -f32::MAX }).collect();
+        for depth in [0.0, 100.0] {
+            let mut v = vibrato(&[("depth", depth)], 1);
+            let mut l = edge.clone();
+            v.process(&mut [&mut l]);
+            assert!(l.iter().all(|s| s.is_finite()), "depth {depth}");
+            if depth == 0.0 {
+                assert_eq!(l, edge);
+            }
+        }
+    }
+
+    /// A block that leaves a channel out feeds it silence, so the channel holds none of its earlier
+    /// audio when it comes back.
+    #[test]
+    fn vibrato_feeds_channels_a_block_leaves_out_silence() {
+        let p = [("rate", 1.0), ("depth", 100.0), ("shape", 1.0)];
+        let (mut left_out, mut silent) = (vibrato(&p, 2), vibrato(&p, 2));
+        let x = sine(220.0, 0.5, SR as f64, 12_000, 0.0);
+        for v in [&mut left_out, &mut silent] {
+            let (mut l, mut r) = (x.clone(), x.clone());
+            v.process(&mut [&mut l, &mut r]);
+        }
+        let mut l = x[..2000].to_vec();
+        left_out.process(&mut [&mut l]);
+        let (mut l, mut r) = (x[..2000].to_vec(), vec![0.0f32; 2000]);
+        silent.process(&mut [&mut l, &mut r]);
+        let (mut la, mut ra) = (x[..4800].to_vec(), x[..4800].to_vec());
+        left_out.process(&mut [&mut la, &mut ra]);
+        let (mut lb, mut rb) = (x[..4800].to_vec(), x[..4800].to_vec());
+        silent.process(&mut [&mut lb, &mut rb]);
+        assert_eq!(ra, rb);
+        assert_eq!(la, lb);
     }
 }
