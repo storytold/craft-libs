@@ -82,24 +82,9 @@ impl FilterRasterizer {
                 params.values = [displacement[0], displacement[1], 0.0, 0.0];
                 Some(map)
             }
-            FilterOperation::Box { radius } => {
-                // A vertical line blur from another format rounds only at the end, where this pass would round between the axes
-                if radius[0] <= 0.5 && radius[1] > 0.5 && params.source[2] != params.output[2] {
-                    return Ok(None);
-                }
+            FilterOperation::Box { radius, round_between } => {
                 params.control[0] = BOX;
-                for (axis, radius) in radius.into_iter().enumerate() {
-                    if radius <= 0.5 && params.source[2] == params.output[2] {
-                        continue;
-                    }
-                    params.control[1] = axis as u32;
-                    params.values[0] = radius;
-                    let radius = f64::from(radius);
-                    let edge = radius - ((radius - 0.5).ceil() - 0.5);
-                    params.values[1] = (edge / (1.0 + edge) * 256.0).round() as f32;
-                    passes.push(params);
-                    params.source = params.output;
-                }
+                push_box_passes(&mut passes, params, radius, round_between);
                 None
             }
             FilterOperation::ShortLine { major, slope, radius } => {
@@ -209,6 +194,27 @@ impl FilterRasterizer {
             pixels.retain_until_completed(&self.queue);
         }
         Ok(outputs.pop().map(|pixels| ResidentGrey16 { w, h, div: filter.div, alpha, pixels }))
+    }
+}
+
+/// One pass per axis of a box. An axis of at most half a pixel only runs to round to the node's format, and without
+/// `round_between` it leaves that to the second axis when that one blurs.
+fn push_box_passes(passes: &mut Vec<Params>, mut params: Params, radius: [f32; 2], round_between: bool) {
+    let second_axis_blurs = radius[1] > 0.5;
+    for (axis, radius) in radius.into_iter().enumerate() {
+        let converts = params.source[2] != params.output[2];
+        let rounds_later = axis == 0 && !round_between && second_axis_blurs;
+        if radius <= 0.5 && (!converts || rounds_later) {
+            continue;
+        }
+
+        params.control[1] = axis as u32;
+        params.values[0] = radius;
+        let radius = f64::from(radius);
+        let edge = radius - ((radius - 0.5).ceil() - 0.5);
+        params.values[1] = (edge / (1.0 + edge) * 256.0).round() as f32;
+        passes.push(params);
+        params.source = params.output;
     }
 }
 
@@ -333,23 +339,34 @@ mod tests {
     }
 
     #[test]
-    fn a_vertical_line_blur_into_eight_bits_matches_the_cpu() {
+    fn box_axes_round_to_the_node_format_like_the_cpu() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
-        let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), ..Default::default() };
-        let graph = Graph::parse(
-            "format 3\nsize 256\nmeta compiled \"1\"\nnode 1 input idx=0 gray=1 format=\"u16_compiled\"\n\
-             node 2 line_blur in=@1 intensity=1.3 angle=0.25 format=\"u8_compiled\"\noutput out 2\n",
-        )
-        .unwrap();
+        let nodes = Arc::new(Nodes::default());
+        let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         // 16-bit detail that rounding to 8 bits before the blur loses
         let inputs = [Some(Tex::gray_fn(256, 256, |u, v| 0.5 + 0.004 * (u * 301.0).sin() + 0.003 * (v * 457.0).cos()))];
+        for (filter, format, options) in [
+            ("line_blur", "u8_compiled", "intensity=1.3 angle=0.25"),
+            ("line_blur", "u16_compiled", "intensity=1.3 angle=0.25"),
+            ("box_blur", "u8_compiled", "intensity=1.7"),
+            ("box_blur", "u8_compiled", "intensity=1.7 aspect_x=0"),
+        ] {
+            nodes.resident.store(0, Relaxed);
+            let graph = Graph::parse(&format!(
+                "format 3\nsize 256\nmeta compiled \"1\"\nnode 1 input idx=0 gray=1 format=\"u16_compiled\"\n\
+                 node 2 {filter} in=@1 {options} format=\"{format}\"\noutput out 2\n"
+            ))
+            .unwrap();
 
-        let cpu = &graph.evaluate_with_inputs(None, &inputs).unwrap()["out"];
-        let gpu = &graph.evaluate_in(&context, None, &inputs).unwrap()["out"];
+            let cpu = &graph.evaluate_with_inputs(None, &inputs).unwrap()["out"];
+            let gpu = &graph.evaluate_in(&context, None, &inputs).unwrap()["out"];
 
-        assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()));
-        let mismatch = cpu.px.iter().zip(&gpu.px).position(|(a, b)| a != b);
-        assert_eq!(mismatch, None, "first mismatched pixel");
+            let label = format!("{filter} {options} into {format}");
+            assert_eq!(nodes.resident.load(Relaxed), 1, "{label} must run on the GPU");
+            assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()), "{label}");
+            let mismatch = cpu.px.iter().zip(&gpu.px).position(|(a, b)| a != b);
+            assert_eq!(mismatch, None, "{label}: first mismatched pixel");
+        }
     }
 
     #[test]

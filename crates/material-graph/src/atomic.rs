@@ -306,7 +306,7 @@ pub(crate) fn resident_filter<'a>(
             if radius.into_iter().any(|r| !(0.0..=max_radius).contains(&r)) {
                 return None;
             }
-            FilterOperation::Box { radius }
+            FilterOperation::Box { radius, round_between: true }
         }
         "line_blur" if quantized_blur => {
             let [rx, ry] = radii(value("intensity", LINE_BLUR_DEFAULT_INTENSITY));
@@ -319,13 +319,13 @@ pub(crate) fn resident_filter<'a>(
                 if radius.into_iter().any(|r| r > max_radius) {
                     return None;
                 }
-                FilterOperation::Box { radius }
+                FilterOperation::Box { radius, round_between: false }
             } else {
                 let (dx, dy) = ((rx - LINE_HALF_PIXEL).max(0.0) * cos, (ry - LINE_HALF_PIXEL).max(0.0) * sin);
                 let longest = dx.abs().max(dy.abs());
                 let along_y = f64::from(dx.abs()) * h as f64 <= f64::from(dy.abs()) * w as f64 * (1.0 + TIE_SLACK);
                 if longest == 0.0 {
-                    FilterOperation::Box { radius: [0.0; 2] }
+                    FilterOperation::Box { radius: [0.0; 2], round_between: false }
                 } else if longest < 1.0 {
                     let slope = if along_y { dx / dy * h as f32 / w as f32 } else { dy / dx * w as f32 / h as f32 };
                     FilterOperation::ShortLine { major: usize::from(along_y), slope, radius: LINE_HALF_PIXEL + longest }
@@ -1257,6 +1257,27 @@ mod tests {
             assert_eq!((a.w, a.h), (b.w, b.h));
             assert!(a.px.iter().flatten().zip(b.px.iter().flatten()).all(|(p, q)| p.to_bits() == q.to_bits()));
         }
+    }
+
+    #[test]
+    fn only_a_box_blur_rounds_between_its_axes_on_the_gpu() {
+        let source = crate::tex::Grey16 { w: 256, h: 256, px: vec![0; 256 * 256], div: STEPS_16 as f32, alpha: 1.0 };
+        let round_between = |kind: &str, angle: f32| {
+            let node = Node {
+                kind: kind.into(),
+                nums: BTreeMap::from([("ofmt".into(), COMPILED_8_BIT as f32), ("intensity".into(), 1.3), ("angle".into(), angle)]),
+                ..Default::default()
+            };
+            let filter = resident_filter(&node, [256, 256], STEPS_8 as f32, crate::accelerator::GreyInput::Host(&source), None);
+            match filter.map(|filter| filter.operation) {
+                Some(crate::accelerator::FilterOperation::Box { round_between, .. }) => round_between,
+                _ => panic!("{kind} at angle {angle} should be a box on the GPU"),
+            }
+        };
+
+        assert!(round_between("box_blur", 0.0));
+        assert!(!round_between("line_blur", 0.25));
+        assert!(!round_between("line_blur", 0.0));
     }
 
     #[test]
