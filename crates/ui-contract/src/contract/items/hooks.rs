@@ -442,6 +442,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let fit = self.header.fit.as_ref().map(|(column, _)| column.clone());
         let mut fit_widest = 0.0_f32;
         let aligns = self.header.aligns();
+        #[allow(clippy::cognitive_complexity)]
         let place_rows = |ui: &mut Ui| {
             // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
             let members_ui = C::MEMBERS.then(|| {

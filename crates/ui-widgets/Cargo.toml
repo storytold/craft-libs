@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Components of the craft UI library: buttons, choices, fields, lists, menus, pickers, tabs, tables and bars"
 
+[package.metadata.craft]
+reads = ["crates/ui-contract/tests/fonts/NotoSansArabic-test.ttf"]
+
 [lib]
 # Every test lives in the `it` integration binary.
 test = false

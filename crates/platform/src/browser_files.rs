@@ -176,9 +176,12 @@ fn write_name(path: &Path) -> String {
     if base.is_empty() { "document".to_owned() } else { base.to_owned() }
 }
 
+/// Callback the embedding page registers to intercept a browser file save before falling back to a download.
+pub(crate) type PageSaver = dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync;
+
 /// A write's route: the embedding page when `page` answers (`Ok(true)`), else `download` (`Ok(false)`).
 pub(crate) fn page_or_download(
-    page: Option<&(dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync)>,
+    page: Option<&PageSaver>,
     name: &str,
     bytes: &[u8],
     save_as: bool,

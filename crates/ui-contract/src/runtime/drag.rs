@@ -637,6 +637,7 @@ pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
 /// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer a drop doing `op`, with its mark in
 /// layer space and the tokens of the target's region. A `window` target covers the whole window; an `under_modal` one
 /// takes OS files under a modal layer.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn register(
     ctx: &Context,
     owner: Id,
