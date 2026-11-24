@@ -735,11 +735,17 @@ pub struct FontPicker<'a> {
 #[derive(Clone, Copy, Default)]
 struct StopBuilds(u64);
 
+/// Where the stop-build count lives in the context's memory.
+#[cfg(feature = "screen-testing")]
+fn stop_builds_id() -> egui::Id {
+    craft_ui::runtime::memory::global("font_picker_stop_builds", ())
+}
+
 /// How many times a closed [`FontPicker`] built its stop list on `ctx`.
 #[doc(hidden)]
 #[cfg(feature = "screen-testing")]
 pub fn stop_builds(ctx: &egui::Context) -> u64 {
-    craft_ui::runtime::egui::memory::with::<StopBuilds, _>(ctx, |builds| builds.0)
+    craft_ui::runtime::memory::with_session::<StopBuilds, _>(ctx, stop_builds_id(), |builds| builds.0)
 }
 
 impl<'a> FontPicker<'a> {
@@ -819,7 +825,7 @@ impl<'a> FontPicker<'a> {
     /// families in the list's narrowed order. A notice takes no step.
     fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<Stop> {
         #[cfg(feature = "screen-testing")]
-        craft_ui::runtime::egui::memory::with::<StopBuilds, _>(&cx.response.ctx, |builds| builds.0 += 1);
+        craft_ui::runtime::memory::with_session::<StopBuilds, _>(&cx.response.ctx, stop_builds_id(), |builds| builds.0 += 1);
         let folder = cx.env.folder();
         let host = rank::host_rows(self.host, "", &folder)
             .into_iter()
