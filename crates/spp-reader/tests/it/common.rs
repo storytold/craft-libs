@@ -98,8 +98,10 @@ mod tests {
 
         discover(&folder.0, &mut files);
 
+        let mut expected = vec![top, nested];
         files.sort();
-        assert_eq!(files, vec![top, nested]);
+        expected.sort();
+        assert_eq!(files, expected);
     }
 
     #[test]
@@ -123,5 +125,20 @@ mod tests {
         discover_with(&folder.0, &mut files, &vanished);
 
         assert!(files.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_follows_a_link_to_a_folder() {
+        let folder = ScratchFolder::new("discover_link");
+        let outside = ScratchFolder::new("discover_link_target");
+        let project = outside.0.join(format!("linked.{PROJECT_EXT}"));
+        std::fs::write(&project, b"").unwrap();
+        std::os::unix::fs::symlink(&outside.0, folder.0.join("link")).unwrap();
+        let mut files = Vec::new();
+
+        discover(&folder.0, &mut files);
+
+        assert_eq!(files, vec![folder.0.join("link").join(format!("linked.{PROJECT_EXT}"))]);
     }
 }
