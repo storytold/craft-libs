@@ -16,8 +16,8 @@ use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
-    Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Scopes,
-    Trigger, TypingRule,
+    Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Problem,
+    Scopes, Trigger, TypingRule,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -975,6 +975,13 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
                 .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
         }
         keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, typing);
+    }
+    // An override whose key names no command binds nothing and leaves that command's defaults in place; a misspelt id in
+    // an app's own table otherwise fails without a trace.
+    for problem in keymap.problems() {
+        if let Problem::UnknownCommand { key } = problem {
+            log::warn!("shortcut override `{key}` names no command and binds nothing");
+        }
     }
     let window_shortcuts = registry
         .defs()
