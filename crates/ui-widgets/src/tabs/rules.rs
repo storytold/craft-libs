@@ -15,6 +15,8 @@ pub enum DocumentTabLook {
     /// PdfCraft's tabs: they shrink before they overflow (a name at most 22 digits wide, at its least a readable
     /// prefix), stand the inline gap apart, and a modified tab shows the marker dot in place of the `*`.
     Shrinking,
+    /// VectorCraft's tabs: whole titles as [`Whole`](Self::Whole), the title and its `*` in the label's semibold face.
+    Semibold,
 }
 
 /// The look of panel tabs ([`TabKind::Panel`]): a strip's choice ([`TabStrip::panel_look`](super::TabStrip)), which a
@@ -26,7 +28,8 @@ pub enum PanelTabLook {
     #[default]
     Plain,
     /// VectorCraft's tabs: the shown tab on a filled pill (`surface.control` with `shape.radius.control` corners), a
-    /// small control high in the middle of the strip; a tab under the pointer shows the pill too.
+    /// small control high in the middle of the strip; a tab under the pointer shows the pill too. A dock group's panel
+    /// menu button stands in the strip's middle with them.
     Pill,
 }
 

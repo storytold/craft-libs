@@ -6,9 +6,10 @@ use craft_host::target::Os;
 use craft_ui::contract::{Common, Component, Cx, Input, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState};
 use craft_ui::runtime::env::{AltCodePages, RootEnv};
-use craft_ui::runtime::focus::KeyUse;
+use craft_ui::runtime::focus::{FocusTarget, KeyUse, host_canvas, request};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::style::StyleCx;
+use craft_ui::testing::focus::{named_id, widget};
 use craft_ui::testing::input::{key_press, key_repeat, text};
 use craft_ui::testing::pointer::click;
 use craft_ui::testing::{Frames, trial};
@@ -247,4 +248,68 @@ fn an_alt_numpad_code_types_its_character_once() {
     let option = mac.send(code("0233"));
     assert!(!option.text.contains('é'), "macOS has no Alt codes: {option:?}");
     assert!(!option.lone_alt, "macOS has no lone Alt either");
+}
+
+/// Alt with the digit 3, which the host canvas of the next trial claims.
+const ALT_3: craft_keymap::Chord = craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num3);
+
+/// An app's Alt+digit shortcut on Windows and Linux: the app's own egui canvas (`host_canvas`) claims Alt+3. With
+/// nothing focused the canvas is the window's key target, so Alt-code entry leaves the claimed press and egui's input
+/// keeps it for the app, while an unclaimed Alt+5 still folds into a code. With the canvas focused, the claimed press
+/// still reaches egui. A focused text field types Alt codes again, with the claimed digit among them.
+#[trial]
+fn an_alt_digit_a_host_canvas_claims_reaches_the_app_and_a_field_still_types_codes() {
+    for os in [Os::Windows, Os::Linux] {
+        let canvas = named_id("alt digit canvas");
+        let typed = Rc::new(RefCell::new(String::new()));
+        let reached = Rc::new(RefCell::new(Vec::<Key>::new()));
+        let mut show = {
+            let (typed, reached) = (Rc::clone(&typed), Rc::clone(&reached));
+            move |ui: &mut egui::Ui| {
+                let alt_digits: Vec<Key> = ui.input(|input| {
+                    input
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt => Some(*key),
+                            _ => None,
+                        })
+                        .collect()
+                });
+                reached.borrow_mut().extend(alt_digits);
+                widget(ui, canvas);
+                host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_claims(&[ALT_3]));
+                Probe::new(&typed).label("Text").id_salt("alt_code_field").show_at(ui, AT);
+            }
+        };
+        let mut frames = Frames::new();
+        craft_ui::testing::windows::set_os(&frames.ctx, os);
+        frames.root(RootEnv::default().alt_code_pages(AltCodePages::new(1252, 437)));
+        frames.idle(3, &mut show);
+        // Plays `sequence`, then a frame with none; returns the Alt presses that reached egui and the field's text.
+        let send = |frames: &mut Frames, show: &mut dyn FnMut(&mut egui::Ui), sequence: Vec<Vec<Event>>| {
+            reached.borrow_mut().clear();
+            typed.borrow_mut().clear();
+            for events in sequence {
+                frames.frame(events, &mut *show);
+            }
+            frames.frame(Vec::new(), &mut *show);
+            (reached.take(), typed.take())
+        };
+
+        let (keys, _) = send(&mut frames, &mut show, code("3"));
+        assert!(keys.contains(&Key::Num3), "{os:?}: with nothing focused, the canvas's claimed Alt+3 reaches egui: {keys:?}");
+        let (keys, _) = send(&mut frames, &mut show, code("5"));
+        assert!(!keys.contains(&Key::Num5), "{os:?}: an unclaimed Alt+5 folds into an Alt code: {keys:?}");
+
+        request(&frames.ctx, FocusTarget::Id(canvas));
+        let (keys, _) = send(&mut frames, &mut show, code("3"));
+        assert!(keys.contains(&Key::Num3), "{os:?}: the focused canvas's claimed Alt+3 reaches egui: {keys:?}");
+
+        click(&mut frames, AT.center(), &mut show);
+        frames.idle(1, &mut show);
+        let (keys, text) = send(&mut frames, &mut show, code("0233"));
+        assert_eq!(text, "é", "{os:?}: the focused field types the code, its 3 included");
+        assert!(keys.is_empty(), "{os:?}: no digit of the code reaches egui: {keys:?}");
+    }
 }

@@ -102,6 +102,16 @@ pub struct DockSizes {
     pub grip: f32,
 }
 
+/// Which inset a docked column's card takes on its outer side ([`DockSizes::card_place`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CardInset {
+    /// The first column, at the dock's window edge: [`DockSizes::card`].
+    Edge,
+    /// A column past its outer neighbour's card: [`DockSizes::card_gutter`].
+    Gutter,
+}
+
 impl DockSizes {
     /// The sizes in the root scope's style, for code outside a style pass:
     /// `StyleCx::with_root(ctx, DockSizes::style)`.
@@ -206,10 +216,25 @@ impl DockSizes {
     /// [`card_gutter`](Self::card_gutter) for the others, which stand that far from their outer neighbour's card. A
     /// docked column is that much wider than its content.
     pub fn card_inset(&self, at: usize) -> f32 {
+        self.card_place(at).map_or(0.0, |place| self.inset(place))
+    }
+
+    /// Which inset the card of a dock's docked column `at` from the window edge inwards takes on its outer side: none
+    /// without [`column_cards`](Self::column_cards); [`CardInset::Edge`] for the first column, [`CardInset::Gutter`]
+    /// for the others.
+    pub fn card_place(&self, at: usize) -> Option<CardInset> {
         match (self.column_cards, at) {
-            (false, _) => 0.0,
-            (true, 0) => self.card,
-            (true, _) => self.card_gutter,
+            (false, _) => None,
+            (true, 0) => Some(CardInset::Edge),
+            (true, _) => Some(CardInset::Gutter),
+        }
+    }
+
+    /// The inset on the outer side of a card at `place`: [`card`](Self::card) or [`card_gutter`](Self::card_gutter).
+    pub fn inset(&self, place: CardInset) -> f32 {
+        match place {
+            CardInset::Edge => self.card,
+            CardInset::Gutter => self.card_gutter,
         }
     }
 
@@ -572,6 +597,20 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     /// registration order.
     pub fn resolve(ctx: &Context, dock: Id, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
         Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.at(at))).flatten()
+    }
+
+    /// The rect of a group in the dock `dock` as the previous pass showed it, by the side spots it registered (a
+    /// [`DockSpot::Group`] applies to its group's rect); `in_group` tells the group's panels. `None` outside a pass
+    /// and for a group that registered no side spots, such as a minimized one.
+    pub(crate) fn group_rect(ctx: &Context, dock: Id, in_group: impl Fn(&P) -> bool) -> Option<Rect> {
+        Self::with_pass(ctx, |pass| {
+            let (_, targets) = pass.before.iter().find(|(id, _)| *id == dock)?;
+            targets.targets.iter().find_map(|target| match &target.spot {
+                DockSpot::Group { anchor, .. } if in_group(anchor) => Some(target.applies),
+                _ => None,
+            })
+        })
+        .flatten()
     }
 }
 

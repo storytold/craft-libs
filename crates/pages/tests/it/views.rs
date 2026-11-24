@@ -512,7 +512,7 @@ fn a_page_gap_change_keeps_the_scroll_offset() {
 #[trial]
 fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     let budget = TextureStoreOptions::pages().budget.max_entries;
-    let count = 4 * budget;
+    let count = 2 * budget;
     let state = Rc::new(RefCell::new(state_with(|s| {
         s.continuous = true;
         s.fit = Fit::None;

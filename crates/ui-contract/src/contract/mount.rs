@@ -365,25 +365,24 @@ impl Host for ViewportHost {
         let spec = self.spec.clone().unwrap_or_else(by_rank);
         let placed = self.overlay.placed;
         let full_window = self.overlay.is_full_window();
-        // A full-window container fills its window, so the window's own layout memory holds the size the user gave
-        // it; before it has one the window opens at the opener's content size, large enough for a workspace.
-        let measured = || {
-            let remembered = layout_memory::read(&ctx, id);
-            if full_window { remembered.or_else(|| Some(ctx.content_rect().size())) } else { remembered }
-        };
+        // A full-window container fills its window and has no content size: its window opens at the opener's content
+        // size, large enough for a workspace. What its body took is no size for the window: side panels, header and
+        // footer are no part of it, and a window sent it shrank by them each pass (photocraft#16595).
+        let measured = || if full_window { Some(ctx.content_rect().size()) } else { layout_memory::read(&ctx, id) };
         let open = ViewportOpen {
             id,
             title: title.as_str(),
             // A placed rect is the caller's size for the window, within the window's limits, which the OS would clamp it
             // to; then a resizable fallback's default size, as the layer takes it; the measured size is for a window
             // sized by content: what its body took in the window, recorded once the window reported its place
-            // (`steps::record_body_size`).
+            // (`steps::record_body_size`), or a full-window container's opening size.
             size: placed
                 .map(|rect| self.overlay.size_limits.clamp(rect.size()))
                 .or(self.overlay.size.filter(|_| self.overlay.fit == overlay::OverlayFit::Resizable))
                 .or_else(measured),
-            // A resizable window takes its default or content size to open; from then on its size is the user's.
-            follows_size: placed.is_some() || self.overlay.fit != overlay::OverlayFit::Resizable,
+            // A resizable window takes its default or content size to open; from then on its size is the user's, as a
+            // full-window container's is.
+            follows_size: placed.is_some() || (!full_window && self.overlay.fit != overlay::OverlayFit::Resizable),
             save: self.save.as_deref(),
             spec: &spec,
             limits: (Some(self.overlay.size_limits.min), self.overlay.size_limits.max),

@@ -5,7 +5,7 @@ use serde_json::{Map, Number, Value};
 use super::{FormatErrors, SCHEMA, SCHEMA_VERSION, ThemeFile};
 use crate::scale::Radius;
 use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, GripSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
-use crate::tokens::{GripMark, KnobShape, WellShape};
+use crate::tokens::{KnobShape, WellShape};
 
 /// Top-level keys in the order a file lists them; other keys follow, sorted.
 const TOP_ORDER: [&str; 14] = [
@@ -173,7 +173,7 @@ fn update_shape(shape: &mut Map<String, Value>, s: &ShapeSeed) {
 fn grip(out: &mut Map<String, Value>, g: &GripSeed) {
     match g.mark {
         Some(mark) => {
-            out.insert("mark".to_owned(), Value::String(if mark == GripMark::Ticks { "ticks" } else { "dots" }.to_owned()));
+            out.insert("mark".to_owned(), Value::String(mark.name().to_owned()));
         }
         None => {
             out.remove("mark");

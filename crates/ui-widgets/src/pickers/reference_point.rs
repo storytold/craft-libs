@@ -12,6 +12,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, Flags, FocusLook, Stateful, States, StyleColor, StyleCx, SurfaceKind, SurfaceLook, UiTokens};
 use craft_behavior::{Anchor9, Metrics, NavShape, PartKey, PartRef, Roving, Sense};
+use craft_theme::Rgba;
 use egui::{CornerRadius, Pos2, Rect, Vec2, vec2};
 
 #[cfg(feature = "suite")]
@@ -62,7 +63,7 @@ pub struct ReferencePointStyle {
     picked_dot: f32,
     /// The dots' corner radius.
     dot_radius: egui::CornerRadius,
-    /// The picked point's dot.
+    /// The picked point's dot or square: `accent.text`, `text.normal` in the `Squares` look.
     ink: Stateful<StyleColor>,
     /// The side of the square one growth arrow fits in.
     arrow: f32,
@@ -104,8 +105,9 @@ pub enum ReferencePointLook {
     /// A dot for each point, the pick's twice as wide.
     #[default]
     Dots,
-    /// Eight outer squares joined by one line round the box and a lone centre square, the pick filled, with growth
-    /// arrows in `Dots` only.
+    /// Eight outer squares joined by one line round the box and a lone centre square in the muted ink, the pick
+    /// filled in the normal text ink, on the surface around the picker with no well of its own. Growth arrows are
+    /// in `Dots` only.
     Squares,
 }
 
@@ -213,18 +215,25 @@ impl Component for ReferencePoint<'_> {
         let edge = Stateful::new(cx.color(colors.line.control_edge));
         let disabled = cx.color(colors.text.disabled);
         let look = |rest: StyleColor| Stateful::new(rest).off(States::new(rest, rest, rest, disabled));
-        ReferencePointStyle {
-            metrics: Metrics::new(),
-            surface: SurfaceLook::new(Stateful::new(StyleColor(sunken.fill)))
+        let squares = key.look == ReferencePointLook::Squares;
+        // The squares stand on the surface around them, joined by their own line; the dots sit in a sunken well.
+        let surface = if squares {
+            SurfaceLook::new(Stateful::new(cx.color(Rgba::TRANSPARENT)))
+        } else {
+            SurfaceLook::new(Stateful::new(StyleColor(sunken.fill)))
                 .kind(SurfaceKind::Sunken)
                 .radius(sunken.radius)
-                .border(edge, cx.tokens.stroke.thin),
+                .border(edge, cx.tokens.stroke.thin)
+        };
+        ReferencePointStyle {
+            metrics: Metrics::new(),
+            surface,
             focus: cx.focus_look(),
             cell: if key.compact { cx.tokens.size.icon.md / GRID as f32 } else { cx.tokens.size.control.md },
             dot: DOT,
             picked_dot: if key.compact { DOT } else { DOT * 2.0 },
             dot_radius: UiTokens::corner(cx.tokens.shape.radius.sm),
-            ink: look(cx.color(colors.accent.text)),
+            ink: look(cx.color(if squares { colors.text.normal } else { colors.accent.text })),
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
             square: cx.tokens.size.handle.sm,
