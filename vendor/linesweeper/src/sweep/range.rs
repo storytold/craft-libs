@@ -223,8 +223,11 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
     /// Returns the collection of all output events that end at the current
     /// position, or `None` if this batcher is finished.
     ///
-    /// All the returned events start at the previous `x` position and end
-    /// at the current `x` position. In particular, if you alternate between
+    /// Each returned horizontal fragment ends at the current `x` position or
+    /// at its own end, whichever comes first. Before this method has run once,
+    /// each fragment starts at its own start. After that, each one starts at
+    /// the `x` position of the previous call or at its own start, whichever
+    /// comes later. In particular, if you alternate between
     /// calling [`SweepLineRange::increase_x`] and this method, you'll
     /// receive non-overlapping batches of output events.
     pub fn events(&mut self) -> Option<Vec<OutputEvent>> {
