@@ -57,7 +57,6 @@ pub mod server;
 
 #[cfg(feature = "ui")]
 pub use control::{ControlChannel, ControlRequest, ControlResponse, Dispatch, Reply};
-#[cfg(not(target_arch = "wasm32"))]
 pub use protocol::REPLY_DEADLINE;
 #[cfg(feature = "ui")]
 pub use screenshot::Captures;

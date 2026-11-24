@@ -15,9 +15,9 @@ use craft_ui::form::SliderField;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::presets::{
-    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetSource, PresetState, PresetView, PreviewPaint,
+    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetSource, PresetState, PresetView,
 };
-use craft_ui::primitives::IconSpec;
+use craft_ui::primitives::{FacePaint, IconSpec};
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::runtime::overlay::CloseReason;
 use egui::{Pos2, Response, Ui};
@@ -277,7 +277,7 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash + MemoProps> {
     /// Paints the brush's current tip on the chip, as the app's engine draws it (its falloff, angle and roundness, a
     /// sampled tip's shape); without it the chip shows the picked preset's tip.
     #[prop]
-    tip: Option<PreviewPaint>,
+    tip: Option<FacePaint>,
 }
 
 /// The app's own rows of the picker's gear menu.

@@ -150,3 +150,29 @@ fn max_coverage_omits_excess_strokes_and_fast_rects() {
         assert_eq!(red(kept.bytes()), 0);
     }
 }
+
+/// A soft mask set outside a form, whose group draws that same form (an exporter's one shared cover form), is finite
+/// nesting, not a form drawing itself: the mask draws the form whole and the page is not reported truncated.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_soft_mask_drawing_the_form_it_masks_draws_it_whole() {
+    let content = "0 0 1 rg /G gs /X Do";
+    let cover = "0 0 40 20 re f";
+    let mask = "1 g /X Do";
+    let bytes = assemble(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R /Resources << /XObject << /X 5 0 R >> /ExtGState << /G << /SMask << /S /Luminosity /G 6 0 R >> >> >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 40 20] /Length {} >>\nstream\n{cover}\nendstream", cover.len()),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 40 20] /Group << /S /Transparency >> /Resources << /XObject << /X 5 0 R >> >> /Length {} >>\nstream\n{mask}\nendstream",
+            mask.len()
+        ),
+    ]);
+    let (r, warnings) = render_with_coverage_budget(bytes, None);
+    assert!(!r.diagnostics.content_truncated, "the mask's form is not a form drawing itself");
+    assert_eq!(warnings, 0);
+    let blue = r.bytes().as_chunks::<4>().0.iter().filter(|p| p[2] > 200 && p[0] < 50).count();
+    assert!(blue > r.bytes().len() / 4 / 2, "the white mask shows the blue cover");
+}

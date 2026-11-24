@@ -7,7 +7,7 @@ use crate::testing::{Frames, style, trial};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
 use craft_theme::{AppSizes, Appearance, Contrast, IconPackId, Mode, Size, TextSize, builtins};
-use egui::{Color32, ColorImage, Rect, Shape, TextureId, pos2};
+use egui::{Color32, ColorImage, Rect, Shape, TextureId, pos2, vec2};
 use std::cell::RefCell;
 
 // Built from parts so the workspace scan of icon-id literals does not read them.
@@ -18,8 +18,11 @@ const DISC: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24
 const SQUARE: &[u8] =
     b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" fill=\"black\"/></svg>";
 
-const FIRST_SET: AppIcons = AppIcons { name: "t10-first", stroke_width: None, icons: &[(FIRST_NAME, DISC), (CATALOG_NAME, DISC)] };
-const SECOND_SET: AppIcons = AppIcons { name: "t10-second", stroke_width: None, icons: &[(FIRST_NAME, SQUARE), (SECOND_NAME, SQUARE)] };
+const FIRST_SET: AppIcons = AppIcons { name: "t10-first", stroke_width: None, icons: &[(FIRST_NAME, DISC), (CATALOG_NAME, DISC)], fills: &[] };
+const SECOND_SET: AppIcons = AppIcons { name: "t10-second", stroke_width: None, icons: &[(FIRST_NAME, SQUARE), (SECOND_NAME, SQUARE)], fills: &[] };
+const FILLED_NAME: &str = concat!("zz_k10_", "filled");
+const FILL_COLOR: [u8; 4] = [255, 0, 0, 255];
+const FILLED_SET: AppIcons = AppIcons::new("k10-filled", None, &[(FILLED_NAME, DISC)]).with_fills(&[(FILLED_NAME, SQUARE, FILL_COLOR)]);
 
 fn icon(name: &'static str) -> Option<SvgIcon> {
     let tokens = style::tokens(Mode::Light, Contrast::Standard);
@@ -89,10 +92,10 @@ const LAYERED: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0
 <rect x=\"4\" y=\"8\" width=\"10\" height=\"8\" fill=\"black\"/>\
 <g class=\"accent\"><path d=\"M14 8 L22 12 L14 16 Z\" fill=\"black\"/></g>\
 <rect class=\"fixed\" x=\"2\" y=\"8\" width=\"2\" height=\"8\" fill=\"#d02020\"/></svg>";
-const LAYERED_SET: AppIcons = AppIcons { name: "t19-layers", stroke_width: None, icons: &[(LAYERED_NAME, LAYERED)] };
+const LAYERED_SET: AppIcons = AppIcons { name: "t19-layers", stroke_width: None, icons: &[(LAYERED_NAME, LAYERED)], fills: &[] };
 /// A plain icon with no classed part.
 const PLAIN_NAME: &str = concat!("zz_t19_", "plain");
-const PLAIN_SET: AppIcons = AppIcons { name: "t19-plain", stroke_width: None, icons: &[(PLAIN_NAME, DISC)] };
+const PLAIN_SET: AppIcons = AppIcons { name: "t19-plain", stroke_width: None, icons: &[(PLAIN_NAME, DISC)], fills: &[] };
 
 /// The texture and tint of every textured shape `shapes` holds, in paint order.
 fn textured(shapes: &[Shape]) -> Vec<(TextureId, Color32)> {
@@ -196,4 +199,24 @@ fn an_accent_part_paints_in_the_accent_ink_a_fixed_part_as_drawn_and_both_take_t
 
     // An icon with no classed part paints its ink layer alone.
     assert_eq!(paint(PLAIN_NAME, DataMode::Full, ink).len(), 1, "a layer with no part paints no quad");
+}
+
+/// The tints of the textured shapes `name` paints under the tint `color`, first to last.
+fn painted(name: &'static str, color: Color32) -> Vec<Color32> {
+    let Some(svg) = icon(name) else { return Vec::new() };
+    let square = Rect::from_min_size(pos2(10.0, 10.0), vec2(24.0, 24.0));
+    textured(&Frames::new().frame_shapes(|ui| svg.paint(ui.painter(), square, color))).into_iter().map(|(_, tint)| tint).collect()
+}
+
+#[trial]
+fn an_icon_with_a_fill_keeps_its_colour_under_the_tint() {
+    register_app_icons(&FILLED_SET);
+    let [r, g, b, a] = FILL_COLOR;
+    let fill = Color32::from_rgba_unmultiplied(r, g, b, a);
+    // design: allow[raw-colour/const](white is the tint that leaves colours unchanged: the fill keeps its colour under it too)
+    for tint in [Color32::from_rgb(10, 200, 30), Color32::WHITE] {
+        assert_eq!(painted(FILLED_NAME, tint), [fill, tint], "the fill keeps its colour and the icon takes the tint");
+    }
+    let tint = Color32::from_rgb(10, 200, 30);
+    assert_eq!(painted(CATALOG_NAME, tint), [tint], "an icon with no fill paints the icon only");
 }

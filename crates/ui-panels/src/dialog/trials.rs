@@ -21,7 +21,7 @@ use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
 use craft_behavior::ColumnWidth;
 use craft_quit::{CloseAnswer, CloseScope};
-use egui::{Key, Modifiers, Rect, Ui};
+use egui::{Key, Modifiers, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -439,4 +439,183 @@ fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
     assert_eq!(run(Some(Key::Enter)).1, (Some(CloseReason::Activated), Some(2)), "Enter picks OK");
     let (escaped, _) = run(Some(Key::Escape)).1;
     assert_eq!(escaped, Some(CloseReason::Escape), "Escape cancels");
+}
+
+/// A fixture that shows a dialog "Options" while `open` is set, with `body` inside it.
+fn dialog_fixture(open: &std::rc::Rc<Cell<bool>>, make: impl Fn(Dialog<'_>) -> Dialog<'_> + 'static, body: impl Fn(&mut Ui) + 'static) -> Fixture {
+    let shown = std::rc::Rc::clone(open);
+    Fixture::new(move |ui| {
+        let mut now = shown.get();
+        if now {
+            make(Dialog::new("Options").opened(Bind::bound(&mut now))).show(ui, |ui, _| body(ui));
+        }
+        shown.set(now);
+    })
+}
+
+/// Closes the dialog of `fixture` for a pass and opens it again.
+fn reopen(fixture: &mut Fixture, open: &std::rc::Rc<Cell<bool>>) {
+    open.set(false);
+    fixture.idle(3);
+    open.set(true);
+    fixture.settle();
+}
+
+#[trial]
+fn a_reopened_dialog_focuses_its_first_enabled_field_again() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog,
+        |ui| {
+            let (mut first, mut second) = (String::new(), String::new());
+            TextField::new("First", Bind::bound(&mut first)).enabled(false).show(ui);
+            TextField::new("Second", Bind::bound(&mut second)).show(ui);
+        },
+    );
+    fixture.settle();
+    let on_second = |fixture: &Fixture| {
+        let second = fixture.by_label("Second").expect("the second field is shown");
+        crate::testing::access::focused_key(fixture.tree()) == second.node
+    };
+    assert!(on_second(&fixture), "the first enabled field takes the focus, not the disabled one before it");
+    reopen(&mut fixture, &open);
+    assert!(on_second(&fixture), "and takes it again after a reopen");
+}
+
+/// The window of the title-band trial: room around the dialog to move it in.
+const BAND_ROOM: Vec2 = Vec2::new(900.0, 700.0);
+/// Where a drag in the body starts, from the middle of the dialog's bottom edge: inside the body, far from the title.
+const IN_BODY: Vec2 = Vec2::new(0.0, -6.0);
+/// The drag that starts in the body.
+const BODY_DRAG: Vec2 = Vec2::new(60.0, 40.0);
+/// The drag of the title band.
+const BAND_DRAG: Vec2 = Vec2::new(80.0, 50.0);
+/// A drag of the title band far past every edge of the window.
+const PAST_THE_EDGE: Vec2 = Vec2::new(5000.0, 5000.0);
+/// The window of the tall-body trial: lower than the body.
+const SHORT_ROOM: Vec2 = Vec2::new(600.0, 320.0);
+/// One wheel turn down the body.
+const WHEEL_DOWN: Vec2 = Vec2::new(0.0, -400.0);
+
+#[trial]
+fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog.remember(crate::contract::SaveKey::new("trial.dialog-band")),
+        |ui| {
+            Text::new("Body text").show(ui);
+        },
+    );
+    fixture.room(BAND_ROOM);
+    fixture.settle();
+    let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect;
+    let band = |fixture: &Fixture| {
+        fixture.by_role(Role::HEADING).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Options")).expect("the title band")
+    };
+    let start = dialog(&fixture);
+
+    let from = start.center_bottom() + IN_BODY;
+    fixture.drag_at(from, BODY_DRAG).settle();
+    assert_eq!(dialog(&fixture), start, "a drag that starts in the body moves nothing");
+
+    let title = band(&fixture);
+    fixture.drag(&title, BAND_DRAG).settle();
+    let moved = dialog(&fixture);
+    assert_eq!(moved.min - start.min, BAND_DRAG, "a drag of the band moves the dialog by it");
+
+    let title = band(&fixture);
+    fixture.drag(&title, PAST_THE_EDGE).settle();
+    let screen = fixture.ctx().content_rect();
+    assert!(screen.contains_rect(dialog(&fixture)), "a drag past the edge stops at it: {:?} in {screen:?}", dialog(&fixture));
+
+    for _ in 0..8 {
+        fixture.key(Key::Tab, Modifiers::NONE);
+    }
+    let band_node = band(&fixture).node;
+    assert_ne!(crate::testing::access::focused_key(fixture.tree()), band_node, "the title band is no Tab stop");
+
+    let left = dialog(&fixture);
+    reopen(&mut fixture, &open);
+    assert_eq!(dialog(&fixture), left, "a reopen under the same key starts where the dialog was left");
+}
+
+#[trial]
+fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog.buttons([FooterButton::new("OK", DialogRole::Accept)]),
+        |ui| {
+            for line in 0..60 {
+                Text::new(format!("Line {line}")).show(ui);
+            }
+        },
+    );
+    fixture.room(SHORT_ROOM);
+    fixture.settle();
+    let first = |fixture: &Fixture| fixture.by_label("Line 0").map(|target| target.rect);
+    let at_top = first(&fixture).expect("the first line is shown");
+    let screen = fixture.ctx().content_rect();
+    let ok = fixture.by_label("OK").expect("the footer is shown").rect;
+    assert!(screen.contains_rect(ok), "the footer stays inside the short window: {ok:?} in {screen:?}");
+    assert!(fixture.by_label("Line 59").is_none_or(|last| !screen.contains_rect(last.rect)), "the body does not all fit: it scrolls");
+
+    let over = fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect.center();
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: WHEEL_DOWN,
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    };
+    fixture.frame(vec![egui::Event::PointerMoved(over), wheel]).settle();
+    assert_ne!(first(&fixture), Some(at_top), "the wheel scrolled the body");
+    assert!(screen.contains_rect(fixture.by_label("OK").expect("the footer is shown").rect), "the footer stays in view while the body scrolls");
+
+    reopen(&mut fixture, &open);
+    assert_eq!(first(&fixture), Some(at_top), "a reopen starts at the top");
+}
+
+#[trial]
+fn an_armed_answer_waits_until_its_prompt_was_seen() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let closed = std::rc::Rc::new(Cell::new(None));
+    let (shown, seen) = (std::rc::Rc::clone(&open), std::rc::Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = shown.get();
+        if now {
+            let out = Dialog::new("Options")
+                .opened(Bind::bound(&mut now))
+                .buttons([FooterButton::new("Delete", DialogRole::Destructive).armed_after(1.0), FooterButton::new("Cancel", DialogRole::Cancel)])
+                .show(ui, |_, _| {});
+            if out.output.closed.is_some() {
+                seen.set(out.output.closed);
+            }
+        }
+        shown.set(now);
+    });
+    // The wait counts while the window has the focus, which the fixture's window has once it reports it.
+    fixture.frame(vec![egui::Event::WindowFocused(true)]);
+    fixture.settle();
+    let press = |fixture: &mut Fixture| {
+        let delete = fixture.by_label("Delete").expect("the armed button is shown");
+        fixture.click(&delete).idle(2);
+    };
+    press(&mut fixture);
+    assert_eq!(closed.get(), None, "a click before the delay does nothing");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(2);
+    assert_eq!(closed.get(), None, "nor does Enter");
+
+    open.set(false);
+    fixture.idle(2);
+    open.set(true);
+    fixture.idle(40);
+    press(&mut fixture);
+    assert_eq!(closed.get(), None, "a frame without the prompt restarted the wait");
+
+    fixture.idle(90);
+    press(&mut fixture);
+    assert_eq!(closed.get(), Some(CloseReason::Activated), "after the delay the answer takes the click");
 }

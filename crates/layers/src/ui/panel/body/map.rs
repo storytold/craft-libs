@@ -1,6 +1,6 @@
 //! Maps the list's events to the panel's events.
 
-use craft_behavior::{ColumnKey, EditEvent, Mixed, SelectionChange};
+use craft_behavior::{ColumnKey, DropOperation, EditEvent, Mixed, SelectionChange};
 use craft_keymap::Mods;
 use craft_ui::contract::{CollectionEvent, OpenChange, request_rename};
 use craft_ui::list::{RowEvent, ThumbTarget};
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::super::Session;
 use super::super::context::PanelContext;
-use super::super::drag::{LayersDrag, drop_event, part_drop_event};
+use super::super::drag::{LayersDrag, drop_event, host_drop_place, part_drop_event};
 use super::super::events::{ActivateOn, LayerColumn, LayerSelect, LayerToggle, LayersEvent, MenuTarget};
 use super::super::menu::{OpenMenu, shared_label};
 use super::super::row::{EYE, FX_PART, LOCK_PART, NAME, OPTIONS_PART};
@@ -49,7 +49,7 @@ pub(super) fn map_events<T: LayerTree>(
     let mut toggle_label: Arc<str> = Arc::from("");
     for event in list {
         match event {
-            CollectionEvent::Selection(change) => {
+            CollectionEvent::Selection { change, mods, .. } => {
                 // A set made on an effects or Smart Filter row names that row; a toggle acts on its layer only.
                 let (row, set, mapped) = match change {
                     SelectionChange::Set(keys) => (keys.last().cloned(), true, SelectionChange::Set(layers_of(&keys))),
@@ -73,6 +73,7 @@ pub(super) fn map_events<T: LayerTree>(
                     part = Some(hit);
                 }
                 let mut select = LayerSelect::new(mapped, part);
+                select.mods = mods;
                 if set && let Some(row) = &row {
                     select = select.on_row(row);
                 }
@@ -127,12 +128,17 @@ pub(super) fn map_events<T: LayerTree>(
                 session.menu = Some(OpenMenu::Row(MenuTarget { row: None, part: None, on_selection: false }));
             }
             CollectionEvent::Reorder(edit) => events.extend(drop_event(edit, order, parent_of, filtered)),
-            CollectionEvent::Dropped { at, op, payload, .. } => {
-                if let Some(drag) = payload.get::<LayersDrag<T::Id>>() {
-                    events.extend(part_drop_event(cx.list, drag, &at, op, Arc::from(cx.words.list.as_str())));
+            CollectionEvent::Dropped { at, op, payload, .. } => match payload.get::<LayersDrag<T::Id>>() {
+                Some(drag) => events.extend(part_drop_event(cx.list, drag, &at, op, Arc::from(cx.words.list.as_str()))),
+                // Only the host's payload type is taken besides the panel's own drag.
+                None => {
+                    if let Some((target, position)) = host_drop_place(order, parent_of, &at) {
+                        events.push(LayersEvent::host_drop(payload, target, position, op == DropOperation::Copy));
+                    }
                 }
-            }
-            CollectionEvent::Toggle(edit) => toggle_events(edit, &mut session.sweeps, &mut toggle_label, events),
+            },
+            CollectionEvent::Delete(keys) => events.push(LayersEvent::Delete(keys)),
+            CollectionEvent::Toggle(edit) => toggle_events(edit, session.sweeps_for(cx.look), &mut toggle_label, events),
             CollectionEvent::Rename(edit) => {
                 if let EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } = edit
                     && let LayerRowKey::Layer(id) = &after.key
@@ -185,7 +191,9 @@ pub(super) fn map_events<T: LayerTree>(
         events.push(if thumb_click_replaces_select(part, *mods, &info) {
             LayersEvent::ThumbClick { layer: row.layer().clone(), part, mods: *mods }
         } else {
-            LayersEvent::Select(LayerSelect::new(SelectionChange::Set(vec![row.layer().clone()]), Some(part)).on_row(row))
+            let mut select = LayerSelect::new(SelectionChange::Set(vec![row.layer().clone()]), Some(part)).on_row(row);
+            select.mods = *mods;
+            LayersEvent::Select(select)
         });
     }
 }
@@ -224,6 +232,10 @@ impl<Id: Clone + PartialEq> SweepOut<LayerRowKey<Id>, LayerColumn> for Vec<Layer
 
     fn undo_show_only(&mut self, key: LayerRowKey<Id>) {
         self.push(LayersEvent::UndoShowOnly(key));
+    }
+
+    fn claimed(&mut self, key: LayerRowKey<Id>, column: LayerColumn, mods: Mods) {
+        self.push(LayersEvent::cell_click(key, column, mods));
     }
 }
 

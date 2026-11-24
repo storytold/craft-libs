@@ -2,7 +2,7 @@
 //! Alt variant. It reads no toolkit's events; craft-ui's key stage runs it.
 
 use crate::DOUBLE_PRESS;
-use crate::chord::{Chord, Key, Mods, Trigger};
+use crate::chord::{Chord, Key, Mods, PressKind, Trigger};
 use crate::command::CommandRef;
 use crate::keymap::{Keymap, Lookup};
 use crate::layout::{KeyInput, Layout};
@@ -107,6 +107,12 @@ impl Matcher {
     pub fn single(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
         Chords::of(layout, input)?.single(&Match { keymap, active, outer, accept: &|_| true })
     }
+
+    /// The command a hold of `input` runs: for a key that stays down past the hold time. Keeps no state.
+    // PLAN: `Keymap::hold_of` ranks without the outer panels, so `outer` has no effect yet.
+    pub fn hold(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, _outer: &[&str]) -> Option<Hit> {
+        Chords::of(layout, input)?.hold(keymap, active)
+    }
 }
 
 /// What one press is matched against: the keymap, what has the keyboard, the panels around it, and the commands the
@@ -157,7 +163,20 @@ impl Chords {
     fn find(&self, m: &Match<'_>, double: bool) -> Option<Hit> {
         let first = self.first();
         self.0.iter().find_map(|&chord| {
-            Hit::from_lookup(m.keymap.lookup_where(&chord, double, m.active, m.outer, m.accept), Trigger { chord, double }, chord == first)
+            Hit::from_lookup(
+                m.keymap.lookup_where(&chord, double, m.active, m.outer, m.accept),
+                Trigger { chord, press: if double { PressKind::Double } else { PressKind::Single } },
+                chord == first,
+            )
+        })
+    }
+
+    /// The first chord a hold is bound to.
+    fn hold(&self, keymap: &Keymap, active: &Active<'_>) -> Option<Hit> {
+        let first = self.first();
+        self.0.iter().find_map(|&chord| {
+            let command = keymap.hold_of(&chord, active)?;
+            Some(Hit { command, cycle: Vec::new(), trigger: Trigger::hold(chord), exact: chord == first, alt_variant: false })
         })
     }
 
@@ -176,9 +195,13 @@ impl Chords {
             }
             let plain = Chord::new(Mods { alt: false, ..chord.mods }, chord.key);
             match keymap.lookup_where(&plain, false, &Active { typing: false, ..*active }, outer, accept) {
-                Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => {
-                    Some(Hit { command, cycle: Vec::new(), trigger: Trigger { chord, double: false }, exact: chord == first, alt_variant: true })
-                }
+                Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => Some(Hit {
+                    command,
+                    cycle: Vec::new(),
+                    trigger: Trigger { chord, press: PressKind::Single },
+                    exact: chord == first,
+                    alt_variant: true,
+                }),
                 _ => None,
             }
         })

@@ -42,6 +42,8 @@ craft-png = { path = "crates/png" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-win32 = { path = "crates/win32" }
+craft-appkit = { path = "crates/appkit" }
+craft-wayland = { path = "crates/wayland" }
 craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }

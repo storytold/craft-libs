@@ -121,8 +121,12 @@ fn workspace(minimized: bool) -> Arc<Workspace<usize>> {
 static SPECS: LazyLock<Tracked<DemoSpecs>> = LazyLock::new(|| Tracked::new(DemoSpecs));
 
 fn dock(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo, minimized: bool) -> StoryOutput {
+    dock_with(ui, data, demo, minimized, DockConfig::default())
+}
+
+fn dock_with(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo, minimized: bool, config: DockConfig) -> StoryOutput {
     let (workspace, workspace_at) = data.value_at("workspace", workspace(minimized));
-    DockArea::new("Dock", workspace_at.bind(&mut *workspace), &*SPECS, demo, DockConfig::default()).show(ui).into()
+    DockArea::new("Dock", workspace_at.bind(&mut *workspace), &*SPECS, demo, config).show(ui).into()
 }
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
@@ -138,6 +142,14 @@ fn a_canvas_group_the_host_draws(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn host_rows_above_the_dock_rows_in_a_panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     dock(ui, data, &mut Demo { canvas_view: false, host_rows: true }, false)
+}
+
+/// Every group shows its panel menu button, the three-line mark, whether its shown panel has rows of its own or only
+/// the dock's (`DockConfig::panel_menu_always`, `DockConfig::panel_menu_icon`): VectorCraft's dock.
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
+fn a_menu_button_on_every_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let config = DockConfig::default().panel_menu_always(true).panel_menu_icon(IconId::new("menu"));
+    dock_with(ui, data, &mut Demo { canvas_view: false, host_rows: false }, false, config)
 }
 
 /// The floating group minimized: its window shows the title row and the tab strip at its width.

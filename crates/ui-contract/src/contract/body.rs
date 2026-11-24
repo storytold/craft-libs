@@ -33,7 +33,6 @@ pub use regions::pad_of;
 #[doc(hidden)]
 pub use reorder::REORDER_BAND;
 pub use scroll::{STRIP_BACK, STRIP_FORWARD};
-#[cfg(feature = "suite")]
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
 pub use window::grip_band;
@@ -128,6 +127,10 @@ pub(super) struct BodyHooks<'b> {
     /// found it has to run again at (`ColumnGroup::scope_measured`).
     settle: Option<crate::layout::Columns>,
     unsettled: Option<crate::layout::Columns>,
+    /// How far the ranked units of an end region that joins the body's fit (`EndRegion::fit`) give way in the
+    /// measuring run's second sweep, and the body's shortfall a first sweep found.
+    end_fit: Option<f32>,
+    end_unfit: Option<f32>,
     extent: Option<Vec2>,
     /// The content extent a measuring run found that leaves another view than the one the run laid the content out
     /// for: the run lays it out again at that view.
@@ -177,9 +180,10 @@ pub(super) struct BodyHooks<'b> {
 }
 
 impl<'b> BodyHooks<'b> {
-    /// The hooks of `comp`'s run, over its props as they are now.
-    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Self {
-        Self::new(body, Arc::new(comp.props(super::Internal::new()).clone()))
+    /// The hooks of `comp`'s run, over its props as they are now. They live on the heap: the run holds them while its
+    /// children run.
+    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Box<Self> {
+        Box::new(Self::new(body, Arc::new(comp.props(super::Internal::new()).clone())))
     }
 
     pub(super) fn new(body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>), props: Arc<ContainerProps>) -> Self {
@@ -231,6 +235,8 @@ impl<'b> BodyHooks<'b> {
             reached: None,
             settle: None,
             unsettled: None,
+            end_fit: None,
+            end_unfit: None,
             extent: None,
             view_moves: None,
             view: None,

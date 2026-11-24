@@ -843,6 +843,16 @@ impl<T: MemoProps> MemoProps for craft_behavior::Mixed<T> {
 }
 
 /// The translator (`Words::generation`): words with the same generation read every word the same.
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the selected keys, the lead and
+/// the anchor.
+impl<K: MemoProps> MemoProps for craft_behavior::Selection<K> {
+    fn key(&self, key: &mut MemoKey) {
+        self.items.key(key);
+        self.lead.key(key);
+        self.anchor.key(key);
+    }
+}
+
 impl MemoProps for craft_i18n::Words {
     fn key(&self, key: &mut MemoKey) {
         self.generation().key(key);
@@ -1003,6 +1013,27 @@ impl MemoProps for craft_behavior::canvas::CanvasView {
             value.key(key);
         }
         self.flip_x.key(key);
+    }
+}
+
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the rungs, the greatest zoom, the
+/// least zoom and the device zoom of 100 %.
+impl MemoProps for craft_behavior::ZoomScheme {
+    fn key(&self, key: &mut MemoKey) {
+        self.rungs.key(key);
+        self.max.key(key);
+        match self.floor {
+            craft_behavior::ZoomFloor::ShorterSide(side) => {
+                key.write_u32(0);
+                side.key(key);
+            }
+            craft_behavior::ZoomFloor::Fixed(zoom) => {
+                key.write_u32(1);
+                zoom.key(key);
+            }
+            other => format!("{other:?}").key(key),
+        }
+        self.hundred.key(key);
     }
 }
 
