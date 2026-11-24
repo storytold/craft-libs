@@ -304,13 +304,24 @@ fn the_clear_part_empties_the_field_in_the_pass_of_its_click() {
 fn a_field_that_keeps_its_text_on_escape_commits_leaves_focus_and_passes_the_escape_on() {
     let text = Rc::new(RefCell::new(String::new()));
     let (passed, lost, id) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(false)), Rc::new(Cell::new(Id::NULL)));
+    // What the field reported: the commits and cancels of its events and the passes that reported a submit.
+    let (commits, cancels, submits) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)));
     let (shown, scope_saw, lost_seen, field) = (text.clone(), passed.clone(), lost.clone(), id.clone());
+    let (seen_commits, seen_cancels, seen_submits) = (commits.clone(), cancels.clone(), submits.clone());
     let mut fixture = Fixture::new(move |ui| {
         let mut held = shown.borrow_mut();
         Stack::new().show(ui, |ui, body| {
             let out = TextField::new("Filter", Bind::bound(&mut *held)).keeps_on_escape().show(ui);
             field.set(out.response.id);
             lost_seen.set(lost_seen.get() || out.text_lost_focus);
+            for event in out.events.iter() {
+                match event {
+                    craft_behavior::EditEvent::Commit { .. } => seen_commits.set(seen_commits.get() + 1),
+                    craft_behavior::EditEvent::Cancel { .. } => seen_cancels.set(seen_cancels.get() + 1),
+                    _ => {}
+                }
+            }
+            seen_submits.set(seen_submits.get() + u32::from(out.submitted));
             if body.take_cancel() {
                 scope_saw.set(scope_saw.get() + 1);
             }
@@ -321,9 +332,13 @@ fn a_field_that_keeps_its_text_on_escape_commits_leaves_focus_and_passes_the_esc
     fixture.type_text("abc");
     fixture.idle(2);
     assert!(!lost.get(), "typing loses no focus");
+    let (commits_before, cancels_before) = (commits.get(), cancels.get());
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.idle(3);
     assert_eq!(*text.borrow(), "abc", "Escape keeps the typed text");
+    assert_eq!(commits.get() - commits_before, 1, "the open typing run commits exactly once");
+    assert_eq!(cancels.get() - cancels_before, 0, "and nothing is cancelled");
+    assert_eq!(submits.get(), 0, "the Escape submits nothing");
     assert_eq!(passed.get(), 1, "the enclosing scope gets the one Escape");
     assert_ne!(fixture.focused(), Some(id.get()), "the field lets focus go");
     assert!(lost.get(), "and reports the focus loss");
