@@ -32,12 +32,35 @@ pub struct FrameInput {
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
+    /// Whether the window system's input reaches the OS windows the runtime hosts.
+    pub window_input: WindowInput,
+}
+
+/// Whether the window system's input reaches the OS windows the runtime hosts beside the root (a panel floated into
+/// its own window). eframe gives the host only the root's raw input (`App::raw_input_hook`), so the host applies its
+/// policy to the root there and gives it here for the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowInput {
+    /// The window system's input reaches every hosted window.
+    #[default]
+    Live,
+    /// An agent-driven session: a hosted window's events, hovered files and dropped files are dropped before any
+    /// stage reads them, so only the runtime's injected input reaches it. Its window facts (size, focus, close
+    /// requests) stay.
+    Dropped,
 }
 
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE }
+        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, window_input: WindowInput::Live }
+    }
+
+    /// Sets whether the window system's input reaches the hosted windows.
+    pub fn window_input(mut self, window_input: WindowInput) -> Self {
+        self.window_input = window_input;
+        self
     }
 
     /// Sets the command input.
@@ -414,6 +437,11 @@ fn frame_hit(ctx: &Context) -> HitSizes {
 /// The wheel speed and Alt-code pages of the frame's root values; the defaults before the app sets any input.
 pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
     pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
+}
+
+/// The frame's window-input policy; `Live` before the app sets any input.
+pub(crate) fn window_input(ctx: &Context) -> WindowInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.window_input)).unwrap_or_default()
 }
 
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own

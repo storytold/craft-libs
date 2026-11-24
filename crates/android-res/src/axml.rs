@@ -20,8 +20,10 @@ const XML_RESOURCE_MAP: u16 = 0x0180;
 const MAX_STRINGS: usize = 1_000_000;
 /// Longest string kept (characters).
 const MAX_STRING: usize = 64 * 1024;
+/// Default budget for copied resource and XML values, and the base string-pool byte cap.
+pub(crate) const MAX_RETAINED_VALUE_BYTES: usize = 64 << 20;
 /// Base budget for decoded string bytes; larger chunks allow at most three times their size.
-const BASE_POOL_BYTES: usize = 64 << 20;
+const BASE_POOL_BYTES: usize = MAX_RETAINED_VALUE_BYTES;
 /// Most extra UTF-8 length candidates examined across one string pool.
 const MAX_RECOVERY_PROBES: usize = 65_536;
 /// Most XML nodes decoded.
@@ -54,6 +56,8 @@ pub struct StringPool {
     pub utf8: bool,
     /// Strings the pool declared (may exceed `strings.len()` when capped).
     pub declared: usize,
+    /// Entries left empty because the UTF-8 recovery probe budget ran out.
+    pub recovery_omitted: usize,
 }
 
 impl StringPool {
@@ -104,12 +108,13 @@ impl StringPool {
         let strings_reader = Reader::new(string_bytes);
         let mut strings = Vec::with_capacity(count.min(MAX_STRINGS).min(65_536));
         let mut bytes_left = BASE_POOL_BYTES.max(size.saturating_mul(3));
+        let mut recovery_omitted = 0;
         for i in 0..count.min(MAX_STRINGS) {
             let at = r.u32_le(hdr + i * 4).ok_or_else(|| Error::Truncated("string offsets".into()))? as usize;
             let s = if at >= string_bytes.len() {
                 None
             } else if utf8 {
-                utf8_string(&strings_reader, at, string_bytes.len(), recovery_left)
+                utf8_string(&strings_reader, at, string_bytes.len(), recovery_left, &mut recovery_omitted)
             } else {
                 utf16_string(&strings_reader, at, string_bytes.len())
             };
@@ -120,7 +125,7 @@ impl StringPool {
             bytes_left -= s.len();
             strings.push(s);
         }
-        Ok(StringPool { strings, utf8, declared: count })
+        Ok(StringPool { strings, utf8, declared: count, recovery_omitted })
     }
 }
 
@@ -134,7 +139,7 @@ fn utf8_len(r: &Reader<'_>, at: usize) -> Option<(usize, usize)> {
     }
 }
 
-fn utf8_string(r: &Reader<'_>, at: usize, end: usize, recovery_left: &mut usize) -> Option<String> {
+fn utf8_string(r: &Reader<'_>, at: usize, end: usize, recovery_left: &mut usize, recovery_omitted: &mut usize) -> Option<String> {
     let (_chars, n1) = utf8_len(r, at)?;
     let (mut bytes, n2) = utf8_len(r, at.checked_add(n1)?)?;
     let start = at.checked_add(n1 + n2)?;
@@ -146,7 +151,11 @@ fn utf8_string(r: &Reader<'_>, at: usize, end: usize, recovery_left: &mut usize)
         }
         // The declared candidate costs one read per entry, already bounded by MAX_STRINGS.
         if bytes >= 0x8000 {
-            *recovery_left = recovery_left.checked_sub(1)?;
+            if *recovery_left == 0 {
+                *recovery_omitted += 1;
+                return None;
+            }
+            *recovery_left -= 1;
         }
         if r.u8(terminator)? == 0 {
             break;
@@ -171,6 +180,56 @@ fn utf16_string(r: &Reader<'_>, at: usize, end: usize) -> Option<String> {
         units.push(r.u16_le(start + i * 2)?);
     }
     Some(String::from_utf16_lossy(&units))
+}
+
+/// Record that a string pool was capped or omitted recovery entries.
+pub(crate) fn report_partial_string_pool(pool: &StringPool, prefix: &str, truncated: &mut bool, warnings: &mut Vec<String>) {
+    if pool.strings.len() < pool.declared {
+        *truncated = true;
+        warnings.push(format!("{prefix} was capped at {} of {} strings", pool.strings.len(), pool.declared));
+    }
+    if pool.recovery_omitted > 0 {
+        *truncated = true;
+        warnings.push(format!("{prefix} omitted {} strings after the UTF-8 recovery budget was exhausted", pool.recovery_omitted));
+    }
+}
+
+/// Charge `value` against a retained-byte budget. When it does not fit, report truncation once
+/// and return `None`, so a later shorter value can still be kept.
+pub(crate) fn retain_value(
+    left: &mut usize,
+    value: String,
+    truncated: &mut bool,
+    warned: &mut bool,
+    warnings: &mut Vec<String>,
+    warning: &str,
+) -> Option<String> {
+    if value.len() > *left {
+        if !*warned {
+            warnings.push(warning.to_string());
+            *warned = true;
+        }
+        *truncated = true;
+        None
+    } else {
+        *left -= value.len();
+        Some(value)
+    }
+}
+
+pub(crate) struct ValueBudget {
+    left: usize,
+    warned: bool,
+}
+
+impl ValueBudget {
+    pub(crate) fn new(max_bytes: usize) -> Self {
+        Self { left: max_bytes, warned: false }
+    }
+
+    pub(crate) fn take(&mut self, value: String, truncated: &mut bool, warnings: &mut Vec<String>, warning: &str) -> Option<String> {
+        retain_value(&mut self.left, value, truncated, &mut self.warned, warnings, warning)
+    }
 }
 
 /// A typed value (`Res_value`): data type and 32-bit data.
@@ -313,10 +372,10 @@ pub fn framework_attr(id: u32) -> Option<&'static str> {
 
 /// Decode a binary XML file.
 pub fn parse(data: &[u8]) -> Result<Document, Error> {
-    parse_with_limits(data, MAX_NODES, MAX_DEPTH)
+    parse_with_limits(data, MAX_NODES, MAX_DEPTH, MAX_RETAINED_VALUE_BYTES)
 }
 
-fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize) -> Result<Document, Error> {
+fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize, max_value_bytes: usize) -> Result<Document, Error> {
     let r = Reader::new(data);
     let (t, h, size) = chunk(&r, 0).ok_or_else(|| Error::Truncated("binary XML header".into()))?;
     if t != RES_XML {
@@ -329,6 +388,7 @@ fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize) -> Result<
     let mut pos = h;
     let mut depth = 0usize;
     let mut ns_stack: Vec<(String, String)> = Vec::new();
+    let mut value_budget = ValueBudget::new(max_value_bytes);
     while pos < size {
         let Some((ct, ch, cs)) = chunk(&r, pos) else {
             doc.truncated = true;
@@ -354,10 +414,7 @@ fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize) -> Result<
         match ct {
             RES_STRING_POOL => match StringPool::parse(data, pos) {
                 Ok(p) => {
-                    if p.strings.len() < p.declared {
-                        doc.truncated = true;
-                        doc.warnings.push(format!("string pool was capped at {} of {} strings", p.strings.len(), p.declared));
-                    }
+                    report_partial_string_pool(&p, "string pool", &mut doc.truncated, &mut doc.warnings);
                     doc.pool = p;
                 }
                 Err(e) => doc.warnings.push(format!("string pool: {e}")),
@@ -431,6 +488,9 @@ fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize) -> Result<
                     } else {
                         raw.format(&doc.pool)
                     };
+                    let value = value_budget
+                        .take(value, &mut doc.truncated, &mut doc.warnings, "XML value budget reached; remaining values were omitted")
+                        .unwrap_or_default();
                     attributes.push(Attribute {
                         namespace: ans,
                         name: aname,
@@ -450,6 +510,9 @@ fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize) -> Result<
             }
             XML_CDATA => {
                 let text = r.u32_le(pos + ch).and_then(|i| doc.pool.get(i)).unwrap_or("").to_string();
+                let text = value_budget
+                    .take(text, &mut doc.truncated, &mut doc.warnings, "XML value budget reached; remaining values were omitted")
+                    .unwrap_or_default();
                 doc.nodes.push(Node::Text { depth, text });
             }
             _ => {}
@@ -639,6 +702,7 @@ mod tests {
         assert_eq!(parsed.get(1), parsed.get(0));
         assert_eq!(parsed.get(2), Some(""));
         assert_eq!(parsed.get(3), Some("ok"));
+        assert_eq!(parsed.recovery_omitted, 1);
     }
 
     #[test]
@@ -655,6 +719,7 @@ mod tests {
         assert_eq!(parsed.get(1).map(str::len), Some(0x8000));
         assert_eq!(parsed.get(2), Some(""));
         assert_eq!(parsed.get(3), Some("ok"));
+        assert_eq!(parsed.recovery_omitted, 1);
     }
 
     #[test]
@@ -670,6 +735,7 @@ mod tests {
             assert_eq!(left, remaining);
             assert_eq!(parsed.get(0).map(str::len), Some(length));
             assert_eq!(parsed.get(1), Some("ok"));
+            assert_eq!(parsed.recovery_omitted, usize::from(length == 0));
         }
     }
 
@@ -681,10 +747,10 @@ mod tests {
         assert_eq!(left, 7);
         assert_eq!(parsed.get(0), Some(""));
         assert_eq!(parsed.get(1), Some("ok"));
+        assert_eq!(parsed.recovery_omitted, 0);
     }
 
-    #[test]
-    fn default_pool_budget_stops_repeated_recovery_before_later_long_strings() {
+    fn utf8_recovery_exhausted_pool() -> (Vec<u8>, usize) {
         let mut strings = vec![b'x'; 2 * 0x8000 + 16];
         strings[..4].copy_from_slice(&[0x80, 0, 0x80, 0]);
         let long = append_legacy_ascii(&mut strings, 0x8000);
@@ -694,13 +760,78 @@ mod tests {
         let repeated = MAX_RECOVERY_PROBES / 3 + 1;
         let mut offsets = vec![0; repeated];
         offsets.extend([long, short]);
-        let data = pool_with_offsets(&offsets, &strings);
+        (pool_with_offsets(&offsets, &strings), repeated)
+    }
+
+    #[test]
+    fn default_pool_budget_stops_repeated_recovery_before_later_long_strings() {
+        let (data, repeated) = utf8_recovery_exhausted_pool();
         let parsed = StringPool::parse(&data, 0).unwrap();
         assert_eq!(parsed.declared, repeated + 2);
         assert_eq!(parsed.strings.len(), repeated + 2);
         assert!(parsed.strings[..repeated].iter().all(String::is_empty));
         assert_eq!(parsed.get(repeated as u32), Some(""));
         assert_eq!(parsed.get((repeated + 1) as u32), Some("ok"));
+        assert!(parsed.recovery_omitted > 0);
+    }
+
+    #[test]
+    fn xml_and_resource_tables_disclose_recovery_omissions() {
+        let (pool, repeated) = utf8_recovery_exhausted_pool();
+        let short_index = (repeated + 1) as u32;
+        {
+            let doc = parse(&pool_container(RES_XML, 8, &pool)).unwrap();
+            assert!(doc.truncated);
+            assert!(doc.warnings.iter().any(|w| w.contains("string pool") && w.contains("UTF-8 recovery budget")));
+            assert_eq!(doc.pool.get(short_index), Some("ok"));
+            assert!(doc.pool.recovery_omitted > 0);
+        }
+        let table = crate::arsc::parse(&pool_container(2, 12, &pool), crate::arsc::Limits::default()).unwrap();
+        assert!(table.truncated);
+        assert!(table.warnings.iter().any(|w| w.contains("global string pool") && w.contains("UTF-8 recovery budget")));
+        for (field, label) in [(268, "type"), (276, "key")] {
+            let mut package = pool_container(0x0200, 288, &pool);
+            package[8..12].copy_from_slice(&0x7fu32.to_le_bytes());
+            package[field..field + 4].copy_from_slice(&288u32.to_le_bytes());
+            let table = crate::arsc::parse(&pool_container(2, 12, &package), crate::arsc::Limits::default()).unwrap();
+            assert!(table.truncated, "{label}");
+            assert!(
+                table.warnings.iter().any(|w| w.contains(&format!("{label} string pool")) && w.contains("UTF-8 recovery budget")),
+                "{label}: {:?}",
+                table.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn xml_value_budget_omits_long_copies_and_keeps_a_later_short_value() {
+        let long = "x".repeat(16);
+        let attrs = vec![
+            fx::AxAttr { name: "a", res_id: None, val: fx::AxVal::Str(&long) },
+            fx::AxAttr { name: "b", res_id: None, val: fx::AxVal::Str(&long) },
+            fx::AxAttr { name: "c", res_id: None, val: fx::AxVal::Str("ok") },
+        ];
+        let bytes = fx::axml(&[fx::AxNode::Start("root", attrs), fx::AxNode::End("root")]);
+        let complete = parse(&bytes).unwrap();
+        assert!(!complete.truncated);
+        let Node::Start { attributes, .. } = complete.nodes.iter().find(|n| matches!(n, Node::Start { name, .. } if name == "root")).unwrap() else {
+            panic!("expected the root start");
+        };
+        assert_eq!(
+            attributes.iter().map(|a| (a.name.as_str(), a.value.as_str())).collect::<Vec<_>>(),
+            [("a", long.as_str()), ("b", long.as_str()), ("c", "ok")]
+        );
+
+        let partial = parse_with_limits(&bytes, MAX_NODES, MAX_DEPTH, 20).unwrap();
+        assert!(partial.truncated);
+        assert!(partial.warnings.iter().any(|w| w.contains("value budget")));
+        let Node::Start { attributes, .. } = partial.nodes.iter().find(|n| matches!(n, Node::Start { name, .. } if name == "root")).unwrap() else {
+            panic!("expected the root start");
+        };
+        assert_eq!(
+            attributes.iter().map(|a| (a.name.as_str(), a.value.as_str())).collect::<Vec<_>>(),
+            [("a", long.as_str()), ("b", ""), ("c", "ok")]
+        );
     }
 
     fn chunk_at(data: &[u8], kind: u16) -> usize {
@@ -757,11 +888,11 @@ mod tests {
     #[test]
     fn dropping_a_close_event_marks_the_document_partial() {
         let bytes = fx::axml(&[fx::AxNode::Start("root", vec![]), fx::AxNode::End("root")]);
-        let complete = parse_with_limits(&bytes, 3, 1).unwrap();
+        let complete = parse_with_limits(&bytes, 3, 1, MAX_RETAINED_VALUE_BYTES).unwrap();
         assert!(!complete.truncated);
         assert!(matches!(complete.nodes.last(), Some(Node::End { depth: 0, .. })));
 
-        let partial = parse_with_limits(&bytes, 2, 1).unwrap();
+        let partial = parse_with_limits(&bytes, 2, 1, MAX_RETAINED_VALUE_BYTES).unwrap();
         assert!(partial.truncated);
         assert_eq!(partial.nodes, complete.nodes[..2]);
     }
@@ -770,19 +901,19 @@ mod tests {
     fn nesting_limit_keeps_an_exact_prefix_instead_of_saturating_depth() {
         let bytes =
             fx::axml(&[fx::AxNode::Start("root", vec![]), fx::AxNode::Start("child", vec![]), fx::AxNode::End("child"), fx::AxNode::End("root")]);
-        let complete = parse_with_limits(&bytes, 5, 2).unwrap();
+        let complete = parse_with_limits(&bytes, 5, 2, MAX_RETAINED_VALUE_BYTES).unwrap();
         assert!(!complete.truncated);
         assert!(matches!(complete.nodes[3], Node::End { depth: 1, .. }));
         assert!(matches!(complete.nodes[4], Node::End { depth: 0, .. }));
 
-        let partial = parse_with_limits(&bytes, 5, 1).unwrap();
+        let partial = parse_with_limits(&bytes, 5, 1, MAX_RETAINED_VALUE_BYTES).unwrap();
         assert!(partial.truncated);
         assert_eq!(partial.nodes, complete.nodes[..2]);
     }
 
     #[test]
     fn values_format() {
-        let p = StringPool { strings: vec!["x".into()], utf8: false, declared: 1 };
+        let p = StringPool { strings: vec!["x".into()], utf8: false, declared: 1, recovery_omitted: 0 };
         assert_eq!(ResValue { data_type: 0x05, data: (16 << 8) | 1 }.format(&p), "16dp");
         assert_eq!(ResValue { data_type: 0x12, data: 0xffff_ffff }.format(&p), "true");
         assert_eq!(ResValue { data_type: 0x1c, data: 0xff00_ff00 }.format(&p), "#ff00ff00");

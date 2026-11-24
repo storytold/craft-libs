@@ -65,6 +65,29 @@ fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
     assert!(fixture.by_label("2 replies").is_none(), "Comments' caption goes with it");
 }
 
+// Beside pill tabs (VectorCraft's) the panel menu button stands in the strip's middle, level with the shown tab's pill;
+// beside plain tabs it keeps to the strip's top.
+#[trial]
+fn the_panel_menu_button_stands_level_with_pill_tabs() {
+    use craft_ui::menu::PanelRow;
+    use craft_ui::tabs::PanelTabLook;
+    let middles = |look: PanelTabLook| {
+        let panels = vec![PanelTitle::new(PanelKey::new(1), "Layers"), PanelTitle::new(PanelKey::new(2), "Pages")];
+        let mut fixture = Fixture::new(move |ui| {
+            let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).menu(Vec::<PanelRow>::new).tab_look(look);
+            let _ = group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), |_, _| ());
+        });
+        fixture.settle();
+        let Some(tab) = fixture.by_label("Layers") else { panic!("the shown tab shows") };
+        let Some(menu) = fixture.by_label("Panel Menu") else { panic!("the panel menu button shows") };
+        (tab.rect.center().y, menu.rect)
+    };
+    let (tab, menu) = middles(PanelTabLook::Pill);
+    assert!((menu.center().y - tab).abs() <= 0.5, "the menu button {menu:?} is level with the pill tab's middle {tab}");
+    let (_, plain) = middles(PanelTabLook::Plain);
+    assert!(menu.top() > plain.top() + 0.5, "beside plain tabs the button {plain:?} keeps to the strip's top, above {menu:?}");
+}
+
 // A titled group shows the shown panel's name as a heading with its count and a close button, not a tab strip: the
 // panel's name is not cut to a tab's width, and the close button closes the shown panel.
 #[trial]
@@ -137,6 +160,26 @@ fn a_grip_window_keeps_no_band_for_a_title_rule() {
     assert!(ruled - grip >= 0.5, "the grip window's body ({grip}) starts above the ruled window's ({ruled})");
 }
 
+// A floating window's resize grips are named, so assistive technology and automation address them: each edge and
+// corner the window declares is one node.
+#[trial]
+fn a_floating_window_names_each_resize_grip() {
+    use craft_ui::contract::Role;
+    use craft_ui::docking::FloatingGroup;
+    let mut fixture = Fixture::new(move |ui| {
+        let group = FloatingGroup::new("Quick tools", Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(120.0, 200.0)));
+        let _ = group.show_group(ui, |ui, _| {
+            Button::new("Select").show(ui);
+        });
+    });
+    fixture.settle();
+    let grips = fixture.by_role(Role::SPLITTER);
+    assert!(grips.len() >= 4, "a resizable window declares a grip on each edge");
+    for grip in &grips {
+        assert_eq!(craft_ui::testing::access::name(fixture.tree(), grip.node), Some("Resize panel window"), "every grip is named");
+    }
+}
+
 // A toolbar's marked grip is a handle (photocraft#16467): the grab cursor over it and grabbing while it is held, as
 // the grips of a collapsed column show. An unmarked band and a grip that does not move keep the plain arrow.
 #[trial]
@@ -182,4 +225,46 @@ fn a_tab_mark_change_repaints_the_tab_row() {
     fixture.command_state(command, CommandState::new().checked(false)).settle();
     let cleared = width(&mut fixture);
     assert!((cleared - plain).abs() < 0.5, "the tab loses its dot again: {plain} then {cleared}");
+}
+
+// A click on an app's own egui widget in a group's body (a raw text field) is the widget's, not a press on the
+// group's empty body: the group reads no surface press, so its stop does not take the focus, and the field keeps
+// egui's focus and takes typing. A press on the body's empty room still focuses the group's panel.
+#[trial]
+fn a_click_on_an_app_field_in_the_body_keeps_its_focus() {
+    use std::cell::RefCell;
+    let text = Rc::new(RefCell::new(String::new()));
+    let field = Rc::new(Cell::new(None::<(egui::Id, Rect)>));
+    let surface = Rc::new(Cell::new(false));
+    let (typed, shown, pressed) = (Rc::clone(&text), Rc::clone(&field), Rc::clone(&surface));
+    let panels = vec![PanelTitle::new(PanelKey::new(1), "Color")];
+    let mut fixture = Fixture::new(move |ui| {
+        let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key);
+        let (typed, shown, pressed) = (Rc::clone(&typed), Rc::clone(&shown), Rc::clone(&pressed));
+        group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), move |ui, cx| {
+            pressed.set(pressed.get() || cx.surface_pressed());
+            let response = egui::TextEdit::singleline(&mut *typed.borrow_mut()).desired_width(120.0).show(ui).response;
+            shown.set(Some((response.id, response.rect)));
+        });
+    });
+    fixture.settle();
+    let Some((field_id, field_rect)) = field.get() else { panic!("the body shows the app's field") };
+    let empty = Pos2::new(field_rect.center().x, field_rect.bottom() + 80.0);
+
+    // Typing a character at a time with a click before each. The clicks are a second apart, so egui sees no double
+    // click (which would select the word).
+    for (clicks, typed) in ["a", "1"].into_iter().enumerate() {
+        fixture.advance(1.0).click_at(field_rect.center()).settle();
+        assert!(!surface.get(), "click {clicks} on the field is no press on the group's empty body");
+        assert_eq!(fixture.focused(), Some(field_id), "click {clicks} leaves egui's focus on the app's field");
+        fixture.type_text(typed).settle();
+    }
+    let on_field = fixture.focused_stop();
+    assert!(text.borrow().contains("a1"), "the field takes the typing after each click: {:?}", text.borrow());
+
+    fixture.click_at(empty).settle();
+    let group_stop = fixture.focused_stop();
+    assert!(surface.get(), "a press on the empty body is the group's surface press");
+    assert!(group_stop.is_some() && fixture.focused() != Some(field_id), "a press on the empty body focuses the group's panel");
+    assert_ne!(on_field, group_stop, "the clicks on the field left the group's stop unfocused");
 }

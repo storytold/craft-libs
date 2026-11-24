@@ -24,7 +24,7 @@ pub(crate) mod stories;
 /// - Padding: none of its own. An inspector is a dock body, docked or floating, and the dock group insets it.
 /// - Title weight: a section heading's by default, as the headings of the sections under it;
 ///   [`title_strength`](Inspector::title_strength) gives another, such as `Quiet` for a muted kind line over the
-///   sections.
+///   sections, with no rule under it.
 #[derive(crate::contract::Pattern)]
 pub struct Inspector<'a> {
     label: Label,
