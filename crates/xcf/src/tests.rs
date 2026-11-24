@@ -1194,6 +1194,7 @@ fn tiles_before_the_level_table_cannot_consume_its_dimensions() {
             file.u32(value);
         }
         let level_slot = file.slot();
+        file.ptr(0); // Mandatory hierarchy pointer-list terminator.
         let pixels_at = file.out.len();
         file.out.extend([22, 44, 66, 255]);
         if complete {

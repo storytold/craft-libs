@@ -327,7 +327,17 @@ impl Xcf<'_> {
         if level == pointer {
             return Err(invalid("a hierarchy cannot be its own level"));
         }
-        Ok(HierarchyHead { width, height, bpp, level, header: pointer..cursor.pos })
+        // The fixed fields are followed by unused mip-level pointers and a
+        // mandatory zero. Protect those words as framing too. A u32-sized
+        // dimension can halve at most 32 times, so never scan an input-sized list.
+        // Unused offsets are deliberately not followed or narrowed to usize.
+        let pointer_bytes = if cursor.wide { 8 } else { 4 };
+        for _ in 0..u32::BITS {
+            if cursor.take(pointer_bytes)?.iter().all(|byte| *byte == 0) {
+                return Ok(HierarchyHead { width, height, bpp, level, header: pointer..cursor.pos });
+            }
+        }
+        Err(invalid("hierarchy level list exceeds 32 levels or has no zero terminator"))
     }
 
     /// Validate only the fixed first-level header, including the physical first

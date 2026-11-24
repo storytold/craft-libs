@@ -613,6 +613,7 @@ fn source_tiles_before_the_level_table_cannot_consume_its_dimensions() {
             file.u32(value);
         }
         let level_slot = file.slot();
+        file.ptr(0); // Mandatory hierarchy pointer-list terminator.
         let pixels_at = file.out.len();
         file.out.push(22);
         if complete {
@@ -844,6 +845,7 @@ fn hierarchy_headers_are_never_tile_payload_for_either_pixel_api() {
                 file.u32(value);
             }
             let level_slot = file.slot();
+            file.ptr(0); // Mandatory hierarchy pointer-list terminator.
             let between = file.out.len();
             file.out.extend([22, 44]);
             let level = file.out.len();
@@ -917,5 +919,108 @@ fn fixed_first_level_validation_accepts_zero_tiles_but_rejects_short_or_overlapp
         let reader = Xcf::parse(&file.out).unwrap();
         let head = reader.hierarchy_head(hierarchy, 1).unwrap();
         assert!(reader.validate_first_level(&head).is_err());
+    }
+}
+
+#[test]
+fn complete_hierarchy_pointer_lists_are_framing_not_pixel_payload() {
+    for version in [10, 11] {
+        for dummy_count in [0, 1, 31] {
+            for location in ["terminator", "dummy", "payload"] {
+                if dummy_count == 0 && location == "dummy" {
+                    continue;
+                }
+                let mut source = Source::gray(150, 1, vec![0]);
+                source.version = version;
+                let mut file = W { out: source.write(), wide: version >= 11 };
+                let hierarchy = file.out.len();
+                for value in [2, 1, 1] {
+                    file.u32(value);
+                }
+                let level_slot = file.slot();
+                let dummy = file.out.len();
+                for _ in 0..dummy_count {
+                    // Unused offsets remain wire words, never dereferenced or
+                    // narrowed to usize (even on a 32-bit caller).
+                    if file.wide {
+                        file.out.extend(u64::MAX.to_be_bytes());
+                    } else {
+                        file.u32(u32::MAX);
+                    }
+                }
+                let terminator = file.out.len();
+                file.ptr(0);
+                let payload = file.out.len();
+                file.out.extend([22, 44]);
+                let level = file.out.len();
+                file.patch(level_slot, level);
+                file.u32(2);
+                file.u32(1);
+                file.ptr(match location {
+                    "terminator" => terminator,
+                    "dummy" => dummy,
+                    _ => payload,
+                });
+                file.ptr(0);
+                let reader = Xcf::parse(&file.out).unwrap();
+                let legacy = reader.hierarchy(hierarchy, 1, false, &mut 8, GO);
+                let mut seen = Vec::new();
+                let source = reader.visit_hierarchy(
+                    VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false },
+                    SampleOptions::default(),
+                    &mut 2,
+                    GO,
+                    |tile| {
+                        seen.extend_from_slice(tile.data);
+                        Ok(())
+                    },
+                );
+                if location == "payload" {
+                    assert_eq!(legacy.unwrap().data, [22u8, 44].map(|v| f32::from(v) / 255.0));
+                    source.unwrap();
+                    assert_eq!(seen, [22, 44]);
+                } else {
+                    assert!(legacy.is_err(), "v{version}, {dummy_count} dummy levels, {location}");
+                    assert!(source.is_err());
+                    assert!(seen.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unterminated_or_excessive_hierarchy_lists_stop_before_pixel_admission() {
+    for version in [10, 11] {
+        for excessive in [false, true] {
+            let mut source = Source::gray(150, 1, vec![22]);
+            source.version = version;
+            let mut file = W { out: source.write(), wide: version >= 11 };
+            let hierarchy = file.out.len();
+            for value in [1, 1, 1] {
+                file.u32(value);
+            }
+            file.ptr(1);
+            for _ in 0..if excessive { 32 } else { 1 } {
+                file.ptr(1);
+            }
+            if excessive {
+                file.ptr(0);
+            }
+            let reader = Xcf::parse(&file.out).unwrap();
+            let mut budget = 1;
+            assert!(
+                reader
+                    .visit_hierarchy(
+                        VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((1, 1)), coverage: false },
+                        SampleOptions::default(),
+                        &mut budget,
+                        GO,
+                        |_| panic!("unadmitted hierarchy"),
+                    )
+                    .is_err()
+            );
+            assert_eq!(budget, 1);
+        }
     }
 }
