@@ -11,9 +11,9 @@ struct Fixture {
     mask_slot: usize,
 }
 fn fixture(code: u32, data: &[u8], sample_bytes: usize, present: bool) -> Fixture {
-    fixture_named(code, data, sample_bytes, present, "Coverage", true)
+    fixture_named(code, data, sample_bytes, present, b"Coverage\0", true)
 }
-fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, name: &str, properties: bool) -> Fixture {
+fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, wire_name: &[u8], properties: bool) -> Fixture {
     let mut w = W::new(22);
     for value in [2, 1, 1, code] {
         w.u32(value);
@@ -36,7 +36,8 @@ fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, nam
     for value in [2, 1] {
         w.u32(value);
     }
-    w.string(name);
+    w.u32(wire_name.len().try_into().unwrap());
+    w.out.extend_from_slice(wire_name);
     if properties {
         w.prop(15, &[0, 0, 0, 3, 0xff, 0xff, 0xff, 0xfe]);
         w.prop_u32(35, 2);
@@ -192,6 +193,25 @@ fn auxiliary_header_rejects_an_unterminated_name_without_retaining_metadata() {
 }
 
 #[test]
+fn auxiliary_header_rejects_an_interior_nul_and_accepts_both_empty_names() {
+    let invalid = fixture_named(150, &[1, 2], 1, true, b"a\0b\0", true);
+    let xcf = Xcf::parse(&invalid.bytes).unwrap();
+    let mut metadata = records::Budget::new(4096, 4096);
+    let original_name_budget = xcf.meta_budget.get();
+    let error = xcf.effect_mask_header(&record(&invalid), &mut metadata, &|| true).unwrap_err();
+    assert!(error.to_string().contains("interior NUL"), "{error}");
+    assert_eq!(metadata.retained_remaining(), 4096);
+    assert_eq!(xcf.meta_budget.get(), original_name_budget);
+
+    for name in [b"".as_slice(), b"\0"] {
+        let empty = fixture_named(150, &[1, 2], 1, true, name, false);
+        let xcf = Xcf::parse(&empty.bytes).unwrap();
+        let header = xcf.effect_mask_header(&record(&empty), &mut records::Budget::default(), &|| true).unwrap().unwrap();
+        assert!(header.channel().name.is_empty());
+    }
+}
+
+#[test]
 fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before_tiles() {
     let mut f = fixture(150, &[1, 2], 1, true);
     let level = u64::from_be_bytes(f.bytes[f.hierarchy + 12..f.hierarchy + 20].try_into().unwrap()) as usize;
@@ -218,7 +238,7 @@ fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before
 
 #[test]
 fn repeated_empty_name_headers_spend_shared_work_and_stop_before_publishing() {
-    let f = fixture_named(150, &[1, 2], 1, true, "", false);
+    let f = fixture_named(150, &[1, 2], 1, true, b"", false);
     let xcf = Xcf::parse(&f.bytes).unwrap();
     let effect = record(&f);
     // Eight dimension bytes, four name-length bytes, and eight PROP_END bytes.

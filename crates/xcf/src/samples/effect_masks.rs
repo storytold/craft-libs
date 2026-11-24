@@ -109,6 +109,9 @@ impl<'a> Xcf<'a> {
                 Some((&0, name)) => name,
                 Some(_) => return Err(invalid("effect mask name has no terminating NUL").into()),
             };
+            if name_bytes.contains(&0) {
+                return Err(invalid("effect mask name contains an interior NUL").into());
+            }
             let name = String::from_utf8_lossy(name_bytes).into_owned();
             self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
             let channel = Channel { name, selection: properties.records.iter().any(|p| p.kind == 4) };
