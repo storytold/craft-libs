@@ -97,8 +97,11 @@ sensitive payloads; changing permissions inside a callback is too late to guaran
 other process opened the stage. Private stages request `0600`; actual enforcement depends on
 the filesystem's permission support. Neither policy adds Windows ACL guarantees.
 
-Replacements still stage privately and restore the existing Unix mode after writing. A new
-file keeps any mode selected by its callback. In the normal exclusive-copy fallback, a changed
+Replacements still stage privately and restore the existing Unix mode after writing. When the
+stage already has that mode, no `chmod` is attempted. This lets replacements work on fixed-mode
+GVfs/SMB mounts and document portals that reject permission changes even when the reported mode
+already matches. The comparison happens after the callback, so its mode changes are still
+restored. A new file keeps any mode selected by its callback. In the normal exclusive-copy fallback, a changed
 mode is applied before copying bytes; explicit private copies stay private during copying and
 apply callback-selected modes afterward. A required mode change that fails is reported, not
 silently ignored. Existing-file replacements and deliberate callback changes can therefore

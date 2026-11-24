@@ -401,3 +401,62 @@ fn refusals_have_messages() {
         assert!(!r.to_string().is_empty());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_non_unicode_document_path_keeps_the_namespace_rules() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let doc = Path::new(OsStr::from_bytes(b"/home/u/\xff/a.doc"));
+    assert_eq!(resolve("img/x.png", Some(doc)).unwrap(), Path::new(OsStr::from_bytes(b"/home/u/\xff/img/x.png")));
+    let device = Path::new(OsStr::from_bytes(b"/??/\xff/a.doc"));
+    assert_eq!(resolve("x.png", Some(device)), Err(Refused::Device));
+    assert_eq!(resolve("x.png", Some(Path::new("/??/u/a.doc"))), Err(Refused::Device));
+    for doc in [&b"\\??\\C:\\\xff\\a.doc"[..], b"\\\\.\\COM1\\\xff\\a.doc", b"//./COM1/\xff/a.doc"] {
+        assert_eq!(resolve("x.png", Some(Path::new(OsStr::from_bytes(doc)))), Err(Refused::Device), "{doc:?}");
+    }
+    // A share is the link's boundary, as for a Unicode document path.
+    let share = Path::new(OsStr::from_bytes(b"//server/share/\xff/a.doc"));
+    assert_eq!(resolve("../x.png", Some(share)).unwrap(), Path::new("//server/share/x.png"));
+    assert_eq!(resolve("../../x.png", Some(share)), Err(Refused::Invalid));
+    // A `\\` inside a native name splits the Unicode path but not the native one: a folder that
+    // the two agree on is kept, a document name they split differently is refused.
+    let folder = Path::new(OsStr::from_bytes(b"/home/u/a\\b/\xff.doc"));
+    assert_eq!(resolve("x.png", Some(folder)).unwrap(), Path::new(OsStr::from_bytes(b"/home/u/a\\b/x.png")));
+    let name = Path::new(OsStr::from_bytes(b"/home/u/a\xff\\b.doc"));
+    assert_eq!(resolve("x.png", Some(name)), Err(Refused::Invalid));
+    // `.` and `..` in the document's folder are folded as for a Unicode document path.
+    let dotted = Path::new(OsStr::from_bytes(b"/home/./x/../u/\xff/a.doc"));
+    assert_eq!(resolve("../y/x.png", Some(dotted)).unwrap(), Path::new("/home/u/y/x.png"));
+    assert_eq!(resolve("../../../../x.png", Some(dotted)), Err(Refused::Invalid));
+    let relative = Path::new(OsStr::from_bytes(b"\xff/a.doc"));
+    assert_eq!(resolve("../../x.png", Some(relative)).unwrap(), Path::new("../x.png"));
+    // A `..` that climbs out of a name holding a `\` on Unix does not leave the share unnoticed.
+    let climb = Path::new(OsStr::from_bytes(b"//server/share/a\\b/../../\xff/a.doc"));
+    assert_eq!(resolve("x.png", Some(climb)), Err(Refused::Invalid));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_non_unicode_document_path_keeps_the_namespace_rules() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    let native = |s: &str| {
+        // An unpaired surrogate in the folder name makes the path non-Unicode.
+        let mut w: Vec<u16> = s.encode_utf16().collect();
+        let at = w.iter().rposition(|c| *c == u16::from(b'\\')).unwrap_or(0);
+        w.insert(at, 0xD800);
+        std::path::PathBuf::from(OsString::from_wide(&w))
+    };
+    assert_eq!(resolve("x.png", Some(native(r"C:\docs\a.doc").as_path())).unwrap(), native(r"C:\docs\x.png"));
+    let share = native(r"\\server\share\docs\a.doc");
+    assert_eq!(resolve("x.png", Some(share.as_path())).unwrap(), native(r"\\server\share\docs\x.png"));
+    assert_eq!(resolve(r"..\..\x.png", Some(share.as_path())), Err(Refused::Invalid));
+    let dotted = native(r"C:\a\..\.\docs\a.doc");
+    assert_eq!(resolve("x.png", Some(dotted.as_path())).unwrap(), native(r"C:\docs\x.png"));
+    assert_eq!(resolve(r"..\y\x.png", Some(dotted.as_path())).unwrap(), Path::new(r"C:\y\x.png"));
+    assert_eq!(resolve(r"..\..\x.png", Some(dotted.as_path())), Err(Refused::Invalid));
+    for doc in [r"\\.\COM1\docs\a.doc", r"\\?\GLOBALROOT\Device\docs\a.doc", r"\??\C:\docs\a.doc"] {
+        assert_eq!(resolve("x.png", Some(native(doc).as_path())), Err(Refused::Device), "{doc}");
+    }
+}

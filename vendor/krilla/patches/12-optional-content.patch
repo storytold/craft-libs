@@ -1,0 +1,709 @@
+diff --git a/src/chunk_container.rs b/src/chunk_container.rs
+index 978eacc..023784f 100644
+--- a/src/chunk_container.rs
++++ b/src/chunk_container.rs
+@@ -55,6 +55,7 @@ pub(crate) struct NonStreamChunks {
+     pub(crate) patterns: Chunk,
+     pub(crate) pages: Chunk,
+     pub(crate) embedded_files: Chunk,
++    pub(crate) optional_content: Chunk,
+ }
+ 
+ impl ChunkContainer {
+@@ -93,6 +94,7 @@ impl ChunkContainer {
+                 patterns: sc.new_chunk(),
+                 pages: sc.new_chunk(),
+                 embedded_files: sc.new_chunk(),
++                optional_content: sc.new_chunk(),
+             },
+         }
+     }
+@@ -345,6 +347,9 @@ impl ChunkContainer {
+                 }
+             }
+ 
++            sc.optional_content
++                .write_catalog_entries(&mut catalog, &remapper);
++
+             catalog.finish();
+         }
+ 
+@@ -441,6 +446,7 @@ impl Visit for NonStreamChunks {
+         self.patterns.visit(sc, f)?;
+         self.pages.visit(sc, f)?;
+         self.embedded_files.visit(sc, f)?;
++        self.optional_content.visit(sc, f)?;
+ 
+         Ok(())
+     }
+diff --git a/src/configure/PDF_A1.md b/src/configure/PDF_A1.md
+index 06b5243..a4c7bc3 100644
+--- a/src/configure/PDF_A1.md
++++ b/src/configure/PDF_A1.md
+@@ -58,7 +58,8 @@ with an even number of characters and without whitespaces. 🟢
+   DeviceN colorants is never reached. 🟢
+ - krilla only uses u16 for CIDs. 🟢
+ 
+-6.1.13: krilla does not support optional content. 🔵
++6.1.13: krilla fails export if an optional content group is added
++(`ValidationError::OptionalContent`), so the catalog never has `OCProperties`. 🟢
+ 
+ ## 6.2 Graphics
+ 
+diff --git a/src/configure/PDF_A2.md b/src/configure/PDF_A2.md
+index 7e3fd8f..69acde5 100644
+--- a/src/configure/PDF_A2.md
++++ b/src/configure/PDF_A2.md
+@@ -222,7 +222,9 @@ krilla prohibits embedding files in this export mode. 🟢
+ 
+ # 6.9 Optional content
+ 
+-krilla does not support optional content. 🔵
++- krilla writes every optional content group with a `Name`. 🟢
++- krilla writes one optional content configuration, `D`, with the `Name` `Layers`, an `Order`
++  array that lists every group, and no `AS` key. 🟢
+ 
+ # 6.10 Use of alternate presentations and transitions
+ 
+diff --git a/src/configure/PDF_A4.md b/src/configure/PDF_A4.md
+index aac8008..be1314b 100644
+--- a/src/configure/PDF_A4.md
++++ b/src/configure/PDF_A4.md
+@@ -191,7 +191,9 @@ See `README.md` for the meaning of each color.
+ - krilla straight out forbids embedding files in this export mode. 🟢
+ 
+ ## 6.10 Optional content
+-- krilla does not support optional content. 🟢
++- krilla writes every optional content group with a `Name`. 🟢
++- krilla writes one optional content configuration, `D`, with the `Name` `Layers`, an `Order`
++  array that lists every group, and no `AS` key. 🟢
+ 
+ ## 6.11 Use of alternate presentations and transitions
+ - krilla does not use the `AlternatePresentations` entry. 🟢
+diff --git a/src/configure/PDF_UA1.md b/src/configure/PDF_UA1.md
+index 16959bb..80449b8 100644
+--- a/src/configure/PDF_UA1.md
++++ b/src/configure/PDF_UA1.md
+@@ -87,7 +87,7 @@ See `README.md` for the meaning of each color.
+ - krilla always generates an ID for notes. 🟢
+ 
+ # 7.10 Optional content
+-- krilla does currently not support optional content. 🔵
++- krilla writes its one optional content configuration, `D`, with a `Name`. 🟢
+ 
+ # 7.11 Embedded files
+ - krilla supports embedded files, and requires a description in this export mode. 🟢
+diff --git a/src/configure/validate.rs b/src/configure/validate.rs
+index b0a8f03..fb429ce 100644
+--- a/src/configure/validate.rs
++++ b/src/configure/validate.rs
+@@ -159,6 +159,12 @@ pub enum ValidationError {
+     EmbeddedPDF(Option<Location>),
+     /// A feature only available in a later PDF version was required.
+     RequiresNewerPdfVersion(VersionedFeature, Option<Location>),
++    /// The PDF contains optional content groups, which PDF/A-1 forbids.
++    ///
++    /// Occurs if [`Document::add_optional_content_group`] was called.
++    ///
++    /// [`Document::add_optional_content_group`]: crate::Document::add_optional_content_group
++    OptionalContent(Option<Location>),
+ }
+ 
+ /// Features that may require a later PDF version than the current one.
+@@ -170,6 +176,8 @@ pub enum VersionedFeature {
+     HeaderFooterArtifactSubtypes,
+     /// Scope attribute for table header cells.
+     TableHeaderScope,
++    /// Optional content groups (layers).
++    OptionalContent,
+ }
+ 
+ impl VersionedFeature {
+@@ -179,6 +187,7 @@ impl VersionedFeature {
+             VersionedFeature::StructureOrderTabbing => PdfVersion::Pdf15,
+             VersionedFeature::HeaderFooterArtifactSubtypes => PdfVersion::Pdf17,
+             VersionedFeature::TableHeaderScope => PdfVersion::Pdf15,
++            VersionedFeature::OptionalContent => PdfVersion::Pdf15,
+         }
+     }
+ }
+@@ -566,7 +575,8 @@ impl Archival {
+                 | ValidationError::ImageInterpolation(_)
+                 | ValidationError::PdfxVersionWithoutExtensionSchema
+                 | ValidationError::EmbeddedFile(EmbedError::Existence, _)
+-                | ValidationError::EmbeddedPDF(_),
++                | ValidationError::EmbeddedPDF(_)
++                | ValidationError::OptionalContent(_),
+             ) => true,
+             // Allowed under all PDF/A-1 profiles.
+             (
+@@ -582,7 +592,8 @@ impl Archival {
+                 | ValidationError::RequiresNewerPdfVersion(
+                     VersionedFeature::HeaderFooterArtifactSubtypes
+                     | VersionedFeature::StructureOrderTabbing
+-                    | VersionedFeature::TableHeaderScope,
++                    | VersionedFeature::TableHeaderScope
++                    | VersionedFeature::OptionalContent,
+                     _,
+                 ),
+             ) => false,
+@@ -628,9 +639,11 @@ impl Archival {
+                 | ValidationError::RequiresNewerPdfVersion(
+                     VersionedFeature::HeaderFooterArtifactSubtypes
+                     | VersionedFeature::StructureOrderTabbing
+-                    | VersionedFeature::TableHeaderScope,
++                    | VersionedFeature::TableHeaderScope
++                    | VersionedFeature::OptionalContent,
+                     _,
+-                ),
++                )
++                | ValidationError::OptionalContent(_),
+             ) => false,
+             // Forbidden under PDF/A-2 but allowed under PDF/A-3.
+             (
+@@ -707,9 +720,11 @@ impl Archival {
+                 | ValidationError::RequiresNewerPdfVersion(
+                     VersionedFeature::HeaderFooterArtifactSubtypes
+                     | VersionedFeature::StructureOrderTabbing
+-                    | VersionedFeature::TableHeaderScope,
++                    | VersionedFeature::TableHeaderScope
++                    | VersionedFeature::OptionalContent,
+                     _,
+-                ),
++                )
++                | ValidationError::OptionalContent(_),
+             ) => false,
+             // Forbidden under PDF/A-4 but allowed under other PDF/A-4 profiles.
+             (
+@@ -1133,7 +1148,8 @@ impl Accessibility {
+                 | ValidationError::RequiresNewerPdfVersion(
+                     VersionedFeature::HeaderFooterArtifactSubtypes
+                     | VersionedFeature::StructureOrderTabbing
+-                    | VersionedFeature::TableHeaderScope,
++                    | VersionedFeature::TableHeaderScope
++                    | VersionedFeature::OptionalContent,
+                     _,
+                 ),
+             ) => true,
+@@ -1159,7 +1175,8 @@ impl Accessibility {
+                     EmbedError::Existence | EmbedError::MissingDate | EmbedError::MissingMimeType,
+                     _,
+                 )
+-                | ValidationError::MissingDocumentDate,
++                | ValidationError::MissingDocumentDate
++                | ValidationError::OptionalContent(_),
+             ) => false,
+         }
+     }
+diff --git a/src/content.rs b/src/content.rs
+index 26ad665..68779d6 100644
+--- a/src/content.rs
++++ b/src/content.rs
+@@ -22,6 +22,7 @@ use crate::graphics::graphics_state::{ExtGState, GraphicsStates};
+ #[cfg(feature = "raster-images")]
+ use crate::graphics::image::Image;
+ use crate::graphics::mask::Mask;
++use crate::graphics::optional_content::{self, OpenMarks};
+ use crate::graphics::paint::{Fill, FillRule, InnerPaint, LineCap, LineJoin, Paint, Stroke};
+ use crate::graphics::shading_function::{
+     GradientProperties, GradientPropertiesExt, ShadingFunction,
+@@ -42,8 +43,8 @@ use crate::text::{Glyph, GlyphId};
+ use crate::util::{calculate_stroke_bbox, NameExt};
+ 
+ pub(crate) struct ContentBuilder {
+-    rd_builder: ResourceDictionaryBuilder,
+-    content: Content,
++    pub(crate) rd_builder: ResourceDictionaryBuilder,
++    pub(crate) content: Content,
+     validation_errors: HashSet<ValidationError>,
+     root_transform: Transform,
+     graphics_states: GraphicsStates,
+@@ -57,6 +58,7 @@ pub(crate) struct ContentBuilder {
+     /// A temporary buffer that's reused across the builder.
+     scratch: Vec<u8>,
+     pub(crate) active_marked_content: bool,
++    pub(crate) optional_content: OpenMarks,
+ }
+ 
+ /// Stores either a device-specific color space,
+@@ -84,6 +86,7 @@ impl ContentBuilder {
+             bbox: None,
+             scratch: Vec::new(),
+             active_marked_content: false,
++            optional_content: OpenMarks::default(),
+         }
+     }
+ 
+@@ -96,7 +99,8 @@ impl ContentBuilder {
+         }
+     }
+ 
+-    pub(crate) fn finish(self, sc: &mut SerializeContext) -> Stream {
++    pub(crate) fn finish(mut self, sc: &mut SerializeContext) -> Stream {
++        optional_content::close_open_marks(&mut self, sc);
+         let buf = self.content.finish();
+         sc.register_limits(buf.limits());
+ 
+@@ -153,6 +157,7 @@ impl ContentBuilder {
+             panic!("can't end marked content when none has been started");
+         }
+ 
++        self.optional_content.tag_ended();
+         self.content.end_marked_content();
+         self.active_marked_content = false;
+     }
+diff --git a/src/error.rs b/src/error.rs
+index 4c582ae..a19ebf6 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -34,6 +34,15 @@ pub enum KrillaError {
+     ///
+     /// [`MeshGradient`]: crate::paint::MeshGradient
+     MixedMeshColorSpaces(Option<Location>),
++    /// [`Surface::start_optional_content`] was given an [`OcgId`] that this document did
++    /// not create.
++    ///
++    /// [`Surface::start_optional_content`]: crate::surface::Surface::start_optional_content
++    /// [`OcgId`]: crate::optional_content::OcgId
++    UnknownOptionalContentGroup(Option<Location>),
++    /// Optional content marks were not balanced: an end without a start, a mark still open
++    /// when its stream finished, or a mark overlapping a tagged section.
++    UnbalancedOptionalContent(Option<Location>),
+     /// An error while attempting to embed a font.
+     Font(Font, String),
+     /// A list of validation errors. Can only occur if you set the `validator` in
+@@ -79,6 +88,14 @@ impl Display for KrillaError {
+                 f.write_str("a mesh gradient mixes color spaces that can't be written as one")?;
+                 write_location(f, *location)
+             }
++            KrillaError::UnknownOptionalContentGroup(location) => {
++                f.write_str("an optional content group from another document was used")?;
++                write_location(f, *location)
++            }
++            KrillaError::UnbalancedOptionalContent(location) => {
++                f.write_str("optional content marks are not balanced")?;
++                write_location(f, *location)
++            }
+             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
+             KrillaError::Validation(errors) => {
+                 let count = errors.len();
+diff --git a/src/graphics/mod.rs b/src/graphics/mod.rs
+index 57e9406..3864d6e 100644
+--- a/src/graphics/mod.rs
++++ b/src/graphics/mod.rs
+@@ -6,6 +6,7 @@ pub mod icc;
+ #[cfg(feature = "raster-images")]
+ pub mod image;
+ pub mod mask;
++pub mod optional_content;
+ pub mod paint;
+ pub(crate) mod device_n;
+ pub(crate) mod separation;
+diff --git a/src/graphics/optional_content.rs b/src/graphics/optional_content.rs
+new file mode 100644
+index 0000000..45c135f
+--- /dev/null
++++ b/src/graphics/optional_content.rs
+@@ -0,0 +1,266 @@
++//! Optional content (layers).
++//!
++//! An optional content group (OCG) is a named layer that a viewer can show or hide. Create
++//! groups on the [`Document`] with [`Document::add_optional_content_group`], then mark
++//! content on any surface with [`Surface::start_optional_content`] and
++//! [`Surface::end_optional_content`].
++//!
++//! Every group is written once as `<< /Type /OCG /Name (…) >>`, and the catalog gets
++//! `/OCProperties` listing all groups, also those that no page uses, with the hidden ones
++//! in the default configuration's `/OFF` array. Marked content is written as
++//! `/OC /ocN BDC … EMC`, with `/ocN` registered in the `/Properties` resources of the
++//! stream that holds it.
++//!
++//! Optional content marks nest independently of tagged sections, but they must not overlap
++//! them: a tagged section started inside a mark ends before the mark does, and a mark started
++//! inside a tagged section ends before the section does. Marks are balanced per stream: a mark
++//! started before [`Surface::push_group`] (or any other push that starts a new stream, such as
++//! an opacity or a mask) can't be ended inside it.
++//!
++//! Optional content needs PDF 1.5 and is forbidden in PDF/A-1.
++//!
++//! [`Surface::push_group`]: crate::surface::Surface::push_group
++
++use std::collections::HashMap;
++
++use pdf_writer::types::PageMode;
++use pdf_writer::writers::{self, Catalog};
++use pdf_writer::{Dict, Finish, Name, Ref, TextStr};
++
++use crate::configure::validate::VersionedFeature;
++use crate::configure::ValidationError;
++use crate::content::ContentBuilder;
++use crate::document::Document;
++use crate::error::{KrillaError, KrillaResult};
++use crate::resource::{Resource, ResourceDictionaryBuilder, ResourceMapper};
++use crate::serialize::SerializeContext;
++use crate::surface::{Location, Surface};
++use crate::util::NameExt;
++
++/// An optional content group of a [`Document`], returned by
++/// [`Document::add_optional_content_group`].
++///
++/// An id is only meaningful for the document that created it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct OcgId(usize);
++
++struct Group {
++    ref_: Ref,
++    visible: bool,
++}
++
++/// The document's optional content groups and settings.
++#[derive(Default)]
++pub(crate) struct OptionalContent {
++    groups: Vec<Group>,
++    page_mode: bool,
++    /// Where the first unbalanced or overlapping mark was found;
++    /// [`SerializeContext::finish`] fails with [`KrillaError::UnbalancedOptionalContent`].
++    pub(crate) misuse: Option<Option<Location>>,
++}
++
++impl OptionalContent {
++    fn group_ref(&self, id: OcgId) -> Option<Ref> {
++        self.groups.get(id.0).map(|g| g.ref_)
++    }
++
++    fn record_misuse(&mut self, location: Option<Location>) {
++        self.misuse.get_or_insert(location);
++    }
++
++    /// Writes `/OCProperties`, and `/PageMode /UseOC` when requested, if any group exists.
++    pub(crate) fn write_catalog_entries(
++        &self,
++        catalog: &mut Catalog<'_>,
++        remapper: &HashMap<Ref, Ref>,
++    ) {
++        if self.groups.is_empty() {
++            return;
++        }
++
++        let all: Vec<Ref> = self
++            .groups
++            .iter()
++            .filter_map(|g| remapper.get(&g.ref_).copied())
++            .collect();
++        let hidden: Vec<Ref> = self
++            .groups
++            .iter()
++            .filter(|g| !g.visible)
++            .filter_map(|g| remapper.get(&g.ref_).copied())
++            .collect();
++
++        let mut properties = catalog.insert(Name(b"OCProperties")).dict();
++        properties
++            .insert(Name(b"OCGs"))
++            .array()
++            .items(all.iter().copied());
++        let mut config = properties.insert(Name(b"D")).dict();
++        config.pair(Name(b"Name"), TextStr("Layers"));
++        config
++            .insert(Name(b"Order"))
++            .array()
++            .items(all.iter().copied());
++        if !hidden.is_empty() {
++            config.insert(Name(b"OFF")).array().items(hidden);
++        }
++        config.finish();
++        properties.finish();
++
++        if self.page_mode {
++            catalog.page_mode(PageMode::UseOC);
++        }
++    }
++}
++
++impl Document {
++    /// Add an optional content group (a layer) named `name`, shown when the document opens
++    /// if `visible` is true.
++    ///
++    /// The group is listed in the catalog's `/OCProperties` even if no content uses it.
++    /// Names are text strings, so any Unicode name works; they need not be unique.
++    ///
++    /// Optional content needs PDF 1.5 and is forbidden in PDF/A-1: adding a group registers
++    /// [`ValidationError::OptionalContent`] and, below PDF 1.5,
++    /// [`ValidationError::RequiresNewerPdfVersion`].
++    pub fn add_optional_content_group(&mut self, name: impl Into<String>, visible: bool) -> OcgId {
++        let sc = &mut self.serializer_context;
++        let name = name.into();
++
++        sc.register_validation_error(ValidationError::OptionalContent(sc.location));
++        if sc.serialize_settings().pdf_version()
++            < VersionedFeature::OptionalContent.minimum_pdf_version()
++        {
++            sc.register_validation_error(ValidationError::RequiresNewerPdfVersion(
++                VersionedFeature::OptionalContent,
++                sc.location,
++            ));
++        }
++
++        let ref_ = sc.new_ref();
++        let mut ocg = self
++            .chunk_container
++            .non_stream
++            .optional_content
++            .indirect(ref_)
++            .dict();
++        ocg.pair(Name(b"Type"), Name(b"OCG"));
++        ocg.pair(Name(b"Name"), TextStr(&name));
++        ocg.finish();
++
++        let groups = &mut sc.optional_content.groups;
++        groups.push(Group { ref_, visible });
++        OcgId(groups.len() - 1)
++    }
++
++    /// Whether the document opens with the viewer's layers panel showing
++    /// (`/PageMode /UseOC`). Only written when the document has optional content groups.
++    /// Off by default.
++    pub fn set_optional_content_page_mode(&mut self, use_oc: bool) {
++        self.serializer_context.optional_content.page_mode = use_oc;
++    }
++}
++
++impl Surface<'_> {
++    /// Start content that belongs to the optional content group `group`, until the matching
++    /// [`Surface::end_optional_content`].
++    ///
++    /// Marks nest, and a mark may contain tagged sections (see the [module
++    /// documentation](crate::optional_content) for the nesting rules). Content left open
++    /// when the surface finishes, or when a group, opacity or mask pushed after the start
++    /// is popped, is closed there, and [`Document::finish`] then fails with
++    /// [`KrillaError::UnbalancedOptionalContent`].
++    ///
++    /// Returns [`KrillaError::UnknownOptionalContentGroup`] and writes nothing if `group`
++    /// does not belong to this document.
++    pub fn start_optional_content(&mut self, group: OcgId) -> KrillaResult<()> {
++        let (builder, sc) = self.content_and_context();
++        let Some(ocg) = sc.optional_content.group_ref(group) else {
++            return Err(KrillaError::UnknownOptionalContentGroup(sc.location));
++        };
++
++        let name = builder.rd_builder.register_resource(Properties(ocg));
++        builder
++            .content
++            .begin_marked_content_with_properties(Name(b"OC"))
++            .properties_named(name.to_pdf_name());
++        let tagged = builder.active_marked_content;
++        builder.optional_content.open.push(tagged);
++        Ok(())
++    }
++
++    /// End the innermost optional content started with [`Surface::start_optional_content`]
++    /// in the current stream.
++    ///
++    /// Returns [`KrillaError::UnbalancedOptionalContent`] and writes nothing if no optional
++    /// content is open in the current stream, or if a tagged section started inside it is
++    /// still open.
++    pub fn end_optional_content(&mut self) -> KrillaResult<()> {
++        let (builder, sc) = self.content_and_context();
++        let tagged = builder.active_marked_content;
++        if builder.optional_content.open.last() != Some(&tagged) {
++            return Err(KrillaError::UnbalancedOptionalContent(sc.location));
++        }
++
++        builder.optional_content.open.pop();
++        builder.content.end_marked_content();
++        Ok(())
++    }
++}
++
++/// The optional content marks open in one content stream. Each entry records whether a
++/// tagged section was open when the mark started.
++#[derive(Default)]
++pub(crate) struct OpenMarks {
++    open: Vec<bool>,
++    overlap: bool,
++}
++
++impl OpenMarks {
++    /// Called when a tagged section ends: a mark started inside it would be closed by its
++    /// `EMC`.
++    pub(crate) fn tag_ended(&mut self) {
++        if self.open.last() == Some(&true) {
++            self.overlap = true;
++        }
++    }
++}
++
++/// Close the marks still open in `builder` before its stream is finished, and record the
++/// misuse for [`SerializeContext::finish`].
++pub(crate) fn close_open_marks(builder: &mut ContentBuilder, sc: &mut SerializeContext) {
++    let open = std::mem::take(&mut builder.optional_content.open);
++    for _ in &open {
++        builder.content.end_marked_content();
++    }
++    if !open.is_empty() || builder.optional_content.overlap {
++        let location = sc.location;
++        sc.optional_content.record_misuse(location);
++    }
++}
++
++/// An entry of a resource dictionary's `/Properties`: an optional content group.
++#[derive(Debug, Eq, PartialEq, Hash, Clone)]
++pub(crate) struct Properties(Ref);
++
++impl Resource for Properties {
++    fn new(ref_: Ref) -> Self {
++        Self(ref_)
++    }
++
++    fn get_ref(&self) -> Ref {
++        self.0
++    }
++
++    fn get_dict<'a>(resources: &'a mut writers::Resources) -> Dict<'a> {
++        resources.insert(Name(b"Properties")).dict()
++    }
++
++    fn get_prefix() -> &'static str {
++        "oc"
++    }
++
++    fn get_mapper(b: &mut ResourceDictionaryBuilder) -> &mut ResourceMapper<Properties> {
++        &mut b.properties
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 099a9d4..cc608aa 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -187,3 +187,6 @@ pub const CRAFT_UNWIND_POISONING: bool = true;
+ /// Identifies the print color patches: CMYK blending groups, print output intent and
+ /// PDF/X markers.
+ pub const CRAFT_PRINT_COLOR: bool = true;
++
++/// Identifies the optional content patch: layers written as optional content groups.
++pub const CRAFT_OPTIONAL_CONTENT: bool = true;
+diff --git a/src/resource.rs b/src/resource.rs
+index 56b8488..da8ab83 100644
+--- a/src/resource.rs
++++ b/src/resource.rs
+@@ -7,6 +7,7 @@ use pdf_writer::types::ProcSet;
+ use pdf_writer::writers;
+ use pdf_writer::{Chunk, Dict, Finish, Name, Ref};
+ 
++use crate::graphics::optional_content::Properties;
+ use crate::serialize::{Cacheable, SerializeContext};
+ use crate::util::NameExt;
+ 
+@@ -180,6 +181,7 @@ pub(crate) struct ResourceDictionaryBuilder {
+     pub(crate) x_objects: ResourceMapper<XObject>,
+     pub(crate) shadings: ResourceMapper<Shading>,
+     pub(crate) fonts: ResourceMapper<Font>,
++    pub(crate) properties: ResourceMapper<Properties>,
+ }
+ 
+ impl ResourceDictionaryBuilder {
+@@ -191,6 +193,7 @@ impl ResourceDictionaryBuilder {
+             x_objects: ResourceMapper::new(),
+             shadings: ResourceMapper::new(),
+             fonts: ResourceMapper::new(),
++            properties: ResourceMapper::new(),
+         }
+     }
+ 
+@@ -209,6 +212,7 @@ impl ResourceDictionaryBuilder {
+             x_objects: self.x_objects.into_resource_list(),
+             shadings: self.shadings.into_resource_list(),
+             fonts: self.fonts.into_resource_list(),
++            properties: self.properties.into_resource_list(),
+         }
+     }
+ }
+@@ -221,6 +225,7 @@ pub(crate) struct ResourceDictionary {
+     pub(crate) x_objects: ResourceList<XObject>,
+     pub(crate) shadings: ResourceList<Shading>,
+     pub(crate) fonts: ResourceList<Font>,
++    pub(crate) properties: ResourceList<Properties>,
+ }
+ 
+ impl Default for ResourceDictionary {
+@@ -232,6 +237,7 @@ impl Default for ResourceDictionary {
+             x_objects: ResourceList::empty(),
+             shadings: ResourceList::empty(),
+             fonts: ResourceList::empty(),
++            properties: ResourceList::empty(),
+         }
+     }
+ }
+@@ -253,7 +259,8 @@ impl ResourceDictionary {
+             || self.patterns.len() > 0
+             || self.x_objects.len() > 0
+             || self.shadings.len() > 0
+-            || self.fonts.len() > 0;
++            || self.fonts.len() > 0
++            || self.properties.len() > 0;
+ 
+         if !write_proc_sets && !has_resource_entries {
+             // `Resources` dictionary is mandatory (or rather, it's mandatory if
+@@ -282,6 +289,7 @@ impl ResourceDictionary {
+         write_resource_type::<XObject>(&mut resources, &self.x_objects);
+         write_resource_type::<Shading>(&mut resources, &self.shadings);
+         write_resource_type::<Font>(&mut resources, &self.fonts);
++        write_resource_type::<Properties>(&mut resources, &self.properties);
+         parent.set_resources(resources_ref);
+     }
+ }
+diff --git a/src/serialize.rs b/src/serialize.rs
+index 587e2c6..4f4af4c 100644
+--- a/src/serialize.rs
++++ b/src/serialize.rs
+@@ -22,6 +22,7 @@ use crate::graphics::device_n::DeviceNColorSpace;
+ use crate::graphics::icc::{ICCBasedColorSpace, ICCProfile};
+ #[cfg(feature = "raster-images")]
+ use crate::graphics::image::Image;
++use crate::graphics::optional_content::OptionalContent;
+ use crate::graphics::separation::SeparationColorSpace;
+ use crate::interactive::destination::{NamedDestination, XyzDestination};
+ use crate::interchange::embed::EmbeddedFile;
+@@ -356,6 +357,8 @@ pub(crate) struct SerializeContext {
+     /// Where the first mesh gradient whose corner colors share no color space was drawn;
+     /// [`SerializeContext::finish`] fails with [`KrillaError::MixedMeshColorSpaces`].
+     pub(crate) mixed_mesh_colors: Option<Option<Location>>,
++    /// The document's optional content groups.
++    pub(crate) optional_content: OptionalContent,
+     /// The ref of the page tree.
+     page_tree_ref: Ref,
+     /// PDF 2.0 namespaces.
+@@ -417,6 +420,7 @@ impl SerializeContext {
+         Self {
+             poisoned: false,
+             mixed_mesh_colors: None,
++            optional_content: OptionalContent::default(),
+             cached_mappings: HashMap::new(),
+             pdf2_ns,
+             global_objects: GlobalObjects::default(),
+@@ -631,6 +635,9 @@ impl SerializeContext {
+         if let Some(location) = self.mixed_mesh_colors {
+             return Err(KrillaError::MixedMeshColorSpaces(location));
+         }
++        if let Some(location) = self.optional_content.misuse {
++            return Err(KrillaError::UnbalancedOptionalContent(location));
++        }
+ 
+         // We need to be careful here that we serialize the objects in the right order,
+         // as in some cases we use MaybeTake::take to remove an object, which means that
+diff --git a/src/surface.rs b/src/surface.rs
+index 15a728d..b5b602d 100644
+--- a/src/surface.rs
++++ b/src/surface.rs
+@@ -100,6 +100,11 @@ impl<'a> Surface<'a> {
+         }
+     }
+ 
++    /// The content stream being drawn and the serialization context, borrowed together.
++    pub(crate) fn content_and_context(&mut self) -> (&mut ContentBuilder, &mut SerializeContext) {
++        (self.bd.get_mut(), self.sc)
++    }
++
+     /// Return a `StreamBuilder` to allow drawing on a sub-context.
+     pub fn stream_builder(&mut self) -> StreamBuilder<'_> {
+         StreamBuilder::new(self.sc, self.chunk_container)

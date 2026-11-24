@@ -1,0 +1,24 @@
+[package]
+name = "craft-scraft-format"
+description = "SoundCraft's versioned native session document model and JSON schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-audio = { workspace = true, features = ["lossless-encode", "peaks"] }
+craft-midi = { workspace = true, features = ["serde"] }
+craft-time.workspace = true
+craft-zip.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+craft-audio = { workspace = true, features = ["decode", "serde"] }
+proptest.workspace = true

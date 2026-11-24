@@ -1,5 +1,4 @@
 use crate::object::ObjectIdentifier;
-use crate::object::Stream;
 use crate::reader::ReaderContext;
 use crate::sync::HashMap;
 use crate::sync::{Arc, Mutex, MutexExt};
@@ -68,6 +67,10 @@ pub(crate) struct Data {
     decoded: SegmentList<Option<Vec<u8>>, 32>,
     map: Mutex<HashMap<ObjectIdentifier, usize>>,
     loading: LoadGate,
+    // PdfCraft patch: each object stream's header pairs, parsed once. Looking up every object of
+    // a stream otherwise reparsed all /N pairs per lookup, quadratic in /N. An entry is at most
+    // one pair per four decoded bytes, and decoded streams are kept for the document anyway.
+    object_offsets: Mutex<HashMap<ObjectIdentifier, Arc<Vec<(u32, usize)>>>>,
 }
 
 impl Debug for Data {
@@ -84,6 +87,7 @@ impl Data {
             decoded: SegmentList::new(),
             map: Mutex::new(HashMap::new()),
             loading: LoadGate::default(),
+            object_offsets: Mutex::new(HashMap::new()),
         }
     }
 
@@ -92,6 +96,25 @@ impl Data {
         &self.data
     }
 
+    /// PdfCraft patch: the header pairs of object stream `id`, from `parse` on first use.
+    pub(crate) fn object_offsets(
+        &self,
+        id: ObjectIdentifier,
+        parse: impl FnOnce() -> Option<Vec<(u32, usize)>>,
+    ) -> Option<Arc<Vec<(u32, usize)>>> {
+        if let Some(offsets) = self.object_offsets.get().get(&id) {
+            return Some(offsets.clone());
+        }
+        // Parsed without the lock held; a racing parse of the same stream gives the same table.
+        let parsed = Arc::new(parse()?);
+        Some(self.object_offsets.get().entry(id).or_insert(parsed).clone())
+    }
+
+    /// PdfCraft patch: (hayro-syntax (33)) enter the gate for what an object stream's index depends
+    /// on, once its data is read and [`Self::get_with`] has let go of it.
+    pub(crate) fn enter_loading(&self, id: ObjectIdentifier) -> Option<LoadGuard<'_>> {
+        self.loading.enter(id)
+    }
     /// Get access to the data of a decoded object stream.
     pub(crate) fn get_with(&self, id: ObjectIdentifier, ctx: &ReaderContext<'_>) -> Option<&[u8]> {
         // PdfCraft patch: (#307, see vendor/README.md hayro-syntax (10)) register exactly once:
@@ -110,7 +133,8 @@ impl Data {
         let _loading = self.loading.enter(id)?;
         self.decoded
             .get_or_init(idx, || {
-                let stream = ctx.xref().get_with::<Stream<'_>>(id, ctx)?;
+                // PdfCraft patch: (hayro-syntax (33)) only ever an object stream.
+                let stream = ctx.xref().object_stream(id, ctx)?;
                 stream.decoded().ok().map(Cow::into_owned)
             })?
             .as_deref()
@@ -244,7 +268,7 @@ mod tests {
     }
 }
 
-struct LoadGuard<'a>(&'a LoadGate);
+pub(crate) struct LoadGuard<'a>(&'a LoadGate);
 
 impl Drop for LoadGuard<'_> {
     fn drop(&mut self) {

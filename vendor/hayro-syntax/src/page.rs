@@ -66,9 +66,11 @@ impl<'a> Pages<'a> {
     /// Of course this could result in the order of pages being messed up, but
     /// this is still better than nothing.
     pub(crate) fn new_brute_force(ctx: &ReaderContext<'a>, xref: &'a XRef) -> Option<Self> {
+        crate::cancel::check(ctx.control())?;
         let mut pages = vec![];
 
         for object in xref.objects() {
+            crate::cancel::check(ctx.control())?;
             if let Some(dict) = object.into_dict()
                 && let Some(page) = Page::new(
                     &dict,
@@ -81,6 +83,7 @@ impl<'a> Pages<'a> {
             }
         }
 
+        crate::cancel::check(ctx.control())?;
         if pages.is_empty() {
             return None;
         }
@@ -113,6 +116,7 @@ const MAX_PAGE_TREE_WORK: usize = 100_000;
 enum PageTreeError {
     Malformed,
     Limit,
+    Cancelled,
 }
 
 struct PageTreeFrame<'a> {
@@ -142,6 +146,7 @@ fn resolve_pages<'a>(
     reader_ctx: &ReaderContext<'a>,
     work_limit: usize,
 ) -> Result<(), PageTreeError> {
+    crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     let mut remaining = work_limit.checked_sub(1).ok_or(PageTreeError::Limit)?;
     let root =
         PageTreeFrame::new(pages_dict, PagesContext::new(), Resources::new(Dict::empty(), None, reader_ctx)).ok_or(PageTreeError::Malformed)?;
@@ -154,6 +159,7 @@ fn resolve_pages<'a>(
     stack.push(root);
 
     while let Some(frame) = stack.last_mut() {
+        crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
         let Some(kid) = frame.kids.next() else {
             stack.pop();
             continue;
@@ -196,6 +202,7 @@ fn resolve_pages<'a>(
         }
     }
 
+    crate::cancel::check(reader_ctx.control()).ok_or(PageTreeError::Cancelled)?;
     Ok(())
 }
 
@@ -446,12 +453,36 @@ impl<'a> Page<'a> {
             return None;
         }
 
-        let media_box = dict.get::<Rect>(MEDIA_BOX).or(ctx.media_box).unwrap_or(A4);
+        // PdfCraft patch (38): a box that encloses no area is no box. A `/MediaBox` without
+        // area (`[0 0 0 0]`) is read as a missing one, and a `/CropBox` that has none, or
+        // none in common with the media box, as a missing one (the media box, ISO 32000-2
+        // §14.11.2, Table 33). Kept, the page's visible region had no area: nothing was drawn
+        // and no text was extracted, where other readers show the page.
+        // A page's own box without area gives way to one it inherits that has some. Each box
+        // set aside is logged, as other repairs of this reader are.
+        // PdfCraft patch (44): a page with no `/MediaBox`, its own or inherited, or only ones
+        // without area, is US Letter, not A4. The box is required (ISO 32000-2 §7.7.3.3,
+        // Table 31) and has no default; other readers use Letter, as do PdfCraft's page model
+        // and inspector. The page is then sized, placed and clipped by the same Letter region
+        // and its content shows.
+        let own_media = dict.get::<Rect>(MEDIA_BOX);
+        let media_box = own_media
+            .filter(has_area)
+            .or(ctx.media_box.filter(has_area))
+            .unwrap_or(LETTER);
+        if own_media.or(ctx.media_box).is_some_and(|m| !has_area(&m)) {
+            warn!("a /MediaBox without area was read as missing");
+        }
 
-        let crop_box = dict
-            .get::<Rect>(CROP_BOX)
-            .or(ctx.crop_box)
+        let shows = |c: &Rect| has_area(&c.intersect(media_box));
+        let own_crop = dict.get::<Rect>(CROP_BOX);
+        let crop_box = own_crop
+            .filter(shows)
+            .or(ctx.crop_box.filter(shows))
             .unwrap_or(media_box);
+        if own_crop.or(ctx.crop_box).is_some_and(|c| !shows(&c)) {
+            warn!("a /CropBox with no area in the media box was read as missing");
+        }
 
         let rotation = match dict
             .get::<i32>(ROTATE)
@@ -602,11 +633,20 @@ impl<'a> Page<'a> {
 
         if (crop_box.width() as f32).is_nearly_zero() || (crop_box.height() as f32).is_nearly_zero()
         {
-            (A4.width() as f32, A4.height() as f32)
+            // PdfCraft patch (44): the same US Letter default as a missing `/MediaBox`.
+            (LETTER.width() as f32, LETTER.height() as f32)
         } else {
+            // PdfCraft patch: retain a one-point floor after UserUnit, not one raw unit.
+            // The stored unit is finite and within 1..=75000. Round upward only if the
+            // reciprocal's f32 product would fall below one and trigger a placeholder.
+            let mut raw_floor = 1.0 / self.user_unit;
+            if raw_floor * self.user_unit < 1.0 {
+                raw_floor = raw_floor.next_up();
+            }
+            let raw_floor = f64::from(raw_floor);
             (
-                crop_box.width().max(1.0) as f32,
-                crop_box.height().max(1.0) as f32,
+                crop_box.width().max(raw_floor) as f32,
+                crop_box.height().max(raw_floor) as f32,
             )
         }
     }
@@ -712,11 +752,13 @@ impl<'a> Page<'a> {
 pub struct Resources<'a> {
     parent: Option<Box<Self>>,
     ctx: ReaderContext<'a>,
+    // PdfCraft patch: legacy forms without Resources use the page, not their caller.
+    page_properties: Dict<'a>,
     /// The raw dictionary of external graphics states.
     pub ext_g_states: Dict<'a>,
     /// The raw dictionary of fonts.
     pub fonts: Dict<'a>,
-    /// The raw dictionary of properties.
+    /// The effective property dictionary selected at page or form entry.
     pub properties: Dict<'a>,
     /// The raw dictionary of color spaces.
     pub color_spaces: Dict<'a>,
@@ -748,6 +790,26 @@ impl<'a> Resources<'a> {
         Self::new(resources, Some(parent), &ctx)
     }
 
+    // PdfCraft patch: page-tree inheritance stops at any present Resources dictionary.
+    fn for_page(resources: Option<Dict<'a>>, parent: Self) -> Self {
+        let properties = resources.as_ref().map_or_else(|| parent.properties.clone(), |dict| dict.get::<Dict<'_>>(PROPERTIES).unwrap_or_default());
+        let mut result = Self::from_parent(resources.unwrap_or_default(), parent);
+        result.properties = properties.clone();
+        result.page_properties = properties;
+        result
+    }
+
+    /// Create form resources, using page Properties only when Resources is absent.
+    /// Other resource categories retain their existing parent-chain lookup.
+    // PdfCraft patch: ISO 32000-2, 7.8.3 and Table 93 require the page origin.
+    pub fn for_form(resources: Option<Dict<'a>>, parent: Self) -> Self {
+        let properties =
+            resources.as_ref().map_or_else(|| parent.page_properties.clone(), |dict| dict.get::<Dict<'_>>(PROPERTIES).unwrap_or_default());
+        let mut result = Self::from_parent(resources.unwrap_or_default(), parent);
+        result.properties = properties;
+        result
+    }
+
     /// Create a new `Resources` object.
     pub(crate) fn new(resources: Dict<'a>, parent: Option<Self>, ctx: &ReaderContext<'a>) -> Self {
         let ext_g_states = resources.get::<Dict<'_>>(EXT_G_STATE).unwrap_or_default();
@@ -758,6 +820,8 @@ impl<'a> Resources<'a> {
         let shadings = resources.get::<Dict<'_>>(SHADING).unwrap_or_default();
         let properties = resources.get::<Dict<'_>>(PROPERTIES).unwrap_or_default();
 
+        // PdfCraft patch: generic child resources retain the page origin.
+        let page_properties = parent.as_ref().map_or_else(|| properties.clone(), |parent| parent.page_properties.clone());
         let parent = parent.map(Box::new);
 
         Self {
@@ -766,6 +830,7 @@ impl<'a> Resources<'a> {
             fonts,
             color_spaces,
             properties,
+            page_properties,
             x_objects,
             patterns,
             shadings,
@@ -823,12 +888,33 @@ impl<'a> Resources<'a> {
 const POINTS_PER_INCH: f64 = 72.0;
 const POINTS_PER_MM: f64 = 1.0 / (10.0 * 2.54) * POINTS_PER_INCH;
 
+/// PdfCraft patch (38): whether `r` encloses some area: finite, and wider and taller than
+/// nothing.
+fn has_area(r: &Rect) -> bool {
+    let (w, h) = (r.width() as f32, r.height() as f32);
+    w.is_finite()
+        && h.is_finite()
+        && w > 0.0
+        && h > 0.0
+        && !w.is_nearly_zero()
+        && !h.is_nearly_zero()
+}
+
 /// The dimension of an A4 page.
 pub const A4: Rect = Rect {
     x0: 0.0,
     y0: 0.0,
     x1: 210.0 * POINTS_PER_MM,
     y1: 297.0 * POINTS_PER_MM,
+};
+
+/// PdfCraft patch (44): the dimension of a US Letter page (8.5 × 11 in), the size of a page
+/// that has no `/MediaBox`.
+pub const LETTER: Rect = Rect {
+    x0: 0.0,
+    y0: 0.0,
+    x1: 8.5 * POINTS_PER_INCH,
+    y1: 11.0 * POINTS_PER_INCH,
 };
 
 pub(crate) mod cached {
@@ -874,7 +960,7 @@ pub(crate) mod cached {
                     Err(PageTreeError::Malformed) => Pages::new_brute_force(&ctx, xref_reference)?,
                     // A limit is a failed load, never permission to bypass the bound
                     // or return a partially walked page tree through repair.
-                    Err(PageTreeError::Limit) => return None,
+                    Err(PageTreeError::Limit | PageTreeError::Cancelled) => return None,
                 },
                 None => Pages::new_brute_force(&ctx, xref_reference)?,
             };
@@ -913,8 +999,32 @@ mod page_tree_tests {
     }
 
     fn cached_with_limit(objects: &[String], limit: usize) -> Option<cached::CachedPages> {
-        let xref = crate::xref::root_xref(pdf_bytes(objects).into(), b"", DecodeLimits::default()).unwrap();
+        let (xref, _) = crate::xref::root_xref(pdf_bytes(objects).into(), b"", DecodeLimits::default()).unwrap();
         cached::CachedPages::new_with_limit(cached::Arc::new(xref), limit)
+    }
+
+    #[test]
+    fn cancellation_interrupts_initial_page_tree_construction() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let armed = alloc::sync::Arc::new(AtomicBool::new(false));
+        let polls = alloc::sync::Arc::new(AtomicUsize::new(0));
+        let flag = armed.clone();
+        let counter = polls.clone();
+        let cancellation = crate::Cancellation::new(move || {
+            flag.load(Ordering::Relaxed) && counter.fetch_add(1, Ordering::Relaxed) + 1 == 100
+        });
+        let control = crate::cancel::Control::new(&cancellation);
+        let kids = (3..1003).map(|i| format!("{i} 0 R ")).collect::<String>();
+        let mut objects = vec![
+            String::from("<< /Type /Catalog /Pages 2 0 R >>"),
+            format!("<< /Type /Pages /Kids [{kids}] /Count 1000 >>"),
+        ];
+        objects.extend((0..1000).map(|_| String::from("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>")));
+        let (xref, _) = crate::xref::root_xref_controlled(pdf_bytes(&objects).into(), b"", DecodeLimits::default(), Some(control)).unwrap();
+        armed.store(true, Ordering::Relaxed);
+        assert!(cached::CachedPages::new(cached::Arc::new(xref)).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 100);
+        assert_eq!(cached_with_limit(&objects, 100_000).unwrap().get().len(), 1000);
     }
 
     fn assert_deep_tree() {
@@ -1004,6 +1114,45 @@ mod page_tree_tests {
         let repaired = cached_with_limit(&objects, 1).unwrap();
         assert_eq!(repaired.get().len(), 1);
         assert_eq!(repaired.get()[0].raw().obj_id().unwrap().obj_number, 3);
+    }
+
+    fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {
+        let bounds = crop.map(|n| n.to_string()).join(" ");
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [{bounds}] /CropBox [{bounds}] /UserUnit {unit} /Resources << >> /Contents [] >>"),
+        ];
+        pdf_bytes(&objects)
+    }
+
+    /// PdfCraft patch: a tiny crop box keeps a one-point floor after `/UserUnit`, not one raw unit.
+    #[test]
+    fn raw_crop_unit_floor_is_one_point_after_user_unit() {
+        for (unit, width, height) in [(1.0, 1.0, 1.0), (4096.0, 512.0, 1024.0), (75000.0, 9375.0, 18750.0)] {
+            let pdf = Pdf::new(raw_crop_unit_page(unit, [10.0, 20.0, 10.125, 20.25])).unwrap();
+            let page = &pdf.pages()[0];
+            assert_eq!(page.base_dimensions(), ((width / unit) as f32, (height / unit) as f32), "unit={unit}");
+        }
+        // In f32, the nearest reciprocal of 41 or 47 multiplies back to 0.99999994.
+        for unit in [1.0, 41.0, 47.0] {
+            let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, 0.01, 0.01])).unwrap();
+            let page = &pdf.pages()[0];
+            let (width, height) = page.base_dimensions();
+            assert!(width * page.user_unit() >= 1.0 && height * page.user_unit() >= 1.0, "unit={unit}");
+            let (width, height) = page.render_dimensions();
+            assert!((1.0..=1.000001).contains(&width) && (1.0..=1.000001).contains(&height), "unit={unit}: {width} by {height}");
+        }
+        // A nearly-zero crop box still falls back to US Letter (PdfCraft patch 44).
+        for unit in [1.0, 4096.0, 75000.0] {
+            for side in [0.0, 0.0001] {
+                let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, side, side])).unwrap();
+                let page = &pdf.pages()[0];
+                let expected = (super::LETTER.width() as f32, super::LETTER.height() as f32);
+                assert_eq!(page.base_dimensions(), expected, "unit={unit}, side={side}");
+                assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
+            }
+        }
     }
 }
 

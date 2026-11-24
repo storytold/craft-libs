@@ -1,0 +1,102 @@
+name: Shared format crates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/xml/**"
+      - "crates/mime/**"
+      - "crates/cfb/**"
+      - "crates/mesh/**"
+      - "crates/metafile/**"
+      - "crates/dxf/**"
+      - "crates/gcode/**"
+      - "crates/svg-paths/**"
+      - "crates/silhouette-studio/**"
+      - "crates/tiff/**"
+      - "crates/heif/**"
+      - "crates/cms/**"
+      - "crates/cdr/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/formats.yml"
+  pull_request:
+    paths:
+      - "crates/xml/**"
+      - "crates/mime/**"
+      - "crates/cfb/**"
+      - "crates/mesh/**"
+      - "crates/metafile/**"
+      - "crates/dxf/**"
+      - "crates/gcode/**"
+      - "crates/svg-paths/**"
+      - "crates/silhouette-studio/**"
+      - "crates/tiff/**"
+      - "crates/heif/**"
+      - "crates/cms/**"
+      - "crates/cdr/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/formats.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-formats-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `features`: each is linted alone, so code that needs another feature fails here.
+          - { crate: craft-xml, features: "" }
+          - { crate: craft-mime, features: "" }
+          - { crate: craft-cfb, features: "" }
+          - { crate: craft-mesh, features: "stl obj ply gltf" }
+          - { crate: craft-metafile, features: "write" }
+          - { crate: craft-dxf, features: "" }
+          - { crate: craft-gcode, features: "" }
+          - { crate: craft-svg-paths, features: "" }
+          - { crate: craft-silhouette-studio, features: "" }
+          - { crate: craft-tiff, features: "" }
+          - { crate: craft-heif, features: "testdata" }
+          - { crate: craft-cms, features: "" }
+          - { crate: craft-cdr, features: "synth" }
+    # fmt, clippy with default and with all features, and the tests run in the Workspace gate on
+    # every OS; this lints each feature alone and checks the web build.
+    name: ${{ matrix.crate }} feature sets, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - name: Clippy, each feature alone
+        if: matrix.features != ''
+        env:
+          CRATE: ${{ matrix.crate }}
+          FEATURES: ${{ matrix.features }}
+        run: |
+          for f in $FEATURES; do
+            echo "::group::feature: $f"
+            cargo clippy -p "$CRATE" --all-targets --locked --no-default-features --features "$f" -- -D warnings
+            echo "::endgroup::"
+          done
+      - run: cargo check -p "$CRATE" --all-features --locked --target wasm32-unknown-unknown
+        env:
+          CRATE: ${{ matrix.crate }}

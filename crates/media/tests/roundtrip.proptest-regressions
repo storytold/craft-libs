@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2f1e39c31dcb71e2f413c6f8046cb8976a8d51bab762a3d6cecce91feeda3a96 # shrinks to tracks = [(0, [S { size: 0, duration: 1, cto: 0, sync: false }])], order = [], mov = false, fast = false, with_pcm = false, start = None

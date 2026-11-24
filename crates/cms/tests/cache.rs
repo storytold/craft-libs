@@ -48,14 +48,14 @@ fn test_global_lru_cache() {
 
     // Reinsert entry 2 so cache has 3 resident transforms before applying byte limit
     set_cache_limits(CacheLimits { max_entries: 10, max_bytes: 64 * 1024 * 1024 });
-    let _ = cached(srgb, adobe, opts).expect("cached 2 again");
+    let most_recent = cached(srgb, adobe, opts).expect("cached 2 again");
     assert_eq!(cache_stats().entries, 3);
 
     // Byte budget eviction test: set limit so only 1 transform fits (evicts 2 entries)
-    let single_bytes = cache_stats().total_bytes / 3;
-    set_cache_limits(CacheLimits { max_entries: 10, max_bytes: single_bytes + 10 });
+    let single_bytes = most_recent.table_bytes() + srgb.to_bytes().len() + adobe.to_bytes().len();
+    set_cache_limits(CacheLimits { max_entries: 10, max_bytes: single_bytes });
     assert_eq!(cache_stats().entries, 1);
-    assert!(cache_stats().total_bytes <= single_bytes + 10);
+    assert_eq!(cache_stats().total_bytes, single_bytes);
 
     // Clear cache
     clear_cache();
@@ -207,7 +207,7 @@ fn test_retained_pipeline_clut_memory_accounting_and_eviction() {
     // Insert a smaller transform first to verify oversized entries don't evict it
     let p3 = Builtin::DisplayP3.profile();
     let small_t = cache.get(dst, p3, opts).expect("small transform");
-    let small_bytes = small_t.table_bytes();
+    let small_bytes = small_t.table_bytes() + dst.to_bytes().len() + p3.to_bytes().len();
     assert_eq!(cache.stats().entries, 1);
     assert_eq!(cache.stats().total_bytes, small_bytes);
 
@@ -225,7 +225,7 @@ fn test_retained_pipeline_clut_memory_accounting_and_eviction() {
     let t2 = cache.get(&src, dst, opts).expect("get transform with sufficient budget");
     let stats2 = cache.stats();
     assert_eq!(stats2.entries, 2);
-    assert_eq!(stats2.total_bytes, small_bytes + t2.table_bytes());
+    assert_eq!(stats2.total_bytes, small_bytes + t2.table_bytes() + src.to_bytes().len() + dst.to_bytes().len());
 
     // Touch small_t so t2 is the LRU entry
     let _ = cache.get(dst, p3, opts).expect("touch small transform");
