@@ -351,11 +351,12 @@ fn clamp_axis(center: f64, len: f64, size: f64, zoom: f64) -> f64 {
     center.clamp(half, len - half)
 }
 
-/// Clamp one axis of the view centre with overscroll on: the centre may pass a document's edge until only
-/// [`KEPT_IN_VIEW`] points of the document (all of a shorter one) are left in view at the opposite edge, which is the
-/// room [`Span::content`] gives a thumb at either end of its track: half the view less that margin. A document, a view
-/// or a centre this cannot measure keeps its centre.
-fn clamp_axis_overscrolled(center: f64, len: f64, size: f64, zoom: f64) -> f64 {
+/// Clamp one axis of the view centre with overscroll on: the centre may pass a document's edge until only `kept`
+/// points of the document (all of a shorter one) are left in view at the opposite edge, which is the room
+/// [`Span::content`] gives a thumb at either end of its track: half the view less that margin. `size` and `kept` are
+/// the axis' points as `Bars::of` measures them - divided by the pixel aspect on x - so a pan stops exactly where the
+/// thumb does at every aspect. A document, a view or a centre this cannot measure keeps its centre.
+fn clamp_axis_overscrolled(center: f64, len: f64, size: f64, zoom: f64, kept: f64) -> f64 {
     if !(zoom.is_finite() && zoom > 0.0 && len.is_finite() && len > 0.0 && size.is_finite() && size > 0.0) {
         return center;
     }
@@ -363,7 +364,8 @@ fn clamp_axis_overscrolled(center: f64, len: f64, size: f64, zoom: f64) -> f64 {
         return len / 2.0;
     }
     let half = size / zoom / 2.0;
-    let kept = (KEPT_IN_VIEW / zoom).clamp(0.0, len);
+    let kept = if kept.is_finite() { kept.clamp(0.0, len) } else { len };
+    let kept = kept / zoom;
     let room = (2.0 * half - kept).max(0.0);
     let (lo, hi) = (half - room, len + room - half);
     if !(lo.is_finite() && hi.is_finite() && lo <= hi) {
@@ -518,8 +520,8 @@ impl<'a> CanvasScrollbars<'a> {
         }
         let (zoom, x_aspect) = (view.zoom, aspect(view));
         let local = [
-            clamp_axis_overscrolled(view.center.x - doc.x0, doc.width(), f64::from(size.x) / x_aspect, zoom),
-            clamp_axis_overscrolled(view.center.y - doc.y0, doc.height(), f64::from(size.y), zoom),
+            clamp_axis_overscrolled(view.center.x - doc.x0, doc.width(), f64::from(size.x) / x_aspect, zoom, KEPT_IN_VIEW / x_aspect),
+            clamp_axis_overscrolled(view.center.y - doc.y0, doc.height(), f64::from(size.y), zoom, KEPT_IN_VIEW),
         ];
         let center = Point::new(local[0] + doc.x0, local[1] + doc.y0);
         let changed = !view.center.x.is_finite()

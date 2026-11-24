@@ -7,10 +7,10 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{Axis, CanvasView};
-use craft_ui::canvas::{Canvas, CanvasTool, HandTool, Momentary, NavigationOptions, NoTool, ToolHost, tool_pass};
-use craft_ui::contract::ShowContainer as _;
+use craft_ui::canvas::{Canvas, CanvasScrollbars, CanvasTool, HandTool, Momentary, NavigationOptions, NoTool, ToolHost, tool_pass};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Event, Key, Modifiers, Pos2, Rect};
@@ -339,6 +339,72 @@ fn a_mirrored_view_stops_at_the_same_limit_with_overscroll_on() {
         (got - past_end(Axis::X, DOCUMENT, 1.0)).abs() < SHOWN,
         "the mirrored drag stops 636.5 points past the image's end edge, it came to {got}"
     );
+}
+
+/// The limit holds inside one held drag, not only at its release: the pass where the pointer passes the biting point
+/// stops there with the button still down, and the release keeps it there.
+#[trial]
+fn the_drag_stops_at_the_limit_while_the_button_is_still_down() {
+    let mut rig = Rig::new(HandTool::new(overscroll()), overscroll(), None, DOCUMENT, 1.0);
+    // One gesture: the centre comes to 100 document units from the image's left edge, inside the range.
+    let (from, to) = gesture(Axis::X, true, full_drag(Axis::X));
+    rig.drag(from, to, 7);
+    assert!((rig.view().center.x - 100.0).abs() < SHOWN, "the first drag leaves the centre at 100: {:?}", rig.view().center);
+    // A second gesture, held: the first half is still inside the range, the rest stops at the limit before any release.
+    rig.press(from);
+    let middle = egui::pos2(from.x + 700.0, from.y);
+    rig.drag_to(from, middle, 4, FRAME);
+    let inside = rig.view().center.x;
+    assert!((inside - -600.0).abs() < SHOWN, "inside the range the held drag still follows the pointer: {inside}");
+    rig.drag_to(middle, to, 4, FRAME);
+    let held = rig.view().center.x;
+    assert!((held - past_start(Axis::X, 1.0)).abs() < SHOWN, "the held drag stops at the limit, before its release: {held}");
+    rig.release(to, FRAME);
+    assert!((rig.view().center.x - held).abs() < SHOWN, "and the release keeps it there: {held} -> {}", rig.view().center.x);
+}
+
+/// The limit is the thumb's range on the x axis even when the pixels are not square (View, Pixel Aspect Ratio
+/// Correction): at aspect 2 the drag stops where a thumb drag stops, at -318.25 document units on this canvas rather
+/// than the -268.25 a margin not divided by the aspect would give.
+#[trial]
+fn an_aspect_corrected_drag_stops_where_the_thumb_does() {
+    let mut rig = Rig::new(HandTool::new(overscroll()), overscroll(), None, DOCUMENT, 1.0);
+    let mut corrected = rig.view();
+    corrected.aspect = 2.0;
+    rig.view.set(corrected);
+    rig.tick(FRAME, Vec::new());
+    let (from, to) = gesture(Axis::X, true, full_drag(Axis::X));
+    for _ in 0..5 {
+        rig.drag(from, to, 7);
+    }
+    let panned = rig.view().center.x;
+    let thumb = thumb_centre_x(2.0);
+    assert!((panned - thumb).abs() < SHOWN, "at aspect 2 the drag stops where the thumb does: drag {panned}, thumb {thumb}");
+}
+
+/// Where a thumb drag at the end of its track puts the view centre on the x axis, for the same canvas at the pixel
+/// aspect `aspect`: the scroll bars' own extreme.
+fn thumb_centre_x(aspect: f64) -> f64 {
+    let start = CanvasView::new(VIEW, Point::new(DOCUMENT.width / 2.0, DOCUMENT.height / 2.0), 1.0).aspect(aspect);
+    let view = Rc::new(Cell::new(start));
+    let observed = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut next = observed.get();
+        let shown = Canvas::new("Document").document(DOCUMENT).navigation(overscroll()).view(next).show_at(ui, VIEW, |_, _| {});
+        next = shown.output.view.unwrap_or(next);
+        let doc = DocRect::from_origin_size(Point::ZERO, DOCUMENT);
+        let _ = CanvasScrollbars::new("Scroll bars", Bind::bound(&mut next), doc).overscroll(true).document_chrome().show_at(ui, VIEW);
+        observed.set(next);
+    });
+    fixture.room(VIEW.size()).settle();
+    let track = fixture.by_label("Horizontal scroll bar").expect("the horizontal track").rect;
+    let at = track.center();
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]);
+    for step in 1..=20 {
+        fixture.frame(vec![pointer::moved(at + egui::Vec2::new(-150.0 * step as f32, 0.0))]);
+    }
+    fixture.frame(vec![pointer::release(at + egui::Vec2::new(-3000.0, 0.0))]).settle();
+    view.get().center.x
 }
 
 /// Overscroll off keeps today's clamp: the drag stops with the image's edge at the canvas edge, no pasteboard room.
