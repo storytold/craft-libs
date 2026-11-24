@@ -1038,7 +1038,7 @@ impl Component for Tile<'_> {
         let Some(placed) = self.placed.take() else { return };
         let style = cx.style;
         let picture = placed.picture;
-        if let Some(action) = self.summary_action.take() {
+        if let Some(action) = self.summary_action.clone() {
             self.paint_summary_card(ui, cx, &placed, action.as_str());
             return;
         }
