@@ -23,7 +23,7 @@ use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::WindowSpec;
+use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
@@ -194,6 +194,11 @@ pub struct FloatingGroupOutput {
     pub collapsed_width: Option<f32>,
     /// The files dropped on the group's window that no target there took.
     pub files: Vec<OsFile>,
+    /// The band the group is moved by this pass, with the id of its accessibility node; `None` when it has none.
+    pub grip: Option<(Rect, Id)>,
+    /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
+    /// accessibility node; none while it does not resize (minimized).
+    pub resize: Vec<(ResizeEdge, Rect, Id)>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -553,6 +558,8 @@ impl Component for FloatingGroup<'_> {
             iconic,
             collapsed_width: self.collapsed_width,
             files: self.files,
+            grip: cx.move_band(),
+            resize: cx.resize_grips(),
         };
         native::raise(&cx.core.ctx, &output);
         native::fade(&cx.core.ctx, &output);
