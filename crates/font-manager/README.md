@@ -45,8 +45,8 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
 
 `FontsPanel` fills the `Ui` it is given and has no window, menu or interface fonts of its own; the
 craft-ui's theme gives it the colours and interface fonts. The faces it draws samples in come from
-craft-ui's document-face registry, which loads them a few per pass and evicts the ones off screen,
-without touching the host's fonts. Right-to-left interfaces mirror through the layout; sample text
+craft-ui's document-face registry, which loads them on the host's jobs, keeps the ones drawn lately
+up to a budget of font file bytes, and never touches the host's fonts. Right-to-left interfaces mirror through the layout; sample text
 keeps its own direction.
 
 The panel follows the `craft_host::Host` installed in the egui context (`Host::builder(..).install(ctx)`):

@@ -77,6 +77,7 @@ use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, FullWindowWorkspace, RasterOverlay,
     WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
+use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
@@ -462,7 +463,7 @@ impl LiquifyWorkspace {
             .opened(open)
             .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
             .footer(|ui, _| {
-                ui.vertical_centered(|ui| {
+                let _ = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
                     let mut guard = this.borrow_mut();
                     let work: &mut LiquifyWorkspace = &mut guard;
                     let events = Checkbox::new(Bind::given(work.preview)).label(preview_label.clone()).show(ui).events;

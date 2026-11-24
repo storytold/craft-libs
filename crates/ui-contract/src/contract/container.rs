@@ -72,8 +72,10 @@ impl Mount {
 /// its siblings (so a pane can overlay another) and ignores the extent. Otherwise an edge pane takes
 /// [`extent`](Self::extent) along its edge from the room left, or, without an extent, the size it first took, which it
 /// keeps in pane memory until the user resizes it. The central pane fills what the edge panes leave. A pane at a rect
-/// that is as tall as its content (a content-sized embedded shell's body) takes the rect's width, its content's height
-/// from the rect's top, and that room in the flow of its parent.
+/// that is as large as its content along its edge (a content-sized embedded shell's body, a slot sized by its content)
+/// takes the rect's cross extent, its content's extent from the rect's outer edge, and that room in the flow of its
+/// parent: a top or central pane its height from the rect's top, a bottom pane its height from the rect's bottom, a
+/// start or end pane its width from that side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ShellPane {
@@ -85,14 +87,14 @@ pub struct ShellPane {
     pub extent: Option<f32>,
     /// The rect the caller laid the pane out in.
     pub at: Option<Rect>,
-    /// The pane at `at` is as tall as its content.
-    pub(crate) content_height: bool,
+    /// The pane at `at` is as large as its content along its edge.
+    pub(crate) content_extent: bool,
 }
 
 impl ShellPane {
     /// The central pane named `name`.
     pub const fn new(name: &'static str) -> Self {
-        ShellPane { name, edge: PaneEdge::Center, extent: None, at: None, content_height: false }
+        ShellPane { name, edge: PaneEdge::Center, extent: None, at: None, content_extent: false }
     }
 
     /// The pane at `edge`.
@@ -113,11 +115,12 @@ impl ShellPane {
         self
     }
 
-    /// The pane at `rect`, as tall as its content from the rect's top, taking that room in its parent's flow.
+    /// The pane in `rect`, as large as its content along its edge from the rect's outer edge, taking that room in its
+    /// parent's flow. `rect` is the room the content may take.
     #[doc(hidden)]
-    pub const fn at_content_height(mut self, rect: Rect) -> Self {
+    pub const fn at_content_extent(mut self, rect: Rect) -> Self {
         self.at = Some(rect);
-        self.content_height = true;
+        self.content_extent = true;
         self
     }
 }
@@ -129,6 +132,8 @@ pub enum Pad {
     /// No padding.
     #[default]
     None,
+    /// `space.gap.tight`: a hairline frame around a compact group, as a small floating action bar's.
+    Tight,
     /// `space.pad.control`.
     Control,
     /// `space.pad.regular`.
@@ -209,6 +214,8 @@ pub enum LeastWidth {
     /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
     /// band beside the page, not as buttons cut to their labels.
     SideMenu,
+    /// `size.dock.column`: a fixed side pane is as wide as a dock column.
+    DockColumn,
 }
 
 impl LeastWidth {
@@ -222,6 +229,7 @@ impl LeastWidth {
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
             LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
             LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
+            LeastWidth::DockColumn => tokens.size.dock.column,
         }
     }
 }
@@ -484,12 +492,22 @@ pub struct EndRegion {
     /// Whether a rule separates the end region from the body, in a band of its own along the region's edge that
     /// faces it.
     pub rule: bool,
+    /// Whether the region joins the body's fit: when the body's units ask for more than the line the region leaves,
+    /// the region's units that carry a `fit_rank` leave first, lowest rank first, until the body's units fit at their
+    /// ideal widths, before any body unit narrows or leaves.
+    pub fit: bool,
 }
 
 impl EndRegion {
     /// An end region as high as the line, `space.gap.tight` from the body, with no rule.
     pub const fn new() -> Self {
-        EndRegion { full_height: false, gap: Gap::Tight, rule: false }
+        EndRegion { full_height: false, gap: Gap::Tight, rule: false, fit: false }
+    }
+
+    /// Whether the region joins the body's fit.
+    pub const fn fit(mut self, on: bool) -> Self {
+        self.fit = on;
+        self
     }
 
     /// Whether a rule separates the end region from the body.
@@ -810,6 +828,8 @@ pub struct ContainerProps {
     /// `Focus::take_reveal`). A container with a `scroll` region is one already. The body is clipped to its body
     /// region, the view, so what it shows never paints over the container's padding (a canvas's rulers).
     pub scroll_owner: bool,
+    /// A collection that receives moves the focused control in this region leaves unused.
+    pub fallback_collection: Option<egui::Id>,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]
     pub gates: bool,
@@ -835,6 +855,8 @@ pub struct ContainerProps {
     pub collection_body: bool,
     /// The labelled rows of the body share the widest label as one column.
     pub label_column: bool,
+    /// The rank by which a body unit of a shrinking row leaves whole; unranked units never leave by rank.
+    pub fit_rank: Option<u8>,
     /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
     pub labels: Option<LabelScheme>,
     /// The bracket an unwrapped `Row` placed from its start draws from its first child's labelled rows to the child
@@ -862,6 +884,7 @@ impl ContainerProps {
             && self.sizing == other.sizing
             && self.content_in_bar == other.content_in_bar
             && self.room_height == other.room_height
+            && self.fit_rank == other.fit_rank
             && self.layout == other.layout
             && self.header == other.header
             && self.scroll == other.scroll
@@ -912,6 +935,7 @@ impl ContainerProps {
             child_glyphs: None,
             arena: false,
             scroll_owner: false,
+            fallback_collection: None,
             gates: false,
             transform: None,
             theme: None,
@@ -923,6 +947,7 @@ impl ContainerProps {
             outer_edit: false,
             collection_body: false,
             label_column: false,
+            fit_rank: None,
             labels: None,
             bracket: None,
             owner: None,
@@ -1084,6 +1109,12 @@ impl ContainerProps {
         self
     }
 
+    /// Sets the rank by which the container leaves a shrinking row whole.
+    pub const fn fit_rank(mut self, rank: u8) -> Self {
+        self.fit_rank = Some(rank);
+        self
+    }
+
     /// Makes the container an arena root.
     pub const fn arena(mut self, on: bool) -> Self {
         self.arena = on;
@@ -1093,6 +1124,12 @@ impl ContainerProps {
     /// Makes the container its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`).
     pub const fn scroll_owner(mut self, on: bool) -> Self {
         self.scroll_owner = on;
+        self
+    }
+
+    /// Sends unused moves from this region's focused control to the named collection.
+    pub fn fallback_collection(mut self, collection: egui::Id) -> Self {
+        self.fallback_collection = Some(collection);
         self
     }
 

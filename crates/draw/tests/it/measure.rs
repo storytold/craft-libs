@@ -330,6 +330,54 @@ fn a_protractors_vertex_moves_the_whole_protractor_and_its_arm_end_moves_alone()
     assert!(near(new.start, from) && new.protractor.is_none(), "a press on the arm's line starts a new ruler: {new:?}");
 }
 
+/// From upstream PhotoCraft's analysis_ruler_shift_tests (#11985): Shift snaps a ruler end to 45 degree rays and keeps
+/// the shorter leg, so a snap never makes the ruler longer; the same for either end moved about the other and for a
+/// protractor's arm.
+#[trial]
+fn shift_snaps_the_ruler_to_45_degrees_without_making_it_longer() {
+    let shift = egui::Modifiers::SHIFT;
+    let v = kurbo::Vec2::new;
+    // (pointer offset from the press, the end's offset after the snap).
+    for (to, end) in
+        [(v(82.0, 100.0), v(82.0, 82.0)), (v(122.0, 120.0), v(120.0, 120.0)), (v(300.0, 30.0), v(300.0, 0.0)), (v(-82.0, -100.0), v(-82.0, -82.0))]
+    {
+        let mut ruler = shown(None);
+        let from = ruler.middle();
+        ruler.drag(from, from + to, shift);
+        let line = (*ruler.line.borrow()).expect("a line");
+        assert!(near(line.start, from) && near(line.end, from + end), "to {to:?}: {line:?}");
+        assert!(line.start.distance(line.end) <= to.hypot() + 1e-6, "never longer than the pointer's distance: {line:?}");
+    }
+
+    // Either end moved about the other.
+    let mut ruler = shown(None);
+    let m = ruler.middle();
+    let line = RulerLine::new(m, m + v(200.0, 150.0));
+    *ruler.line.borrow_mut() = Some(line);
+    ruler.drag(line.end, line.start + v(282.0, -90.0), shift);
+    let after = (*ruler.line.borrow()).expect("a line");
+    assert!(near(after.start, line.start) && near(after.end, line.start + v(282.0, 0.0)), "the end about the start: {after:?}");
+    let mut ruler = shown(None);
+    *ruler.line.borrow_mut() = Some(line);
+    ruler.drag(line.start, line.end + v(-282.0, -90.0), shift);
+    let after = (*ruler.line.borrow()).expect("a line");
+    assert!(near(after.end, line.end) && near(after.start, line.end + v(-282.0, 0.0)), "the start about the end: {after:?}");
+
+    // A protractor's arm end keeps the shorter leg about the vertex.
+    let mut ruler = shown(None);
+    let line = protractor(ruler.middle());
+    *ruler.line.borrow_mut() = Some(line);
+    ruler.drag(line.protractor.unwrap(), line.start + v(122.0, -170.0), shift);
+    let after = (*ruler.line.borrow()).expect("a line");
+    assert!(after.protractor.is_some_and(|arm| near(arm, line.start + v(122.0, -122.0))), "{after:?}");
+
+    // Without Shift the end follows the pointer.
+    let mut ruler = shown(None);
+    let from = ruler.middle();
+    ruler.drag(from, from + v(82.0, 100.0), egui::Modifiers::NONE);
+    assert!(near((*ruler.line.borrow()).expect("a line").end, from + v(82.0, 100.0)));
+}
+
 /// From upstream PhotoCraft's ruler_tests (#13438): the Ruler's arrow everywhere, the protractor with Alt exactly where
 /// an Alt press starts the protractor arm, and the crosshair while the canvas shows precise cursors.
 #[trial]

@@ -292,6 +292,90 @@ fn filling_bar_members_keep_their_natural_width_and_the_bar_scrolls() {
     assert!(button_whole.contains(&true), "the bar does not scroll to show its last member whole: {button_whole:?}");
 }
 
+/// The rects of `count` buttons in a tool bar `width` wide that wraps or scrolls.
+fn tools(width: f32, wrap: bool, count: usize) -> Vec<Rect> {
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let bar = Bar::new("Tools", BarKind::Tool);
+        let bar = if wrap { bar.wrap() } else { bar };
+        bar.show(ui, |ui, _| {
+            *out.borrow_mut() = (0..count).map(|at| Button::new(format!("Tool {at}")).show(ui).rect).collect();
+        });
+    });
+    fixture.room(Vec2::new(width, 300.0)).settle();
+    seen.borrow().clone()
+}
+
+/// The rect of a select with a long entry in a tool bar `width` wide that wraps.
+fn wide_member(width: f32) -> Rect {
+    let seen = Rc::new(Cell::new(Rect::NOTHING));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(0u8, "Current and Below, No Adjustments"), Entry::new(1, "All Layers")];
+        Bar::new("Tools", BarKind::Tool).wrap().show(ui, |ui, _| {
+            out.set(Select::new("Sample", Bind::given(0u8), &entries).sizing(Sizing::Content).show(ui).response.rect);
+        });
+    });
+    fixture.room(Vec2::new(width, 300.0)).settle();
+    seen.get()
+}
+
+#[trial]
+fn a_wrapping_bar_continues_on_a_new_line() {
+    let plain = tools(200.0, false, 6);
+    assert!(plain.last().is_some_and(|last| last.max.x > 200.0), "six tools fit a 200-point bar that scrolls: {plain:?}");
+    let wrapped = tools(200.0, true, 6);
+    assert_eq!(wrapped.len(), 6, "every member shows");
+    for rect in &wrapped {
+        assert!(rect.min.x >= -SLACK && rect.max.x <= 200.0 + SLACK, "{rect:?} lies past the bar's edge");
+    }
+    let first_line = wrapped[0].center().y;
+    assert!(wrapped.iter().any(|rect| rect.center().y > first_line + SLACK), "no member continued on a new line: {wrapped:?}");
+    for pair in wrapped.windows(2) {
+        let (before, after) = (pair[0], pair[1]);
+        let same_line = (before.center().y - after.center().y).abs() < SLACK;
+        assert!(
+            (same_line && before.max.x <= after.min.x + SLACK) || after.center().y > before.center().y + SLACK,
+            "{after:?} is out of reading order after {before:?}"
+        );
+    }
+    let select = wide_member(120.0);
+    assert!(select.max.x <= 120.0 + SLACK, "a member wider than the bar kept its width: {select:?}");
+}
+
+/// What a bar of three rows, ranked 1 and 2 and unranked, `width` wide shows: whether each of their buttons is there.
+fn ranked(width: f32) -> [bool; 3] {
+    let mut fixture = Fixture::new(|ui| {
+        Bar::new("Tools", BarKind::Tool).show(ui, |ui, _| {
+            Row::new().fit_rank(1).show(ui, |ui, _| {
+                Button::new("Low").show(ui);
+            });
+            Row::new().fit_rank(2).show(ui, |ui, _| {
+                Button::new("Mid").show(ui);
+            });
+            Row::new().show(ui, |ui, _| {
+                Button::new("Keep").show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    ["Low", "Mid", "Keep"].map(|label| fixture.by_label(label).is_some())
+}
+
+#[trial]
+fn ranked_rows_leave_a_narrow_bar_by_rank_and_take_their_rule() {
+    let widths: Vec<f32> = (60..=600).step_by(20).map(|width| width as f32).collect();
+    let shown: Vec<[bool; 3]> = widths.iter().map(|width| ranked(*width)).collect();
+    assert_eq!(shown[shown.len() - 1], [true; 3], "a wide bar shows every row");
+    assert!(!shown[0][0], "the lowest rank is still there in the narrowest bar");
+    for (width, [low, mid, keep]) in widths.iter().zip(&shown) {
+        assert!(*keep, "the unranked row left a bar {width} wide");
+        assert!(!(*low && !*mid), "the higher rank left before the lower at {width}");
+    }
+    assert!(shown.iter().any(|[low, mid, _]| !low && *mid), "the lowest rank never left alone: {shown:?}");
+}
+
 /// The texts a status bar `width` wide paints, each with whether it was cut: the readout of the document sizes, a long
 /// message and the render-path link in its trailing group.
 fn readout_texts(width: f32) -> Vec<(String, bool)> {
@@ -450,6 +534,44 @@ fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
     assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
 }
 
+/// A text tab strip in a tool bar's row, as a window's mode strip: the row gives it unbounded room, so it measures
+/// the natural length of its tabs and every tab shows, none in the overflow menu, and the strip ends before the
+/// bar's trailing group.
+#[trial]
+fn a_tab_strip_in_a_bar_row_takes_its_tabs_natural_length() {
+    use craft_behavior::keyed;
+    use craft_ui::contract::ShowCollection as _;
+    use craft_ui::tabs::{Tab, TabKind, TabStrip};
+    const MODES: [&str; 4] = ["All tools", "Edit", "Convert", "E-Sign"];
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        Row::new().show(ui, |ui, _| {
+            let mut trailing = Rect::NOTHING;
+            let mut strip = Rect::NOTHING;
+            Bar::new("Modes", BarKind::Tool)
+                .trailing(|ui, _| {
+                    trailing = IconButton::new(IconId::new("printer")).label("Print").show(ui).rect;
+                })
+                .show(ui, |ui, _| {
+                    let keys = [0_usize, 1, 2, 3];
+                    let source = keyed(&keys, |key: &usize| *key);
+                    let tabs = TabStrip::new("Modes").kind(TabKind::Text).natural_height(true).shown(1);
+                    strip = tabs.show_items(ui, &source, &mut |key, _| Tab::new(MODES[*key])).response.response.rect;
+                });
+            out.set((strip, trailing));
+        });
+    });
+    fixture.room(Vec2::new(1274.0, 200.0)).settle();
+    let (strip, trailing) = seen.get();
+    let shown: Vec<Rect> = MODES.iter().filter_map(|title| fixture.by_label(title)).map(|tab| tab.rect).collect();
+    let dump = format!("strip {strip:?}, trailing {trailing:?}, tabs {shown:?}");
+    assert_eq!(shown.len(), MODES.len(), "every tab shows: {dump}");
+    let length: f32 = shown.iter().map(Rect::width).sum();
+    assert!(strip.width() >= length - SLACK, "the strip is as long as its tabs: {dump}");
+    assert!(strip.max.x <= trailing.min.x + SLACK, "and ends before the trailing group: {dump}");
+}
+
 /// An icon-only button in an options bar draws its icon at the tool size, as the align strip's buttons do.
 #[trial]
 fn an_icon_button_in_an_options_bar_draws_its_icon_at_the_tool_size() {
@@ -528,4 +650,59 @@ fn a_tool_bar_reports_set_positions_from_its_first_pass() {
     fixture.idle(1);
     let joined = places(&fixture);
     assert!(joined.len() == 4 && joined.iter().all(|(_, held)| *held == size + 1), "the set counts the new tool in the frame it joins: {joined:?}");
+}
+
+/// The painted rects of a status bar `width` wide that ends as production's did: the zoom and the message in the body,
+/// then the pointer's position (rank 2) and the timings (rank 1) in the trailing group. In that order, `None` for one
+/// not shown, and the bar's rect last.
+fn end_group(width: f32) -> ([Option<Rect>; 4], Rect) {
+    const TEXTS: [&str; 4] = ["93.5 %", "Saved recovery data for Untitled-1", "X: 120 pt  Y: 48 pt", "render 0.6 ms"];
+    let seen = Rc::new(Cell::new((None, Rect::NOTHING)));
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let bar = Bar::new("Status", BarKind::Status)
+            .trailing(|ui, _| {
+                Row::new().fit_rank(2).show(ui, |ui, _| {
+                    Text::new(TEXTS[2]).show(ui);
+                });
+                Row::new().fit_rank(1).show(ui, |ui, _| {
+                    Text::new(TEXTS[3]).show(ui);
+                });
+            })
+            .show(ui, |ui, _| {
+                Text::new(TEXTS[0]).show(ui);
+                StatusMessage::new(TEXTS[1]).show(ui).map(|message| message.rect)
+            });
+        shown.set((bar.inner.flatten(), bar.output.response.rect));
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    let rect_of = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let (message, bar) = seen.get();
+    ([rect_of(TEXTS[0]), message.filter(|rect| rect.width() > 0.0), rect_of(TEXTS[2]), rect_of(TEXTS[3])], bar)
+}
+
+/// A status bar's trailing group joins the body's fit: on a wide bar the timings end at the bar's end with the position
+/// before them; a narrowing bar drops the timings first, then the position, while the message keeps its whole width,
+/// and only then cuts the message.
+#[trial]
+fn a_narrow_status_bar_drops_its_ranked_trailing_members_before_it_cuts_its_message() {
+    let ([zoom, message, position, timings], bar) = end_group(1200.0);
+    let [zoom, message, position, timings] = [zoom, message, position, timings].map(|rect| rect.expect("a wide bar shows every member"));
+    assert!(bar.right() - timings.right() < bar.width() / 20.0, "the timings end at the bar's end: {timings:?} in {bar:?}");
+    assert!(position.right() <= timings.left() && message.right() <= position.left() && zoom.right() <= message.left(), "in reading order");
+    let whole = message.width();
+    let shown: Vec<(u32, [Option<Rect>; 4])> = (150..=1200).step_by(10).map(|width| (width, end_group(width as f32).0)).collect();
+    for (width, [zoom, message, position, timings]) in &shown {
+        assert!(zoom.is_some() && message.is_some(), "the body's members stay at {width}: {zoom:?} {message:?}");
+        assert!(!(timings.is_some() && position.is_none()), "the timings leave before the position at {width}");
+        if position.is_some() || timings.is_some() {
+            let message = message.expect("the message shows");
+            assert!(message.width() > whole - SLACK, "the message is cut to {} of {whole} at {width} while a ranked member stays", message.width());
+        }
+    }
+    assert!(shown.iter().any(|(_, [.., position, timings])| position.is_some() && timings.is_none()), "the timings leave alone first");
+    assert!(
+        shown.iter().any(|(_, [_, message, position, _])| position.is_none() && message.is_some_and(|rect| rect.width() < whole - SLACK)),
+        "a narrow bar drops the position, then cuts the message"
+    );
 }
