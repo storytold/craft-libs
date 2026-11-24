@@ -599,6 +599,7 @@ fn themed_grip(shape: craft_theme::GripShape) -> (Vec<egui::Shape>, Rect) {
         knob: None,
         wells: None,
         grip: None,
+        locator: None,
     });
     seed.grip = Some(craft_theme::GripSeed {
         mark: Some(shape.mark),

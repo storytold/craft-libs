@@ -21,6 +21,10 @@
       "mark": "bar",
       "length": 18,
       "width": 3
+    },
+    "locator": {
+      "cell": 9,
+      "square": 5
     }
   },
   "light": {
