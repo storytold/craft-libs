@@ -503,7 +503,7 @@ impl Cells<'_> {
     /// inside the field.
     fn side_and_name(&self, field: TransformField, form: Form) -> (SideLabel, Label) {
         let words = &self.words;
-        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone())));
+        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph.clone())));
         let (side, name) = match field {
             TransformField::X => (beside(&words.x_glyph), &words.x_name),
             TransformField::Y => (beside(&words.y_glyph), &words.y_name),

@@ -17,6 +17,19 @@ pub enum DocumentTabLook {
     Shrinking,
 }
 
+/// The look of panel tabs ([`TabKind::Panel`]): a strip's choice ([`TabStrip::panel_look`](super::TabStrip)), which a
+/// dock makes for its groups' tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum PanelTabLook {
+    /// The shown tab on the panel surface, square and as tall as the strip.
+    #[default]
+    Plain,
+    /// VectorCraft's tabs: the shown tab on a filled pill (`surface.control` with `shape.radius.control` corners), a
+    /// small control high in the middle of the strip; a tab under the pointer shows the pill too.
+    Pill,
+}
+
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
