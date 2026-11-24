@@ -83,9 +83,9 @@ struct LibrarySnapshot {
 }
 
 /// The recorded actions: one flat list (PhotoCraft's engine, journal and file are flat), each
-/// action with an optional set name, plus the names of sets that hold no action yet, so New Set
-/// works before anything is recorded into it (VectorCraft's nested sets map onto
-/// it).
+/// action with an optional set name, plus the order of every set, with or without actions, so New
+/// Set works before anything is recorded into it and a set keeps its place as it fills and empties
+/// (VectorCraft's nested sets map onto it).
 ///
 /// The list is app data shared by the panel, the app's commands, the CLI and the control channel:
 /// the panel only reads it and reports events, and the app applies each event with these calls
@@ -123,12 +123,11 @@ impl ActionList {
         self.actions.get(index)
     }
 
-    /// Every set name in display order: sets of actions in order of first appearance, then the
-    /// empty sets in the order they were made.
+    /// Every set name in display order: the order sets were made or loaded, with or without actions.
+    /// A set an action names that the order lacks follows, by first appearance.
     pub fn sets(&self) -> Vec<&str> {
-        let mut sets: Vec<&str> = Vec::new();
-        let named = self.actions.iter().filter_map(|action| action.set.as_deref());
-        for set in named.chain(self.sets.iter().map(String::as_str)) {
+        let mut sets: Vec<&str> = self.sets.iter().map(String::as_str).collect();
+        for set in self.actions.iter().filter_map(|action| action.set.as_deref()) {
             if !sets.contains(&set) {
                 sets.push(set);
             }
@@ -183,6 +182,9 @@ impl ActionList {
         if self.name_in_use(name) {
             return Err(ActionListError::NameTaken(name.to_owned()));
         }
+        if let Some(set) = &set {
+            self.record_set(set);
+        }
         self.actions.push(Action { set, ..Action::new(name, Vec::new()) });
         self.touch();
         Ok(self.actions.len() - 1)
@@ -227,7 +229,7 @@ impl ActionList {
         Ok(())
     }
 
-    /// Removes and returns the action at `index`.
+    /// Removes and returns the action at `index`; the set it leaves empty stays, in its place.
     pub fn delete_action(&mut self, index: usize) -> Result<Action, ActionListError> {
         if index >= self.actions.len() {
             return Err(ActionListError::NoSuchAction(index));
@@ -270,22 +272,29 @@ impl ActionList {
     }
 
     /// Puts the action at `index` into `set` (`None`: out of any set), as a drop into or out of a
-    /// set folder does.
+    /// set folder does. A new set goes at the end of the order; the set the action leaves stays, in
+    /// its place, even when it is now empty.
     pub fn assign_set(&mut self, index: usize, set: Option<String>) -> Result<(), ActionListError> {
-        let target = self.actions.get_mut(index).ok_or(ActionListError::NoSuchAction(index))?;
+        if index >= self.actions.len() {
+            return Err(ActionListError::NoSuchAction(index));
+        }
         let set = match set {
             None => None,
             Some(set) if set.trim().is_empty() => return Err(ActionListError::EmptyName),
             Some(set) => Some(set.trim().to_owned()),
         };
-        target.set = set;
+        if let Some(set) = &set {
+            self.record_set(set);
+        }
+        self.actions[index].set = set;
         self.touch();
         Ok(())
     }
 
     /// Moves step `step` of action `from` to position `to` of action `into` (the same action or
     /// another). Within one action `disabled` and `dialogs` follow [`moved_index`]; between
-    /// actions the step takes its include and dialog flags along.
+    /// actions the step takes its include and dialog flags along. A set never changes: one whose last
+    /// step moves away keeps its place.
     pub fn move_step(&mut self, from: usize, step: usize, into: usize, to: usize) -> Result<(), ActionListError> {
         let source = self.actions.get(from).ok_or(ActionListError::NoSuchAction(from))?;
         if step >= source.steps.len() {
@@ -400,6 +409,17 @@ impl ActionList {
         Ok(())
     }
 
+    /// Replaces the app's own options of the action at `index` ([`Action::options`]). Setting the options it holds
+    /// changes nothing, so the revision stays.
+    pub fn set_options(&mut self, index: usize, options: serde_json::Map<String, serde_json::Value>) -> Result<(), ActionListError> {
+        let action = self.actions.get_mut(index).ok_or(ActionListError::NoSuchAction(index))?;
+        if action.options != options {
+            action.options = options;
+            self.touch();
+        }
+        Ok(())
+    }
+
     /// Appends a whole action and returns its index; an empty or taken name is refused.
     pub fn push(&mut self, action: Action) -> Result<usize, ActionListError> {
         if action.name.trim().is_empty() {
@@ -407,6 +427,9 @@ impl ActionList {
         }
         if self.name_in_use(&action.name) {
             return Err(ActionListError::NameTaken(action.name));
+        }
+        if let Some(set) = &action.set {
+            self.record_set(set);
         }
         self.actions.push(action);
         self.touch();
@@ -457,17 +480,57 @@ impl ActionList {
         Ok(())
     }
 
+    /// Renames the set `set` to `name` (trimmed) in the order and in every member's `set`: [`ActionListError::EmptyName`]
+    /// for an empty name, [`ActionListError::NameTaken`] for a name another set has, [`ActionListError::NoSuchSet`] for an
+    /// unknown set. The same name succeeds and changes nothing.
+    pub fn rename_set(&mut self, set: &str, name: &str) -> Result<(), ActionListError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ActionListError::EmptyName);
+        }
+        let order: Vec<String> = self.sets().into_iter().map(str::to_owned).collect();
+        let at = order.iter().position(|each| each == set).ok_or_else(|| ActionListError::NoSuchSet(set.to_owned()))?;
+        if name == set {
+            return Ok(());
+        }
+        if order.iter().any(|each| each == name) {
+            return Err(ActionListError::NameTaken(name.to_owned()));
+        }
+        self.sets = order;
+        self.sets[at] = name.to_owned();
+        for action in self.actions.iter_mut().filter(|action| action.set.as_deref() == Some(set)) {
+            action.set = Some(name.to_owned());
+        }
+        self.touch();
+        Ok(())
+    }
+
+    /// Removes the set `set` from the order and its actions from the list, and returns the actions in list order:
+    /// [`ActionListError::NoSuchSet`] for an unknown set.
+    pub fn delete_set(&mut self, set: &str) -> Result<Vec<Action>, ActionListError> {
+        if !self.sets().contains(&set) {
+            return Err(ActionListError::NoSuchSet(set.to_owned()));
+        }
+        let (removed, kept): (Vec<Action>, Vec<Action>) =
+            std::mem::take(&mut self.actions).into_iter().partition(|action| action.set.as_deref() == Some(set));
+        self.actions = kept;
+        self.sets.retain(|each| each != set);
+        self.touch();
+        Ok(removed)
+    }
+
     /// Duplicates the set `set` under a unique name and returns that name; `shift` is as for
-    /// [`duplicate_action`](Self::duplicate_action). The copies of its actions go after its last
-    /// action; a set with none becomes an empty set after it.
+    /// [`duplicate_action`](Self::duplicate_action). The new set goes right after `set` in the order;
+    /// the copies of its actions go after its last action, and a set with none gives an empty set.
     pub fn duplicate_set(&mut self, set: &str, mut shift: impl FnMut(&mut ActionStep, usize, usize)) -> Result<String, ActionListError> {
+        let mut order: Vec<String> = self.sets().into_iter().map(str::to_owned).collect();
+        let position = order.iter().position(|each| each == set).ok_or_else(|| ActionListError::NoSuchSet(set.to_owned()))?;
+        let name = Names::new(order.iter().cloned()).claim(&format!("{set} copy"));
+        order.insert(position + 1, name.clone());
+        self.sets = order;
         let members: Vec<usize> = (0..self.actions.len()).filter(|&i| self.actions[i].set.as_deref() == Some(set)).collect();
-        let name = Names::new(self.sets().into_iter().map(str::to_owned)).claim(&format!("{set} copy"));
-        if members.is_empty() {
-            let position = self.sets.iter().position(|each| each == set).ok_or_else(|| ActionListError::NoSuchSet(set.to_owned()))?;
-            self.sets.insert(position + 1, name.clone());
-        } else {
-            let at = members[members.len() - 1] + 1;
+        if let Some(&last) = members.last() {
+            let at = last + 1;
             // Each copy's name is claimed before the next, so the copies never repeat one.
             let mut names = Names::of(&self.actions);
             for (offset, &source) in members.iter().enumerate() {
@@ -543,6 +606,9 @@ impl ActionList {
                 merged.ids.push((id.clone(), name.clone()));
             }
             action.name = name;
+            if let Some(set) = &action.set {
+                self.record_set(set);
+            }
             self.actions.push(action);
             merged.added.push(self.actions.len() - 1);
         }
@@ -552,9 +618,7 @@ impl ActionList {
             }
         }
         for set in empty_sets {
-            if !self.sets().contains(&set.as_str()) {
-                self.sets.push(set);
-            }
+            self.record_set(&set);
         }
         self.touch();
         merged
@@ -697,6 +761,13 @@ impl ActionList {
     pub fn to_file(&self) -> ActionsFile {
         let empty = self.sets().into_iter().filter(|set| !self.actions.iter().any(|action| action.set.as_deref() == Some(*set)));
         ActionsFile::new(self.actions.clone(), empty.map(str::to_owned).collect())
+    }
+
+    /// Puts `set` at the end of the set order when the order lacks it.
+    fn record_set(&mut self, set: &str) {
+        if !self.sets.iter().any(|each| each == set) {
+            self.sets.push(set.to_owned());
+        }
     }
 
     /// Whether an action has `name`.

@@ -115,3 +115,13 @@ impl From<crate::vp8::Error> for VideoError {
         VideoError::Malformed(format!("VP8: {e}"))
     }
 }
+
+#[cfg(feature = "mjpeg")]
+impl From<crate::mjpeg::Error> for VideoError {
+    fn from(e: crate::mjpeg::Error) -> Self {
+        match e {
+            crate::mjpeg::Error::Unsupported(_) => VideoError::Unsupported(format!("Motion JPEG: {e}")),
+            _ => VideoError::Malformed(format!("Motion JPEG: {e}")),
+        }
+    }
+}

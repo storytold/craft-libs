@@ -54,7 +54,7 @@ name = "CommandPalette"
 old = "craft_ui::patterns::command_palette::CommandPalette"
 new = "craft_ui::patterns::panels::CommandPalette"
 status = "moved"
-note = "A pattern on a modal `Popover`: `CommandPalette::new(label, &entries, open).recents(Bind<Vec<CommandRef>>).show(ui) -> PaletteOutput`. It no longer shows on `&Context`; the app runs `PaletteOutput::picked`. The list is the body of a `Stack` under the search field and above the key hint (`PanelWords::palette_hint`), so it scrolls inside the capped box; Escape clears the query before it closes the box."
+note = "A pattern on a modal `Popover`: `CommandPalette::new(label, &entries, &index, open).recents(Bind<Vec<CommandRef>>).show(ui) -> PaletteOutput`. It no longer shows on `&Context`; the app runs `PaletteOutput::picked`. The list is the body of a `Stack` under the search field, so it scrolls inside the capped box; Escape clears the query before it closes the box."
 
 [[type]]
 name = "Tour"
@@ -89,14 +89,14 @@ name = "CommandSearch"
 old = "craft_ui::behavior::CommandSearch"
 new = ""
 status = "removed"
-note = "Replaced by `menu::search::search_order`, which the palette and the Help menu share."
+note = "Replaced by `menu::search::SearchIndex` and `rank`, which the palette and the Help menu share."
 
 [[type]]
 name = "Match"
 old = "craft_ui::behavior::Match"
 new = ""
 status = "removed"
-note = "`search_order` returns the entries' positions, best first."
+note = "`rank` returns the entries' positions, best first."
 
 [[type]]
 name = "PaletteOutput"

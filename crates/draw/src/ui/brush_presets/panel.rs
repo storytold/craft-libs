@@ -2,7 +2,7 @@
 
 use std::hash::Hash;
 
-use craft_behavior::{EditEvents, IconId};
+use craft_behavior::{EditEvents, IconId, Selection};
 use craft_ui::contract::{Bind, EditResponse, MemoProps, Outcome, Props as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFooterEvent, PresetFooterOptions, PresetReorder, PresetSource, PresetState};
@@ -92,12 +92,11 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> BrushesPanel<
             }
             let mut browser = PresetBrowser::new(label.clone(), state.reborrowed(), source)
                 .toolbar(true)
-                .row_menu(true)
                 .reorder(PresetReorder::items_and_groups())
                 .thumb_range(BRUSH_THUMBS)
                 .footer(footer);
             if let Some(key) = selected.take() {
-                browser = browser.selected(key);
+                browser = browser.selection(Bind::given(Selection::single(key)));
             }
             if let Some(zone) = drop_zone.take() {
                 browser = browser.drop_zone(zone);

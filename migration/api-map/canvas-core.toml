@@ -386,6 +386,7 @@ name = "zoom_to_document_rect"
 old = "craft_ui::canvas::navigator::proxy::zoom_to_document_rect"
 new = "craft_ui::canvas::zoom_to_document_rect"
 status = "moved"
+note = "Takes a last `scheme: &craft_behavior::ZoomScheme` argument."
 
 [[type]]
 name = "view_center_for"
@@ -402,8 +403,16 @@ status = "moved"
 [[type]]
 name = "ZoomLadder"
 old = "craft_ui::canvas::zoom::ZoomLadder"
-new = "craft_behavior::ZoomLadder"
-status = "moved"
+new = ""
+status = "removed"
+note = "`ZoomScheme` holds the rungs."
+
+[[type]]
+name = "ZoomScheme"
+old = ""
+new = "craft_behavior::ZoomScheme"
+status = "replaced"
+note = "A scheme of rungs, range and 100 % (`PHOTOSHOP`, `ILLUSTRATOR`) with a `ZoomFloor`, read from the root env; the zoom functions take it as their last argument."
 
 [[type]]
 name = "ViewHistory"
@@ -592,7 +601,7 @@ name = "SplitViewsOutput"
 old = ""
 new = "craft_ui::canvas::SplitViewsOutput"
 status = "replaced"
-note = "Replaces `SplitResponse`; `edit` carries the divider edits and the response."
+note = "Replaces `SplitResponse`; `edit` carries the divider edits and the response. `tab_drop: Option<TabDrop<D>>` reports a document tab dropped on a pane (`TabDropTarget` says where); `SplitViews::takes_tabs(accepts)` makes the panes take tab drops."
 
 [[type]]
 name = "SplitAt"
@@ -905,7 +914,7 @@ name = "NavigationOptions"
 old = "craft_ui::canvas::navigate::NavigationOptions"
 new = "craft_ui::canvas::NavigationOptions"
 status = "moved"
-note = "Plain data, `#[non_exhaustive]`: build it with `NavigationOptions::default()` and assign the fields. The fields and their defaults are unchanged."
+note = "Plain data, `#[non_exhaustive]`, `PartialEq` but not `Eq`: build it with `NavigationOptions::default()` and assign the fields. `zoom_with_wheel: bool` is gone: `wheel: WheelScheme` (`Scroll` by default; `Zoom` is the old `zoom_with_wheel = true`; `Acrobat`). New fields: `wheel_line` (16 points a wheel line, which replaces `WheelNavigation::LINE`), `key_line` (`PageKey::SMALL_STEP`), `eased_wheel` (off), `touchpad_glide` (off; the canvas runs the glide), `middle_button` (`craft_behavior::MiddleButton`, `Pan`) and `invert_middle` (off). The other fields and their defaults are unchanged."
 
 [[type]]
 name = "WheelNavigation"
@@ -945,9 +954,16 @@ note = "A value the Hand tool or the app keeps: `drag(now, delta)`, `release(now
 [[type]]
 name = "TouchpadGlide"
 old = "craft_ui::canvas::navigate::TouchpadGlide"
-new = "craft_ui::canvas::TouchpadGlide"
-status = "moved"
-note = "`TouchpadGlide::new(enabled)` (the app decides the platform) and `read(&Wheel, now, glide)`; it reads the wheel share, not egui events. `default()` is gone."
+new = ""
+status = "removed"
+note = "The canvas runs the touchpad glide itself under `NavigationOptions::touchpad_glide` (the app turns it on where the platform sends no momentum); the type is internal."
+
+[[type]]
+name = "WheelScheme"
+old = ""
+new = "craft_ui::canvas::WheelScheme"
+status = "replaced"
+note = "What a plain and a modified wheel do over a canvas (`NavigationOptions::wheel`): `Scroll` (Alt zooms), `Zoom` (the old `zoom_with_wheel = true`: the wheel zooms, Alt scrolls) or `Acrobat` (Cmd/Ctrl zooms by `WheelScheme::ACROBAT_NOTCH` a line, Shift scrolls sideways)."
 
 [[type]]
 name = "Autoscroll"
@@ -1284,12 +1300,12 @@ name = "frame_step"
 old = ""
 new = "craft_ui::canvas::frame_step"
 status = "replaced"
-note = "`frame_step(dt: f64) -> f64`: the one step Hand glides, held Zoom presses and autoscroll integrate over, capped at `FRAME_STEP_MAX` (0.1 s). Replaces `FlickPan`'s, `Autoscroll::MAX_DT` and `HoldZoom::MAX_DT`, which never shipped."
+note = "`frame_step(dt: f64) -> f64`: the one step Hand glides, held Zoom presses, autoscroll and the middle button's latched scroll integrate over, capped at `FRAME_STEP_MAX` (0.1 s). It lives in `craft_behavior` (`craft_behavior::frame_step`) and `craft_ui::canvas` re-exports it. Replaces `FlickPan`'s, `Autoscroll::MAX_DT` and `HoldZoom::MAX_DT`, which never shipped."
 
 [[type]]
 name = "FRAME_STEP_MAX"
 old = ""
 new = "craft_ui::canvas::FRAME_STEP_MAX"
 status = "replaced"
-note = "The longest frame step of canvas motion, in seconds."
+note = "The longest frame step of canvas motion, in seconds. It lives in `craft_behavior` (`craft_behavior::FRAME_STEP_MAX`) and `craft_ui::canvas` re-exports it."
 # End of l4z-canvas.

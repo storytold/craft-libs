@@ -2,16 +2,15 @@
 //! `Prompt`.
 
 use super::host::{DialogResult, FieldRefusal, StackDialog};
-use super::prompt::{Prompt, Reply, buttons};
+use super::prompt::{Prompt, Reply, apply_to_all, buttons};
 use super::stack::{DialogId, DialogStack, dialog_id};
 use super::words::DialogWords;
-use crate::choice::Checkbox;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
+use crate::contract::{Bind, NoValue, Outcome};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
-use craft_behavior::Mixed;
+use craft_behavior::IconId;
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 use craft_quit::{CloseAnswer, CloseScope};
@@ -54,6 +53,9 @@ impl Outcome for UnsavedChangesOutput {
 /// guard has more documents, an "Apply to All" check box. Windows and Linux ask Yes, No and Cancel. Reverting asks
 /// Revert and Cancel; Revert answers `CloseAnswer::DontSave`.
 ///
+/// The node has the alert-dialog role (`Role::ALERT_DIALOG`), described by the consequence message and any save
+/// failure reason.
+///
 /// The result is `Ok(UnsavedAnswer)` for every answer, Cancel included (the guard needs it), and
 /// `DialogResult::Cancel` only when the host closed the dialog from outside.
 #[derive(crate::contract::Pattern)]
@@ -68,6 +70,14 @@ pub struct UnsavedChangesDialog {
     chosen: Option<CloseAnswer>,
     /// Why the last save failed, shown under the message.
     reason: Option<String>,
+    /// The buttons are worded and ordered as a document app's save question: Don't save, Cancel, Save.
+    document_wording: bool,
+    title: Option<Label>,
+    message: Option<Label>,
+    note: Option<Label>,
+    icon: Option<IconId>,
+    /// The app's word for the Don't Save button, replacing the catalog's.
+    dont_save: Option<Label>,
 }
 
 impl UnsavedChangesDialog {
@@ -82,6 +92,12 @@ impl UnsavedChangesDialog {
             open: true,
             chosen: None,
             reason: None,
+            document_wording: false,
+            title: None,
+            message: None,
+            note: None,
+            icon: None,
+            dont_save: None,
         }
     }
 
@@ -96,6 +112,49 @@ impl UnsavedChangesDialog {
     /// answer the question has no button for (Save while reverting) gives none.
     pub fn set_answer(&mut self, answer: CloseAnswer) {
         self.chosen = Some(answer);
+    }
+
+    /// Words and orders the buttons as a document app's save question on every platform: Don't save, Cancel and Save
+    /// last, the accepting answer at the end.
+    #[must_use]
+    pub fn document_wording(mut self, on: bool) -> Self {
+        self.document_wording = on;
+        self
+    }
+
+    /// Replaces the title ("Unsaved changes").
+    #[must_use]
+    pub fn title(mut self, title: impl Into<Label>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Replaces the question, in the app's words (the document's name is the app's to put in).
+    #[must_use]
+    pub fn message(mut self, message: impl Into<Label>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    /// A muted note under the question.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<Label>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
+
+    /// An icon of the catalog beside the question.
+    #[must_use]
+    pub fn icon(mut self, icon: IconId) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Replaces the Don't Save button's word, in the app's words.
+    #[must_use]
+    pub fn dont_save_label(mut self, label: impl Into<Label>) -> Self {
+        self.dont_save = Some(label.into());
+        self
     }
 
     /// What a programmatic OK answers.
@@ -116,20 +175,21 @@ impl UnsavedChangesDialog {
         self
     }
 
-    /// The answers in the order the buttons are given: what each means and how it is asked. On macOS Cmd+D also
-    /// answers Don't Save, as the platform's own save sheets do; Revert has no such chord.
+    /// The answers in the order the buttons are given: what each means and how it is asked. Cmd+D (Ctrl+D off macOS)
+    /// also answers Don't Save, as the platform's own save sheets do; Revert has no such chord.
     fn replies(&self, words: &DialogWords, cancel: Label, os: Os) -> Vec<(CloseAnswer, Reply)> {
-        let mac = os == Os::Mac;
+        let mac = os == Os::Mac || self.document_wording;
         self.offered()
             .iter()
             .map(|&answer| {
                 let reply = match answer {
                     CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
-                    CloseAnswer::DontSave if mac => {
-                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Alternate).chord(Chord::new(Mods::CMD, Key::D))
+                    CloseAnswer::DontSave => {
+                        let word = if mac { &words.unsaved_dont_save } else { &words.unsaved_no };
+                        let word = self.dont_save.as_ref().unwrap_or(word);
+                        Reply::new(word.clone(), DialogRole::Alternate).chord(Chord::new(Mods::CMD, Key::D))
                     }
-                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Alternate),
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
                 };
                 (answer, reply)
@@ -141,6 +201,8 @@ impl UnsavedChangesDialog {
     fn offered(&self) -> &'static [CloseAnswer] {
         if self.scope == CloseScope::Revert {
             &[CloseAnswer::DontSave, CloseAnswer::Cancel]
+        } else if self.document_wording {
+            &[CloseAnswer::DontSave, CloseAnswer::Cancel, CloseAnswer::Save]
         } else {
             &[CloseAnswer::Save, CloseAnswer::DontSave, CloseAnswer::Cancel]
         }
@@ -164,22 +226,21 @@ impl UnsavedChangesDialog {
         let replies = self.replies(&words, common.cancel.clone(), env.view().shell().os);
         let answers: Vec<CloseAnswer> = replies.iter().map(|(answer, _)| *answer).collect();
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
-        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
+        let title = self.title.clone().unwrap_or_else(|| words.unsaved_title.clone());
+        let message = self.message.clone().unwrap_or_else(|| Label::from(message));
+        let mut prompt = Prompt::new(title, message).alert().answers(buttons(&env, replies));
         if let Some(reason) = &self.reason {
             prompt = prompt.tone(Tone::Bad, reason.clone());
         }
+        if let Some(icon) = self.icon.clone() {
+            prompt = prompt.icon(icon);
+        }
+        if let Some(note) = self.note.clone() {
+            prompt = prompt.note(note);
+        }
         let mut ticked = hosted && self.apply_to_all;
         if self.offers_apply_to_all() {
-            let label = words.unsaved_apply_to_all.clone();
-            let tick = &mut ticked;
-            let mut value = hosted.then_some(&mut self.apply_to_all);
-            prompt = prompt.extras(move |ui| {
-                if let Some(Mixed::Same(shown)) =
-                    Checkbox::new(value.as_mut().map_or_else(Bind::kept, |value| Bind::bound(&mut **value))).label(label.clone()).show(ui).shown
-                {
-                    *tick = *shown;
-                }
-            });
+            prompt = apply_to_all(prompt, words.unsaved_apply_to_all.clone(), self.remaining, hosted.then_some(&mut self.apply_to_all), &mut ticked);
         }
         if hosted {
             prompt = prompt.opened(Bind::bound(&mut self.open));

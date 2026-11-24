@@ -33,3 +33,12 @@ fn a_caption_section_shows_its_title_as_written_with_no_rule_while_a_section_has
     let (_, section_lines) = rules("Blend mode", HeaderStrength::Section);
     assert!(section_lines > caption_lines, "a section draws a rule above its title; a caption draws none");
 }
+
+/// An overline section reads its title in capitals, with no rule above it.
+#[trial]
+fn an_overline_section_shows_its_title_in_capitals_with_no_rule() {
+    let (overline, lines) = rules("Pages to print", HeaderStrength::Overline);
+    assert!(overline.texts().iter().any(|run| run.text == "PAGES TO PRINT"), "the overline is in capitals");
+    let (_, section_lines) = rules("Pages to print", HeaderStrength::Section);
+    assert!(section_lines > lines, "no rule above an overline");
+}

@@ -147,7 +147,6 @@ impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> Pre
                     PresetBrowser::new(title.clone(), Bind::<PresetState<K>>::kept(), source)
                         .view_lock(PresetView::List)
                         .toolbar(false)
-                        .row_menu(true)
                         .empty(empty.clone())
                         .max_rows(LIST_ROWS)
                         .footer(PresetFooterOptions::new().can_delete(true))
