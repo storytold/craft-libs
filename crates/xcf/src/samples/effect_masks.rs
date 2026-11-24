@@ -3,6 +3,7 @@ use super::{SampleOptions, SourceDrawable, SourceTile, VisitTarget};
 use crate::effects::StoredEffect;
 use crate::records;
 use crate::{Channel, Error, Result, Xcf, invalid};
+use std::ops::Range;
 
 #[cfg(test)]
 mod tests;
@@ -21,7 +22,7 @@ pub enum EffectMaskError {
 pub struct EffectMaskHeader<'a> {
     source: &'a [u8],
     version: u32,
-    offset: u64,
+    channel_header: Range<usize>,
     dimensions: (u32, u32),
     channel: Channel,
     properties: Vec<records::Property<'a>>,
@@ -32,7 +33,7 @@ impl std::fmt::Debug for EffectMaskHeader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EffectMaskHeader")
             .field("source_bytes", &self.source.len())
-            .field("offset", &self.offset)
+            .field("offset", &self.source_offset())
             .field("dimensions", &self.dimensions)
             .finish()
     }
@@ -40,7 +41,7 @@ impl std::fmt::Debug for EffectMaskHeader<'_> {
 
 impl<'a> EffectMaskHeader<'a> {
     pub fn source_offset(&self) -> u64 {
-        self.offset
+        self.channel_header.start as u64
     }
     pub fn width(&self) -> u32 {
         self.dimensions.0
@@ -85,7 +86,8 @@ impl<'a> Xcf<'a> {
             }
             let mut cursor = self.c.at(pointer);
             let dimensions = (cursor.u32()?, cursor.u32()?);
-            let hierarchy = self.c.at(properties.end_offset).ptr()?;
+            let mut channel_end = self.c.at(properties.end_offset);
+            let hierarchy = channel_end.ptr()?;
             let head = self.hierarchy_head(hierarchy, 1)?;
             if dimensions != (head.width, head.height) {
                 return Err(invalid("effect mask dimensions do not match their hierarchy").into());
@@ -118,7 +120,7 @@ impl<'a> Xcf<'a> {
             Ok(Some(EffectMaskHeader {
                 source: self.c.b,
                 version: self.image.version,
-                offset,
+                channel_header: pointer..channel_end.pos,
                 dimensions,
                 channel,
                 properties: properties.records,
@@ -153,7 +155,7 @@ impl<'a> Xcf<'a> {
                 dimensions: Some(header.dimensions),
                 coverage: true,
                 transfer_is_assumed: false,
-                excluded_source: None,
+                excluded_source: Some(header.channel_header.clone()),
             },
             options,
             budget,

@@ -29,6 +29,7 @@ fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, wir
     }
     w.end();
     let mask_slot = w.slot();
+    w.out.extend_from_slice(&[39, 87]); // A tile can end exactly at the channel header.
     let mask = w.out.len();
     if present {
         w.patch(mask_slot, mask);
@@ -222,6 +223,30 @@ fn auxiliary_header_rejects_an_interior_nul_and_accepts_both_empty_names() {
 }
 
 #[test]
+fn auxiliary_tiles_cannot_use_their_channel_header_as_samples() {
+    for displacement in [-2, -1, 0, 4] {
+        let mut f = fixture(150, &[1, 2], 1, true);
+        let level = u64::from_be_bytes(f.bytes[f.hierarchy + 12..f.hierarchy + 20].try_into().unwrap()) as usize;
+        let tile = f.mask.checked_add_signed(displacement).unwrap() as u64;
+        f.bytes[level + 8..level + 16].copy_from_slice(&tile.to_be_bytes());
+        let xcf = Xcf::parse(&f.bytes).unwrap();
+        let header = xcf.effect_mask_header(&record(&f), &mut records::Budget::default(), &|| true).unwrap().unwrap();
+        let mut samples = Vec::new();
+        let result = xcf.visit_effect_mask_tiles(&header, SampleOptions::default(), &mut 2, &|| true, |tile| {
+            samples.extend_from_slice(tile.data);
+            Ok(())
+        });
+        if displacement == -2 {
+            assert!(result.is_ok());
+            assert_eq!(samples, [39, 87]);
+        } else {
+            assert!(result.is_err(), "tile at {displacement} relative to the channel header");
+            assert!(samples.is_empty());
+        }
+    }
+}
+
+#[test]
 fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before_tiles() {
     let mut f = fixture(150, &[1, 2], 1, true);
     let level = u64::from_be_bytes(f.bytes[f.hierarchy + 12..f.hierarchy + 20].try_into().unwrap()) as usize;
@@ -229,12 +254,15 @@ fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before
     let xcf = Xcf::parse(&f.bytes).unwrap();
     let header = xcf.effect_mask_header(&record(&f), &mut records::Budget::default(), &|| true).unwrap().unwrap();
     let mut budget = 2;
+    let mut delivered = 0;
     xcf.visit_effect_mask_tiles(&header, SampleOptions::default(), &mut budget, &|| true, |tile| {
+        delivered += 1;
         assert_eq!(tile.data, &[0, 0]);
         Ok(())
     })
     .unwrap();
     assert_eq!(budget, 0);
+    assert_eq!(delivered, 1);
     let mut huge = fixture(650, &[0; 8], 4, true);
     for at in [huge.mask, huge.hierarchy] {
         huge.bytes[at..at + 4].copy_from_slice(&16_385u32.to_be_bytes());
