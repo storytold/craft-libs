@@ -95,7 +95,7 @@ impl BodyHooks<'_> {
                 inside(press.origin)
                     && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
                     && !pointer::text_takes_press(&ctx, pass.press_targets)
-                    && !pass.press_targets.click.is_some_and(|widget| pointer::foreign_target(&ctx, widget))
+                    && ![pass.press_targets.click, pass.press_targets.drag].into_iter().flatten().any(|widget| pointer::foreign_target(&ctx, widget))
             })
         } else {
             None

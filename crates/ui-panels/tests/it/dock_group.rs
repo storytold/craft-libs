@@ -268,3 +268,28 @@ fn a_click_on_an_app_field_in_the_body_keeps_its_focus() {
     assert!(group_stop.is_some() && fixture.focused() != Some(field_id), "a press on the empty body focuses the group's panel");
     assert_ne!(on_field, group_stop, "the clicks on the field left the group's stop unfocused");
 }
+
+// A press on an app's own egui widget in a group's body that only drags (a canvas) is the widget's, not a press on the
+// group's empty body; a press on the body's empty room still is.
+#[trial]
+fn a_press_on_an_app_drag_widget_in_the_body_is_no_surface_press() {
+    let surface = Rc::new(Cell::new(false));
+    let canvas = Rc::new(Cell::new(None::<Rect>));
+    let (pressed, shown) = (Rc::clone(&surface), Rc::clone(&canvas));
+    let panels = vec![PanelTitle::new(PanelKey::new(1), "Navigator")];
+    let mut fixture = Fixture::new(move |ui| {
+        let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key);
+        let (pressed, shown) = (Rc::clone(&pressed), Rc::clone(&shown));
+        group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), move |ui, cx| {
+            pressed.set(pressed.get() || cx.surface_pressed());
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(120.0, 60.0), egui::Sense::drag());
+            shown.set(Some(rect));
+        });
+    });
+    fixture.settle();
+    let Some(rect) = canvas.get() else { panic!("the body shows the app's canvas") };
+    fixture.click_at(rect.center()).settle();
+    assert!(!surface.get(), "a press on the drag-only widget is no press on the group's empty body");
+    fixture.click_at(Pos2::new(rect.center().x, rect.bottom() + 80.0)).settle();
+    assert!(surface.get(), "a press on the empty body is the group's surface press");
+}
