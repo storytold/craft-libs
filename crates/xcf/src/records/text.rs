@@ -176,10 +176,13 @@ pub enum LegacyEncoding {
 /// unmodified XLFD request. No font is loaded or native unit conversion applied.
 #[derive(Debug)]
 pub struct Legacy<'a> {
-    /// Original lexical fields; only a non-UTF-8 Latin-1 text field is converted.
-    /// `TextRecord::raw` and `spans` always preserve its exact original bytes.
+    /// Compatibility string views of the eight fields. Explicit Latin-1
+    /// lexical text is converted as before. Unavailable text or font string
+    /// views use an empty slot; use [TextRecord::legacy_field_bytes] and
+    /// [TextRecord::legacy_field_str] for exact source access.
     pub fields: Vec<Cow<'a, str>>,
     pub spans: Vec<Span>,
+    /// Borrowed XLFD components, or empty when the request cannot be split.
     pub font_fields: Vec<&'a str>,
     pub text: String,
     pub encoding: LegacyEncoding,
@@ -230,6 +233,18 @@ impl TextRecord<'_> {
             _ => None,
         }
     }
+    /// Exact lexical bytes of the requested GDyntext field.
+    pub fn legacy_field_bytes(&self, index: usize) -> Option<&[u8]> {
+        let Source::Gdyntext(legacy) = &self.source else { return None };
+        let span = legacy.spans.get(index)?;
+        self.raw.get(span.start.checked_sub(self.span.start)?..span.end.checked_sub(self.span.start)?)
+    }
+
+    /// UTF-8 view of the lexical GDyntext field, when one exists.
+    pub fn legacy_field_str(&self, index: usize) -> Option<&str> {
+        std::str::from_utf8(self.legacy_field_bytes(index)?).ok()
+    }
+
     pub fn text(&self) -> std::result::Result<Option<&str>, FieldError> {
         match &self.source {
             Source::Gimp(config) => config
@@ -643,6 +658,15 @@ fn legacy_separator(bytes: &[u8], keep_going: &dyn Fn() -> bool) -> ReadResult<O
     Ok(None)
 }
 
+fn xlfd_fields(font: &[u8]) -> Option<[&str; 14]> {
+    let mut parts = std::str::from_utf8(font).ok()?.strip_prefix('-')?.split('-');
+    let mut fields = [""; 14];
+    for field in &mut fields {
+        *field = parts.next()?;
+    }
+    parts.next().is_none().then_some(fields)
+}
+
 /// Decode GDyntext's escaped content and preserve its eight original fields.
 /// Latin-1 recovery is allowed only for an explicit ISO8859-1 XLFD declaration.
 pub fn gdyntext<'a>(
@@ -685,22 +709,12 @@ pub fn gdyntext<'a>(
             }
             start = end.saturating_add(2);
         }
-        // Metadata is UTF-8 independently of the legacy text field's declared
-        // encoding. A raw Latin-1 text byte must reach the explicit XLFD fallback.
-        let font = fields
-            .get(7)
-            .and_then(|font| std::str::from_utf8(font).ok())
-            .and_then(|font| font.strip_prefix('-'))
-            .ok_or(Failure::Stop(StopReason::Malformed))?;
-        let mut font_fields = [""; 14];
-        let mut parts = font.split('-');
-        for field in &mut font_fields {
-            *field = parts.next().filter(|field| field.len() <= 64).ok_or(Failure::Stop(StopReason::Malformed))?;
-        }
-        if parts.next().is_some() {
-            return Err(StopReason::Malformed.into());
-        }
-        let latin1 = font_fields.get(12).is_some_and(|charset| charset.eq_ignore_ascii_case("iso8859")) && font_fields.get(13) == Some(&"1");
+        // The bounded font request is optional metadata. Only a complete XLFD
+        // with an explicit charset can authorize Latin-1 text recovery.
+        let font_fields = fields.last().and_then(|font| xlfd_fields(font));
+        let latin1 = font_fields
+            .as_ref()
+            .is_some_and(|fields| fields.get(12).is_some_and(|charset| charset.eq_ignore_ascii_case("iso8859")) && fields.get(13) == Some(&"1"));
         let content = fields.first().copied().ok_or(Failure::Stop(StopReason::Malformed))?;
         let before = budget.retained_left;
         let mut parser = Parser { bytes: content, source_offset: 0, at: 0, checked_at: 0, nodes: 0, limits, budget, keep_going };
@@ -755,6 +769,9 @@ pub fn gdyntext<'a>(
                     }
                     Cow::Owned(String::from_utf8(output).map_err(|_| Failure::Stop(StopReason::Malformed))?)
                 }
+                // The decoded text already passed validation. Its lexical bytes,
+                // and an unusable font request, remain available through the spans.
+                Err(_) if index == 0 || index == 7 => Cow::Borrowed(""),
                 Err(_) => return Err(StopReason::Malformed.into()),
             };
             parser.budget.retain(&mut stored_fields, field)?;
@@ -762,7 +779,7 @@ pub fn gdyntext<'a>(
         for span in spans {
             parser.budget.retain(&mut stored_spans, span)?;
         }
-        for field in font_fields {
+        for field in font_fields.into_iter().flatten() {
             parser.budget.retain(&mut stored_font_fields, field)?;
         }
         parser.check()?;
@@ -898,12 +915,9 @@ mod tests {
         assert!(matches!(gimp(b"", 0, Limits::default(), &mut super::super::Budget::new(0, 0), &|| false), Err(crate::Error::Cancelled)));
         assert!(matches!(gdyntext(b"", 0, Limits::default(), &mut super::super::Budget::new(0, 0), &|| false), Err(crate::Error::Cancelled)));
         let mut raw = b"(text \"".to_vec();
-        while raw.len() < 8192 {
-            if raw.len() % 256 == 255 {
-                raw.extend(b"\\n");
-            } else {
-                raw.push(b'x');
-            }
+        for _ in 0..32 {
+            raw.extend([b'x'; 255]);
+            raw.extend(b"\\n");
         }
         raw.extend(b"\")");
         let checks = std::cell::Cell::new(0);

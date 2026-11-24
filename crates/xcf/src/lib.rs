@@ -823,7 +823,7 @@ impl<'a> Xcf<'a> {
         if layer.mask == 0 {
             return Ok(None);
         }
-        self.channel_at(layer.mask, budget, keep_going).map(Some)
+        self.channel_at(layer.mask, false, budget, keep_going).map(Some)
     }
 
     /// Borrow ordered saved-channel properties without decoding its hierarchy.
@@ -847,10 +847,10 @@ impl<'a> Xcf<'a> {
     /// channel, the size of the canvas.
     pub fn channel(&self, index: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {
         let ptr = *self.channels.get(index).ok_or_else(|| invalid("no such channel"))?;
-        self.channel_at(ptr, budget, keep_going)
+        self.channel_at(ptr, true, budget, keep_going)
     }
 
-    fn channel_at(&self, ptr: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {
+    fn channel_at(&self, ptr: usize, saved: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {
         let mut c = self.c.at(ptr);
         let (_w, _h) = (c.u32()?, c.u32()?);
         let name = c.string()?;
@@ -858,7 +858,8 @@ impl<'a> Xcf<'a> {
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
         let name_bytes = name.len();
         let result = (|| {
-            let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
+            let properties = props(&mut c)?;
+            let selection = saved && properties.iter().any(|property| property.kind == 4);
             let hptr = c.ptr()?;
             self.channel_effects_tail(&mut c, hptr, keep_going, None)?;
             // Channels are always one plain sample per pixel, even in indexed images.

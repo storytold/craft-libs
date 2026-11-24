@@ -240,6 +240,58 @@ fn equivalent_auto_boolean_spellings_preserve_direction_and_saved_policy() {
 }
 
 #[test]
+fn usable_legacy_text_survives_optional_font_hints() {
+    let base = super::tests::legacy_bytes("hello", "unknown");
+    let mut long_foundry = "-".to_string();
+    long_foundry.push_str(&"foundry".repeat(10));
+    long_foundry.push_str("-example-medium-r-normal--12-120-75-75-p-60-unknown-1");
+    let prefix_len = base.windows(2).rposition(|pair| pair == b"}{").unwrap() + 2;
+    for (font, foundry) in [
+        (b"".as_slice(), None),
+        (b"unparsed request".as_slice(), None),
+        (b"\xff".as_slice(), None),
+        (long_foundry.as_bytes(), Some(long_foundry.split('-').nth(1).unwrap())),
+    ] {
+        let raw = [&base[..prefix_len], font, b"}"].concat();
+        let scan = gdyntext(&raw, 17, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        let record = &scan.records[0];
+        assert_eq!(record.text().unwrap(), Some("hello"));
+        assert_eq!(record.legacy_field_bytes(7), Some(font));
+        assert_eq!(record.legacy_field_str(7), std::str::from_utf8(font).ok());
+        let Source::Gdyntext(legacy) = &record.source else { panic!("legacy") };
+        if let Some(foundry) = foundry {
+            assert_eq!(legacy.font_fields.len(), 14);
+            assert_eq!(legacy.font_fields[0], foundry);
+            assert_eq!(legacy.font_fields[1], "example");
+        } else {
+            assert!(legacy.font_fields.is_empty());
+        }
+
+        // An incomplete or absent font declaration cannot authorize Latin-1.
+        let bad = [&raw[..6], b"\xffello", &raw[11..]].concat();
+        let scan = gdyntext(&bad, 17, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+    }
+}
+
+#[test]
+fn decoded_legacy_utf8_does_not_require_a_lexical_utf8_view() {
+    let escaped = super::tests::legacy_bytes(r"\303\251", "unknown");
+    let lexical = b"\xc3\\251";
+    let mixed = [&escaped[..6], lexical, &escaped[14..]].concat();
+    for (raw, original) in [(escaped.as_slice(), br"\303\251".as_slice()), (mixed.as_slice(), lexical.as_slice())] {
+        let scan = gdyntext(raw, 21, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        let record = &scan.records[0];
+        assert_eq!(record.text().unwrap(), Some("\u{e9}"));
+        assert_eq!(record.legacy_field_bytes(0), Some(original));
+        assert_eq!(record.legacy_field_str(0), std::str::from_utf8(original).ok());
+        assert_eq!(record.legacy_field_bytes(8), None);
+        let Source::Gdyntext(legacy) = &record.source else { panic!("legacy") };
+        assert_eq!(legacy.encoding, LegacyEncoding::Utf8);
+    }
+}
+
+#[test]
 fn equivalent_legacy_escape_spellings_decode_identically_without_losing_source() {
     for content in [b"\\303\\251".to_vec(), [vec![0xc3], b"\\251".to_vec()].concat()] {
         let mut raw = super::tests::legacy_bytes("?", "iso8859");

@@ -654,10 +654,10 @@ impl Xcf<'_> {
         if overlaps(head.level, level.pos) {
             return Err(invalid("a level table overlaps its source record"));
         }
-        // An unused mip pointer cannot establish dummy framing inside the
-        // validated primary table, even when adjacent pixels match its fields.
+        // An unused mip pointer cannot claim bytes in the drawable record or
+        // the primary table, even when adjacent pixels match its fields.
         for candidate in &mut head.dummy_headers {
-            if candidate.is_some_and(|(start, end)| start < level.pos && end > head.level) {
+            if candidate.is_some_and(|(start, end)| (start < level.pos && end > head.level) || overlaps(start, end)) {
                 *candidate = None;
             }
         }

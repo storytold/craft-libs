@@ -597,10 +597,16 @@ fn auxiliary_tail_work_refusal_retries_without_losing_name_storage_or_mislabelin
     xcf.effect_mask_header(&record(&f), &mut measured, &|| true).unwrap().unwrap();
     let work = 4096 - measured.work_remaining();
     xcf.meta_budget.set("Coverage".len());
-    let mut short = records::Budget::new(work - 1, 4096);
+    let mut prefix = records::Budget::new(4096, 4096);
+    let properties = records::channel_properties(&f.bytes, f.mask, records::Limits::default(), &mut prefix, &|| true).unwrap();
+    assert!(properties.stopped.is_none());
+    let pointer_bytes = 8;
+    let tail_bytes_remaining = pointer_bytes - 1;
+    let short_allowance = 4096 - prefix.work_remaining() + pointer_bytes + tail_bytes_remaining;
+    let mut short = records::Budget::new(short_allowance, 4096);
     assert!(matches!(xcf.effect_mask_header(&record(&f), &mut short, &|| true), Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))));
     assert_eq!(short.retained_remaining(), 4096);
-    assert!(short.work_remaining() < work - 1);
+    assert_eq!(short.work_remaining(), tail_bytes_remaining);
     assert_eq!(xcf.meta_budget.get(), "Coverage".len());
     let mut enough = records::Budget::new(work, 4096);
     assert!(xcf.effect_mask_header(&record(&f), &mut enough, &|| true).unwrap().is_some());

@@ -106,7 +106,9 @@ fn stray_selection_markers_do_not_change_layer_mask_role_or_owner_dimensions() {
         bytes.extend(record.out);
         bytes[slot..slot + 8].copy_from_slice(&(target as u64).to_be_bytes());
         let reader = Xcf::parse(&bytes).unwrap();
-        assert!(reader.layer_mask(0, &mut 1024, GO).unwrap().is_some(), "legacy owner mask remains decodable");
+        let (legacy, pixels) = reader.layer_mask(0, &mut 1024, GO).unwrap().unwrap();
+        assert!(!legacy.selection);
+        assert_eq!(pixels.data, [64u8, 192].map(|sample| f32::from(sample) / 255.));
         let mut budget = 2;
         let (channel, info) = reader
             .visit_layer_mask_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
@@ -172,4 +174,57 @@ fn shared_saved_channel_fixtures_have_the_versioned_effect_tail() {
                 .unwrap();
         }
     }
+}
+
+#[test]
+fn an_unused_mip_offset_in_a_channel_tail_cannot_claim_a_complete_tile() {
+    let mut file = W::new(26);
+    for word in [1, 65, 1, 150] {
+        file.u32(word);
+    }
+    file.prop(17, &[0]);
+    file.end();
+    file.ptr(0);
+    let channel_slot = file.slot();
+    file.ptr(0);
+    file.ptr(0);
+    let channel = file.out.len();
+    file.patch(channel_slot, channel);
+    file.u32(1);
+    file.u32(65);
+    file.string("Saved");
+    file.end();
+    let hierarchy_slot = file.slot();
+    file.ptr(0); // The v26 effect-list terminator belongs to the channel.
+    let first_tile = file.out.len();
+    let mut samples = [0; 65];
+    samples[3] = 32; // The preceding zero word and these pixels resemble a mip header.
+    samples[64] = 57;
+    file.out.extend(samples);
+    let hierarchy = file.out.len();
+    file.patch(hierarchy_slot, hierarchy);
+    for word in [1, 65, 1] {
+        file.u32(word);
+    }
+    let level_slot = file.slot();
+    file.ptr(first_tile - 4);
+    file.ptr(0);
+    let level = file.out.len();
+    file.patch(level_slot, level);
+    file.u32(1);
+    file.u32(65);
+    file.ptr(first_tile);
+    file.ptr(first_tile + 64);
+    file.ptr(0);
+
+    let reader = Xcf::parse(&file.out).unwrap();
+    let mut raw = Vec::new();
+    reader
+        .visit_channel_tiles(0, SampleOptions::default(), &mut 65, GO, |tile| {
+            raw.extend_from_slice(tile.data);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(raw, samples);
+    assert_eq!(reader.channel(0, &mut (65 * 4), GO).unwrap().1.data, samples.map(|sample| f32::from(sample) / 255.));
 }
