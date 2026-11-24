@@ -80,24 +80,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut routed: HashMap<Option<Id>, Routed> = HashMap::new();
     let mut activated = IdMap::default();
     let mut consumed = vec![Taken::No; batch.presses.len()];
-    // Interest comes from real components in last pass's draw order, never from a synthetic focus stop.
-    let mut scalar_owned = if scalar_rows.is_empty() { Vec::new() } else { vec![false; batch.presses.len()] };
-    if let Some(row) = scalar::choose(ctx, &scalar_rows, target.as_ref(), press_captured) {
-        for (at, press) in batch.presses.iter().enumerate() {
-            let movement = match press.key {
-                Key::Up => NavMove::Up,
-                Key::Down => NavMove::Down,
-                _ => continue,
-            };
-            if press.canvas || !(press.mods.is_none() || press.mods == Mods::SHIFT) || batch.claimed.contains(&Chord::new(press.mods, press.key)) {
-                continue;
-            }
-            let modifiers = MoveMods::new(press.mods == Mods::SHIFT, false, MoveMods::PLAIN.by);
-            routed.entry(Some(row.owner)).or_default().scalar_moves.push((movement, modifiers));
-            scalar_owned[at] = true;
-            consumed[at] = Taken::Yes;
-        }
-    }
+    let scalar_owned = route_scalar_rows(ctx, &scalar_rows, target.as_ref(), press_captured, &batch, &mut routed, &mut consumed);
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
@@ -345,6 +328,37 @@ pub(crate) fn focus_in_modal_dialog(ctx: &Context) -> bool {
         overlay::key_layer(ctx, &scopes, None) == overlay::LayerKeys::Class(OwnerClass::Dialog)
             && scopes.iter().find_map(|id| overlay::entry(ctx, *id)).is_some_and(|entry| entry.rank.is_modal())
     })
+}
+
+/// Routes each plain or Shift Up and Down press of the batch to the scalar row the router chooses (`scalar::choose`):
+/// the row takes it as a scalar move, and no other route sees it. Interest comes from real components in last pass's
+/// draw order, never from a synthetic focus stop. Returns which presses the row took; empty when no row was declared.
+fn route_scalar_rows(
+    ctx: &Context,
+    rows: &[scalar::ScalarRow],
+    target: Option<&StopRec>,
+    press_captured: bool,
+    batch: &Batch,
+    routed: &mut HashMap<Option<Id>, Routed>,
+    consumed: &mut [Taken],
+) -> Vec<bool> {
+    let mut owned = if rows.is_empty() { Vec::new() } else { vec![false; batch.presses.len()] };
+    let Some(row) = scalar::choose(ctx, rows, target, press_captured) else { return owned };
+    for (at, press) in batch.presses.iter().enumerate() {
+        let movement = match press.key {
+            Key::Up => NavMove::Up,
+            Key::Down => NavMove::Down,
+            _ => continue,
+        };
+        if press.canvas || !(press.mods.is_none() || press.mods == Mods::SHIFT) || batch.claimed.contains(&Chord::new(press.mods, press.key)) {
+            continue;
+        }
+        let modifiers = MoveMods::new(press.mods == Mods::SHIFT, false, MoveMods::PLAIN.by);
+        routed.entry(Some(row.owner)).or_default().scalar_moves.push((movement, modifiers));
+        owned[at] = true;
+        consumed[at] = Taken::Yes;
+    }
+    owned
 }
 
 /// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds
