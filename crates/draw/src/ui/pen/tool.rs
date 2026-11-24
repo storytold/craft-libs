@@ -152,7 +152,9 @@ struct Run {
 /// - Keys while a draft is open: Enter and Escape end it open and keep it (a draft of one anchor is discarded, as no
 ///   path has fewer than two anchors); Backspace and Delete remove the last anchor, the only one discarding the
 ///   draft, and the host's Undo does the same through [`remove_last`](Self::remove_last), except on a
-///   [`PenDraft::Foreign`] draft, whose anchors both leave to the app. Each ending is [`PenEvent::Finished`].
+///   [`PenDraft::Foreign`] draft, whose anchors both leave to the app. In Curvature mode the two keys remove the
+///   selected anchor instead, when the last press selected one of the draft's own anchors. Each ending is
+///   [`PenEvent::Finished`].
 /// - Look: the path so far, a dashed rubber band from the last anchor to where a click would land (with Path
 ///   Options' Rubber Band), the last anchor's handles, the anchors with the last one filled, and over the first
 ///   anchor the close cue.
@@ -161,8 +163,10 @@ struct Run {
 ///   the draft open.
 /// - [`PenMode::Curvature`] ([`mode`](Self::mode)): a click adds a smooth anchor the curve flows through, which
 ///   follows the pointer while the button is down (past the click slop); a press on the first anchor of 3 or more
-///   closes at once; a press on another anchor grabs and drags it; the second click of a double click on an anchor
-///   toggles it between smooth and corner. Every change reflows the handles ([`EditSubpath::reflow_kept`] with
+///   closes at once; a press on another anchor grabs and drags it and makes it the selected one: a later Backspace
+///   or Delete removes that anchor and reflows the rest; the selection lasts past the release, until the draft
+///   ends, the mode changes, the draft is replaced or an anchor is removed, and a carried anchor is never removed;
+///   the second click of a double click on an anchor toggles it between smooth and corner. Every change reflows the handles ([`EditSubpath::reflow_kept`] with
 ///   [`kept`](Self::kept)). ⇧ and ⌥ do nothing; the keys and the gesture are the Pen's, and a press on an open path's
 ///   end point resumes it. Hover: with two or more anchors a dashed
 ///   preview of the curve the next click makes, with one a dashed line; always drawn, whatever the rubber band
@@ -194,6 +198,10 @@ pub struct PenTool {
     /// The leading anchors of the draft that belong to the path a press continued: they keep their handles when the
     /// Curvature mode reflows the draft, and Undo, Backspace and Delete never take them back.
     pub(super) kept: usize,
+    /// Curvature mode only: the index of the anchor the last press selected, kept past its release; with one
+    /// selected, Backspace and Delete remove that anchor instead of the last one. Cleared when the draft ends, the
+    /// draft is replaced or newly handed in, the mode changes or an anchor is removed.
+    pub(super) selected: Option<usize>,
 }
 
 impl Default for PenTool {
@@ -221,6 +229,7 @@ impl PenTool {
             drag: None,
             events: Vec::new(),
             kept: 0,
+            selected: None,
         }
     }
 
@@ -236,6 +245,7 @@ impl PenTool {
         let host_ended = draft.is_none_or(|draft| draft.knots.is_empty()) && self.run.is_some() && self.drag.is_none();
         if self.run.is_none() || host_ended {
             self.run = None;
+            self.selected = None;
             match draft.filter(|draft| !draft.knots.is_empty()) {
                 Some(draft) => {
                     self.shown = draft.clone();
@@ -270,18 +280,22 @@ impl PenTool {
         self
     }
 
-    /// Replaces the draft with `draft`: one `Update`, beginning a run when none is open. False, and nothing
-    /// changes, while a press is down.
+    /// Replaces the draft with `draft`: one `Update`, beginning a run when none is open, and the end of a Curvature
+    /// selection (its index may name another anchor now). False, and nothing changes, while a press is down.
     pub fn replace(&mut self, draft: &EditSubpath) -> bool {
         if self.drag.is_some() {
             return false;
         }
+        self.selected = None;
         self.change(draft.clone());
         true
     }
 
-    /// The Pen or the Curvature Pen; [`PenMode::Pen`] by default.
+    /// The Pen or the Curvature Pen; [`PenMode::Pen`] by default. Changing it clears a Curvature selection.
     pub fn mode(&mut self, mode: PenMode) -> &mut Self {
+        if self.mode != mode {
+            self.selected = None;
+        }
         self.mode = mode;
         self
     }
@@ -410,6 +424,7 @@ impl PenTool {
         self.drag = None;
         self.resume = false;
         self.kept = 0;
+        self.selected = None;
         self.foreign = false;
     }
 
@@ -434,6 +449,7 @@ impl PenTool {
     }
 
     fn remove_last_anchor(&mut self, reason: CancelReason) {
+        self.selected = None;
         if self.kept > 0 && self.shown.knots.len() <= self.kept {
             // Undo never eats the anchors of the path the draft resumed.
             self.drop_run(reason);
@@ -450,6 +466,29 @@ impl PenTool {
             // Removing the last anchor changes the curve through the rest.
             draft.reflow_kept(self.kept);
         }
+        self.change(draft);
+    }
+
+    /// The Curvature mode's selection, when the draft may lose that anchor: an anchor the last press selected,
+    /// one of the draft's own rather than one of the carried [`kept`](Self::kept) anchors, and still in the draft.
+    fn selected_anchor(&self) -> Option<usize> {
+        let index = self.selected?;
+        (self.mode == PenMode::Curvature && index >= self.kept && index < self.shown.knots.len()).then_some(index)
+    }
+
+    /// Removes the selected anchor at `index` and re-solves the rest: Backspace and Delete in Curvature mode with
+    /// an anchor selected. The only anchor discards the draft, as removing the last one does.
+    fn remove_selected_anchor(&mut self, index: usize, reason: CancelReason) {
+        self.selected = None;
+        if self.shown.knots.len() <= 1 {
+            self.drop_short(reason);
+            self.finish(PenEnd::Removed);
+            return;
+        }
+        let mut draft = self.shown.clone();
+        draft.remove_knot(index);
+        // Removing an anchor changes the curve through the rest.
+        draft.reflow_kept(self.kept);
         self.change(draft);
     }
 
@@ -663,7 +702,10 @@ impl CanvasTool for PenTool {
                 true
             }
             ToolKey::Delete { .. } if self.takes_back() => {
-                self.remove_last_anchor(CancelReason::UndoDuringGesture);
+                match self.selected_anchor() {
+                    Some(index) => self.remove_selected_anchor(index, CancelReason::UndoDuringGesture),
+                    None => self.remove_last_anchor(CancelReason::UndoDuringGesture),
+                }
                 true
             }
             _ => false,

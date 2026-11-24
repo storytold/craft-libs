@@ -24,7 +24,9 @@ impl PenTool {
     ///   [`carried_handles`](crate::geometry::curvature::carried_handles), which keeps the first
     ///   [`kept`](PenTool::kept) knots' handles;
     /// - the second click of a double click on an anchor toggles it between smooth and corner and reflows; on empty
-    ///   canvas the first click's anchor is under it, so a double click places a corner point.
+    ///   canvas the first click's anchor is under it, so a double click places a corner point;
+    /// - the anchor a press grabbed or added becomes the selected one (never a carried end): it stays selected past
+    ///   the release, and Backspace and Delete remove it in place of the draft's last anchor.
     pub(super) fn press_curve(&mut self, pointer: &ToolPointer, at: Point, view: &CanvasView, reach: f32) -> ToolAction {
         self.carry_on_selected(pointer.pos, view, reach);
         let mut draft = self.shown.clone();
@@ -76,6 +78,10 @@ impl PenTool {
         };
         draft.reflow_kept(self.kept);
         let in_ctrl = draft.knots[index].in_ctrl;
+        if index >= self.kept {
+            // The anchor this press grabbed or added becomes the selected one: Backspace and Delete remove it.
+            self.selected = Some(index);
+        }
         self.change(draft);
         self.drag = Some(Drag { origin: pointer.pos, kind: Kind::Move(index), last: pointer.pos, moved: false, in_ctrl });
         ToolAction::Claimed
