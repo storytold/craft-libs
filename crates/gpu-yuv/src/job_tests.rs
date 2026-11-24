@@ -187,6 +187,19 @@ fn jobs_past_the_context_caps_are_refused() {
 }
 
 #[test]
+fn an_output_side_past_the_cpu_limit_is_refused_before_the_input_is_read() {
+    let r = registry(YuvProvider::new());
+    let side = cpu::MAX_SIDE + 2;
+    let caps = DeviceCaps { max_texture_dimension_2d: side, ..DeviceCaps::default() };
+    let mut ctx = Capped::new(caps);
+    let c = Conversion::new(Format::Nv12, Matrix::Bt709, Range::Limited);
+    let input = ctx.upload_buffer("input", &tests::noise(2, 2)).unwrap();
+    let refused = invalid(r.dispatch(&mut ctx, &YuvJob::new(c, 2, 2, side, 2).job(input)));
+    assert!(refused.contains(&format!("{side}×2 is larger than the largest texture side, {}", cpu::MAX_SIDE)), "{refused}");
+    assert_eq!(ctx.reads, 0, "the refused input is not read");
+}
+
+#[test]
 fn an_input_past_the_buffer_limit_is_refused_before_it_is_read() {
     let r = registry(YuvProvider::new());
     let caps = DeviceCaps { max_texture_dimension_2d: 64, max_buffer_size: 16128, ..DeviceCaps::default() };

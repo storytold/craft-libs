@@ -206,8 +206,10 @@ impl GpuProvider for YuvProvider {
         let YuvJob { conversion, src_width, src_height, width, height } = spec;
         let layout = FrameLayout::new(conversion.format, width, height).map_err(fault)?;
         let caps = ctx.caps();
+        // An output side is also held to `cpu::MAX_SIDE`, so that both provider modes take the
+        // same jobs.
         let limit = caps.max_texture_dimension_2d;
-        for (w, h) in [(src_width, src_height), (width, height)] {
+        for (w, h, limit) in [(src_width, src_height, limit), (width, height, limit.min(cpu::MAX_SIDE))] {
             if w > limit || h > limit {
                 return Err(fault(Error::TooLarge { width: w, height: h, limit }));
             }
