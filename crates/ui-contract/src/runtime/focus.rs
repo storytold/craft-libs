@@ -1071,6 +1071,13 @@ pub fn keyboard_in_menu(ctx: &Context) -> bool {
     focused_rec(ctx).is_some_and(|rec| menu_scope(ctx, rec.scope).is_some()) && with(ctx, |state| state.visible)
 }
 
+/// Whether the focused stop took the focus when its scope opened (a menu's first row as the menu showed) and has kept
+/// it since: no key, press or request (an AccessKit `Focus`) has moved it.
+#[doc(hidden)]
+pub fn focus_came_with_open(ctx: &Context) -> bool {
+    focused_rec(ctx).is_some_and(|rec| origin(ctx, &rec) == Some(FocusOrigin::Open))
+}
+
 /// The innermost menu scope around the component whose body is running: the menu a row being shown sits in.
 #[doc(hidden)]
 pub fn running_menu(ctx: &Context) -> Option<Id> {

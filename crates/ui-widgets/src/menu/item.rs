@@ -65,8 +65,9 @@ pub(crate) struct RowInput {
     pub hovered: bool,
     /// The row holds the focus.
     pub focused: bool,
-    /// The row took Enter or Space as the first key in a menu the pointer opened, while the pointer had not lit it:
-    /// the row does not run on it and is not made active by it. [`RowInput::of`] answers the key instead.
+    /// The row took Enter or Space as the first key in a menu the pointer opened, holding the focus the menu gave it
+    /// as it opened, while the pointer had not lit it: the row does not run on it and is not made active by it.
+    /// [`RowInput::of`] answers the key instead.
     pub withheld: bool,
     keyboard: bool,
     gained: bool,
@@ -80,6 +81,8 @@ impl RowInput {
     /// Enter or Space as the first key in a menu the pointer opened reaches the focused row, which the pointer may never
     /// have lit: the row withholds it, and the key runs the row the pointer lit, or with none lit only closes the menu,
     /// as a native menu does. A submenu row is no exception: the first key opens no submenu the pointer did not light.
+    /// Only the focus the menu gave as it opened is withheld from: a row or part that a request focused (an AccessKit
+    /// `Focus`, the app) was aimed at, and the key runs it.
     pub(crate) fn of<C: Component>(cx: &mut Cx<'_, C>, level: &MenuLevel) -> RowInput {
         let moving = cx.core.ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
         let hovered = cx.response.hovered();
@@ -92,8 +95,9 @@ impl RowInput {
         rest.focused = focused;
         let started = keyboard && !rest.keyboard;
         rest.keyboard = keyboard;
+        let opened = focused && crate::runtime::focus::focus_came_with_open(&cx.core.ctx);
         let lit = level.active_enabled();
-        let withheld = started && by_key && lit != Some(id);
+        let withheld = started && by_key && opened && lit != Some(id);
         if withheld {
             match lit {
                 Some(row) => level.run(row),
