@@ -108,7 +108,7 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
             DockArea::new("Second dock", Bind::bound(&mut other), &specs, &mut panels, DockConfig::default()).show(ui);
         }
         if let Some(rect) = shown_popup.get() {
-            egui::Area::new(egui::Id::new("host popup")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ui.ctx(), |ui| {
+            egui::Area::new(egui::Id::unique("host popup")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ui.ctx(), |ui| {
                 let (_, drag) = ui.allocate_exact_size(rect.size(), egui::Sense::drag());
                 if drag.drag_started() {
                     shown_popup.set(None);
@@ -311,7 +311,8 @@ fn a_window_that_took_over_a_panel_drag_docks_on_a_tab_strip_though_its_title_ro
 
 /// A press a host's own egui widget holds (a popup's title, which no framework part senses) carries on as the drag of
 /// the window the host floats in that pass and hands the press to: the window follows the pointer and docks on the
-/// docked group's tab strip.
+/// docked group's tab strip. The window shows first in the pass its drag starts, before its layer is recorded; the
+/// drop targets still look through it, so its own target does not take the drop and refuse it.
 #[trial]
 fn a_window_takes_over_a_press_a_plain_egui_widget_holds() {
     let mut bed = bed_with(Layout::new(Some(Node::tabs(vec![DOCKED], 0)), Vec::new()), DockConfig::default().title_bar_docks(false));
@@ -327,6 +328,17 @@ fn a_window_takes_over_a_press_a_plain_egui_widget_holds() {
         bed.fixture.frame(vec![moved(from + (over - from) * (step as f32 / 4.0))]);
     }
     assert!(dragging(&bed), "the window runs the handed-over drag");
+    let mark = drag::mark(bed.fixture.ctx()).expect("a target under the dragged window takes the drop");
+    let points = match mark {
+        DropMark::Line { from, to, .. } | DropMark::Region { line: Some([from, to]), .. } => vec![from, to],
+        DropMark::Into(rect) | DropMark::Region { area: rect, .. } => vec![rect.center()],
+        _ => Vec::new(),
+    };
+    let strip = tab.rect.expand(SLACK);
+    assert!(
+        !points.is_empty() && points.iter().all(|point| point.y >= strip.top() && point.y <= strip.bottom()),
+        "the mark is the tab strip's: {mark:?}"
+    );
     bed.fixture.frame(vec![release(over)]).settle();
     let layout = bed.workspace.borrow().layout().clone();
     let joined = layout.floating.is_empty() && layout.place(&WINDOW).is_some_and(|place| layout.place(&DOCKED) == Some(place));
