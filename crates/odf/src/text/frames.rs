@@ -396,7 +396,8 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         y: if v_align.is_none() { off(y) } else { 0.0 },
         h_align,
         v_align,
-        dist: left.unwrap_or(0.0).max(right.unwrap_or(0.0)),
+        dist_left: left.unwrap_or(0.0),
+        dist_right: right.unwrap_or(0.0),
         dist_top: top.unwrap_or(0.0),
         dist_bottom: bottom.unwrap_or(0.0),
         ..Float::default()
@@ -686,8 +687,8 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
     let d = |v: f32| pt(if v.is_finite() { v.clamp(0.0, MAX_LEN) } else { 0.0 });
     let props = format!(
         " style:wrap=\"{wrap}\" style:horizontal-pos=\"{hpos}\" style:horizontal-rel=\"{hrel}\" style:vertical-pos=\"{vpos}\" style:vertical-rel=\"{vrel}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\"",
-        d(f.dist),
-        d(f.dist),
+        d(f.dist_left),
+        d(f.dist_right),
         d(f.dist_top),
         d(f.dist_bottom)
     );

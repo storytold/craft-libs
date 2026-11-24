@@ -69,8 +69,8 @@ struct Props {
     behind: Option<bool>,
     /// `dxTextLeft`, `dyTextTop`, `dxTextRight`, `dyTextBottom` (EMUs).
     inset: [Option<i64>; 4],
-    /// `dxWrapDistLeft`, `dyWrapDistTop`, `dyWrapDistBottom` (EMUs).
-    dist: [Option<i64>; 3],
+    /// `dxWrapDistLeft`, `dyWrapDistTop`, `dxWrapDistRight`, `dyWrapDistBottom` (EMUs).
+    dist: [Option<i64>; 4],
 }
 
 /// A colour property (a COLORREF, `0x00BBGGRR`); `None` for a scheme or system colour.
@@ -328,7 +328,8 @@ impl Reader {
             "dyTextBottom" => p.inset[3] = v,
             "dxWrapDistLeft" => p.dist[0] = v,
             "dyWrapDistTop" => p.dist[1] = v,
-            "dyWrapDistBottom" => p.dist[2] = v,
+            "dxWrapDistRight" => p.dist[2] = v,
+            "dyWrapDistBottom" => p.dist[3] = v,
             _ => {}
         }
         s.sn.clear();
@@ -407,9 +408,11 @@ impl Reader {
             f.h_align = align(p.posh);
             f.v_align = align(p.posv);
             let dist = |v: Option<i64>, d: f32| v.map_or(d, |v| points(v, EMUS).max(0.0));
-            f.dist = dist(p.dist[0], 9.0);
-            f.dist_top = dist(p.dist[1], 0.0);
-            f.dist_bottom = dist(p.dist[2], 0.0);
+            let [dl, dt, dr, db] = p.dist;
+            f.dist_left = dist(dl, 9.0);
+            f.dist_right = dist(dr, 9.0);
+            f.dist_top = dist(dt, 0.0);
+            f.dist_bottom = dist(db, 0.0);
         }
         let blocks = std::mem::take(&mut s.blocks);
         s.read = true;

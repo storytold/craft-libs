@@ -147,6 +147,32 @@ fn floating_picture_from_the_blip_store_keeps_position_and_wrap() {
     assert_eq!(doc.media.get(media).map(|b| b.as_slice()), Some(png.as_slice()));
 }
 
+/// Verifies that OfficeArt `FOPT` wrap-distance properties (`0x0384`–`0x0387`) populate
+/// `dist_left` and `dist_right` independently while keeping Word's 9 pt horizontal default when
+/// one side is omitted.
+///
+/// The second picture sets `0x0384` (`dxWrapDistLeft`) to `0` and leaves `0x0386`
+/// (`dxWrapDistRight`) absent, catching any fallback that takes the maximum of both sides.
+#[test]
+fn floating_picture_asymmetric_wrap_distances_stay_separate() {
+    let png = tiny_png();
+    let pic1 = sp(&[fsp(75, 1025, 0xA00), fopt(&[(0x0104, 1), (0x0384, 152_400), (0x0385, 101_600), (0x0386, 88_900), (0x0387, 63_500)], &[])]);
+    let pic2 = sp(&[fsp(75, 1026, 0xA00), fopt(&[(0x0104, 1), (0x0384, 0)], &[])]);
+    let art = art_content(&[fbse_png(&png)], &[pic1, pic2]);
+    let flags = spa_flags(1, 0, 2, false);
+    let spas = plc(&[1, 2, 4], &[spa(1025, [1440, 720, 4320, 2160], flags), spa(1026, [1440, 720, 4320, 2160], flags)].concat());
+    let text = "A\u{8}\u{8}B\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let floats: Vec<_> =
+        p0.objects.iter().filter_map(|o| if let InlineObject::Image { float, .. } = o { Some(float.clone()) } else { None }).collect();
+    let [f0, f1] = floats.as_slice() else { panic!("expected 2 images: {:?}", p0.objects) };
+    assert_eq!((f0.dist_left, f0.dist_right, f0.dist_top, f0.dist_bottom), (12.0, 7.0, 8.0, 5.0));
+    assert_eq!((f1.dist_left, f1.dist_right, f1.dist_top, f1.dist_bottom), (0.0, 9.0, 0.0, 0.0));
+}
+
 /// Layout in table cell is `fLayoutInCell` (bit 15) of the Group Shape Boolean Properties
 /// (0x03BF), valid when `fUsefLayoutInCell` (bit 31) is set; otherwise it's on, its default
 /// ([MS-ODRAW] §2.3.4.44). Off, the shape is placed outside the cell it is anchored in.

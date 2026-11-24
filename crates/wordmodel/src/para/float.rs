@@ -132,7 +132,7 @@ impl FloatAlign {
 
 /// Floating placement (ignored when `wrap` is `Inline`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "FloatDe")]
 pub struct Float {
     pub wrap: Wrap,
     /// The sides text wraps on (Square, Tight and Through).
@@ -149,7 +149,8 @@ pub struct Float {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub v_align: Option<FloatAlign>,
     /// Distance from surrounding text at the left and right (points).
-    pub dist: f32,
+    pub dist_left: f32,
+    pub dist_right: f32,
     /// Distance from surrounding text above and below (points).
     pub dist_top: f32,
     pub dist_bottom: f32,
@@ -199,6 +200,72 @@ pub struct Float {
     /// the turned object overhang it (see [`Float::line_pad`]). Cleared by [`Float::set_spin`].
     #[serde(skip_serializing_if = "is_false")]
     pub bare_turn: bool,
+}
+
+/// Deserialization shadow for [`Float`] accepting the legacy single `"dist"` key alongside
+/// `"distLeft"` and `"distRight"`.
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct FloatDe {
+    wrap: Wrap,
+    wrap_text: WrapText,
+    h_rel: Anchor,
+    v_rel: Anchor,
+    x: f32,
+    y: f32,
+    h_align: Option<FloatAlign>,
+    v_align: Option<FloatAlign>,
+    dist: Option<f32>,
+    dist_left: Option<f32>,
+    dist_right: Option<f32>,
+    dist_top: f32,
+    dist_bottom: f32,
+    effect: [f32; 4],
+    rot: f32,
+    flip_h: bool,
+    flip_v: bool,
+    wrap_polygon: Option<std::sync::Arc<crate::wrap::WrapPolygon>>,
+    alt: AltText,
+    hidden: bool,
+    outside_cell: bool,
+    z: u32,
+    page: u32,
+    bare_turn: bool,
+}
+
+impl From<FloatDe> for Float {
+    /// Converts a deserialized [`FloatDe`] into a [`Float`], populating any omitted horizontal
+    /// side (`dist_left` or `dist_right`) from the legacy `"dist"` field.
+    ///
+    /// An explicit `"distLeft"` or `"distRight"` — including `0.0` — overrides `"dist"` on that
+    /// side, so mixed legacy/new JSON never replaces an explicit zero with the legacy fallback.
+    fn from(raw: FloatDe) -> Self {
+        Float {
+            wrap: raw.wrap,
+            wrap_text: raw.wrap_text,
+            h_rel: raw.h_rel,
+            v_rel: raw.v_rel,
+            x: raw.x,
+            y: raw.y,
+            h_align: raw.h_align,
+            v_align: raw.v_align,
+            dist_left: raw.dist_left.or(raw.dist).unwrap_or(0.0),
+            dist_right: raw.dist_right.or(raw.dist).unwrap_or(0.0),
+            dist_top: raw.dist_top,
+            dist_bottom: raw.dist_bottom,
+            effect: raw.effect,
+            rot: raw.rot,
+            flip_h: raw.flip_h,
+            flip_v: raw.flip_v,
+            wrap_polygon: raw.wrap_polygon,
+            alt: raw.alt,
+            hidden: raw.hidden,
+            outside_cell: raw.outside_cell,
+            z: raw.z,
+            page: raw.page,
+            bare_turn: raw.bare_turn,
+        }
+    }
 }
 
 /// Longest alternative text kept (characters): hostile files and commands are capped.
@@ -304,5 +371,49 @@ impl Float {
     /// The effect extents, finite and clamped (left, top, right, bottom).
     pub fn effect_extent(&self) -> [f32; 4] {
         self.effect.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Float, Wrap};
+
+    /// Verifies legacy `"dist"`, mixed legacy/new, and empty JSON payloads deserialize into
+    /// separate `dist_left` and `dist_right` fields.
+    ///
+    /// Mixed payloads must let an explicit zero on either new side override `"dist"` rather than
+    /// falling back to the legacy horizontal distance.
+    #[test]
+    fn legacy_dist_deserializes_to_both_horizontal_sides() {
+        let legacy: Float = serde_json::from_str(r#"{"dist":9.0,"distTop":2.5,"distBottom":4.0}"#).expect("legacy float");
+        assert_eq!((legacy.dist_left, legacy.dist_right, legacy.dist_top, legacy.dist_bottom), (9.0, 9.0, 2.5, 4.0));
+
+        let mixed_right: Float = serde_json::from_str(r#"{"dist":9.0,"distRight":0.0}"#).expect("mixed right float");
+        assert_eq!((mixed_right.dist_left, mixed_right.dist_right), (9.0, 0.0));
+
+        let mixed_left: Float = serde_json::from_str(r#"{"dist":9.0,"distLeft":0.0}"#).expect("mixed left float");
+        assert_eq!((mixed_left.dist_left, mixed_left.dist_right), (0.0, 9.0));
+
+        let empty: Float = serde_json::from_str("{}").expect("empty float");
+        assert_eq!(empty, Float::default());
+        assert_eq!((empty.dist_left, empty.dist_right, empty.dist_top, empty.dist_bottom), (0.0, 0.0, 0.0, 0.0));
+    }
+
+    /// Verifies asymmetric and one-side-zero `Float` distances round-trip through JSON using only
+    /// `"distLeft"` and `"distRight"`.
+    ///
+    /// Serialization must emit both new keys even when one side is `0.0` and must never emit the
+    /// retired `"dist"` key.
+    #[test]
+    fn separate_horizontal_distances_round_trip_json() {
+        for (dl, dr, dt, db) in [(12.0, 7.0, 8.0, 5.0), (12.0, 0.0, 8.0, 5.0)] {
+            let orig = Float { wrap: Wrap::Square, dist_left: dl, dist_right: dr, dist_top: dt, dist_bottom: db, ..Float::default() };
+            let json = serde_json::to_string(&orig).expect("serialize float");
+            assert!(json.contains("\"distLeft\":"), "{json}");
+            assert!(json.contains("\"distRight\":"), "{json}");
+            assert!(!json.contains("\"dist\":"), "{json}");
+            let back: Float = serde_json::from_str(&json).expect("deserialize float");
+            assert_eq!(back, orig, "{json}");
+        }
     }
 }

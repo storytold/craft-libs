@@ -36,7 +36,13 @@ fn a_paragraph_anchored_frame_floats_with_text_around_it() {
     assert_eq!((f.wrap, f.wrap_text), (Wrap::Square, WrapText::BothSides));
     assert_eq!((f.h_rel, f.h_align), (Anchor::Paragraph, Some(FloatAlign::End)));
     assert_eq!((f.v_rel, f.v_align), (Anchor::Paragraph, Some(FloatAlign::Start)));
-    assert!((f.dist - 7.2).abs() < 0.01 && (f.dist_top - 3.6).abs() < 0.01, "{f:?}");
+    assert!(
+        (f.dist_left - 7.2).abs() < 0.01
+            && (f.dist_right - 7.2).abs() < 0.01
+            && (f.dist_top - 3.6).abs() < 0.01
+            && (f.dist_bottom - 3.6).abs() < 0.01,
+        "{f:?}"
+    );
 }
 
 #[test]
@@ -194,14 +200,55 @@ fn floating_pictures_round_trip() {
             (b.wrap, b.wrap_text, b.h_rel, b.v_rel, b.h_align, b.v_align),
             "{graphic}"
         );
-        assert!((a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01 && (a.dist - b.dist).abs() < 0.01, "{graphic}: {a:?} {b:?}");
+        assert!(
+            (a.x - b.x).abs() < 0.01
+                && (a.y - b.y).abs() < 0.01
+                && (a.dist_left - b.dist_left).abs() < 0.01
+                && (a.dist_right - b.dist_right).abs() < 0.01,
+            "{graphic}: {a:?} {b:?}"
+        );
+    }
+}
+
+/// Verifies that asymmetric and one-side-zero horizontal wrap margins survive ODT import and
+/// export without collapsing left and right to their maximum.
+///
+/// Checks both `export` and `export_model` (kept markup cleared) so both unmodified round-trip
+/// and `frame_of` serialization emit separate `fo:margin-left` and `fo:margin-right` values.
+#[test]
+fn asymmetric_wrap_margins_round_trip() {
+    for (graphic, want) in [
+        (r#"style:wrap="parallel" fo:margin-left="12pt" fo:margin-right="7pt" fo:margin-top="8pt" fo:margin-bottom="5pt""#, (12.0, 7.0, 8.0, 5.0)),
+        (r#"style:wrap="parallel" fo:margin-left="0pt" fo:margin-right="12pt" fo:margin-top="8pt" fo:margin-bottom="5pt""#, (0.0, 12.0, 8.0, 5.0)),
+    ] {
+        let d = open(graphic, r#"text:anchor-type="paragraph""#);
+        let f = float(&d);
+        assert_eq!((f.dist_left, f.dist_right, f.dist_top, f.dist_bottom), want, "read: {graphic}");
+        let back = float(&import(&export(&d).unwrap()).unwrap());
+        assert_eq!((back.dist_left, back.dist_right, back.dist_top, back.dist_bottom), want, "export: {graphic}");
+        let model_bytes = crate::text::tests::export_model(&d).unwrap();
+        let xml = crate::text::tests::content_of(&model_bytes);
+        let expected_attrs =
+            format!(r#"fo:margin-left="{}pt" fo:margin-right="{}pt" fo:margin-top="{}pt" fo:margin-bottom="{}pt""#, want.0, want.1, want.2, want.3);
+        assert!(xml.contains(&expected_attrs), "missing {expected_attrs} in {xml}");
+        let model_back = float(&import(&model_bytes).unwrap());
+        assert_eq!((model_back.dist_left, model_back.dist_right, model_back.dist_top, model_back.dist_bottom), want, "export_model: {graphic}");
     }
 }
 
 #[test]
 fn hostile_frame_positions_are_clamped() {
     let f = float(&open(r#"style:wrap="parallel" fo:margin-left="1e30in""#, r#"text:anchor-type="paragraph" svg:x="-1e30in" svg:y="NaNin""#));
-    assert!(f.x.is_finite() && f.x.abs() <= 1584.0 && f.y.is_finite() && f.dist.is_finite() && f.dist <= 1584.0, "{f:?}");
+    assert!(
+        f.x.is_finite()
+            && f.x.abs() <= 1584.0
+            && f.y.is_finite()
+            && f.dist_left.is_finite()
+            && f.dist_left <= 1584.0
+            && f.dist_right.is_finite()
+            && f.dist_right == 0.0,
+        "{f:?}"
+    );
 }
 
 #[test]
