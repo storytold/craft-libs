@@ -295,8 +295,12 @@ impl Component for Button<'_> {
     type Style = ButtonStyle;
     type Output = ButtonOutput;
 
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
+
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
-        let cx = &super::pushed(cx);
+        let cx = &super::placed(cx);
         let mut style = match key.tint {
             Some(tint) => ButtonStyle::tinted(cx, tint),
             None => ButtonStyle::of(cx),

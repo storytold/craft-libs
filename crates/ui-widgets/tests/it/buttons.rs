@@ -469,8 +469,8 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
 }
 
 /// Under an app's `PushButtonLook::Filled` a push or split button that asks for no variant draws the filled tile: a fill
-/// apart from the outline's clear rest, no edge at rest and one under the pointer. A variant it asks for stays, and a
-/// ribbon keeps its flat look.
+/// apart from the outline's clear rest, no edge at rest and one under the pointer. A variant it asks for stays, the
+/// outline included, and a ribbon keeps its flat look.
 #[trial]
 fn an_apps_filled_look_fills_its_default_push_buttons() {
     let filled = |ui: &mut Ui, show: &dyn Fn(&mut Ui)| {
@@ -509,6 +509,12 @@ fn an_apps_filled_look_fills_its_default_push_buttons() {
     let (ghost, _) = seen(button, "Cancel", |ui| {
         let _ = Button::new("Cancel").variant(Variant::GHOST).show(ui);
     });
+    let (asked, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").variant(Variant::SECONDARY).show(ui);
+        })
+    });
+    assert_eq!(asked, outline, "a button that asks for the outline keeps it");
     let (tile, outline) = (tile.expect("a filled button has a surface"), outline.expect("a button has a surface"));
     assert_ne!(tile.fill.off.rest, outline.fill.off.rest, "a filled button rests on a fill of its own");
     let edge = tile.border.as_ref().expect("a filled button is edged by state").off;

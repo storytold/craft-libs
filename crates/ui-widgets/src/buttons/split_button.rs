@@ -161,8 +161,12 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     type Style = SplitButtonStyle;
     type Output = SplitOutput<T>;
 
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
+
     fn style(cx: &StyleCx<'_>, key: SplitButtonStyleKey<T>) -> SplitButtonStyle {
-        let cx = &super::pushed(cx);
+        let cx = &super::placed(cx);
         let parts = cx.variant_look();
         let metrics = face::metrics_of(cx, &parts, key.arrangement);
         let mut surface = face::surface(cx, &parts);
