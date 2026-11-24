@@ -14,6 +14,9 @@
 //! An LFO, an envelope follower (5 ms attack, 100 ms release) or a sample-and-hold source moves the
 //! frequency by up to two octaves either way at 100 % depth. The envelope follower moves it up
 //! only.
+//!
+//! The bitcrusher (`bitcrusher`) takes one input sample every `rate_divide` samples, holds it until
+//! the next one, and rounds it to a word length of 1 to 16 bits.
 
 use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tail};
 use crate::{AudioEffect, ParamSpec, ParamValues, Smoothed, Unit, block_len, flush32, param_plumbing};
@@ -214,6 +217,97 @@ impl AudioEffect for RingMod {
     }
 }
 
+/// Bit-depth and sample-rate reduction. The input is sampled once every `rate_divide` samples and
+/// held in between; a fractional value alternates between the two nearest whole hold lengths, so
+/// the holds average it. Each held sample is rounded to the nearest multiple of the step
+/// `2^(1 - bits)`, so silence stays silence and the range -1 ..= 1 takes `2^bits + 1` levels;
+/// fractional bits give steps between the whole-bit ones. Bits and Rate Divide take effect from
+/// the next sample, and a shorter hold cuts the one in progress short. Mix moves to a new value
+/// over 20 ms.
+pub struct Bitcrusher {
+    pv: ParamValues,
+    held: Vec<f32>,
+    /// Samples since the last capture, counted so that a capture happens when it reaches the hold
+    /// length. Infinite after a reset, so the next sample is captured.
+    since: f64,
+    mix: Smoothed,
+}
+
+impl Bitcrusher {
+    pub const PARAMS: &'static [ParamSpec] = &[
+        ParamSpec::new("bits", "Bits", 1.0, 16.0, 8.0, Unit::None),
+        ParamSpec::new("rate_divide", "Rate Divide", 1.0, 50.0, 4.0, Unit::None),
+        ParamSpec::new("mix", "Mix", 0.0, 100.0, 100.0, Unit::Percent),
+    ];
+
+    pub fn new(sample_rate: f32, channels: usize) -> Self {
+        let sample_rate = crate::sane_sample_rate(sample_rate);
+        let ch = crate::sane_channels(channels);
+        let mut s = Bitcrusher {
+            pv: ParamValues::new(Self::PARAMS),
+            held: vec![0.0; ch],
+            since: f64::INFINITY,
+            mix: Smoothed::with_ms(1.0, sample_rate, SM),
+        };
+        s.apply_params(true);
+        s
+    }
+
+    fn apply_params(&mut self, snap: bool) {
+        self.mix.set(self.pv.v("mix") / 100.0);
+        if snap {
+            self.mix.snap();
+        }
+    }
+}
+
+impl AudioEffect for Bitcrusher {
+    param_plumbing!("bitcrusher");
+    /// A held sample lasts at most the hold length rounded up, so it sounds for up to that many
+    /// samples less one after the input ends.
+    fn tail_samples(&self) -> usize {
+        (self.pv.v("rate_divide").ceil() as usize).saturating_sub(1)
+    }
+    fn reset(&mut self) {
+        self.held.fill(0.0);
+        self.since = f64::INFINITY;
+        self.mix.snap();
+    }
+    fn process(&mut self, channels: &mut [&mut [f32]]) {
+        let n = block_len(channels);
+        let nch = channels.len().min(self.held.len());
+        let hold = f64::from(self.pv.v("rate_divide"));
+        // The rounding and the mix run in f64, so a finite input near the f32 limit stays finite.
+        let step = (1.0 - f64::from(self.pv.v("bits"))).exp2();
+        let limit = f64::from(f32::MAX);
+        for i in 0..n {
+            let capture = self.since >= hold;
+            if capture {
+                // On schedule, less than one sample is left over. More is left after a reset or
+                // after the hold got shorter; the new holds then count from this capture.
+                let left = self.since - hold;
+                self.since = if left < 1.0 { left } else { 0.0 };
+            }
+            self.since += 1.0;
+            let mix = f64::from(self.mix.tick());
+            for (ch, held) in self.held.iter_mut().enumerate() {
+                // A non-finite sample is taken as silence. A channel the block leaves out is fed
+                // silence, so it holds none of its earlier audio when it comes back.
+                let dry = match channels.get(ch).filter(|_| ch < nch) {
+                    Some(c) if c[i].is_finite() => f64::from(c[i]),
+                    _ => 0.0,
+                };
+                if capture {
+                    *held = ((dry / step).round() * step).clamp(-limit, limit) as f32;
+                }
+                if ch < nch {
+                    channels[ch][i] = (dry + mix * (f64::from(*held) - dry)) as f32;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +479,139 @@ mod tests {
             x[200] = f32::INFINITY;
             r.process(&mut [&mut x]);
             assert!(x.iter().all(|v| v.is_finite()), "effect {effect}");
+        }
+    }
+
+    fn crush(params: &[(&str, f32)], channels: usize) -> Bitcrusher {
+        let mut c = Bitcrusher::new(SR, channels);
+        for (id, v) in params {
+            assert!(c.set_param(id, *v), "{id}");
+        }
+        c.reset();
+        c
+    }
+
+    /// Indices of the samples where the output changes, with the first sample counted.
+    fn changes(x: &[f32]) -> Vec<usize> {
+        (0..x.len()).filter(|&i| i == 0 || x[i] != x[i - 1]).collect()
+    }
+
+    /// Every output sample is the multiple of `2^(1 - bits)` nearest the input, and silence stays
+    /// silence.
+    #[test]
+    fn bitcrusher_rounds_to_the_word_length() {
+        for (bits, step) in [(1.0, 1.0f32), (3.0, 0.25), (5.5, 2f32.powf(-4.5))] {
+            let mut c = crush(&[("bits", bits), ("rate_divide", 1.0)], 1);
+            let x: Vec<f32> = (0..2000).map(|i| -1.0 + i as f32 / 1000.0).collect();
+            let mut y = x.clone();
+            c.process(&mut [&mut y]);
+            for (a, b) in x.iter().zip(&y) {
+                let k = b / step;
+                assert!((k - k.round()).abs() < 1e-3, "bits {bits}: {b} is not a multiple of {step}");
+                assert!((a - b).abs() <= step / 2.0 + 1e-6, "bits {bits}: {a} became {b}");
+            }
+            let mut z = vec![0.0f32; 480];
+            c.process(&mut [&mut z]);
+            assert!(z.iter().all(|v| *v == 0.0), "bits {bits}");
+        }
+    }
+
+    /// The input is taken once every `rate_divide` samples and held: a whole value holds each
+    /// sample for exactly that many samples, and 2.5 alternates holds of 3 and 2.
+    #[test]
+    fn bitcrusher_holds_each_sample_for_the_rate_divide() {
+        let x: Vec<f32> = (0..200).map(|i| (i + 1) as f32 / 1024.0).collect();
+        for (divide, want) in [(1.0, vec![1usize]), (5.0, vec![5]), (2.5, vec![3, 2])] {
+            let mut c = crush(&[("bits", 16.0), ("rate_divide", divide)], 1);
+            let mut y = x.clone();
+            c.process(&mut [&mut y]);
+            let at = changes(&y);
+            for (k, w) in at.windows(2).enumerate() {
+                assert_eq!(w[1] - w[0], want[k % want.len()], "divide {divide}: hold {k}");
+            }
+            assert!(at.iter().all(|&i| y[i] == x[i]), "divide {divide}: a hold does not start with the input");
+        }
+    }
+
+    /// A shorter rate divide cuts the hold in progress short, and the holds after it have the new
+    /// length from the first one on.
+    #[test]
+    fn bitcrusher_follows_a_shorter_hold_at_once() {
+        let mut c = crush(&[("bits", 16.0), ("rate_divide", 50.0)], 1);
+        let mut a: Vec<f32> = (0..10).map(|i| (i + 1) as f32 / 1024.0).collect();
+        c.process(&mut [&mut a]);
+        assert!(c.set_param("rate_divide", 2.0));
+        let mut b: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
+        c.process(&mut [&mut b]);
+        let at = changes(&b);
+        assert_eq!(at[0], 0);
+        assert!(at.windows(2).all(|w| w[1] - w[0] == 2), "holds after the change: {at:?}");
+    }
+
+    /// A held sample sounds for no longer than the tail reports after the input ends.
+    #[test]
+    fn bitcrusher_tail_covers_the_hold() {
+        for divide in [1.0, 4.0, 7.5, 50.0] {
+            let mut c = crush(&[("bits", 4.0), ("rate_divide", divide)], 1);
+            let tail = c.tail_samples();
+            let mut x = vec![0.0f32; 200];
+            x[0] = 0.5;
+            c.process(&mut [&mut x]);
+            let last = x.iter().rposition(|v| *v != 0.0).unwrap_or(0);
+            assert_eq!(last, tail, "divide {divide}");
+        }
+    }
+
+    /// A block that leaves a channel out feeds it silence, so the channel holds none of its earlier
+    /// audio when it comes back.
+    #[test]
+    fn bitcrusher_feeds_channels_a_block_leaves_out_silence() {
+        let p = [("bits", 6.0), ("rate_divide", 7.0)];
+        let (mut left_out, mut silent) = (crush(&p, 2), crush(&p, 2));
+        let x = sine(220.0, 0.5, SR as f64, 4801, 0.0);
+        for c in [&mut left_out, &mut silent] {
+            let (mut l, mut r) = (x.clone(), x.clone());
+            c.process(&mut [&mut l, &mut r]);
+        }
+        let mut l = x[..10].to_vec();
+        left_out.process(&mut [&mut l]);
+        let (mut l, mut r) = (x[..10].to_vec(), vec![0.0f32; 10]);
+        silent.process(&mut [&mut l, &mut r]);
+        let (mut la, mut ra) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+        left_out.process(&mut [&mut la, &mut ra]);
+        let (mut lb, mut rb) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+        silent.process(&mut [&mut lb, &mut rb]);
+        assert_eq!(ra, rb);
+        assert_eq!(la, lb);
+    }
+
+    /// At a mix of 0 the input passes through unchanged, and a non-finite sample comes out finite.
+    #[test]
+    fn bitcrusher_mix_zero_and_non_finite_input() {
+        let x = sine(220.0, 0.5, SR as f64, 4800, 0.0);
+        let mut c = crush(&[("mix", 0.0), ("bits", 2.0), ("rate_divide", 9.0)], 2);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        c.process(&mut [&mut l, &mut r]);
+        assert!(l == x && r == x);
+        let mut c = crush(&[("bits", 2.0), ("rate_divide", 3.0)], 1);
+        let mut y = x.clone();
+        y[99] = f32::NAN;
+        y[200] = f32::INFINITY;
+        c.process(&mut [&mut y]);
+        assert!(y.iter().all(|v| v.is_finite()));
+    }
+
+    /// Finite samples at the f32 limit, held while the input swings to the other limit, come out
+    /// finite at every mix.
+    #[test]
+    fn bitcrusher_keeps_samples_at_the_f32_limit_finite() {
+        for mix in [0.0, 50.0, 100.0] {
+            for bits in [1.0, 7.3, 16.0] {
+                let mut c = crush(&[("mix", mix), ("bits", bits), ("rate_divide", 3.0)], 1);
+                let mut y: Vec<f32> = (0..30).map(|i| if i % 2 == 0 { f32::MAX } else { -f32::MAX }).collect();
+                c.process(&mut [&mut y]);
+                assert!(y.iter().all(|v| v.is_finite()), "mix {mix}, bits {bits}: {y:?}");
+            }
         }
     }
 }

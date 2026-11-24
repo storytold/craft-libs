@@ -19,7 +19,8 @@ and contains no `unsafe` code.
   them in samples). The pitch shifter's Keep Formants switch adds the formant shifter's latency,
   and `latency()` reports it while the switch is on. A ring modulator for robotic and metallic
   voices (ring, frequency modulation, and positive or negative comb resonators, with the
-  frequency moved by an LFO, the input's level or a sample-and-hold source) adds no latency.
+  frequency moved by an LFO, the input's level or a sample-and-hold source) adds no latency, and
+  neither does a bitcrusher that takes one sample in every 1 to 50 and rounds it to 1 to 16 bits.
 - `loudness`: an ITU-R BS.1770-4 / EBU R128 meter with momentary, short-term and integrated
   loudness, loudness range (EBU Tech 3342), sample peak and true peak.
 - `pan`: stereo pan laws, a surround panner over any layout of up to 16 speakers, and first-order

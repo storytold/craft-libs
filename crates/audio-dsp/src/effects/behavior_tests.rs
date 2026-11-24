@@ -991,6 +991,7 @@ fn direct_constructors_cap_the_channel_count() {
         voice::VoiceFormant,
         suppress::NoiseSuppression,
         character::RingMod,
+        character::Bitcrusher,
     );
 }
 
