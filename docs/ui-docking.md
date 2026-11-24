@@ -105,6 +105,7 @@ The host handles these `DockEvent`s:
 | `panel_menu_always` | off | Every group shows its panel menu button, with the dock's own rows when the shown panel has none. Off: only a panel with rows of its own (`DockPanels::panel_rows`) gets the button. |
 | `panel_menu_icon` | `more` | The panel menu button's icon; `menu` gives the three-line mark. |
 | `native_windows` | on | Floating windows open as OS windows where the window host opens them and reports their positions (not on Wayland) and `PanelSpec::allow_native` allows. |
+| `flyout_layer` | `PopupLayer::AboveWindows` | Where docked columns' flyouts stand against the floating windows. `PopupLayer::BelowWindows` keeps a floating window in front of a docked flyout it overlaps: drawn over it and taking the presses there. The flyout still closes by its rules, and menus opened from it stand above everything. A floating window's own flyouts stand above it either way. |
 
 The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords` holds the words.
 

@@ -2,6 +2,8 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
+use craft_ui::buttons::Button;
+use craft_ui::contract::overlay::PopupLayer;
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
 use craft_ui::docking::{
@@ -419,6 +421,91 @@ fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses
     fixture.click(&alpha).settle();
     assert!(iconic(), "the icon of the panel in front collapses the column");
     assert!(!shown(&fixture, "Alpha body"), "and its panel no longer shows");
+}
+
+/// How tall the flyout of [`UnderWindow`]'s Alpha group measures.
+const FLYOUT_HEIGHT: f32 = 300.0;
+
+/// Panels for a docked flyout under a floating window: Alpha's group, in the flyout, is a view that measures
+/// [`FLYOUT_HEIGHT`] and records the rect it shows in; Beta, in the window, shows a button that counts its clicks.
+struct UnderWindow {
+    flyout: Rc<Cell<Option<Rect>>>,
+    clicks: Rc<Cell<u32>>,
+}
+
+impl DockPanels<u32> for UnderWindow {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if *panel == 11 {
+            self.clicks.set(self.clicks.get() + Button::new("Beta button").show(ui).clicks);
+        }
+    }
+
+    fn group_view(&mut self, panels: &[u32], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if !panels.contains(&10) {
+            return None;
+        }
+        Some(match at {
+            GroupAt::Measure(_) => FLYOUT_HEIGHT,
+            GroupAt::Show(rect) => {
+                self.flyout.set(Some(rect));
+                rect.height()
+            }
+        })
+    }
+}
+
+/// A start dock whose column, collapsed to icons, holds Alpha, beside the canvas, and a floating window holding Beta
+/// at `window`.
+fn flyout_dock(window: Option<Rect>) -> Arc<Workspace<u32>> {
+    let side = Column::new(vec![Group::new(vec![10], 0)]).with_iconic(true);
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.4), Node::dock(DockEdge::Start, vec![side]), Node::tabs(vec![1], 0));
+    let windows = window.map(|at| Floating::new(100, Column::new(vec![Group::new(vec![11], 0)]), at)).into_iter().collect();
+    Arc::new(Workspace::new(Layout::new(Some(root), windows)))
+}
+
+/// What shows where a floating window lies over part of Alpha's open flyout, with docked flyouts standing at `layer`:
+/// whether the layer on top there is the flyout's, whether it stands above the flyout's in egui's layer order, and how
+/// many clicks a click there gave the window's button.
+fn flyout_under_window(layer: PopupLayer) -> (bool, bool, u32) {
+    let workspace = Rc::new(RefCell::new(flyout_dock(None)));
+    let (flyout, clicks) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(0)));
+    let mut panels = UnderWindow { flyout: Rc::clone(&flyout), clicks: Rc::clone(&clicks) };
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Sides));
+    let mut fixture = Fixture::new(move |ui| {
+        let config = DockConfig::default().native_windows(false).flyout_layer(layer);
+        let shown = Bind::given(Arc::clone(&held.borrow()));
+        DockArea::new("Flyout dock", shown, &specs, &mut panels, config).flyout(Bind::given(Some(10))).show(ui);
+    });
+    fixture.room(Vec2::new(900.0, 600.0)).settle();
+    let open = flyout.get().expect("Alpha's flyout shows its group");
+    // The window covers the flyout's end two thirds from its top and reaches past its end edge.
+    let window = Rect::from_min_size(open.min + Vec2::new(open.width() / 3.0, 0.0), Vec2::new(open.width() + 100.0, 220.0));
+    *workspace.borrow_mut() = flyout_dock(Some(window));
+    fixture.settle();
+    let button = fixture.by_label("Beta button").expect("the floating window shows Beta's button").center();
+    assert!(open.contains(button), "the window's button lies over the flyout: {button:?} in {open:?}");
+    let alone = Pos2::new(open.left() + open.width() / 6.0, open.center().y);
+    let ctx = fixture.ctx().clone();
+    let flyout_layer = ctx.layer_id_at(alone).expect("the flyout is on top beside the window");
+    let top = ctx.layer_id_at(button).expect("a layer lies under the button");
+    let place = |layer: egui::LayerId| ctx.memory(|memory| memory.layer_ids().position(|listed| listed == layer));
+    let above = place(top) > place(flyout_layer);
+    fixture.click_at(button).settle();
+    (top == flyout_layer, above, clicks.get())
+}
+
+/// A docked column's open flyout stands above a floating window over it, as popups do: it is drawn over the window
+/// and takes the press there. With `DockConfig::flyout_layer(PopupLayer::BelowWindows)` the window stays in front: its
+/// layer lies above the flyout's and the press reaches its button.
+#[trial]
+fn a_floating_window_stays_above_a_docked_flyout_that_stands_below_the_windows() {
+    let (flyout_on_top, _, clicks) = flyout_under_window(PopupLayer::AboveWindows);
+    assert!(flyout_on_top, "by default the flyout is on top where it overlaps the window");
+    assert_eq!(clicks, 0, "and the press there does not reach the window");
+
+    let (flyout_on_top, window_above, clicks) = flyout_under_window(PopupLayer::BelowWindows);
+    assert!(!flyout_on_top && window_above, "below the windows, the window's layer lies above the flyout's");
+    assert_eq!(clicks, 1, "and the press where they overlap reaches the window's button");
 }
 
 #[derive(PlainData)]
