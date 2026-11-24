@@ -80,10 +80,16 @@ fn tc_div_large(p: f32, q: f32) -> f32 {
     return sign(p) * 1e30;
 }
 
+// 1 / 2 pi in single precision, split into two halves of 12 significant bits each
+const TC_INV_TAU_HIGH: f32 = 0.15911865234375;
+const TC_INV_TAU_LOW: f32 = 3.628432750701904e-5;
+
 fn tc_turn(x: f32) -> f32 {
-    let inv_tau = 0.15915494;
-    let near = x * inv_tau;
-    let residual = fma(x, inv_tau, -near);
+    let near = x * (TC_INV_TAU_HIGH + TC_INV_TAU_LOW);
+    // The rounding error of the product from half-width parts whose products are exact, so it does not depend on fused multiply-add
+    let x_high = bitcast<f32>(bitcast<u32>(x) & 0xfffff000u);
+    let x_low = x - x_high;
+    let residual = ((x_high * TC_INV_TAU_HIGH - near) + x_high * TC_INV_TAU_LOW + x_low * TC_INV_TAU_HIGH) + x_low * TC_INV_TAU_LOW;
     let rounded_away = (near > 0.0 && residual < 0.0) || (near < 0.0 && residual > 0.0);
     let t = select(near, bitcast<f32>(bitcast<u32>(near) - 1u), rounded_away);
     return (t - floor(t)) * 6.2831855;

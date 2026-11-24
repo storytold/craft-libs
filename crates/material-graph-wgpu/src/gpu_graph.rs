@@ -768,6 +768,36 @@ mod tests {
     }
 
     #[test]
+    fn turn_reduction_rounds_the_product_toward_zero_like_the_reference() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        let source = format!(
+            "{SHADER}\n@group(0) @binding(1) var<storage, read_write> turns: array<vec4f>;\n\
+             @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3u) {{\n\
+                 let x = parameters[id.x];\n\
+                 turns[id.x] = vec4f(tc_turn(x.x), tc_turn(x.y), tc_turn(x.z), tc_turn(x.w));\n\
+             }}"
+        );
+        // Phases from a tenth of a radian to beyond the point where a turn has no fraction left, both signs
+        let inputs = (0..4096)
+            .map(|i| {
+                let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+                sign * 10f32.powf(i as f32 / 512.0 - 1.0) * 1.000_123
+            })
+            .collect::<Vec<f32>>();
+
+        let bytes = gpu.run_compute(&source, bytemuck::cast_slice(&inputs), (inputs.len() * 4) as u64, (inputs.len() / 4) as u32);
+
+        let turns = bytemuck::cast_slice::<u8, f32>(&bytes);
+        for (&x, &turn) in inputs.iter().zip(turns) {
+            // The reference: x / 2 pi with the single-precision product rounded toward zero
+            let product = f64::from(x) * f64::from(std::f32::consts::FRAC_1_PI / 2.0);
+            let near = product as f32;
+            let t = if f64::from(near).abs() > product.abs() { if near > 0.0 { near.next_down() } else { near.next_up() } } else { near };
+            assert_eq!(turn, (t - t.floor()) * 6.283_185_5, "phase of {x:e}");
+        }
+    }
+
+    #[test]
     fn imported_pixel_program_binds_indexed_random_initializers() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let backend = gpu.accelerator();
