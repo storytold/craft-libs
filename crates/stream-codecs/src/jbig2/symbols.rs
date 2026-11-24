@@ -942,6 +942,10 @@ mod tests {
         let past = page(&data, columns).unwrap();
         assert!(plan(&past, columns, rows, 1, None, None).is_none() && plan(&past, columns, rows, 2, None, None).is_none());
         assert_eq!(encode_jbig2(&data, columns, rows).unwrap(), encode_jbig2_generic(&data, columns, rows).unwrap());
+        // Each picture below is another 65,536 marks coded and decoded: nightly only.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
         // With two of them repeated, the second plan codes those two.
         let (data, columns, rows) = codes(MAX_CODED_SYMBOLS + 1, 200);
         let past = page(&data, columns).unwrap();

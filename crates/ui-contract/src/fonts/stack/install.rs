@@ -2,29 +2,25 @@
 
 use std::sync::Arc;
 
-use egui::{Context, FontFamily, FontProvider};
+use egui::{Context, FontDefinitions, FontFamily, FontProvider};
 
 use super::{SEMIBOLD, Stack, SystemFonts};
 use crate::fonts::faces::{Installed, on_baseline};
 use crate::fonts::served::loader;
 use crate::fonts::system::installed_system_font_provider;
 use crate::fonts::system::ui_face::{self, SYSTEM_UI_REGULAR, SYSTEM_UI_SEMIBOLD, SystemUiFace};
-use crate::fonts::{FontRef, RegularWeight, load, system_font_provider};
+use crate::fonts::{FontRef, RegularWeight, load_with, system_font_provider};
 use crate::runtime::egui::fonts::{self as egui_fonts, GlyphProbe};
 use crate::runtime::egui::memory;
 
 /// Starts building the system font index for a context.
 type StartIndex = fn(&Context);
 
-/// What a context remembers of the stack installed in it.
+/// What a context remembers of the stack installed in it and of the font definitions it was given last.
 #[derive(Default)]
 struct State {
-    /// Whether the OS's interface face draws in the proportional family of that stack.
-    system_ui: bool,
-    /// Whether that stack has the semibold family.
-    semibold: bool,
-    /// The line height per point of text of the face that leads the proportional family, measured at install.
-    line_ratio: f32,
+    /// The facts of the definitions given last ([`record_facts`]).
+    facts: StackFacts,
     /// The provider that serves the stack's faces after the system fonts, swapped in place by every install.
     installed: Option<Arc<Installed>>,
     /// A stack installed before the OS face resolved, to install again with it.
@@ -35,21 +31,34 @@ struct State {
 /// height is negligible in the ratio.
 const LINE_PROBE_SIZE: f32 = 100.0;
 
-/// What text layout and control sizing read of the stack last installed in a context, read once per layout or pass.
+/// What text layout and control sizing read of the font definitions a context was given last ([`crate::fonts::load`],
+/// which a stack's install calls), read once per layout or pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct StackFacts {
     /// Whether the OS's interface face draws in the proportional family ([`craft_theme::InterfaceFont::System`], once
     /// the face resolved).
     pub system_ui: bool,
-    /// Whether the semibold family exists.
+    /// Whether the semibold family ([`SEMIBOLD`]) exists.
     pub semibold: bool,
     /// The line height per point of text of the face that leads the proportional family; 0 before a stack installs.
     pub line_ratio: f32,
 }
 
-/// The facts of the stack last installed in `ctx`.
+/// The facts of the font definitions `ctx` was given last.
 pub(crate) fn stack_facts(ctx: &Context) -> StackFacts {
-    memory::with::<State, _>(ctx, |state| StackFacts { system_ui: state.system_ui, semibold: state.semibold, line_ratio: state.line_ratio })
+    memory::with::<State, _>(ctx, |state| state.facts)
+}
+
+/// Records the facts of `definitions`, which `ctx` is given now: `providers` serve the characters their faces lack, to
+/// the probe that measures the line ratio.
+pub(in crate::fonts) fn record_facts(ctx: &Context, definitions: &FontDefinitions, providers: Vec<Arc<dyn FontProvider>>) {
+    let proportional = definitions.families.get(&FontFamily::Proportional).map(Vec::as_slice).unwrap_or_default();
+    let facts = StackFacts {
+        system_ui: proportional.iter().any(|name| name == SYSTEM_UI_REGULAR) && definitions.font_data.contains_key(SYSTEM_UI_REGULAR),
+        semibold: definitions.families.contains_key(&FontFamily::Name(SEMIBOLD.into())),
+        line_ratio: GlyphProbe::new(definitions.clone(), providers).row_height(&FontRef::proportional(), LINE_PROBE_SIZE) / LINE_PROBE_SIZE,
+    };
+    memory::with::<State, _>(ctx, |state| state.facts = facts);
 }
 
 /// Installs the stack kept for `ctx` once the OS face has resolved: the first pass after it resolves.
@@ -96,16 +105,10 @@ impl Stack {
 
     /// [`Self::install`] without fetching; `miss` is asked for characters no face has.
     pub(in crate::fonts) fn install_faces(&self, ctx: &Context, miss: Option<Arc<dyn FontProvider>>) {
-        load(ctx, self.checked_definitions());
-        let system_ui = self.has_system_ui();
-        let semibold = self.definitions.families.contains_key(&FontFamily::Name(SEMIBOLD.into()));
-        let line_ratio = self.probe(false).row_height(&FontRef::proportional(), LINE_PROBE_SIZE) / LINE_PROBE_SIZE;
+        load_with(ctx, self.checked_definitions(), self.providers(false));
         let (system, start_index) = self.context_lookup();
         let (installed, added, replaced) = memory::with::<State, _>(ctx, |state| {
             let replaced = state.pending.take();
-            state.system_ui = system_ui;
-            state.semibold = semibold;
-            state.line_ratio = line_ratio;
             state.pending = self.system_ui_pending.then(|| self.clone());
             match &state.installed {
                 Some(installed) => (Arc::clone(installed), false, replaced),
@@ -158,11 +161,6 @@ impl Stack {
             let cjk_faces = self.cjk_faces.clone();
             self.fit_into_rows(&cjk_faces);
         }
-    }
-
-    /// Whether the system face draws in the proportional family: its slot is there, with data.
-    fn has_system_ui(&self) -> bool {
-        self.chain_of(&FontFamily::Proportional).iter().any(|n| n == SYSTEM_UI_REGULAR) && self.definitions.font_data.contains_key(SYSTEM_UI_REGULAR)
     }
 
     /// A glyph probe over the stack, for coverage checks. `with_system` adds the system font

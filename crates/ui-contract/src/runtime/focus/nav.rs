@@ -262,7 +262,9 @@ impl State {
         let stop = &rec.stop;
         let roving = stop.group.is_some();
         let keys = stop.keys;
-        let escape = keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
+        // An app's own widget (`Stop::host`) reads its Escape from egui, as a stop that claims it does: egui keeps its
+        // focus on it.
+        let escape = stop.host || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
         let filter = egui_focus::filter(
             keys.keep == super::KeepKeys::Tab,
             roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),
@@ -891,6 +893,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
     state.record = super::FocusedRecord {
         claims: keys.map(|keys| keys.claims.to_vec()).unwrap_or_default(),
         focused: stop.as_ref().map(|stop| stop.id),
+        host: stop.as_ref().is_some_and(|stop| stop.host),
         root: stop.as_ref().filter(|stop| stop.root != stop.id && !stop.text).map(|stop| stop.root),
         menu: state.focused_menu_level(),
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),
