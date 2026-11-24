@@ -3,7 +3,7 @@
 
 use craft_keymap::Mods;
 use emath::Pos2;
-use kurbo::{Point, Rect};
+use kurbo::{Point, Rect, Vec2};
 
 /// The two corners of a marquee in document space, as dragged: not ordered, not rounded.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -169,6 +169,39 @@ impl MarqueeGesture {
     /// press or released since.
     pub fn square_and_centre(&self) -> (bool, bool) {
         (self.live.shift && (!self.at_press.shift || self.released_shift), self.live.alt && (!self.at_press.alt || self.released_alt))
+    }
+
+    /// Pixel bounds for a fixed ratio, fitted to the canvas from the current gesture anchor.
+    /// Call after `size_to` so a Space drag uses the translated anchor and pointer.
+    pub fn ratio_pixels(&self, width: f64, height: f64, size: [u32; 2]) -> Rect {
+        let [w, h] = size.map(f64::from);
+        let start = Point::new(self.start.x.clamp(0.0, w), self.start.y.clamp(0.0, h));
+        let delta = self.end - start;
+        let centre = self.square_and_centre().1;
+        let room = |origin: f64, extent: f64, direction: f64| {
+            if centre {
+                origin.min(extent - origin)
+            } else if direction < 0.0 {
+                origin
+            } else {
+                extent - origin
+            }
+        };
+        let scale =
+            (delta.x.abs() / width).max(delta.y.abs() / height).min(room(start.x, w, delta.x) / width).min(room(start.y, h, delta.y) / height);
+        let offset = Vec2::new((scale * width).copysign(delta.x), (scale * height).copysign(delta.y));
+        let clamp = |p: Point| Point::new(p.x.clamp(0.0, w), p.y.clamp(0.0, h));
+        let a = if centre { clamp(start - offset) } else { start };
+        let b = clamp(start + offset);
+        let r = marquee_pixels(a, b);
+        if width != height || r.width() == 0.0 || r.height() == 0.0 {
+            return r;
+        }
+        let square = square_pixels(r, a, b);
+        let side = square.width().min(w).min(h);
+        let x = square.x0.clamp(0.0, w - side);
+        let y = square.y0.clamp(0.0, h - side);
+        Rect::new(x, y, x + side, y + side)
     }
 
     /// Sizes the marquee to the pointer's document point `at` (the host's snap applied): with
