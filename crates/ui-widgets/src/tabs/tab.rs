@@ -393,7 +393,7 @@ impl Component for Tab<'_> {
         } else if text_only {
             line(role) + space.gap.tight + stroke.thick
         } else if key.large {
-            size.bar.title
+            size.bar.tab_large
         } else if key.kind == TabKind::Panel {
             size.panel_header
         } else {
