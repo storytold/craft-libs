@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::{ComponentStyle, StyleCx};
 use crate::text::{NumberField, RangeAlert};
-use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace};
+use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace, TrackPress};
 use craft_behavior::{Flow, Metrics, Mixed, Proposal, Sense, decimals_for_step};
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
@@ -77,11 +77,9 @@ pub struct SliderField<'a> {
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
-    /// Begin a genuine value gesture on the first primary track press and propose its landing in that same pass.
-    /// False preserves click/drag timing. Thumb presses and keyboard, wheel and editor behavior are unchanged.
+    /// When a press on the slider's track sets the value (`Slider::track_press`): on its release or drag by default.
     #[prop]
-    propose_on_primary_down: bool,
-
+    track_press: TrackPress,
     /// What the number counts: the field shows its unit and reads its spellings.
     #[prop]
     unit_kind: Option<UnitKind>,
@@ -156,7 +154,7 @@ impl<'a> SliderField<'a> {
             step: None,
             typed_decimals: None,
             wheel_step: None,
-            propose_on_primary_down: false,
+            track_press: TrackPress::OnRelease,
             unit_kind: None,
             unit: None,
             fill: true,
@@ -188,7 +186,7 @@ impl<'a> SliderField<'a> {
     /// What the children are built from, apart from the binding and the track face.
     fn look(&self) -> Look {
         Look {
-            propose_on_primary_down: self.propose_on_primary_down,
+            track_press: self.track_press,
             range: self.range.clone(),
             scale: self.scale,
             step: self.step,
@@ -217,7 +215,7 @@ enum FieldMarks {
 
 /// What a `SliderField` builds its two children from.
 struct Look {
-    propose_on_primary_down: bool,
+    track_press: TrackPress,
     range: RangeInclusive<f64>,
     scale: SliderScale,
     step: Option<f64>,
@@ -258,7 +256,7 @@ impl Look {
             bind = bind.check_with(check, BindCheck::validity);
         }
         let slider = Slider::new(bind, self.range.clone())
-            .propose_on_primary_down(self.propose_on_primary_down)
+            .track_press(self.track_press)
             .scale(self.scale)
             .fill(self.fill)
             .thumb(self.thumb)
@@ -415,9 +413,9 @@ impl Component for SliderField<'_> {
             SliderFieldLayout::Inline => ui.child("field", place(field), field_view),
         };
         self.out_of_range = typed.out_of_range.clone();
-        let slider = look.slider(&name, shown, Some(bind.check_of()), face);
-        // An inert composite must not arm a hidden first-Down gesture in its child for a later writable release.
-        let slider = if self.propose_on_primary_down { slider.read_only(cx.resolved.read_only) } else { slider };
+        // A read-only field's track is read-only too: no press on it edits the value, whatever `track_press` is, and an
+        // inert composite arms no first-Down gesture in its child for a later writable release.
+        let slider = look.slider(&name, shown, Some(bind.check_of()), face).read_only(cx.resolved.read_only);
         let dragged = ui.child("slider", place(track), slider);
         let start = *self.range.start();
         cx.adopt(&typed, &start, |value, mine| {

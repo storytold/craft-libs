@@ -554,3 +554,24 @@ fn a_live_wheel_commits_before_opted_track_down_and_the_fresh_press_keeps_draggi
         assert_eq!(rig.state.borrow().values[0], 0.6);
     }
 }
+
+/// A read-only `SliderField` keeps its value whatever its track press option: a click, a press held still and a drag on
+/// its track change nothing and report no edit. Before, only a field with the press option passed read-only to its
+/// slider, so a read-only field without it kept a writable track.
+#[trial]
+fn a_read_only_slider_field_ignores_track_presses_with_either_track_press_option() {
+    for policy in [None, Some(false), Some(true)] {
+        let mut rig = Rig::new(true, policy);
+        let geometry = rig.geometry(0);
+        rig.state.borrow_mut().read_only = true;
+        rig.fixture.settle();
+        rig.clear();
+        rig.fixture.click_at(geometry.at(0.8));
+        rig.fixture.settle();
+        rig.fixture.drag_hold_at(geometry.at(0.6), Vec2::new(40.0, 0.0));
+        rig.fixture.release_at(geometry.at(0.6) + Vec2::new(40.0, 0.0));
+        rig.fixture.settle();
+        assert_eq!(rig.state.borrow().values[0], START, "a read-only field keeps its value ({policy:?})");
+        assert!(rig.state.borrow().events.iter().all(Vec::is_empty), "and reports no edit ({policy:?})");
+    }
+}

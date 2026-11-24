@@ -85,10 +85,10 @@ pub struct Slider<'a> {
     /// moves along the track and ignores it.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
-    /// Begin a genuine value gesture on the first primary track press and propose its landing in that same pass.
-    /// False preserves click/drag timing. Thumb presses and keyboard, wheel and editor behavior are unchanged.
+    /// When a press on the track sets the value: on its release or drag (the default), or as the primary button goes
+    /// down. Presses on the thumb and keyboard, wheel and editor input do not change.
     #[prop]
-    propose_on_primary_down: bool,
+    track_press: TrackPress,
     /// The value as the caller words it ("50 %"), in place of the slider's own value text: the number in the step's
     /// decimals, or in one decimal without a step. Assistive technology reads it, and so does a viewer that
     /// shows the value beside the slider.
@@ -105,6 +105,19 @@ pub struct Slider<'a> {
     #[style_key]
     #[prop]
     short: bool,
+}
+
+/// When a press on a slider's track sets the value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrackPress {
+    /// The value jumps to the press when it ends as a click, or follows the pointer once the press starts a drag; a
+    /// press held still changes nothing yet.
+    #[default]
+    OnRelease,
+    /// The value lands where the primary button goes down, in the same pass, and a drag goes on from there: an
+    /// editor whose preview should answer the first touch. A double click still restores the reset value.
+    OnPress,
 }
 
 /// The shape of a slider's thumb.
@@ -135,7 +148,7 @@ impl<'a> Slider<'a> {
             thumb: SliderThumb::Round,
             marks: Marks::default(),
             wheel_step: None,
-            propose_on_primary_down: false,
+            track_press: TrackPress::OnRelease,
             value_text: None,
             track_face: None,
             trim: None,
@@ -235,7 +248,7 @@ impl Component for Slider<'_> {
             cx.part(track::GROOVE, self.face_rect(cx.style, along));
         }
         let sense = Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS;
-        let sense = if self.propose_on_primary_down { sense | Sense::SETS_ON_PRESS } else { sense };
+        let sense = if self.track_press == TrackPress::OnPress { sense | Sense::SETS_ON_PRESS } else { sense };
         cx.part(TRACK, along.area).sense(sense).value_part().pointer_only("the arrow keys step the value");
         cx.part(Self::THUMB, thumb)
             .sense(Sense::DRAG | Sense::TAKE_FOCUS)
@@ -268,7 +281,7 @@ impl Component for Slider<'_> {
         let press_at = |cx: &Cx<'_, Self>, x: f32| pick.press(&[along.x(scale.position(current(cx)))], x);
         // Multi-clicks keep the legacy track path: reset wins on Down, and a later drag
         // can still begin from the reset value through the existing DragStart handling.
-        let follow_track_on_down = self.propose_on_primary_down
+        let follow_track_on_down = self.track_press == TrackPress::OnPress
             && cx.part(TRACK).press.phase.start().is_none_or(|start| start.button != craft_behavior::PointerButton::Primary || start.clicks < 2);
         if follow_track_on_down {
             let press = cx.part(TRACK).press;
