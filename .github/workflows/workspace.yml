@@ -41,6 +41,7 @@ jobs:
       platform: ${{ steps.select.outputs.platform }}
       tests: ${{ steps.select.outputs.tests }}
       filter: ${{ steps.select.outputs.filter }}
+      profile: ${{ steps.profile.outputs.profile }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -59,6 +60,18 @@ jobs:
           select-os: '["windows-latest","macos-latest"]'
           select-tests: true
           label: full-ci
+      # The hash of the profile overrides every test build passes (scripts/ci-workspace-tests.sh),
+      # which names the Workspace legs' cache entries: rust-cache's key does not hash these files,
+      # and an entry built with other overrides would be rebuilt in full on every run. Other events
+      # than a pull request check out only these files.
+      - uses: actions/checkout@v7.0.1
+        if: github.event_name != 'pull_request'
+        with:
+          persist-credentials: false
+          sparse-checkout: .config/cargo-*.toml
+          sparse-checkout-cone-mode: false
+      - id: profile
+        run: echo "profile=$(cat .config/cargo-dev.toml .config/cargo-ci.toml | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
@@ -74,6 +87,7 @@ jobs:
     with:
       os: '["ubuntu-latest"]'
       cache-workspace-crates: true
+      cache-version: &cache-version v2-${{ needs.platforms.outputs.profile }}
       cold-build: ${{ github.event.schedule == '17 0 * * *' }}
       lint-cache: false
       # Vendored PDF/graphics backends are excluded from the workspace (Cargo.toml) and
@@ -124,23 +138,8 @@ jobs:
         fi
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      command: &command |
-        # The tests run once, with every feature, in parallel across test binaries; nextest skips
-        # doctests, so `cargo test --doc` runs them. Examples are not built, except the two whose
-        # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
-        # first clippy run; the last command runs the crates whose tests check behaviour with a
-        # feature off, which an all-features build cannot reach.
-        # Every build is the whole workspace's, as on main; the filter narrows only the run. The
-        # doctests run for the whole workspace: `cargo test -p <selected>` would resolve features
-        # over the selected crates only and rebuild the dependencies whose features differ.
-        if [ "$CRAFT_TESTS" = none ]; then
-          echo "No crate changed: no tests to run."
-          exit 0
-        fi
-        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
-        cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+      # Every test step: scripts/ci-workspace-tests.sh.
+      command: &command bash scripts/ci-workspace-tests.sh run
 
   # The macOS and Windows legs, with the Linux leg's inputs. They take 1.5-2 hours against the Linux
   # leg's 15-40 minutes, so a pull request does not wait for them: they run after the merge, on
@@ -154,6 +153,7 @@ jobs:
     with:
       os: '["windows-latest","macos-latest"]'
       lint-cache: false
+      cache-version: *cache-version
       timeout-minutes: *timeout
       tools: *tools
       craft-fonts-ref: *craft-fonts
@@ -171,16 +171,6 @@ jobs:
       cache-key-files: *cache-key-files
       lint-command: *lint
       command: *command
-      windows-command: |
-        if [ "$CRAFT_TESTS" = none ]; then
-          echo "No crate changed: no tests to run."
-          exit 0
-        fi
-        powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
-        cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
   # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
   # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
