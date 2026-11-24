@@ -249,3 +249,25 @@ fn xz_dictionary_overhead_indexes_and_terminal_alignment_remain_checked() {
     wrong_footer[start..start + 4].copy_from_slice(&check);
     assert!(matches!(source(&wrong_footer, None, Limits::default(), &|| true).read(), Err(Error::Invalid(_))));
 }
+
+#[test]
+fn xz_index_size_mismatch_is_rejected_even_with_a_valid_index_crc() {
+    let plain = image();
+    let valid = xz(&plain);
+    assert_eq!(&*source(&valid, None, Limits::default(), &|| true).read().unwrap(), plain);
+    // Both one-block Index sizes fit a single VLI byte in this original fixture.
+    let footer = valid.len() - 12;
+    let backward = u32::from_le_bytes(valid[footer + 4..footer + 8].try_into().unwrap()) as usize;
+    let index = footer - (backward + 1) * 4;
+    assert_eq!(&valid[index..index + 2], &[0, 1]);
+    assert!(valid[index + 2] < 127 && valid[index + 3] < 127);
+    for field in [2, 3] {
+        let mut damaged = valid.clone();
+        damaged[index + field] += 1;
+        let check = crc(&damaged[index..footer - 4]);
+        damaged[footer - 4..footer].copy_from_slice(&check);
+        let opened = source(&damaged, None, Limits { probe_bytes: MAGIC.len(), ..Limits::default() }, &|| true);
+        assert_eq!(opened.prefix(), MAGIC);
+        assert!(matches!(opened.read(), Err(Error::Invalid(_))));
+    }
+}

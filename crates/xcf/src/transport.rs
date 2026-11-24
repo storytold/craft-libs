@@ -57,9 +57,11 @@ impl Wrapper {
 /// Independent prefix, retained-output and decoder-memory bounds.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
-    /// Maximum complete decoded source, counting the prefix once.
+    /// Maximum assembled decoded source, counting the prefix once.
+    /// This does not cap a bzip2 decoder's separate decoded-block buffer.
     pub max_inflated: usize,
-    /// Maximum provisional prefix, including the XCF magic. No trailer guarantee.
+    /// Maximum returned provisional prefix, including the XCF magic. No trailer guarantee.
+    /// A short bzip2 probe can still decode and retain an entire block internally.
     pub probe_bytes: usize,
     /// Per-block XZ dictionary plus decoder overhead, in KiB.
     pub max_xz_memory_kib: u32,
@@ -113,7 +115,9 @@ impl Source<'_> {
 
 impl<'a> Source<'a> {
     /// Finish this decoder, verifying every member, trailer and admitted padding.
-    /// Plain input is borrowed; compressed input has one retained decoded buffer.
+    /// Plain input is borrowed; compressed output is assembled in one retained buffer.
+    /// The bzip2 decoder separately retains its current decoded block while this
+    /// output is assembled; `probe_bytes`/`max_inflated` do not bound that memory.
     pub fn read(mut self) -> Result<Cow<'a, [u8]>> {
         self.state.check()?;
         let Some(mut decoder) = self.decoder.take() else {

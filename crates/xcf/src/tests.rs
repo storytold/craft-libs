@@ -1181,3 +1181,35 @@ fn channel_names_are_charged_to_the_metadata_budget() {
     assert!(results[..32].iter().all(|r| *r == Ok(MAX_STRING - 1)), "32 copies fit the 32 MiB budget");
     assert!(results[32..].iter().all(|r| *r == Err(Error::Invalid("channel metadata exceeds the budget".into()))));
 }
+
+#[test]
+fn tiles_before_the_level_table_cannot_consume_its_dimensions() {
+    for complete in [false, true] {
+        let mut image = TestImage::rgb8(2, 1);
+        image.compression = Compression::None;
+        let mut file = W { out: image.write(), wide: true };
+        let hierarchy = file.out.len();
+        for value in [2, 1, 4] {
+            file.u32(value);
+        }
+        let level_slot = file.slot();
+        let pixels_at = file.out.len();
+        file.out.extend([22, 44, 66, 255]);
+        if complete {
+            file.out.extend([88, 110, 132, 255]);
+        }
+        let level = file.out.len();
+        file.patch(level_slot, level);
+        file.u32(2);
+        file.u32(1);
+        file.ptr(pixels_at);
+        file.ptr(0);
+        let xcf = open(&file.out).unwrap();
+        let result = xcf.hierarchy(hierarchy, 4, false, &mut 32, GO);
+        if complete {
+            assert_eq!(result.unwrap().data, [22_u8, 44, 66, 255, 88, 110, 132, 255].map(|v| f32::from(v) / 255.0));
+        } else {
+            assert!(result.is_err(), "level width bytes cannot become the second pixel");
+        }
+    }
+}

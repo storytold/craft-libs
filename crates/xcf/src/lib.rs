@@ -754,7 +754,9 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            let end = tiles.get(i + 1).copied().unwrap_or(self.c.b.len());
+            // A tile may precede its level table, but must not decode table bytes.
+            let boundary = if at < lptr { lptr } else { self.c.b.len() };
+            let end = tiles.get(i + 1).copied().unwrap_or(boundary).min(boundary);
             let input = self.c.b.get(at..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
