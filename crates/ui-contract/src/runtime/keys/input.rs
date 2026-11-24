@@ -639,6 +639,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             stage.keyed = false;
             stage.stirred = false;
             stage.textless_paste = false;
+            stage.fired_before.clone_from(&stage.fired_down);
         });
         return (removed || trimmed, Vec::new());
     }
@@ -697,6 +698,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.keyed = false;
         stage.stirred = false;
         stage.textless_paste = false;
+        stage.fired_before.clone_from(&stage.fired_down);
         let mut place = 0;
         let ime_presses = std::mem::take(&mut stage.ime_presses);
         let press_next: Vec<bool> = (0..events.len())
@@ -739,6 +741,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
+            note_fired_up(&mut stage.fired_down, &mut stage.fired_before, &read);
+            if batch.focus_lost {
+                // The releases of the keys held now go to another window.
+                stage.fired_down.clear();
+            }
             let arrival = Arrival {
                 at: arrived.at,
                 ime_next: ime_presses.contains(&arrived.event),
@@ -819,6 +826,21 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
         }
         KeyEvent::Release { input } => down.retain(|key| Some(*key) != input.physical.or(input.typed)),
         KeyEvent::RightAlt(false) => down.clear(),
+        _ => {}
+    }
+}
+
+/// Ends the hold of a key a command fired for (`Stage::fired_down`) at any release of the key, whatever has focus, and
+/// at a press of it that is no repeat, as the release of the earlier press went to another window: the next release
+/// of that key is no command's. Such a press ends it for this pass's events too (`Stage::fired_before`).
+fn note_fired_up(fired_down: &mut Vec<Key>, fired_before: &mut Vec<Key>, event: &KeyEvent) {
+    match event {
+        KeyEvent::Press { input, repeat: false, .. } => {
+            let pressed = input.physical.or(input.typed);
+            fired_down.retain(|key| Some(*key) != pressed);
+            fired_before.retain(|key| Some(*key) != pressed);
+        }
+        KeyEvent::Release { input } => fired_down.retain(|key| Some(*key) != input.physical.or(input.typed)),
         _ => {}
     }
 }

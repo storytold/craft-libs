@@ -1506,6 +1506,50 @@ fn a_held_key_a_command_fired_for_in_a_native_float_forwards_none_of_its_repeats
     }
 }
 
+/// The hold of a key a command fired for in a native float's own OS window ends at the key's release wherever it lands:
+/// released in the main window, it leaves the float's next press and release of that key (with Shift, which no command
+/// is bound to) forwarded, as they are no command's.
+#[trial]
+fn a_key_a_command_fired_for_in_a_native_float_and_released_elsewhere_forwards_its_next_press_and_release() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let binding = Binding::parse("F1").expect("the trial's chord parses");
+    let help = CommandDef::new("nativeKeysTrial.help", "Help", Scope::app()).with_default(binding);
+    let catalog = AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid");
+    windows.commands(CommandInput::new().catalog(catalog));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+    let mut frame = |root: Vec<Event>, child: Vec<Event>| {
+        let mut forwarded = Vec::new();
+        windows.frame(root, child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
+                .show(ui)
+                .forwarded_events;
+        });
+        let fired = take_output(&windows.ctx).fired.len();
+        // The key and whether it went down: egui may still count the key down in the float, and read its next press as
+        // a repeat.
+        let keys: Vec<(Key, bool)> =
+            forwarded.iter().filter_map(|event| if let Event::Key { key, pressed, .. } = event { Some((*key, *pressed)) } else { None }).collect();
+        (keys, fired)
+    };
+    for _ in 0..5 {
+        frame(vec![], vec![]);
+    }
+    take_output(&windows.ctx);
+
+    let none: Vec<(Key, bool)> = Vec::new();
+    assert_eq!(frame(vec![], vec![key_press(Key::F1, Modifiers::NONE)]), (none.clone(), 1), "the command fires, and its press is its own");
+    frame(vec![key_release(Key::F1, Modifiers::NONE)], vec![]);
+    assert_eq!(
+        frame(vec![], vec![key_press(Key::F1, Modifiers::SHIFT)]),
+        (vec![(Key::F1, true)], 0),
+        "the release in the main window ended the hold: the next press of the key is forwarded"
+    );
+    assert_eq!(frame(vec![], vec![key_release(Key::F1, Modifiers::SHIFT)]), (vec![(Key::F1, false)], 0), "and so is its release");
+}
+
 /// A clipboard chord no command takes in a native float's own OS window is forwarded as its clipboard event in its place
 /// among the window's other leftover events: a Paste and a typed text in one pass are forwarded in the order they
 /// arrived, whichever comes first.

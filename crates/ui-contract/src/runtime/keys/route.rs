@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, with};
+use super::{Batch, EscapePress, Item, LeftClip, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, with};
 use crate::runtime::commands::{self, ClipContent, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind, Leftover, leftover};
 use crate::runtime::focus::{self, StopRec};
@@ -555,7 +555,9 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
 /// command for it (`note_fired`) or for the press of a key still held, whose auto-repeats are the command's too, whether
 /// or not they fire it again. A press the dispatcher declined is left over, and so are its repeats that fire nothing. Call
 /// it once the viewport's content has run, for a host that runs its own shortcuts on the input of a window the
-/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only.
+/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only. The release of
+/// a key a command took is the command's only while that press holds it: the hold ends at any release of the key,
+/// wherever focus is, so the next press and release of the key are left over.
 ///
 /// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
 /// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image). Empty while a component has focus, as that component owns the keys then.
@@ -567,12 +569,14 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
         return Vec::new();
     }
     let platform = craft_keymap::egui::platform(ctx);
+    // The keys whose press a command took in an earlier pass and that are still held as this pass's events begin. The
+    // key stage keeps the hold itself (`note_fired_up`), so this reads it and leaves it as it is.
     let (fired, clips, passed, mut down) =
-        current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), stage.passed.clone(), std::mem::take(&mut stage.fired_down)));
+        current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), stage.passed.clone(), stage.fired_before.clone()));
     let key_of = |input: &KeyInput| input.physical.or(input.typed);
     let same = |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) && input.mods == other.mods;
-    // The clipboard events whose press no command took, in the order they arrived.
-    let mut clips = clips.into_iter().filter(|clip| !fired.iter().any(|(fired, by_repeat)| !by_repeat && same(fired, &clip.input))).peekable();
+    let took = |input: &KeyInput| fired.iter().any(|(fired, by_repeat)| !by_repeat && same(fired, input));
+    let mut clips = clips.into_iter().peekable();
     let events = ctx.input(|input| input.events.clone());
     let mut left = Vec::with_capacity(events.len());
     // The place in `passed` after the last event found there.
@@ -588,12 +592,16 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
             None => from,
         };
         while let Some(clip) = clips.next_if(|clip| clip.at <= place) {
-            left.push(clip.event);
+            leave_clip(clip, &took, &mut down, &mut left);
         }
         match leftover(&event) {
             Leftover::Key { pressed, repeat } => {
                 let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
                 if pressed && fired.iter().any(|(fired, by_repeat)| *by_repeat == repeat && same(fired, &input)) {
+                    // A press a command took holds its key until its release.
+                    if let Some(key) = key_of(&input).filter(|key| !repeat && !down.contains(key)) {
+                        down.push(key);
+                    }
                     continue;
                 }
                 // A later pass's repeat of a key a command took at its press is the command's whether or not the repeat
@@ -611,12 +619,20 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
             Leftover::Other => {}
         }
     }
-    left.extend(clips.map(|clip| clip.event));
-    current(ctx, |stage| {
-        // What this pass did not release stays down for a later pass's release.
-        stage.fired_down = down;
-    });
+    for clip in clips {
+        leave_clip(clip, &took, &mut down, &mut left);
+    }
     left
+}
+
+/// Puts `clip` in `left` in [`unclaimed`] when no command took the press it stands for (`took`); a press a command
+/// took holds its key in `down` until its release, as a key's own press does.
+fn leave_clip(clip: LeftClip, took: impl Fn(&KeyInput) -> bool, down: &mut Vec<Key>, left: &mut Vec<Event>) {
+    if !took(&clip.input) {
+        left.push(clip.event);
+    } else if let Some(key) = clip.input.physical.or(clip.input.typed).filter(|key| !down.contains(key)) {
+        down.push(key);
+    }
 }
 
 /// Asks the focused component of the running viewport to take `command` as `Intent::Edit` in the next pass.

@@ -350,8 +350,13 @@ pub(crate) struct Stage {
     /// The presses the shortcut dispatcher fired a command for in this pass (`note_fired`), each `true` when the command
     /// fired for an auto-repeat.
     fired: Vec<(KeyInput, bool)>,
-    /// The keys whose press a command fired and whose release has not come yet: the release is the command's too.
+    /// The keys whose press a command fired and whose release has not come yet: the release is the command's too. The
+    /// key stage drops a key at any release of it, whatever has focus, at a press of it that is no repeat (the earlier
+    /// release went to another window) and when the window loses focus.
     fired_down: Vec<Key>,
+    /// The keys of `fired_down` held over from earlier passes, as `unclaimed` reads this pass's events by them:
+    /// `fired_down` before this pass's events, less each key pressed again (no repeat) in this pass.
+    fired_before: Vec<Key>,
     /// The paste the focused component reads through its clipboard handle.
     pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.
