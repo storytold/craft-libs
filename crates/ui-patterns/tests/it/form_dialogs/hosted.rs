@@ -386,19 +386,19 @@ fn export_as_keeps_scale_all_within_its_limits_and_enter_in_a_field_only_commits
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host);
     host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
-    fixture.idle(10);
+    fixture.settle();
     let options = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<HostedExportAs>().map(|dialog| dialog.options().clone()).expect("open");
 
     let scale = fixture.by_label("Scale").expect("the Scale field");
-    fixture.click(&scale).idle(2);
+    fixture.click(&scale).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text("50");
-    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
     assert!(host.borrow().is_open::<HostedExportAs>(), "Enter in the Scale field leaves the dialog open");
     assert_eq!(options(&host).output_size(PICTURE), PixelSize::new(800, 450), "Enter commits the field");
 
     for _ in 1..ScaleRow::MAX_ROWS {
         let add = fixture.by_label("Add a size").expect("the + button");
-        fixture.click(&add).idle(4);
+        fixture.click(&add).settle();
     }
     let rows = options(&host).scale_rows();
     assert_eq!(rows.len(), ScaleRow::MAX_ROWS, "+ adds rows up to the limit");
@@ -409,9 +409,9 @@ fn export_as_keeps_scale_all_within_its_limits_and_enter_in_a_field_only_commits
     assert!(fixture.tree().is_disabled_key(add.node), "+ is disabled at the limit");
 
     let suffix = fixture.by_label("Suffix 2").expect("the second row's suffix");
-    fixture.click(&suffix).idle(2);
+    fixture.click(&suffix).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text(&"s".repeat(ScaleRow::MAX_SUFFIX + 10));
-    fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
     assert_eq!(options(&host).scale_rows()[1].suffix.chars().count(), ScaleRow::MAX_SUFFIX, "a suffix is cut at its limit");
 }
 

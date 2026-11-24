@@ -173,8 +173,9 @@ impl<'a> MenuBarUi<'a> {
 
 /// The bar's view: the titles through [`craft_ui::menu::MenuBar`], each menu's rows as command rows.
 fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
-    let rows = Rows::new(props.target).preferred(props.preferred).icons(props.icons).compact(props.compact);
     let env = Env::of(ui);
+    let cjk = crate::context::cjk(&env);
+    let rows = Rows::new(props.target).cjk(cjk).preferred(props.preferred).icons(props.icons).compact(props.compact);
     let os = env.view().shell().os;
     // The text of every menu is worked out once for these inputs and kept: a pass that shows an open menu again writes none of it.
     let key = LabelKey {
@@ -182,6 +183,7 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
         target: props.target,
         os,
         preferred: props.preferred,
+        cjk,
         words: &env.words,
         keymap: craft_ui::runtime::commands::keymap_generation(ui.ctx()),
     };
@@ -198,7 +200,11 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
         .map(|((menu, title), level)| {
             // The commands the title holds, for the palette's callout; a built-in has no command of the app.
             let held = menu.children.iter().flat_map(node_commands).filter(|command| Builtin::of(command).is_none()).collect();
-            MenuTitle::new(title.clone(), move |ui| shared.show(ui, &menu.children, level)).holds(held)
+            let row = MenuTitle::new(title.label.clone(), move |ui| shared.show(ui, &menu.children, level)).holds(held);
+            match title.hidden {
+                Some(letter) => row.mnemonic(letter),
+                None => row,
+            }
         })
         .collect();
     // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
@@ -213,13 +219,14 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
 }
 
 /// What the kept text of a bar is made of: the model, the platform that names its shortcuts, the preferred mnemonics,
-/// the language and the keymap. The English names are part of the model.
+/// the language (its words, and whether it is CJK) and the keymap. The English names are part of the model.
 #[derive(MemoProps)]
 struct LabelKey<'a> {
     bar: &'a Tracked<MenuBar>,
     target: Target,
     os: Os,
     preferred: &'a [(&'a str, char)],
+    cjk: bool,
     words: &'a Words,
     keymap: u64,
 }

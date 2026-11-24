@@ -348,8 +348,24 @@ impl<'a> Menu<'a> {
     /// [`submenu_row`](Menu::submenu_row) with `enabled`: a row with it false draws disabled and does not open (a
     /// submenu none of whose rows can run).
     pub fn submenu_row_enabled(ui: &mut Ui, label: impl Into<Label>, enabled: bool, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> MenuItemOutput {
+        Menu::submenu_row_lettered(ui, label, enabled, None, body)
+    }
+
+    /// [`submenu_row_enabled`](Menu::submenu_row_enabled) whose row takes `mnemonic` in place of the level's pick
+    /// ([`MenuItem::mnemonic`]).
+    pub fn submenu_row_lettered(
+        ui: &mut Ui,
+        label: impl Into<Label>,
+        enabled: bool,
+        mnemonic: Option<char>,
+        body: impl FnMut(&mut Ui, &mut BodyCx<'_>),
+    ) -> MenuItemOutput {
         let label = label.into();
-        let head = MenuItem::submenu(label.clone()).enabled(enabled).show(ui);
+        let mut head = MenuItem::submenu(label.clone()).enabled(enabled);
+        if let Some(letter) = mnemonic {
+            head = head.mnemonic(letter);
+        }
+        let head = head.show(ui);
         let mut open = head.submenu_open;
         let show = |ui: &mut Ui| {
             Menu::submenu(label, &head.response)

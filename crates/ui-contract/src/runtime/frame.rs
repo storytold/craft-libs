@@ -32,6 +32,12 @@ pub struct FrameInput {
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
+    /// The window in which the app's own egui code shows a modal this frame (a dialog the app draws itself, not a
+    /// framework layer). It blocks the app's other windows as a framework app-modal layer open in it does: their
+    /// presses, keys, wheel and text go nowhere, a press there brings the modal's window forward, and they refuse to
+    /// close. A panel floated into a window of its own is one of them. `None` (the default) when the app shows no such
+    /// modal; set every frame from the app's own state.
+    pub app_modal: Option<ViewportId>,
     /// Whether the window system's input reaches the OS windows the runtime hosts.
     pub window_input: WindowInput,
 }
@@ -54,7 +60,7 @@ pub enum WindowInput {
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, window_input: WindowInput::Live }
+        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, app_modal: None, window_input: WindowInput::Live }
     }
 
     /// Sets whether the window system's input reaches the hosted windows.
@@ -72,6 +78,12 @@ impl FrameInput {
     /// Sets the modifiers latched beyond the window's input.
     pub fn latched(mut self, mods: Mods) -> Self {
         self.latched = mods;
+        self
+    }
+
+    /// Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`](Self::app_modal)).
+    pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self {
+        self.app_modal = viewport;
         self
     }
 
@@ -163,6 +175,9 @@ pub struct FrameOutput {
 #[derive(Default)]
 pub(crate) struct FrameState {
     input: Option<FrameInput>,
+    /// The window of `FrameInput::app_modal` and the root frame its modal first showed in: its place in the modal stack
+    /// (`overlay::modal_viewport`). It stays while the app names the same window frame after frame.
+    app_modal: Option<(ViewportId, u64)>,
     /// The pointer tolerances of the app's resolved tokens (`tokens.size.hit`) and the `sizes` they came from:
     /// the input hook writes the slop before any `Env` exists, and the press lifecycle reads the hit target.
     hit: Option<(Arc<AppSizes>, HitSizes)>,
@@ -393,6 +408,10 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
         if !state.hit.as_ref().is_some_and(|(sizes, _)| Arc::ptr_eq(sizes, &input.root.sizes)) {
             state.hit = Some((input.root.sizes.clone(), resolved_hit(&input.root.sizes)));
         }
+        state.app_modal = match (input.app_modal, state.app_modal) {
+            (Some(viewport), Some((shown, since))) if shown == viewport => Some((viewport, since)),
+            (viewport, _) => viewport.map(|viewport| (viewport, pass::root_frame_nr(ctx))),
+        };
         state.input = Some(input);
         ran
     });
@@ -434,9 +453,30 @@ fn frame_hit(ctx: &Context) -> HitSizes {
     pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
 }
 
-/// The wheel speed and Alt-code pages of the frame's root values; the defaults before the app sets any input.
-pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
-    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
+/// What the raw-input step reads of the frame's root values (`RootEnv`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RootInput {
+    pub(crate) wheel: WheelSpeed,
+    pub(crate) alt_codes: AltCodePages,
+    pub(crate) ctrl_wheel_pinch: bool,
+}
+
+impl RootInput {
+    fn of(root: &RootEnv) -> Self {
+        RootInput { wheel: root.wheel, alt_codes: root.alt_codes, ctrl_wheel_pinch: root.ctrl_wheel_pinch }
+    }
+}
+
+/// The raw-input values of the frame's root values; the defaults before the app sets any input.
+pub(crate) fn root_input(ctx: &Context) -> RootInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| RootInput::of(&input.root)))
+        .unwrap_or_else(|| RootInput::of(&RootEnv::default()))
+}
+
+/// The window in which the app's own egui code shows a modal this frame (`FrameInput::app_modal`), and the root frame
+/// that modal first showed in.
+pub(crate) fn app_modal(ctx: &Context) -> Option<(ViewportId, u64)> {
+    pass_state::with::<FrameState, _>(ctx, |state| state.app_modal)
 }
 
 /// The frame's window-input policy; `Live` before the app sets any input.
@@ -476,9 +516,12 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
-    // already acted in the key stage.
+    // already acted in the key stage. Quit, from any source, asks the root window to close through its close path.
     let focused = crate::runtime::egui::viewports::reported(ctx).into_iter().find(|(_, facts)| facts.focused).map(|(viewport, _)| viewport);
     for fired in &output.fired {
+        if fired.phase == commands::FirePhase::Press && commands::QuitCommand::from_ref(&fired.command).is_some() {
+            windows::act(ctx, ViewportId::ROOT, windows::WindowAction::Close);
+        }
         if fired.source == commands::FireSource::Key {
             continue;
         }

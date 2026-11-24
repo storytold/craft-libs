@@ -26,7 +26,8 @@ fn random_garbage_never_panics() {
         for channels in 1..=2 {
             let mut dec = StreamDecoder::new(rate, channels).unwrap();
             let mut out = Vec::new();
-            for i in 0..3000 {
+            // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs 1/N of the packets.
+            for i in 0..3000usize.div_ceil(craft_media_testkit::hostile::divisor()) {
                 let len = (rng.next() % 400) as usize;
                 let mut pkt: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
                 if let Some(t) = pkt.first_mut() {
@@ -52,7 +53,7 @@ fn multistream_garbage_never_panics() {
     h.extend([1, 6, 0x38, 0x01, 0x80, 0xBB, 0, 0, 0, 0, 1, 4, 2, 0, 4, 1, 2, 3, 5]);
     let mut dec = Decoder::new(&h).unwrap();
     let mut rng = Rng(42);
-    for _ in 0..2000 {
+    for _ in 0..2000usize.div_ceil(craft_media_testkit::hostile::divisor()) {
         let len = (rng.next() % 600) as usize;
         let pkt: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
         if let Ok(out) = dec.decode(Some(&pkt)) {
