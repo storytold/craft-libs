@@ -8,7 +8,7 @@ use craft_draw::ui::{
     ShapeKind, ShapePanel, ShapeToolSettings,
 };
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::contract::{Bind, Role, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::RangeAlert;
 use egui::{Key, Modifiers, vec2};
@@ -226,6 +226,126 @@ fn a_triangle_shows_its_size_and_one_corner_radius() {
     type_into(&mut fixture, "Corner radius", "12");
     let radius = host.borrow().events.iter().rev().find_map(|event| event.value().cloned());
     assert_eq!(radius, Some(ShapeChange::CornerRadius(12.0)), "the radius is one radius for every corner");
+}
+
+/// A fixture of the panel over the measured polygon (5 sides, star ratio 100 %, radius 0 px), which applies each
+/// Sides change to the shape as an app does, live through a drag.
+fn pentagon_panel() -> (Fixture, Rc<RefCell<PanelHost>>) {
+    let host = Rc::new(RefCell::new(PanelHost {
+        shape: LiveShape::polygon(200.0, 200.0, 0.0, 5, 1.0),
+        look: ShapeAppearance::new(Paint::None, Paint::None, 0.0),
+        events: Vec::new(),
+    }));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let PanelHost { shape, look, events } = &mut *held;
+        let out = ShapePanel::new("Shape properties", shape, look, 72.0).show(ui);
+        for event in out.events {
+            if let (Some(ShapeChange::Sides(n)), LiveShape::Polygon { sides, .. }) = (event.value(), &mut *shape) {
+                *sides = *n;
+            }
+            events.push(event);
+        }
+    });
+    fixture.settle();
+    (fixture, host)
+}
+
+/// The side count of the panel's polygon.
+fn sides_of(host: &Rc<RefCell<PanelHost>>) -> u32 {
+    match host.borrow().shape {
+        LiveShape::Polygon { sides, .. } => sides,
+        ref other => panic!("a polygon, got {other:?}"),
+    }
+}
+
+/// The Sides slider: its node and the count it reports.
+fn sides_slider(fixture: &Fixture) -> (craft_ui::testing::Target, Option<f64>) {
+    let tree = fixture.tree();
+    let slider = fixture.by_role(Role::SLIDER).into_iter().find(|t| tree.name_of(t.node) == Some("Sides")).expect("the Sides slider");
+    let value = tree.numeric_of(slider.node).and_then(|n| n.value);
+    (slider, value)
+}
+
+/// The number field named `label`.
+fn spin(fixture: &Fixture, label: &str) -> craft_ui::testing::Target {
+    let tree = fixture.tree();
+    fixture.by_role(Role::SPIN_BUTTON).into_iter().find(|t| tree.name_of(t.node) == Some(label)).unwrap_or_else(|| panic!("the {label} field"))
+}
+
+/// The point `fraction` of the way along the Sides slider, on its middle line.
+fn along(slider: &craft_ui::testing::Target, fraction: f32) -> egui::Pos2 {
+    egui::pos2(slider.rect.left() + fraction * slider.rect.width(), slider.rect.center().y)
+}
+
+/// storytold/photocraft#13316: a polygon's Sides is a slider with its number field on one row, first, then Corner
+/// radius, then Star ratio.
+#[trial]
+fn a_polygon_lists_sides_as_a_slider_with_its_field_before_corner_radius_then_star_ratio() {
+    let (fixture, _) = pentagon_panel();
+    let (slider, value) = sides_slider(&fixture);
+    assert_eq!(value, Some(5.0), "the slider shows the count");
+    let (field, radius, star) = (spin(&fixture, "Sides").rect, spin(&fixture, "Corner radius").rect, spin(&fixture, "Star ratio").rect);
+    let slider = slider.rect;
+    assert!((slider.center().y - field.center().y).abs() < 1.0, "the slider and its field share a row: {slider:?} {field:?}");
+    assert!(slider.right() <= field.left(), "the slider comes before its field: {slider:?} {field:?}");
+    assert!(field.bottom() <= radius.top(), "Sides comes before Corner radius: {field:?} {radius:?}");
+    assert!(radius.bottom() <= star.top(), "Corner radius comes before Star ratio: {radius:?} {star:?}");
+}
+
+/// A drag on the Sides slider is one gesture, `Begin` to `Commit`, of whole counts the shape follows while it runs;
+/// past either end of the track it stops at 100 and at 3.
+#[trial]
+fn a_sides_slider_drag_is_one_gesture_of_whole_sides_from_3_to_100() {
+    let (mut fixture, host) = pentagon_panel();
+    let (slider, _) = sides_slider(&fixture);
+    let (from, to) = (along(&slider, 0.3), along(&slider, 0.63));
+    fixture.drag_hold_at(from, to - from);
+    let shown = sides_slider(&fixture).1.expect("the slider's count");
+    assert_eq!(shown.fract(), 0.0, "the slider takes whole sides: {shown}");
+    assert!(shown > 5.0, "the drag moved the count: {shown}");
+    assert_eq!(f64::from(sides_of(&host)), shown, "the shape follows the slider while the drag runs");
+    fixture.release_at(to);
+    let events = std::mem::take(&mut host.borrow_mut().events);
+    assert!(matches!(events.first(), Some(EditEvent::Begin { .. })), "the drag begins: {events:?}");
+    assert!(
+        matches!(events.last(), Some(EditEvent::Commit { after: ShapeChange::Sides(n), .. }) if f64::from(*n) == shown),
+        "the drag commits: {events:?}"
+    );
+    let ids: Vec<_> = events.iter().filter_map(EditEvent::id).collect();
+    assert!(ids.windows(2).all(|w| w[0] == w[1]), "one gesture: {events:?}");
+    assert!(events.iter().filter_map(EditEvent::value).all(|v| matches!(v, ShapeChange::Sides(3..=100))), "whole sides in range: {events:?}");
+
+    let (slider, _) = sides_slider(&fixture);
+    fixture.drag_at(along(&slider, 0.5), egui::vec2(slider.rect.width(), 0.0));
+    assert_eq!(sides_of(&host), 100, "past the end of the track stops at 100");
+    assert_eq!(sides_slider(&fixture).1, Some(100.0));
+    fixture.drag_at(along(&slider, 0.5), egui::vec2(-slider.rect.width(), 0.0));
+    assert_eq!(sides_of(&host), 3, "past the start of the track stops at 3");
+}
+
+/// A press on the slider's thumb that leaves the count as it was is no edit, and a count typed in the field moves the
+/// slider.
+#[trial]
+fn a_press_that_keeps_the_count_changes_nothing_and_the_field_moves_the_slider() {
+    let (mut fixture, host) = pentagon_panel();
+    let (slider, _) = sides_slider(&fixture);
+    // A press on the track jumps the thumb there; a second press at the same place lands on the thumb.
+    let at = along(&slider, 0.4);
+    fixture.click_at(at);
+    let jumped = sides_of(&host);
+    assert_ne!(jumped, 5, "a press on the track moves the thumb there");
+    host.borrow_mut().events.clear();
+    fixture.click_at(at);
+    let events = host.borrow().events.clone();
+    assert!(events.iter().filter_map(EditEvent::value).all(|v| *v == ShapeChange::Sides(jumped)), "a press on the thumb moves nothing: {events:?}");
+    assert!(!events.iter().any(|e| matches!(e, EditEvent::Set { .. })), "and is no edit of its own: {events:?}");
+    assert_eq!(sides_of(&host), jumped);
+
+    type_into(&mut fixture, "Sides", "8");
+    assert_eq!(sides_of(&host), 8, "a typed count");
+    assert_eq!(sides_slider(&fixture).1, Some(8.0), "the slider follows the field");
 }
 
 struct GearHost {

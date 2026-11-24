@@ -11,7 +11,7 @@ use craft_color_ui::ui::{Paint, PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
-use craft_ui::form::{Field, FieldGroup};
+use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::{Env, Label, LengthUnits, UnitKind, Units, with_env};
 use craft_ui::runtime::requests::ColorRequest;
@@ -67,7 +67,8 @@ pub struct ShapePanelOutput {
 /// - Shape (a collapsible section), by the [`LiveShape`]: W and H (1 to 300,000 px, whole pixels) for a rect,
 ///   ellipse, polygon or triangle; a rect's "Corner radius" (0 to 150,000, sets all four) then Top Left, Top Right,
 ///   Bottom Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's
-///   Corner radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a triangle's Corner radius; a
+///   Sides (a slider and its number field on one row, whole sides 3 to 100: a drag on the slider is one gesture),
+///   then Corner radius and Star ratio (1 to 100 %, stored 0.01 to 1); a triangle's Corner radius; a
 ///   line's Weight (1 to 10,000), and with arrowheads its Start and End check boxes, Width, Length and Concavity
 ///   (-50 to 50 %, whole), then the "Set as default" check box ([`arrow_default`](Self::arrow_default)).
 /// - A value typed past its field's range is clamped and reported once in [`ShapePanelOutput::out_of_range`].
@@ -435,6 +436,25 @@ impl<'p, 'a> Cells<'p, 'a> {
         self.alert(alert);
     }
 
+    /// A polygon's Sides row: under its caption, a slider and then its number field over the count, whole sides in
+    /// [`SIDES_RANGE`] (the slider steps by one side, so a drag proposes only whole counts). The slider's drag, the
+    /// field's scrub and a typed count each go out as one edit stream, so a drag is one undo step.
+    fn sides_row(&mut self, ui: &mut Ui, sides: u32) {
+        let caption = self.words.sides.clone();
+        let side = SideLabel::new().scrub(true);
+        let shown = Field::new(caption.clone()).id_salt("sides").side(side).show(ui, |ui, _| {
+            let slider = SliderField::new(caption.clone(), Bind::given(f64::from(sides)), SIDES_RANGE)
+                .step(1.0)
+                .id_salt("slider")
+                .layout(SliderFieldLayout::Inline);
+            let out = slider.show(ui);
+            (out.edit.events, out.out_of_range)
+        });
+        let (events, alert) = shown.inner.unwrap_or_default();
+        self.events.extend(events.map(sides_change));
+        self.alert(alert);
+    }
+
     /// The W and H row of a rect, ellipse or polygon: whole pixels, 1 to 300,000.
     fn size_row(&mut self, ui: &mut Ui, (width, height): (f64, f64)) {
         let (units, ppi, words) = (self.units, self.pixels_per_inch, self.words);
@@ -491,10 +511,10 @@ impl<'p, 'a> Cells<'p, 'a> {
             LiveShape::Ellipse { width, height } => self.size_row(ui, (*width, *height)),
             LiveShape::Polygon { width, height, corner_radius, sides, star_ratio } => {
                 self.size_row(ui, (*width, *height));
+                // storytold/photocraft#13316: Sides comes first, as a slider with its field, then Corner radius.
+                self.sides_row(ui, *sides);
                 let radius = NumberCell::pixels(units, ppi, "corner-radius", &words.corner_radius, *corner_radius, RADIUS_RANGE);
                 self.number_row(ui, radius, ShapeChange::CornerRadius);
-                let count = NumberCell::count(units, "sides", &words.sides, f64::from(*sides), SIDES_RANGE);
-                self.number_row(ui, count, sides_change);
                 let ratio = NumberCell::percent(units, "star-ratio", &words.star_ratio, star_ratio * 100.0, RATIO_PERCENT);
                 self.number_row(ui, ratio, |percent| ShapeChange::StarRatio(percent / 100.0));
             }
