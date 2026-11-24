@@ -12,6 +12,7 @@
 //! Adapted from pdfcer (MIT, same author), `crates/pdfcer-core/src/prepress/pdfx.rs` at
 //! f5525637, rewritten over craft-pdf's reader.
 
+use crate::plates::pdf_text;
 use craft_pdf::syntax::Pdf;
 use craft_pdf::syntax::object::{Array, Dict, Name, Stream};
 
@@ -140,27 +141,13 @@ fn output_intents(catalog: &Dict<'_>) -> Vec<String> {
 fn identifier(intent: &Dict<'_>) -> String {
     intent
         .get::<craft_pdf::syntax::object::String<'_>>(b"OutputConditionIdentifier")
-        .map(|s| text_string(s.as_bytes()).trim().chars().take(MAX_IDENTIFIER).collect())
+        .map(|s| pdf_text(s.as_bytes()).trim().chars().take(MAX_IDENTIFIER).collect())
         .unwrap_or_default()
 }
 
 fn text_entry(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
     let s = dict.get::<craft_pdf::syntax::object::String<'_>>(key)?;
-    claim_value(&text_string(s.as_bytes()))
-}
-
-/// A text string's characters (ISO 32000-2 §7.9.2.2): UTF-16BE or UTF-8 after a byte order
-/// mark, else the bytes read as UTF-8. That matches PDFDocEncoding only for ASCII; other bytes
-/// become replacement characters.
-fn text_string(bytes: &[u8]) -> String {
-    match bytes {
-        [0xFE, 0xFF, rest @ ..] => {
-            let units = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c));
-            char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect()
-        }
-        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
-        _ => String::from_utf8_lossy(bytes).into_owned(),
-    }
+    claim_value(&pdf_text(s.as_bytes()))
 }
 
 /// `value` trimmed, when it is short printable ASCII.
@@ -195,9 +182,10 @@ enum Markup<'p> {
 
 /// The first `GTS_PDFXVersion` value in `packet` whose prefix is bound to [`PDFXID_NS`] where it
 /// occurs, in attribute form (`p:GTS_PDFXVersion="v"`) or element form
-/// (`<p:GTS_PDFXVersion>v<`). One pass over the markup: a namespace declaration applies to its
-/// element and that element's content only, and comments, CDATA sections, processing
-/// instructions and declarations are skipped. A default namespace doesn't apply to attributes.
+/// (`<p:GTS_PDFXVersion>v</p:GTS_PDFXVersion>`). One pass over the markup: a namespace
+/// declaration applies to its element and that element's content only, and comments, CDATA
+/// sections, processing instructions and declarations are skipped. A default namespace doesn't
+/// apply to attributes. An element value that can't be read is passed over.
 fn version_in_packet(packet: &[u8]) -> Option<String> {
     let mut scopes: Vec<Scope<'_>> = Vec::new();
     let mut at = 0usize;
@@ -214,16 +202,16 @@ fn version_in_packet(packet: &[u8]) -> Option<String> {
             }
             Markup::Other => continue,
         };
-        scopes.push(tag.attributes.iter().filter_map(|(n, v)| declared_prefix(n).map(|p| (p, *v == PDFXID_NS))).collect());
+        scopes.push(tag.attributes.iter().filter_map(|(n, v)| declared_prefix(n).map(|p| (p, is_pdfxid(v)))).collect());
         let attribute = tag.attributes.iter().filter(|(n, _)| is_version(&scopes, n, false)).find_map(|(_, v)| xml_value(v));
         if attribute.is_some() {
             return attribute;
         }
-        if !tag.empty && is_version(&scopes, tag.name, true) {
-            let text = packet.get(at..)?;
-            if let Some(v) = xml_value(text.get(..text.iter().position(|b| *b == b'<')?)?) {
-                return Some(v);
-            }
+        if !tag.empty
+            && is_version(&scopes, tag.name, true)
+            && let Some(v) = packet.get(at..).and_then(element_text).and_then(|t| claim_value(&t))
+        {
+            return Some(v);
         }
         if tag.empty {
             scopes.pop();
@@ -245,6 +233,38 @@ fn is_version(scopes: &[Scope<'_>], name: &[u8], element: bool) -> bool {
         return false;
     }
     scopes.iter().rev().flat_map(|s| s.iter().rev()).find(|(p, _)| *p == prefix).is_some_and(|(_, bound)| *bound)
+}
+
+/// Whether a namespace declaration's raw value, its references decoded, is [`PDFXID_NS`].
+fn is_pdfxid(raw: &[u8]) -> bool {
+    std::str::from_utf8(raw).is_ok_and(|v| decode_references(v).as_bytes() == PDFXID_NS)
+}
+
+/// The character data of an element whose start tag ends just before `content`, through the
+/// next start or end tag: references decoded, CDATA sections kept as written, comments and
+/// processing instructions left out. `None` when it isn't UTF-8 or markup doesn't close.
+fn element_text(content: &[u8]) -> Option<String> {
+    let mut text = String::new();
+    let mut rest = content;
+    loop {
+        let open = rest.iter().position(|b| *b == b'<')?;
+        text.push_str(&decode_references(std::str::from_utf8(rest.get(..open)?).ok()?));
+        let markup = rest.get(open.saturating_add(1)..)?;
+        let (skip, body) = if let Some(cdata) = markup.strip_prefix(b"![CDATA[") {
+            let end = find(cdata, b"]]>")?;
+            (b"![CDATA[".len().saturating_add(end).saturating_add(3), cdata.get(..end))
+        } else if let Some(comment) = markup.strip_prefix(b"!--") {
+            (b"!--".len().saturating_add(find(comment, b"-->")?).saturating_add(3), None)
+        } else if let Some(pi) = markup.strip_prefix(b"?") {
+            (1usize.saturating_add(find(pi, b"?>")?).saturating_add(2), None)
+        } else {
+            return Some(text);
+        };
+        if let Some(raw) = body {
+            text.push_str(std::str::from_utf8(raw).ok()?);
+        }
+        rest = markup.get(skip..)?;
+    }
 }
 
 /// The prefix an `xmlns` or `xmlns:p` attribute name declares.

@@ -6,6 +6,11 @@ use craft_pdf::syntax::Pdf;
 /// 1 catalog with `catalog_extra`, 2 pages, 3 page, 4 the information dictionary with `info`,
 /// 5 an XMP packet when `xmp` is given.
 fn pdf(catalog_extra: &str, info: &str, xmp: Option<&str>) -> Pdf {
+    pdf_with(catalog_extra, info, xmp.map(str::as_bytes))
+}
+
+/// [`pdf`] with an XMP packet that need not be UTF-8.
+fn pdf_with(catalog_extra: &str, info: &str, xmp: Option<&[u8]>) -> Pdf {
     let metadata = if xmp.is_some() { "/Metadata 5 0 R" } else { "" };
     let mut objects = vec![
         format!("<< /Type /Catalog /Pages 2 0 R {metadata} {catalog_extra} >>").into_bytes(),
@@ -14,8 +19,7 @@ fn pdf(catalog_extra: &str, info: &str, xmp: Option<&str>) -> Pdf {
         format!("<< {info} >>").into_bytes(),
     ];
     if let Some(x) = xmp {
-        objects
-            .push([format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n", x.len()).as_bytes(), x.as_bytes(), b"\nendstream"].concat());
+        objects.push([format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n", x.len()).as_bytes(), x, b"\nendstream"].concat());
     }
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -167,6 +171,42 @@ fn an_identifier_is_any_text_not_a_claim_value() {
     assert_eq!(identifier("<FEFF0046006F0067007200610020 00DC>"), vec!["Fogra \u{dc}".to_owned()]);
     let long = "C".repeat(80);
     assert_eq!(identifier(&format!("({long})")), vec![long]);
+    // Unmarked: PDFDocEncoding, where 0xDC is Ü.
+    assert_eq!(identifier("<466F67726120DC>"), vec!["Fogra \u{dc}".to_owned()]);
+    // Bullet, em dash, Euro, an undefined byte and a breve, where Latin-1 differs.
+    assert_eq!(identifier("<4180 84A0AD18>"), vec!["A\u{2022}\u{2014}\u{20AC}\u{FFFD}\u{02D8}".to_owned()]);
+}
+
+#[test]
+fn an_element_value_that_is_not_utf8_does_not_end_the_scan() {
+    let ns = "xmlns:p=\"http://www.npes.org/pdfx/ns/id/\"";
+    let xmp = packet(&format!(
+        "<rdf:Description {ns}><p:GTS_PDFXVersion>\u{1}</p:GTS_PDFXVersion></rdf:Description><rdf:Description {ns} p:GTS_PDFXVersion=\"PDF/X-4\"/>"
+    ));
+    // The first value's byte becomes 0xFF, which isn't UTF-8.
+    let bad: Vec<u8> = xmp.bytes().map(|b| if b == 1 { 0xFF } else { b }).collect();
+    assert_eq!(pdfx_claim(&pdf_with("", "", Some(&bad))).unwrap().level, "PDF/X-4");
+}
+
+#[test]
+fn a_namespace_declaration_is_compared_after_its_references_are_decoded() {
+    let xmp = packet("<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/&#105;d/\" p:GTS_PDFXVersion=\"PDF/X-4\"/>");
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&xmp))).unwrap().level, "PDF/X-4");
+    let other = packet("<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/&#105;e/\" p:GTS_PDFXVersion=\"PDF/X-4\"/>");
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&other))), None);
+}
+
+#[test]
+fn an_element_value_runs_to_its_end_tag_past_comments_and_cdata() {
+    let element = |content: &str| {
+        let xmp = packet(&format!(
+            "<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\"><p:GTS_PDFXVersion>{content}</p:GTS_PDFXVersion></rdf:Description>"
+        ));
+        pdfx_claim(&pdf("", "", Some(&xmp))).map(|c| c.level)
+    };
+    assert_eq!(element("PDF/X-4<!--note-->p").as_deref(), Some("PDF/X-4p"));
+    assert_eq!(element("PDF/X-<?pi x?>4").as_deref(), Some("PDF/X-4"));
+    assert_eq!(element("PDF/<![CDATA[X-&#52;]]>").as_deref(), Some("PDF/X-&#52;"));
 }
 
 #[test]
