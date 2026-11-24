@@ -399,6 +399,8 @@ pub struct Layer {
     pub name: String,
     /// `PROP_FLOATING_SELECTION`: the layer is a floating selection, not part of the stack.
     pub floating_selection: bool,
+    // Source wire identity; never dereferenced to infer an unrecorded encoding.
+    floating_target: Option<u64>,
     /// 0 to 1: `PROP_FLOAT_OPACITY` when present (it wins whatever the order), else
     /// `PROP_OPACITY` / 255.
     pub opacity: f32,
@@ -850,7 +852,7 @@ impl<'a> Xcf<'a> {
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
         let across = w.div_ceil(TILE) as usize;
-        let tiles = self.hierarchy_tiles(&head, false, keep_going)?;
+        let tiles = self.hierarchy_tiles(&head, false, None, keep_going)?;
         if !keep_going() {
             return Err(Error::Cancelled);
         }
@@ -865,7 +867,7 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            let input = self.tile_input(&head, at, tiles.get(i + 1).copied())?;
+            let input = self.tile_input(&head, at, tiles.get(i + 1).copied(), None)?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
                 let start = (ty * side + py) * stride + tx * side * channels;
@@ -1006,6 +1008,7 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         layer_type,
         name,
         floating_selection: false,
+        floating_target: None,
         opacity: 1.0,
         mode: 0,
         visible: true,
@@ -1035,7 +1038,14 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
     for p in &lprops {
         let v = be_u32(p.data).unwrap_or(0);
         match p.kind {
-            5 => l.floating_selection = true,
+            5 => {
+                l.floating_selection = true;
+                l.floating_target = if c.wide {
+                    p.data.get(..8).and_then(|bytes| bytes.try_into().ok()).map(u64::from_be_bytes)
+                } else {
+                    p.data.get(..4).and_then(|bytes| bytes.try_into().ok()).map(u32::from_be_bytes).map(u64::from)
+                };
+            }
             6 => l.opacity = (v.min(255) as f32) / 255.0,
             33 => float_opacity = be_f32(p.data).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0)).or(float_opacity),
             7 => l.mode = v,

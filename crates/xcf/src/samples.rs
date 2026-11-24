@@ -83,7 +83,8 @@ pub struct SourceDrawable {
     pub indexed: bool,
     pub precision: SourcePrecision,
     pub sample_order: SampleOrder,
-    /// Ordinary saved channels carry no per-channel transfer marker in XCF.
+    /// Ordinary saved channels and floating selections with unconfirmed target
+    /// encodings carry no per-drawable transfer marker in XCF.
     /// When true, `precision.transfer` is the reader's default assumption rather
     /// than an encoding established by the file. Stored samples are unchanged.
     pub transfer_is_assumed: bool,
@@ -161,6 +162,7 @@ struct VisitTarget {
     dimensions: Option<(u32, u32)>,
     coverage: bool,
     transfer_is_assumed: bool,
+    excluded_source: Option<std::ops::Range<usize>>,
 }
 
 pub(super) struct HierarchyHead {
@@ -223,14 +225,16 @@ impl Xcf<'_> {
             return Ok(None);
         }
         let (channels, indexed) = layer.source_layout(self.image.base_type)?;
+        let (coverage, transfer_is_assumed) = self.floating_gray_transfer(layer);
         self.visit_hierarchy(
             VisitTarget {
                 pointer: layer.hierarchy,
                 channels,
                 indexed,
                 dimensions: Some((layer.width, layer.height)),
-                coverage: false,
-                transfer_is_assumed: false,
+                coverage,
+                transfer_is_assumed,
+                excluded_source: None,
             },
             options,
             budget,
@@ -238,6 +242,32 @@ impl Xcf<'_> {
             visit,
         )
         .map(Some)
+    }
+
+    // Resolve only already-parsed source identities. Never follow an arbitrary
+    // floating-selection pointer or rescan untrusted channel properties here.
+    fn floating_gray_transfer(&self, layer: &crate::Layer) -> (bool, bool) {
+        if !layer.floating_selection || layer.layer_type != 3 {
+            return (false, false);
+        }
+        let Some(target) = layer.floating_target.filter(|offset| *offset != 0) else { return (false, true) };
+        if self.image.layers.iter().any(|owner| owner.mask != 0 && u64::try_from(owner.mask).ok() == Some(target)) {
+            return (true, false); // A known mask is linear coverage, including alpha.
+        }
+        if self
+            .layer_sources
+            .iter()
+            .zip(&self.image.layers)
+            .any(|(source, owner)| u64::try_from(*source).ok() == Some(target) && !owner.floating_selection)
+        {
+            return (false, false); // Ordinary layer color retains the canvas transfer.
+        }
+        if self.channels.iter().any(|source| u64::try_from(*source).ok() == Some(target)) {
+            let nonlinear_u8 =
+                self.image.precision.bytes == 1 && !self.image.precision.float && self.source_precision().transfer == Transfer::Nonlinear;
+            return (!nonlinear_u8, true); // Same unconfirmed default as a saved channel.
+        }
+        (false, true) // Unknown targets cannot establish the stored transfer.
     }
 
     pub fn visit_layer_mask_tiles(
@@ -311,6 +341,7 @@ impl Xcf<'_> {
                     dimensions: Some(dimensions),
                     coverage: owner.is_some() || selection || !nonlinear_u8,
                     transfer_is_assumed: owner.is_none() && !selection,
+                    excluded_source: None,
                 },
                 options,
                 budget,
@@ -355,10 +386,11 @@ impl Xcf<'_> {
                 let mut dummy_headers = [None; 31];
                 let (mut mip_width, mut mip_height) = (width, height);
                 for (slot, offset) in dummy_headers.iter_mut().zip(dummy_offsets.iter().take(index)) {
-                    mip_width = (mip_width / 2).max(1);
-                    mip_height = (mip_height / 2).max(1);
+                    mip_width /= 2;
+                    mip_height /= 2;
                     let Ok(at) = usize::try_from(*offset) else { continue };
-                    let Some(end) = at.checked_add(8 + pointer_bytes) else { continue };
+                    // Dummy levels end in a fixed zero WORD, not a pointer.
+                    let Some(end) = at.checked_add(12) else { continue };
                     if at < header.end && end > header.start {
                         continue;
                     }
@@ -403,7 +435,13 @@ impl Xcf<'_> {
 
     // Header starts are hard boundaries, even when tile records precede them.
     // Both pixel APIs must use the same slice to avoid decoding framing as samples.
-    pub(super) fn tile_input(&self, head: &HierarchyHead, start: usize, next: Option<usize>) -> Result<&[u8]> {
+    pub(super) fn tile_input(
+        &self,
+        head: &HierarchyHead,
+        start: usize,
+        next: Option<usize>,
+        excluded: Option<&std::ops::Range<usize>>,
+    ) -> Result<&[u8]> {
         if head.header.contains(&start) {
             return Err(invalid("a tile pointer is inside its hierarchy header"));
         }
@@ -422,14 +460,36 @@ impl Xcf<'_> {
                 end = end.min(begin);
             }
         }
+        if let Some(range) = excluded {
+            if range.contains(&start) {
+                return Err(invalid("a tile pointer is inside its source record"));
+            }
+            if start < range.start {
+                end = end.min(range.start);
+            }
+        }
         self.c.b.get(start..end).ok_or_else(|| invalid("a tile pointer is outside the file"))
     }
 
-    pub(super) fn hierarchy_tiles(&self, head: &HierarchyHead, allow_empty: bool, keep_going: &dyn Fn() -> bool) -> Result<Vec<usize>> {
+    pub(super) fn hierarchy_tiles(
+        &self,
+        head: &HierarchyHead,
+        allow_empty: bool,
+        excluded: Option<&std::ops::Range<usize>>,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<Vec<usize>> {
         if !keep_going() {
             return Err(Error::Cancelled);
         }
         self.validate_first_level(head)?;
+        let overlaps = |start: usize, end: usize| excluded.is_some_and(|range| start < range.end && end > range.start);
+        if overlaps(head.header.start, head.header.end) {
+            return Err(invalid("a hierarchy overlaps its source record"));
+        }
+        let fixed_end = head.level.checked_add(if self.c.wide { 16 } else { 12 }).ok_or_else(|| invalid("level header overflow"))?;
+        if overlaps(head.level, fixed_end) {
+            return Err(invalid("a level header overlaps its source record"));
+        }
         let mut level = self.c.at(head.level);
         level.take(8)?;
         // The enhanced source contract admits an entirely zero level; retain the
@@ -442,6 +502,9 @@ impl Xcf<'_> {
         let offsets = crate::tile_offsets(&mut level, head.level, count, keep_going)?;
         if head.level < head.header.end && level.pos > head.header.start {
             return Err(invalid("a level table overlaps its hierarchy header"));
+        }
+        if overlaps(head.level, level.pos) {
+            return Err(invalid("a level table overlaps its source record"));
         }
         Ok(offsets)
     }
@@ -457,7 +520,7 @@ impl Xcf<'_> {
         if !keep_going() {
             return Err(Error::Cancelled);
         }
-        let VisitTarget { pointer, channels, indexed, dimensions, coverage, transfer_is_assumed } = target;
+        let VisitTarget { pointer, channels, indexed, dimensions, coverage, transfer_is_assumed, excluded_source } = target;
         let order = self.source_order(options)?;
         let head = self.hierarchy_head(pointer, channels)?;
         if dimensions.is_some_and(|size| size != (head.width, head.height)) {
@@ -474,7 +537,7 @@ impl Xcf<'_> {
             return Err(invalid("drawable exceeds the source pixel limit"));
         }
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the source pixel limit"))?;
-        let offsets = self.hierarchy_tiles(&head, true, keep_going)?;
+        let offsets = self.hierarchy_tiles(&head, true, excluded_source.as_ref(), keep_going)?;
         let mut precision = self.source_precision();
         if coverage {
             // Layer masks contain coverage, not color in the image's transfer.
@@ -494,7 +557,7 @@ impl Xcf<'_> {
             let width = (head.width - x).min(TILE);
             let height = (head.height - y).min(TILE);
             let raw = if let Some(&start) = offsets.get(index) {
-                let input = self.tile_input(&head, start, offsets.get(index + 1).copied())?;
+                let input = self.tile_input(&head, start, offsets.get(index + 1).copied(), excluded_source.as_ref())?;
                 tiles::decode(input, self.image.compression, head.bpp, width as usize * height as usize)?
             } else {
                 let length = (width as usize)
