@@ -120,18 +120,23 @@ fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOu
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
 }
 
-/// A group whose Timeline lists its open compositions as tabs after the panel tabs, each with its label colour; the
-/// shown composition's tab is selected while the Timeline shows, and a pick shows another.
+/// A group whose Timeline lists its open compositions as tabs after the panel tabs, each with its label colour and a
+/// close button; the shown composition's tab is selected while the Timeline shows, a pick shows another and a close
+/// closes it.
 #[story(DockGroup<'static, usize>, covers = [Default])]
 fn a_panel_with_documents(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = *data.value("shown", 1_u64);
-    let comp = |id: u64, name: &'static str, color: Option<Srgba>| PanelDocument::new(id, name).swatch(color).shown(id == shown);
-    let documents = vec![comp(1, "Comp 1", Some(Srgba::rgb(0.8, 0.3, 0.3))), comp(2, "Comp 2", None)];
-    let panels = vec![title_of(LAYERS).documents(documents), title_of(CHANNELS)];
-    let output = DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output;
+    let open = data.value("open", vec![1_u64, 2]).clone();
+    let comp = |id: u64| {
+        let color = (id == 1).then(|| Srgba::rgb(0.8, 0.3, 0.3));
+        PanelDocument::new(id, format!("Comp {id}")).swatch(color).closable(true).shown(id == shown)
+    };
+    let panels = vec![title_of(LAYERS).documents(open.iter().map(|id| comp(*id)).collect()), title_of(CHANNELS)];
+    let output = DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).closable().show(ui, |_, _| ()).output;
     if let Some((_, id)) = output.picked_document {
         *data.value("shown", 1_u64) = id;
     }
+    data.value("open", vec![1_u64, 2]).retain(|id| !output.closed_documents.iter().any(|(_, closed)| closed == id));
     output.into()
 }
 

@@ -330,3 +330,25 @@ fn closable_panel_tabs_shrink_and_close_on_a_middle_click() {
     assert_eq!(closed.get(), Some(keys[2]), "the middle click closes the tab");
     assert_eq!(picked.get(), None, "the middle click does not show the tab first");
 }
+
+// An AccessKit click on a closable tab's close button closes the tab, as a click on it does, though the tab row has
+// settled and replays its last run.
+#[trial]
+fn an_access_click_on_a_settled_tabs_close_button_closes_it() {
+    use craft_ui::testing::focus::AccessActionKind;
+    let closed = Rc::new(Cell::new(None::<PanelKey>));
+    let closes = Rc::clone(&closed);
+    let panels = vec![PanelTitle::new(PanelKey::new(1), "Color").closable(true), PanelTitle::new(PanelKey::new(2), "Swatches").closable(true)];
+    let key = panels[1].key;
+    let mut fixture = Fixture::new(move |ui| {
+        let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).closable();
+        let out = group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), |_, _| ());
+        if let Some(key) = out.output.closed.first() {
+            closes.set(Some(*key));
+        }
+    });
+    fixture.idle(4);
+    let Some(close) = fixture.by_label("Close Swatches") else { panic!("the Swatches tab shows a close button") };
+    fixture.access(AccessActionKind::Click, &close).settle();
+    assert_eq!(closed.get(), Some(key), "the access click closes the tab");
+}
