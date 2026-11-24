@@ -820,25 +820,20 @@ mod tests {
                  turns[id.x] = vec4f(tc_turn(x.x), tc_turn(x.y), tc_turn(x.z), tc_turn(x.w));\n\
              }}"
         );
-        // Phases from a tenth of a radian to past 2^23 turns (about 5.3e7), where no fraction is left, both signs
+        // WGSL permits indeterminate results for non-finite phases. Compare only finite inputs,
+        // from a tenth of a radian to past 2^23 turns (about 5.3e7), with both signs.
         let inputs = (0..4096)
             .map(|i| {
                 let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
                 sign * 10f32.powf(i as f32 / 400.0 - 1.0) * 1.000_123
             })
-            .chain([f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -f32::NAN])
             .collect::<Vec<f32>>();
 
         let bytes = gpu.run_compute(&source, bytemuck::cast_slice(&inputs), (inputs.len() * 4) as u64, (inputs.len() / 4) as u32);
 
         let turns = bytemuck::cast_slice::<u8, f32>(&bytes);
         for (&x, &turn) in inputs.iter().zip(turns) {
-            let expected = reference_turn(x);
-            if expected.is_nan() {
-                assert!(turn.is_nan(), "phase of {x:e} must be NaN, got {turn:e}");
-            } else {
-                assert_eq!(turn, expected, "phase of {x:e}");
-            }
+            assert_eq!(turn, reference_turn(x), "phase of {x:e}");
         }
     }
 
