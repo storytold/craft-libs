@@ -106,7 +106,7 @@ fn a_small_tips_image_leaves_a_clear_gap_between_the_tip_and_its_arms() {
 
 // The brush cursor's rules for a tip too small to read (photocraft#13602): under 3 points across the tip shows inside
 // four crosshair arms that leave it clear; 3 points or more keep the outline.
-mod small_tip_rules {
+pub(crate) mod small_tip_rules {
     use craft_behavior::kurbo::{Point, Rect as DocRect};
     use craft_behavior::{CanvasView, Cursor, CursorBadge, PaintedCursor, PointerButton};
     use craft_ui::canvas::{ToolContext, ToolPointer};
