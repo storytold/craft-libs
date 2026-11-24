@@ -12,11 +12,11 @@ use crate::runtime::commands::{self, CommandScope, CommandSet as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{EnterRule, FocusPolicy, Initial};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::WindowSpec;
+use crate::runtime::windows::{WindowHost, WindowSpec};
 use crate::sections::FooterButton;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
-use egui::{Ui, Vec2, vec2};
+use egui::{Ui, UiBuilder, Vec2, vec2};
 
 pub use hosted::{FullWindowWorkspace, HostedWorkspace, WorkspaceCx, WorkspacePass};
 
@@ -284,7 +284,20 @@ impl Container for FullWindowDialog<'_> {
         if self.props.outer_edit {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable), None, None);
+        // The dialog covers the window's top, where macOS draws the traffic lights over the content: the title row
+        // starts clear of them, as the shell's title bar does.
+        let mut room = ui.available_rect_before_wrap();
+        let Some(lights) = WindowHost::of(ui.ctx()).lights_room().filter(|lights| lights.intersects(room)) else {
+            frame::header(ui, cx, frame::close_action(self.closable), None, None);
+            return;
+        };
+        if lights.center().x < room.center().x {
+            room.min.x = lights.max.x.min(room.max.x);
+        } else {
+            room.max.x = lights.min.x.max(room.min.x);
+        }
+        let closable = self.closable;
+        ui.scope_builder(UiBuilder::new().max_rect(room).layout(*ui.layout()), |ui| frame::header(ui, cx, frame::close_action(closable), None, None));
     }
 
     fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

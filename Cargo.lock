@@ -4345,6 +4345,7 @@ name = "craft-ui-canvas"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-i18n",
  "craft-keymap",
  "craft-theme",
@@ -4352,6 +4353,7 @@ dependencies = [
  "craft-ui-macros",
  "craft-ui-panels",
  "craft-ui-test-kit",
+ "craft-window",
  "egui",
  "serde",
  "serde_json",
