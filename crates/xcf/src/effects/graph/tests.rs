@@ -87,7 +87,7 @@ fn colors_and_nested_configuration_remain_typed_inert_source_data() {
         let graph = read(&source);
         assert_eq!(graph.nodes[0].properties[0].value, Value::Color(Color { rgba: rgba.map(|value| value / 255.), space: ColorSpace::Srgb }));
     }
-    for invalid in ["color value='rgb(1,2)'", "color value='rgba(1,2,3,2)'", "color value='#xyz'", "color value='rgb(NaN,0,0)'"] {
+    for invalid in ["color value='rgb(1,2)'", "color value='rgba(1,2,3,NaN)'", "color value='#xyz'", "color value='rgb(NaN,0,0)'"] {
         assert!(parse(invalid, SCHEMA, &mut Budget::default(), &|| true).is_err());
     }
 }
@@ -564,7 +564,7 @@ fn color_function_names_accept_ascii_case_and_separating_whitespace_without_conv
         Value::Color(Color { rgba: [1., 0., 0., 0.5], space: ColorSpace::LinearRgb })
     );
     assert_eq!(read("color value='#ff0000'").nodes[0].properties[0].value, Value::Color(Color { rgba: [1., 0., 0., 1.], space: ColorSpace::Srgb }));
-    for literal in ["RGBX (1,0,0)", "RGB junk (1,0,0)", "RGB (1,0)", "RGBA (1,0,0,2)", "CMYK (0,25,100)", "CMYKA (0,25,100,0,NaN)"] {
+    for literal in ["RGBX (1,0,0)", "RGB junk (1,0,0)", "RGB (1,0)", "RGBA (1,0,0,NaN)", "CMYK (0,25,100)", "CMYKA (0,25,100,0,NaN)"] {
         let source = format!("color value='{literal}'");
         assert!(parse(&source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
     }
@@ -644,8 +644,74 @@ fn color_function_outer_ascii_whitespace_does_not_change_the_retained_literal() 
         assert_eq!(graph.nodes[0].properties[0].literal, literal);
         assert_eq!(graph.nodes[0].properties[0].value, Value::CmykColor { cmyk: [0., 25., 100., 0.], alpha: 1. });
     }
-    for literal in ["red ", " red", "#ff0000 ", " #ff0000", " RGB (1,2) ", " RGBA (1,0,0,2) ", " CMYK (0,25,100) ", "rgbx(1,0,0) "] {
+    for literal in ["red ", " red", "#ff0000 ", " #ff0000", " RGB (1,2) ", " RGBA (1,0,0,NaN) ", " CMYK (0,25,100) ", "rgbx(1,0,0) "] {
         let raw = format!("color value='{literal}'");
         assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "do not broaden nonfunction or component rules: {literal:?}");
+    }
+}
+
+#[test]
+fn quoted_assignment_prefixes_keep_a_following_unquoted_auxiliary_opener_structural() {
+    for prefix in ["'aux='", "\"aux=\"", "'au'\"x=\"", "aux\\=", "'aux='''", "'aux='\"\""] {
+        let raw = format!("gegl:over {prefix}[invert-linear ]");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes.len(), 2, "{raw}");
+        assert_eq!(graph.nodes[0].operation, "invert-linear");
+        assert_eq!(graph.nodes[1].operation, "gegl:over");
+        assert_eq!(graph.nodes[1].properties[0].value, Value::Input(Input::Node(0)));
+        assert!(graph.diagnostics.is_empty());
+        check_edges(&graph);
+    }
+    for raw in ["gain 'text='\"[literal]\"", "gain 'text=[literal]'", "gain text='[literal]'", "gain 'text='\\[literal\\]"] {
+        let graph = read(raw);
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].properties[0].literal, "[literal]", "{raw}");
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Text);
+    }
+    let graph = read("gain 'text=a'[literal]b");
+    assert_eq!(graph.nodes[0].properties[0].literal, "a[literal]b");
+}
+
+#[test]
+fn empty_quote_fragments_preserve_pending_auxiliary_closers() {
+    for raw in [
+        "over aux=[gain text=a]''",
+        "over aux=[gain text=a]\"\"",
+        "over aux=[gain text=a]''\"\"",
+        "over aux=[over aux=[gain text=a]]''",
+        "over aux=[gain 'text=a']''",
+    ] {
+        let graph = read(raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, "a", "{raw}");
+        assert!(graph.diagnostics.is_empty());
+        assert!(matches!(graph.nodes.last().unwrap().properties[0].value, Value::Input(_)));
+        check_edges(&graph);
+    }
+    // Nonempty quotes put the earlier bracket inside the decoded scalar.
+    assert_eq!(read("over aux=[gain text=a]'tail' ]").nodes[0].properties[0].literal, "a]tail");
+    assert_eq!(read("gain text='' ").nodes[0].properties[0].literal, "");
+    assert!(parse("invert-linear ''", SCHEMA, &mut Budget::default(), &|| true).is_err());
+}
+
+#[test]
+fn rgba_keeps_all_finite_written_alpha_values_without_hiding_later_nodes() {
+    for (literal, alpha) in
+        [("2", 2.), ("-0.5", -0.5), ("0", 0.), ("1", 1.), ("-0", -0.), ("1.7976931348623157e308", f64::MAX), ("-1.7976931348623157e308", -f64::MAX)]
+    {
+        let color = format!("rgba(-2,1.25,0.5,{literal})");
+        let raw = format!("color value='{color}' gain n=7");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, color);
+        let Value::Color(color) = &graph.nodes[0].properties[0].value else { panic!("source color") };
+        assert_eq!(color.rgba, [-2., 1.25, 0.5, alpha]);
+        assert_eq!(color.rgba[3].to_bits(), alpha.to_bits());
+        assert_eq!(color.space, ColorSpace::LinearRgb);
+        assert_eq!(graph.nodes[1].properties[0].value, Value::Number(7.));
+        assert!(graph.diagnostics.is_empty());
+        check_edges(&graph);
+    }
+    for literal in ["rgba(1,0,0,NaN)", "rgba(1,0,0,inf)", "rgba(1,0,0,-inf)", "rgba(1,0,0,1e999)", "rgba(1,0,0)", "rgba(1,0,0,2,3)", "rgb(1,0,0,2)"] {
+        let raw = format!("color value='{literal}' gain n=7");
+        assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
     }
 }

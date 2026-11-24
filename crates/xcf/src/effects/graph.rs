@@ -53,6 +53,7 @@ pub enum ColorSpace {
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color {
+    /// Finite source components, including alpha, without destination clamping.
     pub rgba: [f64; 4],
     pub space: ColorSpace,
 }
@@ -223,7 +224,14 @@ fn token(tokens: &mut Vec<Token>, value: Token, budget: &mut Budget) -> Result<(
 
 /// Emit a decoded shell word, splitting only a whole-word assignment. A word
 /// already lexed as a scalar value must retain every embedded '=' literally.
-fn word_tokens(tokens: &mut Vec<Token>, mut word: String, scalar: bool, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<()> {
+fn word_tokens(
+    tokens: &mut Vec<Token>,
+    mut word: String,
+    scalar: bool,
+    block_value: bool,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<()> {
     if !scalar && let Some(equal) = word.find('=') {
         // Shell quoting may surround an entire assignment, not just its value.
         // Copy the bounded name fallibly, then keep the value in the original
@@ -244,11 +252,22 @@ fn word_tokens(tokens: &mut Vec<Token>, mut word: String, scalar: bool, budget: 
         });
         token(tokens, Token::Word(name), budget)?;
         token(tokens, Token::Equal, budget)?;
-        token(tokens, Token::Word(word), budget)?;
+        if !block_value {
+            token(tokens, Token::Word(word), budget)?;
+        }
     } else {
         token(tokens, Token::Word(word), budget)?;
     }
     Ok(())
+}
+
+fn word_character(word: &mut String, ch: char, equal: &mut bool, value: &mut bool, budget: &mut Budget) -> Result<()> {
+    if *equal {
+        *value = true;
+    } else if ch == '=' {
+        *equal = true;
+    }
+    character(word, ch, budget)
 }
 
 // Public chain syntax uses inert shell quoting: no variable, command or path expansion.
@@ -308,18 +327,20 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
         let mut word = String::new();
         let mut started = false;
         let mut decoded_equal = false;
+        let mut decoded_value = false;
         let mut trailing_closes = 0usize;
         while let Some(ch) = next(at) {
             if at >= next_check {
                 check(keep_going)?;
                 next_check = at.saturating_add(1024);
             }
-            if ch.is_ascii_whitespace() || !scalar && !decoded_equal && matches!(ch, '=' | '[' | ']') {
+            if ch.is_ascii_whitespace()
+                || !scalar && ((!decoded_equal && matches!(ch, '=' | '[' | ']')) || (decoded_equal && !decoded_value && ch == '['))
+            {
                 break;
             }
             if matches!(ch, '\'' | '"') {
                 started = true; // Explicit empty quotes still contribute a word.
-                trailing_closes = 0;
                 let quote = ch;
                 at += ch.len_utf8();
                 loop {
@@ -337,13 +358,15 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                         if matches!(escaped, '$' | '`' | '"' | '\\' | '\n') {
                             at += escaped.len_utf8();
                             // Quoted escaped newlines are literal; only unquoted ones continue.
-                            character(&mut word, escaped, budget)?;
+                            trailing_closes = 0;
+                            word_character(&mut word, escaped, &mut decoded_equal, &mut decoded_value, budget)?;
                         } else {
-                            character(&mut word, '\\', budget)?;
+                            trailing_closes = 0;
+                            word_character(&mut word, '\\', &mut decoded_equal, &mut decoded_value, budget)?;
                         }
                     } else {
-                        decoded_equal |= ch == '=';
-                        character(&mut word, ch, budget)?;
+                        trailing_closes = 0;
+                        word_character(&mut word, ch, &mut decoded_equal, &mut decoded_value, budget)?;
                     }
                 }
             } else if ch == '\\' {
@@ -352,14 +375,13 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 at += escaped.len_utf8();
                 if escaped != '\n' {
                     started = true;
-                    decoded_equal |= escaped == '=';
                     trailing_closes = 0;
-                    character(&mut word, escaped, budget)?;
+                    word_character(&mut word, escaped, &mut decoded_equal, &mut decoded_value, budget)?;
                 }
             } else {
                 started = true;
                 trailing_closes = if (scalar || decoded_equal) && ch == ']' { trailing_closes.saturating_add(1) } else { 0 };
-                character(&mut word, ch, budget)?;
+                word_character(&mut word, ch, &mut decoded_equal, &mut decoded_value, budget)?;
                 at += ch.len_utf8();
             }
         }
@@ -367,7 +389,10 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
         let length = word.len().checked_sub(trailing_closes).ok_or_else(|| invalid("invalid graph scalar boundary"))?;
         word.truncate(length);
         if started || scalar {
-            word_tokens(&mut tokens, word, scalar, budget, keep_going)?;
+            // A quoted/escaped assignment prefix still accepts an unquoted opener when
+            // no value byte followed its first decoded '='. Do not invent an empty scalar.
+            let block_value = !scalar && decoded_equal && !decoded_value && next(at) == Some('[');
+            word_tokens(&mut tokens, word, scalar, block_value, budget, keep_going)?;
         }
         for index in 0..trailing_closes {
             if index % 64 == 0 {
@@ -723,8 +748,8 @@ fn color(value: &str) -> Result<Color> {
         for (index, item) in parts.0.split(',').enumerate() {
             let out = rgba.get_mut(index).ok_or_else(|| invalid("too many graph color components"))?;
             let value = item.trim().parse::<f64>().map_err(|_| invalid("invalid graph color component"))?;
-            if !value.is_finite() || (index == 3 && !(0.0..=1.0).contains(&value)) {
-                return Err(invalid("graph color exceeds finite/alpha domain"));
+            if !value.is_finite() {
+                return Err(invalid("graph color component is not finite"));
             }
             *out = value;
             count += 1;
