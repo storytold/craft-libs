@@ -203,14 +203,19 @@ impl El {
     /// Attribute by canonical name (`w:val`); falls back to an unqualified attribute with the
     /// same local name (some producers omit the prefix).
     pub fn attr(&self, name: &str) -> Option<&str> {
-        if let Some((_, v)) = self.attrs.iter().find(|(k, _)| k == name) {
+        if let Some(v) = self.attr_exact(name) {
             return Some(v);
         }
         let local = name.rsplit(':').next().unwrap_or(name);
         if local != name {
-            return self.attrs.iter().find(|(k, _)| k == local).map(|(_, v)| v.as_str());
+            return self.attr_exact(local);
         }
         None
+    }
+    /// Attribute by canonical name only, for one whose namespace carries meaning an unqualified
+    /// attribute can't claim.
+    pub fn attr_exact(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
     /// Child elements.
     pub fn els(&self) -> impl Iterator<Item = &El> {

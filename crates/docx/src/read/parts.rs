@@ -74,7 +74,9 @@ impl Reader<'_> {
     pub(super) fn revision_named(&mut self, kind: RevisionKind, e: &El, move_name: Option<String>) -> u32 {
         let author = e.attr("w:author").unwrap_or("").chars().take(256).collect::<String>();
         let date = e.attr("w:date").unwrap_or("").chars().take(64).collect::<String>();
-        let date_utc = e.attr("w16du:dateUtc").filter(|d| !d.is_empty()).map(|d| d.chars().take(64).collect::<String>());
+        // Only the Word namespace's `dateUtc`: a bare one would be saved under that namespace
+        // without having come from it.
+        let date_utc = e.attr_exact("w16du:dateUtc").filter(|d| !d.is_empty()).map(|d| d.chars().take(64).collect::<String>());
         let k = match kind {
             RevisionKind::Insert => 0,
             RevisionKind::Delete => 1,
