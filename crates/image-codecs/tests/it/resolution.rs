@@ -405,12 +405,16 @@ fn jpeg_export_writes_one_resolution_everywhere() {
     }
 }
 
-#[cfg(feature = "webp")]
 #[test]
 fn other_formats_take_the_exif_resolution_when_they_have_none() {
     let mut img = Image::from_raw(4, 4, ChannelLayout::Rgb, SampleType::U8, vec![90; 48]).unwrap();
     img.meta.exif = Some(camera_exif(&LE));
-    for fmt in [Format::WebP, Format::Png] {
+    let formats = [
+        #[cfg(feature = "webp")]
+        Format::WebP,
+        Format::Png,
+    ];
+    for fmt in formats {
         // Written at 240 with the 300 ppi EXIF: the EXIF follows the image.
         img.meta.dpi = Some((240.0, 240.0));
         let out = encode(&img, fmt, &EncodeOptions::default()).unwrap();
@@ -497,7 +501,6 @@ fn exif_with_thumbnail(e: &Exif) -> Vec<u8> {
     v
 }
 
-#[cfg(feature = "webp")]
 fn next_ifd(e: &Exif, exif: &[u8]) -> u32 {
     let at = 8 + 2 + 4 * 12;
     let b: [u8; 4] = exif[at..at + 4].try_into().unwrap();
@@ -506,7 +509,6 @@ fn next_ifd(e: &Exif, exif: &[u8]) -> u32 {
 
 /// #2147 / #2373: an export must not carry the source's EXIF thumbnail (IFD1). Finder, Android
 /// and upload pickers show it instead of the image, so an edited photo kept its old thumbnail.
-#[cfg(feature = "webp")]
 #[test]
 fn exports_drop_the_source_exif_thumbnail() {
     for e in [&LE, &BE] {
@@ -536,7 +538,12 @@ fn exports_drop_the_source_exif_thumbnail() {
         img.meta.exif = Some(exif.clone());
         let jpeg = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
         assert_eq!(next_ifd(e, &exif_of(&jpeg)), 0, "JPEG");
-        for format in [Format::Png, Format::WebP] {
+        let formats = [
+            Format::Png,
+            #[cfg(feature = "webp")]
+            Format::WebP,
+        ];
+        for format in formats {
             let back = decode(&encode(&img, format, &EncodeOptions::default()).unwrap()).unwrap();
             let got = back.meta.exif.unwrap_or_else(|| panic!("{format:?} kept no EXIF"));
             let body = got.strip_prefix(b"Exif\0\0").unwrap_or(&got);

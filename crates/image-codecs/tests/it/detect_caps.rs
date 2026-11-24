@@ -620,8 +620,8 @@ fn sun_raster_disabled_by_default() {
     assert!(encode(&image, Format::SunRaster, &EncodeOptions::default()).is_err());
 }
 
-/// A codec the build leaves out still has its files detected, and reading or writing one is
-/// refused with the missing feature named.
+/// A codec the build leaves out still has its files detected, and reading, writing or inspecting
+/// one is refused with the missing feature named.
 #[test]
 fn formats_left_out_of_the_build_are_detected_and_refused_by_name() {
     let mut dicom = vec![0u8; 128];
@@ -653,6 +653,7 @@ fn formats_left_out_of_the_build_are_detected_and_refused_by_name() {
             assert!(!caps(format).read, "{feature}");
             assert!(names_feature(decode(&bytes).map(drop), format, feature), "{feature}");
             assert!(names_feature(probe_size(&bytes).map(drop), format, feature), "{feature}");
+            assert!(names_feature(has_unretained_source_data(&bytes).map(drop), format, feature), "{feature}");
         }
     }
 }

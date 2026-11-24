@@ -439,8 +439,15 @@ pub fn webp_is_animated(bytes: &[u8]) -> bool {
 /// DPX elements and FITS HDU payloads.
 /// Pixels are not decoded; derived TIFF thumbnails do not require preservation here.
 /// Other formats return false; this does not establish preservation of other format-specific data.
+/// A format whose codec this build leaves out is refused with [`CodecError::Unsupported`].
 pub fn has_unretained_source_data(bytes: &[u8]) -> Result<bool, CodecError> {
-    match detect(bytes) {
+    let detected = detect(bytes);
+    if let Some(format) = detected
+        && let Some(feature) = format::missing_feature(format)
+    {
+        return Err(CodecError::feature_missing(format, feature));
+    }
+    match detected {
         Some(Format::Gif) => via_image::gif_has_more_frames(bytes).ok_or_else(|| CodecError::malformed(Format::Gif, "cannot inspect every frame")),
         Some(Format::Png) => png::has_additional_images(bytes),
         Some(Format::WebP) => gated!("webp", Format::WebP, Ok(webp_is_animated(bytes))),

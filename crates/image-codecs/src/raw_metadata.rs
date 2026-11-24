@@ -273,7 +273,6 @@ pub fn replace_webp_exif(webp: &mut Vec<u8>, exif: &[u8]) -> Result<(), CodecErr
 mod tests {
     use super::*;
     const EXIF: &[u8] = b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
-    #[cfg(feature = "webp")]
     #[test]
     fn replacements_match_previous_code_on_mutated_containers() {
         fn old_png(png: &mut Vec<u8>, exif: &[u8]) {
@@ -324,7 +323,12 @@ mod tests {
         }
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
         image.meta.exif = Some(EXIF.to_vec());
-        for format in [Format::Jpeg, Format::Png, Format::WebP] {
+        for format in [
+            Format::Jpeg,
+            Format::Png,
+            #[cfg(feature = "webp")]
+            Format::WebP,
+        ] {
             let encoded = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
             for at in 0..encoded.len() {
                 for value in [0, 255] {
@@ -360,12 +364,16 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "webp")]
     #[test]
     fn explicit_replacements_preserve_raw_orientation_in_real_encodings() {
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
         image.meta.exif = Some(EXIF.to_vec());
-        for format in [Format::Jpeg, Format::Png, Format::WebP] {
+        for format in [
+            Format::Jpeg,
+            Format::Png,
+            #[cfg(feature = "webp")]
+            Format::WebP,
+        ] {
             let mut bytes = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
             let normal = crate::decode_as_with(format, &bytes, &crate::DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
             assert_eq!(normal.meta.exif.as_deref().map(crate::exif_orientation), Some(1), "default {format:?}");

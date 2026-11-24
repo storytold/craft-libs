@@ -155,12 +155,18 @@ mod hdr {
 // ---------------------------------------------------------------------------
 
 /// Float formats must keep HDR values (> 1, and negative where allowed).
-#[cfg(all(feature = "exr", feature = "pnm"))]
 #[test]
 fn hdr_values_survive_float_formats() {
     let vals: Vec<f32> = (0..16 * 8 * 3).map(|i| (i as f32 - 40.0) * 0.37).collect();
     let img = Image::from_f32(16, 8, ChannelLayout::Rgb, &vals).unwrap();
-    for f in [Format::Tiff, Format::OpenExr, Format::Pnm] {
+    let formats = [
+        Format::Tiff,
+        #[cfg(feature = "exr")]
+        Format::OpenExr,
+        #[cfg(feature = "pnm")]
+        Format::Pnm,
+    ];
+    for f in formats {
         let back = decode(&encode(&img, f, &EncodeOptions::default()).unwrap()).unwrap();
         assert_eq!(back.to_f32_samples().unwrap(), vals, "{f:?}");
     }
