@@ -1672,6 +1672,17 @@ fn hyperlink_history_attribute_preservation_round_trips() {
     let saved_zero = craft_docx::write(&read_zero).unwrap();
     let resaved_zero_xml = doc_xml_of(&saved_zero);
     assert!(resaved_zero_xml.contains(r#"w:history="0""#), "expected w:history=\"0\" on save, got: {resaved_zero_xml}");
+
+    // Replace the hyperlink in document.xml to have w:history=" 0 " (whitespace-padded false)
+    let xml_padded_zero = orig_doc_xml.replace(r#"w:history="1""#, r#"w:history=" 0 ""#);
+    assert_ne!(orig_doc_xml, xml_padded_zero);
+    let file_padded = replace_part(&base, "word/document.xml", xml_padded_zero.as_bytes());
+
+    let read_padded = craft_docx::read(&file_padded).unwrap();
+    assert_eq!(paras(&read_padded)[0].props_of_char(0).link_history, Some(false));
+    let saved_padded = craft_docx::write(&read_padded).unwrap();
+    let resaved_padded_xml = doc_xml_of(&saved_padded);
+    assert!(resaved_padded_xml.contains(r#"w:history="0""#), "expected w:history=\"0\" on save, got: {resaved_padded_xml}");
 }
 
 /// Tools › Templates and Add-ins: the attached template (an external relationship of the settings

@@ -32,7 +32,7 @@ impl Reader<'_> {
                 if let Some(link) = link {
                     c.link = Some(link);
                     c.link_tooltip = k.attr("w:tooltip").and_then(crate::bounded_link_tooltip).map(std::sync::Arc::from);
-                    c.link_history = k.attr("w:history").map(|v| !matches!(v, "0" | "false" | "off"));
+                    c.link_history = k.attr("w:history").map(|v| !crate::units::is_off_val(v));
                 }
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }

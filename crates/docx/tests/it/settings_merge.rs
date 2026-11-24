@@ -229,9 +229,39 @@ fn cleared_compatibility_mode_removes_it_from_merged_settings() {
     let s2 = text(&files2, "word/settings.xml");
     assert!(!s2.contains("compatibilityMode"), "expected mode removed: {s2}");
     assert!(s2.contains("<w:compat>"), "{s2}");
+    assert!(s2.contains("<w:doNotExpandShiftReturn/>"), "expected switch preserved: {s2}");
     assert!(s2.contains("overrideTableStyleFontSizeAndJustification"), "{s2}");
     assert!(s2.contains("enableOpenTypeFeatures"), "{s2}");
 
     let reopened2 = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert_eq!(reopened2.settings.compat_mode, None);
+    assert!(reopened2.settings.do_not_expand_shift_return);
+}
+
+#[test]
+fn foreign_namespace_compat_child_is_preserved_through_round_trip() {
+    let settings = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:x="urn:vendor"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/><x:compatSetting x:name="customSetting" x:val="1"/></w:compat></w:settings>"#;
+    let pkg = with_settings(settings);
+    let doc = craft_docx::read(&pkg).unwrap();
+    assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+    let saved = save(&doc);
+    let s = text(&saved, "word/settings.xml");
+    assert!(s.contains("<x:compatSetting"), "expected foreign child preserved: {s}");
+    assert!(s.contains("x:name=\"customSetting\""), "{s}");
+    assert!(s.contains("compatibilityMode"), "{s}");
+}
+
+#[test]
+fn compat_closing_tag_with_whitespace_preserves_unowned_sibling() {
+    let settings = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:compat><w:useFELayout/><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat ></w:settings>"#;
+    let pkg = with_settings(settings);
+    let mut doc = craft_docx::read(&pkg).unwrap();
+    assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+    doc.settings.compat_mode = None;
+    let saved = save(&doc);
+    let s = text(&saved, "word/settings.xml");
+    assert!(s.contains("<w:useFELayout/>"), "expected unowned setting preserved: {s}");
+    assert!(!s.contains("compatibilityMode"), "expected mode removed: {s}");
 }
