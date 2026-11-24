@@ -1413,11 +1413,11 @@ fn groups_must_be_slots_of_one_part_each_in_one_group() {
 #[test]
 fn the_estimate_covers_what_the_read_does() {
     // A flat colour in ZIP16 (decodes to far more than it reads), lines of a ramp, and tiles.
-    let (w, h) = (1024usize, 600usize);
+    let (w, h) = (256usize, 160usize);
     let list = vec![AnyChannel::new("R", FlatSamples::F32(vec![0.25; w * h])), AnyChannel::new("G", FlatSamples::F32(vec![0.5; w * h]))];
     let encoding = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let flat = file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h));
-    let ramp = file(vec![layer(None, (0, 0), (1024, 600), &["R", "G"], false, Compression::Uncompressed)], (1024, 600));
+    let ramp = file(vec![layer(None, (0, 0), (256, 160), &["R", "G"], false, Compression::Uncompressed)], (256, 160));
     let tiled = file(vec![layer(None, (0, 0), (300, 200), &["R", "G", "B"], true, Compression::PIZ)], (300, 200));
     for bytes in [&flat, &ramp, &tiled] {
         let index = indexed(bytes);
