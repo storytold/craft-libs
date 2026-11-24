@@ -1,3 +1,4 @@
+use super::images::{ImageLoader, Images};
 use super::lex::{Tok, accent_mark, compose, ligatures, text_symbol, tokenize};
 use super::limits::{MAX_ANCHOR_RUN, MAX_NEST, MAX_SOURCE, MAX_SPEC};
 use super::table::{raw_text, source_text, table};
@@ -8,10 +9,20 @@ use craft_math::latex_text::latex_to_linear;
 // =============================================================================================
 // Import
 
-/// Import a LaTeX source file.
+/// Import a LaTeX source file. Pictures become their placeholder text; [`import_with`] loads them.
 pub fn import(bytes: &[u8]) -> Document {
+    import_from(bytes, None)
+}
+
+/// Import a LaTeX source file, loading the pictures `\includegraphics` names through `images`.
+/// A picture the loader doesn't have, or whose bytes aren't a picture, stays placeholder text.
+pub fn import_with(bytes: &[u8], images: ImageLoader<'_>) -> Document {
+    import_from(bytes, Some(images))
+}
+
+fn import_from(bytes: &[u8], images: Option<ImageLoader<'_>>) -> Document {
     model::begin_import();
-    let mut d = model::to_doc(&parse(&craft_mime::detect::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes))));
+    let mut d = model::to_doc(&parse_with(&craft_mime::detect::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes)), images));
     d.ensure_nonempty();
     d
 }
@@ -149,6 +160,8 @@ pub(super) struct Parser<'a> {
     meta: model::Meta,
     /// Sectioning levels in use: `\part`/`\chapter` push `\section` down.
     top: u8,
+    /// Where pictures load from, when the caller gave a loader.
+    pub(super) images: Option<&'a Images<'a>>,
 }
 
 impl<'a> Parser<'a> {
@@ -166,6 +179,7 @@ impl<'a> Parser<'a> {
             depth,
             meta: Default::default(),
             top: 0,
+            images: None,
         }
     }
 
@@ -728,11 +742,22 @@ impl<'a> Parser<'a> {
                 self.text(")");
             }
             "includegraphics" => {
-                let _ = self.opt_arg();
+                let options = self.opt_arg();
                 let file = self.arg_raw();
-                let mut f = self.fmt();
-                f.italic = true;
-                self.para.push_text(&format!("[Picture: {}]", file.trim()), &f);
+                match self.images.and_then(|i| i.picture(options.as_deref(), &file)) {
+                    Some(img) => self.para.inlines.push(Inline::Image(img)),
+                    None => {
+                        let mut f = self.fmt();
+                        f.italic = true;
+                        self.para.push_text(&format!("[Picture: {}]", file.trim()), &f);
+                    }
+                }
+            }
+            "graphicspath" => {
+                let source = self.arg_source();
+                if let Some(i) = self.images {
+                    i.set_paths(&source);
+                }
             }
             "caption" | "caption*" => {
                 let _ = self.opt_arg();
@@ -867,7 +892,7 @@ impl<'a> Parser<'a> {
                 let spec: String = self.arg_source().chars().take(MAX_SPEC).collect();
                 let toks = self.until_end(name);
                 self.flush();
-                let t = table(toks, &spec, self.depth);
+                let t = table(toks, &spec, self.depth, self.images);
                 if !t.rows.is_empty() {
                     self.blocks.push(FBlock::Table(t));
                 }
@@ -954,8 +979,15 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Parse LaTeX source into a flow.
+/// Parse LaTeX source into a flow. Pictures become their placeholder text; [`parse_with`] loads them.
 pub fn parse(src: &str) -> Flow {
+    parse_with(src, None)
+}
+
+/// Parse LaTeX source into a flow, loading the pictures `\includegraphics` names through
+/// `images` (see [`import_with`]).
+pub fn parse_with(src: &str, images: Option<ImageLoader<'_>>) -> Flow {
+    let images = images.map(Images::new);
     let toks = tokenize(src);
     // The preamble only contributes metadata; without `\begin{document}` it is all body.
     let body_at = toks.iter().position(|t| matches!(t, Tok::Begin(n) if n == "document"));
@@ -971,12 +1003,19 @@ pub fn parse(src: &str) -> Flow {
             match c.as_str() {
                 "title" => meta.title = pre.arg_text(),
                 "author" => meta.author = pre.arg_text(),
+                "graphicspath" => {
+                    let source = pre.arg_source();
+                    if let Some(i) = &images {
+                        i.set_paths(&source);
+                    }
+                }
                 _ => {}
             }
         }
     }
     let mut p = Parser::new(body, 0);
     p.meta = meta;
+    p.images = images.as_ref();
     // `\part` and `\chapter` put `\section` one level down each.
     let uses = |names: [&str; 2]| body.iter().any(|t| matches!(t, Tok::Cmd(c) if names.contains(&c.as_str())));
     p.top = u8::from(uses(["part", "part*"])) + u8::from(uses(["chapter", "chapter*"]));
