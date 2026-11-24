@@ -318,6 +318,7 @@ fn tiff_opens_upright_for_every_orientation() {
     }
 }
 
+#[cfg(feature = "webp")]
 #[test]
 fn webp_opens_upright() {
     let (w, h) = (6, 2);
@@ -390,7 +391,13 @@ fn export_writes_orientation_1_and_keeps_pixels() {
     let mut stale = opened.clone();
     stale.meta.exif = Some(exif(6, true, false));
     stale.meta.xmp = Some(r#"<x tiff:Orientation="6"/>"#.into());
-    for format in [Format::Png, Format::Jpeg, Format::WebP, Format::Tiff] {
+    for format in [
+        Format::Png,
+        Format::Jpeg,
+        #[cfg(feature = "webp")]
+        Format::WebP,
+        Format::Tiff,
+    ] {
         let bytes = encode(&stale, format, &EncodeOptions { jpeg_quality: 100, ..Default::default() }).unwrap();
         let raw = decode_with(&bytes, &DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
         if let Some(e) = &raw.meta.exif {
@@ -667,13 +674,16 @@ fn probe_size_matches_decode() {
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
+        #[cfg(feature = "webp")]
         Format::WebP,
         Format::Gif,
         Format::Bmp,
+        #[cfg(feature = "tga")]
         Format::Tga,
         Format::Qoi,
         Format::Hdr,
         Format::Ico,
+        #[cfg(feature = "exr")]
         Format::OpenExr,
     ];
     assert!(probed.iter().all(|f| rw_formats().contains(f)));

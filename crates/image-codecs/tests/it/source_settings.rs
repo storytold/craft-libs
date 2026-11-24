@@ -71,6 +71,7 @@ fn hostile_jpeg_tables_give_no_estimate_and_never_panic() {
     assert_eq!(jpeg_quality(&png), None);
 }
 
+#[cfg(feature = "webp")]
 #[test]
 fn webp_lossless_and_lossy_are_told_apart() {
     let img = photo(33, 21, ChannelLayout::Rgb);
@@ -87,6 +88,7 @@ fn webp_lossless_and_lossy_are_told_apart() {
     assert!(matches!(webp_encoding(&bytes), Some(WebpEncoding::Lossy { quality: Some(58..=62) })), "{:?}", webp_encoding(&bytes));
 }
 
+#[cfg(feature = "webp")]
 #[test]
 fn hostile_webp_never_panics() {
     let img = photo(24, 24, ChannelLayout::Rgb);

@@ -155,6 +155,7 @@ mod hdr {
 // ---------------------------------------------------------------------------
 
 /// Float formats must keep HDR values (> 1, and negative where allowed).
+#[cfg(all(feature = "exr", feature = "pnm"))]
 #[test]
 fn hdr_values_survive_float_formats() {
     let vals: Vec<f32> = (0..16 * 8 * 3).map(|i| (i as f32 - 40.0) * 0.37).collect();
@@ -180,6 +181,7 @@ fn hdr_format_keeps_bright_values_approximately() {
     }
 }
 
+#[cfg(feature = "exr")]
 #[test]
 fn f16_exr_is_bit_exact() {
     let vals: Vec<f16> = (0..20 * 10 * 4).map(|i| f16::from_f32(i as f32 * 0.013 - 1.0)).collect();
@@ -302,6 +304,7 @@ fn jpeg_format_options_round_trip() {
     }
 }
 
+#[cfg(feature = "webp")]
 #[test]
 fn webp_lossy_request_is_a_lossy_file() {
     let img = test_image(ChannelLayout::Rgb, SampleType::U8);
@@ -347,7 +350,12 @@ fn empty_image_rejected() {
 #[test]
 fn larger_image_png_tiff_exact() {
     let img = synth(513, 257, ChannelLayout::Rgba, SampleType::U16, 99, 1.0);
-    for f in [Format::Png, Format::Tiff, Format::Pnm] {
+    for f in [
+        Format::Png,
+        Format::Tiff,
+        #[cfg(feature = "pnm")]
+        Format::Pnm,
+    ] {
         let back = decode(&encode(&img, f, &EncodeOptions::default()).unwrap()).unwrap();
         assert_eq!(back.data(), img.data(), "{f:?}");
     }

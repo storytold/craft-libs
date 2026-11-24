@@ -28,4 +28,8 @@ impl CodecError {
     pub(crate) fn unsupported(format: Format, reason: impl Into<String>) -> Self {
         CodecError::Unsupported { format, reason: reason.into() }
     }
+    /// `format`'s codec is behind the Cargo feature `feature`, which this build leaves out.
+    pub(crate) fn feature_missing(format: Format, feature: &str) -> Self {
+        CodecError::unsupported(format, format!("this build leaves out the {feature} feature"))
+    }
 }

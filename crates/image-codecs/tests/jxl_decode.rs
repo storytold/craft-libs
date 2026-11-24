@@ -1,5 +1,6 @@
 //! JPEG XL decode through craft-jxl: lossless round trips, metadata, and hostile containers.
-#![cfg(feature = "jxl")]
+// The files are made with our JPEG XL encoder.
+#![cfg(all(feature = "jxl", feature = "jxl-encode"))]
 
 use craft_image_codecs::{ChannelLayout, CodecError, DecodeOptions, EncodeOptions, Format, Image, Limits, SampleType, decode, decode_with, encode};
 

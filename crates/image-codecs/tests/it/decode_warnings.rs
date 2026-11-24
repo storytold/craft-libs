@@ -183,6 +183,7 @@ fn apng_warns_and_keeps_the_first_frame() {
     }
 }
 
+#[cfg(feature = "webp")]
 fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut c = id.to_vec();
     c.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -193,12 +194,14 @@ fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
     c
 }
 
+#[cfg(feature = "webp")]
 fn u24(v: u32) -> [u8; 3] {
     let b = v.to_le_bytes();
     [b[0], b[1], b[2]]
 }
 
 /// An animated WebP: each frame is a full-canvas lossless still wrapped in an ANMF chunk.
+#[cfg(feature = "webp")]
 fn animated_webp(frames: &[Image]) -> Vec<u8> {
     let mut body = b"WEBP".to_vec();
     let mut vp8x = vec![0x02, 0, 0, 0]; // animation flag
@@ -224,6 +227,7 @@ fn animated_webp(frames: &[Image]) -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "webp")]
 #[test]
 fn animated_webp_warns_and_keeps_the_first_frame() {
     let frames: Vec<Image> = COLOURS.iter().map(|&c| solid(c)).collect();
@@ -309,6 +313,7 @@ fn warnings_survive_orientation() {
     assert_eq!(img.convert(ChannelLayout::Rgba, SampleType::U16).warnings, img.warnings);
 }
 
+#[cfg(feature = "dds")]
 /// A flagless depth still declares slices the flat reader and writer cannot retain.
 #[test]
 fn dds_depth_probe_refuses_unretained_slices_without_volume_flags() {
@@ -336,6 +341,7 @@ fn dds_depth_probe_refuses_unretained_slices_without_volume_flags() {
 #[test]
 fn additional_images_probe_uses_container_structure_without_decoding_pixels() {
     use craft_image_codecs::has_unretained_source_data;
+    #[cfg(feature = "webp")]
     let frames: Vec<_> = COLOURS.iter().take(2).map(|&c| solid(c)).collect();
     for (bytes, multiple) in [
         (gif(1), false),
@@ -344,7 +350,9 @@ fn additional_images_probe_uses_container_structure_without_decoding_pixels() {
         (apng(1, false, false), false),
         (apng(1, false, true), true),
         (apng(2, true, false), true),
+        #[cfg(feature = "webp")]
         (animated_webp(&frames[..1]), false),
+        #[cfg(feature = "webp")]
         (animated_webp(&frames), true),
         (tiff(&[(0, SampleType::U8)]), false),
         (tiff(&[(0, SampleType::U8), (2, SampleType::U8)]), true),
@@ -368,6 +376,7 @@ fn additional_images_probe_uses_container_structure_without_decoding_pixels() {
     assert!(has_unretained_source_data(&broken).is_err(), "junk block after the first frame");
     assert!(has_unretained_source_data(&two[..two.len() - 1]).unwrap(), "two frames seen, trailer cut off");
     let image = solid(COLOURS[0]);
+    #[cfg(feature = "dds")]
     for mipmaps in [false, true] {
         let mut options = EncodeOptions::default();
         options.dds.mipmaps = mipmaps;
@@ -382,7 +391,9 @@ fn additional_images_probe_uses_container_structure_without_decoding_pixels() {
             assert!(has_unretained_source_data(&flagless).unwrap());
         }
     }
+    #[cfg(feature = "dpx")]
     let dpx = encode(&image, Format::Dpx, &Default::default()).unwrap();
+    #[cfg(feature = "dpx")]
     for little in [false, true] {
         let mut bytes = dpx.clone();
         if little {
@@ -418,6 +429,7 @@ fn additional_images_probe_uses_container_structure_without_decoding_pixels() {
     assert!(has_unretained_source_data(b"\x89PNG\r\n\x1a\n").is_err());
 }
 
+#[cfg(feature = "fits")]
 /// FITS RGB planes form one image; other cubes and later image HDUs would be discarded.
 #[test]
 fn fits_additional_images_probe_distinguishes_color_planes_and_hdus() {
@@ -456,6 +468,7 @@ fn fits_additional_images_probe_distinguishes_color_planes_and_hdus() {
 }
 
 /// Tables and extension heaps are source data even though the flat image decoder skips them.
+#[cfg(feature = "fits")]
 #[test]
 fn fits_source_probe_preserves_nonimage_payload_and_allows_empty_extensions() {
     let primary = encode(&solid(COLOURS[0]), Format::Fits, &Default::default()).unwrap();

@@ -11,6 +11,7 @@
 //!
 //! Everything here reads hostile bytes: every index is checked and a malformed file gives `None`.
 
+#[cfg(feature = "webp")]
 use crate::codecs::vp8;
 
 /// ITU-T T.81 Annex K.1, the example luminance quantisation table, in natural (row) order.
@@ -146,6 +147,7 @@ fn read_dqt(mut seg: &[u8], tables: &mut [Option<Table>; 4]) {
 }
 
 /// How a WebP file's image is compressed.
+#[cfg(feature = "webp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebpEncoding {
     /// VP8L.
@@ -157,6 +159,7 @@ pub enum WebpEncoding {
 
 /// The compression of a WebP file's (first) image, or `None` when it isn't a WebP or holds no
 /// image chunk.
+#[cfg(feature = "webp")]
 pub fn webp_encoding(bytes: &[u8]) -> Option<WebpEncoding> {
     if bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WEBP") {
         return None;
@@ -165,6 +168,7 @@ pub fn webp_encoding(bytes: &[u8]) -> Option<WebpEncoding> {
 }
 
 /// The first `VP8 ` or `VP8L` chunk among `chunks`, looking inside animation frames.
+#[cfg(feature = "webp")]
 fn find_image_chunk(mut chunks: &[u8], depth: u8) -> Option<WebpEncoding> {
     while let Some(head) = chunks.get(..8) {
         let fourcc = head.get(..4)?;
@@ -190,6 +194,7 @@ fn find_image_chunk(mut chunks: &[u8], depth: u8) -> Option<WebpEncoding> {
 
 /// The quality a VP8 key frame's base quantiser index maps back to on our encoder's scale (the
 /// quality whose index is nearest; the middle one when several share it).
+#[cfg(feature = "webp")]
 fn vp8_quality(frame: &[u8]) -> Option<u8> {
     let qi = vp8_base_quantizer(frame)?;
     let distance = |q: u8| vp8::quantizer_index(q).abs_diff(qi);
@@ -202,6 +207,7 @@ fn vp8_quality(frame: &[u8]) -> Option<u8> {
 /// The base quantiser index of a VP8 key frame: `y_ac_qi` from its frame header (RFC 6386
 /// §9.2–9.6, §19.2), averaged over the segments when segmentation sets absolute quantisers or
 /// adjusted by their mean delta otherwise.
+#[cfg(feature = "webp")]
 fn vp8_base_quantizer(frame: &[u8]) -> Option<u8> {
     let tag = frame.get(..3)?;
     // Bit 0 clear: a key frame, which carries the start code and dimensions.
@@ -260,6 +266,7 @@ fn vp8_base_quantizer(frame: &[u8]) -> Option<u8> {
 }
 
 /// RFC 6386 §7's boolean decoder, reading zeros past the end of its data.
+#[cfg(feature = "webp")]
 struct BoolDecoder<'a> {
     data: &'a [u8],
     pos: usize,
@@ -270,6 +277,7 @@ struct BoolDecoder<'a> {
     overrun: usize,
 }
 
+#[cfg(feature = "webp")]
 impl<'a> BoolDecoder<'a> {
     fn new(data: &'a [u8]) -> Self {
         let mut d = BoolDecoder { data, pos: 0, value: 0, range: 255, bit_count: 0, overrun: 0 };

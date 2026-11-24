@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use super::{MAX_PPI, file_resolution, usable};
+#[cfg(feature = "webp")]
 use crate::{ChannelLayout, EncodeOptions, Format, Image, SampleType};
 
 /// A little- or big-endian classic TIFF whose IFD0 holds XResolution and YResolution
@@ -153,6 +154,7 @@ fn png_phys_in_metres_only_before_image_data() {
 
 /// What the probe reads is what a full decode reports, for each format the encoder writes with
 /// a resolution.
+#[cfg(feature = "webp")]
 #[test]
 fn agrees_with_decode_for_encoded_files() {
     let mut img = Image::from_raw(2, 1, ChannelLayout::Rgb, SampleType::U8, vec![10, 20, 30, 40, 50, 60]).unwrap();
@@ -165,6 +167,7 @@ fn agrees_with_decode_for_encoded_files() {
     }
 }
 
+#[cfg(feature = "webp")]
 #[test]
 fn webp_without_exif_has_none() {
     let img = Image::from_raw(1, 1, ChannelLayout::Rgb, SampleType::U8, vec![1, 2, 3]).unwrap();

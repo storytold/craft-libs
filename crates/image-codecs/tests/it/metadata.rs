@@ -217,7 +217,13 @@ fn jpeg_with_oversized_metadata_still_encodes() {
 fn embed_flags_disable_metadata() {
     let img = rich_image(ChannelLayout::Rgb);
     let opts = EncodeOptions { embed_icc: false, embed_metadata: false, ..Default::default() };
-    for f in [Format::Png, Format::Jpeg, Format::Tiff, Format::WebP] {
+    for f in [
+        Format::Png,
+        Format::Jpeg,
+        Format::Tiff,
+        #[cfg(feature = "webp")]
+        Format::WebP,
+    ] {
         let back = decode(&encode(&img, f, &opts).unwrap()).unwrap();
         assert!(back.icc.is_none(), "{f:?}");
         assert!(back.meta.exif.is_none() && back.meta.xmp.is_none(), "{f:?}");
@@ -308,6 +314,7 @@ fn metadata_survives_depth_conversion() {
     assert_eq!(back.meta.xmp, img.meta.xmp);
 }
 
+#[cfg(feature = "webp")]
 /// #2399: a WebP export keeps the resolution even when the image has no EXIF (WebP has no
 /// resolution field of its own, so a minimal EXIF block carries it), lossless and lossy alike,
 /// and no longer warns that it is dropped.

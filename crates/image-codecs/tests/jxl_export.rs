@@ -1,13 +1,13 @@
 //! Lossless JPEG XL export and honest export-only capability reporting.
 
-use craft_image_codecs::{
-    ASYMMETRIC_EXCEPTIONS, ChannelLayout, CodecError, EncodeOptions, Format, Image, SampleType, caps, decode, detect, encode, from_extension,
-};
+use craft_image_codecs::{ASYMMETRIC_EXCEPTIONS, ChannelLayout, CodecError, Format, SampleType, caps, decode, detect, from_extension};
+#[cfg(feature = "jxl-encode")]
+use craft_image_codecs::{EncodeOptions, Image, encode};
 
 #[test]
 fn jpeg_xl_is_export_only_without_the_jxl_feature_and_detects_both_signatures() {
     let c = caps(Format::Jxl);
-    assert!(c.write);
+    assert_eq!(c.write, cfg!(feature = "jxl-encode"));
     assert_eq!(c.read, cfg!(feature = "jxl"));
     assert_eq!(c.depths, &[SampleType::U8, SampleType::U16]);
     assert_eq!(c.layouts, &[ChannelLayout::Gray, ChannelLayout::Rgb, ChannelLayout::Rgba]);
@@ -27,6 +27,7 @@ fn jpeg_xl_is_export_only_without_the_jxl_feature_and_detects_both_signatures() 
     assert!(matches!(err, Err(CodecError::Malformed { format: Format::Jxl, .. })), "{err:?}");
 }
 
+#[cfg(feature = "jxl-encode")]
 #[test]
 fn jpeg_xl_encoding_is_deterministic_and_converts_float_to_integer() {
     let input =
@@ -42,6 +43,7 @@ fn jpeg_xl_encoding_is_deterministic_and_converts_float_to_integer() {
     assert_eq!(detect(&bytes), Some(Format::Jxl));
 }
 
+#[cfg(feature = "jxl-encode")]
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn jpeg_xl_decodes_losslessly_with_independent_decoder() {
@@ -86,6 +88,7 @@ fn jpeg_xl_decodes_losslessly_with_independent_decoder() {
     }
 }
 
+#[cfg(feature = "jxl-encode")]
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn jpeg_xl_preserves_sixteen_bit_alpha_across_dimension_header_sizes() {
@@ -110,6 +113,7 @@ fn jpeg_xl_preserves_sixteen_bit_alpha_across_dimension_header_sizes() {
     }
 }
 
+#[cfg(feature = "jxl-encode")]
 #[test]
 fn jpeg_xl_rejects_one_pixel_images_without_panicking() {
     // zune-jpegxl currently requires at least two pixels on each axis.

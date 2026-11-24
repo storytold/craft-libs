@@ -273,6 +273,7 @@ pub fn replace_webp_exif(webp: &mut Vec<u8>, exif: &[u8]) -> Result<(), CodecErr
 mod tests {
     use super::*;
     const EXIF: &[u8] = b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+    #[cfg(feature = "webp")]
     #[test]
     fn replacements_match_previous_code_on_mutated_containers() {
         fn old_png(png: &mut Vec<u8>, exif: &[u8]) {
@@ -359,6 +360,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "webp")]
     #[test]
     fn explicit_replacements_preserve_raw_orientation_in_real_encodings() {
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();

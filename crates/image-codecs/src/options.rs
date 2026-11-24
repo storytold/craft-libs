@@ -317,6 +317,7 @@ impl Default for EncodeOptions {
 /// A zero-filled buffer of `len` elements, allocated fallibly: an allocation failure becomes
 /// [`CodecError::LimitExceeded`] instead of aborting the process (which `catch_unwind` cannot
 /// stop).
+#[cfg(any(feature = "exr", feature = "iff", feature = "webp"))]
 pub(crate) fn alloc_zeroed<T: Copy + Default>(len: usize) -> Result<Vec<T>, CodecError> {
     let mut v = Vec::new();
     v.try_reserve_exact(len).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {len} elements for the image")))?;

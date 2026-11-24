@@ -103,9 +103,10 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     ),
     (
         Format::Jxl,
-        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder in every build; JPEG XL decode \
-         (craft-jxl on jxl-oxide, pure Rust) is behind the non-default `jxl` feature, which official \
-         builds enable. Without the feature JPEG XL is written but not read.",
+        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder behind the default \
+         `jxl-encode` feature; JPEG XL decode (craft-jxl on jxl-oxide, pure Rust) is behind the \
+         non-default `jxl` feature, which official builds enable. With only one of them JPEG XL is \
+         written but not read, or read but not written.",
     ),
     (
         Format::Heif,
@@ -276,8 +277,34 @@ impl Format {
     }
 }
 
+/// The Cargo feature holding `format`'s codec, when this build leaves it out.
+pub(crate) fn missing_feature(format: Format) -> Option<&'static str> {
+    let (feature, enabled) = match format {
+        Format::Dds => ("dds", cfg!(feature = "dds")),
+        Format::Dicom => ("dicom", cfg!(feature = "dicom")),
+        Format::Dpx | Format::Cineon => ("dpx", cfg!(feature = "dpx")),
+        Format::OpenExr => ("exr", cfg!(feature = "exr")),
+        Format::Fits => ("fits", cfg!(feature = "fits")),
+        Format::Iff => ("iff", cfg!(feature = "iff")),
+        Format::JpegLs => ("jpegls", cfg!(feature = "jpegls")),
+        Format::Pnm => ("pnm", cfg!(feature = "pnm")),
+        Format::Sgi => ("sgi", cfg!(feature = "sgi")),
+        Format::SunRaster => ("sunraster", cfg!(feature = "sunraster")),
+        Format::Tga => ("tga", cfg!(feature = "tga")),
+        Format::WebP => ("webp", cfg!(feature = "webp")),
+        Format::Xpm => ("xpm", cfg!(feature = "xpm")),
+        _ => return None,
+    };
+    (!enabled).then_some(feature)
+}
+
 /// Capability table. `read`/`write` reflect the current build's features.
 pub fn caps(format: Format) -> FormatCaps {
+    let caps = format_caps(format);
+    if missing_feature(format).is_some() { FormatCaps { read: false, write: false, ..caps } } else { caps }
+}
+
+fn format_caps(format: Format) -> FormatCaps {
     let base = FormatCaps {
         read: true,
         write: true,
@@ -335,7 +362,13 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Jxl => FormatCaps {
+            read: cfg!(feature = "jxl"),
+            write: cfg!(feature = "jxl-encode"),
+            depths: &[S::U8, S::U16],
+            layouts: &[L::Gray, L::Rgb, L::Rgba],
+            ..base
+        },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
