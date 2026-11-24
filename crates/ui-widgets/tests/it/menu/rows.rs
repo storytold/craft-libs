@@ -9,7 +9,7 @@ use craft_ui::contract::{CommandSet, Props as _, Show as _, ShowContainer as _, 
 use craft_ui::list::{CommandHighlight, ThumbAspect};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::FacePaint;
-use craft_ui::runtime::commands::CommandState;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
 use craft_ui::runtime::env::{Scale, with_env};
 use craft_ui::testing::{Fixture, Room, pointer, trial};
 use egui::Rect;
@@ -139,6 +139,26 @@ fn a_caller_shortcut_wins_over_the_bound_commands_chord_and_hide_shortcut_shows_
     let plain = row(&fixture, "Plain");
     assert!(other_runs(&fixture, plain.rect, "Plain").is_empty(), "a row with no command and no text shows no shortcut");
     assert_eq!(listed(&fixture, "Plain"), None, "and lists none");
+}
+
+/// A command row's shortcut part is named by its chord spoken, the name its `Kbd` face gives itself, not by the row's
+/// command label.
+#[trial]
+fn a_command_rows_shortcut_part_is_named_by_its_chord_spoken() {
+    let save =
+        CommandDef::new(CommandRef::new("demo.save"), "Save", Scope::app()).with_default(Binding::parse("Cmd+S").expect("the trial's chord parses"));
+    let catalog = AppCatalog::new(vec![save], 1).expect("the trial's catalog is valid");
+    let mut fixture = Fixture::new(|ui| {
+        Menu::inline("m").show(ui, |ui, _| {
+            MenuItem::command(CommandRef::new("demo.save")).show(ui);
+        });
+    });
+    fixture.os(Os::Linux).commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let row = fixture.by_label("Save").expect("the row is named by its command");
+    let shortcut = fixture.by_label("Ctrl+S").expect("a node is named by the row's chord spoken");
+    assert!(row.rect.contains(shortcut.rect.center()), "the chord's node is the row's shortcut part: {:?} in {:?}", shortcut.rect, row.rect);
+    assert_ne!(shortcut.node, row.node, "the chord names the shortcut part's sub-node, not the row");
 }
 
 #[trial]
