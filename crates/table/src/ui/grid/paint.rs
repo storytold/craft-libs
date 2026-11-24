@@ -17,8 +17,8 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 use super::editor::{EditState, Mode};
 use super::row::CellPaint;
 use super::{
-    CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnFilter, GridLayout, GridModel, SheetGeometry,
-    SheetMetrics,
+    CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnEdges, ColumnFilter, GridLayout, GridModel,
+    SheetGeometry, SheetMetrics,
 };
 use super::{digits_of, edges, header_insets, row_digits};
 use crate::ui::error_tag::ErrorTag;
@@ -185,13 +185,40 @@ impl CellGrid<'_> {
         Rect::from_center_size(corner, Vec2::splat(size))
     }
 
+    /// Whether the columns' resize edges are declared and pressed: on the headers, or also over the cells.
+    pub(super) fn shows_column_edges(&self) -> bool {
+        self.headings || self.column_edges == ColumnEdges::Cells
+    }
+
+    /// Declares each column's end edge once: from the header's top (the cells' top without headings) down to the
+    /// header's bottom, or with [`ColumnEdges::Cells`] to the last visible row's bottom.
+    fn declare_column_edges(&self, geometry: &SheetGeometry, columns: &[u32], rows: &[u32], cx: &mut PartsCx<'_, Self>) {
+        let cells = geometry.cells();
+        let reach = craft_behavior::hit::LINE_REACH;
+        let rtl = geometry.right_to_left();
+        let rows_bottom =
+            rows.last().map_or(cells.top(), |&row| (geometry.y(row) + geometry.rows().size(row) as f32 * geometry.zoom()).min(cells.bottom()));
+        for &column in columns {
+            let header = Self::column_header(geometry, column);
+            let top = if self.headings { header.top() } else { cells.top() };
+            let bottom = if self.column_edges == ColumnEdges::Cells { rows_bottom } else { header.bottom() };
+            let x = if rtl { header.left() } else { header.right() };
+            let edge = Rect::from_min_max(Pos2::new(x - reach, top), Pos2::new(x + reach, bottom.max(top)));
+            cx.part(COLUMN_EDGE.at(u64::from(column)), edge)
+                .sense(Sense::CLICK | Sense::DRAG)
+                .priority(HitPriority::new(HitLevel::Body, 1))
+                .cursor(CursorIcon::ResizeColumn)
+                .over()
+                .pointer_only("Column width is set from the app's menu");
+        }
+    }
+
     /// Declares the grid's own parts: header cells, edges, corner, fill handle, range border and the editor.
     pub(super) fn declare_parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let geometry = self.geometry_for(rect, cx.offset(), cx.flow.is_rtl(), cx.style);
         let (columns, rows) = Self::visible_lines(&geometry);
         let sense = Sense::CLICK | Sense::DRAG | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS;
         let reach = craft_behavior::hit::LINE_REACH;
-        let rtl = geometry.right_to_left();
         let marks = Marks::of(&self.snapshot, geometry.rows().count(), geometry.columns().count());
         let flags = |held: Option<bool>| if held.is_some() { Flags::SELECTED } else { Flags::empty() };
         if self.headings {
@@ -205,14 +232,6 @@ impl CellGrid<'_> {
                     .over()
                     .flags(flags(Marks::of_line(&marks.columns, column)))
                     .pointer_only("Select the column is Cmd+Space");
-                let end = if rtl { header.left_center() } else { header.right_center() };
-                let edge = Rect::from_center_size(end, Vec2::new(reach * 2.0, header.height()));
-                cx.part(COLUMN_EDGE.at(u64::from(column)), edge)
-                    .sense(Sense::CLICK | Sense::DRAG)
-                    .priority(HitPriority::new(HitLevel::Body, 1))
-                    .cursor(CursorIcon::ResizeColumn)
-                    .over()
-                    .pointer_only("Column width is set from the app's menu");
             }
             for &row in &rows {
                 let header = Self::row_header(&geometry, row);
@@ -229,6 +248,9 @@ impl CellGrid<'_> {
                     .over()
                     .pointer_only("Row height is set from the app's menu");
             }
+        }
+        if self.shows_column_edges() {
+            self.declare_column_edges(&geometry, &columns, &rows, cx);
         }
         let selection = self.snapshot.clone();
         if let Some(range) = selection.current() {

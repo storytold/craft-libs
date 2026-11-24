@@ -37,6 +37,11 @@ impl Reply {
         Reply { label: label.into(), role, lettered: true, chord: None, enabled: true, reason: None }
     }
 
+    /// The answer's label.
+    pub(super) fn label(&self) -> &Label {
+        &self.label
+    }
+
     /// An answer without a letter.
     pub(super) fn plain(label: impl Into<Label>, role: DialogRole) -> Self {
         Reply { lettered: false, ..Reply::new(label, role) }
@@ -142,11 +147,6 @@ fn default_position(answers: &[FooterButton]) -> Option<usize> {
 /// The index Enter answers with: the default answer, when it is available.
 fn default_answer(answers: &[FooterButton]) -> Option<usize> {
     default_position(answers).filter(|at| answers[*at].is_enabled())
-}
-
-/// Whether the answers include a default one, available or not.
-fn has_default(answers: &[FooterButton]) -> bool {
-    default_position(answers).is_some()
 }
 
 type Below<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
@@ -305,9 +305,9 @@ impl<'a> Prompt<'a> {
     pub fn show(self, ui: &mut Ui) -> PromptOutput {
         let Prompt { title, message, answers, extras, icon, open, escape, alert } = self;
         let (escape_at, enter_at) = (escape_answer(&answers, escape), default_answer(&answers));
-        // A blocked default answer leaves focus off the buttons: landing on the first other one would let Enter answer
-        // with it (Discard under a blocked Recover).
-        let initial = if enter_at.is_none() && has_default(&answers) { Initial::Keep } else { Initial::Default };
+        // With no available default answer (none, or a blocked one) focus stays off the buttons: landing on the first
+        // other one would let Enter answer with it (Discard under a blocked Recover, Cancel in a job window).
+        let initial = if enter_at.is_some() { Initial::Default } else { Initial::Keep };
         let mut dialog = Dialog::prompt(title).buttons(answers).initial_focus(initial).close_on_enter(enter_at.is_some());
         if alert {
             let env = Env::of(ui);

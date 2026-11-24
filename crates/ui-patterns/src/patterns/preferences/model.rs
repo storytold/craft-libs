@@ -6,7 +6,7 @@ use craft_theme::{Rgba, Srgba};
 use egui::{Response, Ui};
 
 use crate::contract::{Entry, NoValue, Outcome};
-use crate::runtime::env::UnitKind;
+use crate::runtime::env::{LengthUnits, UnitKind};
 use crate::runtime::requests::ColorRequest;
 
 /// A setting's value as it crosses the boundary between the window and the host.
@@ -208,6 +208,8 @@ pub enum RowKind<'a> {
         range: RangeInclusive<i64>,
         /// What the number counts, shown after the field in the user's language.
         unit: Option<UnitKind>,
+        /// A translated unit after the number, for quantities with no `UnitKind`; `counting` wins when both are set.
+        unit_text: Option<&'a str>,
     },
     /// A number field.
     #[non_exhaustive]
@@ -220,6 +222,18 @@ pub enum RowKind<'a> {
         decimals: u8,
         /// What the number counts, shown after the field in the user's language.
         unit: Option<UnitKind>,
+        /// A translated unit after the number, for quantities with no `UnitKind`; `counting` wins when both are set.
+        unit_text: Option<&'a str>,
+    },
+    /// A length: stored in `lengths.stored` and shown in `lengths.shown`; typed text accepts any length spelling.
+    #[non_exhaustive]
+    Length {
+        /// The current value in the stored unit.
+        value: f64,
+        /// The values the field accepts, in the stored unit.
+        range: RangeInclusive<f64>,
+        /// The stored and the shown unit.
+        lengths: LengthUnits,
     },
     /// A text field.
     Text(&'a str),
@@ -239,12 +253,27 @@ impl<'a> RowKind<'a> {
 
     /// An integer field limited to `range`.
     pub fn int(value: i64, range: RangeInclusive<i64>) -> Self {
-        RowKind::Int { value, range, unit: None }
+        RowKind::Int { value, range, unit: None, unit_text: None }
     }
 
     /// A number field limited to `range`, showing `decimals` decimal places.
     pub fn float(value: f64, range: RangeInclusive<f64>, decimals: u8) -> Self {
-        RowKind::Float { value, range, decimals, unit: None }
+        RowKind::Float { value, range, decimals, unit: None, unit_text: None }
+    }
+
+    /// A length field limited to `range` in the stored unit, shown in the shown unit of `lengths`.
+    pub fn length(value: f64, range: RangeInclusive<f64>, lengths: LengthUnits) -> Self {
+        RowKind::Length { value, range, lengths }
+    }
+
+    /// A translated unit shown after an integer or number field, for quantities with no `UnitKind`; other kinds
+    /// ignore it.
+    #[must_use]
+    pub fn unit_text(mut self, text: &'a str) -> Self {
+        if let RowKind::Int { unit_text, .. } | RowKind::Float { unit_text, .. } = &mut self {
+            *unit_text = Some(text);
+        }
+        self
     }
 
     /// What an integer or number field counts, shown after it, or what the ids of a choice count (the choice labels its
@@ -329,8 +358,8 @@ pub trait PreferencesModel {
     fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool;
     /// Resets the page's rows in the draft to their defaults.
     fn reset_page(&mut self, page: &str);
-    /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
-    /// every pass.
+    /// Draws the dialogs the host opened from this window (a colour picker) with the body's `Ui`, in the window's own
+    /// viewport. Called last in every pass.
     fn nested(&mut self, _ui: &mut Ui) {}
     /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
     fn nested_open(&self) -> bool {

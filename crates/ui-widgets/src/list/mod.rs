@@ -21,8 +21,8 @@ pub use findings::{Finding, Findings, FindingsList, FindingsListStyle, FindingsS
 pub use predicate::{DropTest, RowTest, RowText};
 pub(crate) use row::RowThumb;
 pub use row::{
-    CellStatus, HueTarget, ListRow, ListRowStyle, RowDragSpot, RowEvent, RowInk, RowLines, RowOutput, RowStyleCx, ThumbAspect, ThumbPaint, ThumbSize,
-    ThumbTarget, ThumbTargets, TrailingFace, TrailingPart, TreeLeaves, label_color_label, tree_steps,
+    CellStatus, HueTarget, LabelUnderline, ListRow, ListRowStyle, RowDragSpot, RowEvent, RowInk, RowLines, RowOutput, RowRun, RowStyleCx,
+    ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget, ThumbTargets, TrailingFace, TrailingPart, TreeLeaves, label_color_label, tree_steps,
 };
 pub use toggle::{ToggleCell, ToggleFace, ToggleState};
 pub use tree::OpenSet;

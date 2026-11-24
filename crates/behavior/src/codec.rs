@@ -62,6 +62,11 @@ pub trait Codec {
         true
     }
 
+    /// Whether a paste the codec reads whole replaces the field's text, wherever the caret is.
+    fn whole_paste(&self, _pasted: &str) -> bool {
+        false
+    }
+
     /// The text the field shows after committing `v`, which was parsed from `text`.
     fn normalise(&self, _text: &str, v: &Self::Value) -> String {
         self.format(v)
@@ -101,6 +106,10 @@ impl<C: Codec + ?Sized> Codec for &C {
 
     fn filter(&self, c: char) -> bool {
         (**self).filter(c)
+    }
+
+    fn whole_paste(&self, pasted: &str) -> bool {
+        (**self).whole_paste(pasted)
     }
 
     fn normalise(&self, text: &str, v: &Self::Value) -> String {
@@ -158,6 +167,8 @@ pub struct NumberCodec {
     custom: Option<Custom>,
     /// Typing rules of a zoom field ([`NumberCodec::zoom_typing`]).
     zoom: bool,
+    /// A lone percentage is that share of the start value ([`NumberCodec::share_of_start`]).
+    share: bool,
     signed_zoom: bool,
 }
 
@@ -168,6 +179,7 @@ impl fmt::Debug for NumberCodec {
             .field("decimals", &self.decimals)
             .field("fixed", &self.fixed)
             .field("zoom", &self.zoom)
+            .field("share", &self.share)
             .field("signed_zoom", &self.signed_zoom)
             .field("custom", &self.custom.is_some())
             .finish()
@@ -185,6 +197,7 @@ impl PartialEq for NumberCodec {
             && self.decimals == other.decimals
             && self.fixed == other.fixed
             && self.zoom == other.zoom
+            && self.share == other.share
             && self.signed_zoom == other.signed_zoom
             && same_custom
     }
@@ -220,7 +233,7 @@ const NUMBER_SAMPLE: &str = "0000.00";
 impl NumberCodec {
     /// A codec reading with `reader` and writing at most `decimals` decimal places.
     pub fn new(reader: Reader, decimals: usize) -> Self {
-        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false, signed_zoom: false }
+        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false, share: false, signed_zoom: false }
     }
 
     /// The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
@@ -267,6 +280,14 @@ impl NumberCodec {
             None => self.reader.read(kept, None)?,
         };
         Ok((number, ParseNote { cut, ..ParseNote::default() }))
+    }
+
+    /// The same codec reading a lone percentage (`50%`, [`Reader::share`]) as that share of the value the edit
+    /// started from, as a size field does: every pass of the edit reads the same value. With no start value it is no
+    /// value, so it never applies as it is typed; it applies on commit.
+    pub fn share_of_start(mut self) -> Self {
+        self.share = true;
+        self
     }
 
     /// The same codec writing at most `decimals` decimal places.
@@ -348,6 +369,11 @@ impl Codec for NumberCodec {
         }
         if self.zoom {
             return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
+        }
+        if self.share
+            && let Some(share) = self.reader.share(trimmed)
+        {
+            return start.map(|start| (Some(start * share), ParseNote::default())).ok_or(NotAValue);
         }
         match self.reader.read_tagged(text, *start) {
             Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),

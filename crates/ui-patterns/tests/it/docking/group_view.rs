@@ -9,6 +9,8 @@ use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockGrid, DockPanels, DockSizes, DragUnit, GroupAt, GroupDrag, PanelSpec, PanelSpecs};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::dock::DockArea;
+use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
+use craft_ui::runtime::commands::EditCommands;
 use craft_ui::runtime::drag;
 use craft_ui::testing::{Fixture, last_pass_runs, pointer, trial};
 use egui::{Rect, Shape, Ui, Vec2};
@@ -209,6 +211,67 @@ fn a_floating_tool_rails_grip_moves_its_window() {
         "the window moved by the pointer's travel {travel:?}, keeping the grabbed point under it: {before:?} -> {after:?}"
     );
     assert_eq!(layout.borrow().as_ref().map(|l| l.floating.len()), Some(1), "still one floating window");
+}
+
+/// The host shows a real tool rail with its Edit Toolbar button, as an app's Tools panel does, and records whether each
+/// shown pass reported the button and whether a click on it was reported.
+struct ToolRailPanels {
+    slots: Tracked<Vec<ToolSlot<u8>>>,
+    last: Tracked<LastUsed<u8>>,
+    reported: Rc<RefCell<Vec<bool>>>,
+    clicked: Rc<Cell<bool>>,
+}
+
+impl DockPanels<usize> for ToolRailPanels {
+    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn group_view(&mut self, panels: &[usize], _: usize, ui: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if !panels.contains(&RAIL) {
+            return None;
+        }
+        let rail = ToolRail::new("Tools", &self.slots, &0, &self.last).tear_off().edit_toolbar("Edit Toolbar");
+        match at {
+            GroupAt::Measure(width) => Some(rail.measure_rail(ui, width, |_, _| {}).y),
+            GroupAt::Show(rect) => {
+                let out = rail.show_rail(ui, |_, _| {});
+                self.reported.borrow_mut().push(out.edit_toolbar.is_some());
+                self.clicked.set(self.clicked.get() || out.edit_toolbar.as_ref().is_some_and(craft_ui::contract::clicked));
+                Some(rect.height())
+            }
+        }
+    }
+}
+
+/// A tool rail its host shows in a docked column reports its Edit Toolbar button in every pass it shows, settled or
+/// not, and the click on it, so the app can open its drawer.
+#[trial]
+fn a_docked_tool_rail_reports_its_edit_toolbar_button() {
+    let tools: Vec<ToolSlot<u8>> = [EditCommands::Undo, EditCommands::Redo]
+        .into_iter()
+        .zip(0u8..)
+        .map(|(command, id)| ToolSlot::new(u32::from(id), vec![RailTool::new(id, command)]))
+        .collect();
+    let (reported, clicked) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(false)));
+    let mut panels =
+        ToolRailPanels { slots: Tracked::new(tools), last: Tracked::new(LastUsed::default()), reported: reported.clone(), clicked: clicked.clone() };
+    let dock = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![RAIL], 0)]).with_steps(1)]);
+    let root = Node::split(Axis::X, SplitSize::FixedFirst(120.0), dock, Node::tabs(vec![1], 0));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let specs = Tracked::new(RailSpecs);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = DockArea::new("Rail dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(800.0, 600.0)).settle();
+    assert!(
+        !reported.borrow().is_empty() && reported.borrow().iter().all(|seen| *seen),
+        "every shown pass reports the button: {:?}",
+        reported.borrow()
+    );
+    let button = fixture.by_label("Edit Toolbar").expect("the docked rail shows its Edit Toolbar button");
+    reported.borrow_mut().clear();
+    fixture.click(&button).idle(3);
+    assert!(reported.borrow().iter().all(|seen| *seen), "the passes of the click report the button: {:?}", reported.borrow());
+    assert!(clicked.get(), "the click on the button is reported");
 }
 
 /// A panel whose body lists more rows than its group shows, with a footer of one action.

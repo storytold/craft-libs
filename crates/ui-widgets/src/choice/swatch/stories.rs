@@ -1,9 +1,10 @@
 //! Stories of `Swatch`.
 
-use super::{Swatch, SwatchFill, SwatchImage, SwatchShape};
+use super::{CellMarks, Swatch, SwatchFill, SwatchImage, SwatchShape};
 use crate::choice::RadioGroup;
 use crate::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::{Row, Stack};
+use crate::primitives::FacePaint;
 use crate::testing::pictures::sample_picture;
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::Mixed;
@@ -83,6 +84,47 @@ fn swatch_table_cells(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             // A cell's place in its set is the owning table's item step; each story cell stands alone in its own.
             Row::new().show(ui, |ui, _| {
                 show_as_only_item(ui, Swatch::new(format!("Cell {}", n + 1), color).cell().selected(n == 2));
+            });
+        }
+    });
+    StoryOutput::default()
+}
+
+/// The well shows a host face over its checker instead of the colour.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_face(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let face = FacePaint::new(1, |cx, rect| {
+        cx.painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0x2f, 0x6f, 0xd9));
+    });
+    Swatch::new("Face", BLUE).face(face).show(ui).into()
+}
+
+/// The colour as a ring, opaque, translucent, selected and mixed.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_stroke(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Row::new().show(ui, |ui, _| {
+        Swatch::new("Ring", BLUE).stroke().show(ui);
+        Swatch::new("Translucent ring", Srgba { r: 0.90, g: 0.28, b: 0.30, a: 0.43 }).stroke().show(ui);
+        Swatch::new("Selected ring", PALETTE[5]).stroke().selected(true).show(ui);
+        Swatch::new("Mixed ring", Mixed::<Srgba>::Mixed).stroke().show(ui);
+    });
+    StoryOutput::default()
+}
+
+/// One cell for each mark: edge, locked, web safe, transparent and source colour.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_marks(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let marks = [
+        ("Edge", CellMarks::default().edge(true)),
+        ("Locked", CellMarks::default().locked(true)),
+        ("Web safe", CellMarks::default().web_safe(true)),
+        ("Transparent", CellMarks::default().transparent(true)),
+        ("Source", CellMarks::default().source(PALETTE[0])),
+    ];
+    Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+        for (name, marks) in marks {
+            Row::new().show(ui, |ui, _| {
+                show_as_only_item(ui, Swatch::new(name, BLUE).cell().marks(marks));
             });
         }
     });

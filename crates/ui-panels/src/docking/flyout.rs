@@ -1,6 +1,6 @@
 //! `Flyout`: the panel an icon of an iconic column opens beside the column.
 
-use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Place, PlacementChange, ResizeEdges};
+use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, Place, PlacementChange, ResizeEdges};
 use crate::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
 };
@@ -48,8 +48,8 @@ impl Outcome for FlyoutOutput {
     }
 }
 
-/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape and a press
-/// outside close it; with Auto-Collapse Iconic Panels the focus leaving it closes it too. Its body is measured at the
+/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape closes it; with
+/// Auto-Collapse Iconic Panels a press outside it and the focus leaving it close it too. Its body is measured at the
 /// flyout's width first: the flyout is as tall as the body measures within the room below its top, and at least its
 /// `size`'s height, and the body then shows in the rect that takes.
 ///
@@ -77,7 +77,7 @@ pub struct Flyout {
 
 impl Flyout {
     /// A flyout at least `size` that opens on the side `opens` of its column, in reading order (`Side::Start` or
-    /// `Side::End`), closing when the focus leaves it if `auto_collapse`.
+    /// `Side::End`), closing on a press outside it and when the focus leaves it if `auto_collapse`.
     pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
         Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
@@ -96,7 +96,7 @@ impl Flyout {
             .placed_at(top_left)
             .size_limits(SizeLimits::at_least(least))
             .resize_edges(free.union(ResizeEdges::TOP).union(ResizeEdges::BOTTOM))
-            .dismiss(Dismiss::new().focus_left(self.auto_collapse))
+            .dismiss(Dismiss::new().outside(if self.auto_collapse { Outside::Close } else { Outside::Keep }).focus_left(self.auto_collapse))
             .body_scroll(false);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }
