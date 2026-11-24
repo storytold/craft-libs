@@ -136,8 +136,8 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         common
     }
 
-    fn variants(&self, asked: Option<Variant>) -> (Variant, Variant) {
-        steps::variants::<C>(asked)
+    fn variants(&self, asked: Option<Variant>, env: &Env) -> (Variant, Variant) {
+        steps::variants::<C>(asked, env)
     }
 
     fn style(&mut self, ctx: &Context, scx: &StyleCx<'_>) -> Arc<dyn StyleView> {
@@ -708,7 +708,7 @@ pub(crate) fn paint_face<C: Show>(
     let ctx = ui.ctx().clone();
     let common = std::mem::take(face.common_mut(Internal::new()));
     debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
-    let step1 = steps::env(&ctx, env, &common, steps::variants::<C>(common.variant));
+    let step1 = steps::env(&ctx, env, &common, steps::variants::<C>(common.variant, env));
     let scx = steps::style_cx(&ctx, env, &step1);
     let scx = source.ink.map_or(scx, |ink| scx.hosted(ink, source.muted));
     let style = steps::style::<C>(&ctx, &scx, face.style_key());
@@ -815,7 +815,7 @@ pub(crate) fn member_prepare<C: Show>(ui: &Ui, env: &Env, id: Id, row: Rect, hov
     let ctx = ui.ctx();
     let mut common = std::mem::take(item.common_mut(Internal::new()));
     let tooltip = common.tooltip.take();
-    let step1 = steps::env(ctx, env, &common, steps::variants::<C>(common.variant));
+    let step1 = steps::env(ctx, env, &common, steps::variants::<C>(common.variant, env));
     let style = steps::style::<C>(ctx, &steps::style_cx(ctx, env, &step1), item.style_key());
     let (shown, mixed) = steps::peek_value(&mut item, ctx, id, step1.command.as_deref());
     if let Some(key) = item.bind().and_then(|bind| bind.key(id)) {

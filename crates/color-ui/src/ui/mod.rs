@@ -64,8 +64,8 @@ pub use hud::{ColorHud, ColorHudOutput};
 pub use info::{InfoColor, InfoMeasure, InfoPanel, InfoReadings, InfoWords};
 pub use lut_picker::{LutChoice, LutPicker, LutPickerOutput, LutWords};
 pub use paint_chip::{
-    FillKind, GradientPreview, ImagePreview, Paint, PaintChip, PaintChipOutput, PaintEditor, PaintLink, PaintLinkKind, PaintList, PaintListEvent,
-    PaintListOptions, PaintListOutput, PaintRow, PaintWords,
+    FillKind, GradientPreview, ImagePreview, Paint, PaintChip, PaintChipOutput, PaintChipSize, PaintEditor, PaintLink, PaintLinkKind, PaintList,
+    PaintListEvent, PaintListOptions, PaintListOutput, PaintRow, PaintWords,
 };
 pub use pair::{DropAccepts, PairWell, SwatchPair, SwatchPairOutput, Well};
 pub use palette::{SwatchPalette, SwatchPaletteOutput};
