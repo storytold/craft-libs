@@ -376,6 +376,11 @@ impl EditorMode {
     }
 }
 
+/// `text` on one line: each line ending (`\r\n`, `\r` or `\n`) becomes one space.
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
 /// What the editor did this pass.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -572,6 +577,80 @@ fn show_i_beam(cx: &mut Cx<'_, TextEditor<'_>>, phase: &PressPhase, vertical: bo
     }
 }
 
+/// Applies one pass's editor steps to `edits` in order: typing, the marked text, moves, deletes, selections, the edit
+/// commands and the commands keys fired. Returns the text a Copy or Cut put on the clipboard, and whether a command
+/// asked for the character panel.
+fn apply_steps(
+    edits: &mut Edits<'_>,
+    steps: Vec<EditorStep<TextEditorCommand>>,
+    mode: EditorMode,
+    masked: bool,
+    pasted: Option<&str>,
+    fallback: Rect,
+) -> (Option<String>, bool) {
+    let mut copied: Option<String> = None;
+    let mut ending: Option<Range<usize>> = None;
+    let mut character_panel = false;
+    for step in steps {
+        // A commit or cancel ends the session; an input method's committed text still lands.
+        if (edits.done.commit || edits.done.cancel) && ending.is_none() {
+            break;
+        }
+        let input = match step {
+            EditorStep::Input(input) => input,
+            EditorStep::Command(command, _) => {
+                edits.command(command, &mut character_panel);
+                continue;
+            }
+            _ => continue,
+        };
+        if let Some(range) = ending.take() {
+            if let EditorInput::Text(text) = &input {
+                edits.commit_marked(range, text);
+                continue;
+            }
+            edits.drop_marked(range);
+        }
+        match input {
+            EditorInput::Preedit { text, cursor, .. } => {
+                let active = cursor.map(|bytes| byte_range_to_chars(&text, bytes));
+                ending = edits.preedit(&text, active);
+            }
+            EditorInput::ImeCommit => ending = edits.session.preedit.take(),
+            EditorInput::Text(text) => edits.done.changed |= edits.insert_typed(&text),
+            EditorInput::Newline { .. } if edits.session.preedit.is_none() && mode.multiline() => {
+                edits.done.changed |= edits.insert_text("\n", EditKind::Typed);
+            }
+            EditorInput::Tab if mode.takes_tab() => edits.done.changed |= edits.insert_text("\t", EditKind::Typed),
+            EditorInput::Move(step, mods) => edits.motion(step, mods),
+            EditorInput::Delete { forward, by, .. } => edits.done.changed |= edits.delete(forward, by),
+            EditorInput::DeleteSurrounding { before, after, unit, .. } => edits.done.changed |= edits.delete_around(before, after, unit),
+            EditorInput::Select { anchor, focus, .. } => {
+                let lines = lines_of(&mut *edits.host, fallback);
+                edits.end_composition();
+                edits.selection = TextSelection { anchor: char_at(&lines, anchor), caret: char_at(&lines, focus) };
+            }
+            EditorInput::Edit(EditCommand::SelectAll) => edits.select_all(),
+            EditorInput::Edit(EditCommand::Copy) if !masked => copied = edits.selected_text(),
+            EditorInput::Edit(EditCommand::Cut) if !masked => {
+                copied = edits.selected_text();
+                edits.done.changed |= edits.delete_selection();
+            }
+            EditorInput::Edit(EditCommand::Paste) => {
+                if let Some(text) = pasted {
+                    let text = if mode.multiline() { text.to_string() } else { one_line(text) };
+                    edits.done.changed |= edits.insert_text(&text, EditKind::Pasted);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(range) = ending {
+        edits.drop_marked(range);
+    }
+    (copied, character_panel)
+}
+
 /// The clipboard's text when the pass's input asks to paste and the clipboard has it ready.
 fn pasted_text(cx: &mut Cx<'_, TextEditor<'_>>, steps: &[EditorStep<TextEditorCommand>]) -> Option<std::sync::Arc<str>> {
     if !steps.iter().any(|step| matches!(step, EditorStep::Input(EditorInput::Edit(EditCommand::Paste)))) {
@@ -636,7 +715,6 @@ impl Component for TextEditor<'_> {
         let now = cx.now();
         let pasted = pasted_text(cx, &steps);
         let (mode, masked) = (self.mode, self.masked);
-        let mut copied: Option<String> = None;
         let mut session = std::mem::take(cx.memory::<Session>());
         let mut edits = Edits {
             host: &mut *self.host,
@@ -652,64 +730,7 @@ impl Component for TextEditor<'_> {
         edits.reconcile();
         let fallback = space.doc_rect(cx.rect);
 
-        let mut ending: Option<Range<usize>> = None;
-        let mut character_panel = false;
-        for step in steps {
-            // A commit or cancel ends the session; an input method's committed text still lands.
-            if (edits.done.commit || edits.done.cancel) && ending.is_none() {
-                break;
-            }
-            let input = match step {
-                EditorStep::Input(input) => input,
-                EditorStep::Command(command, _) => {
-                    edits.command(command, &mut character_panel);
-                    continue;
-                }
-                _ => continue,
-            };
-            if let Some(range) = ending.take() {
-                if let EditorInput::Text(text) = &input {
-                    edits.commit_marked(range, text);
-                    continue;
-                }
-                edits.drop_marked(range);
-            }
-            match input {
-                EditorInput::Preedit { text, cursor, .. } => {
-                    let active = cursor.map(|bytes| byte_range_to_chars(&text, bytes));
-                    ending = edits.preedit(&text, active);
-                }
-                EditorInput::ImeCommit => ending = edits.session.preedit.take(),
-                EditorInput::Text(text) => edits.done.changed |= edits.insert_typed(&text),
-                EditorInput::Newline { .. } if edits.session.preedit.is_none() && mode.multiline() => {
-                    edits.done.changed |= edits.insert_text("\n", EditKind::Typed);
-                }
-                EditorInput::Tab if mode.takes_tab() => edits.done.changed |= edits.insert_text("\t", EditKind::Typed),
-                EditorInput::Move(step, mods) => edits.motion(step, mods),
-                EditorInput::Delete { forward, by, .. } => edits.done.changed |= edits.delete(forward, by),
-                EditorInput::DeleteSurrounding { before, after, unit, .. } => edits.done.changed |= edits.delete_around(before, after, unit),
-                EditorInput::Select { anchor, focus, .. } => {
-                    let lines = lines_of(&mut *edits.host, fallback);
-                    edits.end_composition();
-                    edits.selection = TextSelection { anchor: char_at(&lines, anchor), caret: char_at(&lines, focus) };
-                }
-                EditorInput::Edit(EditCommand::SelectAll) => edits.select_all(),
-                EditorInput::Edit(EditCommand::Copy) if !masked => copied = edits.selected_text(),
-                EditorInput::Edit(EditCommand::Cut) if !masked => {
-                    copied = edits.selected_text();
-                    edits.done.changed |= edits.delete_selection();
-                }
-                EditorInput::Edit(EditCommand::Paste) => {
-                    if let Some(text) = &pasted {
-                        edits.done.changed |= edits.insert_text(text, EditKind::Pasted);
-                    }
-                }
-                _ => {}
-            }
-        }
-        if let Some(range) = ending {
-            edits.drop_marked(range);
-        }
+        let (copied, character_panel) = apply_steps(&mut edits, steps, mode, masked, pasted.as_deref(), fallback);
         // A press is the pass's last pointer event (H0), so the pass's editor input came before it.
         match press.phase {
             PressPhase::Down { start, .. } if start.button == craft_behavior::PointerButton::Primary => {

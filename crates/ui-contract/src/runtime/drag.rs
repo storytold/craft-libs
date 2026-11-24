@@ -74,7 +74,7 @@ pub enum DropMark {
     },
 }
 
-crate::stays!(Arc<crate::style::UiTokens>, DropOperation);
+crate::stays!(Arc<crate::style::UiTokens>, DropOperation, TargetReach);
 
 impl crate::runtime::Shift for DropMark {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
@@ -260,6 +260,12 @@ struct Session {
     dropped: Option<u64>,
     /// A file drop has arrived but no pointer position is available yet.
     waiting_for_pointer: bool,
+    /// Where the OS dropped the files: the pass that takes a drop after the frame of its arrival places it there, not
+    /// at a pointer that has moved on (files hovering again for a drag of their own).
+    dropped_at: Option<Pos2>,
+    /// Files the OS holds over the window in the pass that takes this session's drop: a drag of their own, which
+    /// starts when the drop ends this session (`end_pass`).
+    hovering_next: Vec<OsFile>,
     /// The root frame the session started in, the only one in which [`amend`] changes its payload.
     began: u64,
 }
@@ -301,10 +307,16 @@ struct Registration {
     op: DropOperation,
     /// The tokens of the target's region.
     tokens: Arc<UiTokens>,
+    reach: TargetReach,
+}
+
+/// Where a drop target takes drops beyond its own mark.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TargetReach {
     /// The target covers the whole window: any target over a component beats it.
-    window: bool,
+    pub(crate) window: bool,
     /// The target takes OS files under a modal layer (`DropTarget::under_modal`).
-    under_modal: bool,
+    pub(crate) under_modal: bool,
 }
 
 /// A viewport's registrations: this pass's, and the target that won last pass.
@@ -358,6 +370,8 @@ pub fn start(
                 os: false,
                 dropped: None,
                 waiting_for_pointer: false,
+                dropped_at: None,
+                hovering_next: Vec::new(),
                 began,
             });
             board.ended = None;
@@ -483,8 +497,7 @@ fn os_files(ctx: &Context) {
     let hovering = !seen.hovered.is_empty();
     // A session whose window closed has no pass left to end it.
     let closed = source_viewport(ctx).is_some_and(|window| !pass::live_viewports(ctx).contains(&window));
-    let host = WindowHost::of(ctx);
-    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
+    let position = os_files_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     let positioned = position.is_some();
     // A window target can take the drop immediately only if the pointer has not moved since resolution.
     let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window && targets.pointer == position);
@@ -495,23 +508,11 @@ fn os_files(ctx: &Context) {
             if has_drop {
                 repaint = true;
             }
-            board.session = Some(Session {
-                source: Id::NULL.with("craft_ui::os_files"),
-                moving: Moving::default(),
-                viewport,
-                button: PointerButton::Primary,
-                payload: Arc::new(OsFiles { files: if has_drop { seen.dropped } else { seen.hovered } }),
-                also: Vec::new(),
-                preview: DragPreview::None,
-                env: None,
-                mark: None,
-                released: None,
-                taken: false,
-                os: true,
-                dropped: (has_drop && positioned).then_some(frame.saturating_add(1)),
-                waiting_for_pointer: has_drop && !positioned,
-                began: frame,
-            });
+            let mut session = os_session(if has_drop { seen.dropped } else { seen.hovered }, viewport, frame);
+            session.dropped = (has_drop && positioned).then_some(frame.saturating_add(1));
+            session.dropped_at = position.filter(|_| has_drop);
+            session.waiting_for_pointer = has_drop && !positioned;
+            board.session = Some(session);
             board.ended = None;
             board.started += 1;
         }
@@ -521,6 +522,7 @@ fn os_files(ctx: &Context) {
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
                 session.viewport = viewport;
+                session.dropped_at = position;
                 if window_winner {
                     session.dropped = Some(frame);
                 } else if positioned {
@@ -534,9 +536,13 @@ fn os_files(ctx: &Context) {
                 // Targets register this pass and take the drop in the next, after their winner is resolved.
                 session.waiting_for_pointer = false;
                 session.dropped = Some(frame.saturating_add(1));
+                session.dropped_at = position;
                 repaint = true;
             } else if hovering {
                 session.viewport = viewport;
+                if session.dropped == Some(frame) {
+                    session.hovering_next = seen.hovered;
+                }
             } else if (session.viewport == viewport || closed)
                 && !seen.reading
                 && !session.waiting_for_pointer
@@ -551,6 +557,29 @@ fn os_files(ctx: &Context) {
     // the passes that follow the pointer to the target under it.
     if hovering || repaint {
         crate::runtime::egui::repaint::request(ctx);
+    }
+}
+
+/// A session of `files` the OS holds over `viewport`, started in root frame `frame`.
+fn os_session(files: Vec<OsFile>, viewport: ViewportId, frame: u64) -> Session {
+    Session {
+        source: Id::NULL.with("craft_ui::os_files"),
+        moving: Moving::default(),
+        viewport,
+        button: PointerButton::Primary,
+        payload: Arc::new(OsFiles { files }),
+        also: Vec::new(),
+        preview: DragPreview::None,
+        env: None,
+        mark: None,
+        released: None,
+        taken: false,
+        os: true,
+        dropped: None,
+        waiting_for_pointer: false,
+        dropped_at: None,
+        hovering_next: Vec::new(),
+        began: frame,
     }
 }
 
@@ -582,12 +611,22 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
 }
 
 /// The pointer of the running session in screen space, whatever its payload: the pointer `dragging_of` pairs with a
-/// payload, where the button went up in the pass of its release (`PointerFrame::pick_pos`). `None` without a session or
-/// a pointer.
+/// payload, where the button went up in the pass of its release (`PointerFrame::pick_pos`); for an OS drop, where the
+/// files were dropped in the pass that takes it. `None` without a session or a pointer.
 pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
-    let os = board(ctx, |board| board.session.as_ref().map(|session| session.os))?;
-    let host = WindowHost::of(ctx);
-    if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { pointer::frame_raw(ctx).pick_pos }
+    let frame = pass::root_frame_nr(ctx);
+    let (os, dropped_at) =
+        board(ctx, |board| board.session.as_ref().map(|session| (session.os, session.dropped_at.filter(|_| session.dropped == Some(frame)))))?;
+    let own = pointer::frame_raw(ctx).pick_pos;
+    if os { dropped_at.or_else(|| os_files_pointer(ctx, pass::current_viewport(ctx), own)) } else { own }
+}
+
+/// The pointer of OS files over `viewport`: the system pointer where the platform tells one, since the OS sends the
+/// window no pointer events while it drags files over it; else `own`, the pass's own pointer. A drag's noted source
+/// pointer (`windows::note_source_pointer`) is from the pass before, for the other windows, so it never stands in for
+/// the pass's own.
+fn os_files_pointer(ctx: &Context, viewport: ViewportId, own: Option<Pos2>) -> Option<Pos2> {
+    if windows::system_pointer(ctx).is_some() { WindowHost::of(ctx).pointer_in(viewport) } else { own }
 }
 
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
@@ -635,24 +674,12 @@ pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
 }
 
 /// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer a drop doing `op`, with its mark in
-/// layer space and the tokens of the target's region. A `window` target covers the whole window; an `under_modal` one
-/// takes OS files under a modal layer.
-pub(crate) fn register(
-    ctx: &Context,
-    owner: Id,
-    layer: Layer,
-    mark: DropMark,
-    op: DropOperation,
-    tokens: Arc<UiTokens>,
-    window: bool,
-    under_modal: bool,
-) {
+/// layer space, the tokens of the target's region and its `reach`.
+pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, op: DropOperation, tokens: Arc<UiTokens>, reach: TargetReach) {
     crate::runtime::replay::journal(
         ctx,
-        || (owner, layer, mark, op, tokens.clone(), (window, under_modal)),
-        |ctx, (owner, layer, mark, op, tokens, (window, under_modal))| {
-            register(ctx, *owner, *layer, *mark, *op, tokens.clone(), *window, *under_modal)
-        },
+        || (owner, layer, mark, op, tokens.clone(), reach),
+        |ctx, (owner, layer, mark, op, tokens, reach)| register(ctx, *owner, *layer, *mark, *op, tokens.clone(), *reach),
     );
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
@@ -661,7 +688,7 @@ pub(crate) fn register(
     let scope = overlay::drawing_parent(ctx);
     PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
         let ordinal = targets.this.iter().filter(|registration| registration.owner == owner).count() as u32;
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, tokens, window, under_modal });
+        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, tokens, reach });
     });
 }
 
@@ -747,7 +774,7 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     let op = current_operation(ctx, target.copy_keys());
     let drop = target.accept(&*payload, at, op)?;
     let ordinal = next_ordinal(ctx, owner);
-    register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, false, target.under_modal());
+    register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, TargetReach { window: false, under_modal: target.under_modal() });
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
 }
 
@@ -805,13 +832,12 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
 /// window holds the drop, it waits there for one more frame so that window's pass takes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let host = WindowHost::of(ctx);
-    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
+    let position = os_files_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     // A modal holds input: targets on layers below it, and on the window, never accept, except OS files on a target
     // that takes them there.
     let os = carries_os_files(ctx);
     let scopes: Vec<(Option<Id>, bool)> = PerViewport::<Targets>::with(ctx, viewport, |targets| {
-        targets.this.iter().map(|registration| (registration.scope, os && registration.under_modal)).collect()
+        targets.this.iter().map(|registration| (registration.scope, os && registration.reach.under_modal)).collect()
     });
     let open: Vec<bool> =
         scopes.iter().map(|(scope, through)| *through || overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
@@ -823,10 +849,10 @@ pub(crate) fn end_pass(ctx: &Context) {
             .iter()
             .enumerate()
             .filter(|(at, _)| open[*at])
-            .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
+            .max_by_key(|(at, registration)| (!registration.reach.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
-        targets.component = best.is_some_and(|registration| !registration.window);
-        targets.winner_window = best.is_some_and(|registration| registration.window);
+        targets.component = best.is_some_and(|registration| !registration.reach.window);
+        targets.winner_window = best.is_some_and(|registration| registration.reach.window);
         targets.pointer = position;
         let best =
             best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op, registration.tokens.clone())));
@@ -857,7 +883,9 @@ pub(crate) fn end_pass(ctx: &Context) {
             let expired = session.released.is_some_and(|released| frame > released + 1);
             let ended_here = is_source && !held && session.released.is_none();
             if expired || (ended_here && !foreign_target) {
-                board.session = None;
+                let next = std::mem::take(&mut session.hovering_next);
+                board.session = (!next.is_empty()).then(|| os_session(next, viewport, frame));
+                board.started += u64::from(board.session.is_some());
             } else if ended_here {
                 session.released = Some(frame);
             }
@@ -909,7 +937,7 @@ pub(crate) fn held_elsewhere(ctx: &Context) -> bool {
     let viewport = pass::current_viewport(ctx);
     pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).any(|other| {
         PerViewport::<Targets>::with(ctx, other, |targets| {
-            (targets.winner.is_some() && targets.component) || targets.this.iter().any(|registration| !registration.window)
+            (targets.winner.is_some() && targets.component) || targets.this.iter().any(|registration| !registration.reach.window)
         })
     })
 }
