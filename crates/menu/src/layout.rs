@@ -367,8 +367,8 @@ fn desktop_bar(bar: &MenuBar, target: Target, quit: Option<&'static str>, option
                 it.english = Some("Preferences…".to_owned());
                 Node::Item(it)
             }
-            Node::Submenu { children, role, platforms, .. } => {
-                Node::Submenu { label: options.text("Preferences"), english: Some("Preferences".to_owned()), children, role, platforms }
+            Node::Submenu { children, role, platforms, enabled, .. } => {
+                Node::Submenu { label: options.text("Preferences"), english: Some("Preferences".to_owned()), children, role, platforms, enabled }
             }
             other => other,
         };
@@ -396,12 +396,13 @@ fn shown_on(bar: &MenuBar, target: Target) -> MenuBar {
         let shown = nodes.iter().filter_map(|n| match n {
             Node::Item(it) if !it.platforms.contains(on) => None,
             Node::Submenu { platforms, .. } if !platforms.contains(on) => None,
-            Node::Submenu { label, english, children, role, platforms } => Some(Node::Submenu {
+            Node::Submenu { label, english, children, role, platforms, enabled } => Some(Node::Submenu {
                 label: label.clone(),
                 english: english.clone(),
                 children: keep(children, on, appkit),
                 role: *role,
                 platforms: *platforms,
+                enabled: *enabled,
             }),
             Node::Standard { .. } if !appkit => None,
             other => Some(other.clone()),
@@ -471,11 +472,11 @@ fn settings_node(node: Node, comma_taken: Option<CommandRef>, options: &LayoutOp
             give(&mut it);
             Node::Item(it)
         }
-        Node::Submenu { mut children, role, platforms, .. } => {
+        Node::Submenu { mut children, role, platforms, enabled, .. } => {
             if let Some(Node::Item(first)) = children.iter_mut().find(|n| matches!(n, Node::Item(i) if i.enabled)) {
                 give(first);
             }
-            Node::Submenu { label: options.text("Settings"), english: Some("Settings".to_owned()), children, role, platforms }
+            Node::Submenu { label: options.text("Settings"), english: Some("Settings".to_owned()), children, role, platforms, enabled }
         }
         other => other,
     }
@@ -491,18 +492,18 @@ fn appearance_node(bar: &mut MenuBar, options: &LayoutOptions) -> Vec<Node> {
         items.push(it);
     }
     match submenu {
-        Some(Node::Submenu { mut children, role, platforms, .. }) => {
+        Some(Node::Submenu { mut children, role, platforms, enabled, .. }) => {
             if !items.is_empty() {
                 children.push(Node::Separator);
                 children.extend(items);
             }
-            vec![Node::Submenu { label: options.text("Appearance"), english: Some("Appearance".to_owned()), children, role, platforms }]
+            vec![Node::Submenu { label: options.text("Appearance"), english: Some("Appearance".to_owned()), children, role, platforms, enabled }]
         }
         _ => items,
     }
 }
 
-fn node_commands(node: &Node) -> Vec<CommandRef> {
+pub(crate) fn node_commands(node: &Node) -> Vec<CommandRef> {
     match node {
         Node::Item(it) => vec![it.command.clone()],
         Node::Submenu { children, .. } => children.iter().flat_map(node_commands).collect(),

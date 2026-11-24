@@ -8,7 +8,7 @@ use craft_ui::form::Field;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::HexField;
-use egui::{Key, Modifiers};
+use egui::{Event, Key, Modifiers};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -84,4 +84,30 @@ fn a_draft_that_is_no_colour_says_why_in_its_row_or_its_own_tooltip() {
         assert_eq!(fixture.tree().description_of(field.node), None, "a colour clears the reason; in a row: {in_row}");
         assert_eq!(reasons(&fixture), 0, "in a row: {in_row}");
     }
+}
+
+/// A paste that is a colour replaces the field's digits wherever the caret is, with or without its `#` and spaces; a
+/// three-digit paste is the shorthand and applies on commit; a paste that is no colour is inserted as text.
+#[trial]
+fn a_pasted_colour_replaces_the_digits_with_or_without_its_hash() {
+    let start = Rgba::rgb(0xff, 0x88, 0x00);
+    let paste = |fixture: &mut Fixture, pasted: &str| {
+        fixture.key(Key::End, Modifiers::NONE);
+        fixture.frame(vec![Event::Paste(pasted.into())]).settle();
+    };
+    for pasted in ["336699", "#336699", "  #336699 "] {
+        let (mut fixture, value) = focused(start, 2);
+        paste(&mut fixture, pasted);
+        assert_eq!(*value.borrow(), Rgba::rgb(0x33, 0x66, 0x99), "{pasted:?} replaces the digits with the caret at the end");
+    }
+
+    let (mut fixture, value) = focused(start, 2);
+    paste(&mut fixture, "0f0");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), Rgba::rgb(0x00, 0xff, 0x00), "three digits read as 00FF00");
+
+    let (mut fixture, value) = focused(start, 2);
+    paste(&mut fixture, "12");
+    assert_eq!(text(&fixture), "FF880012", "a paste that is no colour is inserted at the caret");
+    assert_eq!(*value.borrow(), start, "and the colour stays");
 }

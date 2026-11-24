@@ -362,3 +362,23 @@ fn a_fill_child_of_a_content_sized_row_takes_its_measured_width_and_the_next_mem
     let [_, leaf, _] = content_row(First::Held);
     assert!(leaf.width() >= IDEAL - 0.5, "the held leaf shows at least its ideal: {leaf:?}");
 }
+
+/// A reveal of a rect a scroll body's view already shows moves nothing, so it asks for no second pass: a part that
+/// asks every frame must not make every frame run twice (egui's "request_discard has been called N frames in a row").
+#[trial]
+fn a_reveal_of_a_rect_in_a_scroll_bodys_view_runs_no_second_pass() {
+    let owner = egui::Id::unique("revealed body");
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut egui::Ui| {
+        let props = ContainerProps::new().sizing(Sizing::Fill).scroll(Scroll::vertical());
+        Slab::new(props).id(owner).show(ui, |ui, _| {
+            Block::new(Vec2::new(40.0, 600.0)).show(ui);
+        });
+    };
+    frames.idle(4, &mut show);
+    let idle = frames.frame(vec![], &mut show);
+    for _ in 0..3 {
+        craft_ui::testing::contract::queue_reveal(&frames.ctx, owner, Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(20.0, 20.0)));
+        assert_eq!(frames.frame(vec![], &mut show), idle, "a reveal of a rect in view runs no extra pass");
+    }
+}

@@ -6,13 +6,13 @@
 //! start it through [`ease`].
 
 use super::frame_step;
-use super::navigate::WheelNavigation;
+use super::navigate::{TouchpadGlide, WheelNavigation};
 use crate::runtime::frame;
 use crate::runtime::memory::{global, with_session};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, ZoomLadder};
-use egui::{Context, Id, Pos2, Rect};
+use craft_behavior::{CanvasView, ZoomScheme};
+use egui::{Context, Id, Pos2, Rect, Vec2};
 
 /// How far the app's view may differ from the zoom anchor, in document units, before the anchor is dropped.
 const ANCHOR_TOLERANCE: f64 = 0.01;
@@ -130,8 +130,79 @@ pub(crate) struct ViewMotion {
     pub(crate) animation: ZoomAnimation,
     /// What the tool host or the Navigator asked of the ease since the canvas's last pass.
     pub(crate) steer: Option<Steer>,
+    /// The touchpad's glide after the fingers lift.
+    pub(crate) glide: TouchpadGlide,
     /// The middle button's autoscroll, with the pass clock of its last step: gesture state, as the ease is.
     pub(crate) autoscroll: super::navigate::MiddleAutoscroll,
+    /// The frame of the autoscroll's last pass: an autoscroll whose canvas missed a frame (another tab showed) ends.
+    pub(crate) scrolled_in: Option<u64>,
+    /// The wheel zoom still owed under `NavigationOptions::eased_wheel_zoom`.
+    pub(crate) wheel_zoom: WheelZoomEase,
+}
+
+/// A wheel zoom paid out over the passes after its notch (`NavigationOptions::eased_wheel_zoom`), as egui eases the
+/// wheel: each pass pays the part of what is owed that reaches 90% in a tenth of a second, by the pass clock, so a
+/// later pass of the same frame pays nothing, and the last sliver is paid whole.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct WheelZoomEase {
+    /// The zoom still owed, as the natural log of its factor.
+    owed: f64,
+    /// The screen point the zoom keeps still: the pointer of the latest notch.
+    anchor: Pos2,
+    /// The pass clock of the last payment.
+    paid_at: f64,
+}
+
+impl WheelZoomEase {
+    /// The owed zoom paid whole: one point of egui's default wheel zoom speed.
+    const SLIVER: f64 = 0.005;
+    /// The longest time one payment counts, in seconds, as egui caps its wheel's frame time.
+    const LONGEST_STEP: f64 = 0.1;
+
+    /// Adds a notch's `factor` about `anchor` at the pass clock `now`. An ease that owed nothing starts one frame
+    /// (`frame_dt` seconds) back, so the notch's own pass pays its first part, as egui's wheel does.
+    pub(crate) fn feed(&mut self, factor: f64, anchor: Pos2, now: f64, frame_dt: f64) {
+        let log = factor.ln();
+        if !log.is_finite() || log == 0.0 {
+            return;
+        }
+        if self.owed == 0.0 {
+            let back = if frame_dt.is_finite() { frame_dt.clamp(0.0, Self::LONGEST_STEP) } else { 0.0 };
+            self.paid_at = now - back;
+        }
+        self.owed += log;
+        if !self.owed.is_finite() {
+            self.owed = 0.0;
+        }
+        self.anchor = anchor;
+    }
+
+    /// This pass's payment at the clock `now`: the factor to zoom by and the point it keeps still, if any.
+    pub(crate) fn step(&mut self, now: f64) -> Option<(f64, Pos2)> {
+        if self.owed == 0.0 {
+            return None;
+        }
+        let dt = if (now - self.paid_at).is_finite() { (now - self.paid_at).clamp(0.0, Self::LONGEST_STEP) } else { 0.0 };
+        self.paid_at = now;
+        let pay = if self.owed.abs() < Self::SLIVER { self.owed } else { self.owed * (1.0 - 0.1_f64.powf(dt / Self::LONGEST_STEP)) };
+        if pay == 0.0 || !pay.is_finite() {
+            return None;
+        }
+        self.owed -= pay;
+        Some((pay.exp(), self.anchor))
+    }
+
+    /// Whether zoom is still owed.
+    pub(crate) fn owes(&self) -> bool {
+        self.owed != 0.0
+    }
+
+    /// Drops what is owed when `stop`.
+    pub(crate) fn stop_if(&mut self, stop: bool) {
+        if stop {
+            self.owed = 0.0;
+        }
+    }
 }
 
 impl ViewMotion {
@@ -193,7 +264,7 @@ impl HoldZoom {
 
     /// Advances the hold for the pass at `time`: once past the delay, zooms `view` about the press point (out when
     /// `out`). Returns `true` while the hold zooms, so the tool skips its scrub and its click step.
-    pub fn advance(&mut self, view: &mut CanvasView, time: f64, out: bool, size: Size, pixels_per_point: f32) -> bool {
+    pub fn advance(&mut self, view: &mut CanvasView, time: f64, out: bool, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
         if self.last.is_none() {
             let begin = self.pressed_at + Self::DELAY;
             if time < begin {
@@ -203,7 +274,7 @@ impl HoldZoom {
         }
         let dt = frame_step(time - self.last.unwrap_or(time));
         let current = zoom::device(view, pixels_per_point);
-        let next = Self::zoom_after(current, dt, out, size);
+        let next = Self::zoom_after(current, dt, out, size, scheme);
         // At a limit the view stays as it is.
         if (next / current - 1.0).abs() > 1e-12 {
             zoom::anchor(view, self.anchor, self.doc, next, pixels_per_point);
@@ -224,16 +295,17 @@ impl HoldZoom {
 
     /// The zoom after holding for a frame step of `dt` seconds at `zoom`, within the document's range. A non-finite
     /// or negative `dt` changes nothing, and `dt` is capped at [`FRAME_STEP_MAX`](super::FRAME_STEP_MAX).
-    pub fn zoom_after(zoom: f64, dt: f64, out: bool, size: Size) -> f64 {
+    pub fn zoom_after(zoom: f64, dt: f64, out: bool, size: Size, scheme: &ZoomScheme) -> f64 {
         let dt = frame_step(dt);
         let doublings = if out { -Self::RATE * dt } else { Self::RATE * dt };
-        ZoomLadder::clamp(zoom * doublings.exp2(), size)
+        scheme.clamp(zoom * doublings.exp2(), size)
     }
 }
 
 /// A Zoom tool drag. With Scrubby Zoom on (Photoshop's default) the drag zooms continuously, right in and left out,
-/// [`DOUBLING`](Self::DOUBLING) points per doubling, about the press point. Off, it draws a rectangle and the release
-/// zooms to fit it (Alt: out, so the view steps one rung out about the press point). Whether a press is a drag or a
+/// [`DOUBLING`](Self::DOUBLING) points per doubling, about the press point. Off, it draws a rectangle, which Space moves
+/// as a marquee ([`shift`](Self::shift)), and the release zooms to fit it (Alt: out, so the view steps one rung out
+/// about the press point). Whether a press is a drag or a
 /// click is the host's call (`drag` reached the tool or not), not the drag's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ZoomDrag {
@@ -254,11 +326,11 @@ impl ZoomDrag {
 
     /// The pointer moved to `pointer`: a scrub zooms `view` about the press point; a rectangle moves its corner (the
     /// view is unchanged).
-    pub fn drag(&mut self, view: &mut CanvasView, pointer: Pos2, size: Size, pixels_per_point: f32) {
+    pub fn drag(&mut self, view: &mut CanvasView, pointer: Pos2, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) {
         match self.corner.as_mut() {
             Some(corner) => *corner = pointer,
             None => {
-                let next = Self::scrub_zoom(self.zoom0, pointer.x - self.anchor.x, size);
+                let next = Self::scrub_zoom(self.zoom0, pointer.x - self.anchor.x, size, scheme);
                 if (next / zoom::device(view, pixels_per_point) - 1.0).abs() > 1e-12 {
                     zoom::anchor(view, self.anchor, self.doc, next, pixels_per_point);
                 }
@@ -266,10 +338,19 @@ impl ZoomDrag {
         }
     }
 
+    /// Moves a rectangle by `by` on `view`, keeping its size, as Space held during the drag moves a marquee. A rectangle
+    /// with no size yet stays at the press point, so the drag sizes it; a scrub has no rectangle to move.
+    pub fn shift(&mut self, view: &CanvasView, by: Vec2) {
+        if self.corner.is_some_and(|corner| corner != self.anchor) {
+            self.anchor += by;
+            self.doc = view.to_doc(self.anchor);
+        }
+    }
+
     /// The button came up: a rectangle zooms `view` to fit it, or with `out` steps the zoom out about the press point;
     /// a scrub has nothing left to do. A rectangle narrower or shorter than `least` points is too small to zoom to:
     /// the view stays.
-    pub fn release(self, view: &mut CanvasView, out: bool, size: Size, pixels_per_point: f32, least: f32) {
+    pub fn release(self, view: &mut CanvasView, out: bool, size: Size, pixels_per_point: f32, least: f32, scheme: &ZoomScheme) {
         let Some(corner) = self.corner else { return };
         let rect = Rect::from_two_pos(self.anchor, corner);
         if rect.width() < least || rect.height() < least || rect.width() <= 0.0 || rect.height() <= 0.0 {
@@ -277,13 +358,13 @@ impl ZoomDrag {
         }
         let current = zoom::device(view, pixels_per_point);
         if out {
-            let next = ZoomLadder::step(current, -1, size);
+            let next = scheme.step(current, -1, size);
             zoom::anchor(view, self.anchor, self.doc, next, pixels_per_point);
             return;
         }
         // The ratio of two screen lengths scales the zoom in any unit.
         let k = f64::from((view.rect.width() / rect.width()).min(view.rect.height() / rect.height()));
-        let next = ZoomLadder::clamp(current * k, size);
+        let next = scheme.clamp(current * k, size);
         let target = view.to_doc(rect.center());
         let middle = view.rect.center();
         zoom::anchor(view, middle, target, next, pixels_per_point);
@@ -295,9 +376,9 @@ impl ZoomDrag {
     }
 
     /// The scrubby zoom for a horizontal drag of `dx` points from a press at `zoom0`, within the document's range.
-    pub fn scrub_zoom(zoom0: f64, dx: f32, size: Size) -> f64 {
+    pub fn scrub_zoom(zoom0: f64, dx: f32, size: Size, scheme: &ZoomScheme) -> f64 {
         // 40 doublings already span far more than the zoom range; the bound keeps the power finite.
         let doublings = if dx.is_finite() { f64::from(dx / Self::DOUBLING).clamp(-40.0, 40.0) } else { 0.0 };
-        ZoomLadder::clamp(zoom0 * doublings.exp2(), size)
+        scheme.clamp(zoom0 * doublings.exp2(), size)
     }
 }

@@ -201,14 +201,14 @@ layout_component!(
     /// a collection that fills it.
     Stack,
     StackStyleKey,
-    [command_scope, surface],
+    [command_scope, surface, fallback_collection],
     <'a> { header: Option<RegionFn<'a>>, footer: Option<RegionFn<'a>> }
 );
 layout_component!(
     /// Children side by side.
     Row,
     RowStyleKey,
-    []
+    [fit_rank, fallback_collection]
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
@@ -219,7 +219,7 @@ layout_component!(
     /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
-    []
+    [fallback_collection]
 );
 
 impl<'a> Stack<'a> {

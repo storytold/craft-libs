@@ -31,7 +31,9 @@ pub enum LatestRelease {
     Found(Release),
     /// The repo exists but has no published release.
     None,
-    /// Couldn't find out (offline, rate-limited, unreadable answer).
+    /// GitHub's request limit was reached and nothing was saved to answer from.
+    RateLimited,
+    /// Couldn't find out (offline, unreadable answer); the reason is data.
     Failed(String),
 }
 

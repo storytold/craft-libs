@@ -23,10 +23,7 @@ pub(super) fn host_words(ctx: &Context, host: Option<&Arc<Host>>) -> Arc<Words> 
         {
             return Arc::clone(words);
         }
-        let words = Arc::new(match host.and_then(|host| host.i18n_shared().map(|i18n| (Arc::clone(i18n), host.lang()))) {
-            Some((i18n, lang)) => Words::from_i18n(i18n, lang),
-            None => Words::english(),
-        });
+        let words = Arc::new(host.map_or_else(Words::english, |host| host.words()));
         cached.words = Some((generation, Arc::clone(&words)));
         words
     })

@@ -1,9 +1,10 @@
 //! [`PatternFillEditor`].
 
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::sync::Arc;
 
 use super::{PatternColors, PatternFillOptions, PatternSwatch, PatternWords};
-use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec};
+use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec, Selection};
 use craft_color_ui::ui::{ColorPopover, PickedColor};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
@@ -11,8 +12,10 @@ use craft_ui::contract::{Bind, FieldLayout, Outcome, Props as _, Remember as _, 
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState, PresetView};
-use craft_ui::primitives::ContentPainterCx;
+use craft_ui::patterns::presets::{
+    CellShape, PresetBrowser, PresetFns, PresetPicker, PresetRow, PresetRowMenu, PresetSource, PresetState, PresetView,
+};
+use craft_ui::primitives::{ContentPainterCx, FacePaint};
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::NumberField;
 use craft_ui::value_drag::AngleDial;
@@ -86,10 +89,10 @@ impl<'a> PatternFillEditor<'a> {
             if let Some(colors) = current.colors {
                 let browser = Field::new(words.pattern.clone()).id_salt("grid").show(ui, |ui, _| {
                     PresetBrowser::new(words.pattern.clone(), Bind::bound(&mut state), &rows)
-                        .selected(current.pattern.clone())
+                        .selection(Bind::given(Selection::single(current.pattern.clone())))
                         .cell_shape(CellShape::Square)
                         .view_lock(PresetView::Grid)
-                        .row_menu(false)
+                        .row_menu(PresetRowMenu::Off)
                         .show(ui)
                         .events
                 });
@@ -181,7 +184,11 @@ fn tile_rows(swatches: &&[PatternSwatch], _: &Env) -> Vec<PresetRow<String>> {
     let tile_row = |swatch: &PatternSwatch| {
         let row = PresetRow::item(swatch.id.clone(), swatch.name.clone(), 0);
         match swatch.picture {
-            Some(picture) => row.preview(CellShape::Square.aspect(), move |cx, rect| paint_picture(cx, rect, picture)),
+            Some(picture) => {
+                let mut key = DefaultHasher::new();
+                picture.hash(&mut key);
+                row.preview_face(CellShape::Square.aspect(), FacePaint::new(key.finish(), move |cx, rect| paint_picture(cx, rect, picture)))
+            }
             None => row,
         }
     };

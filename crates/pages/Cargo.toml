@@ -20,7 +20,7 @@ workspace = true
 suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The page widgets (`craft_pages::ui`), on craft-ui.
-ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:craft-theme", "dep:egui", "craft-text/ui"]
+ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:craft-theme", "dep:egui", "dep:serde_json", "craft-text/ui"]
 # The stories and the integration tests (`tests/it`).
 screen-testing = ["ui", "craft-ui/testing"]
 
@@ -29,7 +29,10 @@ screen-testing = ["ui", "craft-ui/testing"]
 craft-text = { path = "../text", default-features = false }
 kurbo = { workspace = true }
 serde = { workspace = true }
+# `ui::range` keeps a page-range row's value as a dialog's JSON field.
+serde_json = { workspace = true, optional = true }
 craft-behavior = { workspace = true, optional = true }
+# The arrows the page view reads come with the modifiers held.
 craft-keymap = { workspace = true, optional = true }
 craft-ui = { workspace = true, optional = true }
 craft-theme = { workspace = true, optional = true }
@@ -39,3 +42,4 @@ egui = { workspace = true, optional = true }
 craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 craft-i18n = { workspace = true }
+serde_json = { workspace = true }

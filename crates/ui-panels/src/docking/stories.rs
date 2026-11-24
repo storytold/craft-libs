@@ -7,6 +7,7 @@ use super::tree::FrameRules;
 use super::{
     DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows,
 };
+use crate::buttons::Button;
 use crate::contract::SizeLimits;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};
@@ -94,6 +95,26 @@ fn two_panels(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn a_group_in_a_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).in_window().show(ui, |_, _| ()).output.into()
+}
+
+/// A group whose panel has a footer of actions pinned under its body, which stays in view while the body scrolls.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_group_with_a_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
+        .footer(|ui, _| {
+            Button::new("Apply All").show(ui);
+        })
+        .show(ui, |_, _| ())
+        .output
+        .into()
+}
+
+/// A group whose shown panel counts what it lists after its name and says more in a caption under the header.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = vec![title_of(LAYERS).count(Some(3)).caption(Some("2 hidden".into())), title_of(CHANNELS).count(Some(4))];
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
 }
 
 /// A click on the panel menu button opens the group's panel menu.

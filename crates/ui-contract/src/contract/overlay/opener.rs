@@ -18,7 +18,7 @@ pub enum Trigger {
     /// completes the click is part of that opening.
     Click,
     /// A primary press on the opener toggles, and a secondary click inside it toggles too, hanging the layer from the
-    /// opener as a press does (a pop-up menu button).
+    /// opener as a press does (a pop-up menu button). Keyboard and accessibility activation toggle it too.
     Press,
     /// A context request (right click, the Menu key, AccessKit `ShowContextMenu`) opens.
     Context,
@@ -67,13 +67,18 @@ impl Opener {
         // The opener's `Response` carries the press path's verdict, for a root with its own egui widget and for an
         // arena member alike: whether the open press is on it and whether a click released on it.
         let pressed_on = response::is_pressed(anchor);
+        if trigger == Trigger::Context && anchor.enabled() {
+            crate::runtime::egui::access::offer_context_menu(&anchor.ctx, anchor.id);
+        }
         let request = keys::context_request(&anchor.ctx, anchor.id);
         let (fired, opening, pressed, clicked) = pointer::with_pass_raw(&anchor.ctx, |pass| {
             let Some(frame) = pass.frame.as_ref() else { return (false, Opening::Plain, false, false) };
             let inside = frame
                 .pos
                 .is_some_and(|pos| anchor.rect.contains(areas::layer_map(&anchor.ctx, anchor.layer_id).map_or(pos, |map| map.to_layer(pos))));
-            let by_pointer = inside && frame.release == Some(PointerButton::Secondary);
+            let by_pointer = inside
+                && frame.release == Some(PointerButton::Secondary)
+                && frame.pos.is_some_and(|pos| areas::layer_at(&anchor.ctx, pos) == Some(anchor.layer_id));
             // A root opener opens on the primary press inside it, as a pop-up button does, however long the press is
             // then held; a `Click` opener's release completes the click that press began.
             let primary = pressed_on && frame.press.is_some_and(|press| press.button == PointerButton::Primary);
@@ -93,6 +98,9 @@ impl Opener {
             let clicked = trigger == Trigger::Click && frame.release == Some(PointerButton::Primary) && response::pointer_clicked(anchor);
             (fired, opening, pressed_on && pass.primary_down, clicked)
         });
+        // Keyboard and accessibility clicks have no pointer press; their activation must still open the layer.
+        let activated = anchor.enabled() && response::clicked(anchor) && !response::pointer_clicked(anchor);
+        let fired = fired || (activated && matches!(trigger, Trigger::Click | Trigger::Press));
         Opener {
             id: anchor.id,
             rect: anchor.rect,
@@ -132,7 +140,8 @@ pub(super) fn secondary_release_in(response: &Response) -> bool {
         pass.frame.as_ref().is_some_and(|frame| {
             frame.release == Some(PointerButton::Secondary)
                 && frame.pos.is_some_and(|pos| {
-                    response.interact_rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
+                    areas::layer_at(&response.ctx, pos) == Some(response.layer_id)
+                        && response.interact_rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
                 })
         })
     })

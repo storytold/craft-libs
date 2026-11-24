@@ -1,5 +1,6 @@
 //! The integration binary of craft-font-manager: every test is a registered trial.
 
+pub(crate) mod glyphs;
 pub(crate) mod missing;
 pub(crate) mod panel;
 pub(crate) mod picker;
