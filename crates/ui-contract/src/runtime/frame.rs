@@ -32,12 +32,35 @@ pub struct FrameInput {
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
+    /// Whether the window system's input reaches the OS windows the runtime hosts.
+    pub window_input: WindowInput,
+}
+
+/// Whether the window system's input reaches the OS windows the runtime hosts beside the root (a panel floated into
+/// its own window). eframe gives the host only the root's raw input (`App::raw_input_hook`), so the host applies its
+/// policy to the root there and gives it here for the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowInput {
+    /// The window system's input reaches every hosted window.
+    #[default]
+    Live,
+    /// An agent-driven session: a hosted window's events, hovered files and dropped files are dropped before any
+    /// stage reads them, so only the runtime's injected input reaches it. Its window facts (size, focus, close
+    /// requests) stay.
+    Dropped,
 }
 
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE }
+        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, window_input: WindowInput::Live }
+    }
+
+    /// Sets whether the window system's input reaches the hosted windows.
+    pub fn window_input(mut self, window_input: WindowInput) -> Self {
+        self.window_input = window_input;
+        self
     }
 
     /// Sets the command input.
@@ -416,6 +439,11 @@ pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
     pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
 }
 
+/// The frame's window-input policy; `Live` before the app sets any input.
+pub(crate) fn window_input(ctx: &Context) -> WindowInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.window_input)).unwrap_or_default()
+}
+
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own
 /// click options stay the app's.
 pub(crate) fn slop(ctx: &Context) -> f32 {
@@ -664,6 +692,15 @@ pub(crate) fn held_for(ctx: &Context, viewport: ViewportId, frame: u64) -> Vec<e
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.delivered_in(frame))
 }
 
+/// The mode the current frame's root theme resolves to on `ctx`.
+fn effective_mode(ctx: &Context) -> Mode {
+    let root = pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.root.clone()));
+    match root {
+        Some(root) => root.effective_mode(ctx),
+        None => RootEnv::fallback(ctx).effective_mode(ctx),
+    }
+}
+
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
 /// records keyed by `input.viewport_id`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
@@ -675,6 +712,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     raw_input::prepare(ctx, input);
     // H0b: the OS colour scheme egui's integration reports reaches the system reader.
     crate::runtime::env::system::input_hook(ctx, &input.events);
+    // H0d: match egui's font coverage transfer function to the pass's resolved theme mode before egui runs
+    // `Fonts::begin_pass`, so dark-on-light and light-on-dark text use the right curve even when the app's mode
+    // differs from the OS's.
+    let mode = effective_mode(ctx);
+    style::set_text_color_transfer(ctx, mode);
     // From H0 to H3 the events go with the input time each arrived at (`Arrived`): held events keep theirs, and the key
     // stage gives each shortcut its own. egui's events are what these stages leave.
     let mut events = Arrived::take(input);
