@@ -267,6 +267,9 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     page_reveal: Option<usize>,
     /// The row this pass scrolls into view, placed before the rows are built (`place_reveal`).
     revealing: Option<usize>,
+    /// The row an AccessKit Scroll Into View brings into the collection's own view this pass: once placed, its visible
+    /// piece goes to the scroll owner around the collection (`content`), as a scroll body passes a reveal on.
+    reveal_around: Option<usize>,
     /// The row the collection's own press is held on this pass, and where on it.
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
     /// The rows above and below the edge-press band declared this pass.
@@ -331,6 +334,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             drags: Drags::default(),
             page_reveal: None,
             revealing: None,
+            reveal_around: None,
             lead_at_read: None,
             renaming_at_read: None,
             pressed: None,
