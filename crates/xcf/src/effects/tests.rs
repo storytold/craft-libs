@@ -529,7 +529,21 @@ fn malformed_argument_names_skip_only_their_framed_property_and_keep_resource_st
         assert_eq!(parsed.errors, ["effect argument has a malformed name"]);
         assert_eq!(parsed.raw, &bytes[8..]);
         assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::new(4096, 1), &|| true), Err(Error::Limit(Limit::Work))));
-        assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::default(), &|| false), Err(Error::Source(crate::Error::Cancelled))));
+        let calls = Cell::new(0);
+        let keep = || {
+            calls.set(calls.get() + 1);
+            calls.get() < 4
+        };
+        let mut budget = Budget::default();
+        let work = budget.remaining_work();
+        // Reader admission and envelope checks pass, as does the first
+        // property check. Cancel at the next property, after its malformed
+        // predecessor has been read and skipped, before decoding "later".
+        assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut budget, &keep), Err(Error::Source(crate::Error::Cancelled))));
+        assert_eq!(calls.get(), 4);
+        let headers = ["Stored effect", "", "example:inert-operation", "1:0"].iter().map(|name| text_value(name).len()).sum::<usize>();
+        let declared_name = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
+        assert_eq!(work - budget.remaining_work(), 64 + headers + 8 + payload.len() + 4 + declared_name);
     }
 }
 
