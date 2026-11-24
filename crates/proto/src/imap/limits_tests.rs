@@ -29,8 +29,8 @@ fn a_flood_of_long_lines_ends_the_command() {
     // 600 lines of 60 KB are more than the 32 MB one command may bring. The gate sends lines that
     // are not parsed (the cap counts the text read); nightly sends the lines of a real listing.
     let full = craft_testkit::hostile::divisor() == 1;
-    let server = flood(600, |n| if full { format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1) } else { format!("* OK {pad}\r\n") })
-        + "A0001 OK done\r\n";
+    let server =
+        flood(600, |n| if full { format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1) } else { format!("* OK {pad}\r\n") }) + "A0001 OK done\r\n";
     let mut s = Script::new(server);
     let err = opened(&mut s, 1000, 2000).uid_fetch_flags("1:*").unwrap_err();
     assert!(matches!(err, ProtoError::Protocol(ref m) if m.to_string().contains("too much")), "{err:?}");

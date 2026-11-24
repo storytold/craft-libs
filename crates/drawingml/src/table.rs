@@ -749,7 +749,11 @@ mod tests {
         let mut t = Table { cols: vec![1.0; MAX_CELLS + 5], rows: vec![Row::default(); 3], ..Default::default() };
         t.normalize();
         assert_eq!((t.cols.len(), t.rows.len()), (MAX_CELLS, 1));
-        let wide = Table { cols: vec![10.0; 1000], rows: vec![Row { height: 1.0, cells: vec![Cell::new("x"); 1100] }; MAX_CELLS / 1000 + 1], ..Default::default() };
+        let wide = Table {
+            cols: vec![10.0; 1000],
+            rows: vec![Row { height: 1.0, cells: vec![Cell::new("x"); 1100] }; MAX_CELLS / 1000 + 1],
+            ..Default::default()
+        };
         let mut n = wide.clone();
         n.normalize();
         assert_eq!(wide.normalized(), n);

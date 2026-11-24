@@ -504,7 +504,14 @@ proptest! {
 fn perms_filler_follows_the_seed() {
     let perms = |seed: u8| {
         let h = create(
-            &NewEncryption { algorithm: Algorithm::Aes256, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata: true, seed: [seed; 32] },
+            &NewEncryption {
+                algorithm: Algorithm::Aes256,
+                user_password: "user",
+                owner_password: "owner",
+                permissions: -1,
+                encrypt_metadata: true,
+                seed: [seed; 32],
+            },
             ID,
         )
         .unwrap();

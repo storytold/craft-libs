@@ -92,7 +92,10 @@ fn a_menu_taller_than_its_room_scrolls_by_its_strips_and_the_wheel_at_the_width_
     assert!(in_view(&fixture, menu, 0) && !in_view(&fixture, menu, ROWS - 1));
 
     let rest_on = |at: Rect| move || vec![pointer::moved(at.center())];
-    assert!(until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(forward), |f| in_view(f, menu, ROWS - 1)), "resting on the lower strip reaches the last row");
+    assert!(
+        until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(forward), |f| in_view(f, menu, ROWS - 1)),
+        "resting on the lower strip reaches the last row"
+    );
     assert!(!in_view(&fixture, menu, 0));
     assert!(until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(back), |f| in_view(f, menu, 0)), "resting on the upper strip reaches the first row");
 
