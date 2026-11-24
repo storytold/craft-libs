@@ -8,7 +8,7 @@ pub(crate) mod script;
 pub(crate) mod system;
 
 pub use defaults::{deflated_default_definitions, emoji_icon_font, noto_emoji};
-pub use document::{DOCUMENT_FACES_PER_PASS, FaceBytes, FaceState, MAX_DOCUMENT_FACES, MAX_INTERFACE_FACE_BYTES};
+pub use document::{FaceBytes, FaceState, MAX_DOCUMENT_FACE_BYTES};
 pub use faces::{FaceList, RegularWeight, set_weight};
 pub use on_demand::{FontCandidates, MAX_SCRIPT_READS, NoCandidates, OnDemandFonts, SystemCandidates, han_for_locale, on_demand_registered};
 pub use system::system_font_provider;
@@ -32,6 +32,9 @@ use crate::runtime::frame;
 use crate::runtime::layout_memory;
 use egui::{Context, FontDefinitions, FontFamily};
 
+/// The egui family name of [`FontRef::signature`]; the stack registers it in every build.
+const SIGNATURE_FAMILY: &str = "signature";
+
 /// A font handle: the family a run is set in.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FontRef(FontFamily);
@@ -47,6 +50,12 @@ impl FontRef {
         FontRef(FontFamily::Monospace)
     }
 
+    /// The signature face: always a family egui knows. Its chain is the craft-fonts faces of the signature role,
+    /// then the proportional chain; without one in the build, the proportional chain.
+    pub fn signature() -> FontRef {
+        FontRef::named(SIGNATURE_FAMILY)
+    }
+
     /// A family registered under `name`.
     pub fn named(name: &str) -> FontRef {
         FontRef(FontFamily::Name(name.into()))
@@ -56,7 +65,10 @@ impl FontRef {
         FontRef(family)
     }
 
-    pub(crate) fn family(&self) -> FontFamily {
+    /// The egui family that lays the face out, for a layout job an app builds itself: the open paragraph of a text
+    /// editor, whose galley its `TextEditorHost` lays out. Content painters lay document runs out through `DocText`,
+    /// which takes the `FontRef` itself.
+    pub fn family(&self) -> FontFamily {
         self.0.clone()
     }
 }

@@ -1335,7 +1335,7 @@ struct Veiled;
 
 impl DockPanels<u32> for Veiled {
     fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let _ = DropVeil::new("Drop").show(ui, |_, _| {});
+        let _ = DropVeil::new("Drop").show_with_files(ui, |_, _| {});
     }
 }
 

@@ -433,7 +433,7 @@ impl<'a> ListManager<'a> {
                         list = list.empty(empty.clone());
                     }
                     if searchable {
-                        list = list.filter(text.as_str(), |at| Label::from(entries[*at].name.clone()));
+                        list = list.filter(text.as_str(), |at| vec![Label::from(entries[*at].name.clone())]);
                     }
                     let events = list
                         .show_items(ui, &source, &mut |at, _| {

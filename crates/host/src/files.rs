@@ -7,7 +7,7 @@
 //! one; otherwise the service starts it in the last folder it remembers for the
 //! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -225,6 +225,18 @@ pub struct PickAnswer {
     pub picked: Picked,
 }
 
+/// Why a file is written: a Save to the document's own place, or a Save As to a new one. A
+/// service that hands the bytes to an embedding page passes it on, so the page can tell the two
+/// apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WriteIntent {
+    /// Save to the place the document already has.
+    Save,
+    /// Save to a new place.
+    SaveAs,
+}
+
 /// Why a read or write failed. The message reads the same in every app (F15.06).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileError {
@@ -278,8 +290,15 @@ pub trait Files: Send + Sync {
     fn pick_pending(&self) -> bool;
     /// Reads the whole file at `path`.
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError>;
-    /// Writes atomically where the platform allows (temp file and rename).
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError>;
+    /// Writes atomically where the platform allows (temp file and rename). `Ok(true)` when a host page took the bytes
+    /// (a browser embedded in a page), `Ok(false)` when they were written here.
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError>;
+    /// Whether something already exists at `path`. `false` when the service has no file system to
+    /// check (a browser).
+    fn exists(&self, path: &Path) -> bool {
+        let _ = path;
+        false
+    }
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
     /// Queues a save of `bytes` as ticket `request`'s answer, taken with
@@ -291,6 +310,12 @@ pub trait Files: Send + Sync {
     fn can_pick(&self) -> bool;
     /// Whether [`save`](Files::save) hands the bytes to the browser instead of writing a path.
     fn browser_saves(&self) -> bool;
+    /// Answers the next pick, or the oldest pick still open, with `picked` instead of showing a
+    /// picker; the answer arrives through [`take_answer`](Files::take_answer) on a later pass.
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let _ = picked;
+        Err(FileError::Unsupported)
+    }
 }
 
 /// No pickers (every pick answers `Cancelled`); reads and writes go to the file system. The
@@ -334,16 +359,28 @@ impl Files for NoPickFiles {
         Err(FileError::Unsupported)
     }
 
+    // No page to hand the bytes to: every intent writes the path, and no page took them.
     #[cfg(not(target_arch = "wasm32"))]
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, path: &Path, bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         let tmp = path.with_extension(format!("{}.tmp", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
         std::fs::write(&tmp, bytes).map_err(|e| with_path(e, path))?;
-        std::fs::rename(&tmp, path).map_err(|e| with_path(e, path))
+        std::fs::rename(&tmp, path).map_err(|e| with_path(e, path))?;
+        Ok(false)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn exists(&self, _path: &Path) -> bool {
+        false
     }
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
@@ -392,6 +429,10 @@ struct ScriptState {
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
     files: HashMap<PathBuf, Vec<u8>>,
+    /// Paths a write to is refused ([`ScriptedFiles::failing_writes`]).
+    refused: HashSet<PathBuf>,
+    /// The path of every write that took, in order ([`ScriptedFiles::written`]).
+    written: Vec<PathBuf>,
     /// The bytes of the saves not answered yet, written to the chosen path with the answer.
     saves: HashMap<PickId, Vec<u8>>,
     /// Stands in for a browser host.
@@ -425,8 +466,9 @@ impl ScriptedFiles {
     }
 
     /// A service whose picks stay open until the test answers them with
-    /// [`answer`](ScriptedFiles::answer) or [`answer_to`](ScriptedFiles::answer_to): the state of
-    /// a user who has the dialog on screen.
+    /// [`answer`](ScriptedFiles::answer), [`answer_to`](ScriptedFiles::answer_to) or
+    /// [`Files::answer_next`]: the state of a user who has the dialog on screen. A pick that finds
+    /// an answer queued takes it at once.
     pub fn held() -> Self {
         let files = Self::default();
         files.state().held = true;
@@ -450,6 +492,14 @@ impl ScriptedFiles {
     /// Puts a file in memory, for [`Files::read`].
     pub fn with_file(self, path: impl Into<PathBuf>, bytes: impl Into<Vec<u8>>) -> Self {
         self.state().files.insert(path.into(), bytes.into());
+        self
+    }
+
+    /// Refuses every write to `path`: [`Files::write`] returns [`FileError::PermissionDenied`] for it and keeps the
+    /// bytes it had. Other paths write as before.
+    #[must_use]
+    pub fn failing_writes(self, path: impl Into<PathBuf>) -> Self {
+        self.state().refused.insert(path.into());
         self
     }
 
@@ -490,6 +540,12 @@ impl ScriptedFiles {
         self.state().files.get(path).cloned()
     }
 
+    /// The path of every write so far that took, in the order of the writes: a path written twice is listed twice. A
+    /// refused write and a file put there with [`with_file`](ScriptedFiles::with_file) are not listed.
+    pub fn written(&self) -> Vec<PathBuf> {
+        self.state().written.clone()
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, ScriptState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -510,12 +566,12 @@ impl ScriptedFiles {
         }
         let suggested = (state.save_suggested && request.kind == PickKind::Save).then(|| Self::suggested(&request));
         state.asked.push(request.clone());
-        if state.held {
-            state.open.push((id, request));
-            return id;
+        let picked =
+            if state.held { state.queued.pop_front() } else { Some(suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled)) };
+        match picked {
+            Some(picked) => state.settle(id, request, picked),
+            None => state.open.push((id, request)),
         }
-        let picked = suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled);
-        state.settle(id, request, picked);
         id
     }
 }
@@ -546,8 +602,32 @@ impl Files for ScriptedFiles {
         self.file(path).ok_or_else(|| FileError::NotFound(path.to_owned()))
     }
 
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        self.state().files.insert(path.to_owned(), bytes.to_vec());
+    // Kept in memory whatever the intent; no page takes the bytes.
+    fn write(&self, path: &Path, bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
+        let mut state = self.state();
+        if state.refused.contains(path) {
+            return Err(FileError::PermissionDenied(path.to_owned()));
+        }
+        state.files.insert(path.to_owned(), bytes.to_vec());
+        state.written.push(path.to_owned());
+        Ok(false)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        self.state().files.contains_key(path)
+    }
+
+    /// Answers the oldest open pick of a [`held`](ScriptedFiles::held) service; otherwise the
+    /// answer is queued for the next pick. [`answer`](ScriptedFiles::answer) answers the newest
+    /// instead, so this does not go through it.
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let mut state = self.state();
+        if state.held && !state.open.is_empty() {
+            let (id, request) = state.open.remove(0);
+            state.settle(id, request, picked);
+        } else {
+            state.queued.push_back(picked);
+        }
         Ok(())
     }
 

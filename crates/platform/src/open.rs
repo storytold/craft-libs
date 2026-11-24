@@ -90,6 +90,20 @@ pub enum Intake {
     },
     /// The OS asked the app to quit.
     Quit,
+    /// The OS asked to open these absolute paths for the app's own action.
+    OpenFor {
+        /// The files, absolute and sorted.
+        paths: Vec<PathBuf>,
+        /// The app's action name.
+        action: String,
+    },
+    /// A file that arrived as bytes, with no path.
+    Bytes {
+        /// The file's name.
+        name: String,
+        /// The contents.
+        bytes: Arc<[u8]>,
+    },
 }
 
 /// The sending side of a [`FileIntake`]: `Send + Clone`, for the threads that hear the OS (the
@@ -154,9 +168,29 @@ impl IntakeSender {
         if paths.is_empty() {
             return;
         }
-        let mut paths: Vec<PathBuf> = paths.iter().map(|p| absolute(p)).collect();
-        paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
-        push(&self.queue, Intake::Open(paths));
+        self.send(Intake::Open(ordered(paths)));
+    }
+
+    /// Queues an open request for the app's own `action`, made absolute and sorted as [`open`](Self::open) does, and
+    /// wakes the UI. Empty input is ignored.
+    pub fn open_for(&self, paths: Vec<PathBuf>, action: impl Into<String>) {
+        if paths.is_empty() {
+            return;
+        }
+        self.send(Intake::OpenFor { paths: ordered(paths), action: action.into() });
+    }
+
+    /// Queues a file that arrived as bytes, and wakes the UI. A file with neither a name nor bytes is ignored.
+    pub fn open_bytes(&self, name: String, bytes: Arc<[u8]>) {
+        if name.is_empty() && bytes.is_empty() {
+            return;
+        }
+        self.send(Intake::Bytes { name, bytes });
+    }
+
+    /// Queues `batch` after every batch sent before it, then wakes the UI.
+    fn send(&self, batch: Intake) {
+        push(&self.queue, batch);
         self.wake.wake();
     }
 
@@ -176,13 +210,20 @@ impl IntakeSender {
     }
 }
 
+/// `paths` made absolute and sorted by [`natural_cmp`] of the path text, the order an OS open request opens in.
+fn ordered(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = paths.iter().map(|p| absolute(p)).collect();
+    paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    paths
+}
+
 /// OS requests waiting for the app (files to open, files dropped, quit), read once per frame on
 /// the UI thread (spec Q-S4F-7).
 ///
 /// The app makes one at startup, gives [`sender`](Self::sender) to whatever hears the OS
 /// (`apple_events::install` on macOS, its single-instance socket elsewhere), pushes drops
 /// through a sender's [`dropped`](IntakeSender::dropped), and takes the requests with
-/// [`take`](Self::take). An [`Intake::Open`] batch comes made absolute and sorted by
+/// [`take`](Self::take). An [`Intake::Open`] or [`Intake::OpenFor`] batch comes made absolute and sorted by
 /// [`natural_cmp`] of the path text; the app focuses documents already open ([`same_file`]) and
 /// opens the rest, then brings its window to the front (on Wayland, a user-attention request).
 /// [`Intake::Quit`] closes the app the way its own Quit command does.
@@ -283,9 +324,13 @@ pub const CAN_REVEAL: bool = cfg!(not(target_arch = "wasm32"));
 
 /// Shows `path` selected in the system file manager: `open -R` on macOS, Explorer's
 /// `/select,"<path>"` on Windows (raw arguments; a path containing `"` is refused), and on Linux
-/// and FreeBSD the FileManager1 D-Bus call through `dbus-send` on a thread of its own, falling back
-/// to `xdg-open` on the folder. The path is made absolute first (so a name starting with `-` is
-/// never an option); a path that no longer exists is [`FILE_GONE`]. Not on wasm.
+/// and FreeBSD the FileManager1 D-Bus call through `dbus-send`, falling back to `xdg-open` on the
+/// folder. The path is made absolute first (so a name starting with `-` is never an option); a
+/// path that no longer exists is [`FILE_GONE`]. Not on wasm.
+///
+/// It runs on the caller's thread and returns the real result. On Linux and FreeBSD it can block
+/// up to the D-Bus reply timeout (2 s) before the fallback runs, so call it from the host's
+/// `Jobs`, never from the UI thread.
 // pdfcraft: crates/ui-egui/src/menus/tab_context.rs:51 reveal, :77 reveal_process, :92 reveal_via
 #[cfg(not(target_arch = "wasm32"))]
 pub fn reveal(path: &Path) -> Result<(), String> {
@@ -294,20 +339,8 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     if !path.try_exists().map_err(|e| e.to_string())? {
         return Err(FILE_GONE.english.into());
     }
-    let platform = std::env::consts::OS;
     let run = |program: &str, args: &[OsString]| reveal_process(program, args).output().map(|o| o.status.success()).map_err(|e| e.to_string());
-    if matches!(platform, "linux" | "freebsd") {
-        // `dbus-send --print-reply` waits up to 2 s for the file manager (then xdg-open may run),
-        // so it runs off the UI thread; a failure there has nobody to tell.
-        return std::thread::Builder::new()
-            .name("craft-reveal".into())
-            .spawn(move || {
-                let _ = reveal_via(platform, &path, run);
-            })
-            .map(|_| ())
-            .map_err(|e| e.to_string());
-    }
-    reveal_via(platform, &path, run)
+    reveal_via(std::env::consts::OS, &path, run)
 }
 
 /// The process that runs `program` with `args`. Windows: the arguments go on the command line as
@@ -385,9 +418,21 @@ fn reveal_command(platform: &str, path: &Path) -> Result<(&'static str, Vec<OsSt
     }
 }
 
+/// Opens `target` in a new browser tab with `window.open(target, "_blank", "noopener,noreferrer")`; a `null` return
+/// is success. The one web opener. Not on native targets (see the native `open_external`).
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+pub fn open_external(target: &str) -> Result<(), String> {
+    let window = web_sys::window().ok_or("There is no browser window to open the link in")?;
+    // With `noopener` the browser hands back no window, so `None` is the usual success.
+    window
+        .open_with_url_and_target_and_features(target, "_blank", "noopener,noreferrer")
+        .map(|_| ())
+        .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+}
+
 /// Opens a file or an `http(s)` URL with the system's handler (`open`, `rundll32
-/// url.dll,FileProtocolHandler`, `xdg-open`), without waiting for it. Not on wasm (the browser
-/// module opens URLs there).
+/// url.dll,FileProtocolHandler`, `xdg-open`), without waiting for it. On wasm the browser
+/// build's `open_external` opens the URL in a new tab instead.
 ///
 /// No shell sees the target: on Windows `cmd` would run the part of a link after a `&`, and on
 /// macOS and Linux a target that starts with `-` would be read as an option, so `--` precedes it.
