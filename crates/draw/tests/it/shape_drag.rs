@@ -228,6 +228,30 @@ fn a_triangle_fills_its_box_and_shift_makes_it_equilateral() {
     assert!((centre.to_point() - PRESS).hypot() < 1e-9, "⇧⌥ puts the centre on the press, got {centre:?}");
 }
 
+/// A box drag lands on whole pixels by default; with `whole_pixels` off (Photoshop's Align Edges off) the box keeps
+/// the drag's fractions, the preview the same as the commit, and a side under a pixel still draws nothing.
+#[trial]
+fn whole_pixels_off_keeps_the_drags_fractions() {
+    let (from, to) = (PRESS + Vec2::new(0.25, 0.75), PRESS + Vec2::new(30.5, 20.25));
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle));
+    shapes.drag(from, to, Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 101.0, 130.0, 121.0)), "whole pixels by default");
+
+    for kind in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::Triangle, ShapeKind::Custom] {
+        let mut shapes = Shapes::new(ShapeDragOptions::new(kind).whole_pixels(false));
+        shapes.drag(from, to, Modifiers::NONE);
+        assert_eq!(shapes.committed_box(), Some(Rect::new(100.25, 100.75, 130.5, 120.25)), "{kind:?} keeps the fractions");
+        assert_eq!(shapes.proposed(), shapes.committed(), "{kind:?}: the preview is the commit");
+        shapes.forget();
+        shapes.drag(from, from + Vec2::new(0.75, 20.0), Modifiers::NONE);
+        assert_eq!(shapes.committed(), None, "{kind:?}: a side under a pixel draws nothing");
+    }
+
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle).whole_pixels(false));
+    shapes.drag(from, to, Modifiers::SHIFT | Modifiers::ALT);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(80.75, 81.25, 119.75, 120.25)), "⇧⌥ squares and centres before keeping the fractions");
+}
+
 /// A press moved 2 × 1 points and released: a Rectangle in Shape mode draws it, in Path mode it is a click, and an
 /// Ellipse in Shape mode keeps the press slop.
 #[trial]

@@ -187,6 +187,7 @@ impl ShapeDragTool {
             from_centre: mods.alt != c.from_center,
             fixed: (c.constraint == BoxConstraint::FixedSize).then(|| pair(c.fixed)).flatten(),
             ratio: (c.constraint == BoxConstraint::Proportional).then(|| pair(c.ratio)).flatten(),
+            keep_fractions: !o.whole_pixels,
         };
         let rect = box_drag(drag.start, drag.at, rule)?;
         Some(match o.kind {
