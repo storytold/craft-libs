@@ -514,9 +514,9 @@ fn overlapping_bookmarks_keep_their_ends() {
 
 /// What the writer writes for a character's vertical position: superscript and subscript as
 /// `sprmCIss`, a raised or lowered position as `sprmCHpsPos`, character spacing as
-/// `sprmCDxaSpace`. The reader reads them once craft-libs#1799 is in.
+/// `sprmCDxaSpace`. The reader reads `sprmCIss` and `sprmCHpsPos` once craft-libs#2920 is in.
 #[test]
-#[ignore = "the reader reads sprmCIss, sprmCHpsPos and sprmCDxaSpace once craft-libs#1799 is in"]
+#[ignore = "the reader reads sprmCIss and sprmCHpsPos once craft-libs#2920 is in"]
 fn position_and_spacing_round_trip() {
     let mut p = para("sup sub up sp");
     p.format(0, 3, &|c| c.vert_align = Some(VertAlign::Superscript)).unwrap();
@@ -530,6 +530,26 @@ fn position_and_spacing_round_trip() {
     assert_eq!(q.props_at(9).position, Some(3.0));
     assert_ne!(q.props_at(9).vert_align, Some(VertAlign::Superscript));
     assert_eq!(q.props_at(12).spacing, Some(1.5));
+}
+
+/// Expanded and condensed spacing, horizontal scale and kerning survive a round trip, and
+/// kerning turned off stays off rather than becoming a threshold.
+#[test]
+fn character_spacing_scale_and_kerning_round_trip() {
+    let mut p = para("wide tight narrow kern nokern");
+    p.format(0, 4, &|c| c.spacing = Some(1.5)).unwrap();
+    p.format(5, 10, &|c| c.spacing = Some(-0.75)).unwrap();
+    p.format(11, 17, &|c| c.scale = Some(80.0)).unwrap();
+    p.format(18, 22, &|c| c.kern = Some(12.0)).unwrap();
+    p.format(23, 29, &|c| c.kern = Some(0.0)).unwrap();
+    let r = round(&doc_of(vec![p]));
+    let q = r.body[0].as_para().unwrap();
+    assert_eq!(q.props_at(1).spacing, Some(1.5));
+    assert_eq!(q.props_at(6).spacing, Some(-0.75));
+    assert_eq!(q.props_at(12).scale, Some(80.0));
+    assert_eq!(q.props_at(19).kern, Some(12.0));
+    assert_eq!(q.props_at(24).kern, Some(0.0));
+    assert_eq!(q.props_at(1).kern, None);
 }
 
 /// Double strikethrough, emboss and the double-wave underline. The reader reads them once

@@ -222,7 +222,9 @@ pub(crate) fn chpx(p: &CharProps, ctx: &mut dyn CharCtx) -> Grpprl {
         g.u16(C_CHAR_SCALE, sc.round().clamp(1.0, 600.0) as u16);
     }
     if let Some(k) = p.kern {
-        g.u16(C_HPS_KERN, half_points(k.max(0.0)));
+        // 0 is no kerning; otherwise the threshold MUST be 1–3276 half-points.
+        let hps = if k > 0.0 { (k * 2.0).round().clamp(1.0, 3276.0) as u16 } else { 0 };
+        g.u16(C_HPS_KERN, hps);
     }
     if let Some(f) = p.font.as_deref() {
         let i = ctx.font(f);

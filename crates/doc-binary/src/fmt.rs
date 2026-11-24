@@ -20,6 +20,9 @@ const C_ICO: u16 = 0x2A42; // palette colour
 const C_CR: u16 = 0x6870; // explicit COLORREF
 const C_HPS: u16 = 0x4A43; // half-points
 const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
+const C_DXA_SPACE: u16 = 0x8840; // character spacing, an XAS in twips
+const C_CHAR_SCALE: u16 = 0x4852; // horizontal scale, percent
+const C_HPS_KERN: u16 = 0x484B; // kerning threshold, half-points; 0 = no kerning
 const C_FTC0: u16 = 0x4A4F; // font index (ASCII)
 const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
@@ -259,6 +262,21 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                     pos if pos < 0 => VertAlign::Subscript,
                     _ => VertAlign::Baseline,
                 });
+            }
+        }
+        C_DXA_SPACE => {
+            if let Some(tw) = s16_of(prl).filter(|tw| (-31_680..=31_680).contains(tw)) {
+                p.spacing = Some(tw as f32 / 20.0);
+            }
+        }
+        C_CHAR_SCALE => {
+            if let Some(pct) = u16_of(prl).filter(|pct| (1..=600).contains(pct)) {
+                p.scale = Some(pct as f32);
+            }
+        }
+        C_HPS_KERN => {
+            if let Some(hps) = s16_of(prl).filter(|hps| (0..=3276).contains(hps)) {
+                p.kern = Some(hps as f32 / 2.0);
             }
         }
         C_FTC0 => {
