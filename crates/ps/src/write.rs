@@ -607,7 +607,7 @@ mod tests {
         let (mut integer_path, mut visited) = (0usize, 0usize);
         let samples = number_samples();
         for places in 0..=12 {
-            for v in samples.iter().copied().skip(places % step).step_by(step) {
+            for v in samples.iter().copied().skip(places as usize % step).step_by(step) {
                 visited += 1;
                 let mut expected = String::from("x ");
                 base_push_num_places(&mut expected, v, places);
