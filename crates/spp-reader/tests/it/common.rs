@@ -33,16 +33,95 @@ pub fn files() -> Option<Vec<PathBuf>> {
 
 /// A folder or entry that cannot be read stops the test: an incomplete corpus must not pass as a clean one.
 fn discover(root: &Path, files: &mut Vec<PathBuf>) {
+    discover_with(root, files, &metadata_following_links);
+}
+
+/// The metadata of what a path points at, so a link to a folder or project counts as that folder or project.
+fn metadata_following_links(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    std::fs::metadata(path)
+}
+
+/// `discover` with the metadata lookup passed in, so a test can make it fail without changing file permissions.
+fn discover_with(root: &Path, files: &mut Vec<PathBuf>, metadata_of: &dyn Fn(&Path) -> std::io::Result<std::fs::Metadata>) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let read = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read the corpus folder {}: {e}", dir.display()));
         for entry in read {
             let path = entry.unwrap_or_else(|e| panic!("cannot read an entry of the corpus folder {}: {e}", dir.display())).path();
-            if path.is_dir() {
+            let metadata = match metadata_of(&path) {
+                Ok(metadata) => metadata,
+                // a link whose target is gone is not a project
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => panic!("cannot read the metadata of {}: {e}", path.display()),
+            };
+
+            if metadata.is_dir() {
                 stack.push(path);
-            } else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)) {
+            } else if metadata.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)) {
                 files.push(path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch folder that is removed when the test ends, also when it panics.
+    struct ScratchFolder(PathBuf);
+
+    impl ScratchFolder {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("craft_spp_reader_it_{name}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(path.join("nested")).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for ScratchFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn discover_finds_projects_in_nested_folders() {
+        let folder = ScratchFolder::new("discover_nested");
+        let top = folder.0.join(format!("top.{PROJECT_EXT}"));
+        let nested = folder.0.join("nested").join(format!("deep.{PROJECT_EXT}"));
+        std::fs::write(&top, b"").unwrap();
+        std::fs::write(&nested, b"").unwrap();
+        std::fs::write(folder.0.join("notes.md"), b"").unwrap();
+        let mut files = Vec::new();
+
+        discover(&folder.0, &mut files);
+
+        files.sort();
+        assert_eq!(files, vec![top, nested]);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot read the metadata of")]
+    fn discover_stops_when_an_entry_cannot_be_classified() {
+        let folder = ScratchFolder::new("discover_metadata_error");
+        std::fs::write(folder.0.join(format!("hidden.{PROJECT_EXT}")), b"").unwrap();
+        let denied = |_: &Path| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        let mut files = Vec::new();
+
+        discover_with(&folder.0, &mut files, &denied);
+    }
+
+    #[test]
+    fn discover_skips_an_entry_that_vanished() {
+        let folder = ScratchFolder::new("discover_vanished");
+        std::fs::write(folder.0.join(format!("gone.{PROJECT_EXT}")), b"").unwrap();
+        let vanished = |_: &Path| Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        let mut files = Vec::new();
+
+        discover_with(&folder.0, &mut files, &vanished);
+
+        assert!(files.is_empty());
     }
 }
