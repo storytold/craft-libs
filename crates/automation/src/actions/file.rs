@@ -22,6 +22,12 @@ pub struct ActionsFile {
     /// Sets that hold no action.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sets: Vec<String>,
+    /// Every set name in display order, empty sets included. Written only when loading `actions`
+    /// and `sets` would not give this order (the actions' sets in order of first appearance, then
+    /// the empty sets), so files in that natural order, PhotoCraft's included, save unchanged.
+    /// Files without it load in the natural order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_order: Vec<String>,
     /// The folder occurrences a PhotoCraft file carried; empty for every other file.
     #[serde(skip)]
     pub(super) occurrences: FileOccurrences,
@@ -55,6 +61,8 @@ struct RawFile {
     #[serde(default)]
     sets: Vec<String>,
     #[serde(default)]
+    set_order: Vec<String>,
+    #[serde(default)]
     set_rows: Vec<String>,
 }
 
@@ -71,7 +79,7 @@ impl From<RawFile> for ActionsFile {
         let (actions, occurrences): (Vec<Action>, Vec<ActionOccurrence>) = raw.actions.into_iter().map(|raw| (raw.action, raw.occurrence)).unzip();
         let empty = raw.set_rows.is_empty() && occurrences.iter().all(|occurrence| *occurrence == ActionOccurrence::default());
         let occurrences = if empty { FileOccurrences::default() } else { FileOccurrences { set_rows: raw.set_rows, actions: occurrences } };
-        ActionsFile { version: raw.version, actions, sets: raw.sets, occurrences }
+        ActionsFile { version: raw.version, actions, sets: raw.sets, set_order: raw.set_order, occurrences }
     }
 }
 
@@ -117,7 +125,7 @@ impl ActionsFile {
 
     /// A file of version [`VERSION`](Self::VERSION) with `actions` and the empty `sets`.
     pub fn new(actions: Vec<Action>, sets: Vec<String>) -> Self {
-        ActionsFile { version: Self::VERSION, actions, sets, occurrences: FileOccurrences::default() }
+        ActionsFile { version: Self::VERSION, actions, sets, set_order: Vec::new(), occurrences: FileOccurrences::default() }
     }
 
     /// Reads a file's JSON text.

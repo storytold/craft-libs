@@ -19,7 +19,7 @@ use craft_host::Section;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
-    Access, Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _, step_stop,
 };
 use craft_ui::controls::disclosure::{DisclosureGlyph, DropdownArrow};
@@ -59,8 +59,6 @@ craft_ui::words! {
         /// The name of the preview banner, with `{family}` for the family it shows.
         preview_of: template "fontPicker.previewOf" = "Font preview: {family}";
         no_match: "fontPicker.noMatch" = "No fonts match";
-        /// The family field's label when the selection has several families.
-        mixed: "fontPicker.mixed" = "Mixed";
         /// The name of a row's star, with `{row}` for the row's label.
         favorite: template "fontPicker.favorite" = "Favorite {row}";
         list: "fontPicker.list" = "Fonts";
@@ -737,6 +735,18 @@ pub struct FontPicker<'a> {
     host_picked: Option<String>,
 }
 
+/// How many times a closed [`FontPicker`] built its stop list on `ctx`, for regression trials.
+#[cfg(feature = "screen-testing")]
+#[derive(Clone, Copy, Default)]
+struct StopBuilds(u64);
+
+/// How many times a closed [`FontPicker`] built its stop list on `ctx`.
+#[doc(hidden)]
+#[cfg(feature = "screen-testing")]
+pub fn stop_builds(ctx: &egui::Context) -> u64 {
+    ctx.data(|data| data.get_temp::<StopBuilds>(egui::Id::unique("font_picker_stop_builds")).unwrap_or_default().0)
+}
+
 impl<'a> FontPicker<'a> {
     /// A picker named `label` over the family `family` of `catalog`.
     pub fn new(label: impl Into<Label>, family: Bind<'a, String>, catalog: &'a Arc<Catalog>) -> Self {
@@ -813,6 +823,10 @@ impl<'a> FontPicker<'a> {
     /// What the closed field's arrows and wheel step through: the host face and action rows in group order, then the
     /// families in the list's narrowed order. A notice takes no step.
     fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<Stop> {
+        #[cfg(feature = "screen-testing")]
+        cx.response.ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<StopBuilds>(egui::Id::unique("font_picker_stop_builds")).0 += 1;
+        });
         let folder = cx.env.folder();
         let host = rank::host_rows(self.host, "", &folder)
             .into_iter()
@@ -939,10 +953,8 @@ impl Component for FontPicker<'_> {
         }
         let mut options = TextOptions::new();
         options.select_on_focus = true;
+        // A selection of several families shows an empty field, as the reference applications do.
         options.mixed = cx.value().is_none();
-        if options.mixed {
-            options.placeholder = Some(cx.words::<FontPickerWords>().mixed.clone());
-        }
         if !self.catalog.is_ready() {
             // The first scan runs on a background thread; the field asks again until it ends.
             self.catalog.scan_in_background();
@@ -957,12 +969,6 @@ impl Component for FontPicker<'_> {
 
     fn bind(&mut self) -> Option<craft_ui::contract::BindMut<'_, String>> {
         Some(self.family.reborrow())
-    }
-
-    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
-        if cx.value().is_none() && cx.text(&text_key()).is_none_or(|text| text.draft.as_deref().is_none_or(str::is_empty)) {
-            access.value(cx.words::<FontPickerWords>().mixed.as_str());
-        }
     }
 
     /// A changed draft filters the list: it opens on the matches, and closes when the draft ended (committed,
@@ -1000,52 +1006,75 @@ impl Component for FontPicker<'_> {
         let typing = cx.memory::<Typing>();
         typing.expanded.clear();
         typing.rested.clear();
+        // Collect stepping input before building the sorted stop list: idle frames carry neither arrow moves nor
+        // wheel ticks, so skipping `stops` avoids collating every installed family on every repaint.
+        let mut moves: Vec<bool> = Vec::new();
+        while let Some((step, mods)) = cx.intents().take_move() {
+            match step {
+                NavMove::Down if !mods.fine => moves.push(true),
+                NavMove::Up if !mods.fine => moves.push(false),
+                _ => {}
+            }
+        }
+        let wheel = cx.take_wheel();
+        let wheel_along = wheel.as_ref().and_then(|wheel| {
+            if wheel.phase == WheelPhase::End {
+                None
+            } else if let StepResult::Set(along) =
+                wheel_step(&ValueSteps::new(0.0, -f64::MAX, f64::MAX, 1.0, 1.0).fine(1.0), ValueAxes::Both, wheel, cx.env.direction().is_rtl())
+                && along != 0.0
+            {
+                Some((wheel.phase, along))
+            } else {
+                None
+            }
+        });
+        let wheel_ended = wheel.is_some_and(|wheel| wheel.phase == WheelPhase::End);
+        if moves.is_empty() && wheel_along.is_none() {
+            if wheel_ended {
+                cx.wheel_run(WheelPhase::End, None);
+            }
+            return;
+        }
         let settings = read(&mut self.settings, cx);
         let filters = read(&mut self.filters, cx).unwrap_or_default();
         let all = self.stops(cx, settings.as_ref(), &filters);
         let stops: Vec<usize> = (0..all.len()).collect();
-        let here = match self.current_host.as_deref() {
-            Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
-            None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
-        };
-        let mut to = here;
-        while let Some((step, mods)) = cx.intents().take_move() {
-            match step {
-                NavMove::Down if !mods.fine => to = step_stop(&stops, to, true),
-                NavMove::Up if !mods.fine => to = step_stop(&stops, to, false),
-                _ => {}
+        if !moves.is_empty() {
+            let here = match self.current_host.as_deref() {
+                Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
+                None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
+            };
+            let mut to = here;
+            for forward in moves {
+                to = step_stop(&stops, to, forward);
             }
-        }
-        if to != here {
-            match to.and_then(|at| all.get(at)) {
-                Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                Some(Stop::Family(family)) => {
-                    self.picked = Some(family.clone());
-                    cx.set(family.clone());
+            if to != here {
+                match to.and_then(|at| all.get(at)) {
+                    Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
+                    Some(Stop::Family(family)) => {
+                        self.picked = Some(family.clone());
+                        cx.set(family.clone());
+                    }
+                    None => {}
                 }
-                None => {}
             }
         }
         // The wheel steps one stop a line down for a step forward, as one run the wheel's end commits.
-        if let Some(wheel) = cx.take_wheel() {
-            if wheel.phase == WheelPhase::End {
-                cx.wheel_run(wheel.phase, None);
-            } else if let StepResult::Set(along) =
-                wheel_step(&ValueSteps::new(0.0, -f64::MAX, f64::MAX, 1.0, 1.0).fine(1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
-                && along != 0.0
-            {
-                let mut stop = match self.current_host.as_deref() {
-                    Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
-                    None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
-                };
-                for _ in 0..along.abs().round() as usize {
-                    stop = step_stop(&stops, stop, along < 0.0);
-                }
-                match stop.and_then(|at| all.get(at)) {
-                    Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-                    Some(Stop::Family(family)) => cx.wheel_run(wheel.phase, Some(family.clone())),
-                    None => {}
-                }
+        if wheel_ended {
+            cx.wheel_run(WheelPhase::End, None);
+        } else if let Some((phase, along)) = wheel_along {
+            let mut stop = match self.current_host.as_deref() {
+                Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
+                None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
+            };
+            for _ in 0..along.abs().round() as usize {
+                stop = step_stop(&stops, stop, along < 0.0);
+            }
+            match stop.and_then(|at| all.get(at)) {
+                Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
+                Some(Stop::Family(family)) => cx.wheel_run(phase, Some(family.clone())),
+                None => {}
             }
         }
     }
