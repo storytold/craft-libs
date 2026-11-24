@@ -151,10 +151,10 @@ impl Source {
         {
             let at = w.out.len();
             w.patch(slot, at);
-            if Some(slot) == channel {
-                if let Some(target) = floating_target {
-                    w.patch(target, at);
-                }
+            if Some(slot) == channel
+                && let Some(target) = floating_target
+            {
+                w.patch(target, at);
             }
             w.u32(self.width);
             w.u32(self.height);
