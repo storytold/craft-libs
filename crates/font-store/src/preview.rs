@@ -8,9 +8,9 @@
 //! `https://fonts.example.com/v1/faces/<sha256>/list/sample-<h>.woff2`.
 //!
 //! [`Previews`] requests nothing unless a preview service is set and previews are enabled
-//! ([`Installer::preview_service`], [`Installer::previews_enabled`]). Previews are on by default;
-//! a user setting turns them off. There is no prompt, and the install consent
-//! ([`Installer::downloads_allowed`]) is not consulted: previews are fetched whether or not
+//! ([`PreviewStore::preview_service`], [`PreviewStore::previews_enabled`]). Previews are on by
+//! default; a user setting turns them off. There is no prompt, and the install consent (the font
+//! manager's `Installer::downloads_allowed`) is not consulted: previews are fetched whether or not
 //! installs are allowed. With previews off nothing goes to the network, but previews already in
 //! the disk cache are still used. Without a service the panel keeps its whole-family previews.
 
@@ -22,9 +22,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
-use craft_font_store::{Cancel, Client, FetchError, Timeouts, is_font, sha256_hex};
-
-use crate::store::Installer;
+use crate::{Cancel, Client, FetchError, Timeouts, is_font, sha256_hex};
 
 /// The most codepoints one request may name; the service rejects more.
 pub const MAX_CODEPOINTS: usize = 256;
@@ -103,6 +101,7 @@ impl FromIterator<char> for Codepoints {
 
 /// Which instance of a face a subset is drawn at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Instance {
     /// What the list shows: the "Regular" named instance of a variable face, else its default,
     /// pinned to a static font.
@@ -139,6 +138,7 @@ impl SampleHash {
 
 /// Which characters a subset holds.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Subset {
     /// The face's default sample (its script's sentence from the index) and the family name.
     /// The hash names the text the client has; the service answers 404 for any other.
@@ -207,6 +207,7 @@ impl PreviewKey {
 
 /// Why a preview didn't load.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PreviewError {
     /// The user turned previews off, and the subset isn't cached.
     PreviewsOff,
@@ -237,6 +238,7 @@ impl std::error::Error for PreviewError {}
 
 /// A finished request.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Preview {
     /// The key the preview was fetched for.
     pub key: PreviewKey,
@@ -244,7 +246,33 @@ pub struct Preview {
     pub font: Result<Vec<u8>, PreviewError>,
 }
 
-/// How the pool downloads: craft-font-store's [`Client`], or a stand-in in tests.
+/// What [`Previews`] reads from the font store: the service and the user's setting on each request, the client and
+/// the cache folder when the pool is made. The font manager's `Installer` builds on it.
+pub trait PreviewStore: Send + Sync {
+    /// The preview service's base URL, if one is set: [`PREVIEW_SERVICE_ENV`](crate::PREVIEW_SERVICE_ENV), else the
+    /// font store's `preview_service` setting, else the host's default. Installs try it as a mirror first.
+    fn preview_service(&self) -> Option<String> {
+        None
+    }
+
+    /// The store's HTTP client, if it has one. [`Previews`] fetches with it, so a preview service that installs
+    /// found unreachable is skipped by previews too, and the reverse.
+    fn http_client(&self) -> Option<Client> {
+        None
+    }
+
+    /// Whether previews may be fetched from the preview service: the user's setting, on by default.
+    fn previews_enabled(&self) -> bool {
+        true
+    }
+
+    /// The folder [`Previews`] caches preview subsets in; none keeps them only for as long as the caller holds them.
+    fn preview_cache(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// How the pool downloads: the store's [`Client`], or a stand-in in tests.
 pub trait Fetch: Send + Sync {
     /// GETs `url`, built from the preview-service setting, at most `max` bytes, stopping soon after `cancel` is set.
     fn get(&self, url: &str, max: u64, cancel: &Cancel) -> Result<Vec<u8>, FetchError>;
@@ -428,7 +456,7 @@ type Wake = Arc<dyn Fn() + Send + Sync>;
 /// Without a service, requests come back as [`PreviewError::NoService`] at once and nothing is
 /// read or fetched.
 pub struct Previews {
-    installer: Arc<dyn Installer>,
+    installer: Arc<dyn PreviewStore>,
     fetcher: Arc<dyn Fetch>,
     cache: Option<Arc<DiskCache>>,
     wake: Option<Wake>,
@@ -468,13 +496,13 @@ impl State {
 }
 
 impl Previews {
-    /// A pool fetching with the installer's client ([`Installer::http_client`]) given short timeouts
+    /// A pool fetching with the store's client ([`PreviewStore::http_client`]) given short timeouts
     /// (10 s to connect, 15 s to respond, 30 s overall; the down state stays shared), else with its
-    /// own craft-font-store [`Client`]. A network failure of the service pauses its requests for a
-    /// minute, for every user of the same client (installs too). It caches in the store's
-    /// [`Installer::preview_cache`] folder, up to [`CACHE_LIMIT`]. It starts its threads on the
+    /// own [`Client`]. A network failure of the service pauses its requests for a minute, for every
+    /// user of the same client (installs too). It caches in the store's
+    /// [`PreviewStore::preview_cache`] folder, up to [`CACHE_LIMIT`]. It starts its threads on the
     /// first request.
-    pub fn new(installer: Arc<dyn Installer>) -> Previews {
+    pub fn new(installer: Arc<dyn PreviewStore>) -> Previews {
         let timeouts = Timeouts { connect: Duration::from_secs(10), response: Duration::from_secs(15), overall: Duration::from_secs(30) };
         let client = installer.http_client().map_or_else(|| Client::new(timeouts), |c| c.with_timeouts(timeouts));
         let cache = installer.preview_cache().map(|dir| Arc::new(DiskCache::new(dir, CACHE_LIMIT)));
@@ -614,7 +642,7 @@ impl Drop for Previews {
 }
 
 struct Worker {
-    installer: Arc<dyn Installer>,
+    installer: Arc<dyn PreviewStore>,
     fetcher: Arc<dyn Fetch>,
     cache: Option<Arc<DiskCache>>,
     wake: Option<Wake>,

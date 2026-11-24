@@ -4,7 +4,7 @@ use super::{
     AtomicBool, Condvar, Downloaded, Family, HashMap, Index, Installer, Mutex, Ordering, Path, PathBuf, Progress, RemoveRequest, StoreError,
     UserSource, err,
 };
-use super::{LegalText, PreviewServiceSource};
+use super::{LegalText, PreviewServiceSource, PreviewStore};
 
 /// What a [`FakeStore`] was asked to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,16 +271,8 @@ impl Installer for FakeStore {
         Ok(())
     }
 
-    fn preview_service(&self) -> Option<String> {
-        self.preview_service.lock().ok()?.clone()
-    }
-
     fn preview_service_source(&self) -> PreviewServiceSource {
         if self.preview_service().is_some() { PreviewServiceSource::Saved } else { PreviewServiceSource::None }
-    }
-
-    fn previews_enabled(&self) -> bool {
-        self.previews.lock().map_or(true, |p| *p)
     }
 
     fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
@@ -292,10 +284,6 @@ impl Installer for FakeStore {
         let url = url.map(craft_font_store::check_preview_service).transpose().map_err(err)?;
         *self.preview_service.lock().map_err(err)? = url;
         Ok(())
-    }
-
-    fn preview_cache(&self) -> Option<PathBuf> {
-        Some(self.dir.join("previews"))
     }
 
     /// Served from the file table by the index path, like a font.
@@ -310,5 +298,19 @@ impl Installer for FakeStore {
         }
         let bytes = self.files.get(path).ok_or_else(|| StoreError(format!("{path} isn't available")))?;
         Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
+    }
+}
+
+impl PreviewStore for FakeStore {
+    fn preview_service(&self) -> Option<String> {
+        self.preview_service.lock().ok()?.clone()
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.previews.lock().map_or(true, |p| *p)
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.dir.join("previews"))
     }
 }

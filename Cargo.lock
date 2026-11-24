@@ -2757,7 +2757,6 @@ dependencies = [
  "serde",
  "serde_json",
  "skrifa 0.47.0",
- "wuff",
 ]
 
 [[package]]
@@ -2779,6 +2778,7 @@ dependencies = [
  "toml",
  "ureq",
  "write-fonts 0.54.1",
+ "wuff",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ use std::sync::{Condvar, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
 use craft_font_catalog::Catalog;
+pub use craft_font_store::preview::PreviewStore;
 #[cfg(not(target_arch = "wasm32"))]
 use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
 pub use craft_font_store::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
@@ -100,8 +101,9 @@ fn err(e: impl std::fmt::Display) -> StoreError {
     StoreError(e.to_string())
 }
 
-/// The font store. Calls block; the app makes the downloading ones on a worker thread.
-pub trait Installer: Send + Sync {
+/// The font store. Calls block; the app makes the downloading ones on a worker thread. What the preview pool reads
+/// (the preview service, the previews setting, the HTTP client and the cache folder) is its [`PreviewStore`] part.
+pub trait Installer: PreviewStore {
     /// Has the user allowed downloads? The setting is the whole suite's.
     fn downloads_allowed(&self) -> bool;
 
@@ -148,31 +150,11 @@ pub trait Installer: Send + Sync {
         Err(StoreError(NO_FOLDER.into()))
     }
 
-    /// The preview service's base URL, if one is set: [`craft_font_store::PREVIEW_SERVICE_ENV`], else the font
-    /// store's `preview_service` setting, else the host's default
-    /// ([`SuiteStore::with_default_preview_service`]). Installs try it as a mirror first.
-    fn preview_service(&self) -> Option<String> {
-        None
-    }
-
-    /// Where [`Installer::preview_service`] comes from: the environment variable (the setting
+    /// Where [`PreviewStore::preview_service`] comes from: the environment variable (the setting
     /// can't change it), the saved setting, the host's default
     /// ([`PreviewServiceSource::Default`]), or nowhere.
     fn preview_service_source(&self) -> PreviewServiceSource {
         PreviewServiceSource::None
-    }
-
-    /// The store's HTTP client, if it has one. [`Previews`](crate::remote::Previews) fetches
-    /// with it, so a preview service that installs found unreachable is skipped by previews too,
-    /// and the reverse.
-    fn http_client(&self) -> Option<Client> {
-        None
-    }
-
-    /// Whether previews may be fetched from the preview service: the user's setting, on by
-    /// default.
-    fn previews_enabled(&self) -> bool {
-        true
     }
 
     /// Turns previews on or off, as the user's own action.
@@ -184,12 +166,6 @@ pub trait Installer: Send + Sync {
     /// action.
     fn set_preview_service(&self, _url: Option<&str>) -> Result<(), StoreError> {
         Err(StoreError(NO_FOLDER.into()))
-    }
-
-    /// The folder [`crate::remote::Previews`] caches preview subsets in; none keeps them only
-    /// for as long as the caller holds them.
-    fn preview_cache(&self) -> Option<PathBuf> {
-        None
     }
 
     /// The text of `family`'s licence or NOTICE file: the installed copy, else downloaded when
@@ -228,7 +204,7 @@ impl SuiteStore {
     }
 
     /// The store's HTTP client. Clones share the preview service's down state with installs;
-    /// [`Previews::new`](crate::remote::Previews::new) takes it through [`Installer::http_client`].
+    /// [`Previews::new`](craft_font_store::preview::Previews::new) takes it through [`PreviewStore::http_client`].
     pub fn client(&self) -> Client {
         self.store.client()
     }
@@ -329,28 +305,12 @@ impl Installer for SuiteStore {
         self.store.remove_user_source(url).map_err(err)
     }
 
-    fn preview_service(&self) -> Option<String> {
-        self.store.preview_service()
-    }
-
     fn preview_service_source(&self) -> PreviewServiceSource {
         self.store.preview_service_source()
     }
 
-    fn http_client(&self) -> Option<Client> {
-        Some(self.store.client())
-    }
-
     fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
         self.store.set_preview_service(url).map_err(err)
-    }
-
-    fn preview_cache(&self) -> Option<PathBuf> {
-        Some(self.store.previews_dir())
-    }
-
-    fn previews_enabled(&self) -> bool {
-        self.store.previews_enabled()
     }
 
     fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
@@ -362,8 +322,29 @@ impl Installer for SuiteStore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl PreviewStore for SuiteStore {
+    fn preview_service(&self) -> Option<String> {
+        self.store.preview_service()
+    }
+
+    fn http_client(&self) -> Option<Client> {
+        Some(self.store.client())
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.store.previews_enabled()
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.store.previews_dir())
+    }
+}
+
 /// The store when the system names no folder for it (no home folder): nothing installs.
 pub struct NoStore;
+
+impl PreviewStore for NoStore {}
 
 impl Installer for NoStore {
     fn downloads_allowed(&self) -> bool {

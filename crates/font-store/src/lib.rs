@@ -19,8 +19,8 @@
 //! ```
 //!
 //! The index and its lookups, [`verify_font`] and [`IndexPin`] build on every target. The store,
-//! the HTTP client and Language packs (the store's second item kind, `language-pack`: see
-//! [`FontStore::install_language_pack`]) are native only.
+//! the HTTP client, the preview service's client ([`preview`]) and Language packs (the store's
+//! second item kind, `language-pack`: see [`FontStore::install_language_pack`]) are native only.
 
 mod index;
 mod pin;
@@ -32,6 +32,8 @@ mod verify;
 mod http;
 #[cfg(not(target_arch = "wasm32"))]
 mod language_packs;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod store;
 
