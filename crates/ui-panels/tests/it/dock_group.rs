@@ -183,3 +183,45 @@ fn a_tab_mark_change_repaints_the_tab_row() {
     let cleared = width(&mut fixture);
     assert!((cleared - plain).abs() < 0.5, "the tab loses its dot again: {plain} then {cleared}");
 }
+
+// A click on an app's own egui widget in a group's body (a raw text field) is the widget's, not a press on the
+// group's empty body: the group reads no surface press, so its stop does not take the focus, and the field keeps
+// egui's focus and takes typing. A press on the body's empty room still focuses the group's panel.
+#[trial]
+fn a_click_on_an_app_field_in_the_body_keeps_its_focus() {
+    use std::cell::RefCell;
+    let text = Rc::new(RefCell::new(String::new()));
+    let field = Rc::new(Cell::new(None::<(egui::Id, Rect)>));
+    let surface = Rc::new(Cell::new(false));
+    let (typed, shown, pressed) = (Rc::clone(&text), Rc::clone(&field), Rc::clone(&surface));
+    let panels = vec![PanelTitle::new(PanelKey::new(1), "Color")];
+    let mut fixture = Fixture::new(move |ui| {
+        let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key);
+        let (typed, shown, pressed) = (Rc::clone(&typed), Rc::clone(&shown), Rc::clone(&pressed));
+        group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), move |ui, cx| {
+            pressed.set(pressed.get() || cx.surface_pressed());
+            let response = egui::TextEdit::singleline(&mut *typed.borrow_mut()).desired_width(120.0).show(ui).response;
+            shown.set(Some((response.id, response.rect)));
+        });
+    });
+    fixture.settle();
+    let Some((field_id, field_rect)) = field.get() else { panic!("the body shows the app's field") };
+    let empty = Pos2::new(field_rect.center().x, field_rect.bottom() + 80.0);
+
+    // Typing a character at a time with a click before each. The clicks are a second apart, so egui sees no double
+    // click (which would select the word).
+    for (clicks, typed) in ["a", "1"].into_iter().enumerate() {
+        fixture.advance(1.0).click_at(field_rect.center()).settle();
+        assert!(!surface.get(), "click {clicks} on the field is no press on the group's empty body");
+        assert_eq!(fixture.focused(), Some(field_id), "click {clicks} leaves egui's focus on the app's field");
+        fixture.type_text(typed).settle();
+    }
+    let on_field = fixture.focused_stop();
+    assert!(text.borrow().contains("a1"), "the field takes the typing after each click: {:?}", text.borrow());
+
+    fixture.click_at(empty).settle();
+    let group_stop = fixture.focused_stop();
+    assert!(surface.get(), "a press on the empty body is the group's surface press");
+    assert!(group_stop.is_some() && fixture.focused() != Some(field_id), "a press on the empty body focuses the group's panel");
+    assert_ne!(on_field, group_stop, "the clicks on the field left the group's stop unfocused");
+}
