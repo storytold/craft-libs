@@ -41,7 +41,7 @@ pub struct BrowserFiles {
 pub type PageSave = Arc<PageSaveFn>;
 
 /// The page's save callback that [`PageSave`] shares.
-type PageSaveFn = dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync;
+pub type PageSaveFn = dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync;
 
 /// Tickets of one service, shared with the tasks that answer them.
 #[derive(Default)]
