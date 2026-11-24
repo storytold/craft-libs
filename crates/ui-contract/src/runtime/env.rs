@@ -153,9 +153,10 @@ pub struct Scoped {
     /// The width a `Row` body was offered this pass, before its `End` or `Center` lead narrowed the block: the room
     /// its direct children share. Only the row's own children read it.
     pub(crate) row_room: Option<f32>,
-    /// The room the ranked units of the first `Row` body below fit into before its other drops, when less than the
-    /// row's room: an end region that joins its body's fit (`EndRegion::fit`). That row's children do not read it.
-    pub(crate) rank_room: Option<f32>,
+    /// How far the ranked units of the first `Row` body below give way before its other drops: the row drops them
+    /// until the kept units fit in its ideal width less this, an end region that joins its body's fit
+    /// (`EndRegion::fit`) giving up the body's shortfall. That row's children do not read it.
+    pub(crate) rank_short: Option<f32>,
     /// The line of the unwrapped `Row` body whose direct children the scope places in flow (`RowLine`).
     pub(crate) row_line: Option<RowLine>,
     /// Where the first child the scope places in flow reports its first line: a container's header or body
@@ -695,7 +696,7 @@ impl Env {
                 given_column: false,
                 content: (false, false),
                 row_room: None,
-                rank_room: None,
+                rank_short: None,
                 row_line: None,
                 first_line: None,
                 flow_body: None,

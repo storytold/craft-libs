@@ -128,8 +128,8 @@ pub(super) struct BodyHooks<'b> {
     /// found it has to run again at (`ColumnGroup::scope_measured`).
     settle: Option<crate::layout::Columns>,
     unsettled: Option<crate::layout::Columns>,
-    /// The room the ranked units of an end region that joins the body's fit (`EndRegion::fit`) fit into in the
-    /// measuring run's second sweep, and the room a first sweep found they have to fit into.
+    /// How far the ranked units of an end region that joins the body's fit (`EndRegion::fit`) give way in the
+    /// measuring run's second sweep, and the body's shortfall a first sweep found.
     end_fit: Option<f32>,
     end_unfit: Option<f32>,
     extent: Option<Vec2>,

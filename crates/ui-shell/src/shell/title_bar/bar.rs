@@ -10,7 +10,8 @@ use crate::contract::{
     Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DragBand, EndRegion, Gap, HeaderRegion, NoValue, Outcome, Pad,
     PartsCx, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
-use crate::layout::{Placed, arrange, end_group};
+use crate::layout::{Placed, arrange};
+use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
@@ -70,8 +71,8 @@ impl Outcome for TitleBarOutput {
 /// In an embedded shell (an app preview, a story) the bar is a picture of a window: it acts on no window and reads
 /// none. The captions show hover and report their clicks, but send no window command, and the bar has no move band. The body is the leading content; the
 /// trailing content ([`trailing`](TitleBar::trailing)) sits before the end's captions. [`show_titled`](TitleBar::show_titled)
-/// adds the title in the gap between them; [`show_fitted`](TitleBar::show_fitted) puts the trailing content on the
-/// body's line, where its ranked members leave before the leading content narrows. Close never closes the window; see
+/// adds the title in the gap between them; [`show_fitted`](TitleBar::show_fitted) fits the trailing content after the
+/// leading content: its ranked members leave before the leading content narrows. Close never closes the window; see
 /// [`TitleBarOutput`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
@@ -251,21 +252,22 @@ impl<'a> TitleBar<'a> {
         out
     }
 
-    /// Shows the bar with `leading` content at its start and `trailing` content in its place of
-    /// [`trailing`](TitleBar::trailing), before the end's captions, both on the body's line: the trailing content is
-    /// the body's end group (`layout::end_group`). It takes the room the leading content's natural width leaves, so on
-    /// a short bar its members that carry a `fit_rank` leave whole, lowest rank first, before the leading content
-    /// narrows: an app bar whose menus stay whole while its end controls go.
+    /// Shows the bar with `leading` content at its start and `trailing` content before the end's captions, where the
+    /// end region joins the body's fit (`EndRegion::fit`): on a short bar the trailing members that carry a `fit_rank`
+    /// leave whole, lowest rank first, before the leading content narrows: an app bar whose menus stay whole while its
+    /// end controls go.
     pub fn show_fitted(
-        self,
+        mut self,
         ui: &mut Ui,
-        mut leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+        leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
         mut trailing: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
     ) -> TitleBarOutput {
-        self.show(ui, |ui, cx| {
-            leading(ui, cx);
-            end_group(ui, |ui| trailing(ui, cx));
+        self.props = self.props.end(EndRegion::new().fit(true));
+        // The ranked members fit as units of the first row in the end region.
+        self.trailing(move |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+            let _ = Row::new().show(ui, |ui, _| trailing(ui, cx));
         })
+        .show(ui, leading)
         .output
     }
 

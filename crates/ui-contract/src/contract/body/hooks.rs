@@ -634,9 +634,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 layout::ask_shortfall(&plan.ctx, plan.layout_id);
             }
             self.body_step(comp, ui, env, cx.core, &mut plan);
-            // The end region's ranked units take the body's shortfall off what the region took.
-            if fits_end && let (Some(short), Some(end)) = (layout::take_shortfall(&plan.ctx, plan.layout_id), self.end_size) {
-                self.end_unfit = Some(end.x - short);
+            // The end region's ranked units give up the body's shortfall.
+            if fits_end && let Some(short) = layout::take_shortfall(&plan.ctx, plan.layout_id) {
+                self.end_unfit = Some(short);
             }
             self.after_body(ui, env, &mut plan);
             if plan.real && props.end.is_some() {
@@ -839,8 +839,8 @@ impl BodyHooks<'_> {
 
     /// An end region that joins the body's fit (`EndRegion::fit`) gives way before the body: when the body's units ask
     /// for more than the line the region leaves, the sweep is taken back and the content runs once more with the
-    /// region's ranked units fitted into what it took less the body's shortfall, so they leave before a body unit
-    /// narrows or leaves.
+    /// region's first row giving up the body's shortfall by its ranked units, so they leave before a body unit narrows
+    /// or leaves.
     #[inline(never)]
     fn fitting_sweeps<C: Container>(
         &mut self,
@@ -859,8 +859,8 @@ impl BodyHooks<'_> {
             },
             Option::is_none,
         );
-        if let Some(room) = unfit {
-            self.end_fit = Some(room);
+        if let Some(short) = unfit {
+            self.end_fit = Some(short);
             self.sweep(comp, at, cx, (layer, rect), values);
             (self.end_fit, self.end_unfit) = (None, None);
         }
@@ -1330,7 +1330,7 @@ impl BodyHooks<'_> {
                 ..line
             });
         }
-        let fitted = self.end_fit.filter(|_| !plan.real).map(|room| plan.line_env.derive_local(|scoped| scoped.rank_room = Some(room)));
+        let fitted = self.end_fit.filter(|_| !plan.real).map(|short| plan.line_env.derive_local(|scoped| scoped.rank_short = Some(short)));
         let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: fitted.as_ref().unwrap_or(&plan.line_env), gap: plan.gap };
         let closed = self.end_region(comp, ui, &mut end_cx, &frame, props, end, line);
         plan.close = plan.close.or(closed);
