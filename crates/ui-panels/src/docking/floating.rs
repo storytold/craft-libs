@@ -310,6 +310,10 @@ pub struct FloatingGroup<'a> {
     /// ([`native`](FloatingGroup::native)) moves only when pressed again.
     #[prop(quantity = "grab point")]
     continue_move: Option<Vec2>,
+    /// The window comes to the front in this pass: an OS window ([`native`](FloatingGroup::native)) gets the focus,
+    /// a window on a layer goes to the top of the floating windows. A request of the pass.
+    #[prop(flag)]
+    raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
 }
@@ -361,6 +365,7 @@ impl<'a> FloatingGroup<'a> {
             take_drop: None,
             moving: false,
             continue_move: None,
+            raise: false,
             files: Vec::new(),
         }
         .label(title)
@@ -565,7 +570,7 @@ impl Component for FloatingGroup<'_> {
             grip: cx.move_band(),
             resize: cx.resize_grips(),
         };
-        native::raise(&cx.core.ctx, &output);
+        native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);
         output
     }

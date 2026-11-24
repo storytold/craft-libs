@@ -167,6 +167,13 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// neither; `DockAreaOutput::focused` tells the host where focus is.
     #[prop]
     focus: Option<P>,
+    /// The floating window holding the panel comes to the front in this pass: an OS window gets
+    /// `WindowAction::Focus`, an in-app window goes to the top of the floating windows. A request of the pass: a host
+    /// that opens or activates a floating panel (its Window menu, a command) passes the panel in the pass after. When
+    /// no floating window holds the panel, or the window opens in this pass (a new window opens in front), it does
+    /// nothing.
+    #[prop]
+    raise: Option<P>,
     /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
     /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
     /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
@@ -200,6 +207,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             flyout: None,
             continue_move: None,
             focus: None,
+            raise: None,
             rail_footer: None,
             top_inset: 0.0,
         }
@@ -337,6 +345,8 @@ struct Scene<'s, P> {
     continue_move: Option<(&'s P, Vec2)>,
     /// The panel whose group takes key focus in this pass (`DockArea::focus`).
     focus: Option<&'s P>,
+    /// The panel whose window comes to the front (`DockArea::raise`).
+    raise: Option<&'s P>,
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
@@ -549,6 +559,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             mut flyout,
             continue_move,
             focus,
+            raise,
             rail_footer,
             top_inset,
         } = self;
@@ -610,6 +621,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 auto_collapse,
                 continue_move: continue_move.as_ref().map(|(panel, grab)| (panel, *grab)),
                 focus: focus.as_ref(),
+                raise: raise.as_ref(),
                 sizes,
                 rtl,
                 rail_footer: rail_footer.as_ref(),
@@ -719,6 +731,7 @@ struct Input<'i, P> {
     auto_collapse: bool,
     continue_move: Option<(&'i P, Vec2)>,
     focus: Option<&'i P>,
+    raise: Option<&'i P>,
     sizes: DockSizes,
     rtl: bool,
     rail_footer: Option<&'i P>,
@@ -767,6 +780,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         auto_collapse,
         continue_move,
         focus,
+        raise,
         sizes,
         rtl,
         rail_footer,
@@ -795,6 +809,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         auto_collapse,
         continue_move,
         focus,
+        raise,
         rtl,
         floated: current.floated(),
         rail_footer,
@@ -1708,6 +1723,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
                 group = group.continue_move(grab);
+            }
+            if scene.raise.is_some_and(|raised| window.panels().any(|held| held == raised)) {
+                group = group.raise();
             }
             group = match opening.spec.clone() {
                 Some(window_spec) => group.native(window_spec),

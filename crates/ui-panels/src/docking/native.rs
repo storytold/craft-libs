@@ -139,12 +139,21 @@ pub fn send_to(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) 
     }
 }
 
-/// Raises the window of the native group that `output` reports on when the user began moving or resizing it this
-/// pass, so a palette comes to the front of the windows it overlaps. False when nothing was raised.
-pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput) -> bool {
+/// Raises the window of the group that `output` reports on when the host `requested` it, and an OS window also when
+/// the user began moving or resizing it this pass, so a palette comes to the front of the windows it overlaps. A
+/// window on a layer goes to the top of egui's area order, where a press already raises it. False when nothing was
+/// raised.
+pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput, requested: bool) -> bool {
     let began = output.placed.is_some_and(|change| change.phase == GesturePhase::Begin);
     let host = WindowHost::of(ctx);
-    began && host.viewport_of(output.response.id).is_some_and(|viewport| host.act(viewport, WindowAction::Focus))
+    match host.viewport_of(output.response.id) {
+        Some(viewport) => (began || requested) && host.act(viewport, WindowAction::Focus),
+        None if requested => {
+            crate::runtime::overlay::raise(ctx, output.response.id);
+            true
+        }
+        None => false,
+    }
 }
 
 /// Fades the native window of the group that `output` reports on while its drag highlights a drop target, and makes

@@ -276,6 +276,8 @@ struct NativeDock {
     palette_shapes: Vec<Shape>,
     /// Whether Auto-Collapse Iconic Panels is on in the frames of a collapsed palette.
     auto_collapse: bool,
+    /// The panel the next frame asks the dock to raise (`DockArea::raise`).
+    raise: Option<u32>,
 }
 
 impl NativeDock {
@@ -307,6 +309,7 @@ impl NativeDock {
             palette_tree: None,
             palette_shapes: Vec::new(),
             auto_collapse: false,
+            raise: None,
         };
         for _ in 0..3 {
             dock.frame(vec![]);
@@ -326,8 +329,13 @@ impl NativeDock {
         let (mut palettes, mut stepped) = (Palettes, SteppedPalette);
         let panels: &mut dyn DockPanels<u32> = if self.stepped { &mut stepped } else { &mut palettes };
         let specs = &self.specs;
+        let raise = self.raise.take();
         let out = self.windows.frame(root, child, |ui| {
-            actions.extend(DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default()).show(ui).actions);
+            let mut area = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default());
+            if let Some(panel) = raise {
+                area = area.raise(panel);
+            }
+            actions.extend(area.show(ui).actions);
         });
         if self.palette.is_none() {
             self.palette = out.builders.iter().map(|(viewport, _)| *viewport).find(|viewport| *viewport != ViewportId::ROOT);
@@ -346,6 +354,21 @@ impl NativeDock {
         let commands = out.commands.into_iter().filter(|(viewport, _)| Some(*viewport) == palette).map(|(_, command)| command).collect();
         (actions, commands)
     }
+}
+
+/// `DockArea::raise` of a panel in a native palette focuses the palette's OS window once, in the pass it is given in;
+/// a pass without it sends nothing.
+#[trial]
+fn a_raised_native_palette_gets_the_os_focus_once() {
+    let mut dock = NativeDock::on(Os::Linux, Arc::new(FakeSystem::new()));
+    let focus = |commands: &[ViewportCommand]| commands.iter().filter(|command| matches!(command, ViewportCommand::Focus)).count();
+    let (_, settled) = dock.frame(vec![]);
+    assert_eq!(focus(&settled), 0, "a pass without a raise focuses nothing");
+    dock.raise = Some(1);
+    let (_, raised) = dock.frame(vec![]);
+    assert_eq!(focus(&raised), 1, "the raised palette's window gets the focus");
+    let (_, after) = dock.frame(vec![]);
+    assert_eq!(focus(&after), 0, "the raise is a request of its pass");
 }
 
 fn docks_window(actions: &[Action<u32>]) -> bool {

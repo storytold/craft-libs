@@ -659,7 +659,8 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
 }
 
 /// Brings the family of the open layer `id` in front of the other families of its class at the end of this pass, as a
-/// press on it does.
+/// press on it does: a floating window goes to the top of egui's area order, which it shares with the app's own egui
+/// windows.
 pub fn raise(ctx: &Context, id: Id) {
     with_pass(ctx, |pass| pass.raise.push(id));
 }
@@ -867,6 +868,8 @@ pub(crate) fn end_pass(ctx: &Context) {
         with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>(), pass.raise.clone()));
     let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
     let now = pass::root_frame_nr(ctx);
+    // The floating windows raised in this pass: they keep egui's own area order, so they go to its top there.
+    let mut windows_raised = Vec::new();
     let order = with_persist(ctx, viewport, |persist| {
         let stamp = |id: Id, persist: &mut Persist| {
             persist.counter += 1;
@@ -890,6 +893,9 @@ pub(crate) fn end_pass(ctx: &Context) {
             }
             if let Some(root) = at {
                 stamp(root.id, persist);
+                if root.rank == Rank::Window && !root.window {
+                    windows_raised.push(root.layer);
+                }
             }
         }
         persist.raised.retain(|id, _| roots.contains(id));
@@ -949,6 +955,9 @@ pub(crate) fn end_pass(ctx: &Context) {
         order
     });
     areas::set_layer_order(ctx, &order);
+    for layer in windows_raised {
+        areas::move_to_top(ctx, layer);
+    }
     // An owner takes a close in the frame after the request at the latest; one nobody took is for a layer that is not shown.
     pass_state::with::<Closes, _>(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
     let top_modal = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
