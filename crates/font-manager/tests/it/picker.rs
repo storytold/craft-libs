@@ -122,8 +122,10 @@ fn present(fx: &Fixture, text: &str) -> bool {
     fx.by_label(text).is_some() || fx.texts().iter().any(|painted| painted.text == text)
 }
 
+/// A selection of several families leaves the family field empty, on screen and to assistive technology, as the
+/// reference applications do: no family name and no word stands in for it.
 #[trial]
-fn mixed_family_is_named_until_a_font_is_chosen() {
+fn a_mixed_family_shows_an_empty_field() {
     let catalog = catalog_of(&[INTER_REGULAR]);
     let mut family = craft_behavior::Mixed::<String>::Mixed;
     let mut fx = Fixture::new(move |ui| {
@@ -132,8 +134,14 @@ fn mixed_family_is_named_until_a_font_is_chosen() {
     fx.in_room(Room::Window);
     fx.settle();
     let field = fx.by_role(craft_ui::runtime::access::Role::COMBO_BOX).into_iter().next().expect("the family field");
-    let label = fx.tree().value_of(field.node).filter(|value| !value.is_empty()).expect("the mixed family has an accessible label");
-    assert!(present(&fx, label), "the accessible mixed label is also visible");
+    assert!(fx.tree().value_of(field.node).is_none_or(str::is_empty), "the mixed family has no accessible value");
+    let words: Vec<String> = fx
+        .texts()
+        .iter()
+        .filter(|painted| field.rect.contains_rect(painted.rect) && painted.text.chars().any(char::is_alphabetic))
+        .map(|painted| painted.text.clone())
+        .collect();
+    assert!(words.is_empty(), "the field paints no text: {words:?}");
 }
 
 #[trial]

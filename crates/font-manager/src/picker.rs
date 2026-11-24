@@ -19,7 +19,7 @@ use craft_host::Section;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
-    Access, Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _, step_stop,
 };
 use craft_ui::controls::disclosure::{DisclosureGlyph, DropdownArrow};
@@ -59,8 +59,6 @@ craft_ui::words! {
         /// The name of the preview banner, with `{family}` for the family it shows.
         preview_of: template "fontPicker.previewOf" = "Font preview: {family}";
         no_match: "fontPicker.noMatch" = "No fonts match";
-        /// The family field's label when the selection has several families.
-        mixed: "fontPicker.mixed" = "Mixed";
         /// The name of a row's star, with `{row}` for the row's label.
         favorite: template "fontPicker.favorite" = "Favorite {row}";
         list: "fontPicker.list" = "Fonts";
@@ -934,10 +932,8 @@ impl Component for FontPicker<'_> {
         }
         let mut options = TextOptions::new();
         options.select_on_focus = true;
+        // A selection of several families shows an empty field, as the reference applications do.
         options.mixed = cx.value().is_none();
-        if options.mixed {
-            options.placeholder = Some(cx.words::<FontPickerWords>().mixed.clone());
-        }
         if !self.catalog.is_ready() {
             // The first scan runs on a background thread; the field asks again until it ends.
             self.catalog.scan_in_background();
@@ -952,12 +948,6 @@ impl Component for FontPicker<'_> {
 
     fn bind(&mut self) -> Option<craft_ui::contract::BindMut<'_, String>> {
         Some(self.family.reborrow())
-    }
-
-    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
-        if cx.value().is_none() && cx.text(&text_key()).is_none_or(|text| text.draft.as_deref().is_none_or(str::is_empty)) {
-            access.value(cx.words::<FontPickerWords>().mixed.as_str());
-        }
     }
 
     /// A changed draft filters the list: it opens on the matches, and closes when the draft ended (committed,
