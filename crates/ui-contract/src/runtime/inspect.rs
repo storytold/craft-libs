@@ -674,7 +674,9 @@ pub(crate) mod trials {
         });
         fixture.frame(Vec::new());
         let seen = seen.borrow();
-        let Some(recorded) = seen.as_deref() else { panic!("the region ran") };
+        let recorded = seen.as_deref();
+        assert!(recorded.is_some(), "the region ran");
+        let Some(recorded) = recorded else { return };
         let value = |id: Id| {
             let element = recorded.elements.iter().find(|element| element.id == id && element.part.is_none());
             element.and_then(|element| element.facts.as_ref()).and_then(|facts| facts.value.clone())
