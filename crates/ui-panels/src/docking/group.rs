@@ -21,7 +21,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
-use crate::tabs::{PanelTabLook, Tab, TabKind, TabStrip, TornOff};
+use crate::tabs::{PanelTabLook, PanelTabShrink, Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
@@ -350,6 +350,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)).
     #[prop]
     tab_look: PanelTabLook,
+    /// How far the tabs shrink ([`DockConfig::tab_shrink`](super::DockConfig::tab_shrink)).
+    #[prop]
+    tab_shrink: PanelTabShrink,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
     /// single titled panel does: the panels are shown from a rail, not by tabs.
     #[prop(flag)]
@@ -406,6 +409,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             closable: false,
             wheel_selects_tabs: false,
             tab_look: PanelTabLook::Plain,
+            tab_shrink: PanelTabShrink::FirstLetters,
             titled: false,
             dock: None,
             zones: ZoneRule::Fraction,
@@ -671,6 +675,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
                     look: self.tab_look,
+                    shrink: self.tab_shrink,
                     dock: self.dock,
                     sent: Outbox::new(&mut sent),
                 };
@@ -746,6 +751,7 @@ struct TabRow<'a, P> {
     closable: bool,
     wheel_selects: bool,
     look: PanelTabLook,
+    shrink: PanelTabShrink,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
 }
@@ -775,6 +781,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let mut strip = TabStrip::new(name)
         .kind(kind)
         .panel_look(row.look)
+        .panel_shrink(row.shrink)
         .shown(active)
         .tear_off()
         .natural_height(true)

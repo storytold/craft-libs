@@ -4,7 +4,7 @@
 use craft_behavior::{SelectionChange, keyed};
 use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
-use craft_ui::tabs::{DocumentTabLook, Tab, TabKind, TabRole, TabStrip};
+use craft_ui::tabs::{DocumentTabLook, PanelTabShrink, Tab, TabKind, TabRole, TabStrip};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -855,6 +855,96 @@ fn panel_tabs_keep_the_shown_tab_whole_and_overflow_from_the_end() {
         }
     }
     assert!(fewer < PANELS.len(), "the narrowest room overflows");
+}
+
+/// The panels of a narrow colour column, as a dock group lists them.
+const COLOUR_PANELS: [&str; 4] = ["Stroke", "Color", "Swatches", "Gradient"];
+
+/// A panel strip `room` wide of `COLOUR_PANELS`, the first one shown, its tabs shrinking as `shrink` says.
+fn colour_strip(shrink: PanelTabShrink, room: f32) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&COLOUR_PANELS, |title: &&'static str| *title).with_text(|title| std::borrow::Cow::Borrowed(*title));
+        let strip = TabStrip::new("Panels").kind(TabKind::Panel).panel_shrink(shrink).shown(COLOUR_PANELS[0]);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(*key));
+    });
+    fixture.room(egui::vec2(room, 100.0)).settle();
+    fixture
+}
+
+/// Tabs by title, each with the text its label paints and whether egui clipped that text at its room; `None` for a tab
+/// that paints no label.
+type ShownLabels = Vec<(&'static str, Option<(String, bool)>)>;
+
+/// The tabs of `COLOUR_PANELS` the strip shows in a new frame, with their labels: the text painted inside each tab.
+fn shown_labels(fixture: &mut Fixture) -> ShownLabels {
+    let shapes = fixture.frame_shapes();
+    let tree = fixture.tree();
+    COLOUR_PANELS
+        .iter()
+        .filter_map(|title| {
+            let tab = tab_rects(tree, title).first().copied()?;
+            let label = shapes.iter().find_map(|shape| match shape {
+                egui::Shape::Text(text) if tab.contains(text.pos + text.galley.rect.center().to_vec2()) => {
+                    Some((text.galley.text().to_owned(), text.galley.elided))
+                }
+                _ => None,
+            });
+            Some((*title, label))
+        })
+        .collect()
+}
+
+/// Under `PanelTabShrink::Ellipsis` panel tabs shrink no further than their readable least: in every room, each
+/// inactive tab shows its whole title or its title's first characters ending in "…", never a label clipped at its
+/// edge, and where the tabs do not fit at that width the rest are in the overflow menu. The default strip in the same
+/// room clips its labels with no ellipsis.
+#[trial]
+fn panel_tabs_shrinking_to_an_ellipsis_keep_a_readable_prefix_and_overflow_the_rest() {
+    use craft_ui::primitives::TextRun;
+    let mut cut_beside_overflow = None;
+    for room in (60..=320).step_by(6) {
+        let room = room as f32;
+        let shown = shown_labels(&mut colour_strip(PanelTabShrink::Ellipsis, room));
+        let mut cut = false;
+        for (title, label) in shown.iter().filter(|(title, _)| *title != COLOUR_PANELS[0]) {
+            let (text, clipped) = label.as_ref().unwrap_or_else(|| panic!("in {room}: the {title} tab paints its label"));
+            assert!(!clipped, "in {room}: the {title} tab's label is not clipped at its edge: {text:?}");
+            if text == title {
+                continue;
+            }
+            let kept = text.strip_suffix('…').unwrap_or_else(|| panic!("in {room}: the {title} tab's cut label ends in an ellipsis: {text:?}"));
+            let readable: String = title.chars().take(TextRun::READABLE_CHARACTERS).collect();
+            assert!(
+                title.starts_with(kept) && kept.starts_with(readable.trim_end()),
+                "in {room}: the {title} tab keeps at least {readable:?} before its ellipsis: {text:?}"
+            );
+            cut = true;
+        }
+        if cut && shown.len() < COLOUR_PANELS.len() && cut_beside_overflow.is_none() {
+            cut_beside_overflow = Some(room);
+        }
+    }
+    let room = cut_beside_overflow.expect("a room where a cut label stands beside the overflow button");
+
+    let mut fixture = colour_strip(PanelTabShrink::Ellipsis, room);
+    let hidden: Vec<&str> = COLOUR_PANELS.iter().copied().filter(|title| tab_rects(fixture.tree(), title).is_empty()).collect();
+    let more = fixture.by_label("More tabs").expect("the overflow button").center();
+    fixture.click_at(more).settle();
+    let tree = fixture.tree();
+    for title in hidden {
+        assert!(
+            [Role::MENU_ITEM, Role::MENU_ITEM_CHECK_BOX, Role::MENU_ITEM_RADIO]
+                .into_iter()
+                .flat_map(|role| tree.with_role(role))
+                .any(|key| tree.name_of(key) == Some(title)),
+            "in {room}: the overflow menu lists the hidden {title} tab"
+        );
+    }
+
+    let plain = shown_labels(&mut colour_strip(PanelTabShrink::FirstLetters, room));
+    let labels: Vec<&(String, bool)> = plain.iter().filter_map(|(_, label)| label.as_ref()).collect();
+    assert!(labels.iter().all(|(text, _)| !text.ends_with('…')), "in {room}: the default strip ends no label in an ellipsis: {plain:?}");
+    assert!(labels.iter().any(|(_, clipped)| *clipped), "in {room}: the default strip clips a label at its tab's edge: {plain:?}");
 }
 
 /// A strip places its tabs by their measure in its first frame: a panel strip too narrow for its tabs fits them by

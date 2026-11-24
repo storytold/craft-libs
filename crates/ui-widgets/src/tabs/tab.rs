@@ -2,10 +2,11 @@
 //!
 //! Selection, the lead, the focus ring and the drag ghost belong to the collection that shows the tab; the tab draws
 //! the look the item step gives it and reports what its own parts do. The strip gives the tab a rect: the tab's
-//! measure is its natural width (`Proposal::Min` the room for the first letters of its title), and a narrower rect cuts the label
-//! first, then the detail, and shows the whole text as a tooltip.
+//! measure is its natural width (`Proposal::Min` the room for the first letters of its title, or for a panel tab under
+//! `PanelTabShrink::Ellipsis` its label's readable least), and a narrower rect cuts the label first, then the detail,
+//! and shows the whole text as a tooltip.
 
-use super::rules::{CloseSide, PanelTabLook, TabKind, close_side};
+use super::rules::{CloseSide, PanelTabLook, PanelTabShrink, TabKind, close_side};
 use super::words::TabWords;
 use std::borrow::Cow;
 
@@ -195,6 +196,9 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop]
     panel_look: PanelTabLook,
+    /// How far a panel tab ([`TabKind::Panel`]) shrinks and how its cut label ends; the other kinds have their own.
+    #[prop]
+    panel_shrink: PanelTabShrink,
     /// Secondary text after the label (a colour mode, a zoom).
     #[prop(into)]
     detail: Option<Label>,
@@ -236,6 +240,7 @@ impl<'a> Tab<'a> {
             role: TabRole::default(),
             large: false,
             panel_look: PanelTabLook::Plain,
+            panel_shrink: PanelTabShrink::FirstLetters,
             detail: None,
             icon: None,
             modified: false,
@@ -258,6 +263,12 @@ impl<'a> Tab<'a> {
     /// Whether the tab shows a close button.
     fn shows_close(&self) -> bool {
         self.can_close() && self.kind.shows_close()
+    }
+
+    /// Whether the tab shrinks no further than its label's readable least, the cut label ending in an ellipsis: a
+    /// panel tab under [`PanelTabShrink::Ellipsis`].
+    fn shrinks_to_ellipsis(&self) -> bool {
+        self.kind == TabKind::Panel && self.panel_shrink == PanelTabShrink::Ellipsis
     }
 
     fn detail_text(&self) -> Option<&str> {
@@ -481,7 +492,7 @@ impl Component for Tab<'_> {
             let first: String = label.chars().take(MIN_LETTERS).collect();
             cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x
         };
-        if cx.proposal == Proposal::Min && !cx.style.shrinking {
+        if cx.proposal == Proposal::Min && !cx.style.shrinking && !self.shrinks_to_ellipsis() {
             return Vec2::new(letters(), sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
@@ -505,7 +516,10 @@ impl Component for Tab<'_> {
         if self.shows_close() {
             natural += sizes.gap + sizes.close_box;
         }
-        let measured = if cx.proposal == Proposal::Min {
+        let measured = if cx.proposal == Proposal::Min && self.shrinks_to_ellipsis() {
+            // The label at its readable least, its first characters and the ellipsis, beside the tab's other parts.
+            (natural - capped + cx.least(&self.label_run(cx.style, label).elide()).width).min(natural)
+        } else if cx.proposal == Proposal::Min {
             let end = label.char_indices().nth(12).map_or(label.len(), |(index, _)| index);
             let prefix = label.get(..end).unwrap_or(label);
             let readable = natural - capped + width(&self.label_run(cx.style, prefix));
@@ -604,7 +618,7 @@ impl Component for Tab<'_> {
         }
         let role = if selected { style.label.role } else { style.idle_role };
         let label = TextRun::new(&*shown).role(role).color(cx.resolve(&style.label.color));
-        draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
+        draw.text(placed.label, &if self.kind.clips_label_in(self.panel_shrink) { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
         }

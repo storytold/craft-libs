@@ -498,9 +498,10 @@ impl<K> TabRoles<'_, K> {
 /// asks for the tab's context menu.
 ///
 /// The `kind` picks the rules: document and text tabs keep whole titles and send the rest to an overflow menu of
-/// every tab; panel tabs shrink before they overflow and the menu lists the hidden ones. The shown tab is always
-/// visible. A tab dragged out of the strip and released where no other strip, dock or drop target takes it is
-/// reported as `torn_off`.
+/// every tab; panel tabs shrink before they overflow and the menu lists the hidden ones. Panel tabs shrink to their
+/// first letters, clipped, or with `panel_shrink(PanelTabShrink::Ellipsis)` to a readable prefix ending in "…". The
+/// shown tab is always visible. A tab dragged out of the strip and released where no other strip, dock or drop target
+/// takes it is reported as `torn_off`.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(collection, overlay, probe(TabStrip<'static, usize>))]
 pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> {
@@ -519,6 +520,10 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// The look of a panel strip's tabs ([`TabKind::Panel`]).
     #[prop]
     panel_look: super::PanelTabLook,
+    /// How far a panel strip's tabs ([`TabKind::Panel`]) shrink before they overflow: to their first letters, clipped
+    /// (the default), or to a readable prefix ending in an ellipsis ([`PanelTabShrink::Ellipsis`](super::PanelTabShrink)).
+    #[prop]
+    panel_shrink: super::PanelTabShrink,
     /// The tab the host shows. A click, Space, Enter or a drop reports the new one in the output.
     #[prop]
     shown: Option<K>,
@@ -590,6 +595,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             kind: TabKind::Document,
             large: false,
             panel_look: super::PanelTabLook::Plain,
+            panel_shrink: super::PanelTabShrink::FirstLetters,
             shown: None,
             tear_off: false,
             wheel_selects: false,
@@ -1027,9 +1033,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 
-    /// Every tab takes the strip's kind, panel look and size.
+    /// Every tab takes the strip's kind, panel look, panel shrink and size.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
-        let tab = tab.kind(self.kind).panel_look(self.panel_look);
+        let tab = tab.kind(self.kind).panel_look(self.panel_look).panel_shrink(self.panel_shrink);
         if self.large { tab.large() } else { tab }
     }
 

@@ -30,6 +30,21 @@ pub enum PanelTabLook {
     Pill,
 }
 
+/// How far panel tabs ([`TabKind::Panel`]) shrink before they overflow, and how a label too long for its tab ends: a
+/// strip's choice ([`TabStrip::panel_shrink`](super::TabStrip)), which a dock makes for its groups' tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum PanelTabShrink {
+    /// Tabs shrink to their title's first letters, the label clipped at the tab's edge with no ellipsis.
+    #[default]
+    FirstLetters,
+    /// Tabs shrink no further than their label's readable least, its first
+    /// [`TextRun::READABLE_CHARACTERS`](crate::primitives::TextRun::READABLE_CHARACTERS) characters and an ellipsis (a
+    /// title at most one character longer stays whole), and a cut label ends in "…"; the tabs that do not fit at that
+    /// width go to the overflow menu.
+    Ellipsis,
+}
+
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -124,6 +139,13 @@ impl TabKind {
     /// letters) instead of ending in an ellipsis.
     pub fn clips_label(self) -> bool {
         self == Self::Panel
+    }
+
+    /// Whether a label too long for its tab is clipped at the tab's edge under the strip's `shrink`: panel tabs that
+    /// shrink to their first letters ([`PanelTabShrink::FirstLetters`]); under [`PanelTabShrink::Ellipsis`] they end
+    /// in an ellipsis as the other kinds do.
+    pub fn clips_label_in(self, shrink: PanelTabShrink) -> bool {
+        self.clips_label() && shrink == PanelTabShrink::FirstLetters
     }
 
     /// Where the overflow button sits: at the strip's end for document and text tabs, after the last tab for panel
