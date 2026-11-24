@@ -806,6 +806,14 @@ fn zoo() -> Vec<Vec<u8>> {
 }
 
 fn poke(bytes: &[u8]) {
+    let started = std::time::Instant::now();
+    poke_all(bytes);
+    if started.elapsed() > std::time::Duration::from_millis(100) {
+        eprintln!("DIAG tiff poke slow: {} bytes, {:?}", bytes.len(), started.elapsed());
+    }
+}
+
+fn poke_all(bytes: &[u8]) {
     let _ = decode(bytes);
     let _ = decode_with(bytes, &DecodeOptions { limits: Limits { max_alloc: 16 << 20, ..Limits::default() }, ..Default::default() });
     let _ = exif_orientation(bytes);

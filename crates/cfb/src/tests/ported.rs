@@ -557,7 +557,8 @@ fn truncation_at_every_length_never_panics() {
 #[test]
 fn every_single_bit_flip_never_panics_or_hangs() {
     for (mut file, _) in small_samples() {
-        for bit in 0..file.len() * 8 {
+        // The gate flips every divisor-th bit; nightly flips each one.
+        for bit in (0..file.len() * 8).step_by(craft_testkit::hostile::divisor()) {
             file[bit / 8] ^= 1 << (bit % 8);
             exercise(&file, None);
             file[bit / 8] ^= 1 << (bit % 8);

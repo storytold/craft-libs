@@ -202,9 +202,11 @@ fn an_invalid_capture_ends_the_pick_with_a_status() {
     assert!(pick.take_status(&words).is_some(), "and says why");
     assert!(pick.take_status(&words).is_none(), "once");
 
-    // A valid profile of another colour space: a CMYK monitor profile is not an RGB profile.
+    // A valid profile of another colour space: a CMYK monitor profile is not an RGB profile. The smallest grids make
+    // it as valid as the default coated profile, which takes far longer to build.
     let mut odd = monitor([0, 0], [4, 4], 1);
-    odd.icc_profile = Some(craft_cms::synth::coated_cmyk().expect("the synthetic CMYK profile").to_bytes());
+    let params = craft_cms::synth::CmykParams { grid_a2b: 2, grid_b2a: 2, ..craft_cms::synth::CmykParams::default() };
+    odd.icc_profile = Some(craft_cms::synth::cmyk_profile(&params).expect("the synthetic CMYK profile").to_bytes());
     let mut pick = ScreenPick::new();
     pick.start("a");
     pick.tick_with(&ctx, 1, &|| images(vec![odd.clone()]));

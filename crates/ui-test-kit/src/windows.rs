@@ -281,6 +281,7 @@ pub struct Windows {
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
     root: RefCell<RootEnv>,
+    app_modal: Cell<Option<ViewportId>>,
     window_input: Cell<WindowInput>,
 }
 
@@ -314,6 +315,7 @@ impl Windows {
             ctx,
             root_info: RefCell::new(ViewportInfo::default()),
             root: RefCell::new(RootEnv::default()),
+            app_modal: Cell::new(None),
             window_input: Cell::new(WindowInput::Live),
         }
     }
@@ -327,6 +329,11 @@ impl Windows {
     /// [`child_info`](Self::child_info) gave.
     pub fn facts(&self, viewport: ViewportId) -> ViewportInfo {
         with_facts(viewport, |info| info.clone())
+    }
+
+    /// The window in which the app's own egui code shows a modal (`FrameInput::app_modal`), from the next frame on.
+    pub fn app_modal(&self, viewport: Option<ViewportId>) {
+        self.app_modal.set(viewport);
     }
 
     /// The window-input policy every following frame's input gives, as a host's `FrameInput::window_input` does.
@@ -371,7 +378,7 @@ impl Windows {
         CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
         SHAPES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).window_input(self.window_input.get()));
+        set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).app_modal(self.app_modal.get()).window_input(self.window_input.get()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,

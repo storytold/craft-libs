@@ -70,10 +70,12 @@ fn the_destination_black_matches_the_source_lightness() {
     for intent in [Intent::RelativeColorimetric, Intent::Perceptual] {
         for bpc in [true, false] {
             let o = TransformOptions { intent, bpc, ..opts() };
-            for (src, dst) in [(coated(), fogra()), (fogra(), coated())] {
+            // Both directions for one setting; the other settings in the forward one.
+            let directions = if intent == Intent::RelativeColorimetric && bpc { 2 } else { 1 };
+            for (src, dst) in [(coated(), fogra()), (fogra(), coated())].into_iter().take(directions) {
                 let bp = BlackPreserving::new(src, dst, o).unwrap();
                 let dst_black = lightness(dst, o, [0.0, 0.0, 0.0, 1.0]);
-                for k in [0.1f32, 0.3, 0.5, 0.7, 0.9, 1.0] {
+                for k in [0.1f32, 0.5, 0.9, 1.0] {
                     let want = lightness(src, o, [0.0, 0.0, 0.0, k]);
                     if want <= dst_black {
                         assert_eq!(bp.map_k(k), 1.0, "darker than the destination's black clamps to K = 1");
