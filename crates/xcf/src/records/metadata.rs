@@ -225,7 +225,7 @@ impl Reader<'_> {
             19 => {
                 let resolution = if let Some(&[x, y]) = data.as_chunks::<4>().0.as_array::<2>().filter(|_| data.len() == 8) {
                     let (horizontal, vertical) = (f32::from_be_bytes(x), f32::from_be_bytes(y));
-                    [horizontal, vertical].into_iter().all(|axis| (0.005..=1_048_576.).contains(&axis)).then_some(Resolution { horizontal, vertical })
+                    [horizontal, vertical].into_iter().all(|axis| axis.is_finite() && axis > 0.).then_some(Resolution { horizontal, vertical })
                 } else {
                     None
                 };
@@ -251,8 +251,9 @@ impl Reader<'_> {
             }
             18 => {
                 let (records, tail) = data.as_chunks::<5>();
-                for &[a, b, c, d, axis] in records {
+                for (index, &[a, b, c, d, axis]) in records.iter().enumerate() {
                     self.check()?;
+                    let offset = record_offset(property, index, 5)?;
                     let orientation = match axis {
                         1 => Orientation::Horizontal,
                         2 => Orientation::Vertical,
@@ -264,7 +265,7 @@ impl Reader<'_> {
                     // Preserve source off-canvas/legacy positions. The caller decides
                     // whether its document model can represent them.
                     let value = Guide { position: i32::from_be_bytes([a, b, c, d]), orientation };
-                    self.retain(&mut output.guides, Evidence { offset: property.offset, value }, self.limits.guides)?;
+                    self.retain(&mut output.guides, Evidence { offset, value }, self.limits.guides)?;
                 }
                 if !tail.is_empty() {
                     self.issue(&mut output.issues, property, IssueKind::PartialRecord)?;
@@ -278,8 +279,9 @@ impl Reader<'_> {
                     output.has_modern_sample_points = true;
                 }
                 let partial_tail = !records.remainder().is_empty();
-                for record in records {
+                for (index, record) in records.enumerate() {
                     self.check()?;
+                    let offset = record_offset(property, index, stride)?;
                     let words = record.as_chunks::<4>().0;
                     let x = words.first().copied().ok_or(StopReason::Malformed)?;
                     let y = words.get(1).copied().ok_or(StopReason::Malformed)?;
@@ -291,10 +293,7 @@ impl Reader<'_> {
                     } else {
                         (None, [0; 2])
                     };
-                    let value = Evidence {
-                        offset: property.offset,
-                        value: SamplePoint { x: i32::from_be_bytes(x), y: i32::from_be_bytes(y), pick_mode, reserved },
-                    };
+                    let value = Evidence { offset, value: SamplePoint { x: i32::from_be_bytes(x), y: i32::from_be_bytes(y), pick_mode, reserved } };
                     if output.sample_points.len().saturating_add(output.legacy_sample_points.len()) >= self.limits.sample_points {
                         return Err(StopReason::RecordLimit.into());
                     }
@@ -432,6 +431,14 @@ fn layer_read(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budg
     Ok(output)
 }
 
+fn record_offset(property: &Property<'_>, index: usize, stride: usize) -> ReadResult<usize> {
+    index
+        .checked_mul(stride)
+        .and_then(|offset| offset.checked_add(8))
+        .and_then(|offset| property.offset.checked_add(offset))
+        .ok_or(StopReason::Malformed.into())
+}
+
 fn word(bytes: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(*bytes.as_array::<4>()?))
 }
@@ -439,9 +446,7 @@ fn word(bytes: &[u8]) -> Option<u32> {
 fn user_unit(bytes: &[u8], string_limit: usize) -> ReadResult<Option<UserUnit<'_>>> {
     let Some(factor) = bytes.first_chunk::<4>().copied().map(f32::from_be_bytes) else { return Ok(None) };
     let Some(digits) = bytes.get(4..8).and_then(word) else { return Ok(None) };
-    if !factor.is_finite() || factor <= 0. {
-        return Ok(None);
-    }
+    let mut valid = factor.is_finite() && factor > 0.;
     let Some(mut remaining) = bytes.get(8..) else { return Ok(None) };
     let mut strings = [None; 5];
     let mut count = 0;
@@ -460,17 +465,21 @@ fn user_unit(bytes: &[u8], string_limit: usize) -> ReadResult<Option<UserUnit<'_
         let value = if value.is_empty() {
             value
         } else {
-            let Some(value) = value.strip_suffix(&[0]) else { return Ok(None) };
-            value
+            match value.strip_suffix(&[0]) {
+                Some(value) => value,
+                None => {
+                    valid = false;
+                    value
+                }
+            }
         };
-        if value.contains(&0) || std::str::from_utf8(value).is_err() {
-            return Ok(None);
-        }
+        // Semantic errors cannot conceal the length of a later reachable field.
+        valid &= !value.contains(&0) && std::str::from_utf8(value).is_ok();
         *slot = Some(value);
         remaining = rest;
         count += 1;
     }
-    Ok((remaining.is_empty() && matches!(count, 3 | 5)).then_some(UserUnit { factor, digits, strings }))
+    Ok((valid && remaining.is_empty() && matches!(count, 3 | 5)).then_some(UserUnit { factor, digits, strings }))
 }
 
 #[cfg(test)]

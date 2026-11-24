@@ -727,3 +727,130 @@ fn an_unretained_name_issue_preserves_separate_typed_and_raw_parasite_stops() {
     assert_eq!(result.parasite_typed_stopped, Some(Diagnostic { offset: 8 + valid.len(), ordinal: 1, reason: StopReason::RecordLimit }));
     assert_eq!(result.parasite_stopped, Some(Diagnostic { offset: 8 + valid.len() + invalid.len(), ordinal: 2, reason: StopReason::Malformed }));
 }
+
+#[test]
+fn finite_positive_resolutions_are_source_evidence_without_native_bounds() {
+    for (x, y) in [(1_048_577., 72.), (0.0001, f32::MAX), (f32::from_bits(1), 72.)] {
+        let bytes = [property(19, &pair(x, y)), property(0, &[])].concat();
+        let output = image(&properties(&bytes), Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(output.complete());
+        assert!(output.issues.is_empty());
+        assert_eq!(output.resolution.unwrap().value, Resolution { horizontal: x, vertical: y });
+    }
+    for invalid in [0., -0., -1., f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        for (x, y) in [(invalid, 72.), (72., invalid)] {
+            let bytes = [property(19, &pair(300., 150.)), property(19, &pair(x, y)), property(0, &[])].concat();
+            let output = image(&properties(&bytes), Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(output.resolution.unwrap().value, Resolution { horizontal: 300., vertical: 150. });
+            assert_eq!(output.issues.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn all_reachable_unit_lengths_precede_early_semantic_rejection() {
+    let unit = |factor: f32, fields: &[&[u8]]| {
+        let mut bytes = [factor.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for value in fields {
+            bytes.extend((value.len() as u32).to_be_bytes());
+            bytes.extend(*value);
+        }
+        bytes
+    };
+    for count in [3, 5] {
+        let normal = vec![b"ok\0".as_slice(); count];
+        for case in 0..5 {
+            let mut later = normal.clone();
+            let factor = if case < 2 { f32::NAN } else { 3. };
+            if case == 2 {
+                later[0] = &[0xff, 0];
+            }
+            if case == 3 {
+                later[0] = b"bad";
+            }
+            if case == 4 {
+                later[0] = b"x\0y\0";
+            }
+            let oversized = if case == 0 { 0 } else { count - 1 };
+            later[oversized] = b"lengthy\0";
+            let bytes = [property(24, &unit(2., &normal)), property(24, &unit(factor, &later)), property(0, &[])].concat();
+            let raw = super::super::properties_with_version(
+                &bytes,
+                0,
+                if count == 3 { 26 } else { 20 },
+                RecordLimits::default(),
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            let output = image(
+                &raw,
+                Limits { records: RecordLimits { string_bytes: 4, ..Default::default() }, ..Default::default() },
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            assert_eq!(output.user_unit.unwrap().value.factor, 2.);
+            assert!(output.issues.is_empty());
+            assert_eq!(output.stopped, Some(Diagnostic { offset: raw.records[1].offset, ordinal: 1, reason: StopReason::StringLimit }));
+            later[oversized] = normal[oversized];
+            let bytes = [property(24, &unit(2., &normal)), property(24, &unit(factor, &later)), property(0, &[])].concat();
+            let raw = super::super::properties_with_version(
+                &bytes,
+                0,
+                if count == 3 { 26 } else { 20 },
+                RecordLimits::default(),
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            let output = image(
+                &raw,
+                Limits { records: RecordLimits { string_bytes: 4, ..Default::default() }, ..Default::default() },
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            assert!(output.complete());
+            assert_eq!(output.issues.len(), 1);
+            assert_eq!(output.issues[0].kind, IssueKind::InvalidValue);
+        }
+    }
+}
+
+#[test]
+fn guide_and_sample_evidence_identifies_each_wire_record_not_its_property() {
+    let guides = [1i32.to_be_bytes().as_slice(), &[99], &2i32.to_be_bytes(), &[1], &3i32.to_be_bytes(), &[2], &[0]].concat();
+    let legacy = [4i32.to_be_bytes(), 5i32.to_be_bytes(), 6i32.to_be_bytes(), 7i32.to_be_bytes()].concat();
+    let modern = [
+        8i32.to_be_bytes(),
+        9i32.to_be_bytes(),
+        10u32.to_be_bytes(),
+        11u32.to_be_bytes(),
+        12u32.to_be_bytes(),
+        13i32.to_be_bytes(),
+        14i32.to_be_bytes(),
+        15u32.to_be_bytes(),
+        16u32.to_be_bytes(),
+        17u32.to_be_bytes(),
+    ]
+    .concat();
+    let bytes = [property(100, &[1, 2, 3]), property(18, &guides), property(27, &legacy), property(39, &modern), property(0, &[])].concat();
+    let raw = properties(&bytes);
+    let output = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(output.complete());
+    for (record, index) in output.guides.iter().zip([1, 2]) {
+        assert_eq!(record.offset, raw.records[1].offset + 8 + index * 5);
+        assert_eq!(&bytes[record.offset..record.offset + 4], &record.value.position.to_be_bytes());
+    }
+    for (records, property, stride) in [(&output.legacy_sample_points, &raw.records[2], 8), (&output.sample_points, &raw.records[3], 20)] {
+        assert_eq!(records.len(), 2);
+        for (index, record) in records.iter().enumerate() {
+            assert_eq!(record.offset, property.offset + 8 + index * stride);
+            assert_eq!(&bytes[record.offset..record.offset + 4], &record.value.x.to_be_bytes());
+            assert_eq!(&bytes[record.offset + 4..record.offset + 8], &record.value.y.to_be_bytes());
+        }
+    }
+    assert_eq!(output.issues.len(), 2);
+    assert!(output.issues.iter().all(|issue| issue.offset == raw.records[1].offset));
+}

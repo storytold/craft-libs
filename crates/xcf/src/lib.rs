@@ -671,25 +671,39 @@ impl<'a> Xcf<'a> {
         };
         let layer_ptrs = pointers(&mut c, MAX_LAYERS, "layers")?;
         let channels = pointers(&mut c, MAX_CHANNELS, "channels")?;
-        let mut path_sources = (version >= 18).then_some(records::paths::index::Table { start: c.pos, end: None, minimum_end: c.pos });
+        let mut path_sources =
+            (version >= 18).then_some(records::paths::index::Table { start: c.pos, end: None, minimum_end: c.pos, target_start: None });
         if version >= 18 {
             let mut n = 0;
             let mut first_target = usize::MAX;
-            let mut coherent = true;
-            while let Ok(pointer) = c.ptr() {
-                if coherent && let Some(source) = &mut path_sources {
+            let width = if c.wide { 8 } else { 4 };
+            loop {
+                if !keep_going() {
+                    return Err(Error::Cancelled);
+                }
+                // A missing terminator must not turn target bytes into pointer
+                // slots or enlarge the envelope enough to discard its prefix.
+                if c.pos.checked_add(width).is_none_or(|end| end > first_target) {
+                    break;
+                }
+                let Ok(pointer) = c.ptr() else { break };
+                if let Some(source) = &mut path_sources {
                     source.minimum_end = c.pos;
                 }
                 if pointer == 0 {
-                    if coherent && let Some(source) = &mut path_sources {
+                    if let Some(source) = &mut path_sources {
                         source.end = Some(c.pos);
                     }
                     break;
                 }
-                first_target = first_target.min(pointer);
-                // Preserve tolerant counting, but do not mistake zeros inside
-                // target data for a table end after an invalid nonzero slot.
-                coherent &= pointer >= c.pos && c.pos <= first_target;
+                // A malformed backward offset cannot revoke earlier forward
+                // entries or pretend its target starts before the table itself.
+                if pointer >= c.pos {
+                    first_target = first_target.min(pointer);
+                    if let Some(source) = &mut path_sources {
+                        source.target_start = Some(first_target);
+                    }
+                }
                 n += 1;
                 if n > MAX_CHANNELS {
                     break;

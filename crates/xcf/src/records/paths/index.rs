@@ -12,9 +12,11 @@ fn check(keep_going: &dyn Fn() -> bool) -> Result<()> {
 pub(crate) struct Table {
     pub start: usize,
     pub end: Option<usize>,
-    /// Slots observed before the first malformed nonzero entry are always
-    /// excluded, even when no complete table terminator could be established.
+    /// Slot bytes observed without overlapping a forward target are excluded,
+    /// even when no complete table terminator could be established.
     pub minimum_end: usize,
+    /// Earliest target bounds the pointer envelope when its zero is missing.
+    pub target_start: Option<usize>,
 }
 
 pub(crate) fn offsets(
@@ -35,7 +37,7 @@ pub(crate) fn offsets(
             return Err(error);
         }
         let offset = cursor.pos;
-        let result = pointer(&mut cursor, source.end.unwrap_or(source.minimum_end), limits.records, records.len(), budget);
+        let result = pointer(&mut cursor, source.end.unwrap_or(source.minimum_end), source.target_start, limits.records, records.len(), budget);
         match result {
             Ok(None) => return Ok(Scan::complete(records, cursor.pos)),
             Ok(Some(pointer)) => {
@@ -54,11 +56,16 @@ pub(crate) fn offsets(
 fn pointer(
     cursor: &mut Cursor<'_>,
     table_end: usize,
+    target_start: Option<usize>,
     limit: usize,
     index: usize,
     budget: &mut Budget,
 ) -> std::result::Result<Option<usize>, StopReason> {
-    budget.work(if cursor.wide { 8 } else { 4 })?;
+    let width = if cursor.wide { 8 } else { 4 };
+    budget.work(width)?;
+    if cursor.pos.checked_add(width).is_none_or(|end| target_start.is_some_and(|start| end > start)) {
+        return Err(StopReason::Malformed);
+    }
     let pointer = cursor.ptr().map_err(|_| StopReason::Malformed)?;
     if pointer == 0 {
         return Ok(None);
@@ -160,7 +167,7 @@ fn decode_inner<'a>(
     loop {
         check(keep_going)?;
         let slot = table.pos;
-        let offset = match pointer(&mut table, source.end.unwrap_or(source.minimum_end), table_limit, source_index, budget) {
+        let offset = match pointer(&mut table, source.end.unwrap_or(source.minimum_end), source.target_start, table_limit, source_index, budget) {
             Ok(Some(offset)) => offset,
             Ok(None) => return Ok(Scan::complete(output, end_offset.max(table.pos))),
             Err(reason) => return Ok(Scan::stopped(output, slot, reason)),

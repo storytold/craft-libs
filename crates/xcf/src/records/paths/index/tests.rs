@@ -519,11 +519,14 @@ fn standalone_pointers_exclude_the_full_known_table_including_its_terminator() {
         malformed[table..table + 8].copy_from_slice(&(target as u64).to_be_bytes());
         let xcf = Xcf::parse(&malformed).unwrap();
         let offsets = xcf.path_offsets(Default::default(), &mut Budget::default(), &|| true).unwrap();
-        assert!(offsets.records.is_empty());
-        assert_eq!(offsets.stopped.unwrap(), Diagnostic { offset: table, ordinal: 0, reason: StopReason::Malformed });
+        assert!(!offsets.records.is_empty());
+        assert_eq!(offsets.records[0], target);
+        assert_eq!(offsets.stopped.unwrap().reason, StopReason::Malformed);
+        // The target boundary makes the alleged table incomplete, rather than
+        // promoting target bytes into a complete zero-terminated envelope.
         let paths = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
         assert!(paths.records.is_empty());
-        assert_eq!(paths.stopped.unwrap().reason, StopReason::Malformed);
+        assert!(paths.stopped.is_some(), "unframed table bytes cannot become undisclosed geometry");
     }
     // A truly unfinished table has no invented end. Its forward prefix remains
     // available with explicit truncation; no target is claimed after a zero.
@@ -615,4 +618,33 @@ fn opaque_parasite_names_keep_interior_nuls_without_becoming_path_labels() {
     assert!(raw.stopped.is_none());
     assert_eq!(raw.records[0].name, b"A\0B");
     assert_eq!(raw.records[0].flags, 7);
+}
+
+#[test]
+fn missing_table_terminator_keeps_the_usable_pointer_and_geometry_prefix() {
+    for version in [18, 26] {
+        let (mut bytes, table, source) = file(version, &[], 1);
+        bytes.drain(table + 8..table + 16);
+        let source = source - 8;
+        bytes[table..table + 8].copy_from_slice(&(source as u64).to_be_bytes());
+        let xcf = Xcf::parse(&bytes).unwrap();
+        assert_eq!(xcf.image().path_count, 1);
+        let offsets = xcf.path_offsets(Default::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(offsets.records, [source]);
+        assert_eq!(offsets.stopped, Some(Diagnostic { offset: table + 8, ordinal: 1, reason: StopReason::Malformed }));
+        let paths = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(paths.records.len(), 1);
+        assert_eq!(paths.records[0].name, "Standalone");
+        assert_eq!(paths.records[0].strokes[0].knots[0].anchor.position, [4., 5.]);
+        assert_eq!(paths.stopped, Some(Diagnostic { offset: table + 8, ordinal: 1, reason: StopReason::Malformed }));
+        assert!(matches!(xcf.paths(Limits::default(), &mut Budget::default(), &|| false), Err(Error::Cancelled)));
+        let work = xcf.path_offsets(Default::default(), &mut Budget::new(8, 1 << 20), &|| true).unwrap();
+        assert_eq!(work.records, [source]);
+        assert_eq!(work.stopped.unwrap().reason, StopReason::WorkLimit);
+        let (normal, _, _) = file(version, &[], 2);
+        let normal = Xcf::parse(&normal).unwrap();
+        let complete = normal.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(complete.records.len(), 2);
+        assert!(complete.stopped.is_none());
+    }
 }
