@@ -484,3 +484,91 @@ fn unterminated_user_unit_fields_do_not_replace_prior_valid_evidence() {
         assert!(value.strings.iter().flatten().all(|value| value.is_empty()));
     }
 }
+
+#[test]
+fn typed_parasite_limits_keep_the_earlier_location_and_later_raw_stop() {
+    let first = property(22, &1u32.to_be_bytes());
+    let profile = parasite(b"icc-profile", b"kept profile");
+    let comment = parasite(b"gimp-comment", b"kept comment");
+    let exif = parasite(b"exif-data", b"omitted exif");
+    for malformed in [false, true] {
+        let suffix = if malformed { vec![0, 0, 0] } else { Vec::new() };
+        let payload = [profile.clone(), comment.clone(), exif.clone(), suffix].concat();
+        let bytes = [first.clone(), property(21, &payload), property(0, &[])].concat();
+        let raw = properties(&bytes);
+        let limits = Limits { packets: 1, ..Default::default() };
+        let result = image(&raw, limits, &mut Budget::default(), &|| true).unwrap();
+        let base = first.len() + 8;
+        assert!(!result.complete());
+        assert_eq!(result.stopped, Some(Diagnostic { offset: first.len(), ordinal: 1, reason: StopReason::RecordLimit }));
+        assert_eq!(
+            result.parasite_typed_stopped,
+            Some(Diagnostic { offset: base + profile.len() + comment.len(), ordinal: 2, reason: StopReason::RecordLimit })
+        );
+        let raw_stop =
+            malformed.then_some(Diagnostic { offset: base + profile.len() + comment.len() + exif.len(), ordinal: 3, reason: StopReason::Malformed });
+        assert_eq!(result.parasite_stopped, raw_stop);
+        assert_eq!(result.profile.unwrap().value, b"kept profile");
+        assert_eq!(result.packets.len(), 1);
+        assert_eq!(result.packets[0].value.bytes, b"kept comment");
+        let all = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(all.parasite_typed_stopped, None);
+        assert_eq!(all.parasite_stopped, raw_stop);
+        assert_eq!(all.packets.len(), 2);
+        assert_eq!(all.complete(), !malformed);
+    }
+}
+
+#[test]
+fn an_issue_limit_names_the_parasite_that_typed_conversion_cannot_retain() {
+    let first = parasite(b"icc-profile", b"kept");
+    let invalid = parasite(b"icc-profile", b"");
+    let bytes = [property(21, &[first.clone(), invalid].concat()), property(0, &[])].concat();
+    let result = image(&properties(&bytes), Limits { issues: 0, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(result.profile.unwrap().value, b"kept");
+    assert!(result.issues.is_empty());
+    assert_eq!(result.parasite_stopped, None);
+    assert_eq!(result.parasite_typed_stopped, Some(Diagnostic { offset: 8 + first.len(), ordinal: 1, reason: StopReason::RecordLimit }));
+    assert_eq!(result.stopped.unwrap().offset, 0);
+    assert!(!result.complete());
+}
+
+#[test]
+fn invalid_utf8_user_unit_fields_do_not_replace_valid_borrowed_evidence() {
+    let unit = |fields: &[&[u8]], factor: f32| {
+        let mut bytes = [factor.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for field in fields {
+            bytes.extend((field.len() as u32).to_be_bytes());
+            bytes.extend(*field);
+        }
+        bytes
+    };
+    for count in [3, 5] {
+        let fields = vec!["微米\0".as_bytes(); count];
+        let first = unit(&fields, 2.);
+        for bad in 0..count {
+            let mut later = fields.clone();
+            later[bad] = &[0xff, 0];
+            let invalid = unit(&later, 3.);
+            let bytes = [property(24, &first), property(24, &invalid), property(0, &[])].concat();
+            let raw = super::super::properties_with_version(
+                &bytes,
+                0,
+                if count == 5 { 20 } else { 26 },
+                RecordLimits::default(),
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            assert!(raw.stopped.is_none());
+            assert_eq!(raw.records[1].payload, invalid, "raw evidence remains opaque and unmodified");
+            let result = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert!(result.complete());
+            let accepted = result.user_unit.unwrap().value;
+            assert_eq!(accepted.factor, 2.);
+            assert_eq!(accepted.strings[0], Some("微米".as_bytes()));
+            assert!(raw.records[0].payload.as_ptr_range().contains(&accepted.strings[0].unwrap().as_ptr()));
+            assert_eq!(result.issues, [Issue { offset: raw.records[1].offset, property_kind: 24, kind: IssueKind::InvalidValue }]);
+        }
+    }
+}

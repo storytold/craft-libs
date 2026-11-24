@@ -101,9 +101,13 @@ pub struct ImageMetadata<'a> {
     pub has_modern_sample_points: bool,
     /// Nonempty `icc-profile` bytes only; ICC validity and color policy are not inferred.
     pub profile: Option<Evidence<&'a [u8]>>,
-    /// Stop within the enclosing parasite property. `stopped` still identifies its
-    /// outer property/ordinal; this diagnostic identifies the first unretained parasite.
+    /// Where the raw parasite scan stopped. Typed conversion can stop earlier;
+    /// this remains the raw diagnostic even then. `stopped` identifies the outer property.
     pub parasite_stopped: Option<Diagnostic>,
+    /// First parasite omitted by typed conversion, with its source offset and ordinal.
+    /// None when conversion consumes the available raw prefix; `parasite_stopped`
+    /// can still identify a later malformed or quota-limited raw suffix.
+    pub parasite_typed_stopped: Option<Diagnostic>,
     pub packets: Vec<Evidence<Packet<'a>>>,
     pub issues: Vec<Issue>,
     pub source_stopped: Option<Diagnostic>,
@@ -112,7 +116,7 @@ pub struct ImageMetadata<'a> {
 
 impl ImageMetadata<'_> {
     pub fn complete(&self) -> bool {
-        self.source_stopped.is_none() && self.stopped.is_none()
+        self.source_stopped.is_none() && self.stopped.is_none() && self.parasite_stopped.is_none() && self.parasite_typed_stopped.is_none()
     }
 }
 
@@ -172,6 +176,26 @@ impl Reader<'_> {
 
     fn issue(&mut self, issues: &mut Vec<Issue>, property: &Property<'_>, kind: IssueKind) -> ReadResult<()> {
         self.retain(issues, Issue { offset: property.offset, property_kind: property.kind, kind }, self.limits.issues)
+    }
+
+    fn image_parasite<'a>(&mut self, property: &Property<'a>, record: &super::Parasite<'a>, output: &mut ImageMetadata<'a>) -> ReadResult<()> {
+        if record.name == b"icc-profile" {
+            if record.payload.is_empty() {
+                self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
+            } else {
+                output.profile = Some(Evidence { offset: record.offset, value: record.payload });
+            }
+            return Ok(());
+        }
+        let kind = match record.name {
+            b"gimp-comment" => PacketKind::Comment,
+            b"exif-data" => PacketKind::Exif,
+            b"gimp-image-metadata" => PacketKind::ImageMetadata,
+            b"gimp-metadata" => PacketKind::Metadata,
+            _ => return Ok(()),
+        };
+        let value = Evidence { offset: record.offset, value: Packet { kind, flags: record.flags, bytes: record.payload } };
+        self.retain(&mut output.packets, value, self.limits.packets)
     }
 
     fn image_property<'a>(&mut self, property: &Property<'a>, output: &mut ImageMetadata<'a>) -> ReadResult<()> {
@@ -279,25 +303,13 @@ impl Reader<'_> {
                 let scan_charge = retained - self.budget.retained_left;
                 output.parasite_stopped = scan.stopped;
                 let result: ReadResult<()> = (|| {
-                    for record in &scan.records {
+                    for (ordinal, record) in scan.records.iter().enumerate() {
                         self.check()?;
-                        if record.name == b"icc-profile" {
-                            if record.payload.is_empty() {
-                                self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
-                            } else {
-                                output.profile = Some(Evidence { offset: record.offset, value: record.payload });
-                            }
-                            continue;
+                        let converted = self.image_parasite(property, record, output);
+                        if let Err(Failure::Stop(reason)) = &converted {
+                            output.parasite_typed_stopped = Some(Diagnostic { offset: record.offset, ordinal, reason: *reason });
                         }
-                        let kind = match record.name {
-                            b"gimp-comment" => PacketKind::Comment,
-                            b"exif-data" => PacketKind::Exif,
-                            b"gimp-image-metadata" => PacketKind::ImageMetadata,
-                            b"gimp-metadata" => PacketKind::Metadata,
-                            _ => continue,
-                        };
-                        let value = Evidence { offset: record.offset, value: Packet { kind, flags: record.flags, bytes: record.payload } };
-                        self.retain(&mut output.packets, value, self.limits.packets)?;
+                        converted?;
                     }
                     if let Some(stopped) = scan.stopped {
                         return Err(stopped.reason.into());
@@ -430,7 +442,9 @@ fn user_unit(bytes: &[u8]) -> Option<(UserUnit<'_>, usize)> {
         string_bytes = string_bytes.max(length);
         remaining = remaining.get(4..)?;
         let (value, rest) = remaining.split_at_checked(length)?;
-        *slot = Some(if value.is_empty() { value } else { value.strip_suffix(&[0])? });
+        let value = if value.is_empty() { value } else { value.strip_suffix(&[0])? };
+        std::str::from_utf8(value).ok()?;
+        *slot = Some(value);
         remaining = rest;
         count += 1;
     }
