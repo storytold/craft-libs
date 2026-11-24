@@ -143,7 +143,7 @@ impl Rig {
             });
             ui.set_clip_rect(original_clip);
             if scene.canvas {
-                let response = ui.interact(HOST, ui.id().with("native-canvas"), egui::Sense::click_and_drag());
+                let response = ui.interact(HOST, ui.scope_id().with("native-canvas"), egui::Sense::click_and_drag());
                 host_canvas(ui.ctx(), response.id, KeyUse::CANVAS);
                 scene.canvas_id = response.id;
             }
@@ -408,11 +408,7 @@ fn scalar_policy_does_not_steal_a_real_native_text_editors_arrow() {
 fn scalar_policy_ime_composition_keeps_hovered_other_row_out() {
     let mut rig = Rig::new(true, Some(policy()));
     let target = rig.fixture.by_role(Role::SPIN_BUTTON)[0];
-    rig.fixture
-        .click(&target)
-        .frame(vec![Event::Ime(ImeEvent::Enabled)])
-        .frame(vec![Event::Ime(ImeEvent::Preedit { text: "0".to_owned(), active_range_chars: Some(0..1) })])
-        .settle();
+    rig.fixture.click(&target).frame(vec![Event::Ime(ImeEvent::Preedit { text: "0".to_owned(), active_range_chars: Some(0..1) })]).settle();
     let other = rig.scene.borrow().values[0][1];
     rig.hover_label(1);
     rig.fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
