@@ -1,6 +1,8 @@
-//! The theme styles' `right_to_left`.
+//! The theme styles' `right_to_left` and font coverage transfer function.
 
-use egui::{Context, Ui};
+use craft_theme::Mode;
+use egui::epaint::FontColorTransferFunction;
+use egui::{Context, Theme, Ui};
 
 /// Turns off egui's own caret blink in `ui`, and hides the caret stroke unless `visible`: the runtime blinks it.
 pub(crate) fn set_text_cursor(ui: &mut Ui, visible: bool) {
@@ -62,4 +64,20 @@ pub(crate) fn set_theme_direction(ctx: &Context, root: &mut Ui, right_to_left: b
 /// Sets the spacing between the children `ui` lays out.
 pub(crate) fn set_item_spacing(ui: &mut Ui, gap: egui::Vec2) {
     ui.spacing_mut().item_spacing = gap;
+}
+
+/// Matches egui's font coverage transfer function to `mode` across both egui theme styles, so dark-on-light text
+/// never renders with the dark-mode curve (or vice versa) when the app's mode differs from the OS's.
+pub(crate) fn set_text_color_transfer(ctx: &Context, mode: Mode) {
+    let transfer = match mode {
+        Mode::Light => FontColorTransferFunction::LIGHT_MODE_DEFAULT,
+        Mode::Dark => FontColorTransferFunction::DARK_MODE_DEFAULT,
+    };
+    let matches = ctx.style_of(Theme::Dark).visuals.text_options.color_transfer_function == transfer
+        && ctx.style_of(Theme::Light).visuals.text_options.color_transfer_function == transfer;
+    if !matches {
+        ctx.all_styles_mut(|style| {
+            style.visuals.text_options.color_transfer_function = transfer;
+        });
+    }
 }
