@@ -581,6 +581,8 @@ impl PropCtx {
                 "right" | "end" => b.right = Some(self.border_or(k, missing)),
                 "between" | "insideH" => b.between = Some(self.border_or(k, missing)),
                 "insideV" => b.inside_v = Some(self.border_or(k, missing)),
+                "tl2br" => b.tl2br = Some(self.border_or(k, missing)),
+                "tr2bl" => b.tr2bl = Some(self.border_or(k, missing)),
                 _ => {}
             }
         }
