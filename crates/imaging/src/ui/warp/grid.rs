@@ -26,8 +26,12 @@ use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
 
-/// How far from an anchor or a handle end a press takes it, in hit targets (12.25 at an 8 target).
-const REACH_IN_TARGETS: f32 = 1.53125;
+/// How far from an anchor or a handle end a press takes it, in hit targets (11.75 at an 8 target), measured from
+/// where the pointer acts ([`POINTER_OFFSET`]). The reach probe on the reference application (2026-11-23, 2 px steps
+/// at 100 %): a handle end is taken from 12 px below or to the right (11.5 from where the pointer acts) and not from
+/// 12 above (12.5); an anchor from 6 px out on its diagonal (9.2) and not from 8 (12.0); a suite press 12.1 from a
+/// handle under a perspective is not taken. So the reach lies in 11.5..12.0.
+const REACH_IN_TARGETS: f32 = 1.46875;
 
 /// Where the pointer acts in the document: half a document pixel up and left of it. A dragged point
 /// goes there and a split cuts there.
@@ -141,7 +145,7 @@ struct Report {
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
 ///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
 ///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
-/// - Pointer: the nearest anchor or handle within the hit reach (12.25 at an 8 target) drags that
+/// - Pointer: the nearest anchor or handle within the hit reach (11.75 at an 8 target, from where the pointer acts) drags that
 ///   point, which jumps to the pointer, half a document pixel up and left of it; elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
@@ -434,7 +438,9 @@ impl Component for WarpGrid<'_> {
         let armed = self.split.is_some();
         let sense = if armed { Sense::CLICK | Sense::TAKE_FOCUS } else { Sense::DRAG | Sense::TAKE_FOCUS };
         for index in Self::points(mesh) {
-            let at = space.view.to_screen(mesh.points[index]);
+            // The reach is measured from where the pointer acts (half a pixel up and left of it), so the circle
+            // sits half a pixel down and right of the point.
+            let at = space.view.to_screen(mesh.points[index] - POINTER_OFFSET);
             let part = cx
                 .part(POINT.at(index as u64), HitShape::circle(at, cx.style.reach))
                 .sense(sense)
