@@ -248,6 +248,10 @@ impl GraphAccelerator {
                 entries: &entries,
             });
             (parameters, (result, readback), bind_group)
+        })
+        .inspect_err(|_| {
+            // Flush the texture writes of the inputs prepared before the failure
+            queue.submit([]);
         })?;
         let (result, readback) = readback;
         let mut grey = Vec::new();
@@ -259,6 +263,8 @@ impl GraphAccelerator {
         }
         for y in (0..height).step_by(rows as usize) {
             if request.cancel.is_cancelled() {
+                // The first band has not submitted the input texture writes yet
+                queue.submit([]);
                 return Err("GPU pixel graph cancelled".into());
             }
             let rows = rows.min(height - y);
