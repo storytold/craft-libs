@@ -56,8 +56,10 @@ The host keeps its panels' specs in a plain-data model that implements `PanelSpe
 
 | Method | Does |
 | --- | --- |
-| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`, `host_body`. |
+| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`, `host_body`, `count`, `caption`, `swatch` (a data colour before the tab's name; `Some(None)` is the theme's empty swatch) and `documents`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
+
+A panel's `documents` (`PanelDocument`: id, label, swatch, `closable`, `shown`) are tabs of its group's strip after the panel tabs, whichever panel the group shows: one fit and one overflow menu for both. The tab of the shown panel's `shown` document is the selected tab. A pick reports `DockEvent::DocumentPicked` and activates the panel; a close button or middle click reports `DockEvent::DocumentClosed`. The host opens, shows and closes documents by editing the spec. Document tabs do not drag and take no tab drop.
 
 The area reads them only when the model's revision, the workspace's revision or the lock changes (`runtime::derived`), and keeps what it read otherwise, so an idle pass reads no spec. A host changes a label or a limit by editing the model. A spec reads no style: a tool rail's grid is `DockGrid::rail(cells)`, which the dock sizes from its own tokens.
 
@@ -76,11 +78,11 @@ The binding decides who applies the edits. With `Bind::bound` the area writes ev
 
 A panel body, or code a body calls, changes the workspace during the pass with `docking::request_actions(ctx, actions)`, never by writing the workspace the area shows. The running area takes them unapplied and returns them in `DockAreaOutput::requested`, in order, for the host to apply after `actions` in the same frame. With no area over that panel type running, `request_actions` hands the actions back for the caller to apply.
 
-Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collapse`, `locked`, and `flyout`, which binds the open flyout to the host's value (the area keeps it otherwise). A hidden panel keeps its place for restore. Inside an `AppShell`, the shell's hiding wins over `hide`: while it hides the panels and keeps the tools (Shift+Tab, `ShellCx::panels_hidden`), only the panels an `Except` names stay, docked or floating (a toolbar); while it hides the dock (Tab), no panel shows. Under Tab and Shift+Tab, an edge the pointer reveals (`ShellCx::edge_revealed`) shows its `Start` or `End` dock, with the host's `hide` applied to it. Protected panels always show.
+Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collapse`, `locked`, `raise` (the floating window holding the panel comes to the front in this pass: an OS window gets the focus, an in-app window goes to the top of the floating windows; a host passes it in the pass after it opens or activates a floating panel), and `flyout`, which binds the open flyout to the host's value (the area keeps it otherwise). A hidden panel keeps its place for restore. Inside an `AppShell`, the shell's hiding wins over `hide`: while it hides the panels and keeps the tools (Shift+Tab, `ShellCx::panels_hidden`), only the panels an `Except` names stay, docked or floating (a toolbar); while it hides the dock (Tab), no panel shows. Under Tab and Shift+Tab, an edge the pointer reveals (`ShellCx::edge_revealed`) shows its `Start` or `End` dock, with the host's `hide` applied to it. Protected panels always show.
 
 A panel in a column collapsed to icons shows in its flyout (`Layout::opens_in_flyout`). The host opens and closes it by writing the `flyout` binding, not the layout: `WindowMenuRows` checks such a panel's row while its flyout is open (`WindowMenuRows::flyout`) and reports a pick in `WindowMenuRowsOutput::flyout`.
 
-`DockAreaOutput` holds the `actions` taken, the bodies' `requested` actions, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, `columns`, the OS `windows` the floating windows showed in (by a panel of each), `window_files`, and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
+`DockAreaOutput` holds the `actions` taken, the bodies' `requested` actions, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, `columns`, the OS `windows` the floating windows showed in (by a panel of each), `window_files` (one `WindowFiles` per drop on a floating OS window: the shown panel of the group under the drop, the first group's for a drop on the title row, and the files), and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
 
 The host handles these `DockEvent`s:
 
@@ -90,6 +92,8 @@ The host handles these `DockEvent`s:
 | `ToggleAutoCollapse` | Flips its preference and passes it back. |
 | `PanelCommand` | Carries out Move Panel To and Move Group To: asks for a destination and calls `move_actions`. |
 | `FlyoutChanged` | Nothing when the area or a write-through binding holds the flyout; applies the request when the binding is given. |
+| `DocumentPicked` | Shows the document in the panel (the area has activated the panel). |
+| `DocumentClosed` | Closes the document and removes it from the panel's spec. |
 | `FloatPlaced` | Reports for a host that anchors its own surfaces to the dock; `DockAreaOutput::columns` gives every column's rect each pass. |
 
 ## DockConfig

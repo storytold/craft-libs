@@ -161,9 +161,9 @@ impl Titles {
 
     /// The panel and the document whose tab `key` is ([`PanelTitle::document_key`]); `None` for a panel's tab.
     pub fn document_of(&self, key: PanelKey) -> Option<(PanelKey, u64)> {
-        self.list.iter().find_map(|panel| {
-            panel.documents.iter().find(|document| panel.document_key(document.id) == key).map(|document| (panel.key, document.id))
-        })
+        self.list
+            .iter()
+            .find_map(|panel| panel.documents.iter().find(|document| panel.document_key(document.id) == key).map(|document| (panel.key, document.id)))
     }
 }
 

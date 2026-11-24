@@ -14,9 +14,8 @@ use crate::contract::{
     PopupKind, Props as _, Role, Show as _, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::display::{Shade, Text};
-use crate::primitives::IconSpec;
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
-use crate::primitives::PaintShape;
+use crate::primitives::{IconSpec, PaintShape};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusRequest, FocusTarget};

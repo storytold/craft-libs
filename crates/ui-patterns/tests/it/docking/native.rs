@@ -10,7 +10,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, BodyCx, DropMark, PlainData, Show as _, ShowContainer as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec, PanelSpecs};
+use craft_ui::docking::{DockConfig, DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
@@ -1453,6 +1453,57 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     };
     assert_eq!(reached(false), 1, "a file no target took arrives once");
     assert_eq!(reached(true), 0, "a file a target in the window took does not");
+}
+
+/// Palettes that record where each group showed, by its panels, in the window it showed in.
+#[derive(Default)]
+struct GroupRects(Vec<(Vec<u32>, Rect)>);
+
+impl DockPanels<u32> for GroupRects {
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn group_view(&mut self, panels: &[u32], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if let GroupAt::Show(rect) = at {
+            self.0.retain(|(shown, _)| shown != panels);
+            self.0.push((panels.to_vec(), rect));
+        }
+        None
+    }
+}
+
+/// A file dropped on a native float of two groups names the shown panel of the group under the drop, once.
+#[trial]
+fn a_file_dropped_on_a_native_float_names_the_group_under_it() {
+    let dropped_on = |lower: bool| {
+        let windows = Windows::new();
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let column = Column::new(vec![Group::new(vec![1], 0), Group::new(vec![2], 0)]);
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![Floating::new(105, column, PALETTE_AT)])));
+        let mut panels = GroupRects::default();
+        let specs = Specs::with(Permissions::ALL);
+        let mut frame = |child: Vec<Event>, hovered: Vec<HoveredFile>, dropped: Vec<String>, panels: &mut GroupRects| {
+            let mut reached = Vec::new();
+            windows.frame_with_files(vec![], child, FilesOver::Child, hovered, dropped, |ui| {
+                let area = DockArea::new("Native dock", Bind::bound(&mut workspace), &specs, panels, DockConfig::default());
+                reached.extend(area.show(ui).window_files.into_iter().map(|files| files.panel));
+            });
+            reached
+        };
+        for _ in 0..4 {
+            frame(vec![], vec![], vec![], &mut panels);
+        }
+        let group = |panel: u32| panels.0.iter().find(|(shown, _)| shown == &[panel]).map(|(_, rect)| *rect).expect("the group showed");
+        let at = group(if lower { 2 } else { 1 }).center();
+        let mut reached = frame(vec![moved(at)], vec![HoveredFile::default()], vec![], &mut panels);
+        reached.extend(frame(vec![moved(at)], vec![], vec!["a.png".to_owned()], &mut panels));
+        for _ in 0..2 {
+            reached.extend(frame(vec![moved(at)], vec![], vec![], &mut panels));
+        }
+        reached
+    };
+    assert_eq!(dropped_on(true), vec![2], "a drop on the lower group names its panel once");
+    assert_eq!(dropped_on(false), vec![1], "a drop on the upper group names its panel once");
 }
 
 /// A palette whose panel holds an Opacity field, then reads the keys its OS window's pass left, as an app passes a

@@ -23,10 +23,8 @@ struct Specs;
 impl PanelSpecs<u32> for Specs {
     fn spec(&self, panel: &u32) -> PanelSpec {
         match *panel {
-            TIMELINE => PanelSpec::new("Timeline").documents(vec![
-                PanelDocument::new(1, "Comp 1").closable(true).shown(true),
-                PanelDocument::new(2, "Comp 2").closable(true),
-            ]),
+            TIMELINE => PanelSpec::new("Timeline")
+                .documents(vec![PanelDocument::new(1, "Comp 1").closable(true).shown(true), PanelDocument::new(2, "Comp 2").closable(true)]),
             _ => PanelSpec::new("Effects"),
         }
     }
@@ -64,11 +62,8 @@ fn bed(width: f32) -> Bed {
 
 /// The tabs the strip shows, by name, in reading order.
 fn tabs(fixture: &Fixture) -> Vec<(String, Target)> {
-    let mut tabs: Vec<(String, Target)> = fixture
-        .by_role(Role::TAB)
-        .into_iter()
-        .filter_map(|tab| Some((access::name(fixture.tree(), tab.node)?.to_owned(), tab)))
-        .collect();
+    let mut tabs: Vec<(String, Target)> =
+        fixture.by_role(Role::TAB).into_iter().filter_map(|tab| Some((access::name(fixture.tree(), tab.node)?.to_owned(), tab))).collect();
     tabs.sort_by(|a, b| a.1.rect.left().total_cmp(&b.1.rect.left()));
     tabs
 }

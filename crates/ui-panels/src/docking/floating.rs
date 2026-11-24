@@ -199,6 +199,8 @@ pub struct FloatingGroupOutput {
     /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
     /// accessibility node; none while it does not resize (minimized).
     pub resize: Vec<(ResizeEdge, Rect, Id)>,
+    /// Where `files` were dropped, in the group's layer space, when the drop session knew the pointer.
+    pub files_at: Option<Pos2>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -316,6 +318,8 @@ pub struct FloatingGroup<'a> {
     raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
+    /// Where they were dropped.
+    files_at: Option<Pos2>,
 }
 
 type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
@@ -367,6 +371,7 @@ impl<'a> FloatingGroup<'a> {
             continue_move: None,
             raise: false,
             files: Vec::new(),
+            files_at: None,
         }
         .label(title)
     }
@@ -528,6 +533,8 @@ impl Component for FloatingGroup<'_> {
             let target = WholeWindow::new(cx.rect);
             if let Some(dropped) = cx.window_drop_target::<OsFiles, _>(&target) {
                 self.files = dropped.files;
+                // The drop session's pointer, which a drop the OS sent before any position waits for.
+                self.files_at = cx.dragging::<OsFiles>().map(|(_, at)| at);
             }
         }
     }
@@ -569,6 +576,7 @@ impl Component for FloatingGroup<'_> {
             files: self.files,
             grip: cx.move_band(),
             resize: cx.resize_grips(),
+            files_at: self.files_at,
         };
         native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);

@@ -52,6 +52,17 @@ pub struct InvalidGeometry {
     pub error: DockError,
 }
 
+/// Files dropped on a floating OS window of the dock: the shown panel of the group under the drop (the first group's for
+/// a drop on the title row, or when the pointer was not known), and the files.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct WindowFiles<P> {
+    /// The shown panel of the group the files were dropped on.
+    pub panel: P,
+    /// The files, in the order the OS lists them.
+    pub files: Vec<drag::OsFile>,
+}
+
 /// What a dock area reports in a pass: the actions it applied to the workspace and the events for the host.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -85,8 +96,9 @@ pub struct DockAreaOutput<P> {
     pub columns: Vec<(P, Rect)>,
     /// The OS windows the floating windows showed in this pass, each named by a panel of the window (the first).
     pub windows: Vec<(P, ViewportId)>,
-    /// The files dropped on the area's windows this pass, for the host to open.
-    pub window_files: Vec<drag::OsFile>,
+    /// The files dropped on the area's floating OS windows this pass that no target there took, one entry per drop,
+    /// each with the panel it was dropped on, for the host to open.
+    pub window_files: Vec<WindowFiles<P>>,
     /// Every place the area drew this pass where a press starts a dock gesture: each tab, each group's drag bar, each
     /// floating window's grip and resize grips, and each divider, with its rect, its OS window and the id of its
     /// accessibility node. Nothing the area did not draw reports: a hidden panel, the groups of a column collapsed to
@@ -314,9 +326,11 @@ struct Report<P> {
     /// The OS windows the floating windows showed in, by their first panel.
     windows: Vec<(P, ViewportId)>,
     /// The files dropped on the floating windows that no target there took.
-    files: Vec<drag::OsFile>,
+    files: Vec<WindowFiles<P>>,
     /// The gesture sources the parts drew, in the order they showed.
     sources: Vec<DockSource<P>>,
+    /// The groups shown this pass, by their shown panel, in the order they showed.
+    shown: Vec<(P, Rect)>,
 }
 
 /// The inputs of the workspace's derived values: the workspace, the panels' specs and the lock.
@@ -478,7 +492,7 @@ struct Passed<P> {
     space: Option<FloatSpace<P>>,
     columns: Vec<(P, Rect)>,
     windows: Vec<(P, ViewportId)>,
-    files: Vec<drag::OsFile>,
+    files: Vec<WindowFiles<P>>,
     sources: Vec<DockSource<P>>,
 }
 
@@ -829,6 +843,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             windows: Vec::new(),
             files: Vec::new(),
             sources: Vec::new(),
+            shown: Vec::new(),
         },
         dock: id,
     };
@@ -1252,6 +1267,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             GroupAt::Show(rect) => rect,
         };
+        self.report.shown.push((shown.clone(), rect));
         // One child `Ui` held to the group's rect. It takes the parent's next id, so a change of the group's first tab
         // keeps every id inside. The host's view runs first, held to the group's rect and clipped to it: it lays out in
         // the group's room, never in the room the area has left. Where the host leaves the group to the dock, the
@@ -1751,6 +1767,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             let area_dock = std::mem::replace(&mut self.dock, dock);
             let drawn = self.report.sources.len();
+            let first_group = self.report.shown.len();
             let shown = group.show_group(ui, |ui, body| {
                 for (command, state) in states.iter().cloned() {
                     body.publish(command, state);
@@ -1777,7 +1794,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     source.viewport = viewport;
                 }
             }
-            self.report.files.extend(output.files);
+            if !output.files.is_empty() {
+                // The group under the drop, else the first group: a drop on the title row, or with no pointer known.
+                let groups = &self.report.shown[first_group..];
+                let under = output.files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
+                let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
+                self.report.files.push(WindowFiles { panel, files: output.files });
+            }
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
