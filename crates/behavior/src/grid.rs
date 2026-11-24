@@ -119,10 +119,11 @@ impl GridCursor {
         cursor
     }
 
-    /// A cursor for the sweep that asks each column for its least: every column but a `Fixed` one is placed as a
-    /// `Content` column whose cells measure in no bound along x, so each column measures its widest cell.
+    /// A cursor for the sweep that asks each column for its least: the cells of every `Content` and `Fill` column
+    /// measure in no bound along x, so each column measures its widest cell. A `Fill` column stays one, so a child
+    /// that fills its width measures its own width there, where a `Content` column would hold it and take none.
     pub fn unbounded(flow: Flow, columns: &[ColumnWidth], gap: Vec2) -> Self {
-        let mut cursor = Self::new(flow, &as_content(columns), gap, &GridMeasure::default());
+        let mut cursor = Self::new(flow, columns, gap, &GridMeasure::default());
         cursor.unbounded = true;
         cursor
     }
@@ -185,7 +186,7 @@ impl GridCursor {
         let count = self.columns.len().max(1);
         let (column, _, _, top) = self.next_place();
         let width = match self.columns.get(column) {
-            Some(ColumnWidth::Content) if self.unbounded => f32::INFINITY,
+            Some(ColumnWidth::Content | ColumnWidth::Fill { .. }) if self.unbounded => f32::INFINITY,
             Some(ColumnWidth::Content) => {
                 // Every other column keeps at least its least: a column that fills keeps only that, and so does a
                 // content column when each column measures alone.

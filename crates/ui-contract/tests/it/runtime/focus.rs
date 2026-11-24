@@ -74,3 +74,38 @@ fn a_request_in_a_press_pass_keeps_the_focus_from_the_press() {
     craft_ui::testing::pointer::click(&mut frames, at.get().center(), &mut show);
     assert_eq!(egui_focused(&frames.ctx), Some(editor), "the request of the press's pass holds");
 }
+
+/// A popover opened with nothing focused closes while a stop in it holds the focus: from the first pass of its exit
+/// fade, while its body still draws, the focus is nowhere, so a key pressed during the fade is not the stop's
+/// (VectorCraft: Cmd+A after the Artboards flyout closed still selected the list's rows).
+#[trial]
+fn a_stop_in_a_layer_that_fades_out_loses_the_focus_at_once() {
+    use craft_behavior::overlay::{Align, Side};
+    use craft_ui::contract::overlay::{Anchor, Place};
+    use craft_ui::contract::{Mount, Overlay, Sizing};
+    let seen = RefCell::new(Seen::default());
+    let (close, drawn) = (Cell::new(false), Cell::new(0u32));
+    let mut show = |ui: &mut Ui| {
+        let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(Rect::from_min_size(ORIGIN, VIEW)), Side::Below, Align::Start));
+        Slab::new(ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content)).id_salt("flyout").show(ui, |ui, cx| {
+            drawn.set(drawn.get() + 1);
+            if close.get() {
+                cx.request_close();
+            }
+            Probe::new(&seen).label("List").id_salt("list").show(ui);
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let list = seen.borrow().id.expect("the list ran");
+    request(&frames.ctx, FocusTarget::Id(list));
+    frames.idle(2, &mut show);
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), Some(list), "the list took the focus");
+    close.set(true);
+    frames.idle(1, &mut show);
+    close.set(false);
+    drawn.set(0);
+    frames.idle(1, &mut show);
+    assert!(drawn.get() > 0, "the layer still draws its fade");
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), None, "the fading layer's stop has no focus");
+}

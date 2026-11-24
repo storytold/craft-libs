@@ -37,7 +37,7 @@ const SIDE_MENU_DISABLED_ALPHA: u8 = 110;
 
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct ButtonStyle {
     #[style(surface)]
@@ -294,6 +294,10 @@ impl Component for Button<'_> {
     const OVERLAYS: bool = false;
     type Style = ButtonStyle;
     type Output = ButtonOutput;
+
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
         let cx = &super::placed(cx);

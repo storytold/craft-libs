@@ -225,6 +225,8 @@ pub struct BarSizes {
     pub title: f32,
     /// Tab strip.
     pub tab: f32,
+    /// Tab strip in its large form: large document tabs.
+    pub tab_large: f32,
     /// Status bar.
     pub status: f32,
     /// Tool options bar.

@@ -260,6 +260,12 @@ struct Session {
     dropped: Option<u64>,
     /// A file drop has arrived but no pointer position is available yet.
     waiting_for_pointer: bool,
+    /// Where the OS dropped the files: the pass that takes a drop after the frame of its arrival places it there, not
+    /// at a pointer that has moved on (files hovering again for a drag of their own).
+    dropped_at: Option<Pos2>,
+    /// Files the OS holds over the window in the pass that takes this session's drop: a drag of their own, which
+    /// starts when the drop ends this session (`end_pass`).
+    hovering_next: Vec<OsFile>,
     /// The root frame the session started in, the only one in which [`amend`] changes its payload.
     began: u64,
 }
@@ -364,6 +370,8 @@ pub fn start(
                 os: false,
                 dropped: None,
                 waiting_for_pointer: false,
+                dropped_at: None,
+                hovering_next: Vec::new(),
                 began,
             });
             board.ended = None;
@@ -489,8 +497,7 @@ fn os_files(ctx: &Context) {
     let hovering = !seen.hovered.is_empty();
     // A session whose window closed has no pass left to end it.
     let closed = source_viewport(ctx).is_some_and(|window| !pass::live_viewports(ctx).contains(&window));
-    let host = WindowHost::of(ctx);
-    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
+    let position = os_files_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     let positioned = position.is_some();
     // A window target can take the drop immediately only if the pointer has not moved since resolution.
     let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window && targets.pointer == position);
@@ -501,23 +508,11 @@ fn os_files(ctx: &Context) {
             if has_drop {
                 repaint = true;
             }
-            board.session = Some(Session {
-                source: Id::NULL.with("craft_ui::os_files"),
-                moving: Moving::default(),
-                viewport,
-                button: PointerButton::Primary,
-                payload: Arc::new(OsFiles { files: if has_drop { seen.dropped } else { seen.hovered } }),
-                also: Vec::new(),
-                preview: DragPreview::None,
-                env: None,
-                mark: None,
-                released: None,
-                taken: false,
-                os: true,
-                dropped: (has_drop && positioned).then_some(frame.saturating_add(1)),
-                waiting_for_pointer: has_drop && !positioned,
-                began: frame,
-            });
+            let mut session = os_session(if has_drop { seen.dropped } else { seen.hovered }, viewport, frame);
+            session.dropped = (has_drop && positioned).then_some(frame.saturating_add(1));
+            session.dropped_at = position.filter(|_| has_drop);
+            session.waiting_for_pointer = has_drop && !positioned;
+            board.session = Some(session);
             board.ended = None;
             board.started += 1;
         }
@@ -527,6 +522,7 @@ fn os_files(ctx: &Context) {
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
                 session.viewport = viewport;
+                session.dropped_at = position;
                 if window_winner {
                     session.dropped = Some(frame);
                 } else if positioned {
@@ -540,9 +536,13 @@ fn os_files(ctx: &Context) {
                 // Targets register this pass and take the drop in the next, after their winner is resolved.
                 session.waiting_for_pointer = false;
                 session.dropped = Some(frame.saturating_add(1));
+                session.dropped_at = position;
                 repaint = true;
             } else if hovering {
                 session.viewport = viewport;
+                if session.dropped == Some(frame) {
+                    session.hovering_next = seen.hovered;
+                }
             } else if (session.viewport == viewport || closed)
                 && !seen.reading
                 && !session.waiting_for_pointer
@@ -557,6 +557,29 @@ fn os_files(ctx: &Context) {
     // the passes that follow the pointer to the target under it.
     if hovering || repaint {
         crate::runtime::egui::repaint::request(ctx);
+    }
+}
+
+/// A session of `files` the OS holds over `viewport`, started in root frame `frame`.
+fn os_session(files: Vec<OsFile>, viewport: ViewportId, frame: u64) -> Session {
+    Session {
+        source: Id::NULL.with("craft_ui::os_files"),
+        moving: Moving::default(),
+        viewport,
+        button: PointerButton::Primary,
+        payload: Arc::new(OsFiles { files }),
+        also: Vec::new(),
+        preview: DragPreview::None,
+        env: None,
+        mark: None,
+        released: None,
+        taken: false,
+        os: true,
+        dropped: None,
+        waiting_for_pointer: false,
+        dropped_at: None,
+        hovering_next: Vec::new(),
+        began: frame,
     }
 }
 
@@ -588,12 +611,22 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
 }
 
 /// The pointer of the running session in screen space, whatever its payload: the pointer `dragging_of` pairs with a
-/// payload, where the button went up in the pass of its release (`PointerFrame::pick_pos`). `None` without a session or
-/// a pointer.
+/// payload, where the button went up in the pass of its release (`PointerFrame::pick_pos`); for an OS drop, where the
+/// files were dropped in the pass that takes it. `None` without a session or a pointer.
 pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
-    let os = board(ctx, |board| board.session.as_ref().map(|session| session.os))?;
-    let host = WindowHost::of(ctx);
-    if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { pointer::frame_raw(ctx).pick_pos }
+    let frame = pass::root_frame_nr(ctx);
+    let (os, dropped_at) =
+        board(ctx, |board| board.session.as_ref().map(|session| (session.os, session.dropped_at.filter(|_| session.dropped == Some(frame)))))?;
+    let own = pointer::frame_raw(ctx).pick_pos;
+    if os { dropped_at.or_else(|| os_files_pointer(ctx, pass::current_viewport(ctx), own)) } else { own }
+}
+
+/// The pointer of OS files over `viewport`: the system pointer where the platform tells one, since the OS sends the
+/// window no pointer events while it drags files over it; else `own`, the pass's own pointer. A drag's noted source
+/// pointer (`windows::note_source_pointer`) is from the pass before, for the other windows, so it never stands in for
+/// the pass's own.
+fn os_files_pointer(ctx: &Context, viewport: ViewportId, own: Option<Pos2>) -> Option<Pos2> {
+    if windows::system_pointer(ctx).is_some() { WindowHost::of(ctx).pointer_in(viewport) } else { own }
 }
 
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
@@ -799,8 +832,7 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
 /// window holds the drop, it waits there for one more frame so that window's pass takes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let host = WindowHost::of(ctx);
-    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
+    let position = os_files_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     // A modal holds input: targets on layers below it, and on the window, never accept, except OS files on a target
     // that takes them there.
     let os = carries_os_files(ctx);
@@ -851,7 +883,9 @@ pub(crate) fn end_pass(ctx: &Context) {
             let expired = session.released.is_some_and(|released| frame > released + 1);
             let ended_here = is_source && !held && session.released.is_none();
             if expired || (ended_here && !foreign_target) {
-                board.session = None;
+                let next = std::mem::take(&mut session.hovering_next);
+                board.session = (!next.is_empty()).then(|| os_session(next, viewport, frame));
+                board.started += u64::from(board.session.is_some());
             } else if ended_here {
                 session.released = Some(frame);
             }

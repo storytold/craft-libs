@@ -353,3 +353,78 @@ fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
     assert!(rect("Home").left() >= lights - 0.5, "Home {:?} after the lights at the left", rect("Home"));
     assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
 }
+
+/// What a bar with Windows captions `width` wide shows in `direction`, with its trailing content fitted after the
+/// leading content or, without `fitted`, in the end region, by label: the leading button, the trailing buttons ranked 1
+/// and 2 when they are there, the unranked trailing button and the Minimize caption.
+fn fitted(width: f32, direction: craft_i18n::Direction, fitted: bool) -> impl Fn(&str) -> Option<Rect> {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{BodyCx, Show as _, ShowContainer as _};
+    use craft_ui::layout_components::Row;
+    let mut fixture = Fixture::new(move |ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let leading = |ui: &mut Ui, _: &mut BodyCx<'_>| {
+            Button::new(MENUS).show(ui);
+        };
+        let trailing = |ui: &mut Ui, _: &mut BodyCx<'_>| {
+            let _ = Row::new().fit_rank(1).show(ui, |ui, _| {
+                Button::new("Community").show(ui);
+            });
+            let _ = Row::new().fit_rank(2).show(ui, |ui, _| {
+                Button::new("Learn").show(ui);
+            });
+            Button::new("Share").show(ui);
+        };
+        let _ = if fitted {
+            TitleBar::new().frame(frame).show_fitted(ui, leading, trailing)
+        } else {
+            TitleBar::new().frame(frame).trailing(trailing).show(ui, leading).output
+        };
+    });
+    fixture.direction(direction).room(vec2(width, 80.0)).settle();
+    move |label: &str| fixture.by_label(label).map(|node| node.rect)
+}
+
+/// The leading button of the fitted bar trial: menus wider than the trailing content.
+const MENUS: &str = "File Edit Object Type Select Effect View Window Help";
+
+/// A fitted bar's trailing content takes what the leading content leaves: as the bar narrows, its ranked members
+/// leave whole, lowest rank first, while the leading content keeps its width; a ranked member that stays keeps its
+/// whole width, even where the member before it took the room; and the rest of the trailing content stays at the end,
+/// clear of the captions and no further from them than a wide unfitted bar puts it. Right to left places it the same,
+/// mirrored.
+#[trial]
+fn a_fitted_bar_drops_its_trailing_members_by_rank_before_the_leading_content_narrows() {
+    use craft_i18n::Direction;
+    let wide = fitted(1400.0, Direction::Ltr, true);
+    let (whole, learn) = (wide(MENUS).expect("the leading button"), wide("Learn").expect("Learn on a wide bar"));
+    assert!(wide("Community").is_some(), "a wide bar shows every trailing member");
+    let unfitted = fitted(1400.0, Direction::Ltr, false);
+    let end_gap = unfitted("Minimize").expect("Minimize").left() - unfitted("Share").expect("Share").right();
+    let mut dropped_alone = false;
+    for width in (360..=900).step_by(30).map(|width| width as f32) {
+        let rect = fitted(width, Direction::Ltr, true);
+        let (leading, share, minimize) =
+            (rect(MENUS).expect("the leading button"), rect("Share").expect("Share"), rect("Minimize").expect("Minimize"));
+        let (low, high) = (rect("Community").is_some(), rect("Learn"));
+        assert!(!(low && high.is_none()), "rank 2 left before rank 1 at {width}");
+        dropped_alone |= !low && high.is_some();
+        if let Some(high) = high {
+            assert!(leading.width() >= whole.width() - 0.5, "the leading content narrowed to {leading:?} at {width} while a ranked member stayed");
+            assert!(high.width() >= learn.width() - 0.5, "Learn narrowed to {high:?} at {width} instead of leaving");
+        }
+        let gap = minimize.left() - share.right();
+        assert!((-0.5..=end_gap + 0.5).contains(&gap), "Share {share:?} stands {gap} before the captions at {width}, an unfitted bar {end_gap}");
+        let mirrored = fitted(width, Direction::Rtl, true);
+        assert_eq!(
+            [mirrored("Community").is_some(), mirrored("Learn").is_some()],
+            [low, high.is_some()],
+            "right to left keeps the same members at {width}"
+        );
+        let (rtl_leading, rtl_share) = (mirrored(MENUS).expect("the leading button"), mirrored("Share").expect("Share"));
+        assert!((rtl_share.left() - (width - share.right())).abs() <= 0.5, "Share {rtl_share:?} mirrors {share:?} at {width}");
+        assert!((rtl_leading.right() - (width - leading.left())).abs() <= 0.5, "the leading content {rtl_leading:?} mirrors {leading:?} at {width}");
+    }
+    assert!(dropped_alone, "rank 1 never left alone");
+}
