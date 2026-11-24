@@ -21,6 +21,7 @@
 //! destination are the caller's path and are followed like any other path, links included (on
 //! macOS the system temporary folder is under the link `/var`).
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File};
@@ -389,19 +390,29 @@ fn check_part(part: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// File and folder names seen so far, keyed in lowercase, so that names differing only in case,
-/// which are one file or folder on macOS and Windows, are refused.
+/// File and folder names seen so far, so that names differing only in case, which are one file or
+/// folder on macOS and Windows, are refused. Names are compared by their [`fold`] key.
+///
+/// Each folder is kept once, as its last part under the number of the folder that holds it, and
+/// each file as its last part under its folder's number. A key is at most three times as long as
+/// its part, so the text kept is at most four times the length of the names added, however deep
+/// they are: for an archive, at most `4 × max_entries × 4096` bytes.
 #[derive(Default)]
 struct Names {
-    files: HashSet<String>,
-    /// Each folder's lowercase path, mapped to the path as first written.
-    folders: HashMap<String, String>,
+    /// Each file by its folder's number (0 for the destination) and its last part's key.
+    files: HashSet<(usize, String)>,
+    /// Each folder by its parent's number and its last part's key, mapped to its own number and
+    /// its last part as first written.
+    folders: HashMap<(usize, String), (usize, String)>,
 }
 
 impl Names {
     fn add_file<S: AsRef<str>>(&mut self, parts: &[S]) -> Result<(), String> {
-        self.add_parents(parts)?;
-        let key = lower_join(parts);
+        let Some((last, above)) = parts.split_last() else {
+            return Ok(());
+        };
+        let parent = self.add_parents(above)?;
+        let key = (parent, fold(last.as_ref()));
         if self.folders.contains_key(&key) {
             return Err("the name is also used as a folder".into());
         }
@@ -412,37 +423,58 @@ impl Names {
     }
 
     fn add_folder<S: AsRef<str>>(&mut self, parts: &[S]) -> Result<(), String> {
-        self.add_parents(parts)?;
-        let key = lower_join(parts);
+        let Some((last, above)) = parts.split_last() else {
+            return Ok(());
+        };
+        let parent = self.add_parents(above)?;
+        let key = (parent, fold(last.as_ref()));
         if self.files.contains(&key) {
             return Err("the name is also used as a file".into());
         }
-        self.insert_folder(key, join(parts))
+        self.insert_folder(key, parts, above.len()).map(drop)
     }
 
-    fn add_parents<S: AsRef<str>>(&mut self, parts: &[S]) -> Result<(), String> {
-        let folders = parts.len().saturating_sub(1);
-        for end in 1..=folders {
-            let prefix = parts.get(..end).unwrap_or_default();
-            let key = lower_join(prefix);
+    /// Records each folder of `parts`, each inside the one before it, and returns the last one's
+    /// number (0 when `parts` is empty).
+    fn add_parents<S: AsRef<str>>(&mut self, parts: &[S]) -> Result<usize, String> {
+        let mut parent = 0;
+        for (i, part) in parts.iter().enumerate() {
+            let key = (parent, fold(part.as_ref()));
             if self.files.contains(&key) {
-                return Err(format!("the name is inside {key:?}, which is also a file"));
+                return Err(format!("the name is inside {:?}, which is also a file", join(parts.get(..=i).unwrap_or_default())));
             }
-            self.insert_folder(key, join(prefix))?;
+            parent = self.insert_folder(key, parts, i)?;
         }
-        Ok(())
+        Ok(parent)
     }
 
-    /// Records a folder; the same folder written with other letter case is refused.
-    fn insert_folder(&mut self, key: String, exact: String) -> Result<(), String> {
-        match self.folders.get(&key) {
-            Some(seen) if *seen != exact => Err(format!("the folder {exact:?} is also written {seen:?} (names are compared ignoring case)")),
-            Some(_) => Ok(()),
-            None => {
-                self.folders.insert(key, exact);
-                Ok(())
+    /// Records the folder `parts[..=i]` under `key` and returns its number. The same folder
+    /// written with other letter case is refused.
+    fn insert_folder<S: AsRef<str>>(&mut self, key: (usize, String), parts: &[S], i: usize) -> Result<usize, String> {
+        let part = parts.get(i).map_or("", AsRef::as_ref);
+        let number = self.folders.len() + 1;
+        match self.folders.entry(key) {
+            Entry::Occupied(seen) => {
+                let (number, first) = seen.get();
+                if first == part {
+                    return Ok(*number);
+                }
+                let above = join(parts.get(..i).unwrap_or_default());
+                let seen = if above.is_empty() { first.clone() } else { format!("{above}/{first}") };
+                let exact = join(parts.get(..=i).unwrap_or_default());
+                Err(format!("the folder {exact:?} is also written {seen:?} (names are compared ignoring case)"))
+            }
+            Entry::Vacant(slot) => {
+                slot.insert((number, part.to_string()));
+                Ok(number)
             }
         }
+    }
+
+    /// Bytes of name text the registry holds.
+    #[cfg(test)]
+    fn kept_bytes(&self) -> usize {
+        self.files.iter().map(|(_, k)| k.len()).sum::<usize>() + self.folders.iter().map(|((_, k), (_, v))| k.len() + v.len()).sum::<usize>()
     }
 }
 
@@ -450,18 +482,28 @@ fn join<S: AsRef<str>>(parts: &[S]) -> String {
     parts.iter().map(AsRef::as_ref).collect::<Vec<_>>().join("/")
 }
 
-fn lower_join<S: AsRef<str>>(parts: &[S]) -> String {
-    join(parts).to_lowercase()
+/// The key under which [`Names`] compares a part: the lowercase of its uppercase. The forms of one
+/// letter then get one key even when one is not the lowercase of another (`Σ`, `σ` and `ς`). A
+/// letter whose uppercase is longer gets the key of that spelling (`ß` and `ss`), so such pairs are
+/// refused even on a file system that keeps them apart.
+fn fold(part: &str) -> String {
+    part.to_uppercase().to_lowercase()
 }
 
 /// Creates `dest` when it is missing and checks that it is a folder and not a link.
 fn prepare(dest: &Path) -> Result<(), FetchError> {
     fs::create_dir_all(dest).map_err(|e| io_error(dest, e))?;
-    match fs::symlink_metadata(dest) {
+    match fs::symlink_metadata(without_trailing(dest)) {
         Ok(m) if m.is_dir() => Ok(()),
         Ok(_) => Err(FetchError::NotRegular(dest.to_path_buf())),
         Err(e) => Err(io_error(dest, e)),
     }
+}
+
+/// `path` without trailing separators and `.` parts, which make the system follow a link at the
+/// last part. A root such as `/` or `C:\` is kept.
+fn without_trailing(path: &Path) -> PathBuf {
+    path.components().collect()
 }
 
 /// Checks that `path` is a folder and not a link. When it is missing, creates it if `create` is
@@ -773,6 +815,45 @@ mod tests {
         let options = ExtractOptions { max_entries: 3, max_entry_bytes: 1, max_expanded_bytes: 3, strip_components: 0 };
         let items = read_tar("t.tar", &archive, &options).unwrap();
         assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn the_destination_is_checked_without_trailing_separators() {
+        assert_eq!(without_trailing(Path::new("cache/")), Path::new("cache"));
+        assert_eq!(without_trailing(Path::new("a/cache//.")), Path::new("a/cache"));
+        assert_eq!(without_trailing(Path::new("/")), Path::new("/"));
+        assert_eq!(without_trailing(Path::new(".")), Path::new("."));
+        #[cfg(windows)]
+        {
+            assert_eq!(without_trailing(Path::new(r"C:\cache\")).as_os_str(), r"C:\cache");
+            assert_eq!(without_trailing(Path::new(r"C:\")).as_os_str(), r"C:\");
+        }
+    }
+
+    #[test]
+    fn the_name_registry_grows_with_the_names_and_not_their_depth() {
+        // Deep paths with a different first folder each share no folder, so a registry that keeps
+        // every folder's whole path would hold text that grows with the square of the depth.
+        let mut names = Names::default();
+        let mut given = 0;
+        for i in 0..50 {
+            let mut parts = vec![format!("d{i:04}")];
+            parts.extend(std::iter::repeat_n("a".to_string(), 400));
+            parts.push("f".to_string());
+            given += join(&parts).len();
+            names.add_file(&parts).unwrap();
+        }
+        assert!(names.kept_bytes() <= 4 * given, "{} bytes kept for {given} bytes of names", names.kept_bytes());
+    }
+
+    #[test]
+    fn a_fold_key_is_at_most_three_times_its_part() {
+        for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            let key = fold(c.encode_utf8(&mut [0; 4]));
+            assert!(key.len() <= 3 * c.len_utf8(), "{c:?} folds to {key:?}");
+        }
+        assert_eq!(fold("\u{3a3}"), fold("\u{3c2}"));
+        assert_ne!(fold("a.txt"), fold("b.txt"));
     }
 
     #[test]

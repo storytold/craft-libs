@@ -218,6 +218,9 @@ fn bad_pins_are_refused_before_any_download() {
     cases.push(vec![pin("a", &sha), pin("a/b.png", &sha)]);
     cases.push(vec![pin("a/b.png", &sha), pin("A", &sha)]);
     cases.push(vec![pin("Png/a.png", &sha), pin("png/b.png", &sha)]);
+    // `Σ`, `σ` and `ς` are one letter in different case, though `ς` is not the lowercase of `Σ`.
+    cases.push(vec![pin("\u{3a3}.png", &sha), pin("\u{3c2}.png", &sha)]);
+    cases.push(vec![pin("\u{3c2}/a.png", &sha), pin("\u{3a3}/b.png", &sha)]);
     cases.push(vec![Pin { url: "file:///etc/passwd", ..pin("a.png", &sha) }]);
     cases.push(vec![Pin { url: "http://example.com/a.png", ..pin("a.png", &sha) }]);
     cases.push(vec![Pin { url: "https:///a.png", ..pin("a.png", &sha) }]);
@@ -274,6 +277,15 @@ fn links_under_the_destination_are_refused() {
     assert!(matches!(err, FetchError::NotRegular(_)), "linked destination: {err}");
     let err = extract(&dir.0.join("png"), "t.tar", &tarball(&[("a.png", b'0', b"1")]), &ExtractOptions::default()).unwrap_err();
     assert!(matches!(err, FetchError::NotRegular(_)), "linked destination: {err}");
+    // A trailing separator or `.` makes the system follow the link, so they are checked without it.
+    for spelling in ["png/", "png//", "png/."] {
+        let dest = PathBuf::from(format!("{}/{spelling}", dir.0.display()));
+        let err = fetch_pinned_with(&dest, &[pin("a.png", &sha)], &fake).unwrap_err();
+        assert!(matches!(err, FetchError::NotRegular(_)), "{spelling}: {err}");
+        let err = extract(&dest, "t.tar", &tarball(&[("a.png", b'0', b"1")]), &ExtractOptions::default()).unwrap_err();
+        assert!(matches!(err, FetchError::NotRegular(_)), "{spelling}: {err}");
+    }
+    assert_eq!(fake.calls.get(), 0);
     assert!(outside.listing().is_empty(), "{:?}", outside.listing());
 }
 
@@ -353,7 +365,7 @@ fn an_archive_with_the_wrong_hash_or_size_writes_nothing() {
 
 #[test]
 fn unsafe_archive_entries_write_nothing() {
-    let cases: [&[(&str, u8, &[u8])]; 14] = [
+    let cases: [&[(&str, u8, &[u8])]; 17] = [
         &[("ok.png", b'0', b"1"), ("foo\\bar.png", b'0', b"2")],
         &[("ok.png", b'0', b"1"), ("foo//", b'5', b"")],
         &[("ok.png", b'0', b"1"), ("foo//bar.png", b'0', b"2")],
@@ -368,6 +380,9 @@ fn unsafe_archive_entries_write_nothing() {
         &[("ok.png", b'0', b"1"), ("fifo", b'6', b"")],
         &[("ok.png", b'0', b"1"), ("OK.PNG", b'0', b"2")],
         &[("ok.png", b'0', b"1"), ("ok.png/inner", b'0', b"2")],
+        &[("\u{3a3}.txt", b'0', b"1"), ("\u{3c2}.txt", b'0', b"2")],
+        &[("\u{3a3}/", b'5', b""), ("\u{3c2}/", b'5', b"")],
+        &[("\u{3c3}/a.txt", b'0', b"1"), ("\u{3c2}/b.txt", b'0', b"2")],
     ];
     for entries in cases {
         let dir = Scratch::new("unsafe");
