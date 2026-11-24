@@ -686,10 +686,10 @@ mod tests {
         // The range is level-relative, so a low rate gives the same reading for far fewer samples.
         let sr = 16000.0;
         let cases: [(&[(f64, f64)], f64); 4] = [
-            (&[(6.0, -20.0), (6.0, -30.0)], 10.0),
-            (&[(6.0, -20.0), (6.0, -15.0)], 5.0),
-            (&[(6.0, -40.0), (6.0, -20.0)], 20.0),
-            (&[(6.0, -50.0), (6.0, -35.0), (6.0, -20.0), (6.0, -35.0), (6.0, -50.0)], 15.0),
+            (&[(20.0, -20.0), (20.0, -30.0)], 10.0),
+            (&[(20.0, -20.0), (20.0, -15.0)], 5.0),
+            (&[(20.0, -40.0), (20.0, -20.0)], 20.0),
+            (&[(20.0, -50.0), (20.0, -35.0), (20.0, -20.0), (20.0, -35.0), (20.0, -50.0)], 15.0),
         ];
         for (segs, expect) in cases {
             let x = segments(1000.0, sr, segs);
@@ -713,9 +713,11 @@ mod tests {
         assert_eq!(before, 0.0);
         assert!((m.file_loudness_range() - s.loudness_range_lu).abs() < 1e-12);
         assert_eq!(m.loudness_range(), before);
-        // A steady program keeps a file range near 0.
-        let y = segments(1000.0, sr, &[(6.0, -20.0)]);
-        assert!(measure(&[&y, &y], sr).loudness_range_lu < 1.0);
+        // A steady program keeps a file range near 0. It must be long beside the 1.5 s silence tail, so it runs at a
+        // low rate (the range is level-relative).
+        let low = 16000.0;
+        let y = segments(1000.0, low, &[(30.0, -20.0)]);
+        assert!(measure(&[&y, &y], low).loudness_range_lu < 1.0);
     }
 
     #[test]

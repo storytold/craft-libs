@@ -334,8 +334,8 @@ fn attributes_are_bounded_over_the_whole_tree() {
         Ok::<(), Error>(())
     });
     assert_eq!((rows, root.map(|r| r.children.len())), ((ATTRS + 1) * ATTRS, Ok(0)));
-    let tight = Options::default().with_limits(Limits { max_attrs_total: ATTRS * ATTRS - 1, ..Limits::DEFAULT });
-    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(ATTRS * ATTRS - 1)));
+    let tight = Options::default().with_limits(Limits { max_attrs_total: ATTRS - 1, ..Limits::DEFAULT });
+    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(ATTRS - 1)));
 }
 
 /// An internal subset is found wherever it hides, and looking for it is linear in the input.
