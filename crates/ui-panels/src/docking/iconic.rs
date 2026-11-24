@@ -170,9 +170,8 @@ pub struct IconicColumnStyle {
 /// icon, cut with an ellipsis to the cell; a click or drag on the name acts as one on the icon. A click or Enter on an icon
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
 /// time. A drag of an icon starts a move of its panel, a drag of the grip on top of a group a move of the group, a
-/// drag of the bar beside its button a move of the column; each starts through the drag session, and a press outside
-/// the flyout closes it. Escape and a press
-/// outside close the flyout; with `auto_collapse` the focus leaving it does too.
+/// drag of the bar beside its button a move of the column; each starts through the drag session. Escape closes the
+/// flyout; with `auto_collapse` a press outside it and the focus leaving it do too.
 ///
 /// The open flyout is the bound `Option<P>` of [`new`](IconicColumn::new), owned by the host like the layout: a click
 /// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The

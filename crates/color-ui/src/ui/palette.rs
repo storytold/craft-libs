@@ -3,8 +3,8 @@
 
 use craft_behavior::{EditEvent, IconId, Mixed, Selection};
 use craft_theme::Srgba;
-use craft_ui::choice::SwatchTable;
-use craft_ui::contract::{ActivateOn, Bind, Held, NoValue, Outcome, Pattern, Show as _, ShowContainer as _};
+use craft_ui::choice::{SwatchSpacing, SwatchTable};
+use craft_ui::contract::{ActivateOn, Bind, Held, ListDrag, NoValue, Outcome, Pattern, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
@@ -16,6 +16,9 @@ use std::sync::Arc;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
+
+/// The table's drag mapper, type-erased so the palette needs no payload parameter.
+type TableMap = Arc<dyn for<'t> Fn(SwatchTable<'t>) -> SwatchTable<'t>>;
 
 /// What a [`SwatchPalette`] reports.
 #[derive(Debug)]
@@ -62,6 +65,8 @@ pub struct SwatchPalette<'a> {
     label: Label,
     color: PaletteColor<'a>,
     swatches: &'a [(Label, Srgba)],
+    spacing: SwatchSpacing,
+    drag: Option<TableMap>,
     /// The Other… cell: the key of its colour request and its name.
     other: Option<(String, Label)>,
     /// The recent row: its caption and colours.
@@ -117,14 +122,46 @@ fn cell_of(swatches: &[(Label, Srgba)], color: Option<Srgba>) -> Selection<usize
 impl<'a> SwatchPalette<'a> {
     /// A palette named `label` of `swatches`, each a name and a colour, choosing the colour bound to `color`.
     pub fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, swatches: &'a [(Label, Srgba)]) -> Self {
-        SwatchPalette { label: label.into(), color: PaletteColor::Color(Held::new(color)), swatches, other: None, recent: None }
+        SwatchPalette {
+            label: label.into(),
+            color: PaletteColor::Color(Held::new(color)),
+            swatches,
+            spacing: SwatchSpacing::Touching,
+            drag: None,
+            other: None,
+            recent: None,
+        }
     }
 
     /// A palette over a colour that may be none: a host binds its `Mixed<Option<Srgba>>` with `Bind::bound_mixed`.
     /// No swatch is selected for `Same(None)` or `Mixed`, and a pick writes `Mixed::Same(Some(colour))` and reports
     /// the same `edit` as [`new`](Self::new), its `before` the colour or `Mixed` when there was none.
     pub fn optional(label: impl Into<Label>, color: Bind<'a, Option<Srgba>>, swatches: &'a [(Label, Srgba)]) -> Self {
-        SwatchPalette { label: label.into(), color: PaletteColor::Optional(color), swatches, other: None, recent: None }
+        SwatchPalette {
+            label: label.into(),
+            color: PaletteColor::Optional(color),
+            swatches,
+            spacing: SwatchSpacing::Touching,
+            drag: None,
+            other: None,
+            recent: None,
+        }
+    }
+
+    /// The gap between the cells, passed on to its `SwatchTable`.
+    pub fn spacing(mut self, spacing: SwatchSpacing) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
+    /// The payload a cell drags, passed on to its `SwatchTable`.
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
+        let map = Arc::new(map);
+        self.drag = Some(Arc::new(move |table| {
+            let map = Arc::clone(&map);
+            table.drag_payload(move |drag| map(drag))
+        }));
+        self
     }
 
     /// An Other… cell after the swatches, named `label`: activating it files a `ColorRequest` keyed `key` at the bound
@@ -142,7 +179,7 @@ impl<'a> SwatchPalette<'a> {
 
     /// Shows the palette.
     pub fn show(self, ui: &mut Ui) -> SwatchPaletteOutput {
-        let SwatchPalette { label, mut color, swatches, other, recent } = self;
+        let SwatchPalette { label, mut color, swatches, spacing, drag, other, recent } = self;
         let recent = recent.filter(|(_, colors)| !colors.is_empty());
         let recent_cells: Vec<(Label, Srgba)> =
             recent.iter().flat_map(|(_, colors)| colors.iter()).map(|color| (Label::from(color.to_hex()), *color)).collect();
@@ -155,8 +192,15 @@ impl<'a> SwatchPalette<'a> {
             let mut pick = None;
             if !swatches.is_empty() || other.is_some() {
                 // Every click activates, so a click on the swatch already selected, which changes no selection, still picks.
-                let mut table =
-                    SwatchTable::new(label.clone(), swatches).tips(true).wells(true).activate(ActivateOn::Click).selection(Bind::bound(&mut current));
+                let mut table = SwatchTable::new(label.clone(), swatches)
+                    .tips(true)
+                    .wells(true)
+                    .spacing(spacing)
+                    .activate(ActivateOn::Click)
+                    .selection(Bind::bound(&mut current));
+                if let Some(map) = &drag {
+                    table = map(table);
+                }
                 if let Some((_, other_label)) = &other {
                     table = table.trailing(other_label.clone(), IconId::new("plus"));
                 }

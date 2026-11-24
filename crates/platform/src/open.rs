@@ -2,8 +2,7 @@
 //!
 //! - [`FileIntake`]: one queue for the OS requests: files the OS asks the app to open (Finder
 //!   double-click, Open With, a Dock drop, a second launch handing its paths to the first), files
-//!   dropped on the window with where they were dropped ([`DropTarget`]), and the OS asking the
-//!   app to quit.
+//!   dropped on the window, and the OS asking the app to quit.
 //! - `apple_events` (macOS, feature `apple-events`): the open-documents and quit Apple events,
 //!   fed into a [`FileIntake`].
 //! - [`natural_cmp`], [`same_file`]: the order files open in and the check that keeps an open
@@ -11,9 +10,9 @@
 //! - [`OPEN_FAILED`] and the other [`PlatformText`]s: the open errors every app words the same way.
 //! - [`reveal`], [`open_external`]: show a file in the system file manager; open a file or URL
 //!   with the system's handler.
+//! - [`open_with`], [`is_application`]: open a file in a chosen application; whether a path is one.
 //!
-//! No egui: the app converts egui's dropped files into [`DroppedFile`]s and reads the pointer
-//! position for [`DropTarget`] itself.
+//! No egui: the app converts egui's dropped files into [`DroppedFile`]s itself.
 
 use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,21 +48,6 @@ pub const REVEAL_FAILED: PlatformText = PlatformText { id: "open.revealFailed", 
 /// Every [`PlatformText`] of this module, for the missing-translation report ([`crate::texts`]).
 pub const TEXTS: &[PlatformText] = &[OPEN_FAILED, PLACE_FAILED, PATH_NOT_UNICODE_OPEN, PATH_NOT_UNICODE_SAVE, FILE_GONE, REVEAL_FAILED];
 
-/// Where files dropped on the window land. winit's drops carry no position, so the app finds it
-/// from the pointer (PhotoCraft asks the OS while files hover); unknown counts as
-/// [`Elsewhere`](DropTarget::Elsewhere).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum DropTarget {
-    /// The active document's canvas: each file is placed as a layer, one at a time, each in Free
-    /// Transform (Photoshop's Place Embedded). Preset files (brushes, gradients) still open into
-    /// their libraries.
-    Canvas,
-    /// The tab strip: opened with their tabs from this position.
-    Tabs(usize),
-    /// Anywhere else (panels, a dialog, no document): opened like File › Open.
-    Elsewhere,
-}
-
 /// A dropped file as the app got it. On the web there is no path, only the name and bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DroppedFile {
@@ -81,12 +65,10 @@ pub enum Intake {
     /// The OS asked to open these absolute paths: open them like File › Open, focusing a
     /// document that is already open instead of opening it again.
     Open(Vec<PathBuf>),
-    /// Files dropped on the window, in drop order, with where they landed.
+    /// Files dropped on the window, in drop order.
     Dropped {
         /// The dropped files.
         files: Vec<DroppedFile>,
-        /// Where they landed.
-        target: DropTarget,
     },
     /// The OS asked the app to quit.
     Quit,
@@ -195,11 +177,11 @@ impl IntakeSender {
     }
 
     /// Queues files dropped on the window and wakes the UI; an empty list is ignored.
-    pub fn dropped(&self, files: Vec<DroppedFile>, target: DropTarget) {
+    pub fn dropped(&self, files: Vec<DroppedFile>) {
         if files.is_empty() {
             return;
         }
-        push(&self.queue, Intake::Dropped { files, target });
+        push(&self.queue, Intake::Dropped { files });
         self.wake.wake();
     }
 
@@ -233,7 +215,7 @@ fn ordered(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 /// #[cfg(target_os = "macos")]
 /// let _events = craft_platform::open::apple_events::install(sender.clone());
 /// // each frame:
-/// intake.sender().dropped(ctx.input(|i| i.raw.dropped_files.iter().map(to_dropped).collect()), target);
+/// intake.sender().dropped(ctx.input(|i| i.raw.dropped_files.iter().map(to_dropped).collect()));
 /// for request in intake.take() { app.handle(request); }
 /// ```
 pub struct FileIntake {
@@ -321,6 +303,9 @@ pub fn path_text(path: &Path, saving: bool) -> Result<String, String> {
 
 /// Whether `reveal` can show a file on this platform.
 pub const CAN_REVEAL: bool = cfg!(not(target_arch = "wasm32"));
+
+/// Whether [`open_with`] can open a file in an application on this platform.
+pub const CAN_OPEN_WITH: bool = cfg!(not(target_arch = "wasm32"));
 
 /// Shows `path` selected in the system file manager: `open -R` on macOS, Explorer's
 /// `/select,"<path>"` on Windows (raw arguments; a path containing `"` is refused), and on Linux
@@ -442,6 +427,92 @@ pub fn open_external(target: &str) -> Result<(), String> {
     let mut command = open_command(target);
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     command.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Opens `target` in the application at `app` (Edit Original's chosen application), never through a shell: on
+/// macOS `open -a app target`, waiting at most 2 s for Launch Services to refuse; elsewhere `app` runs with
+/// `target` as its only argument, without waiting. A path holding `"` is refused on Windows.
+///
+/// A missing `app` is [`ErrorKind::NotFound`](std::io::ErrorKind::NotFound), so a caller can fall back to its default
+/// editor; a path that is not an application ([`is_application`]) is `InvalidInput`, and nothing is started.
+// PLAN: the contract row sh.B2a says `Result<(), String>`; the app needs the `NotFound` kind, so the error is `io::Error`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_with(app: &Path, target: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    if cfg!(windows) && target.as_os_str().as_encoded_bytes().contains(&b'"') {
+        return Err(Error::new(ErrorKind::InvalidInput, "the file name can't be passed to an application on Windows"));
+    }
+    std::fs::metadata(app)?;
+    if !is_application(app) {
+        return Err(Error::new(ErrorKind::InvalidInput, format!("{} isn't an application files can be opened in", app.display())));
+    }
+    launch(app, target)
+}
+
+/// `open` returns once Launch Services has the request, so a short wait reports an app it can't open (a folder named
+/// `.app` that isn't a bundle). The wait is capped so a stalled `open` never holds the window: past it, the launch is
+/// left to run.
+#[cfg(target_os = "macos")]
+fn launch(app: &Path, target: &Path) -> std::io::Result<()> {
+    use std::time::{Duration, Instant};
+    const WAIT: Duration = Duration::from_secs(2);
+    let mut child = Command::new("open").arg("-a").arg(app).arg(target).stderr(Stdio::piped()).spawn()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => {
+                let mut why = String::new();
+                if let Some(mut err) = child.stderr.take() {
+                    // Best effort: without its message the exit status says why.
+                    let _ = std::io::Read::read_to_string(&mut err, &mut why);
+                }
+                let why = why.trim();
+                return Err(std::io::Error::other(if why.is_empty() { status.to_string() } else { why.to_owned() }));
+            }
+            None if started.elapsed() < WAIT => std::thread::sleep(Duration::from_millis(20)),
+            None => {
+                // Reaped off the UI thread once it ends.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// The editor itself runs, so waiting would last until it closes.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+fn launch(app: &Path, target: &Path) -> std::io::Result<()> {
+    Command::new(app).arg(target).spawn().map(|_| ())
+}
+
+/// Whether `path` names an application the platform can launch: an `.app` folder on macOS, an `.exe` file on
+/// Windows, an executable file elsewhere; `false` on wasm.
+pub fn is_application(path: &Path) -> bool {
+    if cfg!(target_arch = "wasm32") {
+        return false;
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        ext == "app" && path.is_dir()
+    } else if cfg!(windows) {
+        ext == "exe" && path.is_file()
+    } else {
+        executable_file(path)
+    }
+}
+
+#[cfg(unix)]
+fn executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// The command that opens `target`; see [`open_external`].

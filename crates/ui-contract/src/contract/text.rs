@@ -65,9 +65,12 @@ pub(crate) struct SelectDecl {
 }
 
 impl SelectDecl {
-    /// The keys a focused selection part keeps: a read-only text's, with Select All and Copy its only edit commands.
+    /// The keys a focused selection part keeps: a read-only text's, with Select All, Copy and Cut its only edit
+    /// commands. Cut copies, as in a label's selection: the text removes nothing, and the app's Cut never runs on what
+    /// lies behind it.
     pub(crate) fn keys(&self) -> KeyUse {
-        let keys = KeyUse::of(crate::contract::Input::Text).with_edits(EditSet::NONE.with(EditCommand::SelectAll).with(EditCommand::Copy));
+        let edits = EditSet::NONE.with(EditCommand::SelectAll).with(EditCommand::Copy).with(EditCommand::Cut);
+        let keys = KeyUse::of(crate::contract::Input::Text).with_edits(edits);
         if self.multiline { keys.with_keep(KeepKeys::BlockArrows) } else { keys }
     }
 }
@@ -77,7 +80,7 @@ pub(crate) fn selection_id(id: egui::Id, part: PartRef) -> egui::Id {
     sub(id, ("selection", part.key, part.index))
 }
 
-/// Step 8b for selection parts: the focused one takes this pass's Select All and Copy.
+/// Step 8b for selection parts: the focused one takes this pass's Select All, Copy and Cut.
 pub(crate) fn run_selections(core: &mut super::cx::CxCore<'_>, selections: &[SelectDecl]) {
     let ctx = core.ctx.clone();
     let Some(focused) = selections.iter().find(|decl| crate::runtime::egui::focus::has_focus(&ctx, selection_id(core.id, decl.part))) else {
@@ -279,15 +282,18 @@ impl<C: Component> PartsCx<'_, C> {
     pub fn text<K: Codec + Clone + 'static>(&mut self, key: TextKey<K::Value>, rect: Rect, codec: &K, value: &K::Value, options: &TextOptions) {
         debug_assert!(self.text.decl.is_none(), "a component registers one text part");
         let shown = if options.mixed { String::new() } else { codec.format(value) };
+        let reads = codec.clone();
+        let declared = TextOptions { whole_paste: Some(Arc::new(move |pasted: &str| reads.whole_paste(pasted))), ..options.clone() };
+        let resolve = Box::new(resolver(codec.clone(), &declared, rect, value.clone()));
         self.text.decl = Some(TextDecl {
             part: TextPart {
                 key: key.0,
                 rect,
                 caret: if options.select_on_focus { Caret::All } else { codec.caret_on_focus(&shown) },
                 shown,
-                options: options.clone(),
+                options: declared,
             },
-            resolve: Box::new(resolver(codec.clone(), options, rect, value.clone())),
+            resolve,
             values: ValueOps::of::<K::Value>(),
         });
     }
@@ -434,6 +440,15 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = core.popup(EDIT_MENU).is_open_in(core);
+    // A menu bar or a menu the keyboard goes back to the part from has the focus: their Cut and Copy act on the
+    // selection the part keeps for them. Only a part that had the focus last pass, or keeps a selection already, can be
+    // gone back to: asking reads the focus, which a part that never held it has not read, so its replay stays true.
+    let returns_here = (state.focused || state.held_selection.is_some())
+        .then(|| crate::runtime::focus::focused_stop(&ctx))
+        .flatten()
+        .filter(|(focused, _)| *focused != id)
+        .and_then(|(focused, _)| crate::runtime::focus::returning(&ctx, focused))
+        .is_some_and(|((to, _), _)| to == id);
     // The bound caret is compared with the widget's before anything else this pass moves it (AccessKit, Select All,
     // the typing): last pass reported the widget's caret, so only an app write differs here. A composition keeps its
     // caret.
@@ -465,6 +480,7 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
             rtl,
             focused,
             held,
+            keeps_selection: held || returns_here,
             ink,
             intents: &mut core.intents,
             list_open,

@@ -1,0 +1,60 @@
+{
+  "schema": "craft-design-theme",
+  "schema_version": 1,
+  "id": "craft.vectorcraft-modern-medium",
+  "name": "VectorCraft Modern Medium",
+  "version": 1,
+  "variants": "both",
+  "contrast_intent": "standard",
+  "seeds": {
+    "accent": "#f06a52",
+    "neutral": "#272c36",
+    "status": {
+      "bad": "#e34850",
+      "good": "#45af63",
+      "info": "#6f788a",
+      "warn": "#f0a330"
+    }
+  },
+  "shape": null,
+  "light": {
+    "accent.solid": "#d9472f",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#a9b0bc",
+    "line.control_edge": "#9aa2b0",
+    "line.divider": "#bcc3ce",
+    "seeds": {
+      "accent": "#d9472f",
+      "neutral": "#d3d8e0"
+    },
+    "state.hover": "#c5ccd6",
+    "state.pressed": "#b6bec9",
+    "state.selected": "#e7c4bd",
+    "surface.background": "#c4cad4",
+    "surface.canvas": "#b9c0cb",
+    "surface.panel": "#d3d8e0",
+    "surface.sunken": "#e9ecf1",
+    "text.faint": "#7d8594",
+    "text.muted": "#4a5160",
+    "text.normal": "#1b1f27"
+  },
+  "dark": {
+    "accent.solid": "#f06a52",
+    "caption.close_hover": "#c42b1c",
+    "caption.close_text": "#ffffff",
+    "line.border": "#11141a",
+    "line.control_edge": "#3a414e",
+    "line.divider": "#323946",
+    "state.hover": "#353c49",
+    "state.pressed": "#3d4553",
+    "state.selected": "#4a3236",
+    "surface.background": "#1b1f27",
+    "surface.canvas": "#1e222a",
+    "surface.panel": "#272c36",
+    "surface.sunken": "#1a1e26",
+    "text.faint": "#626b7a",
+    "text.muted": "#99a2b2",
+    "text.normal": "#e4e9f1"
+  }
+}

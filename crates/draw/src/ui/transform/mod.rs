@@ -17,4 +17,7 @@ pub use transform_box::{
     ApplyBy, BOX, LineEnd, LineEndDrag, LineEnds, LineLook, RotateZone, TransformBox, TransformBoxOutput, TransformBoxStyle, TransformBoxWords,
     TransformReach,
 };
-pub use transform_fields::{SizeUnit, TransformField, TransformFieldWords, TransformFields, TransformFieldsOutput, TransformGroups, TransformRow};
+pub use transform_fields::{
+    FieldArrangement, SizeUnit, TransformField, TransformFieldWords, TransformFields, TransformFieldsOutput, TransformGroups, TransformRow,
+    TransformSource,
+};

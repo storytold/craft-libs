@@ -155,7 +155,7 @@ impl Component for Row {
     }
 }
 
-/// A list of rows at the control height, with the collection props and selection the trial gives.
+/// A list of rows at the control height, or as tall as the source's size hints say, with the collection props and selection the trial gives.
 #[derive(craft_ui::contract::Component)]
 #[component(collection)]
 pub struct List<'a> {
@@ -166,6 +166,7 @@ pub struct List<'a> {
     items: CollectionProps,
     selection: Option<Bind<'a, Selection<usize>>>,
     tree: bool,
+    sized: bool,
     on_empty: Option<&'a Cell<Rect>>,
     drops: Vec<DropKind<'a, usize>>,
 }
@@ -178,6 +179,7 @@ impl<'a> List<'a> {
             items: CollectionProps::new().select(select),
             selection: None,
             tree: false,
+            sized: false,
             on_empty: None,
             drops: Vec::new(),
         }
@@ -257,8 +259,20 @@ impl<'a> List<'a> {
         self
     }
 
+    /// The host's current item.
+    pub fn current(mut self, key: usize) -> Self {
+        self.items = self.items.current(Some(key));
+        self
+    }
+
     pub fn tree(mut self) -> Self {
         self.tree = true;
+        self
+    }
+
+    /// Rows take the heights the source's size hints give.
+    pub fn sized(mut self) -> Self {
+        self.sized = true;
         self
     }
 }
@@ -293,7 +307,7 @@ impl Collection for List<'_> {
     }
 
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, _: &StyleCx<'_>) -> SpanLayout {
-        let layout = SpanLayout::new(source, width, ROW_H);
+        let layout = if self.sized { SpanLayout::sized(source, width, ROW_H) } else { SpanLayout::new(source, width, ROW_H) };
         if self.tree { layout.tree() } else { layout }
     }
 

@@ -259,6 +259,11 @@ pub(crate) trait ShapeHooks<C: Component> {
         None
     }
 
+    /// The rank by which the component leaves a shrinking row whole (`ContainerProps::fit_rank`).
+    fn fit_rank(&self, _comp: &C) -> Option<u8> {
+        None
+    }
+
     /// The component whose memory holds this one's shown memory, when it is another: a popup body's memory belongs to
     /// the component that shows the popup, so it lasts while that component shows, open or closed.
     fn memory_owner(&self, _comp: &C) -> Option<Id> {
@@ -347,6 +352,8 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
     }
 }
 
+/// The run's `CxCore`, on the heap: a measuring run and a body recurse while their run's core is alive, so a core in
+/// their frames would sit on the stack once per nesting level.
 #[allow(clippy::too_many_arguments, reason = "one argument per field of the context the pipeline builds once per show")]
 fn blank_core<'a>(
     env: EnvView<'a>,
@@ -356,9 +363,9 @@ fn blank_core<'a>(
     ink: Ink,
     response: Response,
     command: Option<Arc<crate::runtime::commands::ResolvedCommand>>,
-) -> CxCore<'a> {
+) -> Box<CxCore<'a>> {
     let rect = Rect::NOTHING;
-    CxCore {
+    Box::new(CxCore {
         env,
         resolved,
         id: resolved.id,
@@ -431,7 +438,7 @@ fn blank_core<'a>(
         value_text: std::cell::RefCell::new(None),
         submitted: false,
         escaped: false,
-    }
+    })
 }
 
 /// What the pipeline reads of a component type's constants.
@@ -517,6 +524,10 @@ pub(crate) trait Erased {
     fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
     fn instance_scope(&self) -> Option<commands::CommandScope>;
     fn theme_scope(&self) -> Option<ThemeScope>;
+    /// The rank by which the component leaves a shrinking row whole.
+    fn fit_rank(&self) -> Option<u8> {
+        None
+    }
     fn memory_owner(&self) -> Option<Id>;
     fn in_flow(&self) -> bool;
     /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
@@ -565,6 +576,8 @@ pub(crate) trait ErasedPass<'a> {
     fn apply_values(&mut self) -> steps::ValueEdit;
     fn register_reset(&mut self);
     fn value_flags(&self) -> crate::style::Flags;
+    /// The shown value when it is a `bool`.
+    fn shown_bool(&self) -> Option<bool>;
     fn content_env(&self, values: &mut AppValues);
     fn paint(&mut self, ui: &mut Ui, env: &Env);
     fn paint_over(&mut self, ui: &mut Ui, env: &Env);
@@ -868,7 +881,7 @@ fn create_node(ctx: &Context, ui: &Ui, id: Id, member: bool, role: Role) -> bool
 
 /// Steps 6 to 16, in the `Ui` the host gives, inside the component's focus scope. Children run inside the overlay
 /// step, `paint`, the content and `paint_over`; each step group is its own function, so during a child's run this
-/// level keeps only `HostStep` on the stack.
+/// level keeps only its `HostStep`, on the heap.
 fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
     let scope = enter_scope(p, ui);
     let env = host_env.unwrap_or(p.env);
@@ -930,7 +943,7 @@ struct HostStep {
 /// inert component.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<HostStep> {
+fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<Box<HostStep>> {
     let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
     let (resolved, inert, facts) = (p.resolved, p.inert, p.facts);
@@ -1110,7 +1123,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         super::text::run_selections(e.core(), &parts.text.selections);
         e.core().selections = parts.text.selections.iter().map(|decl| decl.part).collect();
     }
-    Some(HostStep {
+    Some(Box::new(HostStep {
         ctx,
         id,
         rtl,
@@ -1128,7 +1141,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         values: AppValues::default(),
         outer_clip: Rect::NOTHING,
         inside: Rect::NOTHING,
-    })
+    }))
 }
 
 /// Step 9, update, with the body's roving group, which registers after `update`.
@@ -1485,7 +1498,8 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>
     }
 }
 
-/// What steps 1 to 4 found, which the rest of the run reads.
+/// What steps 1 to 4 found, which the rest of the run reads. It lives on the heap ([`begin`]): `run_steps` holds it
+/// while step 5's measuring runs recurse.
 struct Begun {
     ctx: Context,
     facts: TypeFacts,
@@ -1534,7 +1548,7 @@ impl Begun {
 /// Steps 1 to 3: env, style and id.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
+fn begin(t: &mut dyn Erased, ui: &Ui) -> Box<Begun> {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1565,7 +1579,7 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     }
     // The command instance the component is, which steps 4 to 17 run under.
     let own_env = t.instance_scope().map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
-    Begun { ctx, facts, shape, sizing, recording, env, own_env, common, step1, style, id }
+    Box::new(Begun { ctx, facts, shape, sizing, recording, env, own_env, common, step1, style, id })
 }
 
 /// Step 4, value: returns whether the binding holds a mixed value. A sizing pass reads the cancel and ends nothing:
@@ -1629,11 +1643,12 @@ fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
     let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let given = match shrink {
-        Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(ctx, row, id),
+        Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(ctx, row, id),
         _ => None,
     };
     let dropped = given.is_some_and(|given| given.dropped);
-    let cap = given.map(|given| given.width);
+    // A body takes its width from its own size step; the cap only tells it whether it was dropped.
+    let cap = given.filter(|_| shape == ShapeKind::Leaf).map(|given| given.width);
     let room = match cap {
         Some(cap) => Some(room.map_or(cap, |room| room.min(cap))),
         None => room,
@@ -1766,9 +1781,9 @@ fn measure_step(
             let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
             let whole = steps::whole(style, content, Vec2::ZERO, resolved);
             let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
-            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
+            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), (t.cut_first(), None));
         }
-        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
+        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, (false, t.fit_rank())),
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(ctx, row, id, size.x),
         _ => {}
     }
@@ -1776,7 +1791,7 @@ fn measure_step(
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
         let content = measured.x + t.overflow();
-        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), false);
+        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), (false, t.fit_rank()));
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.
@@ -1795,9 +1810,10 @@ fn measure_step(
     Sizes { room, measured, size, inert, dropped }
 }
 
-/// Steps 6 to 17 under the run's one `CxCore`, which lives in this frame: a sizing child that recurses inside step 5
-/// finds no core of its level on the stack. Returns whether a pass ran past the sizing check.
-// Holds the run's `CxCore`, which opt-level 2 would merge into `run_steps`, on the stack of every measuring run below.
+/// Steps 6 to 17 under the run's one `CxCore`, which this frame owns: a sizing child that recurses inside step 5
+/// finds no core of its level. Returns whether a pass ran past the sizing check.
+// Holds the locals of steps 6 to 17, which opt-level 2 would merge into `run_steps`, on the stack of every measuring run
+// below.
 #[inline(never)]
 fn run_passes(
     t: &mut dyn Erased,

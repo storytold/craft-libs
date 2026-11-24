@@ -37,6 +37,18 @@ pub use row::GridRow;
 pub(crate) use geometry::{digits_of, header_insets, row_digits};
 pub(crate) use reference::edges;
 
+/// Where a column's resize edge is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColumnEdges {
+    /// Only on the column headers.
+    #[default]
+    Headers,
+    /// Also over the cell rows in view, with the header edge's drag, cursor and double press; a press beside the
+    /// band selects the cell.
+    Cells,
+}
+
 /// The rows of a sheet as the collection's source: one key per row, equal to its position.
 struct SheetRows(Positions);
 
@@ -144,7 +156,8 @@ pub struct CellGridStyle {
 /// - Pointer: click selects, drag extends with auto-scroll, Shift+click extends from the anchor, Cmd/Ctrl+click adds a
 ///   range on an unselected cell and removes a selected one; a header click selects the line, Shift+click extends the
 ///   current range to it, Cmd/Ctrl+click adds it as a range, a drag over headers several; the corner selects all. A
-///   header edge drags a resize, a double-click autofits (or unhides a hidden line); the fill handle on the current
+///   header edge drags a resize, a double-click autofits (or unhides a hidden line); with [`ColumnEdges::Cells`] a
+///   column's edge over the cells does the same, with or without headings; the fill handle on the current
 ///   range's corner drags a [`GridEdit::Fill`], the range's border a [`GridEdit::MoveCells`] (Esc cancels either).
 /// - Keys: arrows move (Shift extends; Cmd/Ctrl jumps to [`GridModel::data_edge`]), Page Up and Down a screen, Home the
 ///   row start, Cmd/Ctrl+Home the first cell after the frozen panes, Cmd/Ctrl+End [`GridModel::last_used`], Enter and
@@ -192,6 +205,9 @@ pub struct CellGrid<'a> {
     /// The cell whose problem shows an error tag, with its fixes.
     #[prop]
     error_tag: Option<CellProblem<'a>>,
+    /// Where a column's resize edge is drawn.
+    #[prop]
+    column_edges: ColumnEdges,
     outline: Option<(&'a OutlineAxis, &'a OutlineAxis)>,
     selectable: Box<dyn Fn(CellAt<u32>) -> bool + 'a>,
     frame: Option<paint::Frame>,
@@ -222,6 +238,7 @@ impl<'a> CellGrid<'a> {
             copy_mark: &[],
             filters: &[],
             error_tag: None,
+            column_edges: ColumnEdges::default(),
             outline: None,
             selectable: Box::new(move |cell| model.selectable(cell)),
             frame: None,

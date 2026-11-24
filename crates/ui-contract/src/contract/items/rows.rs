@@ -2,7 +2,7 @@
 //! lead column (17.7) and auto-height rows measured into `LayoutMemory` (17.3, I1).
 
 use super::{ItemsHooks, key_hash};
-use crate::contract::{Collection, Cx, SelectMode};
+use crate::contract::{Collection, Cx, Internal, Meta, SelectMode, Sizing};
 use crate::runtime::egui::memory as store;
 use crate::runtime::memory::sub;
 use crate::runtime::{focus, lazy};
@@ -71,6 +71,52 @@ pub(super) fn measured_widths<R>(ctx: &Context, collection: Id, f: impl FnOnce(&
 /// and minimum widths); the row is placed by it in the same pass.
 pub(super) fn record_measure(ctx: &Context, collection: Id, id: Id, size: Vec2) {
     lazy::remember(ctx, collection, id, size);
+}
+
+/// Whether a row measured as `item` is as wide as it measured: it is sized to its content (`Sizing::Content`).
+pub(super) fn fits(item: &impl Meta) -> bool {
+    item.common(Internal::new()).sizing == Some(Sizing::Content)
+}
+
+/// The id the width of an auto row as wide as it measured is kept under; 0 once it is not.
+fn measured_fit_id(collection: Id, key: u64) -> Id {
+    sub(collection, ("row_fit", key))
+}
+
+/// The id of the mark that a row of the collection `collection` was as wide as it measured.
+fn fits_id(collection: Id) -> Id {
+    sub(collection, "row_fits")
+}
+
+/// Keeps that the auto row `key` (its key hash) of the collection `collection` is `fit` wide, the width it measured, or
+/// no longer as wide as it measured, for the passes that place the row without measuring it (`restore_fits`). Returns
+/// whether that differs from what was kept, which this pass's layout took: only then does the caller set it there.
+pub(super) fn keep_fit(ctx: &Context, collection: Id, key: u64, fit: Option<f32>) -> bool {
+    let id = measured_fit_id(collection, key);
+    let kept = lazy::reading(ctx, collection, |read| read(id).map(|(size, _)| size.x).filter(|width| *width > 0.0));
+    if kept == fit {
+        return false;
+    }
+    record_measure(ctx, collection, id, Vec2::new(fit.unwrap_or(0.0), 0.0));
+    if fit.is_some() {
+        record_measure(ctx, collection, fits_id(collection), Vec2::splat(1.0));
+    }
+    true
+}
+
+/// Sets in `layout` the widths of the rows of the collection `collection` that were as wide as they measured when last
+/// measured, `key(at)` giving each row's key hash. Only a collection that had such a row reads them.
+pub(super) fn restore_fits<L: ItemLayout + ?Sized>(ctx: &Context, collection: Id, layout: &mut L, rows: usize, key: impl Fn(usize) -> u64) {
+    lazy::reading(ctx, collection, |read| {
+        if read(fits_id(collection)).is_none() {
+            return;
+        }
+        for at in 0..rows {
+            if let Some((fit, _)) = read(measured_fit_id(collection, key(at))).filter(|(fit, _)| fit.x > 0.0) {
+                layout.set_fit(at, Some(fit.x));
+            }
+        }
+    });
 }
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {

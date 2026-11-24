@@ -1,5 +1,5 @@
 //! The driver between a platform menu and the app: the gate, display-only shortcuts, key
-//! equivalents, clipboard keys and closing an open menu. A fake backend stands
+//! equivalents, clipboard keys, closing an open menu and reporting one opening. A fake backend stands
 //! in for the platform, so the trials run everywhere.
 
 use std::cell::{Cell, RefCell};
@@ -308,6 +308,35 @@ fn an_option_click_runs_the_rows_alternate() {
 
     let key = dispatch.chosen(&merge, Some(&shortcut), false, true, held([true, false, true, true]), Some(&alternate));
     assert_eq!(key, Event::Key(chord("Cmd+Alt+Shift+E")), "a key equivalent is never swapped");
+}
+
+/// A native menu beginning to track comes back once from `take_opened`, however often the menu is polled, for an
+/// app that refreshes a menu's list as it opens; it changes nothing the menus show, so it lays nothing out again.
+#[trial]
+fn a_native_menu_opening_is_reported_once() {
+    let (mut menu, synced, events, _) = driver();
+    let ctx = egui::Context::default();
+    let opts = LayoutOptions::new("Sample");
+    let model = Tracked::new(sample(false, true));
+    let builds = Cell::new(0);
+    let build = || {
+        builds.set(builds.get() + 1);
+        mac_layout(&model, &opts)
+    };
+    menu.sync_with(&model, build);
+    assert!(!menu.take_opened(), "nothing opened yet");
+
+    events.borrow_mut().push(Event::Opened);
+    menu.poll(&ctx);
+    menu.poll(&ctx);
+    assert!(menu.take_opened(), "the opening is reported");
+    assert!(!menu.take_opened(), "once");
+    menu.sync_with(&model, build);
+    assert_eq!((builds.get(), synced.borrow().len()), (1, 1), "an opening neither lays the menus out nor syncs them again");
+
+    events.borrow_mut().push(Event::Opened);
+    menu.poll(&ctx);
+    assert!(menu.take_opened(), "the next opening is reported too");
 }
 
 /// The menus are laid out again only when the key moved or a menu event arrived: a model edit moves the `Tracked` key once.

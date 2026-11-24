@@ -10,7 +10,7 @@ use crate::display::{Shade, Text};
 use crate::form::{Field, Help};
 use crate::layout_components::{Row, Stack};
 use crate::pickers::Select;
-use crate::runtime::env::{Label, UnitKind, Units};
+use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::runtime::requests::ColorRequest;
 use crate::style::TypeRole;
 use crate::text::{HexField, NumberField, TextField};
@@ -36,8 +36,9 @@ pub(super) enum Kind {
     Bool(bool),
     Choice { value: String, options: Vec<Entry<String>>, unit: Option<UnitKind> },
     Color(Rgba),
-    Int { value: i64, range: RangeInclusive<i64>, unit: Option<UnitKind> },
-    Float { value: f64, range: RangeInclusive<f64>, decimals: u8, step: Option<f64>, unit: Option<UnitKind> },
+    Int { value: i64, range: RangeInclusive<i64>, unit: Option<UnitKind>, unit_text: Option<Label> },
+    Float { value: f64, range: RangeInclusive<f64>, decimals: u8, step: Option<f64>, unit: Option<UnitKind>, unit_text: Option<Label> },
+    Length { value: f64, range: RangeInclusive<f64>, lengths: LengthUnits },
     Text(String),
     Custom,
     CustomRows,
@@ -59,10 +60,18 @@ impl ShownRow {
                     .collect(),
             },
             RowKind::Color(color) => Kind::Color(*color),
-            RowKind::Int { value, range, unit, .. } => Kind::Int { value: *value, range: range.clone(), unit: *unit },
-            RowKind::Float { value, range, decimals, unit, .. } => {
-                Kind::Float { value: *value, range: range.clone(), decimals: *decimals, step: row.step, unit: *unit }
+            RowKind::Int { value, range, unit, unit_text } => {
+                Kind::Int { value: *value, range: range.clone(), unit: *unit, unit_text: unit_text.map(|text| Label::from(text.to_owned())) }
             }
+            RowKind::Float { value, range, decimals, unit, unit_text } => Kind::Float {
+                value: *value,
+                range: range.clone(),
+                decimals: *decimals,
+                step: row.step,
+                unit: *unit,
+                unit_text: unit_text.map(|text| Label::from(text.to_owned())),
+            },
+            RowKind::Length { value, range, lengths } => Kind::Length { value: *value, range: range.clone(), lengths: *lengths },
             RowKind::Text(text) => Kind::Text((*text).to_owned()),
             RowKind::Custom => Kind::Custom,
             RowKind::CustomRows => Kind::CustomRows,
@@ -95,8 +104,13 @@ pub(super) fn step_for(range: &RangeInclusive<f64>, decimals: u8) -> f64 {
     if decimals == 0 || range.end() - range.start() >= 10.0 { 1.0 } else { 10f64.powi(-i32::from(decimals)) }
 }
 
-fn number(units: &Units, label: &Label, value: f64, unit: Option<UnitKind>, decimals: usize) -> NumberField<'static> {
-    NumberField::new(label.clone(), Bind::given(Some(value))).codec(NumberCodec::new(units.reader(unit), decimals))
+/// A number field over `value`. A counted `unit` wins over `unit_text`, which is for quantities with no `UnitKind`.
+fn number(units: &Units, label: &Label, value: f64, unit: Option<UnitKind>, unit_text: Option<&Label>, decimals: usize) -> NumberField<'static> {
+    let field = NumberField::new(label.clone(), Bind::given(Some(value))).codec(NumberCodec::new(units.reader(unit), decimals));
+    match unit_text {
+        Some(text) if unit.is_none() => field.unit(text.clone()),
+        _ => field,
+    }
 }
 
 /// `option` labelled as its id counted in `kind`; an option whose id is not a number keeps its label.
@@ -186,20 +200,29 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(
             });
             record(next.map(PrefValue::Choice));
         }
-        Kind::Int { value, range, unit } => {
+        Kind::Int { value, range, unit, unit_text } => {
             let mut next = None;
             control(ui, row, cards, |ui| {
-                let shown = number(units, label, *value as f64, *unit, 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
+                let shown =
+                    number(units, label, *value as f64, *unit, unit_text.as_ref(), 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
                 next = shown.show(ui).edit.events.landed().cloned().flatten();
             });
             record(next.map(|v| PrefValue::Int(v.round() as i64)));
         }
-        Kind::Float { value, range, decimals, step, unit } => {
+        Kind::Float { value, range, decimals, step, unit, unit_text } => {
             let mut next = None;
             control(ui, row, cards, |ui| {
-                let shown = number(units, label, *value, *unit, usize::from(*decimals))
+                let shown = number(units, label, *value, *unit, unit_text.as_ref(), usize::from(*decimals))
                     .range(range.clone())
                     .step(step.unwrap_or_else(|| step_for(range, *decimals)));
+                next = shown.show(ui).edit.events.landed().cloned().flatten();
+            });
+            record(next.map(PrefValue::Float));
+        }
+        Kind::Length { value, range, lengths } => {
+            let mut next = None;
+            field().show(ui, |ui, _| {
+                let shown = NumberField::length(label.clone(), Bind::given(Some(*value)), *lengths).range(range.clone());
                 next = shown.show(ui).edit.events.landed().cloned().flatten();
             });
             record(next.map(PrefValue::Float));

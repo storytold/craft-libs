@@ -2,11 +2,13 @@
 //! tree; extra columns; effects and Smart Filters open; filtered by Artboard and by Group, which keep each group open or
 //! closed.
 
-use craft_ui::contract::Tracked;
+use craft_ui::contract::{Entry, Show as _, Tracked};
+use craft_ui::menu::MenuRow;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{LayersOutput, LayersPanel};
+use super::{LayerRowLook, LayersOutput, LayersPanel};
 use crate::ui::filter::{FilterBy, LayerFilter};
 use crate::ui::mock::FakeLayers;
 use crate::ui::tree::{LayerInfo, LayerPart, LayerSelection};
@@ -68,6 +70,45 @@ fn layers_panel_target_cell(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn layers_panel_extra_columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tree = selected();
     let shown = LayersPanel::new(&Tracked::new(tree)).lock_column(true).show(ui);
+    with_readout(data, shown)
+}
+
+/// VectorCraft's rows: each row's colour as a stripe (heavy on layers), the current sublayer's corner mark, the eye's
+/// Preview, Outline and Template glyphs, an italic label and a solid and a dashed underline, rows with no thumbnail, two
+/// guides and a spine with no eye or lock.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_color_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = FakeLayers::row_looks();
+    let shown = LayersPanel::new(&Tracked::new(tree)).row_look(LayerRowLook::ColorBar).lock_column(true).show(ui);
+    with_readout(data, shown)
+}
+
+/// The host's own footer in the panel's footer slot, in place of the panel's buttons.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_host_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = selected();
+    let footer = |ui: &mut Ui| {
+        let _ = Icon::new(IconSpec::svg(IconId::new("folder"))).show(ui);
+    };
+    let shown = LayersPanel::new(&Tracked::new(tree)).footer(footer).show(ui);
+    with_readout(data, shown)
+}
+
+/// The host's row menu with a submenu among its rows, before the panel's Label Color submenu.
+// PLAN: LayersPanel has no way to open a row menu from a button; the menu opens on a right-click on a row.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_row_submenu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = selected();
+    let menu = |_: &super::MenuTarget<u32>| {
+        vec![
+            Entry::new(String::from("rename"), "Rename Layer…").into(),
+            MenuRow::Submenu(
+                Label::from("Arrange"),
+                vec![Entry::new(String::from("front"), "Bring to Front").into(), Entry::new(String::from("back"), "Send to Back").into()],
+            ),
+        ]
+    };
+    let shown = LayersPanel::new(&Tracked::new(tree)).row_menu(menu).show(ui);
     with_readout(data, shown)
 }
 

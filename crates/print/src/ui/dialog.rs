@@ -1,34 +1,43 @@
 //! `PrintDialog`: Photoshop's Print Settings (the preview pane, the printer panel and the app's
 //! sections), and `HostedPrint`, the same dialog owned by a `DialogHost`.
 
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use craft_behavior::{CursorIcon, EditEvent, EditEvents, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense};
+use craft_behavior::{CursorIcon, EditEvent, EditEvents, IconId, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense, Value, keyed};
 use craft_theme::variant::Tone;
-use craft_ui::buttons::Button;
+use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, LabelScheme, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Role, Scroll, Show as _, ShowContainer as _, WordSetCx as _, clicked,
+    Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Validity, WordSetCx as _, clicked,
 };
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use craft_ui::display::{Shade, Text};
+use craft_ui::form::Field;
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::list::ListRow;
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamKind, ParamRows, set_color_field,
+    DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamKind, ParamRows, SectionList, set_color_field,
+    set_param_field,
+};
+use craft_ui::patterns::presets::{
+    NameCheck, NameRefuses, NamedPresetEvent, NamedPresetRow, Naming, PickerField, PresetError, PresetPicker, PresetRow, PresetSource, PresetState,
+    PresetWords,
 };
 use craft_ui::primitives::{ContentPainterCx, TextRun, Wrap, fill_polygon};
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::{Env, Label, Message};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::requests::HostAnswer;
 use craft_ui::sections::{DialogRole, FooterButton, HeaderStrength, Section};
 use craft_ui::style::{ComponentStyle, Corners, RuleKind, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use craft_ui::text::TextField;
 use egui::load::SizedTexture;
 use egui::{Color32, Mesh, Pos2, Rect, Response, Shape, TextureId, Ui, Vec2, pos2, vec2};
 
-use super::panel::{Destinations, DriverControls, MOST_COPIES, PrintPanel, PrintWords};
+use super::panel::{Destinations, DriverControls, MOST_COPIES, PrintPanel, PrintPanelLayout, PrintWords};
 use super::{Destination, Duplex, Printer, Settings, State};
 
 craft_ui::words! {
@@ -41,6 +50,14 @@ craft_ui::words! {
         preview: "printDialog.preview" = "Print preview image";
         printer_setup: "printDialog.printerSetup" = "Printer Setup";
         image_box: "printDialog.imageBox" = "Image box";
+        sections: "printDialog.sections" = "Sections";
+        preset: "printDialog.preset" = "Print Preset";
+        custom: "printDialog.custom" = "[Custom]";
+        preset_name: "printDialog.presetName" = "Preset name";
+        save_preset: "printDialog.savePreset" = "Save Preset";
+        previous: "printDialog.previous" = "Previous";
+        next: "printDialog.next" = "Next";
+        sheet_of: template "printDialog.sheetOf" = "{n} of {count}";
     }
 }
 
@@ -86,6 +103,9 @@ pub enum PrintLayout {
     /// Printer Setup and the app's sections in a scrolling column, then the sheet preview, its pager, the readout and
     /// the notes at the end edge; no Done button.
     Document,
+    /// The preset row, the printer row and the header rows above a list of sections beside the shown one, with the
+    /// preview under the list.
+    Sections,
 }
 
 /// What the sheet preview shows on the paper.
@@ -147,6 +167,10 @@ pub struct PrintSheet {
     pub marks: PrintMarks,
     /// The readout under the preview.
     pub readout: Label,
+    /// How many sheets the document prints on; 1 for a document that fits one.
+    pub count: usize,
+    /// The outline of each sheet on the paper, in paper points, for a document that prints on several.
+    pub outlines: Vec<egui::Rect>,
     /// What the sheet shows on the paper.
     pub content: SheetContent,
     /// The borders drawn around the pages, in paper points.
@@ -182,6 +206,8 @@ impl PrintSheet {
             printable: None,
             marks: PrintMarks::default(),
             readout,
+            count: 1,
+            outlines: Vec::new(),
             content,
             borders: Vec::new(),
             cuts: Vec::new(),
@@ -230,6 +256,50 @@ impl PrintSheet {
     pub fn marks(mut self, marks: PrintMarks) -> Self {
         self.marks = marks;
         self
+    }
+
+    /// How many sheets the document prints on.
+    #[must_use]
+    pub fn count(mut self, count: usize) -> Self {
+        self.count = count;
+        self
+    }
+
+    /// The outline of each sheet on the paper, in paper points.
+    #[must_use]
+    pub fn outlines(mut self, outlines: Vec<egui::Rect>) -> Self {
+        self.outlines = outlines;
+        self
+    }
+}
+
+/// What the print dialog is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintMode {
+    /// Print the document.
+    #[default]
+    Print,
+    /// Edit a print preset: a name field with its refusal in place of the printer and the job.
+    PresetEditor,
+}
+
+/// The print presets a [`PrintDialog`] lists in its preset row.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct PrintPresets<'a> {
+    /// The presets, as the preset picker's rows.
+    pub rows: &'a [PresetRow<String>],
+    /// The preset the settings started from or were last filled from.
+    pub held: Option<String>,
+    /// The names of the built-in presets, which a typed name may not take.
+    pub built_in: &'a [String],
+}
+
+impl<'a> PrintPresets<'a> {
+    /// The presets `rows`, the `held` one and the `built_in` names.
+    pub fn new(rows: &'a [PresetRow<String>], held: Option<String>, built_in: &'a [String]) -> Self {
+        PrintPresets { rows, held, built_in }
     }
 }
 
@@ -602,6 +672,9 @@ impl Component for PrintPreview<'_> {
         if let Some(area) = sheet.printable {
             outline(RuleKind::Grid, place.rect(area));
         }
+        for sheet_outline in &sheet.outlines {
+            outline(RuleKind::Grid, place.rect(*sheet_outline));
+        }
         outline(RuleKind::Edge, paper);
         let Some(image) = marked else { return };
         if sheet.image_box().is_some() {
@@ -687,9 +760,156 @@ impl Outcome for PrintPreviewOutput {
     }
 }
 
+/// What the dialog keeps between passes for the values the host does not bind.
+#[derive(Clone, Debug, Default)]
+struct Own {
+    section: String,
+    sheet: usize,
+    name: String,
+    picker: PresetState<String>,
+}
+
+/// The value `bind` holds this pass; `None` while it holds none (a kept or mixed binding).
+fn read<T: Value>(bind: &mut Bind<'_, T>) -> Option<T> {
+    match bind.reborrow().get() {
+        Some(Mixed::Same(value)) => Some(value),
+        _ => None,
+    }
+}
+
+/// Writes `value` through `bind` as one step. A given binding keeps its value: the host takes the dialog's reports.
+// PLAN: form_dialogs' `read_bind` and `write_bind` (form.rs) do the same and are `pub(crate)`; the form_dialogs owner makes them public so this copy goes.
+fn write<T: Value>(bind: &mut Bind<'_, T>, value: T) {
+    let before = bind.reborrow().get().unwrap_or(Mixed::Mixed);
+    let _ = bind.reborrow().apply(&EditEvent::set(before, value, Arc::from(""), None));
+}
+
+/// The host's binding when it gave one, else the dialog's own memory.
+fn bound_or<'b, T: Value>(host: &'b mut Option<Bind<'_, T>>, own: &'b mut T) -> Bind<'b, T> {
+    match host {
+        Some(bind) => bind.reborrowed(),
+        None => Bind::bound(own),
+    }
+}
+
+/// Whether a preset name can be saved: it says something and the host's check lets it through. The one rule for the
+/// dialog's OK and the hosted dialog's `confirm`.
+fn usable_name(name: &str, refused: Option<PresetError>) -> bool {
+    !name.trim().is_empty() && refused.is_none()
+}
+
+/// The preview with its readout and, for a document of several sheets, the step row; with no sheet, the host's message.
+fn preview_room(
+    ui: &mut Ui,
+    words: &PrintDialogWords,
+    sheet: Option<&PrintSheet>,
+    message: Option<&Label>,
+    index: &mut Bind<'_, usize>,
+    moved: &mut EditEvents<Pos2>,
+    stepped: &mut Option<usize>,
+) {
+    let Some(sheet) = sheet else {
+        if let Some(message) = message {
+            Text::new(message.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        }
+        return;
+    };
+    let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
+    let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).show(ui);
+    moved.extend(preview.edit.events);
+    Text::new(sheet.readout.clone()).show(ui);
+    if sheet.count > 1 {
+        step_row(ui, words, sheet.count, index, stepped);
+    }
+}
+
+/// Previous, "{n} of {count}" and Next. A step writes the index and reports it for this pass.
+fn step_row(ui: &mut Ui, words: &PrintDialogWords, count: usize, index: &mut Bind<'_, usize>, stepped: &mut Option<usize>) {
+    let last = count.saturating_sub(1);
+    let shown = read(index).unwrap_or(0).min(last);
+    let mut to = None;
+    Row::new().show(ui, |ui, _| {
+        if clicked(&IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(shown > 0).show(ui)) {
+            to = Some(shown - 1);
+        }
+        let place = words.sheet_of.fill(&[("n", (shown + 1).to_string().as_str()), ("count", count.to_string().as_str())]);
+        Text::new(Label::from(place)).show(ui);
+        if clicked(&IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(shown < last).show(ui)) {
+            to = Some(shown + 1);
+        }
+    });
+    if let Some(to) = to {
+        write(index, to);
+        *stepped = Some(to);
+    }
+}
+
+/// The preset row: the picker over the host's presets, `[Custom]` while the settings match none, and the row's events.
+fn preset_row(
+    ui: &mut Ui,
+    words: &PrintDialogWords,
+    presets: &PrintPresets<'_>,
+    check: Option<&NameRefuses<'_>>,
+    picker: &mut PresetState<String>,
+    events: &mut Vec<NamedPresetEvent<String>>,
+) {
+    let source = PresetSource::listed(presets.rows);
+    let mut pick = PresetPicker::new(words.preset.clone(), Bind::given(presets.held.clone()), &source, Bind::bound(picker)).field(PickerField::Name);
+    if presets.held.is_none() {
+        pick = pick.placeholder(words.custom.clone());
+    }
+    let mut row = NamedPresetRow::new(words.preset.clone(), pick).built_in(|key: &String| presets.built_in.contains(key));
+    if let Some(check) = check {
+        row = row.check_name(NameCheck::of_host(check));
+    }
+    events.extend(row.show(ui).events);
+}
+
+/// The preset editor's name field with the host's refusal under it. Returns whether the name can be saved.
+fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&NameRefuses<'_>>, name: &mut Bind<'_, String>) -> bool {
+    let preset_words = Env::of(ui).words::<PresetWords>();
+    let current = read(name).unwrap_or_default();
+    let host = check.map(NameCheck::of_host);
+    let naming = Naming::new(host.as_ref(), &preset_words.name_taken, &preset_words.name_invalid);
+    let mut typed = None;
+    Field::new(words.preset_name.clone()).id_salt("name").show(ui, |ui, _| {
+        let checked = Bind::given(current.clone()).check_with(&naming, |naming, text| match naming.problem(text) {
+            Some(message) => Validity::Refuse(Message::new(message)),
+            None => Validity::Ok,
+        });
+        typed = TextField::new(words.preset_name.clone(), checked).id_salt("name-text").select_on_focus().show(ui).value().cloned();
+    });
+    let shown = match typed {
+        Some(text) => {
+            write(name, text.clone());
+            text
+        }
+        None => current,
+    };
+    usable_name(&shown, check.and_then(|check| check(&shown)))
+}
+
+/// The rows that show `Settings` key `key` (`copies`, `duplex`, `grayscale`) in place of the printer panel: in the
+/// sections layout the panel shows only the printer, and an app's section or header row with the key is the one the user
+/// sees, so automation sets and lists that row.
+fn row_of_setting<'p>(layout: PrintLayout, sections: &'p [PrintSection], header: &'p [Param], key: &str) -> Option<&'p [Param]> {
+    if layout != PrintLayout::Sections || !matches!(key, "copies" | "duplex" | "grayscale") {
+        return None;
+    }
+    let mut rows = sections.iter().map(|section| section.params.as_slice()).chain([header]);
+    rows.find(|params| params.iter().any(|param| param.key == key))
+}
+
+/// `params` as rows over `values`; the colour, path and eyedropper requests they file go to `requests`.
+fn param_rows(ui: &mut Ui, requests: &mut HostRequests, title: &Label, params: &[Param], values: &mut DialogFields) {
+    let mut rows = ParamRows::new(title.clone(), params, Bind::bound(values)).show(ui);
+    requests.absorb(&mut rows);
+}
+
 /// Photoshop's Print Settings: the preview at the start edge (paper, printable area, image box,
 /// marks, readout), the printer panel and the sections at the end edge, and Print, Cancel and Done
-/// in the footer.
+/// in the footer. With [`PrintLayout::Sections`] the preset row, the printer row and the header rows
+/// stand above a list of sections beside the shown one, and the preview sits under the list.
 ///
 /// - [`PrintLayout::Document`] puts Printer Setup and the sections in a scrolling column, then the sheet preview with
 ///   the pager centred under it, the readout and the notes at the end edge. It has no Done button, the printer list
@@ -702,7 +922,9 @@ pub struct PrintDialog<'a> {
     settings: Bind<'a, Settings>,
     printers: &'a [Printer],
     fields: Bind<'a, DialogFields>,
-    sheet: &'a PrintSheet,
+    /// This pass's layout, from the app; without one the dialog shows no preview, and `message` in its place.
+    #[prop]
+    sheet: Option<&'a PrintSheet>,
     /// The app's sections under the printer panel.
     #[prop]
     sections: &'a [PrintSection],
@@ -721,9 +943,33 @@ pub struct PrintDialog<'a> {
     /// The host's answers to the dialog's requests.
     #[prop]
     answers: Vec<HostAnswer>,
+    /// Binds the number of the sheet the preview shows, for a document that prints on several.
+    #[prop]
+    sheet_index: Option<Bind<'a, usize>>,
+    /// A line of the host's under the preview.
+    #[prop(into)]
+    message: Option<Label>,
     /// How the dialog is arranged.
     #[prop]
     layout: PrintLayout,
+    /// Binds the shown section, with [`PrintLayout::Sections`].
+    #[prop]
+    section: Option<Bind<'a, String>>,
+    /// The print presets the preset row lists, with [`PrintLayout::Sections`].
+    #[prop]
+    presets: Option<PrintPresets<'a>>,
+    /// Rows above the sections, with [`PrintLayout::Sections`].
+    #[prop]
+    header: &'a [Param],
+    /// What the dialog is for.
+    #[prop]
+    mode: PrintMode,
+    /// Binds the preset editor's name.
+    #[prop]
+    preset_name: Option<Bind<'a, String>>,
+    /// Whether a typed preset name may be used, in the preset editor.
+    #[prop(boxed = "Fn(&str) -> Option<PresetError> + 'a")]
+    check_name: Option<Box<NameRefuses<'a>>>,
     /// The printer-driver controls the panel offers.
     #[prop]
     driver: DriverControls,
@@ -766,6 +1012,12 @@ pub struct PrintDialogOutput {
     pub(crate) settings_clicked: bool,
     /// The dialog's requests of the host.
     pub requests: HostRequests,
+    /// What the user did to the print presets this pass (Create, Rename, Delete).
+    pub presets: Vec<NamedPresetEvent<String>>,
+    /// The sheet the user stepped to this pass.
+    pub sheet: Option<usize>,
+    /// Print Settings… was pressed this pass: the host opens the driver's own dialog.
+    pub setup: bool,
     /// The preview's page box as drawn this pass, in physical pixels: the size to render previews at. `None` before it
     /// is drawn.
     pub paper_px: Option<[u32; 2]>,
@@ -786,21 +1038,28 @@ impl Outcome for PrintDialogOutput {
 }
 
 impl<'a> PrintDialog<'a> {
-    /// The dialog over `settings`, the `printers` found, the sections' `fields` and this pass's
-    /// `sheet`.
-    pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer], fields: Bind<'a, DialogFields>, sheet: &'a PrintSheet) -> Self {
+    /// The dialog over `settings`, the `printers` found and the sections' `fields`.
+    pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer], fields: Bind<'a, DialogFields>) -> Self {
         PrintDialog {
             settings,
             printers,
             fields,
-            sheet,
+            sheet: None,
             sections: &[],
             opened: None,
             busy: false,
             discovering: false,
             ready: false,
             answers: Vec::new(),
-            layout: PrintLayout::Image,
+            sheet_index: None,
+            message: None,
+            layout: PrintLayout::default(),
+            section: None,
+            presets: None,
+            header: &[],
+            mode: PrintMode::default(),
+            preset_name: None,
+            check_name: None,
             driver: DriverControls::None,
             duplex_by_layout: false,
             preview_pager: None,
@@ -811,9 +1070,9 @@ impl<'a> PrintDialog<'a> {
         }
     }
 
-    /// Draws the dialog. The body reports the drag events, the Refresh, pager and section button presses and the
-    /// destination picked of its last run only, so a measuring run adds none; a second pass of a frame has no new input
-    /// and reports none.
+    /// Draws the dialog. The body reports the drag events, the Refresh, Setup, pager and section button presses, the
+    /// preset events, the sheet step and the destination picked of its last run only, so a measuring run adds none; a
+    /// second pass of a frame has no new input and reports none.
     pub fn show(self, ui: &mut Ui) -> PrintDialogOutput {
         let PrintDialog {
             mut settings,
@@ -826,7 +1085,15 @@ impl<'a> PrintDialog<'a> {
             discovering,
             ready,
             answers,
+            mut sheet_index,
+            message,
             layout,
+            mut section,
+            presets,
+            header,
+            mode,
+            mut preset_name,
+            check_name,
             driver,
             duplex_by_layout,
             preview_pager,
@@ -837,14 +1104,22 @@ impl<'a> PrintDialog<'a> {
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintDialogWords>();
+        let editor = mode == PrintMode::PresetEditor;
         let document = layout == PrintLayout::Document;
         let grayscale = matches!(settings.reborrow().get(), Some(Mixed::Same(Settings { grayscale: true, .. })));
         let to_file = matches!(settings.reborrow().get(), Some(Mixed::Same(Settings { destination: Destination::File, .. })));
         let title = if document { words.title_document.clone() } else { words.title.clone() };
-        let ok = if document && to_file { env.words::<PrintWords>().save_as_pdf.clone() } else { words.print.clone() };
+        let ok = if editor {
+            words.save_preset.clone()
+        } else if document && to_file {
+            env.words::<PrintWords>().save_as_pdf.clone()
+        } else {
+            words.print.clone()
+        };
         let destinations = if document { Destinations::PrintersAndFile } else { Destinations::Printers };
-        let mut form = FormDialog::new(title, fields).ok_label(ok).ok_enabled(ready && !busy).accept_stays_open(hold_ok).answers(answers);
-        if !document {
+        let titles: Vec<String> = sections.iter().map(|section| section.title.as_str().to_owned()).collect();
+        let mut form = FormDialog::new(title, fields).ok_label(ok).ok_enabled(editor || (ready && !busy)).accept_stays_open(hold_ok).answers(answers);
+        if !editor && !document {
             form = form.extra_buttons([FooterButton::new(words.done.clone(), DialogRole::Other)]);
         }
         if let Some(opened) = opened {
@@ -852,6 +1127,9 @@ impl<'a> PrintDialog<'a> {
         }
         let mut moved = EditEvents::new();
         let mut refresh = false;
+        let mut setup = false;
+        let mut preset_events: Vec<NamedPresetEvent<String>> = Vec::new();
+        let mut stepped = None;
         let mut settings_clicked = false;
         let mut paper_px = None;
         let mut preview_step = None;
@@ -859,6 +1137,9 @@ impl<'a> PrintDialog<'a> {
         let shown = form.show(ui, |ui, form, values| {
             moved = EditEvents::new();
             refresh = false;
+            setup = false;
+            preset_events.clear();
+            stepped = None;
             settings_clicked = false;
             paper_px = None;
             preview_step = None;
@@ -870,83 +1151,151 @@ impl<'a> PrintDialog<'a> {
             for answer in form.take_answers() {
                 match answer {
                     HostAnswer::Color { key, color } | HostAnswer::Eyedropper { key, color } => {
-                        for section in sections {
-                            set_color_field(&section.params, values, &key, color);
+                        for params in sections.iter().map(|section| section.params.as_slice()).chain([header]) {
+                            set_color_field(params, values, &key, color);
                         }
                     }
                     HostAnswer::Path { key, path } => values.set(&key, FieldValue::Text(path.to_string_lossy().into_owned())),
                     _ => {}
                 }
             }
-            // Printer Setup and the app's sections.
-            let mut setup = |ui: &mut Ui, values: &mut DialogFields, requests: &mut HostRequests| {
-                let mut printer = |ui: &mut Ui| {
-                    let panel = PrintPanel::new(settings.reborrowed(), printers)
-                        .discovering(discovering)
-                        .busy(busy)
-                        .driver(driver)
-                        .destinations(destinations)
-                        .duplex_by_layout(duplex_by_layout)
-                        .inline(document)
-                        .printer_search(printer_search)
-                        .show(ui);
-                    refresh |= panel.refresh;
-                    settings_clicked |= panel.settings_clicked;
-                    if panel.printer_chosen.is_some() {
-                        printer_chosen = panel.printer_chosen;
-                    }
-                };
-                // A document dialog's printer rows head the dialog with no heading of their own, as production's.
-                if document {
-                    printer(ui);
+            let mut own = form.memory::<Own>().clone();
+            let accepted = {
+                let Own { section: own_section, sheet: own_sheet, name: own_name, picker } = &mut own;
+                let mut section_bind = bound_or(&mut section, own_section);
+                let mut index_bind = bound_or(&mut sheet_index, own_sheet);
+                let mut name_bind = bound_or(&mut preset_name, own_name);
+                if editor {
+                    name_row(ui, &words, check_name.as_deref(), &mut name_bind)
                 } else {
-                    Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| printer(ui));
-                }
-                for (at, section) in sections.iter().enumerate() {
-                    section.show(ui, at, document, values, requests);
+                    // Printer Setup and the app's sections.
+                    let mut printer_setup = |ui: &mut Ui, values: &mut DialogFields, requests: &mut HostRequests| {
+                        let mut printer = |ui: &mut Ui| {
+                            let panel = PrintPanel::new(settings.reborrowed(), printers)
+                                .discovering(discovering)
+                                .busy(busy)
+                                .driver(driver)
+                                .destinations(destinations)
+                                .duplex_by_layout(duplex_by_layout)
+                                .inline(document)
+                                .printer_search(printer_search)
+                                .show(ui);
+                            refresh |= panel.refresh;
+                            settings_clicked |= panel.settings_clicked;
+                            if panel.printer_chosen.is_some() {
+                                printer_chosen = panel.printer_chosen;
+                            }
+                        };
+                        // A document dialog's printer rows head the dialog with no heading of their own, as production's.
+                        if document {
+                            printer(ui);
+                        } else {
+                            Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| printer(ui));
+                        }
+                        for (at, section) in sections.iter().enumerate() {
+                            section.show(ui, at, document, values, requests);
+                        }
+                    };
+                    // The sheet preview, the pager under it in the `Document` layout, the readout and the notes.
+                    let mut sheet_column = |ui: &mut Ui, moved: &mut EditEvents<Pos2>| {
+                        let Some(sheet) = sheet else {
+                            if let Some(message) = message.as_ref() {
+                                Text::new(message.clone()).show(ui);
+                            }
+                            return None;
+                        };
+                        let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
+                        let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).grayscale(grayscale).show(ui);
+                        moved.extend(preview.edit.events);
+                        paper_px = preview.paper_px;
+                        let mut step = None;
+                        if let Some(pager) = preview_pager.as_ref().filter(|_| document) {
+                            Row::new().align(RowAlign::Center).fill_width().show(ui, |ui, _| step = pager.clone().show(ui));
+                        }
+                        Text::new(sheet.readout.clone()).show(ui);
+                        for note in &sheet.notes {
+                            Text::new(note.clone()).shade(Shade::Muted).show(ui);
+                        }
+                        if let Some(message) = message.as_ref() {
+                            Text::new(message.clone()).show(ui);
+                        }
+                        step
+                    };
+                    match layout {
+                        PrintLayout::Image => {
+                            Row::new().show(ui, |ui, _| {
+                                Stack::new().show(ui, |ui, _| {
+                                    if preview_pager.is_none() && sheet.is_some_and(|s| s.count > 1) {
+                                        preview_room(ui, &words, sheet, message.as_ref(), &mut index_bind, &mut moved, &mut stepped);
+                                    } else {
+                                        preview_step = sheet_column(ui, &mut moved);
+                                    }
+                                });
+                                Stack::new().show(ui, |ui, _| printer_setup(ui, values, form.requests()));
+                            });
+                        }
+                        PrintLayout::Document => {
+                            Row::new().show(ui, |ui, _| {
+                                Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| printer_setup(ui, values, form.requests()));
+                                Stack::new().show(ui, |ui, _| preview_step = sheet_column(ui, &mut moved));
+                            });
+                        }
+                        PrintLayout::Sections => {
+                            let mut preview =
+                                |ui: &mut Ui| preview_room(ui, &words, sheet, message.as_ref(), &mut index_bind, &mut moved, &mut stepped);
+                            Stack::new().show(ui, |ui, _| {
+                                if let Some(presets) = &presets {
+                                    preset_row(ui, &words, presets, check_name.as_deref(), picker, &mut preset_events);
+                                }
+                                let panel = PrintPanel::new(settings.reborrowed(), printers)
+                                    .layout(PrintPanelLayout::PrinterOnly)
+                                    .driver(driver)
+                                    .discovering(discovering)
+                                    .busy(busy)
+                                    .show(ui);
+                                refresh |= panel.refresh;
+                                setup |= panel.settings_clicked;
+                                if !header.is_empty() {
+                                    param_rows(ui, form.requests(), &words.title, header, values);
+                                }
+                                let current = read(&mut section_bind).filter(|title| titles.contains(title)).or_else(|| titles.first().cloned());
+                                let Some(current) = current else {
+                                    preview(ui);
+                                    return;
+                                };
+                                let source = keyed(&titles, |title: &String| title.clone());
+                                // PLAN: assumes `SectionList::foot(self, impl FnOnce(&mut Ui) + 'a) -> Self` (type-w6 request on ty.X70).
+                                let picked = SectionList::new(words.sections.clone(), &source, current.clone()).foot(|ui| preview(ui)).show(
+                                    ui,
+                                    |title| ListRow::new(Label::from(title.clone())),
+                                    |ui| {
+                                        if let Some(section) = sections.iter().find(|section| section.title.as_str() == current) {
+                                            param_rows(ui, form.requests(), &section.title, &section.params, values);
+                                        }
+                                    },
+                                );
+                                if let Some(title) = picked {
+                                    write(&mut section_bind, title);
+                                }
+                            });
+                        }
+                    }
+                    if let Some(step) = preview_step {
+                        form.requests().request_preview_step(step);
+                    }
+                    // The host's refusal of the held OK stays until a setting or a value changes.
+                    let now = settings.reborrow().get();
+                    let refused = refusal
+                        .as_ref()
+                        .filter(|(_, refused, fields)| *fields == *values && matches!(&now, Some(Mixed::Same(now)) if now == refused));
+                    if let Some((reason, ..)) = refused {
+                        Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
+                    }
+                    ready && !busy
                 }
             };
-            // The sheet preview, the pager under it in the `Document` layout, the readout and the notes.
-            let mut sheet_column = |ui: &mut Ui| {
-                let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
-                let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).grayscale(grayscale).show(ui);
-                moved.extend(preview.edit.events);
-                paper_px = preview.paper_px;
-                let mut step = None;
-                if let Some(pager) = preview_pager.as_ref().filter(|_| document) {
-                    Row::new().align(RowAlign::Center).fill_width().show(ui, |ui, _| step = pager.clone().show(ui));
-                }
-                Text::new(sheet.readout.clone()).show(ui);
-                for note in &sheet.notes {
-                    Text::new(note.clone()).shade(Shade::Muted).show(ui);
-                }
-                step
-            };
-            match layout {
-                PrintLayout::Image => {
-                    Row::new().show(ui, |ui, _| {
-                        Stack::new().show(ui, |ui, _| preview_step = sheet_column(ui));
-                        Stack::new().show(ui, |ui, _| setup(ui, values, form.requests()));
-                    });
-                }
-                PrintLayout::Document => {
-                    Row::new().show(ui, |ui, _| {
-                        Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| setup(ui, values, form.requests()));
-                        Stack::new().show(ui, |ui, _| preview_step = sheet_column(ui));
-                    });
-                }
-            }
-            if let Some(step) = preview_step {
-                form.requests().request_preview_step(step);
-            }
-            // The host's refusal of the held OK stays until a setting or a value changes.
-            let now = settings.reborrow().get();
-            let refused =
-                refusal.as_ref().filter(|(_, refused, fields)| *fields == *values && matches!(&now, Some(Mixed::Same(now)) if now == refused));
-            if let Some((reason, ..)) = refused {
-                Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
-            }
-            ready && !busy
+            *form.memory::<Own>() = own;
+            accepted
         });
         let finish = if shown.accepted.is_some() {
             Some(PrintFinish::Print)
@@ -965,6 +1314,9 @@ impl<'a> PrintDialog<'a> {
             refresh,
             settings_clicked,
             requests: shown.requests,
+            presets: preset_events,
+            sheet: stepped,
+            setup,
             paper_px,
             preview_step,
             printer_chosen,
@@ -984,6 +1336,16 @@ pub struct PrintAnswer {
     /// The sections' values.
     pub fields: DialogFields,
 }
+
+/// The preset rows the host listed, the one the settings started from and the built-in names.
+struct HeldPresets {
+    rows: Vec<PresetRow<String>>,
+    held: Option<String>,
+    built_in: Vec<String>,
+}
+
+/// The check on a typed preset name, as the host gave it.
+type NameFn = dyn Fn(&str) -> Option<PresetError> + Send;
 
 /// The print dialog owned by a `DialogHost` (not registered). It polls its [`State`] each pass,
 /// asks the app for a printer list with [`take_refresh`](Self::take_refresh) and takes the list
@@ -1008,12 +1370,25 @@ pub struct HostedPrint {
     requests: HostRequests,
     json_form: Option<Box<JsonForm>>,
     layout: PrintLayout,
+    mode: PrintMode,
+    header: Vec<Param>,
+    check_name: Option<Box<NameFn>>,
+    presets: Option<HeldPresets>,
+    preset_events: Vec<NamedPresetEvent<String>>,
+    message: Option<Label>,
+    /// The title of the shown section; one the list does not have shows the first.
+    section: String,
+    sheet_index: usize,
+    preset_name: String,
     driver: DriverControls,
+    setup: bool,
     duplex_by_layout: bool,
     preview_pager: Option<PanePager>,
     printer_search: bool,
     /// The destination the user picked, or automation set, not taken yet.
     printer_chosen: Option<Destination>,
+    /// `choice: "done"` came in: the next `confirm` answers Done.
+    done_chosen: bool,
     /// Whether Print files its answer for the app instead of closing.
     hold: bool,
     /// The Print the app holds back until it answers, and its refusal.
@@ -1041,16 +1416,96 @@ impl HostedPrint {
             paper_px: None,
             requests: HostRequests::new(),
             json_form: None,
-            layout: PrintLayout::Image,
+            layout: PrintLayout::default(),
+            mode: PrintMode::default(),
+            header: Vec::new(),
+            check_name: None,
+            presets: None,
+            preset_events: Vec::new(),
+            message: None,
+            section: String::new(),
+            sheet_index: 0,
+            preset_name: String::new(),
             driver: DriverControls::None,
+            setup: false,
             duplex_by_layout: false,
             preview_pager: None,
             printer_search: false,
             printer_chosen: None,
+            done_chosen: false,
             hold: false,
             held: HeldAnswer::new(),
             settings_valid: true,
         }
+    }
+
+    /// What the dialog is for.
+    #[must_use]
+    pub fn mode(mut self, mode: PrintMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Rows above the sections.
+    #[must_use]
+    pub fn header(mut self, header: Vec<Param>) -> Self {
+        self.header = header;
+        self
+    }
+
+    /// Whether a typed preset name may be used, in the preset editor.
+    #[must_use]
+    pub fn check_name(mut self, check: impl Fn(&str) -> Option<PresetError> + Send + 'static) -> Self {
+        self.check_name = Some(Box::new(check));
+        self
+    }
+
+    /// Shows the driver's controls in the printer row.
+    #[must_use]
+    pub fn driver(mut self, driver: DriverControls) -> Self {
+        self.driver = driver;
+        self
+    }
+
+    /// The print presets the preset row lists, the one the settings started from, and the built-in names.
+    pub fn set_presets(&mut self, rows: Vec<PresetRow<String>>, held: Option<String>, built_in: Vec<String>) {
+        self.presets = Some(HeldPresets { rows, held, built_in });
+    }
+
+    /// What the user did to the print presets since the last call.
+    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
+        std::mem::take(&mut self.preset_events)
+    }
+
+    /// A line of the host's under the preview.
+    pub fn set_message(&mut self, message: Option<Label>) {
+        self.message = message;
+    }
+
+    /// The number of the sheet the preview shows.
+    pub fn sheet_index(&self) -> usize {
+        self.sheet_index
+    }
+
+    /// The preset editor's name.
+    pub fn preset_name(&self) -> &str {
+        &self.preset_name
+    }
+
+    /// The sections' values.
+    pub fn fields(&self) -> &DialogFields {
+        &self.fields
+    }
+
+    /// Sets the section value `key`, unchecked: the app writes a value its own custom row holds.
+    pub fn set_field(&mut self, key: impl Into<String>, value: FieldValue) {
+        let key: String = key.into();
+        self.fields.set(&key, value);
+    }
+
+    /// Print Settings… was pressed since the last call: the host opens the driver's own dialog.
+    pub fn take_setup(&mut self) -> bool {
+        std::mem::take(&mut self.setup)
     }
 
     /// Tells the dialog whether the settings the app owns are valid (they are until told otherwise). While they are not,
@@ -1097,9 +1552,9 @@ impl HostedPrint {
         self.state.listen(printers)
     }
 
-    /// This pass's layout, from the app.
-    pub fn set_sheet(&mut self, sheet: PrintSheet) {
-        self.sheet = Some(sheet);
+    /// This pass's layout, from the app; `None` shows the dialog without a preview, and the message in its place.
+    pub fn set_sheet(&mut self, sheet: impl Into<Option<PrintSheet>>) {
+        self.sheet = sheet.into();
     }
 
     /// The image box drags since the last call.
@@ -1207,6 +1662,47 @@ impl HostedPrint {
     fn answer(&self, finish: PrintFinish) -> PrintAnswer {
         PrintAnswer { finish, settings: self.state.settings.clone(), fields: self.fields.clone() }
     }
+
+    /// Whether the dialog's OK can answer now: a job can start, or in the editor the name can be saved.
+    fn can_answer(&self) -> bool {
+        match self.mode {
+            PrintMode::Print => self.state.ready(),
+            PrintMode::PresetEditor => usable_name(&self.preset_name, self.check_name.as_ref().and_then(|check| check(&self.preset_name))),
+        }
+    }
+
+    /// Answers with `finish`: the answer itself, or none while the host holds OK and takes it from `take_ok`.
+    fn conclude(&mut self, finish: PrintFinish) -> Option<PrintAnswer> {
+        let answer = self.answer(finish);
+        if self.hold {
+            self.held.file(answer);
+            None
+        } else {
+            Some(answer)
+        }
+    }
+
+    /// The title of the shown section: the one named, else the first.
+    fn shown_section(&self) -> Option<&str> {
+        let named = self.sections.iter().map(|section| section.title.as_str()).find(|title| *title == self.section);
+        named.or_else(|| self.sections.first().map(|section| section.title.as_str()))
+    }
+}
+
+impl HoldsOk for HostedPrint {
+    type Answer = PrintAnswer;
+
+    fn held_ok(self) -> Self {
+        HostedPrint::held_ok(self)
+    }
+
+    fn take_ok(&mut self) -> Option<PrintAnswer> {
+        HostedPrint::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedPrint::answer_ok(self, answer);
+    }
 }
 
 /// The automation name of a duplex mode.
@@ -1240,43 +1736,62 @@ impl StackDialog for HostedPrint {
         self.id
     }
 
-    /// Polls the state, shows the dialog over the sheet the app set, and keeps the drags, the Refresh, pager and button
-    /// presses, the destination picked and the sections' requests for the app. A pass before the first `set_sheet`
-    /// shows nothing.
+    /// Polls the state, shows the dialog over the sheet the app set (the message without one), and keeps the drags, the
+    /// Refresh, pager, Setup and button presses, the preset events, the destination picked and the sections' requests
+    /// for the app.
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<PrintAnswer>> {
         self.state.poll(ui.ctx());
-        let sheet = self.sheet.as_ref()?;
         let answers = if craft_ui::runtime::measure::active(ui.ctx()) { Vec::new() } else { self.requests.take_answers() };
         let finish_held = self.held.is_accepted();
         // Print waits for the app's answer: a second press cannot file over the held one.
         let ready = self.state.ready() && self.settings_valid && !self.held.is_waiting();
         let (busy, discovering) = (self.state.busy(), self.state.discovering());
         let refusal = self.held.refusal().map(|(reason, refused)| (reason.clone(), refused.settings.clone(), refused.fields.clone()));
-        let mut dialog = PrintDialog::new(Bind::bound(&mut self.state.settings), &self.state.printers, Bind::bound(&mut self.fields), sheet)
+        let mut dialog = PrintDialog::new(Bind::bound(&mut self.state.settings), &self.state.printers, Bind::bound(&mut self.fields))
             .sections(&self.sections)
             .busy(busy)
             .discovering(discovering)
             .ready(ready)
             .answers(answers)
             .layout(self.layout)
+            .mode(self.mode)
+            .header(&self.header)
             .driver(self.driver)
             .duplex_by_layout(self.duplex_by_layout)
             .printer_search(self.printer_search)
             .hold_ok(self.hold)
-            .finish_held(finish_held);
+            .finish_held(finish_held)
+            .sheet_index(Bind::bound(&mut self.sheet_index))
+            .section(Bind::bound(&mut self.section))
+            .preset_name(Bind::bound(&mut self.preset_name));
+        if let Some(sheet) = &self.sheet {
+            dialog = dialog.sheet(sheet);
+        }
+        if let Some(message) = &self.message {
+            dialog = dialog.message(message.clone());
+        }
         if let Some(pager) = self.preview_pager.clone() {
             dialog = dialog.preview_pager(pager);
         }
         if let Some(refusal) = refusal {
             dialog = dialog.refusal(refusal);
         }
+        if let Some(held) = &self.presets {
+            dialog = dialog.presets(PrintPresets::new(&held.rows, held.held.clone(), &held.built_in));
+        }
+        if let Some(check) = &self.check_name {
+            dialog = dialog.check_name(move |name| check(name));
+        }
         let shown = dialog.show(ui);
-        let PrintDialogOutput { closed, finish, moved, refresh, settings_clicked, paper_px, requests, printer_chosen, held, .. } = shown;
+        let PrintDialogOutput { closed, finish, moved, refresh, settings_clicked, paper_px, requests, presets, setup, printer_chosen, held, .. } =
+            shown;
         self.moves.extend(moved);
         if paper_px.is_some() {
             self.paper_px = paper_px;
         }
         self.refresh |= refresh;
+        self.setup |= setup;
+        self.preset_events.extend(presets);
         self.settings_clicked |= settings_clicked;
         if printer_chosen.is_some() {
             self.printer_chosen = printer_chosen;
@@ -1300,27 +1815,30 @@ impl StackDialog for HostedPrint {
         self.held.state()
     }
 
-    /// Answers Print as the button does: none while a job cannot start. A held dialog files the answer for the app, as
-    /// its button does, and answers none; once the app accepted the held answer, it answers that.
+    /// Answers Done after `choice: "done"`, else Print as the button does: none while a job cannot start (in the preset
+    /// editor, while the name cannot be saved). A held dialog files the answer for the app, as its button does, and
+    /// answers none; once the app accepted the held answer, it answers that.
     fn confirm(&mut self, _: &egui::Context) -> Option<PrintAnswer> {
         if self.held.is_accepted() {
             return self.held.finish();
         }
-        if self.held.is_waiting() || !self.settings_valid || !self.state.ready() {
+        if self.held.is_waiting() {
             return None;
         }
-        let answer = self.answer(PrintFinish::Print);
-        if self.hold {
-            self.held.file(answer);
+        let finish = if std::mem::take(&mut self.done_chosen) {
+            PrintFinish::Done
+        } else if self.settings_valid && self.can_answer() {
+            PrintFinish::Print
+        } else {
             return None;
-        }
-        Some(answer)
+        };
+        self.conclude(finish)
     }
 
-    /// The `Settings` keys (`printer`, `copies`, `duplex`, `grayscale`, `collate`) and each section parameter's value as
-    /// [`DialogFields`] serializes it. `printer` is the printer's name, or `null` for Save as PDF. With a preview pager,
-    /// `sheet` is the sheet it shows (from 1) and `sheets` how many there are. `notes` lists the keys of the sections'
-    /// read-only text rows ([`Param::read_only_text`]) the values show, in order: what the dialog tells the user.
+    /// The `Settings` keys (`printer`, `copies`, `duplex`, `grayscale`, `collate`), each section parameter's value as
+    /// [`DialogFields`] serializes it, and the dialog's own: `section` (the shown section), `sheet`, `sheets`, `notes`,
+    /// `preset` (the held preset) and, in the preset editor, `name`. A `Settings` key an app's row shows in the
+    /// sections layout lists the row's value.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut map = match serde_json::to_value(&self.fields).ok()? {
             serde_json::Value::Object(map) => map,
@@ -1332,13 +1850,27 @@ impl StackDialog for HostedPrint {
             Destination::File => serde_json::Value::Null,
         };
         map.insert("printer".to_owned(), printer);
-        map.insert("copies".to_owned(), settings.copies.into());
-        map.insert("duplex".to_owned(), duplex_json(settings.duplex));
-        map.insert("grayscale".to_owned(), settings.grayscale.into());
-        map.insert("collate".to_owned(), settings.collate.into());
+        for (key, value) in [
+            ("copies", settings.copies.into()),
+            ("duplex", duplex_json(settings.duplex)),
+            ("grayscale", settings.grayscale.into()),
+            ("collate", settings.collate.into()),
+        ] {
+            if row_of_setting(self.layout, &self.sections, &self.header, key).is_none() {
+                map.insert(key.to_owned(), value);
+            }
+        }
+        map.insert("section".to_owned(), self.shown_section().map_or(serde_json::Value::Null, Into::into));
         if let Some(pager) = &self.preview_pager {
             map.insert("sheet".to_owned(), pager.shown.into());
             map.insert("sheets".to_owned(), pager.count.into());
+        } else {
+            map.insert("sheet".to_owned(), self.sheet_index.into());
+        }
+        let held = self.presets.as_ref().and_then(|presets| presets.held.clone());
+        map.insert("preset".to_owned(), held.map_or(serde_json::Value::Null, Into::into));
+        if self.mode == PrintMode::PresetEditor {
+            map.insert("name".to_owned(), self.preset_name.clone().into());
         }
         let notes = self.sections.iter().flat_map(|section| &section.params);
         let notes = notes.filter(|param| matches!(param.kind, ParamKind::ReadOnlyText { .. }) && param.visible(&self.fields));
@@ -1349,12 +1881,15 @@ impl StackDialog for HostedPrint {
         Some(serde_json::Value::Object(map))
     }
 
-    /// Sets a `Settings` key, or a section parameter through the shared parameter-field rule. `printer` takes a listed
-    /// printer's name, or `null` for Save as PDF where the layout offers it; the write is a choice the app takes with
-    /// [`take_printer_chosen`](HostedPrint::take_printer_chosen). A section parameter's set is recorded as an edit of its
-    /// row, as the user's is ([`HostRequests::set_field`]): the app reads it with `take_edited` in its next pass, so
-    /// the app's own value does not overwrite it.
+    /// Sets a `Settings` key, the dialog's own (`section`, `sheet`, `name`, `preset`, and `choice` = `"done"`), or a
+    /// section parameter through the shared parameter-field rule. A `Settings` key an app's row shows in the sections
+    /// layout sets the row. `printer` takes a listed printer's name, or `null` for Save as PDF where the layout offers
+    /// it; the write is a choice the app takes with [`take_printer_chosen`](HostedPrint::take_printer_chosen). A
+    /// section parameter's set is recorded as an edit of its row, as the user's is ([`HostRequests::set_field`]).
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        if let Some(params) = row_of_setting(self.layout, &self.sections, &self.header, field) {
+            return set_param_field(params, &mut self.fields, field, value);
+        }
         match field {
             "printer" => {
                 let destination = match &value {
@@ -1375,6 +1910,47 @@ impl StackDialog for HostedPrint {
             "duplex" => self.state.settings.duplex = duplex_from_json(&value).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             "grayscale" => self.state.settings.grayscale = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             "collate" => self.state.settings.collate = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
+            "choice" => {
+                if self.mode != PrintMode::Print {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                if value.as_str() != Some("done") {
+                    return Err(FieldRefusal::Rejects(&value).message(field));
+                }
+                self.done_chosen = true;
+            }
+            "section" => {
+                if self.layout != PrintLayout::Sections {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                let title = value.as_str().filter(|title| self.sections.iter().any(|section| section.title.as_str() == *title));
+                self.section = title.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?.to_owned();
+            }
+            "sheet" => {
+                let count = self.sheet.as_ref().map(|sheet| sheet.count).filter(|count| *count > 0);
+                let count = count.ok_or_else(|| FieldRefusal::Inactive.message(field))?;
+                let index = value.as_u64().and_then(|index| usize::try_from(index).ok());
+                self.sheet_index = index.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?.min(count - 1);
+            }
+            "name" => {
+                if self.mode != PrintMode::PresetEditor {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                self.preset_name = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?.to_owned();
+            }
+            "preset" => {
+                // A row's key, else its name in any case ("proofs" applies the saved "Proofs").
+                let rows =
+                    self.presets.as_ref().map(|presets| presets.rows.iter().filter(|row| !row.is_group()).collect::<Vec<_>>()).unwrap_or_default();
+                let key = value.as_str().and_then(|name| {
+                    rows.iter()
+                        .find(|row| row.key == name)
+                        .or_else(|| rows.iter().find(|row| row.label.eq_ignore_ascii_case(name)))
+                        .map(|row| row.key.clone())
+                });
+                let key = key.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                self.preset_events.push(NamedPresetEvent::Apply(key));
+            }
             _ => {
                 let section =
                     self.sections.iter().find(|section| section.params.iter().any(|param| param.key == field || param.unit_key() == Some(field)));
