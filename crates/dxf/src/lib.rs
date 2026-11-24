@@ -48,12 +48,14 @@ pub enum Value {
     Bool(bool),
     /// Binary chunk (310–319, 1004) as hex text.
     Hex(String),
+    /// Non-finite or malformed numeric group value preserved as raw text.
+    Invalid(String),
 }
 
 impl Value {
     pub fn as_str(&self) -> String {
         match self {
-            Value::Str(s) | Value::Hex(s) => s.clone(),
+            Value::Str(s) | Value::Hex(s) | Value::Invalid(s) => s.clone(),
             Value::Real(r) => format_real(*r),
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => i64::from(*b).to_string(),
@@ -84,6 +86,17 @@ impl Value {
             _ => 0,
         }
     }
+    /// Whether this value represents a malformed or non-finite numeric group.
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, Value::Invalid(_))
+    }
+    /// The raw text of the invalid value, if this is [`Value::Invalid`].
+    pub fn invalid_str(&self) -> Option<&str> {
+        match self {
+            Value::Invalid(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +118,9 @@ impl Tag {
     pub fn i(code: i32, v: i64) -> Self {
         Tag { code, value: Value::Int(v) }
     }
+    pub fn invalid(code: i32, v: impl Into<String>) -> Self {
+        Tag { code, value: Value::Invalid(v.into()) }
+    }
     pub fn str(&self) -> String {
         self.value.as_str()
     }
@@ -120,6 +136,12 @@ impl Tag {
     }
     pub fn i64(&self) -> i64 {
         self.value.as_i64()
+    }
+    pub fn is_invalid(&self) -> bool {
+        self.value.is_invalid()
+    }
+    pub fn invalid_str(&self) -> Option<&str> {
+        self.value.invalid_str()
     }
 }
 
@@ -151,7 +173,10 @@ pub fn kind_of(code: i32) -> Kind {
 fn typed(code: i32, text: &str) -> Value {
     let t = text.trim();
     match kind_of(code) {
-        Kind::Real => t.parse::<f64>().ok().filter(|v| v.is_finite()).map_or(Value::Real(0.0), Value::Real),
+        Kind::Real => match t.parse::<f64>() {
+            Ok(v) if v.is_finite() => Value::Real(v),
+            _ => Value::Invalid(t.to_string()),
+        },
         Kind::Int16 | Kind::Int32 | Kind::Int64 => {
             // A float spelling ("1e3", "12.0") is accepted when finite, clamped to what the
             // group's width holds, signed or unsigned (files write 16-bit flags up to 65535, as
@@ -570,7 +595,14 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
         };
         let v = match kind_of(code) {
             Kind::Str => Value::Str(unescape_unicode(&text.string(code, c.cstr()?))),
-            Kind::Real => Value::Real(Some(c.f64()?).filter(|v| v.is_finite()).unwrap_or(0.0)),
+            Kind::Real => {
+                let r = c.f64()?;
+                if r.is_finite() {
+                    Value::Real(r)
+                } else {
+                    Value::Invalid(r.to_string())
+                }
+            }
             Kind::Int16 => Value::Int(i64::from(c.i16()?)),
             Kind::Int32 => Value::Int(i64::from(c.i32()?)),
             Kind::Int64 => Value::Int(c.i64()?),
@@ -766,6 +798,7 @@ fn ascii(tags: &[Tag], strings: Strings) -> Vec<u8> {
                     out.extend_from_slice(chunk.as_bytes());
                 }
             }
+            Value::Invalid(s) => push_string(s, strings, &mut out),
         }
         out.extend_from_slice(b"\r\n");
     }
@@ -809,7 +842,11 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
             }
             Kind::Real => {
                 out.extend_from_slice(&code_bytes);
-                out.extend_from_slice(&t.value.as_f64().to_le_bytes());
+                let r = match &t.value {
+                    Value::Invalid(s) => s.parse::<f64>().unwrap_or_else(|_| t.value.as_f64()),
+                    _ => t.value.as_f64(),
+                };
+                out.extend_from_slice(&r.to_le_bytes());
             }
             Kind::Int16 => {
                 out.extend_from_slice(&code_bytes);
@@ -1323,6 +1360,72 @@ mod tests {
         b.extend_from_slice(&0i16.to_le_bytes());
         b.extend_from_slice(b"EOF\0");
         assert_eq!(parse(&b).unwrap()[0].str(), "图号");
+    }
+
+    #[test]
+    fn invalid_numeric_values_produce_value_invalid_and_preserve_compatibility() {
+        let val = Value::Invalid("not_a_number".into());
+        assert!(val.is_invalid());
+        assert_eq!(val.invalid_str(), Some("not_a_number"));
+        assert_eq!(val.as_str(), "not_a_number");
+        assert_eq!(val.as_f64(), 0.0);
+        assert_eq!(val.as_i64(), 0);
+
+        let tag = Tag::invalid(10, "NaN");
+        assert!(tag.is_invalid());
+        assert_eq!(tag.invalid_str(), Some("NaN"));
+        assert_eq!(tag.str(), "NaN");
+        assert_eq!(tag.str_ref(), None);
+        assert_eq!(tag.f64(), 0.0);
+        assert_eq!(tag.i64(), 0);
+    }
+
+    #[test]
+    fn parse_ascii_invalid_and_non_finite_reals() {
+        let text = "10\nNaN\n20\ninf\n30\n-inf\n40\ngarbage\n50\n  12.34.56  \n0\nEOF\n";
+        let tags = parse(text.as_bytes()).unwrap();
+        assert_eq!(tags.len(), 6);
+
+        assert_eq!(tags[0], Tag::invalid(10, "NaN"));
+        assert!(tags[0].is_invalid());
+        assert_eq!(tags[0].f64(), 0.0);
+
+        assert_eq!(tags[1], Tag::invalid(20, "inf"));
+        assert!(tags[1].is_invalid());
+        assert_eq!(tags[1].f64(), 0.0);
+
+        assert_eq!(tags[2], Tag::invalid(30, "-inf"));
+        assert!(tags[2].is_invalid());
+        assert_eq!(tags[2].f64(), 0.0);
+
+        assert_eq!(tags[3], Tag::invalid(40, "garbage"));
+        assert!(tags[3].is_invalid());
+        assert_eq!(tags[3].f64(), 0.0);
+
+        assert_eq!(tags[4], Tag::invalid(50, "12.34.56"));
+        assert!(tags[4].is_invalid());
+        assert_eq!(tags[4].f64(), 0.0);
+    }
+
+    #[test]
+    fn invalid_reals_roundtrip_in_ascii_and_binary() {
+        let tags = vec![
+            Tag::invalid(10, "NaN"),
+            Tag::invalid(20, "inf"),
+            Tag::invalid(30, "malformed"),
+            Tag::s(0, "EOF"),
+        ];
+        let ascii_out = write_ascii(&tags);
+        let back_ascii = parse(ascii_out.as_bytes()).unwrap();
+        assert_eq!(back_ascii[0], Tag::invalid(10, "NaN"));
+        assert_eq!(back_ascii[1], Tag::invalid(20, "inf"));
+        assert_eq!(back_ascii[2], Tag::invalid(30, "malformed"));
+
+        let bin_out = write_binary(&tags, true);
+        let back_bin = parse(&bin_out).unwrap();
+        assert_eq!(back_bin[0], Tag::invalid(10, "NaN"));
+        assert_eq!(back_bin[1], Tag::invalid(20, "inf"));
+        assert_eq!(back_bin[2], Tag::f(30, 0.0));
     }
 }
 

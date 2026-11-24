@@ -13,15 +13,34 @@ fn bin_with(f: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
 }
 
 #[test]
-fn binary_reals_that_are_not_finite_become_zero() {
+fn binary_reals_that_are_not_finite_become_invalid() {
     for bits in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let b = bin_with(|b| {
             b.extend_from_slice(&10i16.to_le_bytes());
             b.extend_from_slice(&bits.to_le_bytes());
         });
         let tags = parse(&b).unwrap();
-        assert_eq!(tags[0], Tag::f(10, 0.0), "{bits}");
+        assert_eq!(tags[0], Tag::invalid(10, bits.to_string()), "{bits}");
+        assert_eq!(tags[0].f64(), 0.0, "backward compatibility for f64: {bits}");
+        assert_eq!(tags[0].i64(), 0, "backward compatibility for i64: {bits}");
+        assert!(tags[0].is_invalid());
     }
+}
+
+#[test]
+fn malformed_path_coordinates_are_invalid_and_do_not_silently_snap_to_origin() {
+    // Malformed line entity coordinates (groups 10, 20, 11, 21)
+    let dxf = b"0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n100.0\n20\nNaN\n11\ncorrupted\n21\n200.0\n0\nENDSEC\n0\nEOF\n";
+    let tags = parse(dxf).unwrap();
+    let y0 = tags.iter().find(|t| t.code == 20).unwrap();
+    let x1 = tags.iter().find(|t| t.code == 11).unwrap();
+    assert_eq!(y0.value, Value::Invalid("NaN".into()));
+    assert_eq!(x1.value, Value::Invalid("corrupted".into()));
+    assert!(y0.is_invalid());
+    assert!(x1.is_invalid());
+    // Legacy callers still get 0.0
+    assert_eq!(y0.f64(), 0.0);
+    assert_eq!(x1.f64(), 0.0);
 }
 
 #[test]
