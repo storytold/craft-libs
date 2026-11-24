@@ -16,7 +16,13 @@
       "warn": "#f0a330"
     }
   },
-  "shape": null,
+  "shape": {
+    "grip": {
+      "mark": "bar",
+      "length": 18,
+      "width": 3
+    }
+  },
   "light": {
     "accent.solid": "#d9472f",
     "caption.close_hover": "#c42b1c",
