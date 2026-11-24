@@ -833,14 +833,12 @@ fn pointer_grid_hold(rig: &mut Rig, from: Pos2, to: Pos2, mods: Modifiers) -> f6
         rig.fixture.frame(vec![pointer::moved(from + (to - from) * (frame as f32 / 4.0))]);
     }
     rig.fixture.settle();
-    let held = rig.scene.borrow().values[0][0];
-    held
+    rig.scene.borrow().values[0][0]
 }
 
 fn pointer_grid_release(rig: &mut Rig, at: Pos2) -> f64 {
     rig.fixture.frame(vec![pointer::release(at)]).settle();
-    let landed = rig.scene.borrow().values[0][0];
-    landed
+    rig.scene.borrow().values[0][0]
 }
 
 #[trial]

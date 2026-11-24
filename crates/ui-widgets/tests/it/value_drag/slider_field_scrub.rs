@@ -11,8 +11,11 @@ use std::rc::Rc;
 
 const ROW: Rect = Rect { min: Pos2::new(20.0, 20.0), max: Pos2::new(420.0, 80.0) };
 
+/// The fixture of an exposure field, its value and the edit events it reported.
+type Exposure = (Fixture, Rc<RefCell<f64>>, Rc<RefCell<Vec<EditEvent<f64>>>>);
+
 /// A field over -5..=5 on hundredths, scrubbing by `rate` when one is given; the value and the edit events it saw.
-fn exposure(rate: Option<f64>) -> (Fixture, Rc<RefCell<f64>>, Rc<RefCell<Vec<EditEvent<f64>>>>) {
+fn exposure(rate: Option<f64>) -> Exposure {
     let (value, events) = (Rc::new(RefCell::new(0.5)), Rc::new(RefCell::new(Vec::new())));
     let (held, seen) = (Rc::clone(&value), Rc::clone(&events));
     let mut fixture = Fixture::new(move |ui| {
