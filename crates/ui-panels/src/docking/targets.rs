@@ -6,6 +6,7 @@
 
 use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
+use crate::rails::RailDensity;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::{RuleKind, RuleWidth, StyleCx};
 use craft_behavior::DockSide;
@@ -81,6 +82,10 @@ pub struct DockSizes {
     pub rail_first: f32,
     /// The width each further column of a tool rail adds: a rail button and the tight gap before it.
     pub rail_step: f32,
+    /// [`rail_first`](Self::rail_first) with the buttons of a dense rail ([`RailDensity::Dense`]).
+    pub dense_rail_first: f32,
+    /// [`rail_step`](Self::rail_step) with the buttons of a dense rail ([`RailDensity::Dense`]).
+    pub dense_rail_step: f32,
     /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
     /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
     /// shows itself: the least hit size, or the theme's grip marks with `space.gap.tight` above and below them.
@@ -103,6 +108,11 @@ impl DockSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
         let size = &cx.tokens.size;
+        let rail = |density: RailDensity| {
+            let button = density.button(cx.tokens);
+            (button + 2.0 * cx.tokens.space.pad.control, button + cx.tokens.space.gap.tight)
+        };
+        let ((rail_first, rail_step), (dense_rail_first, dense_rail_step)) = (rail(RailDensity::Regular), rail(RailDensity::Dense));
         DockSizes {
             zone_depth: size.rail.width,
             edge_band: size.control.md,
@@ -127,8 +137,10 @@ impl DockSizes {
             jump: cx.control().height,
             iconic_least: size.rail.width,
             column: size.dock.column,
-            rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
-            rail_step: size.rail.button + cx.tokens.space.gap.tight,
+            rail_first,
+            rail_step,
+            dense_rail_first,
+            dense_rail_step,
             grip: super::group::grip_strip(cx.tokens),
         }
     }

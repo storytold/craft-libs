@@ -1,9 +1,8 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
-use super::{LastUsed, RailTool, ToolRail, ToolRailOutput, ToolSlot, ToolTips};
+use super::{LastUsed, RailDensity, RailTool, ToolRail, ToolRailOutput, ToolSlot, ToolTips};
 use crate::contract::{MemoProps, Show as _, Tracked};
 use crate::display::{Shade, Text};
-use crate::docking::{DockGrid, DockSizes};
 use crate::runtime::env::Env;
 use crate::style::TypeRole;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -66,10 +65,10 @@ fn captioned_slots() -> Vec<ToolSlot<u8>> {
     ]
 }
 
-/// Shows `rail` in a room as wide as the grid of `cells` cells at `columns` columns, the stage a dock column of that
+/// Shows `rail` in a room as wide as its grid of `cells` cells at `columns` columns, the stage a dock column of that
 /// many steps gives it, at the reading start and at most `height` high.
 fn in_columns(ui: &mut Ui, columns: u8, cells: usize, height: Option<f32>, rail: ToolRail<'_, u8>) -> ToolRailOutput<u8> {
-    let width = DockGrid::rail(cells).resolved(&DockSizes::of_scope(ui)).width(u16::from(columns));
+    let width = rail.grid(ui, cells).width(u16::from(columns));
     let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, width);
     ui.scope_builder(UiBuilder::new().max_rect(room), |ui| {
         if let Some(height) = height {
@@ -114,6 +113,17 @@ fn tool_rail_captions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let slots = Tracked::new(captioned_slots());
     let last = Tracked::new(LastUsed::default());
     in_columns(ui, columns, slots.len(), None, ToolRail::new("Tools", &slots, &0, &last).captions()).into()
+}
+
+/// The rail at each density in one or two columns: a dense rail's buttons are a control high, and its columns narrow
+/// with them.
+#[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
+fn tool_rail_density(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let columns = *data.ranged("columns", 1_u8, 1.0..=2.0);
+    let density = *data.choice("density", RailDensity::Dense, &[("Regular", RailDensity::Regular), ("Dense", RailDensity::Dense)]);
+    let slots = Tracked::new(slots());
+    let last = Tracked::new(LastUsed::default());
+    in_columns(ui, columns, slots.len(), None, ToolRail::new("Tools", &slots, &BRUSH, &last).density(density)).into()
 }
 
 /// The tips of the brush and the eraser: the tool's name over what it does.
