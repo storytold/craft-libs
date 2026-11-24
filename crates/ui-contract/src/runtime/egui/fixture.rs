@@ -526,17 +526,23 @@ pub(crate) fn host_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, text: &mut Stri
 pub(crate) struct ResettingEditor {
     pub(crate) text: String,
     pub(crate) composing: bool,
-    /// The reset the editor asked for at a press during its composition, until its completion arrives; the editor
-    /// takes no IME event meanwhile.
+    /// The reset the editor asked for last, until its completion arrives; the editor takes no IME event meanwhile.
     pub(crate) reset: Option<egui::ImeResetId>,
+    /// The editor also writes its request into its IME output's `reset_request`. Otherwise it leaves that field to egui,
+    /// which publishes the request asked through `Context::request_ime_reset`, as EffectCraft's editor does.
+    pub(crate) in_output: bool,
+    /// Ask for a reset at the next pass, as EffectCraft's editor does when its caret moves after an outside press.
+    pub(crate) ask: bool,
 }
 
 /// A host's own text editor of `id` at `rect` that fences its own interrupted composition, as EffectCraft's viewer text
-/// editor does: a primary press while it composes ends the composition and asks the platform for a reset in its own IME
-/// output, and the editor ignores IME events until that reset's completion. Otherwise as [`host_ime_editor`].
+/// editor does: a primary press on it while it composes ends the composition and asks the platform for a reset, and the
+/// editor ignores IME events until that reset's completion. A press elsewhere asks for nothing. Otherwise as
+/// [`host_ime_editor`].
 #[cfg(feature = "suite")]
 pub(crate) fn host_resetting_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, editor: &mut ResettingEditor) {
     let _ = ui.interact(rect, id, egui::Sense::click());
+    let pressed = ui.input(|input| input.pointer.primary_pressed() && input.pointer.press_origin().is_some_and(|at| rect.contains(at)));
     for event in ui.input(|input| input.events.clone()) {
         match event {
             Event::ImeResetCompleted { request_id } if editor.reset == Some(request_id) => editor.reset = None,
@@ -555,11 +561,14 @@ pub(crate) fn host_resetting_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, edito
         }
     }
     let mut ime = egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect);
-    if editor.composing && ui.input(|input| input.pointer.primary_pressed()) {
+    let interrupted = editor.composing && pressed;
+    if interrupted || std::mem::take(&mut editor.ask) {
         editor.composing = false;
         editor.reset = ui.ctx().request_ime_reset(ui.ctx().viewport_id());
-        ime.should_interrupt_composition = true;
-        ime.reset_request = editor.reset;
+        ime.should_interrupt_composition = interrupted;
+        if editor.in_output {
+            ime.reset_request = editor.reset;
+        }
     }
     ui.ctx().output_mut(|output| output.ime = Some(ime));
 }

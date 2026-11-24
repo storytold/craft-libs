@@ -109,12 +109,18 @@ pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) -> Option<
     reset
 }
 
+/// The reset request the app asked for this pass, as egui publishes it at the end of the pass: one asked through
+/// `Context::request_ime_reset`, which replaces the IME output's own `reset_request`, or else the one the app wrote
+/// there.
+pub(crate) fn app_reset(ctx: &Context, viewport: ViewportId) -> Option<egui::ImeResetId> {
+    ctx.pending_ime_reset(viewport).or_else(|| ctx.output(|output| output.ime.as_ref().and_then(|ime| ime.reset_request)))
+}
+
 /// Interrupts the composition of the IME output the app's own editor wrote this pass, in its context, and asks for a
-/// reset. An editor that asked for its own reset in that output keeps its request, so the platform answers the app's
-/// id and the app gets its completion. Returns the reset request the output carries, as `write` does.
+/// reset. An editor that asked for its own reset this pass (`app_reset`) keeps its request, so the platform answers the
+/// app's id and the app gets its completion. Returns the reset request the output carries, as `write` does.
 pub(crate) fn interrupt_written(ctx: &Context, viewport: ViewportId) -> Option<egui::ImeResetId> {
-    let written = ctx.output(|output| output.ime.as_ref().and_then(|ime| ime.reset_request));
-    let reset = written.or_else(|| ctx.request_ime_reset(viewport));
+    let reset = app_reset(ctx, viewport).or_else(|| ctx.request_ime_reset(viewport));
     ctx.output_mut(|output| {
         if let Some(ime) = &mut output.ime {
             ime.should_interrupt_composition = true;

@@ -53,9 +53,9 @@ struct Engine {
     editor: Option<EditorFacts>,
     /// The app's own editor that wrote the IME output of the last pass while no framework editor owned the IME.
     host: Option<HostIme>,
-    /// The reset requests the app's own editor wrote in its IME output, unanswered yet: their completions and
-    /// retirements are the app's and stay in egui's input for it, fence or not. One of them is the fence's `reset`
-    /// when the app asked for its reset in the pass the engine interrupted its composition.
+    /// The reset requests the app's own editor published with its IME output, oldest first, unanswered yet: their
+    /// completions and retirements are the app's and stay in egui's input for it, fence or not. The latest one the app
+    /// published while the fence is up is the fence's `reset`, from the pass the engine interrupted its composition on.
     host_resets: Vec<egui::ImeResetId>,
 }
 
@@ -201,13 +201,17 @@ impl Engine {
         self.discard = true;
     }
 
-    /// Notes an answer to one of the app's own reset requests: the request is answered, and a completion of the one the
-    /// fence waits for ends the fence; a retirement leaves the end hook to ask again.
+    /// Notes an answer to one of the app's own reset requests. A completion answers that request and every older one,
+    /// as completions arrive in request order, and ends the fence when it waits for one of them; a retirement answers
+    /// only its own request and, when the fence waits for it, leaves the end hook to ask again.
     fn host_answered(&mut self, event: &Event) {
         let (Event::ImeResetCompleted { request_id: id } | Event::ImeResetRetired { request_id: id }) = event else { return };
         let Some(at) = self.host_resets.iter().position(|own| own == id) else { return };
-        self.host_resets.remove(at);
-        if self.reset == Some(*id) {
+        let answered: Vec<_> = match event {
+            Event::ImeResetCompleted { .. } => self.host_resets.drain(..=at).collect(),
+            _ => vec![self.host_resets.remove(at)],
+        };
+        if self.reset.is_some_and(|reset| answered.contains(&reset)) {
             self.reset = None;
             if matches!(event, Event::ImeResetCompleted { .. }) {
                 self.stale = false;
@@ -490,8 +494,9 @@ pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, pas
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (frame_nr, pass_nr) = (ctx.cumulative_frame_nr_for(viewport), ctx.cumulative_pass_nr_for(viewport));
-    let app_ime = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation, ime.reset_request)));
-    let app_wrote = app_ime.map(|(owner, generation, _)| (owner, generation));
+    let app_wrote = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation)));
+    // egui publishes the app's request only in a pass that has an IME output.
+    let app_reset = app_wrote.and(os::app_reset(ctx, viewport));
     let (owner, interrupt, caret, update, published, host) = with(ctx, viewport, |engine| {
         let ran = std::mem::take(&mut engine.ran);
         if !ran {
@@ -510,10 +515,15 @@ pub(crate) fn end_pass(ctx: &Context) {
         let last_host = engine.host;
         let kept = engine.host.filter(|host| app_wrote.is_some_and(|(owner, _)| owner == host.owner)).is_some_and(|host| host.composing);
         engine.host = app_wrote.filter(|_| engine.owner.is_none()).map(|(owner, generation)| HostIme { owner, generation, composing: kept });
-        if let Some(id) = app_ime.filter(|_| engine.owner.is_none()).and_then(|(.., reset)| reset)
+        if let Some(id) = app_reset.filter(|_| engine.owner.is_none())
             && !engine.host_resets.contains(&id)
         {
             engine.host_resets.push(id);
+            // Completions arrive in request order: the latest request's completion ends the interrupted composition,
+            // whichever request the fence waited for.
+            if engine.stale {
+                engine.reset = Some(id);
+            }
         }
         // The fence has no request the integration can answer: the owner's output asks again, a framework editor's
         // or the app's own.
