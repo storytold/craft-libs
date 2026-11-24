@@ -68,7 +68,8 @@ pub struct DockAreaOutput<P> {
     pub events: Vec<DockEvent<P>>,
     /// The shown panel of the group that holds key focus: focus is on the group or on a control inside it.
     pub focused: Option<P>,
-    /// The panel whose tab the user clicked or picked this pass.
+    /// The panel whose tab the user clicked or picked this pass; a pick of the host's `DockArea::focus` is not the
+    /// user's and shows only in `actions`.
     pub picked: Option<P>,
     /// Why nothing was drawn, when the workspace is invalid.
     pub error: Option<InvalidGeometry>,
@@ -107,6 +108,7 @@ impl<P> Outcome for DockAreaOutput<P> {
 ///   actions the workspace took, divider sizes and window moves included. A given workspace is not written.
 /// - Requests: while the pass runs, a body changes the workspace through
 ///   [`request_actions`](crate::docking::request_actions); the output returns those actions unapplied in `requested`.
+///   The host moves key focus to a panel's group with [`focus`](DockArea::focus).
 /// - Hiding: [`hide`](DockArea::hide), the shell's panel visibility and [`maximized`](DockArea::maximized) prune
 ///   what shows; a pruned panel keeps its place for restore.
 /// - Drops: the area is the drop target of tab and group drags. Ctrl or Cmd held at the release floats the drop, and
@@ -151,6 +153,13 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// nothing.
     #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
+    /// Moves key focus to the group that shows the panel and picks its tab, as a click on the tab does: the group's
+    /// stop takes focus in this pass, and the pick is one of the pass's `actions`. A request of the pass: a host that
+    /// focuses a panel itself (it opened something in it) sets it for one pass. A panel the area does not show in this
+    /// pass (hidden, pruned by a maximize, in a closed flyout, or in a group the host's `group_view` draws) takes
+    /// neither; `DockAreaOutput::focused` tells the host where focus is.
+    #[prop]
+    focus: Option<P>,
     /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
     /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
     /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
@@ -183,6 +192,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked: false,
             flyout: None,
             continue_move: None,
+            focus: None,
             rail_footer: None,
             top_inset: 0.0,
         }
@@ -316,6 +326,8 @@ struct Scene<'s, P> {
     auto_collapse: bool,
     /// The panel whose window takes over the held press, with its grab point (`DockArea::continue_move`).
     continue_move: Option<(&'s P, Vec2)>,
+    /// The panel whose group takes key focus in this pass (`DockArea::focus`).
+    focus: Option<&'s P>,
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
@@ -491,6 +503,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked,
             mut flyout,
             continue_move,
+            focus,
             rail_footer,
             top_inset,
         } = self;
@@ -550,6 +563,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 maximized: maximized.as_ref(),
                 auto_collapse,
                 continue_move: continue_move.as_ref().map(|(panel, grab)| (panel, *grab)),
+                focus: focus.as_ref(),
                 sizes,
                 rtl,
                 rail_footer: rail_footer.as_ref(),
@@ -655,6 +669,7 @@ struct Input<'i, P> {
     maximized: Option<&'i P>,
     auto_collapse: bool,
     continue_move: Option<(&'i P, Vec2)>,
+    focus: Option<&'i P>,
     sizes: DockSizes,
     rtl: bool,
     rail_footer: Option<&'i P>,
@@ -689,8 +704,24 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, continue_move, sizes, rtl, rail_footer, top_inset } =
-        *input;
+    let Input {
+        id,
+        ctx,
+        current,
+        config,
+        specs,
+        keys,
+        hide,
+        model,
+        maximized,
+        auto_collapse,
+        continue_move,
+        focus,
+        sizes,
+        rtl,
+        rail_footer,
+        top_inset,
+    } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
@@ -712,6 +743,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         bounds,
         auto_collapse,
         continue_move,
+        focus,
         rtl,
         floated: current.floated(),
         rail_footer,
@@ -1058,6 +1090,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             return Some(height + grip);
         }
         let shown = &members[active];
+        // The host's focus request, when it names a panel of this group.
+        let focus = scene.focus.filter(|panel| members.contains(panel));
         let words = body.words::<MenuWords>();
         let ctx = ui.ctx().clone();
         let panels = RefCell::new(&mut *self.panels);
@@ -1148,7 +1182,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let taken = in_room(ui, view, |ui| panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body));
                 match taken {
                     Some(_) => None,
-                    None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output),
+                    None => {
+                        let group = make(active, look.minimized);
+                        let group = if focus.is_some() { group.take_focus() } else { group };
+                        Some(group.show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output)
+                    }
                 }
             })
             .inner;
@@ -1188,10 +1226,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let torn = torn.map(|(panel, pointer)| {
             float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel)), None, scene.rtl).action
         });
-        let picked = output.picked.and_then(|key| scene.panel(key));
+        let clicked = output.picked.and_then(|key| scene.panel(key));
+        if let Some(panel) = clicked {
+            self.report.picked = Some(panel.clone());
+        }
+        // The host's focus request picks its panel's tab as a click does; the user's click of the pass wins.
+        let picked = clicked.or(focus.filter(|panel| *panel != shown));
         if let Some(panel) = picked {
             self.report.actions.push(Action::activate(panel.clone()));
-            self.report.picked = Some(panel.clone());
         }
         // A tab picked in this pass is the group's shown panel from now on, though this pass drew the one before.
         if focus_within(ui.ctx(), output.response.id) {
