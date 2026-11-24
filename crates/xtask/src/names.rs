@@ -294,7 +294,8 @@ impl From<Error> for String {
 ///
 /// A file is identified by its path joined to `base`, and a relative `base` is joined to the
 /// current folder (on Windows, a drive-relative `base` such as `C:src` to the current folder of
-/// its drive) before any input is listed, so a relative and an absolute path to it are one file,
+/// its drive) before any input is listed. A drive-relative input (`C:a.rs`) is joined to the
+/// current folder of its drive instead. A relative and an absolute path to a file are one file,
 /// read once and reported by the input path that sorts first; `..` and links are not resolved.
 ///
 /// A [`Kind::Rust`] folder is read recursively for `.rs` files that [`Policy::skip`] keeps; links to
@@ -314,7 +315,7 @@ pub fn scan(base: &Path, inputs: &[Input<'_>], policy: &Policy<'_>) -> Result<Ve
         }
     }
     // A file is known by the path that is opened, so a relative and an absolute input for it are one.
-    let mut files: Vec<(PathBuf, Kind, PathBuf)> = files.into_iter().map(|(path, kind)| (root.join(&path), kind, path)).collect();
+    let mut files = files.into_iter().map(|(path, kind)| Ok((input_path(&root, &path)?, kind, path))).collect::<Result<Vec<_>, Error>>()?;
     files.sort();
     files.dedup_by(|later, first| later.0 == first.0 && later.1 == first.1);
     if let Some(pair) = files.windows(2).find(|pair| pair[0].0 == pair[1].0) {
@@ -341,6 +342,15 @@ fn absolute_base(base: &Path) -> Result<PathBuf, Error> {
     match parts.next() {
         Some(Component::Prefix(drive)) => Ok(std::path::absolute(drive.as_os_str()).map_err(error)?.join(parts.as_path())),
         _ => Ok(std::env::current_dir().map_err(error)?.join(base)),
+    }
+}
+
+/// The absolute path that `path` opens under the absolute `root`: `path` joined to `root`, or for a
+/// Windows drive-relative path (`C:a.rs`), joined to the current folder of its drive.
+fn input_path(root: &Path, path: &Path) -> Result<PathBuf, Error> {
+    match path.components().next() {
+        Some(Component::Prefix(_)) if !path.has_root() => absolute_base(path),
+        _ => Ok(root.join(path)),
     }
 }
 
@@ -585,8 +595,9 @@ pub struct Literal {
 /// Test-only code is the code under `#[cfg(test)]` and the rest of a module that starts with
 /// `#![cfg(test)]`. Under `#[cfg(test)]`, a `const`, `static` or `let` runs up to its `;`, another
 /// item up to its closing `}` or its `;`, and a field, argument, arm or statement up to its `,` or
-/// `;`; a `,` in an expression's generic arguments (`f::<A, B>`) or in the parameters of a closure
-/// that starts the expression does not end it. A block expression (a block, a macro's braces, a
+/// `;`; a `,` in generic arguments (`f::<A, B>`, `<Pair<A, B> as Fixture>::LABEL`, or a field's
+/// `field: Pair<A, B>`) or in the parameters of a closure that starts the expression (after any
+/// `move` or `&`) does not end it. A raw identifier (`r#let`) is never a keyword. A block expression (a block, a macro's braces, a
 /// labeled block, or `if`, `match`, `loop`, `while`, `for`, `unsafe`, `async` or `const`), as the
 /// whole statement or as an arm's expression after `=>`, ends at its `}`, or at the last `}` of an
 /// `if` with `else` branches; braces in the condition of an `if`, `while`, `match` or `for` (a
@@ -741,10 +752,11 @@ enum TestRegion {
     /// its `}` unless an `else` follows. A `.` or `?` after that `}` clears `block`, so the expression
     /// ends at its `;` or `,`. A `{` does not count as the first while `pattern` is set (between the
     /// `let` of an `if` or `while` condition and its `=`, or a `for` and its `in`), while `angle`
-    /// generic brackets are open (of an item's header, or after a `::` in an expression), or while
-    /// `params` is set (between the `|`s of a closure that starts the expression). A `,` does not
-    /// end it while `angle` or `params` is set either.
-    Item { level: usize, start: usize, opened: bool, item: bool, semi: bool, block: bool, pattern: bool, angle: usize, params: bool },
+    /// generic brackets are open (of an item's header, after a `::` or where an operand starts in an
+    /// expression, or in the type after `typed` is set), or while `params` is set (between the `|`s
+    /// of a closure that starts the expression). A `,` does not end it while `angle` or `params` is
+    /// set either. `typed` is set at the `:` after the name of a field or parameter (`name: Type`).
+    Item { level: usize, start: usize, opened: bool, item: bool, semi: bool, block: bool, pattern: bool, angle: usize, params: bool, typed: bool },
     /// The rest of the module that `#![cfg(test)]` starts, at this delimiter depth.
     Inner { level: usize },
 }
@@ -752,7 +764,18 @@ enum TestRegion {
 impl TestRegion {
     /// Test-only code at `level` whose code starts at `start`.
     fn item(level: usize, start: usize) -> Self {
-        TestRegion::Item { level, start, opened: false, item: false, semi: false, block: false, pattern: false, angle: 0, params: false }
+        TestRegion::Item {
+            level,
+            start,
+            opened: false,
+            item: false,
+            semi: false,
+            block: false,
+            pattern: false,
+            angle: 0,
+            params: false,
+            typed: false,
+        }
     }
 }
 
@@ -760,14 +783,44 @@ impl TestRegion {
 /// an item (`if let`, `for … in`).
 const HEADER_KEYWORDS: &[&str] = &["for", "if", "loop", "match", "while"];
 
+/// What the fields or parameters in a delimiter are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fields {
+    /// None are declared there: the delimiter is an expression's, a pattern's or a block's.
+    Untyped,
+    /// They are declared with their types: a struct's, union's or variant's named fields, or a
+    /// function's parameters.
+    Typed,
+    /// The types of a tuple struct's or tuple variant's fields.
+    Tuple,
+    /// An enum's variants, whose `{ .. }` and `( .. )` hold typed fields.
+    Variants,
+}
+
+/// A declaration whose fields or parameters have not opened yet.
+#[derive(Debug, Clone, Copy)]
+struct Declares {
+    /// The delimiter depth of its keyword.
+    level: usize,
+    /// Its keyword: `struct`, `union`, `enum` or `fn`.
+    keyword: &'static str,
+    /// The generic brackets of its header that are open (`fn f<F: Fn(u8)>`).
+    angle: usize,
+    /// Whether its `where` clause has started, after which only a `{` opens its fields.
+    after_where: bool,
+}
+
 struct Lexer<'s> {
     chars: Vec<char>,
     at: usize,
     line: usize,
     kinds: Literals,
     marker: Option<&'s str>,
-    /// Open delimiters and the line of each.
-    delims: Vec<(char, usize)>,
+    /// Open delimiters, the line of each, and what the fields or parameters in each are.
+    delims: Vec<(char, usize, Fields)>,
+    /// The next `{` or `(` that declares fields or parameters, after a `struct`, `union`, `enum` or
+    /// `fn`.
+    declares: Option<Declares>,
     test: Option<TestRegion>,
     /// Whether the last token read, past whitespace and comments, is a word.
     after_word: bool,
@@ -791,6 +844,7 @@ fn lex(source: &str, kinds: Literals, marker: Option<&str>) -> Result<Lexed, Syn
         kinds,
         marker,
         delims: Vec::new(),
+        declares: None,
         test: None,
         after_word: false,
         after_bang: false,
@@ -851,6 +905,7 @@ impl Lexer<'_> {
                 '=' => self.equals(),
                 '<' | '>' => self.angle(c),
                 '|' => self.pipe(),
+                ':' => self.colon(),
                 c if c.is_ascii_digit() => self.number(),
                 c if is_word(c) => self.word()?,
                 _ => self.at += 1,
@@ -866,7 +921,7 @@ impl Lexer<'_> {
             }
         }
         match self.delims.last() {
-            Some(&(_, line)) => Err(Self::error(line, "unclosed delimiter")),
+            Some(&(_, line, _)) => Err(Self::error(line, "unclosed delimiter")),
             None => Ok(()),
         }
     }
@@ -1046,12 +1101,31 @@ impl Lexer<'_> {
         }
     }
 
-    /// An identifier, or the prefix of a byte, C or raw literal.
+    /// An identifier, or the prefix of a byte, C or raw literal. A raw identifier (`r#let`) is read
+    /// whole, so its name is not taken for a keyword.
     fn word(&mut self) -> Result<(), SyntaxError> {
         let start = self.at;
         self.number();
+        let raw_name = self.peek(1).is_some_and(|c| is_word(c) && !c.is_ascii_digit());
+        if self.at == start + 1 && self.chars.get(start) == Some(&'r') && self.peek(0) == Some('#') && raw_name {
+            self.at += 1;
+            self.number();
+        }
         let word: String = self.chars.get(start..self.at).unwrap_or_default().iter().collect();
         self.header_word(start, &word);
+        // `union` is a keyword only before the union's name.
+        let named = word != "union" || !self.word_at(self.skip_space(self.at)).is_empty();
+        let keyword = ["struct", "union", "enum", "fn"].into_iter().find(|&k| k == word);
+        // A `fn` type in a declaration's header (`struct S<F = fn(u8)>`) does not replace it.
+        let in_header = self.declares.is_some_and(|d| d.level == self.delims.len() && (d.angle > 0 || d.after_where));
+        if let Some(keyword) = keyword.filter(|_| named && !in_header) {
+            self.declares = Some(Declares { level: self.delims.len(), keyword, angle: 0, after_where: false });
+        } else if word == "where"
+            && let Some(declares) = &mut self.declares
+            && declares.level == self.delims.len()
+        {
+            declares.after_where = true;
+        }
         match (word.as_str(), self.peek(0)) {
             ("b", Some('\'')) => self.quote(Form::Byte),
             ("b", Some('"')) => {
@@ -1114,30 +1188,140 @@ impl Lexer<'_> {
     }
 
     /// A `<` or `>` (not the `>` of `->`) opens or closes a generic bracket in an item's header
-    /// before its body, and in an expression from a `::<` until its brackets close
-    /// (`pair::<u8, u16>`), so that a comparison does not.
+    /// before its body. In an expression, a `<` opens one after a `::` (`pair::<u8, u16>`), where an
+    /// operand starts (`<Pair<u8, u16> as Fixture>::LABEL`), and after a word in the type of a field
+    /// or parameter when its `>` follows (`field: Pair<A, B>`), and the brackets stay open until
+    /// they close, so that a comparison (`a < b`) does not.
     fn angle(&mut self, c: char) {
         let arrow = c == '>' && self.at.checked_sub(1).and_then(|i| self.chars.get(i)) == Some(&'-');
         let turbofish = c == '<' && self.prev == Some(':') && self.prev_prev == Some(':');
+        let level_now = self.delims.len();
+        if let Some(declares) = &mut self.declares
+            && declares.level == level_now
+            && !arrow
+        {
+            declares.angle = if c == '<' { declares.angle + 1 } else { declares.angle.saturating_sub(1) };
+        }
+        // A tuple field is a type from its start.
+        let tuple = self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Tuple);
+        let generic = c == '<'
+            && match self.test {
+                Some(TestRegion::Item { level, start, item: false, angle: 0, typed, .. }) if level == level_now => {
+                    self.operand_starts(start) || ((typed || tuple) && self.after_word && self.angle_closes())
+                }
+                _ => false,
+            };
         if let Some(TestRegion::Item { level, opened, item, angle, .. }) = &mut self.test
             && *level == self.delims.len()
             && !arrow
-            && if *item { !*opened } else { turbofish || *angle > 0 }
+            && if *item { !*opened } else { turbofish || generic || *angle > 0 }
         {
             *angle = if c == '<' { *angle + 1 } else { angle.saturating_sub(1) };
         }
         self.at += 1;
     }
 
-    /// A `|` at the start of a test-only expression, after any `async` and `move`, opens the
-    /// parameters of a closure (`|a, b| ..`), and the next `|` at its level closes them.
+    /// Whether an operand starts at the current index in the test-only expression whose code starts
+    /// at `start`: at that code, or after an operator or a keyword that takes one.
+    fn operand_starts(&self, start: usize) -> bool {
+        if self.after_word {
+            return matches!(self.word_at(self.last_word).as_str(), "as" | "break" | "if" | "in" | "match" | "return" | "while");
+        }
+        self.code_start(start) == self.at || matches!(self.prev, Some('=' | '!' | '&' | '|' | '+' | '-' | '*' | '/' | '%' | '^' | ':'))
+    }
+
+    /// Whether the `<` at the current index has its `>` before a `;`, a `=>`, a closing delimiter of
+    /// its level, or a string or `.` that a type does not hold. Whitespace, comments, groups in
+    /// delimiters and character literals are passed over whole.
+    fn angle_closes(&self) -> bool {
+        let mut depth = 0_usize;
+        let mut at = self.at + 1;
+        loop {
+            at = self.skip_space(at);
+            let Some(&c) = self.chars.get(at) else { return false };
+            match c {
+                '(' | '[' | '{' => {
+                    let Some(end) = self.group_end(at) else { return false };
+                    at = end;
+                    continue;
+                }
+                ')' | ']' | '}' | ';' | '"' | '.' => return false,
+                '=' if self.chars.get(at + 1) == Some(&'>') => return false,
+                '-' if self.chars.get(at + 1) == Some(&'>') => at += 1,
+                '<' => depth += 1,
+                '>' if depth == 0 => return true,
+                '>' => depth -= 1,
+                '\'' => {
+                    at += match (self.chars.get(at + 1), self.chars.get(at + 2)) {
+                        (Some('\\'), _) => self.chars.get(at + 3..).and_then(|rest| rest.iter().position(|&q| q == '\'')).map_or(1, |end| end + 4),
+                        (Some(_), Some('\'')) => 3,
+                        _ => 1,
+                    };
+                    continue;
+                }
+                c if is_word(c) => {
+                    at += self.word_at(at).chars().count();
+                    continue;
+                }
+                _ => {}
+            }
+            at += 1;
+        }
+    }
+
+    /// A `:` (not part of a `::`) right after the name that starts a test-only field or parameter,
+    /// after any `pub`, starts its type (`name: Type`) in the fields of a struct, union or variant
+    /// and in a function's parameters, not in a struct expression.
+    fn colon(&mut self) {
+        let single = self.peek(1) != Some(':') && self.at.checked_sub(1).and_then(|i| self.chars.get(i)) != Some(&':');
+        let declared = self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Typed);
+        if single
+            && declared
+            && let Some(TestRegion::Item { level, start, item: false, typed: false, .. }) = self.test
+            && level == self.delims.len()
+            && self.name_before(start)
+            && let Some(TestRegion::Item { typed, .. }) = &mut self.test
+        {
+            *typed = true;
+        }
+        self.at += 1;
+    }
+
+    /// Whether the code at `start` is one name, after any `pub` and its `(..)`, that ends at the
+    /// current index.
+    fn name_before(&self, start: usize) -> bool {
+        let mut at = self.code_start(start);
+        if self.word_at(at) == "pub" {
+            at = self.skip_space(at + 3);
+            if self.chars.get(at) == Some(&'(') {
+                let Some(end) = self.group_end(at) else { return false };
+                at = self.skip_space(end);
+            }
+        }
+        let len = self.word_at(at).chars().count();
+        len > 0 && self.skip_space(at + len) == self.at
+    }
+
+    /// A `|` at the start of a test-only expression, after any `async`, `move` and borrow (`&`,
+    /// `&mut`), opens the parameters of a closure (`|a, b| ..`), and the next `|` at its level
+    /// closes them.
     fn pipe(&mut self) {
         if let Some(TestRegion::Item { level, start, item: false, params, .. }) = self.test
             && level == self.delims.len()
         {
             let mut code = self.code_start(start);
-            while matches!(self.word_at(code).as_str(), "async" | "move") {
-                code = self.skip_space(code + self.word_at(code).chars().count());
+            loop {
+                let word = self.word_at(code);
+                if matches!(word.as_str(), "async" | "move") {
+                    code = self.skip_space(code + word.chars().count());
+                } else if self.chars.get(code) == Some(&'&') {
+                    code = self.skip_space(code + 1);
+                    if self.word_at(code) == "mut" {
+                        code = self.skip_space(code + 3);
+                    }
+                } else {
+                    break;
+                }
             }
             let opens = !params && code == self.at;
             if let Some(TestRegion::Item { params, .. }) = &mut self.test {
@@ -1446,7 +1630,25 @@ impl Lexer<'_> {
                 *block = starts;
             }
         }
-        self.delims.push((c, self.line));
+        let level = self.delims.len();
+        let fields = match self.declares {
+            Some(Declares { level: at, keyword, angle: 0, after_where }) if at == level && (c == '{' || (c == '(' && !after_where)) => {
+                self.declares = None;
+                match (keyword, c) {
+                    ("enum", '{') => Fields::Variants,
+                    ("fn", _) | (_, '{') => Fields::Typed,
+                    _ => Fields::Tuple,
+                }
+            }
+            // A variant's `{ .. }` or `( .. )` after its name.
+            _ if self.after_word && self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Variants) => match c {
+                '{' => Fields::Typed,
+                '(' => Fields::Tuple,
+                _ => Fields::Untyped,
+            },
+            _ => Fields::Untyped,
+        };
+        self.delims.push((c, self.line, fields));
         self.at += 1;
     }
 
@@ -1472,8 +1674,8 @@ impl Lexer<'_> {
 
     fn close(&mut self, c: char) -> Result<(), SyntaxError> {
         let expected = match self.delims.pop() {
-            Some(('{', _)) => '}',
-            Some(('(', _)) => ')',
+            Some(('{', _, _)) => '}',
+            Some(('(', _, _)) => ')',
             Some(_) => ']',
             None => return Err(Self::error(self.line, "unmatched closing delimiter")),
         };
@@ -1482,6 +1684,9 @@ impl Lexer<'_> {
         }
         self.at += 1;
         let depth = self.delims.len();
+        if self.declares.is_some_and(|declares| declares.level > depth) {
+            self.declares = None;
+        }
         let ends = match self.test {
             Some(TestRegion::Item { level, opened, item, semi, block, .. }) => {
                 let block_end = opened && depth == level && c == '}';
@@ -1526,6 +1731,10 @@ impl Lexer<'_> {
     /// (`impl<A, B>`, a `where` clause) does not, and neither does one in an expression's generic
     /// arguments (`f::<A, B>`) or in the parameters of a closure that starts it.
     fn item_end(&mut self, comma: bool) {
+        // A unit struct (`struct S;`) declares no fields.
+        if !comma && self.declares.is_some_and(|declares| declares.level == self.delims.len()) {
+            self.declares = None;
+        }
         if let Some(TestRegion::Item { level, opened, item, semi, angle, params, .. }) = self.test
             && level == self.delims.len()
             && if comma { level > 0 && !item && angle == 0 && !params } else { !item || !opened || semi }
@@ -2173,6 +2382,96 @@ fn after() { let _ = "seven"; }
     }
 
     #[test]
+    fn test_only_types_and_qualified_paths_keep_their_generic_commas() {
+        let source = r#"struct S {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "one".len() }>,
+}
+fn arms(x: u8, a: u8, b: u8) {
+    match x {
+        #[cfg(test)]
+        0 => <Pair<u8, Tag<{ "AzureKit".len() }>> as Fixture>::LABEL,
+        #[cfg(test)]
+        1 => a < b,
+        _ => "two",
+    }
+    call(#[cfg(test)] a < b, "three");
+    let _ = S { #[cfg(test)] probe: a < b, label: "four" };
+    let _ = S { #[cfg(test)] probe: a < b, live: "six".len() > 0 };
+    let _ = S { #[cfg(test)] probe: a < b, live: x("seven") > d };
+    let _ = S { #[cfg(test)] probe: a < /* > */ b, live: "eight" };
+}
+fn typed(#[cfg(test)] p: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "five".len() }>) {}
+struct Bounds<'a> {
+    #[cfg(test)]
+    field: &'a dyn Foo<A: Send, B: Bar<{ "AzureKit".len() }>>,
+    live: Tag<{ "nine".len() }>,
+}
+enum E {
+    V {
+        #[cfg(test)]
+        field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+        live: Tag<{ "ten".len() }>,
+    },
+    W(#[cfg(test)] Pair<u8, Tag<{ "AzureKit".len() }>>, Tag<{ "eleven".len() }>),
+}
+fn bounded<F: Fn(u8, u16)>(#[cfg(test)] p: Pair<u8, Tag<{ "AzureKit".len() }>>, f: F) -> Tag<{ "twelve".len() }> {}
+struct Tuple(#[cfg(test)] pub Pair<u8, Tag<{ "AzureKit".len() }>>, Tag<{ "thirteen".len() }>);
+struct Where<F> where F: Fn(u8, u16) {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "fourteen".len() }>,
+}
+struct Defaulted<F = fn(u8, u16)> {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "fifteen".len() }>,
+}
+fn returns(x: u8) -> &'static str {
+    match x {
+        #[cfg(test)]
+        0 => return <Pair<u8, Tag<{ "AzureKit".len() }>> as Fixture>::LABEL,
+        _ => "sixteen",
+    }
+}
+"#;
+        let expected = [
+            "one", "two", "three", "four", "six", "seven", "eight", "five", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+            "sixteen",
+        ];
+        assert_eq!(literals(source), expected);
+    }
+
+    #[test]
+    fn test_only_borrowed_closures_keep_their_parameter_commas() {
+        let source = r#"fn arms(x: u8) {
+    match x {
+        #[cfg(test)]
+        0 => &|_, _| "AzureKit",
+        #[cfg(test)]
+        1 => &mut move |_, _| "AzureKit",
+        2 => &|_, _| "one",
+        _ => &|_, _| "two",
+    }
+}
+"#;
+        assert_eq!(literals(source), ["one", "two"]);
+    }
+
+    #[test]
+    fn a_raw_identifier_is_not_read_as_a_keyword() {
+        let source = r##"fn f(r#let: bool) {
+    #[cfg(test)] if r#let {}
+    let _ = "one";
+    #[cfg(test)] if r#let { "AzureKit"; }
+    let _ = r#"two"#;
+}
+"##;
+        assert_eq!(literals(source), ["one", "two"]);
+    }
+
+    #[test]
     fn braces_in_a_test_only_condition_are_not_its_body() {
         let source = r#"fn statements(ready: bool) {
     #[cfg(test)] if ready! { } { let _ = "AzureKit"; }
@@ -2337,6 +2636,17 @@ fn seven() { let _ = "seven"; }
         let fits = Policy { limits: Limits { max_total_bytes: size, ..DEFAULT_LIMITS }, ..POLICY };
         let same = [Input::manifest(Path::new("Cargo.toml")), Input::manifest(&absolute)];
         scan(Path::new(drive.as_os_str()), &same, &fits).unwrap();
+        // A drive-relative input names the file under the current folder of its drive.
+        let mut spelled = drive.as_os_str().to_os_string();
+        spelled.push("Cargo.toml");
+        let relative = PathBuf::from(spelled);
+        for base in [Path::new(drive.as_os_str()), current.as_path()] {
+            let same = [Input::manifest(&relative), Input::manifest(&absolute)];
+            scan(base, &same, &fits).unwrap();
+            let mixed = [Input::text(&relative), Input::manifest(&absolute)];
+            let err = scan(base, &mixed, &POLICY).unwrap_err();
+            assert!(matches!(&err, Error::Conflict { path } if path.ends_with("Cargo.toml")), "{err}");
+        }
     }
 
     #[test]
