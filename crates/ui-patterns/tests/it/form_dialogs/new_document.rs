@@ -1,6 +1,7 @@
 //! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards and
 //! the pixel aspect ratio.
 
+use craft_behavior::MotionMode;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, SaveKey, Show as _, clicked};
 use craft_ui::dialog::DialogHost;
@@ -35,10 +36,10 @@ fn shows(fixture: &Fixture, text: &str) -> bool {
 /// Opens `tab` and clicks the card titled `card` in it.
 fn pick(fixture: &mut Fixture, tab: &str, card: &str) {
     let target = fixture.by_label(tab).unwrap_or_else(|| panic!("the {tab} tab"));
-    fixture.click(&target).idle(10);
+    fixture.click(&target).settle();
     // A card's node is named by its title and size line together; its title is clicked where it is painted.
     let title = fixture.texts().iter().find(|painted| painted.text == card).map(|painted| painted.rect.center());
-    fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).idle(10);
+    fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).settle();
 }
 
 /// The most a host's count may be: its `fitted` caps it.
@@ -176,12 +177,13 @@ fn the_orientation_turns_the_built_in_cards() {
         let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
         *held.borrow_mut() = options;
     });
-    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    // The cards are read where they are painted, so the motion is off: a settled frame shows them at rest.
+    fixture.motion(MotionMode::Off).room(Vec2::new(1400.0, 1000.0)).settle();
     let art = fixture.by_label("Art & Illustration").expect("the Art tab");
-    fixture.click(&art).idle(10);
+    fixture.click(&art).settle();
     let turn = |fixture: &mut Fixture, orientation: &str| {
         let control = fixture.by_label(orientation).unwrap_or_else(|| panic!("the {orientation} control"));
-        fixture.click(&control).idle(10);
+        fixture.click(&control).settle();
     };
     let page = |shared: &Rc<RefCell<DocumentOptions>>| {
         let size = shared.borrow().size;
@@ -394,13 +396,14 @@ fn web_cards_turn_artboards_on_and_only_take_back_their_own() {
         let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
         *held.borrow_mut() = options;
     });
-    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    // The cards are read where they are painted, so the motion is off: a settled frame shows them at rest.
+    fixture.motion(MotionMode::Off).room(Vec2::new(1400.0, 1000.0)).settle();
     pick(&mut fixture, "Web", "Web Most Common");
     assert!(shared.borrow().artboard, "a Web card turns Artboards on");
     pick(&mut fixture, "Photo", "Landscape, 6 x 4");
     assert!(!shared.borrow().artboard, "a Photo card takes it back");
     let artboards = fixture.by_label("Artboards").expect("the Artboards box");
-    fixture.click(&artboards).idle(10);
+    fixture.click(&artboards).settle();
     pick(&mut fixture, "Photo", "Landscape, 7 x 5");
     assert!(shared.borrow().artboard, "the user's tick stays");
 }
