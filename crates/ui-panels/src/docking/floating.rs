@@ -18,6 +18,8 @@ use crate::contract::{
     Mount, NoValue, OsFiles, Outcome, Overlay, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing,
     WordSetCx as _,
 };
+use crate::display::Icon;
+use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -25,7 +27,7 @@ use crate::runtime::windows::WindowSpec;
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
-use craft_behavior::{GesturePhase, Metrics, Sense};
+use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
@@ -261,6 +263,14 @@ pub struct FloatingGroup<'a> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
+    /// The title row is a bare grip (a small handle that moves the window), with no menu, float or close action, no
+    /// column arrow and no rule under it: a quick-action strip's look.
+    #[prop]
+    grip: bool,
+    /// The surfaces the body paints keep to the window's rounded lower corners (`frame_surfaces`), and the window's
+    /// edge is drawn again over the body, which covers it along the sides: the window reads as one rounded piece.
+    #[prop]
+    rounded_body: bool,
     /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
     open: Bind<'a, bool>,
     taken: Option<HeaderAction>,
@@ -287,6 +297,14 @@ pub struct FloatingGroup<'a> {
     take_drop: Option<TakeDrop<'a>>,
     /// A move by the title began this pass.
     moving: bool,
+    /// The window takes over the held primary press in this pass: its own move gesture begins from that press with the
+    /// pointer at this point inside the window, so the window follows the pointer and, with
+    /// [`window_of`](FloatingGroup::window_of), docks where it would dock on release. A request of the pass, for the
+    /// pass after a rail's `torn_off`; without a held press it does nothing. Only a window on a layer takes the press:
+    /// the OS keeps a held button's moves with the window it went down in, so a group shown in an OS window
+    /// ([`native`](FloatingGroup::native)) moves only when pressed again.
+    #[prop(quantity = "grab point")]
+    continue_move: Option<Vec2>,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
 }
@@ -316,6 +334,8 @@ impl<'a> FloatingGroup<'a> {
             native: None,
             menu: None,
             actions: ACTIONS.to_vec(),
+            grip: false,
+            rounded_body: false,
             open: Bind::given(true),
             taken: None,
             menu_opener: None,
@@ -331,6 +351,7 @@ impl<'a> FloatingGroup<'a> {
             start_drag: None,
             take_drop: None,
             moving: false,
+            continue_move: None,
             files: Vec::new(),
         }
         .label(title)
@@ -378,11 +399,25 @@ impl<'a> FloatingGroup<'a> {
         // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
         let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
         let sizes = self.scale.map_or(sizes, |scale| sizes.at_scale(scale));
-        (self.header, self.chrome, self.rtl) = (sizes.title_row, sizes.window_chrome(self.native.is_none()), env.direction.is_rtl());
+        // A grip title row has no rule under it, so the chrome keeps no band for one.
+        (self.header, self.chrome, self.rtl) =
+            (sizes.title_row, sizes.window_chrome_ruled(self.native.is_none(), !self.grip), env.direction.is_rtl());
+        if self.grip {
+            self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
+        }
         let mount = self.mount();
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
-        let shown = self.show(ui, |ui, cx| (!minimized).then(|| body(ui, cx)));
+        // The window's lower corners: its body ends at the window's foot and sides.
+        let window = UiTokens::corner(env.tokens.shape.radius.window);
+        let lower = egui::CornerRadius { nw: 0, ne: 0, sw: window.sw, se: window.se };
+        let rounded = self.rounded_body;
+        let shown = self.show(ui, |ui, cx| {
+            if rounded {
+                crate::primitives::frame_surfaces(ui, cx.rect, lower);
+            }
+            (!minimized).then(|| body(ui, cx))
+        });
         Inner { output: shown.output, inner: shown.inner.flatten(), settle: shown.settle }
     }
 
@@ -424,6 +459,9 @@ impl<'a> FloatingGroup<'a> {
         if self.start_drag.is_some() {
             overlay = overlay.moved_by_app();
         }
+        if let Some(grab) = self.continue_move {
+            overlay = overlay.continue_move(grab);
+        }
         match &self.native {
             Some(spec) => Mount::viewport_with(overlay, spec.clone()),
             None => Mount::Layer(overlay),
@@ -438,7 +476,7 @@ impl<'a> FloatingGroup<'a> {
 
     /// The double arrow's square at the end of the title row the window keeps to.
     fn chevron_edge(&self) -> Option<HeaderEdge> {
-        let column = self.column.filter(|column| column.arrow.shown())?;
+        let column = self.column.filter(|column| column.arrow.shown() && !self.grip)?;
         Some(if column.edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start })
     }
 }
@@ -482,6 +520,9 @@ impl Component for FloatingGroup<'_> {
 
     /// The double arrow, over the title row's surface.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.rounded_body {
+            ui.draw().surface_edge(cx.rect, SurfaceKind::Floating);
+        }
         let Some(column) = self.column.filter(|_| self.chevron_declared) else { return };
         paint_chevron(ui, column.edge, column.arrow, column.collapsed.is_none(), cx.flow.is_rtl(), &cx.words::<DockWords>());
     }
@@ -543,6 +584,13 @@ impl Container for FloatingGroup<'_> {
         // A drag bar with no title: the tabs below name the panels. A collapsed column's title row is its bar alone,
         // the band and the double arrow; the menu, which a context request on the band opens, keeps its rows.
         let collapsed = self.column.is_some_and(|column| column.collapsed.is_some());
+        if self.grip {
+            ui.vertical_centered(|ui| {
+                let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(cx.words::<DockWords>().move_window.clone()).show(ui);
+            });
+            self.toggled |= cx.band_double_pressed();
+            return;
+        }
         let actions = if collapsed { &[][..] } else { &self.actions[..] };
         let shown = TitleRow::new("").strength(HeaderStrength::Bar).actions(actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);

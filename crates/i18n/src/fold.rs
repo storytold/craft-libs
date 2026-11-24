@@ -24,11 +24,14 @@ use icu_normalizer::DecomposingNormalizerBorrowed;
 use icu_properties::props::{GraphemeExtend, HangulSyllableType};
 use icu_properties::{CodePointMapData, CodePointSetData};
 
+use crate::scripts::{Direction, direction};
+
 /// Folds text for one locale. Cheap to build and copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Folder {
     turkic: bool,
     accents: bool,
+    rtl: bool,
 }
 
 impl Folder {
@@ -36,7 +39,11 @@ impl Folder {
     /// or `zh-hant` (any case, `-` or `_`).
     pub fn new(locale: &str) -> Folder {
         let language = locale.split(['-', '_', '.', '@']).next().unwrap_or_default();
-        Folder { turkic: language.eq_ignore_ascii_case("tr") || language.eq_ignore_ascii_case("az"), accents: false }
+        Folder {
+            turkic: language.eq_ignore_ascii_case("tr") || language.eq_ignore_ascii_case("az"),
+            accents: false,
+            rtl: direction(locale) == Direction::Rtl,
+        }
     }
 
     /// Accents count: `é` no longer matches `e`, and a match can't end on a letter whose accent it
@@ -48,6 +55,12 @@ impl Folder {
     /// Whether the locale is Turkic (`tr`, `az`): `I` folds to `ı` and `İ` to `i`.
     pub fn turkic(&self) -> bool {
         self.turkic
+    }
+
+    /// Whether the locale writes right to left, by its main script ([`direction`]); a locale with no script data is
+    /// left to right.
+    pub(crate) fn rtl(&self) -> bool {
+        self.rtl
     }
 
     /// `s` folded, with the map back to `s`.

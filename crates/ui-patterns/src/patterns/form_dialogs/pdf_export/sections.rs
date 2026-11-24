@@ -1,20 +1,23 @@
 //! The seven sections of Save PDF and the rows they share.
 
-use super::PdfSection;
 use super::words::PdfExportWords;
+use super::{PdfExportMode, PdfSection, PresetDraft};
+use crate::buttons::Button;
 use crate::choice::{Checkbox, Radio, RadioGroup};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
-use crate::layout_components::Stack;
+use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
-use crate::runtime::env::{Label, UnitKind, Units};
+use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::sections::{HeaderStrength, Section};
 use crate::style::TypeRole;
-use crate::text::{NumberField, TextField};
+use crate::text::{LinkMode, LinkedFields, NumberField, TextField};
 use craft_behavior::Mixed;
-use craft_pdf::settings::{Choice, ColorConversion, Compatibility, DOCUMENT_CMYK, Encryption, ImageCodec, ImageCompression, PdfSettings, Standard};
+use craft_pdf::settings::{
+    Choice, ColorConversion, Compatibility, DOCUMENT_CMYK, Downsample, Encryption, ImageCodec, ImageCompression, PdfSettings, Standard,
+};
 use craft_theme::variant::Tone;
 use egui::Ui;
 use std::ops::RangeInclusive;
@@ -31,16 +34,30 @@ const PERCENT: RangeInclusive<f64> = 0.0..=100.0;
 
 /// The artboards to write: all, or the typed range ("1-3, 5").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct ArtboardChoice {
+#[non_exhaustive]
+pub struct ArtboardChoice {
+    /// Only the typed range is written.
     pub range_only: bool,
+    /// The typed range ("1-3, 5").
     pub range: String,
 }
 
 /// The two check boxes that turn a password on. A password that is set keeps its box checked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct PasswordSwitches {
+#[non_exhaustive]
+pub struct PasswordSwitches {
+    /// The check box of the open password.
     pub open: bool,
+    /// The check box of the permissions password.
     pub permissions: bool,
+}
+
+/// The buttons of the sections that were pressed in this pass.
+pub(super) struct SectionPresses {
+    /// Custom… beside the flattener preset.
+    pub custom: bool,
+    /// Save Summary… under the Summary.
+    pub save_summary: bool,
 }
 
 /// What the sections read and edit in one pass.
@@ -58,6 +75,8 @@ pub(super) struct Sections<'a> {
     pub work: &'a mut PdfSettings,
     pub artboards: &'a mut ArtboardChoice,
     pub switches: &'a mut PasswordSwitches,
+    /// Whether the four bleed sides move together.
+    pub bleed_linked: &'a mut bool,
     /// Why the typed artboard range is refused, already worded.
     pub range_error: Option<&'a str>,
     /// The warnings of the Summary, already worded.
@@ -66,6 +85,14 @@ pub(super) struct Sections<'a> {
     pub changed: &'a [String],
     /// The chosen preset's name as shown.
     pub preset_name: &'a Label,
+    pub mode: PdfExportMode,
+    /// A custom flattener preset is in effect: the select shows it as "[Custom]".
+    pub custom_flattener: bool,
+    pub pressed: &'a mut SectionPresses,
+    /// The name and description a preset editor edits; its Description box stands in place of Artboards.
+    pub draft: Option<&'a mut PresetDraft>,
+    /// The artboards are the art bounds: General has no Artboards group.
+    pub art_bounds: bool,
 }
 
 impl Sections<'_> {
@@ -83,9 +110,9 @@ impl Sections<'_> {
 
     fn general(&mut self, ui: &mut Ui) {
         let words = self.words;
-        let plain = self.work.standard == Standard::None;
-        // PDF layers need PDF 1.5, and PDF/X-1a and PDF/X-3 have none.
-        let layers = self.work.standard.allows_layers() && self.work.compatibility.has_layers();
+        let plain = enabled(self.work, "preserveEditing");
+        let layers = enabled(self.work, "createLayers");
+        let long_pages = enabled(self.work, "longPagesInPoints");
         let work = &mut *self.work;
         group(ui, "options", &words.options, |ui| {
             flag(ui, "preserve", &words.preserve_editing, &mut work.preserve_editing, plain);
@@ -94,7 +121,20 @@ impl Sections<'_> {
             flag(ui, "view", &words.view_after_saving, &mut work.view_after_saving, true);
             flag(ui, "layers", &words.create_layers, &mut work.create_layers, layers);
             flag(ui, "nonprinting", &words.include_non_printing, &mut work.include_non_printing, true);
+            flag(ui, "longPages", &words.long_pages, &mut work.long_pages_in_points, long_pages);
         });
+        if let Some(draft) = self.draft.as_deref_mut() {
+            group(ui, "description", &words.description, |ui| {
+                let typed = TextField::new(words.description.clone(), Bind::given(draft.description.clone())).lines(4).show(ui);
+                if let Some(text) = typed.value().cloned() {
+                    draft.description = text;
+                }
+            });
+            return;
+        }
+        if self.art_bounds {
+            return;
+        }
         let artboards = &mut *self.artboards;
         let range_error = self.range_error;
         group(ui, "artboards", &words.artboards, |ui| {
@@ -173,19 +213,27 @@ impl Sections<'_> {
         });
         let bleed = &mut self.work.bleed;
         let document = self.document_bleed;
+        let linked = &mut *self.bleed_linked;
+        // A unit that needs the document's resolution shows in points.
+        let shown_unit = if length.per_inch(UnitKind::POINTS_PER_INCH).is_some() { length } else { UnitKind::Points };
         group(ui, "bleeds", &words.bleeds, |ui| {
             flag(ui, "document", &words.use_document_bleed, &mut bleed.use_document, true);
             // With the document's bleed the fields show it.
             let use_document = bleed.use_document;
-            let mut shown = if use_document { document } else { bleed.values() };
-            let sides = [("top", &words.top), ("bottom", &words.bottom), ("left", &words.left), ("right", &words.right)];
-            for (side, (id, label)) in sides.into_iter().enumerate() {
-                if let Some(points) = shown.get_mut(side) {
-                    length_row(ui, id, label, points, length, !use_document);
-                }
-            }
-            if !use_document {
-                [bleed.top, bleed.bottom, bleed.left, bleed.right] = shown;
+            let shown = if use_document { document } else { bleed.values() };
+            let sides =
+                LinkedFields::<4>::new(words.bleeds.clone(), Bind::given(shown.map(|points| Mixed::Same(Some(points)))), Bind::bound(&mut *linked))
+                    .mode(LinkMode::Equal)
+                    .captions([&words.top, &words.bottom, &words.left, &words.right].map(Clone::clone))
+                    .range(0.0..=MAX_LENGTH)
+                    .lengths(LengthUnits::new(UnitKind::Points, shown_unit, UnitKind::POINTS_PER_INCH))
+                    .enabled(!use_document)
+                    .show(ui);
+            if let Some([Mixed::Same(Some(top)), Mixed::Same(Some(bottom)), Mixed::Same(Some(left)), Mixed::Same(Some(right))]) =
+                sides.edit.value().copied()
+                && !use_document
+            {
+                (bleed.top, bleed.bottom, bleed.left, bleed.right) = (top, bottom, left, right);
             }
         });
     }
@@ -193,26 +241,25 @@ impl Sections<'_> {
     fn output(&mut self, ui: &mut Ui) {
         let (words, profiles) = (self.words, self.profiles);
         let standard = self.work.standard;
+        let profiles_on = enabled(self.work, "output.profiles");
         let work = &mut *self.work;
         let cmyk_only = standard.cmyk_only();
         group(ui, "color", &words.color, |ui| {
+            pick(ui, "conversion", "colorConversion", &words.color_conversion, words, &mut work.output.conversion, true);
+            let converting = enabled(work, "output.destination");
             let output = &mut work.output;
-            pick(ui, "conversion", "colorConversion", &words.color_conversion, words, &mut output.conversion, true);
-            // PDF/X-1a converts to CMYK even without a conversion.
-            let converting = output.conversion != ColorConversion::None || cmyk_only;
             let mut destinations = vec![(String::new(), words.document_profile.clone()), (DOCUMENT_CMYK.to_owned(), Label::from(DOCUMENT_CMYK))];
             destinations.extend(profiles.iter().map(|name| (name.clone(), Label::from(name.clone()))));
             name_row(ui, "destination", &words.destination, &mut output.destination, destinations, converting);
             // A standard decides whether colours are tagged.
-            pick(ui, "profiles", "profileInclusion", &words.profile_inclusion, words, &mut output.profiles, standard == Standard::None);
+            pick_or_unset(ui, "profiles", "profileInclusion", &words.profile_inclusion, words, &mut output.profiles, profiles_on);
             if cmyk_only {
                 note(ui, &words.note_cmyk_only);
             } else if standard != Standard::None {
                 note(ui, &words.note_tagged);
             }
         });
-        // PDF/A files carry their own output intent; PDF/X files always have one.
-        let own = standard != Standard::PdfA2b;
+        let own = enabled(work, "output.outputIntent");
         let blank = if standard.is_pdfx() { &words.cmyk_in_effect } else { &words.no_profile };
         group(ui, "intent", &words.output_intent, |ui| {
             let output = &mut work.output;
@@ -230,19 +277,20 @@ impl Sections<'_> {
     }
 
     fn advanced(&mut self, ui: &mut Ui) {
-        let (words, flatteners) = (self.words, self.flatteners);
-        // PDF 1.3 files (PDF/X-1a and PDF/X-3 ones too) have no transparency: it is flattened.
-        let flat = self.work.pdf13();
+        let (words, flatteners, custom_flattener) = (self.words, self.flatteners, self.custom_flattener);
+        let editor = self.mode == PdfExportMode::PresetEditor;
+        let pressed = &mut *self.pressed;
+        let flat = enabled(self.work, "flattenerPreset");
+        let subset_on = enabled(self.work, "advanced.fontSubsetPercent");
         let work = &mut *self.work;
         group(ui, "fonts", &words.fonts, |ui| {
             let advanced = &mut work.advanced;
-            let outlined = advanced.outline_text;
             number_row(
                 ui,
                 "subset",
                 &words.subset_below,
                 &mut advanced.font_subset_percent,
-                NumberSetup { kind: UnitKind::Percent, range: PERCENT, enabled: !outlined },
+                NumberSetup { kind: UnitKind::Percent, range: PERCENT, enabled: subset_on },
             );
             note(ui, &words.of_characters);
             flag(ui, "outline", &words.outline_text, &mut advanced.outline_text, true);
@@ -258,6 +306,7 @@ impl Sections<'_> {
             // The empty name and the ids `high`, `medium` and `low` name the built-in presets.
             let built_in = ["high", "medium", "low"];
             let mut current = match work.flattener_preset.trim() {
+                _ if custom_flattener => words.custom_flattener.as_str().to_owned(),
                 "" => "High Resolution".to_owned(),
                 id if built_in.iter().any(|name| name.eq_ignore_ascii_case(id)) => {
                     let at = built_in.iter().position(|name| name.eq_ignore_ascii_case(id)).unwrap_or_default();
@@ -266,7 +315,12 @@ impl Sections<'_> {
                 name => name.to_owned(),
             };
             let before = current.clone();
-            name_row(ui, "flattener", &words.flattener_preset, &mut current, presets, flat);
+            Row::new().show(ui, |ui, _| {
+                name_row(ui, "flattener", &words.flattener_preset, &mut current, presets.clone(), flat);
+                if !editor && clicked(&Button::new(words.custom.clone()).id_salt("custom").enabled(flat).show(ui)) {
+                    pressed.custom = true;
+                }
+            });
             if current != before {
                 work.flattener_preset = current;
             }
@@ -280,6 +334,7 @@ impl Sections<'_> {
         let words = self.words;
         let plain = self.work.standard == Standard::None;
         let compatibility = self.work.compatibility;
+        let plaintext_rule = enabled(self.work, "security.plaintextMetadata");
         let security = &mut self.work.security;
         let switches = &mut *self.switches;
         let mut open = false;
@@ -304,7 +359,7 @@ impl Sections<'_> {
             if !security.copy {
                 security.screen_reader = reader;
             }
-            let plaintext_ok = (open || restrict) && !matches!(compatibility, Compatibility::Pdf13 | Compatibility::Pdf14);
+            let plaintext_ok = (open || restrict) && plaintext_rule;
             flag(ui, "plaintext", &words.plaintext_metadata, &mut security.plaintext_metadata, plaintext_ok);
             let name = Encryption::for_compatibility(compatibility).label();
             note_text(ui, words.encryption_note.fill(&[("name", name)]));
@@ -342,6 +397,67 @@ impl Sections<'_> {
                 }
             });
         });
+        if clicked(&Button::new(words.save_summary.clone()).id_salt("save-summary").show(ui)) {
+            self.pressed.save_summary = true;
+        }
+    }
+}
+
+/// Whether the to and above rows of an image apply: its downsampling is on.
+fn resamples(downsample: Downsample) -> bool {
+    downsample != Downsample::None
+}
+
+/// Whether the codec has a quality.
+fn is_lossy(codec: ImageCodec) -> bool {
+    !matches!(codec, ImageCodec::None | ImageCodec::Zip)
+}
+
+/// Whether the setting at `path` (a path of `summary::leaves`) can be changed under the other settings: the one place
+/// the rows and a host's write ask. A password row's enable also follows the dialog's switches, which are not
+/// settings, so those rows keep the switch and ask only for the standard's rule.
+pub(super) fn enabled(settings: &PdfSettings, path: &str) -> bool {
+    let standard = settings.standard;
+    let plain = standard == Standard::None;
+    match path {
+        "preserveEditing" => plain,
+        // PDF layers need PDF 1.5, and PDF/X-1a and PDF/X-3 have none.
+        "createLayers" => standard.allows_layers() && settings.compatibility.has_layers(),
+        // Only a file without a standard and above PDF 1.4 can carry a page over the limit at all.
+        "longPagesInPoints" => plain && !matches!(settings.compatibility, Compatibility::Pdf13 | Compatibility::Pdf14),
+        // PDF/X-1a converts to CMYK even without a conversion.
+        "output.destination" => settings.output.conversion != ColorConversion::None || standard.cmyk_only(),
+        // A standard decides whether colours are tagged.
+        "output.profiles" => plain,
+        // PDF/A files carry their own output intent; PDF/X files always have one.
+        "output.outputIntent" | "output.outputCondition" | "output.outputConditionId" | "output.registry" | "output.trapped" => {
+            standard != Standard::PdfA2b
+        }
+        "advanced.fontSubsetPercent" => !settings.advanced.outline_text,
+        // PDF 1.3 files (PDF/X-1a and PDF/X-3 ones too) have no transparency: it is flattened.
+        "flattenerPreset" => settings.pdf13(),
+        "bleed.top" | "bleed.bottom" | "bleed.left" | "bleed.right" => !settings.bleed.use_document,
+        "security.openPassword" | "security.permissionsPassword" | "security.printing" | "security.changes" | "security.copy" => plain,
+        // What can be copied can be read out.
+        "security.screenReader" => plain && !settings.security.copy,
+        "security.plaintextMetadata" => plain && !matches!(settings.compatibility, Compatibility::Pdf13 | Compatibility::Pdf14),
+        _ => match path.strip_prefix("compression.").and_then(|rest| rest.split_once('.')) {
+            Some((kind, field)) => {
+                let compression = &settings.compression;
+                let (downsample, codec) = match kind {
+                    "color" => (compression.color.downsample, Some(compression.color.compression)),
+                    "gray" => (compression.gray.downsample, Some(compression.gray.compression)),
+                    "mono" => (compression.mono.downsample, None),
+                    _ => return true,
+                };
+                match field {
+                    "ppi" | "abovePpi" => resamples(downsample),
+                    "quality" => codec.is_none_or(is_lossy),
+                    _ => true,
+                }
+            }
+            None => true,
+        },
     }
 }
 
@@ -349,14 +465,13 @@ impl Sections<'_> {
 fn image_rows(ui: &mut Ui, words: &PdfExportWords, image: &mut ImageCompression) {
     resample_rows(ui, words, &mut image.downsample, &mut image.ppi, &mut image.above_ppi);
     pick(ui, "codec", "imageCodec", &words.compression, words, &mut image.compression, true);
-    let lossy = !matches!(image.compression, ImageCodec::None | ImageCodec::Zip);
-    pick(ui, "quality", "jpegQuality", &words.quality, words, &mut image.quality, lossy);
+    pick(ui, "quality", "jpegQuality", &words.quality, words, &mut image.quality, is_lossy(image.compression));
 }
 
 /// Downsampling, to and above rows of one kind of image.
-fn resample_rows(ui: &mut Ui, words: &PdfExportWords, downsample: &mut craft_pdf::settings::Downsample, ppi: &mut f64, above: &mut f64) {
+fn resample_rows(ui: &mut Ui, words: &PdfExportWords, downsample: &mut Downsample, ppi: &mut f64, above: &mut f64) {
     pick(ui, "downsample", "downsample", &words.downsampling, words, downsample, true);
-    let enabled = *downsample != craft_pdf::settings::Downsample::None;
+    let enabled = resamples(*downsample);
     for (id, label, value) in [("ppi", &words.to, ppi), ("above", &words.above, above)] {
         number_row(ui, id, label, value, NumberSetup { kind: UnitKind::PixelsPerInch, range: PPI, enabled });
     }
@@ -391,8 +506,18 @@ fn flag(ui: &mut Ui, id: &'static str, label: &Label, value: &mut bool, enabled:
     }
 }
 
+/// Every choice of `T` with its words.
+fn entries<T: Choice + Copy>(kind: &str, words: &PdfExportWords) -> Vec<(T, Label)> {
+    T::ALL
+        .iter()
+        .zip(T::IDS)
+        .zip(T::LABELS)
+        .map(|((choice, choice_id), choice_label)| (*choice, words.choice(kind, choice_id, choice_label)))
+        .collect()
+}
+
 /// A list of the choices of `T`, worded through `words`.
-fn pick<T: Choice + PartialEq + Send + Sync>(
+fn pick<T: Choice + Copy + PartialEq + Send + Sync>(
     ui: &mut Ui,
     id: &'static str,
     kind: &str,
@@ -401,14 +526,30 @@ fn pick<T: Choice + PartialEq + Send + Sync>(
     value: &mut T,
     enabled: bool,
 ) {
-    let entries: Vec<Entry<T>> = T::ALL
-        .iter()
-        .zip(T::IDS)
-        .zip(T::LABELS)
-        .map(|((choice, choice_id), choice_label)| Entry::new(*choice, words.choice(kind, choice_id, choice_label)))
-        .collect();
+    let entries: Vec<Entry<T>> = entries::<T>(kind, words).into_iter().map(|(choice, text)| Entry::new(choice, text)).collect();
     field(ui, id, label, enabled, |ui| {
         let chosen = Select::new(label.clone(), Bind::given(*value), &entries).show(ui);
+        if let Some(next) = chosen.value().cloned() {
+            *value = next;
+        }
+    });
+}
+
+/// A list of the choices of `T` with a first entry, `words.profile_default`, that stands for `None`.
+// PLAN: the contract's `unset: &Label` argument is dropped (it only ever is `words.profile_default`); it kept the fn over clippy's argument limit.
+fn pick_or_unset<T: Choice + Copy + PartialEq + Send + Sync>(
+    ui: &mut Ui,
+    id: &'static str,
+    kind: &str,
+    label: &Label,
+    words: &PdfExportWords,
+    value: &mut Option<T>,
+    enabled: bool,
+) {
+    let mut options = vec![Entry::new(None, words.profile_default.clone())];
+    options.extend(entries::<T>(kind, words).into_iter().map(|(choice, text)| Entry::new(Some(choice), text)));
+    field(ui, id, label, enabled, |ui| {
+        let chosen = Select::new(label.clone(), Bind::given(*value), &options).show(ui);
         if let Some(next) = chosen.value().cloned() {
             *value = next;
         }

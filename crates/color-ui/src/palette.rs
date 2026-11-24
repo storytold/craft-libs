@@ -147,7 +147,7 @@ impl SwatchColor {
     }
 }
 
-/// How an `.ase` file marks a colour.
+/// How a swatch is marked: its `.ase` kind, or the built-in Registration swatch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(rename_all = "camelCase")]
@@ -159,25 +159,102 @@ pub enum SwatchKind {
     Global,
     #[allow(missing_docs)]
     Spot,
+    /// The built-in Registration swatch: the global CMYK colour that prints on every plate.
+    Registration,
+}
+
+/// What a swatch holds.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
+#[non_exhaustive]
+pub enum SwatchPaint {
+    /// A colour.
+    Color(SwatchColor),
+    /// A tint of a named base swatch, with the colour it resolves to.
+    Tint {
+        /// The base swatch's name.
+        base: String,
+        /// The tint, 0–1.
+        tint: f32,
+        /// The resolved colour.
+        color: SwatchColor,
+    },
+    /// A gradient; its value is the host's, keyed by the entry's name.
+    Gradient,
+    /// A pattern; its value is the host's, keyed by the entry's name.
+    Pattern,
+    /// The None swatch.
+    None,
+}
+
+impl From<SwatchColor> for SwatchPaint {
+    /// The colour as a [`SwatchPaint::Color`].
+    fn from(color: SwatchColor) -> Self {
+        SwatchPaint::Color(color)
+    }
 }
 
 /// One named swatch.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
+#[serde(from = "SwatchEntryWire", into = "SwatchEntryWire")]
 pub struct SwatchEntry {
     /// The swatch's label.
     pub name: String,
-    /// The swatch's colour.
-    pub color: SwatchColor,
-    #[serde(default)]
+    /// What the swatch holds.
+    pub paint: SwatchPaint,
     /// How the file marks the colour; `Process` unless the file says otherwise.
     pub kind: SwatchKind,
+}
+
+/// The stored form of a [`SwatchEntry`]. It still reads an entry stored as `{name, color, kind}`, which holds a
+/// colour, and writes `paint` only.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SwatchEntryWire {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<SwatchColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paint: Option<SwatchPaint>,
+    #[serde(default)]
+    kind: SwatchKind,
+}
+
+impl From<SwatchEntryWire> for SwatchEntry {
+    fn from(wire: SwatchEntryWire) -> Self {
+        let paint = wire.paint.or(wire.color.map(SwatchPaint::Color)).unwrap_or(SwatchPaint::None);
+        SwatchEntry { name: wire.name, paint, kind: wire.kind }
+    }
+}
+
+impl From<SwatchEntry> for SwatchEntryWire {
+    fn from(entry: SwatchEntry) -> Self {
+        SwatchEntryWire { name: entry.name, color: None, paint: Some(entry.paint), kind: entry.kind }
+    }
 }
 
 impl SwatchEntry {
     /// A process swatch.
     pub fn new(name: impl Into<String>, color: SwatchColor) -> SwatchEntry {
-        SwatchEntry { name: name.into(), color, kind: SwatchKind::Process }
+        SwatchEntry { name: name.into(), paint: SwatchPaint::Color(color), kind: SwatchKind::Process }
+    }
+
+    /// A process swatch holding `paint`.
+    pub fn with_paint(name: impl Into<String>, paint: SwatchPaint) -> SwatchEntry {
+        SwatchEntry { name: name.into(), paint, kind: SwatchKind::Process }
+    }
+
+    /// The swatch's colour: the colour of a `Color` or `Tint` paint, else `None`.
+    pub fn color(&self) -> Option<&SwatchColor> {
+        match &self.paint {
+            SwatchPaint::Color(color) | SwatchPaint::Tint { color, .. } => Some(color),
+            _ => None,
+        }
+    }
+
+    /// Whether the swatch is reserved: a `None` paint or the Registration kind.
+    pub fn is_reserved(&self) -> bool {
+        self.kind == SwatchKind::Registration || matches!(self.paint, SwatchPaint::None)
     }
 }
 
@@ -223,6 +300,9 @@ pub enum SwatchNote {
     /// An `.act` read whose trailer names a transparent index: the 1-based colour number, so a read reports what it
     /// could not keep.
     TransparentKept(usize),
+    /// The format holds colours only: gradient, pattern and None swatches were skipped, with their
+    /// count.
+    PaintsSkipped(usize),
 }
 
 /// Why a swatch file could not be read or written.
@@ -291,7 +371,8 @@ pub fn read_swatches(bytes: &[u8], file_name: &str) -> Result<(Vec<SwatchGroup>,
             let (mut n, mut skipped) = (0usize, 0usize);
             let mut convert = |s: &AseSwatch| {
                 n += 1;
-                let entry = from_ase(&s.color).map(|color| SwatchEntry { name: entry_name(n - 1, &s.name), color, kind: s.kind });
+                let entry =
+                    from_ase(&s.color).map(|color| SwatchEntry { name: entry_name(n - 1, &s.name), paint: SwatchPaint::Color(color), kind: s.kind });
                 skipped += usize::from(entry.is_none());
                 entry
             };
@@ -330,20 +411,21 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
     }
     let mut report = SwatchReport::default();
     let all = || groups.iter().flat_map(|g| g.entries.iter());
-    let kinds = all().filter(|e| e.kind != SwatchKind::Process).count();
+    let kinds = all().filter(|e| e.color().is_some() && e.kind != SwatchKind::Process).count();
+    let skipped = all().filter(|e| e.color().is_none()).count();
     let flattened = groups.len() > 1;
-    match format {
+    let bytes = match format {
         SwatchFormat::Aco => {
             if count_swatches(groups) > ACO_MAX_SWATCHES {
                 return Err(malformed(format, "an .aco file holds at most 65535 swatches"));
             }
-            let entries: Vec<(String, AcoColor)> = all().map(|e| (e.name.clone(), to_aco(&e.color))).collect();
+            let entries: Vec<(String, AcoColor)> = all().filter_map(|e| e.color().map(|c| (e.name.clone(), to_aco(c)))).collect();
             if flattened {
                 report.notes.push(SwatchNote::GroupsFlattened);
             }
             push_note(&mut report, kinds, SwatchNote::KindsDropped);
             push_note(&mut report, names_cut(groups, false), SwatchNote::NamesCut);
-            Ok((write_aco(&entries), report))
+            write_aco(&entries)
         }
         SwatchFormat::Act => {
             let (colors, books, converted) = rgb_colors(groups);
@@ -364,7 +446,7 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
             out.resize(ACT_PALETTE_LEN, 0);
             out.extend((triplets.len() as u16).to_be_bytes());
             out.extend(0xFFFFu16.to_be_bytes());
-            Ok((out, report))
+            out
         }
         SwatchFormat::Ase => {
             if count_swatches(groups) > ASE_MAX_SWATCHES || groups.len() > ASE_MAX_GROUPS {
@@ -377,8 +459,8 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
                 put_ase_name(&mut name, &g.name);
                 put_ase_block(&mut body, ASE_GROUP_START, &name);
                 blocks += 2;
-                for e in &g.entries {
-                    match to_ase(&e.color) {
+                for (e, color) in g.entries.iter().filter_map(|e| e.color().map(|c| (e, c))) {
+                    match to_ase(color) {
                         Some(color) => {
                             put_ase_color(&mut body, &e.name, &color, e.kind);
                             blocks += 1;
@@ -396,7 +478,7 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
             out.extend(0u16.to_be_bytes());
             out.extend(blocks.to_be_bytes());
             out.extend(body);
-            Ok((out, report))
+            out
         }
         SwatchFormat::Gpl | SwatchFormat::Css => {
             let (colors, books, converted) = rgb_colors(groups);
@@ -409,9 +491,11 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
             } else {
                 write_css(groups, &colors)
             };
-            Ok((text.into_bytes(), report))
+            text.into_bytes()
         }
-    }
+    };
+    push_note(&mut report, skipped, SwatchNote::PaintsSkipped);
+    Ok((bytes, report))
 }
 
 /// PhotoCraft's default swatches (46 RGB colours in five groups: Grays, the exact RGB primaries
