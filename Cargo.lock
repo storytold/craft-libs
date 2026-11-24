@@ -3841,6 +3841,7 @@ name = "craft-ps"
 version = "0.1.0"
 dependencies = [
  "craft-eps",
+ "craft-testkit",
  "flate2",
  "kurbo",
  "miniz_oxide 0.8.9",
