@@ -118,7 +118,8 @@ impl Outcome for PathOptionsOutput {
 ///   focus to the gear; a press outside closes it.
 /// - The popover reports every change at once; there is no OK button.
 /// - A host whose tool fits a path to the pointer's trace adds the Curve Fit row after Thickness and Color with
-///   [`curve_fit`](Self::curve_fit); without it the popover has no such row and reports nothing for one.
+///   [`curve_fit`](Self::curve_fit); Tab then reaches it between Default and Rubber Band. Without the call the
+///   popover has no such row and reports nothing for one.
 #[must_use = "show the popover with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct PathOptionsPopover<'a> {
