@@ -219,7 +219,8 @@ name repeated ignoring case each stop the extraction. `ExtractOptions` holds the
 The tar data, decompressed or plain, is bounded too: `max_expanded_bytes` plus 12 KiB for headers,
 padding and long-name records for each entry `max_entries` allows, plus one more. A gzip archive is
 read to its end, so a damaged checksum or a cut trailer stops the extraction. Each file is written through a temporary file and a rename, so an
-existing file at its name is replaced whole. Archives are not inferred from a file name: the
+existing file at its name is replaced whole. Files are written one at a time, so a write error
+after the checks leaves the files written before it in place. Archives are not inferred from a file name: the
 caller chooses `fetch_archive` or `fetch_pinned`.
 
 The pins come from the caller. Reading a manifest file into pins is left to the caller.

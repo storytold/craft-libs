@@ -265,7 +265,9 @@ pub fn fetch_archive_with(dest: &Path, archive: &Pin<'_>, options: &ExtractOptio
 /// or total over `options`, a link, device or other special entry, a path that is absolute,
 /// holds `..`, is not UTF-8 or is not portable, a file name repeated ignoring case, and a name
 /// used for both a file and a folder each stop it with nothing written. Each file is then written
-/// through a temporary file and a rename; an existing file at that name is replaced.
+/// through a temporary file and a rename; an existing file at that name is replaced. Files are
+/// written one at a time, so a write error after the checks leaves the files written before it in
+/// place.
 pub fn extract(dest: &Path, name: &str, bytes: &[u8], options: &ExtractOptions) -> Result<Vec<String>, FetchError> {
     let items = read_tar(name, bytes, options)?;
     prepare(dest)?;
