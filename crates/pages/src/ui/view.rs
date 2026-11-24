@@ -24,7 +24,7 @@ use crate::layout::{
 };
 use craft_behavior::geometry::{SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
-use craft_behavior::{Axis, CanvasView, NavMove, PressPhase, ZoomLadder};
+use craft_behavior::{Axis, CanvasView, NavMove, PressPhase, ZoomScheme};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor,
@@ -247,12 +247,11 @@ impl PageViewState {
         self.turn = Some(forward);
     }
 
-    /// Zoom In / Zoom Out: the next rung of craft-ui's [`ZoomLadder`] above (or below) the shown zoom, within
-    /// [`ZOOM_RANGE`] (Photoshop's rungs, the suite's one zoom ladder); a fit ends. The zoom a fit showed is the
-    /// start.
-    pub fn zoom_step(&mut self, larger: bool) {
+    /// Zoom In / Zoom Out: the next rung of `scheme` above (or below) the shown zoom, within [`ZOOM_RANGE`]; a fit
+    /// ends. The zoom a fit showed is the start.
+    pub fn zoom_step(&mut self, larger: bool, scheme: &ZoomScheme) {
         self.fit = Fit::None;
-        self.zoom = ZoomLadder::step_in_range(self.zoom, if larger { 1 } else { -1 }, ZOOM_RANGE);
+        self.zoom = scheme.step_in_range(self.zoom, if larger { 1 } else { -1 }, ZOOM_RANGE);
     }
 
     /// The state as a pass reads it: the rotation one of the four quarter turns (rounded down), the zoom within

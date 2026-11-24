@@ -17,7 +17,8 @@
 //!
 //! Points are screen points (egui points), or document points with `coordinates: "document"`, which the application
 //! maps to the screen through its canvas ([`DocumentMap`]). Document-coordinate `ui.pointer` events are the
-//! application's own method: they drive its tool host, not the window.
+//! application's own method: they drive its tool host, not the window. With `control: {name, role?, within?, index?}`
+//! a point is the centre of that control's rect, `x` and `y` an offset from it ([`access::Target`]).
 //!
 //! A node of the access tree (`id` or `label`, [`NodeTarget`]) is clicked or focused through the node's own action
 //! instead of a point: [`crate::access::resolve`] finds it in the window's kept tree when the request arrives, so a
@@ -32,7 +33,7 @@ use craft_ui::runtime::windows::{Released, WindowHost};
 use egui::{Pos2, Vec2, ViewportId, pos2, vec2};
 use serde_json::Value;
 
-use crate::access::{NodeTarget, inject_click, inject_context_menu, inject_focus};
+use crate::access::{self, NodeTarget, inject_click, inject_context_menu, inject_focus};
 use crate::protocol::{BUTTONS, KEY_MODIFIERS, Params};
 
 /// Most clicks one `ui.click` may ask for (`count`).
@@ -62,22 +63,37 @@ pub const NOT_FINITE: &str = "the point must be finite";
 /// when no canvas shows a document. Applications without documents pass `&|_, _| None`.
 pub type DocumentMap<'a> = &'a dyn Fn(usize, Pos2) -> Option<Pos2>;
 
-/// A point of a request: screen points, or document points the application maps.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A point of a request: screen points, document points the application maps, or an offset from a named control.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum At {
     /// Screen points.
     Screen(Pos2),
     /// Document points on page `page` (0 when the request names none).
     Document(Pos2, usize),
+    /// An offset from the centre of the rect of the control `target` names.
+    #[non_exhaustive]
+    Control {
+        /// The control.
+        target: access::Target,
+        /// The offset from the rect's centre.
+        offset: Vec2,
+    },
 }
 
 impl At {
-    /// `x` and `y`, each defaulting to 0, in the space `coordinates` names (`screen`, the default, or `document`).
+    /// `x` and `y`, each defaulting to 0, in the space `coordinates` names (`screen`, the default, or `document`); with
+    /// `control` they are an offset in points from the control's centre, and `coordinates` is refused.
     fn from_params(p: &Params<'_>) -> Result<Self, String> {
         let range = Some((-MAX_SCREEN_POINT, MAX_SCREEN_POINT));
         let x = p.number_in("x", "x", range)?.unwrap_or(0.0) as f32;
         let y = p.number_in("y", "y", range)?.unwrap_or(0.0) as f32;
+        if let Some(control) = p.0.get("control") {
+            if p.0.get("coordinates").is_some() {
+                return Err("`coordinates` and `control` exclude each other".into());
+            }
+            return Ok(Self::Control { target: access::Target::from_params(control)?, offset: vec2(x, y) });
+        }
         Self::in_space(p, pos2(x, y))
     }
 
@@ -97,23 +113,30 @@ impl At {
     }
 
     /// The screen point, through `map` for a document point; [`NO_DOCUMENT`] when the map has none, and
-    /// [`OFF_SCREEN`] when it maps beyond [`MAX_SCREEN_POINT`]; a point that is not finite is [`NOT_FINITE`].
-    pub fn resolve(self, map: DocumentMap<'_>) -> Result<Pos2, String> {
+    /// [`OFF_SCREEN`] when it maps beyond [`MAX_SCREEN_POINT`]; a point that is not finite is [`NOT_FINITE`]. A control
+    /// point is the centre of the rect `controls` gives it plus the offset, or the error `controls` gives.
+    pub fn resolve(&self, map: DocumentMap<'_>, controls: access::ControlMap<'_>) -> Result<Pos2, String> {
         match self {
-            Self::Screen(at) if at.x.is_finite() && at.y.is_finite() => Ok(at),
+            Self::Control { target, offset } => Ok(controls(target)?.center() + *offset),
+            Self::Screen(at) if at.x.is_finite() && at.y.is_finite() => Ok(*at),
             Self::Screen(_) => Err(NOT_FINITE.to_owned()),
             Self::Document(at, _) if !(at.x.is_finite() && at.y.is_finite()) => Err(NOT_FINITE.to_owned()),
             Self::Document(at, page) => {
-                let on_screen = map(page, at).ok_or_else(|| NO_DOCUMENT.to_owned())?;
+                let on_screen = map(*page, *at).ok_or_else(|| NO_DOCUMENT.to_owned())?;
                 let within = |v: f32| v.is_finite() && f64::from(v.abs()) <= MAX_SCREEN_POINT;
                 if within(on_screen.x) && within(on_screen.y) { Ok(on_screen) } else { Err(OFF_SCREEN.to_owned()) }
             }
         }
     }
+
+    /// [`At::resolve`] against the controls of the access tree the host kept for `viewport`.
+    fn place(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<Pos2, String> {
+        self.resolve(map, &|target| target.rect(host, viewport))
+    }
 }
 
 /// The point fields every pointer request takes.
-const POINT: [&str; 4] = ["x", "y", "coordinates", "page"];
+const POINT: [&str; 5] = ["x", "y", "coordinates", "page", "control"];
 /// The modifier fields ([`crate::protocol::KEY_MODIFIERS`], top-level or under `modifiers`).
 const MODIFIERS: [&str; 5] = ["modifiers", "shift", "alt", "command", "ctrl"];
 
@@ -233,7 +256,7 @@ impl Click {
         match &self.target {
             ClickTarget::At(at) => {
                 let count = u32::try_from(self.count).unwrap_or(u32::MAX);
-                host.inject_click(viewport, at.resolve(map)?, self.button, count, self.mods, self.hold);
+                host.inject_click(viewport, at.place(host, viewport, map)?, self.button, count, self.mods, self.hold);
                 Ok(())
             }
             ClickTarget::Node(node) => {
@@ -273,10 +296,14 @@ impl Move {
 
     /// Queues the move in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        host.inject_move(viewport, self.at.resolve(map)?, self.mods, self.rest);
+        let at = self.at.place(host, viewport, map)?;
+        host.inject_move(viewport, at, self.mods, self.rest);
         Ok(())
     }
 }
+
+/// The most notches one `ui.wheel` turn in lines may ask for, either way.
+pub const MAX_NOTCHES: f32 = 100.0;
 
 /// A validated `ui.wheel`.
 #[derive(Clone, Debug, PartialEq)]
@@ -286,23 +313,33 @@ pub struct Wheel {
     pub at: At,
     /// The scroll in points, as egui reports it (positive `y` scrolls towards the content's top).
     pub delta: Vec2,
+    /// Whether `delta` is in points or in whole notches of lines.
+    pub unit: egui::MouseWheelUnit,
     /// Modifiers held from the turn on.
     pub mods: Mods,
 }
 
 impl Wheel {
-    /// `{x?, y?, coordinates?, dx?, dy?, modifiers…}`, no other fields; `dx` and `dy` are points, default 0.
+    /// `{x?, y?, coordinates?, dx?, dy?, unit?, modifiers…}`, no other fields; `dx` and `dy` are default 0, in points
+    /// or, with `unit: "lines"`, in whole notches (rounded, at most [`MAX_NOTCHES`] either way). `unit` defaults to
+    /// `"points"`.
     pub fn from_params(params: &Value) -> Result<Self, String> {
-        let p = only(params, &["dx", "dy"])?;
+        let p = only(params, &["dx", "dy", "unit"])?;
         let p = Params(&p);
         let dx = p.number_in("dx", "dx", None)?.unwrap_or(0.0) as f32;
         let dy = p.number_in("dy", "dy", None)?.unwrap_or(0.0) as f32;
-        Ok(Self { at: At::from_params(&p)?, delta: vec2(dx, dy), mods: p.modifiers(&KEY_MODIFIERS)? })
+        let notches = |turn: f32| turn.round().clamp(-MAX_NOTCHES, MAX_NOTCHES);
+        let (unit, delta) = match p.choice("unit", "unit", &["points", "lines"])?.unwrap_or("points") {
+            "lines" => (egui::MouseWheelUnit::Line, vec2(notches(dx), notches(dy))),
+            _ => (egui::MouseWheelUnit::Point, vec2(dx, dy)),
+        };
+        Ok(Self { at: At::from_params(&p)?, delta, unit, mods: p.modifiers(&KEY_MODIFIERS)? })
     }
 
     /// Queues the move and the turn in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        host.inject_wheel(viewport, self.at.resolve(map)?, self.delta, self.mods);
+        let at = self.at.place(host, viewport, map)?;
+        host.inject_wheel(viewport, at, self.delta, self.unit, self.mods);
         Ok(())
     }
 }
@@ -336,7 +373,7 @@ impl KeyPress {
 }
 
 /// A validated `ui.release`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Release {
     /// Where the release happens; where the pointer is when absent.
@@ -346,10 +383,10 @@ pub struct Release {
 }
 
 impl Release {
-    /// `{button?, key?, x?, y?, coordinates?}`, no other fields. With neither `button` nor `key` everything held is
-    /// released, the modifiers too; both is ``"`button` and `key` exclude each other"``.
+    /// `{button?, key?, x?, y?, coordinates?, page?, control?}`, no other fields. With neither `button` nor `key` everything
+    /// held is released, the modifiers too; both is ``"`button` and `key` exclude each other"``.
     pub fn from_params(params: &Value) -> Result<Self, String> {
-        let p = Params(params).only(None, &["button", "key", "x", "y", "coordinates", "page"])?;
+        let p = Params(params).only(None, &["button", "key", "x", "y", "coordinates", "page", "control"])?;
         let p = Params(&p);
         let released = match (button(&p)?, key(&p)?) {
             (Some(_), Some(_)) => return Err("`button` and `key` exclude each other".into()),
@@ -357,13 +394,13 @@ impl Release {
             (None, Some(key)) => Released::Key(key),
             (None, None) => Released::All,
         };
-        let at = (p.0.get("x").is_some() || p.0.get("y").is_some()).then(|| At::from_params(&p)).transpose()?;
+        let at = ["x", "y", "control"].iter().any(|field| p.0.get(*field).is_some()).then(|| At::from_params(&p)).transpose()?;
         Ok(Self { at, released })
     }
 
     /// Queues the release in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        let at = self.at.map(|at| at.resolve(map)).transpose()?;
+        let at = self.at.as_ref().map(|at| at.place(host, viewport, map)).transpose()?;
         host.inject_release(viewport, at, self.released);
         Ok(())
     }
@@ -422,8 +459,8 @@ fn drop_files(params: &Value, host: &WindowHost, viewport: ViewportId, map: Docu
         return Err(PATHS.into());
     }
     let hover_only = p.bool_field("hover_only")?.unwrap_or(false);
-    let at = (p.0.get("x").is_some() || p.0.get("y").is_some()).then(|| At::from_params(&p)).transpose()?;
-    let at = at.map(|at| at.resolve(map)).transpose()?;
+    let at = (p.0.get("x").is_some() || p.0.get("y").is_some() || p.0.get("control").is_some()).then(|| At::from_params(&p)).transpose()?;
+    let at = at.map(|at| at.place(host, viewport, map)).transpose()?;
     host.inject_files(viewport, at, paths, !hover_only);
     Ok(())
 }

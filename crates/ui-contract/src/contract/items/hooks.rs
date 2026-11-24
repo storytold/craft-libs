@@ -274,7 +274,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
         self.open_lead(comp);
-        self.follow_lead_source();
+        self.follow_lead_source(comp);
         // A lead set in place (from the selection, `open_lead`, a row that left) has not rested yet: a lead that comes
         // back to a row it rested on before reports the rest again.
         if self.lead.rested != self.lead.key {
@@ -354,7 +354,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             }
             None => cx.core.memory.session::<Held<C::Selection>>(sub(id, "selection")).0 = self.selection.clone(),
         }
-        self.selection_at_read = self.selection.clone();
     }
 
     fn content(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, values: &AppValues) {
@@ -373,7 +372,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let base_env = Self::rows_env(comp, env, id, cx.core.resolved.size, own).derive(|scoped| scoped.extend_values(values));
         let known = self.known(comp, false);
         let known_at_read = self.known(comp, true);
+        let declared = self.offset;
         let revealed = self.place_reveal(comp, ui, (id, cx.core.env, &base_env), (&mut layout, &known), rect);
+        // The parts (the scroll bar's thumb among them) stand at the offset before the reveal moved it: the next pass
+        // declares them where the rows now are, and a memoized view around the rows runs it instead of replaying this.
+        if self.offset != declared {
+            crate::runtime::egui::repaint::request(&ctx);
+        }
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
@@ -510,6 +515,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     cells,
                     grid: grid.as_ref(),
                     tip: None,
+                    detail: None,
                     openers: Vec::new(),
                     item: item_id,
                     memory: &mut *cx.core.memory,
@@ -520,6 +526,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let item = (self.item)(&key, &mut icx);
                 let mut item = comp.dress(item, &state);
                 let tip = icx.tip.take();
+                let detail = icx.take_detail(layout.is_auto(at));
                 let openers = std::mem::take(&mut icx.openers);
                 drop(icx);
                 item = Props::id(item, item_id);
@@ -554,12 +561,15 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         Some((row_ui, installed))
                     }
                 };
+                // The height of the leaf of a row with a detail body; the slot is the leaf and the body.
+                let mut leaf_height: Option<f32> = None;
                 // A row is a run or a member, so one of the two is there.
                 if let Some((measure_ui, _)) = row_ui.as_ref().or(members_ui.as_ref()) {
                     // A row this pass measured is placed by that measure. A row it did not measure (one the reveal's
                     // scroll or a kept lead brings in) is measured here. A restated row is measured again with its new
                     // state; a size other than the one the pass placed by asks for the frame's discard pass, so the
-                    // rerun places it from step 5.
+                    // rerun places it from step 5. A row with a detail body measures its leaf here every pass: its
+                    // height is the leaf's and the body's, recorded once the body is shown.
                     let (measured_size, measured_widths) = fresh[place];
                     if layout.auto_widths() && (measured_widths.is_none() || restated) {
                         let widths = Vec2::new(item.measure_in(measure_ui, Proposal::Ideal).x, item.measure_in(measure_ui, Proposal::Min).x);
@@ -571,42 +581,64 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         row = self.screen(&layout, rect, at, offset, rtl);
                     }
                     let measured_size = measured_size.filter(|size| (size.x - row.width()).abs() <= tolerance);
-                    if layout.is_auto(at) && (measured_size.is_none() || restated) {
-                        let measured = item.measure_in(measure_ui, Proposal::Width(row.width())).y;
+                    if layout.is_auto(at) && (detail.is_some() || measured_size.is_none() || restated) {
+                        let size = item.measure_in(measure_ui, Proposal::Width(row.width()));
+                        let measured = size.y;
                         #[cfg(feature = "testing")]
                         crate::runtime::measure::count_row_measure(&ctx, rows::measured_id(id, &key));
-                        rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
-                        if measured_size.is_some_and(|before| (before.y - measured).abs() > tolerance) {
-                            layout_memory::ask_discard(&ctx);
-                        }
-                        if measured != row.height() {
-                            Arc::make_mut(&mut layout).set_height(at, measured);
-                            row = self.screen(&layout, rect, at, offset, rtl);
+                        if detail.is_some() {
+                            leaf_height = Some(measured);
+                        } else {
+                            rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
+                            if measured_size.is_some_and(|before| (before.y - measured).abs() > tolerance) {
+                                layout_memory::ask_discard(&ctx);
+                            }
+                            let fit = rows::fits(&item).then_some(size.x);
+                            let refit = rows::keep_fit(&ctx, id, key_hash(&key), fit);
+                            if measured != row.height() || refit {
+                                let held = Arc::make_mut(&mut layout);
+                                held.set_height(at, measured);
+                                held.set_fit(at, fit);
+                                row = self.screen(&layout, rect, at, offset, rtl);
+                            }
                         }
                     }
                     if let Some(column) = &fit {
-                        let (_, cells) = crate::runtime::measure::cell_widths(&ctx, || item.measure_in(measure_ui, Proposal::Ideal));
-                        if let Some((_, width)) = cells.iter().find(|(held, _)| held == column) {
-                            fit_widest = fit_widest.max(*width);
-                        }
+                        fit_widest = fit_widest.max(cell_width(&ctx, &mut item, measure_ui, column).unwrap_or_default());
                     }
                 }
+                let leaf = leaf_height.map_or(row, |height| Rect::from_min_size(row.min, Vec2::new(row.width(), height)));
                 // A member has no node of its own: it reports as a sub-node of the collection's.
                 let row_node = if C::MEMBERS { super::members::lead_node(id, &key) } else { item_id };
-                shown_rows.push(ShownRow::new(key.clone(), row_node, row, shown_cells.clone()).with_hover(state.hovered));
+                shown_rows.push(ShownRow::new(key.clone(), row_node, leaf, shown_cells.clone()).with_hover(state.hovered));
                 let Some((mut row_ui, installed)) = row_ui else {
-                    debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
+                    debug_assert!(tip.is_none() && detail.is_none(), "a member of a collection's run takes no rich tooltip and no detail body");
                     let shown = shown_rows.len() - 1;
                     members.push(Member { at, key, item, row, clip, flags, position, renaming: state.renaming, openers, shown });
                     continue;
                 };
                 let out = match tip {
-                    Some(tip) => item.show_at_with_tip(&mut row_ui, row, tip),
-                    None => item.show_at(&mut row_ui, row),
+                    Some(tip) => item.show_at_with_tip(&mut row_ui, leaf, tip),
+                    None => item.show_at(&mut row_ui, leaf),
                 };
+                if let Some(body) = detail {
+                    // The body's stops follow the leaf's: it shows inside the item's scope, under the leaf.
+                    let below = Rect::from_min_size(Pos2::new(row.min.x, leaf.max.y), Vec2::new(row.width(), f32::INFINITY));
+                    let builder = UiBuilder::new().max_rect(below).layout(child::column_layout(rtl)).scope_id(sub(item_id, "detail"));
+                    let mut body_ui = alloc::child(&mut row_ui, builder);
+                    body_ui.set_clip_rect(clip);
+                    body(&mut body_ui);
+                    let total = leaf.height() + body_ui.min_rect().height();
+                    rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), total));
+                    if (total - row.height()).abs() > tolerance {
+                        Arc::make_mut(&mut layout).set_height(at, total);
+                        // The rows after this one were placed by the old height: the frame's discard pass places them by the new one.
+                        layout_memory::ask_discard(&ctx);
+                    }
+                }
                 // After the row is shown: its toggle cells have recorded their names by then.
                 self.report_toggle_cells(&ctx, (id, item_id), (at, &key), (shown_cells.as_slice(), cx.core.resolved.enabled), &cx.core.env);
-                let label = out.label_rect().unwrap_or(row);
+                let label = out.label_rect().unwrap_or(leaf);
                 self.slow_click_label(&key, label);
                 crate::runtime::keys::redirect_node(&ctx, item_id, id, ITEM_NODE.at(key_hash(&key)));
                 if let Some(row) = shown_rows.last_mut() {
@@ -904,6 +936,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 }
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
+    /// Goes on renaming after a Shift+Enter commit: the field holds the applied name `name`, selected whole when focus
+    /// is requested again, and the next commit is its own undo step.
+    fn continue_rename(&mut self, ctx: &Context, name: String) {
+        self.renaming.draft = name;
+        self.renaming.focused = false;
+        self.renaming.proposed = false;
+        self.renaming.gesture = crate::runtime::edit::next_gesture_id(ctx);
+        self.refocus = false;
+    }
+
     /// The rename editor of the row `(at, key)` being renamed, over its label rect `label`, and the end of the rename
     /// it reports.
     pub(super) fn rename_row(
@@ -921,6 +963,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.renaming.draft = draft;
         if let Some(editor) = editor {
             let gesture = self.renaming.gesture;
+            let shifted = editor.submitted && editor.submit_mods.shift;
             let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
             let (end, escaped) = rename_input(ctx, &editor, rtl, &mut self.renaming.focused, &mut self.refocus);
             match end {
@@ -932,8 +975,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 }
                 Some(EditEvent::Commit { after, .. }) => {
                     let after = Rename { key: key.clone(), name: after };
+                    let applied = after.name.clone();
                     self.events.push(CollectionEvent::Rename(EditEvent::commit(gesture, before, after)));
-                    self.ended_rename = true;
+                    if shifted {
+                        self.continue_rename(ctx, applied);
+                    } else {
+                        self.ended_rename = true;
+                    }
                 }
                 Some(EditEvent::Cancel { reason, .. }) => {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, reason, Some(before))));
@@ -942,12 +990,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 // Enter on a proposed draft nobody typed in commits it. Enter on the row's own name opens no edit run: the
                 // rename ends with no event and no undo step, as a text field's empty commit does.
                 None if editor.submitted => {
+                    let applied = self.renaming.draft.clone();
                     if self.renaming.proposed {
-                        let after = Rename { key: key.clone(), name: self.renaming.draft.clone() };
+                        let after = Rename { key: key.clone(), name: applied.clone() };
                         self.events.push(CollectionEvent::Rename(EditEvent::commit(gesture, before, after)));
                     }
-                    self.ended_rename = true;
-                    self.refocus = true;
+                    if shifted {
+                        self.continue_rename(ctx, applied);
+                    } else {
+                        self.ended_rename = true;
+                        self.refocus = true;
+                    }
                 }
                 None if editor.left_by_tab.is_some() => {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Blur, Some(before))));
@@ -966,6 +1019,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
         }
     }
+}
+
+/// The width `item` gives its cell in `column` at its ideal width in `ui`; `None` when it has no cell there.
+fn cell_width(ctx: &Context, item: &mut impl crate::contract::Show, ui: &Ui, column: &craft_behavior::ColumnKey) -> Option<f32> {
+    let (_, cells) = crate::runtime::measure::cell_widths(ctx, || item.measure_in(ui, Proposal::Ideal));
+    cells.into_iter().find(|(held, _)| held == column).map(|(_, width)| width)
 }
 
 /// Apply the collection's wheel displacement, the page and end moves a descendant left untaken and any reveal left by
@@ -1122,6 +1181,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let ctx = ui.ctx();
         rows::measured_heights(ctx, id, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
+        rows::restore_fits(ctx, id, &mut layout, self.source.len(), |at| key_hash(&self.source.key(at)));
         if layout.auto_widths() {
             rows::measured_widths(ctx, id, |width| {
                 for at in 0..self.source.len() {

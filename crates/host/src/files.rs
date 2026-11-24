@@ -5,7 +5,8 @@
 //! arrives on a later pass through [`Files::take_answer`]. One picker shows at a time; later
 //! requests wait in order. A request starts in its own [`PickRequest::directory`] when it names
 //! one; otherwise the service starts it in the last folder it remembers for the
-//! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it.
+//! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it,
+//! and a Save answer ([`Picked::Saved`]) reports the file type picked in the panel.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -169,9 +170,17 @@ pub struct PickId(pub u64);
 pub enum Picked {
     /// The user cancelled.
     Cancelled,
-    /// One or more paths. For [`PickKind::Save`] the extension policy has been applied, and the
-    /// service has already asked about replacing an existing file the OS panel did not check.
+    /// One or more existing paths, the answer of an Open or Folder pick.
     Paths(Vec<PathBuf>),
+    /// Every [`PickKind::Save`] answer: the extension policy has been applied, and the service has
+    /// already asked about replacing an existing file the OS panel did not check. `file_type` is the index into the request's `filters` of the
+    /// type picked in the panel, when the panel reports one.
+    Saved {
+        /// The path chosen.
+        path: PathBuf,
+        /// The index of the picked type in the request's `filters`.
+        file_type: Option<usize>,
+    },
     /// Files read by the browser (wasm): name and contents.
     Contents(Vec<(String, Vec<u8>)>),
     /// No picker could be shown (no desktop portal or `zenity` on Linux, no window to attach to);
@@ -190,28 +199,39 @@ impl Picked {
     pub fn first_path(&self) -> Option<PathBuf> {
         match self {
             Picked::Paths(paths) => paths.first().cloned(),
+            Picked::Saved { path, .. } => Some(path.clone()),
             Picked::Contents(files) => files.first().map(|(name, _)| PathBuf::from(name)),
             Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => None,
         }
     }
 
     /// Whether the document is now the file a finished save made. A save answers
-    /// [`Picked::Paths`] with the file it made: the path a native service wrote, or the name
+    /// [`Picked::Saved`] with the file it made: the path a native service wrote, or the name
     /// under which a hosted browser page now holds the document. A browser download answers
     /// [`Picked::Downloaded`], which names a file the page does not hold, so this is false for it.
     /// The app sets its session path only when this is true.
     pub fn records_file(&self) -> bool {
-        matches!(self, Picked::Paths(paths) if !paths.is_empty())
+        matches!(self, Picked::Saved { .. })
     }
 
     /// Every chosen path; on wasm the files' names. Empty when cancelled or unavailable.
     pub fn paths(&self) -> Vec<PathBuf> {
         match self {
             Picked::Paths(paths) => paths.clone(),
+            Picked::Saved { path, .. } => vec![path.clone()],
             Picked::Contents(files) => files.iter().map(|(name, _)| PathBuf::from(name)).collect(),
             Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Vec::new(),
         }
     }
+}
+
+/// A pick that is on screen or waiting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingPick {
+    /// The request.
+    pub request: PickRequest,
+    /// Whether the panel is attached to the app window (macOS Save), so the window must not close.
+    pub sheet: bool,
 }
 
 /// One answered pick.
@@ -286,8 +306,9 @@ pub trait Files: Send + Sync {
     /// Drops ticket `id`: its answer, if it has come, and the answer that has yet to come. An
     /// owner that closes with a pick outstanding calls it.
     fn forget(&self, id: PickId);
-    /// Whether a picker is on screen or waiting.
-    fn pick_pending(&self) -> bool;
+    /// The oldest pick not yet answered (the one on screen), including one waiting on the service's
+    /// Replace question; `None` when none.
+    fn pending_pick(&self) -> Option<PendingPick>;
     /// Reads the whole file at `path`.
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError>;
     /// Writes atomically where the platform allows (temp file and rename). `Ok(true)` when a host page took the bytes
@@ -304,7 +325,7 @@ pub trait Files: Send + Sync {
     /// Queues a save of `bytes` as ticket `request`'s answer, taken with
     /// [`take_answer`](Files::take_answer): the desktop service asks for the path, then writes
     /// atomically; the browser service opens the save picker or makes one download. Counted in
-    /// [`pick_pending`](Files::pick_pending).
+    /// [`pending_pick`](Files::pending_pick).
     fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId;
     /// Whether a pick can answer paths that [`read`](Files::read) opens again.
     fn can_pick(&self) -> bool;
@@ -345,8 +366,8 @@ impl Files for NoPickFiles {
         self.answered.lock().unwrap_or_else(|e| e.into_inner()).retain(|a| a.id != id);
     }
 
-    fn pick_pending(&self) -> bool {
-        false
+    fn pending_pick(&self) -> Option<PendingPick> {
+        None
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -405,7 +426,7 @@ impl Files for NoPickFiles {
 /// records every [`PickRequest`], keeps files in memory, and answers each pick in order from the
 /// answers the test queued: the first queued answer goes to the first pick, and a pick with
 /// nothing queued is `Cancelled`. A [`save`](Files::save) is a pick whose bytes go to the chosen
-/// path in memory when it is answered with `Paths`.
+/// path in memory when it is answered with `Saved`.
 ///
 /// A test that expects no picker asserts [`requests`](ScriptedFiles::requests) is empty. Every
 /// method takes `&self`, so a test keeps its own `Arc<ScriptedFiles>` and hands a clone to the
@@ -425,6 +446,8 @@ struct ScriptState {
     held: bool,
     /// A Save is answered with the suggested name in the suggested folder.
     save_suggested: bool,
+    /// Picks report `sheet: true` in [`PendingPick`].
+    sheets: bool,
     /// Picks the test has not answered yet, oldest first.
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
@@ -443,8 +466,7 @@ impl ScriptState {
     /// Files `picked` as ticket `id`'s answer; a save's bytes go to the path it chose.
     fn settle(&mut self, id: PickId, request: PickRequest, picked: Picked) {
         if let Some(bytes) = self.saves.remove(&id)
-            && let Picked::Paths(paths) = &picked
-            && let Some(path) = paths.first()
+            && let Picked::Saved { path, .. } = &picked
         {
             self.files.insert(path.clone(), bytes);
         }
@@ -479,6 +501,12 @@ impl ScriptedFiles {
     /// queue as before.
     pub fn saving_suggested(self) -> Self {
         self.state().save_suggested = true;
+        self
+    }
+
+    /// Scripted picks report `sheet: on`.
+    pub fn sheets(self, on: bool) -> Self {
+        self.state().sheets = on;
         self
     }
 
@@ -553,7 +581,7 @@ impl ScriptedFiles {
     /// The suggested name of a Save in its suggested folder.
     fn suggested(request: &PickRequest) -> Picked {
         let name = PathBuf::from(request.file_name.clone().unwrap_or_default());
-        Picked::Paths(vec![request.directory.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name))])
+        Picked::Saved { path: request.directory.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name)), file_type: None }
     }
 
     /// Records `request` and answers it from the script; a save's `bytes` wait for the answer.
@@ -594,8 +622,9 @@ impl Files for ScriptedFiles {
         state.saves.remove(&id);
     }
 
-    fn pick_pending(&self) -> bool {
-        !self.state().open.is_empty()
+    fn pending_pick(&self) -> Option<PendingPick> {
+        let state = self.state();
+        state.open.first().map(|(_, request)| PendingPick { request: request.clone(), sheet: state.sheets })
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {

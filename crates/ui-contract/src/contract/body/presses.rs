@@ -7,18 +7,20 @@ use crate::contract::cx::CxCore;
 use crate::runtime::egui::areas;
 use crate::runtime::memory::sub;
 use crate::runtime::pointer;
-use craft_behavior::{Cursor, CursorPriority, PartRef, PressState};
+use craft_behavior::{Cursor, CursorPriority, PartRef, PointerButton, PressState};
+use egui::Pos2;
 
 /// Whether the second press of a double click went down on the container's move band in this pass.
 #[derive(Clone, Default)]
 struct BandDouble(bool);
 
-/// Whether the primary press of this pass went down on the container's own surface (`Sense::SURFACE`), and whether it
-/// is the second of a double click.
+/// Whether the primary press of this pass went down on the container's own surface (`Sense::SURFACE`), whether it
+/// is the second of a double click, and whether this pass's release completes a click that began there.
 #[derive(Clone, Default)]
 struct SurfacePress {
     pressed: bool,
     double: bool,
+    clicked: bool,
 }
 
 impl BodyCx<'_> {
@@ -53,6 +55,13 @@ impl BodyCx<'_> {
         !self.memory.is_peek() && self.memory.recall::<SurfacePress>(sub(self.id, "surface_press")).double
     }
 
+    /// Whether this pass's primary release ends a press that went down on the container's own surface, moved less
+    /// than `PointerFrame::slop` and was released inside. A drag, a cancel, a release elsewhere and a measuring run
+    /// give false. It takes no focus and is no Tab stop.
+    pub fn surface_clicked(&self) -> bool {
+        !self.memory.is_peek() && self.memory.recall::<SurfacePress>(sub(self.id, "surface_press")).clicked
+    }
+
     /// Requests `cursor` at `priority` for this pass, in the cursor service the parts' and components' requests go
     /// to: the highest priority of the pass wins, the later request on a tie. A body that learns something only after
     /// its children ran (a drag its panes report as refused) sets the cursor in the same pass. A measuring run
@@ -66,26 +75,52 @@ impl BodyCx<'_> {
 
 impl BodyHooks<'_> {
     /// Records for the container's hooks whether this pass's primary press went down on its own surface
-    /// (`BodyCx::surface_pressed`): no shape of last pass under the press takes it, and the press lies in the
+    /// (`BodyCx::surface_pressed`): no shape of last pass under the press takes it, nor a component's text widget
+    /// egui gives it to (a focused field's), and the press lies in the
     /// container's rect on its layer; and whether that press is the second of a double click
-    /// (`BodyCx::surface_double_pressed`), read from the same press's click count.
+    /// (`BodyCx::surface_double_pressed`), read from the same press's click count; and whether this pass's primary
+    /// release ends a press that went down there (`BodyCx::surface_clicked`). The press origin waits in the press slot
+    /// until the release; Escape and a blur clear it, and so does any pass with no button held.
     pub(super) fn surface_press(&self, sensed: bool, core: &mut CxCore<'_>) {
         let ctx = core.ctx.clone();
+        let pass = pointer::pass_pointer(&ctx);
+        let (layer, rect) = (core.response.layer_id, core.rect);
+        // Whether `pos` lies in the container's rect, on its layer.
+        let inside = |pos: Pos2| {
+            let at = areas::layer_map(&ctx, layer).map_or(pos, |map| map.to_layer(pos));
+            areas::layer_at(&ctx, pos) == Some(layer) && rect.contains(at)
+        };
         let surface = if sensed {
-            let pass = pointer::pass_pointer(&ctx);
-            pass.frame.as_ref().and_then(|frame| frame.press).filter(|press| press.button == craft_behavior::PointerButton::Primary).filter(|press| {
-                let layer = core.response.layer_id;
-                let at = areas::layer_map(&ctx, layer).map_or(press.origin, |map| map.to_layer(press.origin));
-                areas::layer_at(&ctx, press.origin) == Some(layer)
-                    && core.rect.contains(at)
+            pass.frame.as_ref().and_then(|frame| frame.press).filter(|press| press.button == PointerButton::Primary).filter(|press| {
+                inside(press.origin)
                     && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
+                    && !pointer::text_takes_press(&ctx, pass.press_targets)
             })
         } else {
             None
         };
-        let shown = core.memory.shown::<SurfacePress>(sub(sub(core.id, "body"), "surface_press"));
+        let state_id = sub(sub(core.id, "body"), "surface_press");
+        let mut clicked = false;
+        if sensed {
+            let origin = core.memory.press::<Pos2>(state_id);
+            if let Some(press) = surface {
+                *origin = Some(press.origin);
+            }
+            match pass.frame.as_ref() {
+                Some(frame) if frame.release == Some(PointerButton::Primary) => {
+                    clicked = origin.take().is_some_and(|from| frame.pos.is_some_and(|pos| inside(pos) && (pos - from).length() < frame.slop));
+                }
+                _ if surface.is_none() && (!pass.primary_down || pointer::cancel_of_pass(&ctx).is_some()) => *origin = None,
+                _ => {}
+            }
+            if origin.is_some() && !core.memory.is_peek() {
+                pointer::hold_surface_press(&ctx);
+            }
+        }
+        let shown = core.memory.shown::<SurfacePress>(state_id);
         shown.pressed = surface.is_some();
         shown.double = surface.is_some_and(|press| press.clicks >= 2);
+        shown.clicked = clicked;
     }
 
     /// Records for the container's header hooks whether the second press of a double click went down on the move

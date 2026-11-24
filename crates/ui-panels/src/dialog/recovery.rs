@@ -1,7 +1,7 @@
 //! `RecoveryDialog` (24.4): the offer to recover a document an earlier run autosaved and never saved, a
 //! configuration of `Prompt`.
 
-use super::host::{DialogResult, StackDialog};
+use super::host::{DialogResult, FieldRefusal, StackDialog};
 use super::prompt::{Prompt, Reply, apply_to_all, buttons};
 use super::stack::{DialogId, DialogStack, dialog_id};
 use super::words::DialogWords;
@@ -11,6 +11,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::sections::DialogRole;
 use craft_i18n::AgeStyle;
 use egui::{Context, Response, Ui};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 /// One autosaved document, as the app's recovery folder lists it.
@@ -52,7 +53,8 @@ impl RecoveredDocument {
 
 /// What the user chose for one document. Closing the dialog (Escape, the close action) is `DialogResult::Cancel`:
 /// the copy stays and is offered again at the next launch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum RecoveryAnswer {
     /// Open the autosaved copy as an unsaved document.
@@ -101,6 +103,7 @@ impl Outcome for RecoveryOutput {
 pub struct RecoveryDialog {
     id: DialogId,
     document: RecoveredDocument,
+    choice: RecoveryAnswer,
     open: bool,
     /// The documents still waiting, this one included: the Apply to All box shows while it is above 1.
     remaining: usize,
@@ -111,7 +114,7 @@ pub struct RecoveryDialog {
 impl RecoveryDialog {
     /// A dialog offering to recover `document`.
     pub fn new(document: RecoveredDocument) -> Self {
-        Self { id: dialog_id("recovery"), document, open: true, remaining: 1, apply_to_all: false }
+        Self { id: dialog_id("recovery"), document, choice: RecoveryAnswer::Recover, open: true, remaining: 1, apply_to_all: false }
     }
 
     /// The documents still waiting, this one included; the Apply to All box shows while it is above 1.
@@ -189,8 +192,27 @@ impl StackDialog for RecoveryDialog {
         Some(shown.answer.map_or(DialogResult::Cancel, DialogResult::Ok))
     }
 
-    /// Recover, the accepting answer; `None` while recovery is blocked.
+    /// The chosen answer, Recover by default; `None` for Recover while recovery is blocked.
     fn confirm(&mut self, _: &Context) -> Option<RecoveryChoice> {
-        self.document.blocked.is_none().then(|| self.choice(RecoveryAnswer::Recover, self.apply_to_all))
+        (self.choice != RecoveryAnswer::Recover || self.document.blocked.is_none()).then(|| self.choice(self.choice, self.apply_to_all))
+    }
+
+    /// `choice`, the answer OK gives.
+    fn json_fields(&self) -> Option<Value> {
+        Some(json!({ "choice": self.choice }))
+    }
+
+    /// `choice` takes `recover` (not while recovery is blocked) or `discard`.
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
+        if field != "choice" {
+            return Err(FieldRefusal::Unknown.message(field));
+        }
+        match serde_json::from_value::<RecoveryAnswer>(value.clone()) {
+            Ok(choice) if choice != RecoveryAnswer::Recover || self.document.blocked.is_none() => {
+                self.choice = choice;
+                Ok(())
+            }
+            _ => Err(FieldRefusal::Rejects(&value).message(field)),
+        }
     }
 }

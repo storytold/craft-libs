@@ -81,6 +81,9 @@ pub struct Text {
     spans: Vec<DocRun<'static>>,
     /// The interface spans that replace the label's text, in the type role, shade and tone of the text; empty for plain text.
     styled: Vec<Span<'static>>,
+    /// Sets the text's ideal and least width to those of this text, so a readout keeps its width while its value changes.
+    #[prop(into)]
+    sample: Option<Label>,
     /// Whether every span is italic, a value set apart from the words around it.
     italic: bool,
     /// Gives the text an accessible numeric value, `value`, so tests and assistive technology read a position or a count
@@ -100,6 +103,7 @@ impl Text {
             elide: Elide::Off,
             spans: Vec::new(),
             styled: Vec::new(),
+            sample: None,
             italic: false,
             numeric: None,
         }
@@ -210,6 +214,13 @@ impl Component for Text {
             };
         }
         let role = cx.style.text.role;
+        let sample = self.sample.as_ref().map(|sample| cx.layout_at(&self.run(role, sample.as_str()), f32::INFINITY).size().x);
+        if let Some(width) = sample
+            && matches!(cx.proposal, Proposal::Ideal | Proposal::Min)
+        {
+            let height = cx.layout_at(&self.run(role, cx.resolved.label), f32::INFINITY).size().y;
+            return Vec2::new(width, height);
+        }
         // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word, up to
         // an enclosing reading-width cap.
         let widest = || {
@@ -228,7 +239,8 @@ impl Component for Text {
             let run = self.run(role, cx.resolved.label);
             return cx.least(&run).size();
         }
-        let band = wrap.unwrap_or(f32::INFINITY);
+        // A wrapping text is never narrower than its sample.
+        let band = wrap.unwrap_or(f32::INFINITY).max(if self.elide == Elide::Off { sample.unwrap_or(0.0) } else { 0.0 });
         let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
         // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
         // then makes room for the word.

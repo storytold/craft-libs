@@ -177,9 +177,10 @@ pub(super) struct BodyHooks<'b> {
 }
 
 impl<'b> BodyHooks<'b> {
-    /// The hooks of `comp`'s run, over its props as they are now.
-    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Self {
-        Self::new(body, Arc::new(comp.props(super::Internal::new()).clone()))
+    /// The hooks of `comp`'s run, over its props as they are now. They live on the heap: the run holds them while its
+    /// children run.
+    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Box<Self> {
+        Box::new(Self::new(body, Arc::new(comp.props(super::Internal::new()).clone())))
     }
 
     pub(super) fn new(body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>), props: Arc<ContainerProps>) -> Self {
