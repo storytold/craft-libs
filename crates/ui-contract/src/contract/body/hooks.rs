@@ -165,8 +165,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.region_gap = gap_of(&env.tokens, Gap::Tight);
         self.end_gap = gap_of(&env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(props, &env.tokens);
-        self.after_rule = layout::flow_start(&ctx, env) == Some(true);
-        self.rules = RuleBands::of(props, &env.tokens, crate::runtime::egui::scale::pixels_per_point(&ctx), self.after_rule);
+        let start = layout::flow_start(&ctx, env);
+        self.after_rule = start == Some(true);
+        self.rules = RuleBands::of(props, env, crate::runtime::egui::scale::pixels_per_point(&ctx), start);
         self.least_width = least_of(&env.tokens, props.least_width);
         let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
         if !matches!(props.mount, Mount::Inline | Mount::Pane(_))
@@ -629,7 +630,15 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.label_step(ui, env, cx.core, &mut plan);
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if plan.is_open {
+            let fits_end = !plan.real && self.end_fit.is_none() && props.end.is_some_and(|end| end.fit);
+            if fits_end {
+                layout::ask_shortfall(&plan.ctx, plan.layout_id);
+            }
             self.body_step(comp, ui, env, cx.core, &mut plan);
+            // The end region's ranked units give up the body's shortfall.
+            if fits_end && let Some(short) = layout::take_shortfall(&plan.ctx, plan.layout_id) {
+                self.end_unfit = Some(short);
+            }
             self.after_body(ui, env, &mut plan);
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
@@ -820,10 +829,41 @@ impl BodyHooks<'_> {
         (layer, rect): (areas::LayerKey, Rect),
         values: &AppValues,
     ) {
-        if self.props.label_column {
+        if self.props.end.is_some_and(|end| end.fit) {
+            self.fitting_sweeps(comp, at, cx, (layer, rect), values);
+        } else if self.props.label_column {
             self.settling_sweeps(comp, at, cx, (layer, rect), values);
         } else {
             self.sweep(comp, at, cx, (layer, rect), values);
+        }
+    }
+
+    /// An end region that joins the body's fit (`EndRegion::fit`) gives way before the body: when the body's units ask
+    /// for more than the line the region leaves, the sweep is taken back and the content runs once more with the
+    /// region's first row giving up the body's shortfall by its ranked units, so they leave before a body unit narrows
+    /// or leaves.
+    #[inline(never)]
+    fn fitting_sweeps<C: Container>(
+        &mut self,
+        comp: &mut C,
+        at: &Measuring<'_, '_>,
+        cx: &mut Cx<'_, C>,
+        (layer, rect): (areas::LayerKey, Rect),
+        values: &AppValues,
+    ) {
+        let ctx = at.ui.ctx().clone();
+        let (unfit, _) = crate::contract::draft(
+            &ctx,
+            || {
+                self.sweep(comp, at, cx, (layer, rect), values);
+                self.end_unfit.take()
+            },
+            Option::is_none,
+        );
+        if let Some(short) = unfit {
+            self.end_fit = Some(short);
+            self.sweep(comp, at, cx, (layer, rect), values);
+            (self.end_fit, self.end_unfit) = (None, None);
         }
     }
 
@@ -1291,7 +1331,8 @@ impl BodyHooks<'_> {
                 ..line
             });
         }
-        let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: &plan.line_env, gap: plan.gap };
+        let fitted = self.end_fit.filter(|_| !plan.real).map(|short| plan.line_env.derive_local(|scoped| scoped.rank_short = Some(short)));
+        let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: fitted.as_ref().unwrap_or(&plan.line_env), gap: plan.gap };
         let closed = self.end_region(comp, ui, &mut end_cx, &frame, props, end, line);
         plan.close = plan.close.or(closed);
     }
@@ -1860,8 +1901,9 @@ impl BodyHooks<'_> {
         self.region_gap = gap_of(&at.env.tokens, Gap::Tight);
         self.end_gap = gap_of(&at.env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(&props, &at.env.tokens);
-        self.after_rule = layout::flow_start(at.ui.ctx(), at.env) == Some(true);
-        self.rules = RuleBands::of(&props, &at.env.tokens, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()), self.after_rule);
+        let start = layout::flow_start(at.ui.ctx(), at.env);
+        self.after_rule = start == Some(true);
+        self.rules = RuleBands::of(&props, at.env, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()), start);
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),

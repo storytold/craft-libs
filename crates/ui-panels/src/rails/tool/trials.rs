@@ -4,7 +4,7 @@
 
 use super::super::FlyoutButton;
 use super::stories::tools;
-use super::{DropAt, LastUsed, ToolRail, ToolSlot};
+use super::{DropAt, LastUsed, RailDensity, ToolRail, ToolSlot};
 use crate::buttons::Button;
 use crate::contract::Props as _;
 use crate::contract::Show as _;
@@ -83,6 +83,29 @@ fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
     }
     let (wide, _) = rail_in(grid.width(grid.most) * 2.0, 800.0);
     assert_eq!(columns_of(&wide), LABELS.len(), "a wide room fills one row");
+}
+
+/// A dense rail's buttons are smaller than a regular rail's, and its dock grid narrows with them: at the dense grid's
+/// width of two steps the dense rail shows two columns, as wide as that grid, where a regular rail fits one.
+#[trial]
+fn a_dense_rail_and_its_grid_narrow_together() {
+    let ctx = Fixture::new(|_| {}).ctx().clone();
+    let sizes = DockSizes::of(&ctx);
+    let (regular, dense) = (DockGrid::rail(LABELS.len()).resolved(&sizes), DockGrid::rail(LABELS.len()).density(RailDensity::Dense).resolved(&sizes));
+    assert!(dense.width(2) < regular.width(2), "the dense grid is narrower: {dense:?} against {regular:?}");
+    let shown = |density: RailDensity| {
+        let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
+        let mut fixture = Fixture::new(move |ui| {
+            ToolRail::new("Tools", &slots, &0, &last).density(density).show_rail(ui, |_, _| {});
+        });
+        fixture.room(Vec2::new(dense.width(2), 800.0)).settle();
+        (columns_of(&fixture), rect(&fixture, "Tools"), rect(&fixture, "Move"))
+    };
+    let ((dense_columns, rail, dense_button), (regular_columns, _, regular_button)) = (shown(RailDensity::Dense), shown(RailDensity::Regular));
+    assert_eq!(dense_columns, 2, "the dense rail fills its grid's two steps");
+    assert!(near(rail.width(), dense.width(2)), "the dense rail is as wide as its grid: {rail:?}");
+    assert!(regular_columns < dense_columns, "a regular rail fits fewer columns in the same width");
+    assert!(dense_button.width() < regular_button.width(), "a dense button ({dense_button:?}) is smaller than a regular one ({regular_button:?})");
 }
 
 /// The measure at a width is the size the rail shows at it: exactly its rows plus the footer between equal paddings,
