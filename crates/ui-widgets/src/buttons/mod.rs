@@ -91,8 +91,9 @@ pub enum PushButtonLook {
     Filled,
 }
 
-/// The filled neutral variant a push button takes under [`PushButtonLook::Filled`].
-pub(crate) const FILLED: craft_theme::Variant = craft_theme::Variant::look(craft_theme::Emphasis::Filled, craft_theme::variant::Tone::Neutral);
+/// The filled neutral variant a push button takes under [`PushButtonLook::Filled`]: `surface.control` with no edge at
+/// rest.
+pub const FILLED: craft_theme::Variant = craft_theme::Variant::look(craft_theme::Emphasis::Filled, craft_theme::variant::Tone::Neutral);
 
 /// The variant a push or split button that asks for none takes in `env` (`Component::default_variant`): the filled one
 /// under [`PushButtonLook::Filled`], outside a ribbon.
