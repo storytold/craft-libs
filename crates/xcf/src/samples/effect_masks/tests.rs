@@ -166,13 +166,22 @@ fn auxiliary_absence_bad_headers_budget_and_cancellation_never_decode_unadmitted
 
 #[test]
 fn auxiliary_header_requires_a_complete_first_level_header() {
-    for available in [0, 7, 8, 15] {
+    for available in [0, 7, 8, 15, 16] {
         let mut fixture = fixture(150, &[1, 2], 1, true);
-        let level = fixture.bytes.len() - available;
-        fixture.bytes[fixture.hierarchy + 12..fixture.hierarchy + 20].copy_from_slice(&(level as u64).to_be_bytes());
+        let level = u64::from_be_bytes(fixture.bytes[fixture.hierarchy + 12..fixture.hierarchy + 20].try_into().unwrap());
+        let level = usize::try_from(level).unwrap();
+        fixture.bytes.truncate(level + available);
         let xcf = Xcf::parse(&fixture.bytes).unwrap();
         let mut metadata = records::Budget::new(4096, 4096);
-        assert!(xcf.effect_mask_header(&record(&fixture), &mut metadata, &|| true).is_err(), "{available} bytes at first level");
+        let result = xcf.effect_mask_header(&record(&fixture), &mut metadata, &|| true);
+        if available == 16 {
+            assert!(result.unwrap().is_some(), "the fixed header alone is sufficient");
+            continue;
+        }
+        let error = result.unwrap_err();
+        if available >= 8 {
+            assert!(error.to_string().contains(&format!("wanted 8 bytes at {}", level + 8)), "{error}");
+        }
         assert_eq!(metadata.retained_remaining(), 4096);
     }
 }
