@@ -191,6 +191,13 @@ pub struct PanelSpec {
     pub count: Option<usize>,
     /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
     pub caption: Option<Label>,
+    /// The panel's body is the app's own egui code: the dock hands `DockPanels::body`, `footer`, `group_header`,
+    /// `rail_footer` and the group's `group_view` (while the panel is the one its group shows) a `Ui` with the style
+    /// of the `Ui` the dock was shown in, so the code lays out as it does outside the dock, and runs them once per pass,
+    /// in the pass's real run (a measuring run takes the size they last took). Other bodies lay out with
+    /// the group's spacing, which framework components expect. An app moves onto the framework panel by panel by
+    /// clearing it on each panel it ports.
+    pub host_body: bool,
 }
 
 impl PanelSpec {
@@ -210,6 +217,7 @@ impl PanelSpec {
             footer: false,
             count: None,
             caption: None,
+            host_body: false,
         }
     }
 
@@ -287,6 +295,13 @@ impl PanelSpec {
     #[must_use]
     pub fn canvas(mut self) -> Self {
         self.canvas = true;
+        self
+    }
+
+    /// The panel's body is the app's own egui code (`host_body`).
+    #[must_use]
+    pub fn host_body(mut self) -> Self {
+        self.host_body = true;
         self
     }
 

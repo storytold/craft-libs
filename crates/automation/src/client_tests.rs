@@ -10,12 +10,18 @@ use super::*;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+/// Writes `reply` and its newline in one write. `writeln!` on a bare stream writes in pieces, so the client can see
+/// part of a line and close the connection before the rest is sent.
+fn say(out: &mut impl std::io::Write, reply: serde_json::Value) -> std::io::Result<()> {
+    out.write_all(format!("{reply}\n").as_bytes())
+}
+
 // call returns Ok(result) for ok replies and Err(error) otherwise.
 
 // A stale reply left by a timed-out call is skipped, and a transport failure closes the client.
 #[trial]
 fn replies_are_matched_by_id() {
-    use std::io::{BufRead, Write};
+    use std::io::BufRead;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -24,11 +30,11 @@ fn replies_are_matched_by_id() {
         let mut out = stream;
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        writeln!(out, "{}", json!({"id": 1, "ok": true})).unwrap();
+        say(&mut out, json!({"id": 1, "ok": true})).unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
-        writeln!(out, "{}", json!({"id": 99, "ok": true, "result": "stale"})).unwrap();
-        writeln!(out, "{}", json!({"id": 2, "ok": true, "result": "fresh"})).unwrap();
+        say(&mut out, json!({"id": 99, "ok": true, "result": "stale"})).unwrap();
+        say(&mut out, json!({"id": 2, "ok": true, "result": "fresh"})).unwrap();
         // Closing the connection ends the third call.
     });
     let mut client = ControlClient::connect(addr, TOKEN).unwrap();
@@ -42,7 +48,7 @@ fn replies_are_matched_by_id() {
 // later call.
 #[trial]
 fn a_cancelled_call_stops_waiting_and_closes_the_connection() {
-    use std::io::{BufRead, Write};
+    use std::io::BufRead;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (done, wait) = std::sync::mpsc::channel::<()>();
@@ -52,12 +58,12 @@ fn a_cancelled_call_stops_waiting_and_closes_the_connection() {
         let mut out = stream;
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        writeln!(out, "{}", json!({"id": 1, "ok": true})).unwrap();
+        say(&mut out, json!({"id": 1, "ok": true})).unwrap();
         // The call is read and never answered while the client waits.
         line.clear();
         reader.read_line(&mut line).unwrap();
         wait.recv().unwrap();
-        writeln!(out, "{}", json!({"id": 2, "ok": true, "result": "late"})).ok();
+        say(&mut out, json!({"id": 2, "ok": true, "result": "late"})).ok();
     });
     let mut client = ControlClient::connect(addr, TOKEN).unwrap();
     let asked = std::cell::Cell::new(0);
@@ -86,12 +92,9 @@ fn an_unasked_line_makes_the_connection_unusable_before_sending() {
         let mut out = stream;
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        writeln!(out, "{}", json!({"id": 1, "ok": true})).unwrap();
+        say(&mut out, json!({"id": 1, "ok": true})).unwrap();
         wait.recv().unwrap();
-        // One write: `writeln!` on a bare stream sends the line and its newline apart, and the client closes on
-        // the first bytes, so the newline met a reset (BrokenPipe) now and then.
-        let unasked = format!("{}\n", json!({"id": null, "ok": false, "error": "idle connection closed"}));
-        out.write_all(unasked.as_bytes()).unwrap();
+        say(&mut out, json!({"id": null, "ok": false, "error": "idle connection closed"})).unwrap();
         out.flush().unwrap();
         // The client's close shows as an end of input or, with the unread line, a reset.
         line.clear();
@@ -121,7 +124,7 @@ fn a_refusal_waiting_at_sign_in_is_the_reason_connect_gives() {
         let (stream, _) = listener.accept().unwrap();
         let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
         let mut out = stream;
-        writeln!(out, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"})).unwrap();
+        say(&mut out, json!({"id": null, "ok": false, "error": "connection limit reached"})).unwrap();
         out.flush().unwrap();
         let mut line = String::new();
         reader.read_line(&mut line).ok().filter(|&read| read > 0).map(|_| line)

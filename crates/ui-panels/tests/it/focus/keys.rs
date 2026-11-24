@@ -63,14 +63,15 @@ fn a_held_escape_cancels_once() {
 }
 
 /// Static claims hold in the frame after focus arrives; the chord is withheld from egui and read once through
-/// `take_claimed`, and a claimed Escape is no `Cancel`.
+/// `take_claimed`, and a claimed Escape is no `Cancel`. The stop is a canvas control, not the window's document canvas,
+/// whose claims hold with nothing focused too.
 #[trial]
 fn claimed_chords_hold_after_focus_arrives_and_a_claimed_escape_is_no_cancel() {
     const CLAIMS: &[Chord] = &[Chord::plain(craft_keymap::Key::Up), Chord::plain(craft_keymap::Key::Escape)];
     let mut frames = Frames::new();
     let reads = RefCell::new((Vec::new(), 0, true));
     let mut show = |ui: &mut egui::Ui| {
-        stop_with(ui, "canvas", KeyUse::CANVAS.with_claims(CLAIMS));
+        stop_with(ui, "canvas", KeyUse::CANVAS.with_chrome_key(false).with_claims(CLAIMS));
         let ctx = ui.ctx();
         let mut reads = reads.borrow_mut();
         reads.0.push((take_claimed(ctx, id("canvas"), CLAIMS[0]), take_claimed(ctx, id("canvas"), CLAIMS[1])));
