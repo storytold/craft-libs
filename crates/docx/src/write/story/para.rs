@@ -213,17 +213,17 @@ impl Writer<'_> {
                 i += 1;
                 continue;
             }
-            // Hyperlinks with different ScreenTips stay separate even if their target is shared.
+            // Hyperlinks with different ScreenTips or history settings stay separate even if their target is shared.
             let link = props
                 .link
                 .as_deref()
                 .filter(|target| !target.is_empty())
-                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)));
+                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip), props.link_history));
             if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
                 }
-                if let Some((link, tip)) = link {
+                if let Some((link, tip, hist)) = link {
                     let id;
                     let target = if let Some(anchor) = link.strip_prefix('#') {
                         ("w:anchor", anchor)
@@ -231,11 +231,19 @@ impl Writer<'_> {
                         id = rels.add(rt::HYPERLINK, link, true);
                         ("r:id", id.as_str())
                     };
-                    if let Some(tip) = tip {
-                        w.open("w:hyperlink", &[target, ("w:history", "1"), ("w:tooltip", tip)]);
-                    } else {
-                        w.open("w:hyperlink", &[target, ("w:history", "1")]);
+                    let mut attrs = [("", ""); 3];
+                    let mut n = 0;
+                    attrs[n] = target;
+                    n += 1;
+                    if let Some(h) = hist {
+                        attrs[n] = ("w:history", if h { "1" } else { "0" });
+                        n += 1;
                     }
+                    if let Some(tip) = tip {
+                        attrs[n] = ("w:tooltip", tip);
+                        n += 1;
+                    }
+                    w.open("w:hyperlink", &attrs[..n]);
                 }
                 open_link = link;
             }

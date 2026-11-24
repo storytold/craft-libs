@@ -143,6 +143,7 @@ fn every_char_prop_round_trips() {
         }),
         link: None,
         link_tooltip: None,
+        link_history: None,
         ins: None,
         del: None,
         fmt_change: None,
@@ -1487,11 +1488,11 @@ fn table_contextual_spacing_compatibility_flag_round_trips() {
     for mode in [11, 12, 14, 15] {
         for allow in [false, true] {
             let mut d = Document::new();
-            d.settings.compat_mode = mode;
+            d.settings.compat_mode = Some(mode);
             d.settings.allow_space_of_same_style_in_table = allow;
             let r = rt(&d);
             assert_eq!(r.settings.allow_space_of_same_style_in_table, allow);
-            assert_eq!(r.settings.compat_mode, mode);
+            assert_eq!(r.settings.compat_mode, Some(mode));
             if allow {
                 let bytes = craft_docx::write(&d).unwrap();
                 let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -1508,12 +1509,169 @@ fn table_contextual_spacing_compatibility_flag_round_trips() {
 fn compatibility_mode_round_trips() {
     // New documents are Word 2013+ documents; an older file keeps its mode, so saving it doesn't
     // change how Word lays it out.
-    assert_eq!(rt(&Document::new()).settings.compat_mode, craft_wordmodel::COMPAT_MODE_CURRENT);
+    assert_eq!(rt(&Document::new()).settings.compat_mode, Some(craft_wordmodel::COMPAT_MODE_CURRENT));
     for mode in [11, 12, 14, 15] {
         let mut d = Document::new();
-        d.settings.compat_mode = mode;
-        assert_eq!(rt(&d).settings.compat_mode, mode);
+        d.settings.compat_mode = Some(mode);
+        assert_eq!(rt(&d).settings.compat_mode, Some(mode));
     }
+}
+
+/// #3308: A document without `<w:compat>` or without `<w:compatSetting w:name="compatibilityMode">`
+/// round-trips without synthesizing the tag on save.
+#[test]
+fn compatibility_mode_omitted_round_trips_without_synthesizing() {
+    let settings_xml_of = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        match zip.by_name("word/settings.xml") {
+            Ok(mut file) => {
+                std::io::Read::read_to_string(&mut file, &mut xml).unwrap();
+                Some(xml)
+            }
+            Err(zip::result::ZipError::FileNotFound) => None,
+            Err(e) => panic!("zip error: {e:?}"),
+        }
+    };
+
+    // Case 1: settings.xml without `<w:compat>` at all.
+    let base_docx = craft_docx::write(&Document::new()).unwrap();
+    let original_settings = settings_xml_of(&base_docx).unwrap();
+    let without_compat = original_settings.replace(
+        "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat>",
+        "",
+    );
+    assert_ne!(original_settings, without_compat);
+    let docx_without_compat = replace_part(&base_docx, "word/settings.xml", without_compat.as_bytes());
+
+    let doc = craft_docx::read(&docx_without_compat).unwrap();
+    assert_eq!(doc.settings.compat_mode, None);
+    assert_eq!(doc.settings.effective_compat_mode(), craft_wordmodel::LEGACY_COMPAT_MODE);
+
+    let saved_bytes = craft_docx::write(&doc).unwrap();
+    let saved_settings = settings_xml_of(&saved_bytes).unwrap();
+    assert!(!saved_settings.contains("<w:compat"), "expected no <w:compat>, got: {saved_settings}");
+    assert!(!saved_settings.contains("compatibilityMode"), "expected no compatibilityMode, got: {saved_settings}");
+
+    let read_back = craft_docx::read(&saved_bytes).unwrap();
+    assert_eq!(read_back.settings.compat_mode, None);
+
+    // Case 2: settings.xml with `<w:compat>` but without `<w:compatSetting w:name="compatibilityMode">`
+    // (e.g. only legacy compatibility flags like `<w:doNotExpandShiftReturn/>`).
+    let with_other_compat = original_settings.replace(
+        "<w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/>",
+        "<w:doNotExpandShiftReturn/>",
+    );
+    assert_ne!(original_settings, with_other_compat);
+    let docx_with_other = replace_part(&base_docx, "word/settings.xml", with_other_compat.as_bytes());
+
+    let doc2 = craft_docx::read(&docx_with_other).unwrap();
+    assert_eq!(doc2.settings.compat_mode, None);
+    assert!(doc2.settings.do_not_expand_shift_return);
+
+    let saved_bytes2 = craft_docx::write(&doc2).unwrap();
+    let saved_settings2 = settings_xml_of(&saved_bytes2).unwrap();
+    assert!(saved_settings2.contains("<w:compat>"), "expected <w:compat>, got: {saved_settings2}");
+    assert!(saved_settings2.contains("<w:doNotExpandShiftReturn/>"), "expected doNotExpandShiftReturn, got: {saved_settings2}");
+    assert!(!saved_settings2.contains("compatibilityMode"), "expected no compatibilityMode, got: {saved_settings2}");
+
+    let read_back2 = craft_docx::read(&saved_bytes2).unwrap();
+    assert_eq!(read_back2.settings.compat_mode, None);
+    assert!(read_back2.settings.do_not_expand_shift_return);
+}
+
+/// #3305: Hyperlinks without `w:history`, with `w:history="0"`, or with `w:history="1"`
+/// round-trip with the exact attribute state preserved.
+#[test]
+fn hyperlink_history_attribute_preservation_round_trips() {
+    let doc_xml_of = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+        xml
+    };
+
+    // 1. In-memory / programmatic round-trip with different history settings:
+    // a) omitted (`None`)
+    let mut p_none = Paragraph::new();
+    p_none
+        .insert_text(
+            0,
+            "link without history",
+            &CharProps { link: Some("https://example.com/no-hist".into()), link_history: None, ..Default::default() },
+        )
+        .unwrap();
+    let d_none = doc_with(vec![p_none]);
+    let bytes_none = craft_docx::write(&d_none).unwrap();
+    let xml_none = doc_xml_of(&bytes_none);
+    assert!(xml_none.contains("<w:hyperlink "), "{xml_none}");
+    assert!(!xml_none.contains("w:history"), "expected no w:history in: {xml_none}");
+    let r_none = craft_docx::read(&bytes_none).unwrap();
+    let read_prop_none = paras(&r_none)[0].props_of_char(0);
+    assert_eq!(read_prop_none.link.as_deref(), Some("https://example.com/no-hist"));
+    assert_eq!(read_prop_none.link_history, None);
+
+    // b) explicit 0 (`Some(false)`)
+    let mut p_zero = Paragraph::new();
+    p_zero
+        .insert_text(
+            0,
+            "link with history 0",
+            &CharProps { link: Some("https://example.com/hist-zero".into()), link_history: Some(false), ..Default::default() },
+        )
+        .unwrap();
+    let d_zero = doc_with(vec![p_zero]);
+    let bytes_zero = craft_docx::write(&d_zero).unwrap();
+    let xml_zero = doc_xml_of(&bytes_zero);
+    assert!(xml_zero.contains(r#"w:history="0""#), "expected w:history=\"0\" in: {xml_zero}");
+    let r_zero = craft_docx::read(&bytes_zero).unwrap();
+    let read_prop_zero = paras(&r_zero)[0].props_of_char(0);
+    assert_eq!(read_prop_zero.link.as_deref(), Some("https://example.com/hist-zero"));
+    assert_eq!(read_prop_zero.link_history, Some(false));
+
+    // c) explicit 1 (`Some(true)`)
+    let mut p_one = Paragraph::new();
+    p_one
+        .insert_text(
+            0,
+            "link with history 1",
+            &CharProps { link: Some("https://example.com/hist-one".into()), link_history: Some(true), ..Default::default() },
+        )
+        .unwrap();
+    let d_one = doc_with(vec![p_one]);
+    let bytes_one = craft_docx::write(&d_one).unwrap();
+    let xml_one = doc_xml_of(&bytes_one);
+    assert!(xml_one.contains(r#"w:history="1""#), "expected w:history=\"1\" in: {xml_one}");
+    let r_one = craft_docx::read(&bytes_one).unwrap();
+    let read_prop_one = paras(&r_one)[0].props_of_char(0);
+    assert_eq!(read_prop_one.link.as_deref(), Some("https://example.com/hist-one"));
+    assert_eq!(read_prop_one.link_history, Some(true));
+
+    // 2. Original XML fixture round-trip:
+    // Verify that reading raw XML with omitted w:history and w:history="0" saves back identically.
+    let base = craft_docx::write(&d_one).unwrap();
+    // Replace the hyperlink in document.xml to have NO w:history attribute
+    let orig_doc_xml = doc_xml_of(&base);
+    let xml_omitted_hist = orig_doc_xml.replace(r#" w:history="1""#, "");
+    assert_ne!(orig_doc_xml, xml_omitted_hist);
+    let file_omitted = replace_part(&base, "word/document.xml", xml_omitted_hist.as_bytes());
+
+    let read_omitted = craft_docx::read(&file_omitted).unwrap();
+    assert_eq!(paras(&read_omitted)[0].props_of_char(0).link_history, None);
+    let saved_omitted = craft_docx::write(&read_omitted).unwrap();
+    let resaved_xml = doc_xml_of(&saved_omitted);
+    assert!(!resaved_xml.contains("w:history"), "expected no w:history on save, got: {resaved_xml}");
+
+    // Replace the hyperlink in document.xml to have w:history="0"
+    let xml_zero_hist = orig_doc_xml.replace(r#"w:history="1""#, r#"w:history="0""#);
+    assert_ne!(orig_doc_xml, xml_zero_hist);
+    let file_zero = replace_part(&base, "word/document.xml", xml_zero_hist.as_bytes());
+
+    let read_zero = craft_docx::read(&file_zero).unwrap();
+    assert_eq!(paras(&read_zero)[0].props_of_char(0).link_history, Some(false));
+    let saved_zero = craft_docx::write(&read_zero).unwrap();
+    let resaved_zero_xml = doc_xml_of(&saved_zero);
+    assert!(resaved_zero_xml.contains(r#"w:history="0""#), "expected w:history=\"0\" on save, got: {resaved_zero_xml}");
 }
 
 /// Tools › Templates and Add-ins: the attached template (an external relationship of the settings

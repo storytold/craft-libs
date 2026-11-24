@@ -49,6 +49,7 @@ const MAX_FORM: usize = 64 * 1024;
 pub struct RunCtx {
     link: Option<String>,
     link_tooltip: Option<std::sync::Arc<str>>,
+    link_history: Option<bool>,
     ins: Option<u32>,
     del: Option<u32>,
 }
