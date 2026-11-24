@@ -13,7 +13,7 @@ use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, Sho
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::text::NumberField;
-use egui::{Id, Ui};
+use egui::{Id, Rect, Ui};
 
 use crate::gradient::stops::{self, StopRules, locations, midpoint};
 use crate::gradient::{GradientStops, StopRow, StopRows};
@@ -62,8 +62,8 @@ pub(super) struct Report {
     pub events: Vec<EditEvent<GradientStops>>,
     /// The selection the fields moved.
     pub select: Option<Option<StopRef>>,
-    /// The colour stop whose colour the host is asked to edit.
-    pub color_requested: Option<usize>,
+    /// The colour stop whose colour the host is asked to edit, and the rect of what asked.
+    pub color_requested: Option<(usize, Rect)>,
     pub screen_pick: Option<ScreenPickGesture>,
 }
 
@@ -78,7 +78,7 @@ pub(super) struct Row<'r, 'a> {
     pub picker: &'r Option<PickerSetup<'a>>,
     pub sampled: Option<Srgba>,
     /// The colour request of the bar, when the bar asked for one.
-    pub requested: Option<usize>,
+    pub requested: Option<(usize, Rect)>,
 }
 
 /// A 0..=1 value in percent, without the binary fraction an `f32` adds (0.3 is 30, not 30.0000012).
@@ -222,7 +222,7 @@ impl Row<'_, '_> {
                         }
                         self.popover(ui, cx, now, i, &well.response, report);
                     } else if well.clicked {
-                        report.color_requested = Some(i);
+                        report.color_requested = Some((i, well.response.rect));
                     }
                 }
                 if rows == StopRows::Combined {

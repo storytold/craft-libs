@@ -5,14 +5,27 @@ use crate::contract::Show as _;
 use crate::dialog::stories::hosted;
 use crate::display::Text;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use egui::Ui;
-use std::sync::LazyLock;
+use egui::{Color32, ColorImage, Ui};
+use std::sync::{Arc, LazyLock};
 
-fn info(community: bool) -> AboutInfo {
-    let info = AboutInfo::new("PhotoCraft", "An open-source, native image editor written in Rust.", "0.42.1 (a1b2c3d, 2026-10-30)")
+/// A diagonal gradient standing for the app's mark.
+fn mark() -> Arc<ColorImage> {
+    const SIDE: usize = 32;
+    let pixels = (0..SIDE * SIDE).map(|at| Color32::from_rgb((at % SIDE * 255 / SIDE) as u8, (at / SIDE * 255 / SIDE) as u8, 160)).collect();
+    Arc::new(ColorImage::new([SIDE, SIDE], pixels))
+}
+
+fn info(community: bool, with_mark: bool) -> AboutInfo {
+    let mut info = AboutInfo::new("PhotoCraft", "An open-source, native image editor written in Rust.", "0.42.1 (a1b2c3d, 2026-10-30)")
         .links([AboutLink::new("Website", "https://example.org"), AboutLink::new("Source", "https://example.org/source")])
         .built_with("egui · wgpu");
-    if community { info.community(AboutLink::new("Join us on Discord", "https://discord.example/join")) } else { info }
+    if community {
+        info = info.community(AboutLink::new("Join us on Discord", "https://discord.example/join"));
+    }
+    if with_mark {
+        info = info.icon(mark());
+    }
+    info
 }
 
 const TABS: [(&str, AboutTab); 3] = [("About", AboutTab::About), ("Contributors", AboutTab::Contributors), ("Models", AboutTab::Models)];
@@ -38,14 +51,15 @@ static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
 fn about_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::About, &TABS);
     let community = *data.value("community_button", true);
-    hosted(ui, data, (tab, community), || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
+    let mark = *data.value("mark", true);
+    hosted(ui, data, (tab, community, mark), || HostedAbout::new(info(community, mark), CREDITS.clone()).tab(tab))
 }
 
 /// The About tab in the listed layout: name, version, blurb and links one to a line, and Close.
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
 fn about_dialog_listed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let community = *data.value("community_link", true);
-    hosted(ui, data, community, || HostedAbout::new(info(community), CREDITS.clone()).layout(AboutLayout::Listed))
+    hosted(ui, data, community, || HostedAbout::new(info(community, false), CREDITS.clone()).layout(AboutLayout::Listed))
 }
 
 /// The dialog with one app tab after Models, open on it.
@@ -58,7 +72,7 @@ fn about_dialog_app_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Text::new("Français 1.2 · 98% translated").show(ui);
             Text::new("Deutsch 1.1 · 91% translated").show(ui);
         });
-        HostedAbout::new(info(community), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
+        HostedAbout::new(info(community, false), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
     })
 }
 
@@ -74,7 +88,7 @@ const SUITE_DARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never, title = "About with a mark and suite logo")]
 fn about_dialog_with_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     hosted(ui, data, AboutTab::About, || {
-        let marked = info(true).mark(AboutImage::svg("PhotoCraft", MARK)).part_of(AboutImage::svg("Craft Suite", SUITE).dark(SUITE_DARK));
+        let marked = info(true, false).mark(AboutImage::svg("PhotoCraft", MARK)).part_of(AboutImage::svg("Craft Suite", SUITE).dark(SUITE_DARK));
         HostedAbout::new(marked, CREDITS.clone())
     })
 }
@@ -86,7 +100,7 @@ fn about_dialog_icon_links(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             AboutLink::new("Website", "https://example.org").icon(craft_behavior::IconId::new("globe")),
             AboutLink::new("Source", "https://example.org/source").icon(craft_behavior::IconId::new("file")),
         ];
-        HostedAbout::new(info(false).links(links), CREDITS.clone())
+        HostedAbout::new(info(false, false).links(links), CREDITS.clone())
     })
 }
 
@@ -94,5 +108,5 @@ fn about_dialog_icon_links(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn about_dialog_contributors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::Contributors, &TABS);
     let community = *data.value("community_button", true);
-    hosted(ui, data, (tab, community), || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
+    hosted(ui, data, (tab, community), || HostedAbout::new(info(community, false), CREDITS.clone()).tab(tab))
 }

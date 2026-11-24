@@ -226,9 +226,9 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         let value = lookup(&self.draft.table, &row.key);
         let kind = match (&row.shape, value) {
             (Shape::Bool, Some(Value::Boolean(on))) => RowKind::Bool(*on),
-            (Shape::Int { range, unit }, Some(Value::Integer(n))) => RowKind::Int { value: *n, range: range.clone(), unit: *unit },
+            (Shape::Int { range, unit }, Some(Value::Integer(n))) => RowKind::Int { value: *n, range: range.clone(), unit: *unit, unit_text: None },
             (Shape::Float { range, decimals, unit }, Some(Value::Float(x))) => {
-                RowKind::Float { value: *x, range: range.clone(), decimals: *decimals, unit: *unit }
+                RowKind::Float { value: *x, range: range.clone(), decimals: *decimals, unit: *unit, unit_text: None }
             }
             (Shape::Text, Some(Value::String(text))) => RowKind::Text(text),
             (Shape::Choice(options, counted), Some(Value::Integer(n))) => {

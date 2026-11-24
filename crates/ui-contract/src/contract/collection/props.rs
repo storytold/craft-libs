@@ -2,7 +2,7 @@
 
 use super::columns::{ColumnSort, ColumnSpec};
 use super::events::ListDrag;
-use crate::contract::Notch;
+use crate::contract::{Notch, ScrollAnchor};
 pub use crate::runtime::env::RowPressed;
 use crate::runtime::env::{Counted, Label};
 use crate::style::StyleCx;
@@ -11,7 +11,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// What a collection lets the user select.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum SelectMode {
     /// Nothing; the lead still moves.
@@ -35,6 +35,23 @@ pub enum DeleteTarget {
     /// Also while the pointer is over the collection and no text editor or modal owns the keys. Delete acts on the
     /// picked rows, or on the current row when none are picked, falling back to the lead.
     FocusOrHover,
+}
+
+/// What a row drag shows while it runs. The text is the count word for the dragged items
+/// (`CollectionProps::drag_count`), else the number of items for several and the item's text for one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowPreview {
+    /// The text in a badge by the pointer.
+    #[default]
+    Badge,
+    /// The text inside the region a drop would take, where the target marks one ([`DragPreview::Named`]); nothing
+    /// by the pointer.
+    ///
+    /// [`DragPreview::Named`]: crate::runtime::drag::DragPreview::Named
+    Named,
+    /// No preview: the dragged row shows alone.
+    None,
 }
 
 /// How the user may reorder items.
@@ -243,14 +260,14 @@ pub struct CollectionProps {
     pub deletable: bool,
     /// Where a deletable collection takes Delete and Backspace.
     pub delete_target: DeleteTarget,
-    /// Maps a row drag to the payload that other drop targets take (8.4). A map starts row drags by itself, with or
-    /// without a reorder rule.
-    pub drag_payload: Option<DragPayload>,
-    /// The count word the drag badge shows for the dragged items, one item included ("1 page", "3 pages"); `None`
-    /// shows the number of items for several and the item's text for one.
+    /// Map a row drag to the payloads that other drop targets take (8.4), one per type. A map starts row drags by
+    /// itself, with or without a reorder rule.
+    pub drag_payloads: Vec<DragPayload>,
+    /// The count word a row drag's preview shows for the dragged items, one item included ("1 page", "3 pages");
+    /// `None` shows the number of items for several and the item's text for one.
     pub drag_count: Option<Counted>,
-    /// Whether a row drag shows its badge by the pointer. Off, the drag carries no preview.
-    pub drag_badge: bool,
+    /// What a row drag shows while it runs.
+    pub drag_preview: RowPreview,
     /// The collection takes the full height of its rows and owns no scroll, so it can sit inside a scrolling page:
     /// every row is built, the wheel and the keys that move past an end act on the page's scroll owner, and moving
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
@@ -292,6 +309,9 @@ pub struct CollectionProps {
     /// While a drag whose payload is neither the collection's own nor one of its drop kinds rests over an item that is
     /// not selected, the item becomes the lead and the selection in that pass.
     pub select_under_drag: bool,
+    /// Which end of the rows a collection that scrolls its own rows stays at while rows are added; `End` keeps the offset
+    /// at the end as long as the user left it there.
+    pub scroll_anchor: ScrollAnchor,
 }
 
 type Payload = Arc<dyn Any + Send + Sync>;
@@ -364,9 +384,9 @@ impl CollectionProps {
             marquee: false,
             deletable: false,
             delete_target: DeleteTarget::Focus,
-            drag_payload: None,
+            drag_payloads: Vec::new(),
             drag_count: None,
-            drag_badge: true,
+            drag_preview: RowPreview::Badge,
             natural_height: false,
             min_rows: 0,
             max_rows: None,
@@ -381,6 +401,7 @@ impl CollectionProps {
             current: None,
             picks_beside_current: false,
             select_under_drag: false,
+            scroll_anchor: ScrollAnchor::Start,
         }
     }
 
@@ -408,19 +429,26 @@ impl CollectionProps {
     /// A row drag carries `map` of it, for the drop targets of type `P`; a row the map gives `None` for does not drag
     /// unless a reorder rule is set. The drag stays one session with one ghost.
     #[must_use]
-    pub fn drag_payload<K: 'static, P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
-        self.drag_payload = Some(DragPayload::new(map));
-        self
+    pub fn drag_payload<K: 'static, P: Send + Sync + 'static>(self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
+        self.carry(DragPayload::new(map))
     }
 
-    /// Whether a row drag shows its badge by the pointer (on by default).
+    /// A row drag carries `payload` of it too, beside the payloads given before: a host adds its own payload type to a
+    /// drag the component already maps.
     #[must_use]
-    pub const fn drag_badge(mut self, on: bool) -> Self {
-        self.drag_badge = on;
+    pub fn carry(mut self, payload: DragPayload) -> Self {
+        self.drag_payloads.push(payload);
         self
     }
 
-    /// The drag badge reads `count` for the number of dragged items.
+    /// What a row drag shows while it runs (a badge by the pointer by default).
+    #[must_use]
+    pub const fn drag_preview(mut self, preview: RowPreview) -> Self {
+        self.drag_preview = preview;
+        self
+    }
+
+    /// A row drag's preview reads `count` for the number of dragged items.
     #[must_use]
     pub const fn drag_count(mut self, count: Counted) -> Self {
         self.drag_count = Some(count);
@@ -733,6 +761,8 @@ pub struct RowState {
     pub continued: bool,
     /// The row is the collection's last: dividers fall between rows, so none under it. Measured.
     pub last: bool,
+    /// The row is the collection's first, the mirror of `last`.
+    pub first: bool,
     /// The activation key (Enter) activated the row this pass: a row with controls of its own may move focus into one.
     pub activated_by_key: bool,
 }

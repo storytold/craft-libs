@@ -19,6 +19,7 @@ mod date;
 mod fold;
 mod format;
 pub mod matcher;
+mod message;
 mod number;
 mod region;
 mod scripts;
@@ -34,6 +35,8 @@ use negotiation::posix_env_tags;
 use negotiation::{bare, candidates, is_region, marked, plural_rules};
 
 pub use bidi::{file_name, isolate, ltr, path, strip_isolates};
+pub use message::MessageMatch;
+use message::{KEPT_VALUE, MAX_MESSAGE_LEN, MESSAGE_DEPTH, Template, insert_template, sort_templates};
 
 /// The CLDR number, plural and date data for every CLDR locale, from `data/generate.sh`.
 mod data {
@@ -129,7 +132,33 @@ struct Locale {
 /// A locale's rows, app over shared, and what was wrong with the catalogs it came from.
 struct Parsed {
     rows: HashMap<String, HashMap<String, String>>,
+    /// The `@msg` rows without placeholders: the English message, its `{{` and `}}` read as `{`
+    /// and `}`, → its translation as written.
+    exact: HashMap<String, String>,
+    /// The `@msg` rows with placeholders and each English form of a `@msgplural` row, most
+    /// specific first.
+    templates: Vec<Template>,
     problems: Vec<String>,
+}
+
+/// A message's matched catalog entry: the locale that holds it, the English template, its
+/// translation forms and the values captured from the message.
+struct Found<'a> {
+    locale: &'a Locale,
+    english: &'a str,
+    forms: &'a [String],
+    captures: Vec<(&'a str, &'a str)>,
+}
+
+/// The index of `category` among a locale's plural `categories`. A category whole numbers up to
+/// 1000 never reach has no form of its own: Russian and Ukrainian decimals (`other`) take the `few`
+/// form (`1,5 файла`); any other (French `many` for a million) takes the last.
+fn plural_index(categories: &[PluralCategory], category: PluralCategory) -> usize {
+    categories
+        .iter()
+        .position(|c| *c == category)
+        .or_else(|| categories.iter().position(|c| *c == PluralCategory::Few))
+        .unwrap_or(categories.len().saturating_sub(1))
 }
 
 impl Locale {
@@ -138,17 +167,41 @@ impl Locale {
         self.parsed.get_or_init(|| {
             let mut problems = Vec::new();
             let mut rows: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut exact = HashMap::new();
+            let mut templates = Vec::new();
             for (name, text) in [("common", &self.shared), ("app", &self.app)] {
                 let (entries, errors) = catalog::parse(text, self.forms);
                 problems.extend(errors.into_iter().map(|e| format!("{}/{name}: {e}", self.code)));
                 for e in entries {
+                    match e.context.as_str() {
+                        "@msg" => {
+                            if let Some(template) = Template::parse(&e.source, vec![e.translation.clone()], false) {
+                                match template.exact_key() {
+                                    Some(key) => {
+                                        exact.insert(key, e.translation.clone());
+                                    }
+                                    None => insert_template(&mut templates, template),
+                                }
+                            }
+                        }
+                        "@msgplural" => {
+                            let forms: Vec<String> = e.translation.split('|').map(str::to_string).collect();
+                            for english in e.source.split('|') {
+                                if let Some(template) = Template::parse(english, forms.clone(), true) {
+                                    insert_template(&mut templates, template);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     rows.entry(e.context).or_default().insert(e.source, e.translation);
                 }
             }
+            sort_templates(&mut templates);
             for p in &problems {
                 log::warn!("translation catalog: {p}; row skipped");
             }
-            Parsed { rows, problems }
+            Parsed { rows, exact, templates, problems }
         })
     }
 
@@ -299,6 +352,119 @@ impl I18n {
         self.find(lang, &[("@id", id), ("", label)]).unwrap_or(label)
     }
 
+    /// Translates a filled-in English message. An exact `@msg` row wins; otherwise the first matching
+    /// template: those that start with text before those that start with a placeholder, then the
+    /// longest text before the first placeholder, then the most literal text. The plural form comes
+    /// from `{n}`. Captured values are translated in turn to a depth of 5; a value between quotes
+    /// at its own place stays, a value that starts with `{` is translated only by an exact row, and
+    /// one that starts with `[` only by a template that starts with `[` and an index of digits.
+    /// Messages over 2000 bytes are matched by an exact row only. Looks along the locale chain; a
+    /// message with no match is returned as it is.
+    pub fn message(&self, lang: Lang, s: &str) -> String {
+        self.message_with(lang, s, &|_, _, _| None)
+    }
+
+    /// As [`I18n::message`], with an app hook that sees each captured value (`key`, `value`) that
+    /// is not between quotes at its own place in the message, at every depth, before the default
+    /// rule. `Some(text)` replaces the value's translation.
+    pub fn message_with(&self, lang: Lang, s: &str, values: &dyn Fn(&MessageMatch<'_>, &str, &str) -> Option<String>) -> String {
+        if lang == Lang::PSEUDO {
+            return self.mark(s).to_string();
+        }
+        self.message_at(lang, s, false, MESSAGE_DEPTH, values)
+    }
+
+    /// The exact `@msg` row for a filled-in English message, its `{{` and `}}` shown as `{` and `}`,
+    /// or `None` when the catalog has no such row. Templates are not tried.
+    pub fn message_exact(&self, lang: Lang, s: &str) -> Option<String> {
+        let chain = self.locale(lang)?.chain.as_slice();
+        let translation = chain.iter().find_map(|&i| self.locales.get(i)?.parsed().exact.get(s))?;
+        Some(fill(translation, &[], false, true))
+    }
+
+    /// Translates a message around a kept span (placeholder U+FFFC): `before` and `after` as
+    /// [`I18n::message`] translates a message, `kept` (such as text a script threw) shown as it is,
+    /// even when it reads like a message that has a translation. The message is shown in English
+    /// when `before` or `after` already holds the placeholder, or the translation does not hold it
+    /// exactly once.
+    pub fn message_keeping(&self, lang: Lang, before: &str, kept: &str, after: &str) -> String {
+        let english = || format!("{before}{kept}{after}");
+        if before.contains(KEPT_VALUE) || after.contains(KEPT_VALUE) {
+            return english();
+        }
+        let shown = self.message(lang, &format!("{before}{KEPT_VALUE}{after}"));
+        match shown.split_once(KEPT_VALUE) {
+            Some((head, tail)) if !tail.contains(KEPT_VALUE) => format!("{head}{kept}{tail}"),
+            _ => english(),
+        }
+    }
+
+    /// The exact row or the first template `s` is an instance of, along `lang`'s chain. With
+    /// `indexed`, only a template that starts with `[` and an index of digits.
+    fn find_message<'a>(&'a self, lang: Lang, s: &'a str, indexed: bool) -> Option<Found<'a>> {
+        let chain = self.locale(lang)?.chain.as_slice();
+        chain.iter().find_map(|&i| {
+            let locale = self.locales.get(i)?;
+            let parsed = locale.parsed();
+            if let Some(translation) = parsed.exact.get(s) {
+                return Some(Found { locale, english: s, forms: std::slice::from_ref(translation), captures: Vec::new() });
+            }
+            if s.len() > MAX_MESSAGE_LEN {
+                return None;
+            }
+            parsed.templates.iter().find_map(|t| {
+                let captures = if indexed { t.indexed_captures(s)? } else { t.captures(s)? };
+                Some(Found { locale, english: &t.english, forms: &t.forms, captures })
+            })
+        })
+    }
+
+    /// `s` shown through the catalog entry it matches, its placeholder values translated in turn
+    /// while `depth` lasts.
+    fn message_at(
+        &self,
+        lang: Lang,
+        s: &str,
+        indexed: bool,
+        depth: usize,
+        values: &dyn Fn(&MessageMatch<'_>, &str, &str) -> Option<String>,
+    ) -> String {
+        let Some(Found { locale, english, forms, captures }) = self.find_message(lang, s, indexed) else { return s.to_string() };
+        let last = forms.len().saturating_sub(1);
+        let count = captures.iter().find(|(k, _)| *k == "n").and_then(|(_, v)| v.parse::<u64>().ok());
+        let index = match (count, &locale.plural) {
+            (Some(n), Some((rules, categories))) => plural_index(categories, rules.category_for(PluralOperands::from(n))).min(last),
+            _ => last,
+        };
+        let Some(template) = forms.get(index) else { return s.to_string() };
+        // A value is quoted when quotes surround it at its own place in `s`. The same text quoted at
+        // another place in `s` (a property named like the reason given for it) does not count.
+        let quoted = |v: &str| {
+            let at = (v.as_ptr() as usize).checked_sub(s.as_ptr() as usize);
+            let Some((before, after)) = at.and_then(|at| Some((s.get(..at)?, s.get(at + v.len()..)?))) else { return false };
+            [('"', '"'), ('“', '”'), ('\'', '\''), ('`', '`')].iter().any(|(a, b)| before.ends_with(*a) && after.starts_with(*b))
+        };
+        let matched = MessageMatch { english, captures: &captures };
+        let nested = |v: &str| {
+            if depth <= 1 || v.is_empty() {
+                v.to_string()
+            } else if v.starts_with('{') {
+                self.message_exact(lang, v).unwrap_or_else(|| v.to_string())
+            } else {
+                self.message_at(lang, v, v.starts_with('['), depth - 1, values)
+            }
+        };
+        let shown: Vec<(&str, String)> = captures
+            .iter()
+            .map(|&(k, v)| {
+                let text = if quoted(v) { v.to_string() } else { values(&matched, k, v).unwrap_or_else(|| nested(v)) };
+                (k, text)
+            })
+            .collect();
+        let args: Vec<(&str, &str)> = shown.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        fill(template, &args, false, true)
+    }
+
     /// A count's wording in `lang`, `{n}` filled in as [`I18n::format`] writes numbers: grouped and
     /// in the region's digits, as a left-to-right isolate ([`ltr`]) when the wording has a
     /// right-to-left letter. `one` and `other` are the English forms; they are also the key of the
@@ -338,15 +504,7 @@ impl I18n {
                 let forms = locale.parsed().rows.get("@plural")?.get(&key)?;
                 let (rules, categories) = locale.plural.as_ref()?;
                 let category = operands.map_or(PluralCategory::Other, |o| rules.category_for(o));
-                // A category whole numbers up to 1000 never reach has no form of its own. Russian
-                // and Ukrainian decimals (`other`) take the `few` form (`1,5 файла`); any other
-                // (French `many` for a million) takes the last.
-                let index = categories
-                    .iter()
-                    .position(|c| *c == category)
-                    .or_else(|| categories.iter().position(|c| *c == PluralCategory::Few))
-                    .unwrap_or(categories.len().saturating_sub(1));
-                forms.split('|').nth(index)
+                forms.split('|').nth(plural_index(categories, category))
             })
             .unwrap_or(if english_one { one } else { other });
         let text = fmt(text, &[("n", &ltr(n))]);
@@ -471,21 +629,35 @@ impl I18n {
 /// Other text gets no marks, and a value's own isolate is taken off. Unknown placeholders stay as written,
 /// and inserted values are never read as templates, so a file name containing `{n}` stays intact.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
-    fill(template, args, true)
+    fill(template, args, true, false)
 }
 
 /// [`fmt`] without isolates, for text that goes where the marks would get in the way: file
 /// names, logs, terminals, text compared or parsed later. Every isolate mark is taken off, in
 /// the template and in the values.
 pub fn fmt_plain(template: &str, args: &[(&str, &str)]) -> String {
-    strip_isolates(&fill(template, args, false))
+    strip_isolates(&fill(template, args, false, false))
 }
 
-fn fill(template: &str, args: &[(&str, &str)], isolated: bool) -> String {
+/// The one filler behind [`fmt`], [`fmt_plain`] and message translation. With `escapes`, `{{` and
+/// `}}` are a literal `{` and `}`, as in a message template; without, braces are only placeholders.
+fn fill(template: &str, args: &[(&str, &str)], isolated: bool, escapes: bool) -> String {
     let mut pieces: Vec<(&str, bool)> = Vec::new();
     let mut rest = template;
-    while let Some((before, after_open)) = rest.split_once('{') {
+    while let Some(open) = rest.find(|c: char| c == '{' || (escapes && c == '}')) {
+        let (before, tail) = rest.split_at_checked(open).unwrap_or((rest, ""));
         pieces.push((before, false));
+        let after_open = tail.get(1..).unwrap_or("");
+        if tail.starts_with('}') {
+            pieces.push(("}", false));
+            rest = after_open.strip_prefix('}').unwrap_or(after_open);
+            continue;
+        }
+        if escapes && let Some(escaped) = after_open.strip_prefix('{') {
+            pieces.push(("{", false));
+            rest = escaped;
+            continue;
+        }
         let Some((name, after_close)) = after_open.split_once('}') else {
             pieces.push(("{", false));
             rest = after_open;
@@ -516,5 +688,7 @@ fn fill(template: &str, args: &[(&str, &str)], isolated: bool) -> String {
     out
 }
 
+#[cfg(test)]
+mod message_tests;
 #[cfg(test)]
 mod tests;

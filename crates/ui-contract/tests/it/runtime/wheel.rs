@@ -1,16 +1,20 @@
 //! The wheel service: the begin hook splits the pass's wheel input among last pass's takers.
 
+use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{GESTURE_GAP, Sense, Wheel, WheelNotch, WheelPhase, WheelTaker, WheelUnit};
 use craft_host::target::Os;
-use craft_ui::contract::{Common, Component, Cx, Pointer as _, Props as _, Role, Show as _};
+use craft_ui::contract::overlay::{Anchor, Place};
+use craft_ui::contract::{
+    Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing,
+};
 use craft_ui::runtime::env::{RootEnv, WheelSpeed};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer;
 use craft_ui::testing::sensing::{ProbeRoot, show};
 use craft_ui::testing::wheel::{register, take, take_share};
 use craft_ui::testing::{Fixture, Frames, trial};
-use craft_ui_test_kit::contract::PlainStyle;
-use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, Response, TouchPhase, Vec2, ViewportId};
+use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
+use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, Response, TouchPhase, Ui, Vec2, ViewportId};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -194,6 +198,91 @@ fn a_wheel_gesture_ends_for_a_value_control_in_any_wheel_scope_and_not_for_a_scr
         }
         assert_eq!(ends(&close(&mut frames, &mut show_frame)), [owner], "the device's end reaches the gesture's owner once");
     }
+}
+
+/// A popup layer that holds one probe.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Popup {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl Component for Popup {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PopupStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Popup {}
+
+#[trial]
+fn a_wheel_over_an_open_popup_goes_to_the_popup_and_not_to_the_region_under_it() {
+    let anchor = Rect::from_min_size(Pos2::new(200.0, 100.0), Vec2::new(30.0, 20.0));
+    let (field_seen, popup_seen) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let open = std::cell::Cell::new(false);
+    let popup_rect = std::cell::Cell::new(Rect::NOTHING);
+    let field = std::cell::Cell::new(Id::NULL);
+    let popup = Id::unique("wheel_popup");
+    let panel = Id::unique("wheel_panel");
+    let shares: RefCell<Vec<(Id, Wheel)>> = RefCell::new(Vec::new());
+    let mut show_frame = |ui: &mut Ui| {
+        let ctx = ui.ctx().clone();
+        let field_rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 20.0));
+        field.set(Probe::new(&field_seen).size(field_rect.size()).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui).id);
+        if open.get() {
+            let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start));
+            let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
+            let out = Popup { common: Common::new(), props }.id_salt("wheel_popup_layer").show(ui, |ui, _| {
+                Probe::new(&popup_seen).size(Vec2::new(120.0, 60.0)).show(ui);
+            });
+            popup_rect.set(out.output.rect);
+        }
+        register(&ctx, WheelTaker::new(panel, Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))).vertical(true).scrolls(true));
+        register(&ctx, WheelTaker::new(field.get(), field_rect).vertical(true).field(true));
+        if open.get() {
+            register(&ctx, WheelTaker::new(popup, popup_rect.get()).vertical(true).scrolls(true));
+        }
+        for id in [panel, field.get(), popup] {
+            if let Some(share) = take_share(&ctx, id) {
+                shares.borrow_mut().push((id, share));
+            }
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    pointer::click(&mut frames, Pos2::new(50.0, 10.0), &mut show_frame);
+    // Each wheel starts its own gesture, which splits by position.
+    let wheel_at = |frames: &mut Frames, at: Pos2, show_frame: &mut dyn FnMut(&mut Ui)| -> Vec<Id> {
+        frames.advance(GESTURE_GAP);
+        frames.frame(vec![pointer::moved(at)], &mut *show_frame);
+        shares.borrow_mut().clear();
+        frames.frame(vec![pointer::wheel(-30.0)], &mut *show_frame);
+        shares.borrow().iter().map(|(id, _)| *id).collect()
+    };
+
+    let beside = Pos2::new(300.0, 300.0);
+    assert_eq!(wheel_at(&mut frames, beside, &mut show_frame), [field.get()], "the focused field takes the wheel over the region");
+
+    open.set(true);
+    frames.idle(4, &mut show_frame);
+    assert!(popup_rect.get().is_positive(), "the popup shows: {:?}", popup_rect.get());
+    let on_popup = popup_rect.get().center();
+    assert_eq!(
+        wheel_at(&mut frames, on_popup, &mut show_frame),
+        [popup],
+        "the popup under the pointer takes the wheel, not the focused field or the region"
+    );
 }
 
 /// What the view under the pointer took over one step: the summed scroll, the product of the zooms and the number of

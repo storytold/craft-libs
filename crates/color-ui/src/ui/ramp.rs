@@ -2,6 +2,7 @@
 
 use super::channels::primary;
 use craft_behavior::{Axis, Metrics, NavMove, PartKey, PressPhase, Sense};
+use craft_cms::convert::CmykConverter;
 use craft_theme::{Hsb, Srgba};
 use craft_ui::canvas::context_click;
 use craft_ui::contract::{
@@ -94,13 +95,49 @@ impl RampPick {
     }
 }
 
-/// Maps a spectrum colour to the host's gamut: `ColorRamp::gamut`.
-pub struct Gamut<'a>(Box<dyn Fn(Srgba) -> Srgba + 'a>);
+/// Maps a spectrum colour to the host's gamut: `ColorRamp::gamut`. The one gamut mechanism of the picker, the panel,
+/// the ramp and `ColorArea`; it is `Send + Sync`, so a stored dialog can hold one.
+pub struct Gamut<'a>(Box<dyn Fn(Srgba) -> Srgba + Send + Sync + 'a>);
 
 impl<'a> Gamut<'a> {
     /// The gamut that runs `map`.
-    pub fn new(map: impl Fn(Srgba) -> Srgba + 'a) -> Self {
+    pub fn new(map: impl Fn(Srgba) -> Srgba + Send + Sync + 'a) -> Self {
         Gamut(Box::new(map))
+    }
+
+    /// The gamut of a CMYK working space: the nearest in-gamut colour by [`CmykConverter::nearest_in_gamut`] with
+    /// [`CmykConverter::PICKER_GAMUT_DE`], the colour itself inside.
+    pub fn cmyk(converter: CmykConverter) -> Gamut<'static> {
+        Gamut::new(move |c| match converter.nearest_in_gamut([c.r, c.g, c.b], CmykConverter::PICKER_GAMUT_DE) {
+            Some([r, g, b]) => Srgba::new(r, g, b, c.a),
+            None => c,
+        })
+    }
+
+    /// The mapped colour when it differs from `color` by more than one 8-bit step, else `None`: the one out-of-gamut
+    /// test every warning chip and `ColorArea`'s shading use.
+    pub fn nearest(&self, color: Srgba) -> Option<Srgba> {
+        let mapped = (self.0)(color);
+        let step = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+        let (a, b) = ([color.r, color.g, color.b, color.a].map(step), [mapped.r, mapped.g, mapped.b, mapped.a].map(step));
+        a.iter().zip(&b).any(|(x, y)| (x - y).abs() > 1).then_some(mapped)
+    }
+}
+
+/// What a click on the ramp with Cmd or Ctrl asks the host to recolour: Shift sets `invert`, Alt sets `other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RampRecolor {
+    /// Shift was held.
+    pub invert: bool,
+    /// Alt was held.
+    pub other: bool,
+}
+
+impl RampRecolor {
+    /// A recolour request with `invert` when Shift was held and `other` when Alt was.
+    pub const fn new(invert: bool, other: bool) -> Self {
+        RampRecolor { invert, other }
     }
 }
 
@@ -115,6 +152,8 @@ pub struct ColorRampOutput {
     pub cycle: bool,
     /// A secondary click that began and ended on the bar: where the host opens its menu.
     pub menu_at: Option<Pos2>,
+    /// A primary click with Cmd or Ctrl on a ramp with `recolor_clicks`: nothing was picked.
+    pub recolor: Option<RampRecolor>,
 }
 
 impl Outcome for ColorRampOutput {
@@ -135,6 +174,7 @@ impl Outcome for ColorRampOutput {
 struct Held {
     shift: bool,
     alt: bool,
+    cmd: bool,
     /// The ends of a Between ramp at the press.
     ends: Option<[Srgba; 2]>,
 }
@@ -162,7 +202,8 @@ struct Cache {
 ///   moves, also outside the bar, where the pick stays at the edge, and commits at the release. A
 ///   [`Between`](RampKind::Between) ramp keeps the ends it had at the press for the whole gesture. Alt at the press
 ///   sets [`other`](RampPick::other) on every event. A click with Shift starts no gesture and sets
-///   [`cycle`](ColorRampOutput::cycle). A secondary click on the bar is reported as
+///   [`cycle`](ColorRampOutput::cycle). With [`recolor_clicks`](ColorRamp::recolor_clicks), a click with Cmd or Ctrl
+///   starts no gesture, picks nothing and sets [`recolor`](ColorRampOutput::recolor). A secondary click on the bar is reported as
 ///   [`menu_at`](ColorRampOutput::menu_at).
 /// - Boxes: a click on the white or the black box (also by keyboard) is a `Set` of that colour, with
 ///   [`other`](RampPick::other) when Alt is held; they are Tab stops of their own.
@@ -184,7 +225,7 @@ pub struct ColorRamp<'a> {
     ends: Option<[Srgba; 2]>,
     /// Maps each colour of a spectrum ramp to the host's gamut (a CMYK round trip). It runs for the cached colours
     /// only, and again for a pick.
-    #[prop(func = "Fn(Srgba) -> Srgba")]
+    #[prop]
     gamut: Option<Gamut<'a>>,
     /// The host's counter for the working space `gamut` maps into; a change recomputes the colours.
     #[prop]
@@ -192,6 +233,10 @@ pub struct ColorRamp<'a> {
     /// Whether every channel is rounded to the nearest of 0, 0.2, ... 1 and the ramp is flat cells.
     #[prop]
     web_safe: bool,
+    /// Whether a primary click with Cmd or Ctrl picks nothing and reports a [`RampRecolor`] (Shift sets `invert`, Alt
+    /// sets `other`); off by default, where Cmd clicks pick as they do.
+    #[prop]
+    recolor_clicks: bool,
     /// Whether the white and black boxes follow the bar; on by default.
     #[prop]
     boxes: bool,
@@ -203,6 +248,7 @@ pub struct ColorRamp<'a> {
     cursor: (usize, usize),
     cycle: bool,
     menu_at: Option<Pos2>,
+    recolor: Option<RampRecolor>,
 }
 
 impl<'a> ColorRamp<'a> {
@@ -217,6 +263,7 @@ impl<'a> ColorRamp<'a> {
             gamut: None,
             gamut_revision: 0,
             web_safe: false,
+            recolor_clicks: false,
             boxes: true,
             kind_name: None,
             colors: Arc::default(),
@@ -224,6 +271,7 @@ impl<'a> ColorRamp<'a> {
             cursor: (0, CELLS_Y / 2),
             cycle: false,
             menu_at: None,
+            recolor: None,
         }
         .label(label)
         .ltr_axis()
@@ -258,7 +306,7 @@ impl<'a> ColorRamp<'a> {
     }
 
     fn gamut_fn(&self) -> Option<&dyn Fn(Srgba) -> Srgba> {
-        self.gamut.as_ref().map(|gamut| &*gamut.0)
+        self.gamut.as_ref().map(|gamut| &*gamut.0 as &dyn Fn(Srgba) -> Srgba)
     }
 
     /// The pick at the fractions (`fx`, `fy`) of the bar.
@@ -391,14 +439,18 @@ impl Component for ColorRamp<'_> {
         let configured = self.ends.unwrap_or_else(Self::default_ends);
         let press = cx.part(BAR).press;
         if primary(&press) && matches!(press.phase, PressPhase::Down { .. }) {
-            *cx.memory::<Held>() = Held { shift: press.mods.shift, alt: press.mods.alt, ends: Some(configured) };
+            *cx.memory::<Held>() = Held { shift: press.mods.shift, alt: press.mods.alt, cmd: press.mods.cmd, ends: Some(configured) };
         }
         let held = *cx.memory::<Held>();
         let running = cx.gesture().is_some();
         let ends = if running || press.phase.is_press() { held.ends.unwrap_or(configured) } else { configured };
         self.shown_ends = ends;
         let mut cursor = cx.memory::<Cursor>().0.unwrap_or((0, CELLS_Y / 2));
-        if primary(&press) && !held.shift {
+        if primary(&press) && self.recolor_clicks && held.cmd {
+            if matches!(press.phase, PressPhase::Release { click: true, .. }) {
+                self.recolor = Some(RampRecolor::new(held.shift, held.alt));
+            }
+        } else if primary(&press) && !held.shift {
             let mut picked = None;
             cx.follow_press(BAR, |pos| {
                 let (fx, fy) = fractions(bar, pos);
@@ -477,8 +529,8 @@ impl Component for ColorRamp<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> ColorRampOutput {
-        let (cycle, menu_at) = (self.cycle, self.menu_at);
-        ColorRampOutput { edit: cx.edit_response(), cycle, menu_at }
+        let (cycle, menu_at, recolor) = (self.cycle, self.menu_at, self.recolor);
+        ColorRampOutput { edit: cx.edit_response(), cycle, menu_at, recolor }
     }
 }
 

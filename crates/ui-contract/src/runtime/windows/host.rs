@@ -118,12 +118,6 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
-    /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
-    /// while AccessKit is off.
-    pub fn access_tree(&self, viewport: ViewportId) -> Option<crate::runtime::egui::access::TreeUpdate> {
-        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
-    }
-
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
     /// held after it, and a button held by earlier injected input stays down, so the move drags. With `rest` (seconds)
     /// the input counts as processed only once the pointer has rested that long. As a window never reports a NaN or
@@ -145,9 +139,24 @@ impl WindowHost {
         injected::inject_key(&self.ctx, viewport, key, mods, hold);
     }
 
-    /// Queues a move to `at`, then a wheel turn of `delta` points with `mods` held. A non-finite `delta` queues nothing.
-    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
-        injected::inject_wheel(&self.ctx, viewport, at, delta, mods);
+    /// Queues a move to `at`, then a wheel turn of `delta` in `unit` with `mods` held. A non-finite `delta` queues
+    /// nothing.
+    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, unit: egui::MouseWheelUnit, mods: Mods) {
+        // PLAN: `injected::inject_wheel` (injected.rs:477) takes `unit` after `delta` once shell-w1 writes it (sh.K4)
+        injected::inject_wheel(&self.ctx, viewport, at, delta, unit, mods);
+    }
+
+    /// Turns AccessKit on, idempotent and off by default; from then the settled tree of every finished pass is kept
+    /// per viewport (`access_tree`).
+    pub fn keep_access_trees(&self) {
+        self.ctx.enable_accesskit();
+    }
+
+    /// The access tree of `viewport`'s latest settled pass, a host fact of the window as its screenshot facts are;
+    /// `None` while AccessKit is off or before the viewport has run.
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<std::sync::Arc<crate::runtime::egui::access::AccessTree>> {
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
+            .map(|update| std::sync::Arc::new(crate::runtime::egui::access::AccessTree::new(update)))
     }
 
     /// Queues the release of what `released` names, at `at` or where the injected pointer is.
@@ -468,8 +477,19 @@ impl WindowHost {
     /// The desktop pointer in the coordinates of `viewport`, when it lies inside that window.
     pub fn pointer_in(&self, viewport: ViewportId) -> Option<Pos2> {
         let desktop = self.desktop_pointer()?;
-        let inner = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))?;
+        let inner = self.inner_on_desktop(viewport)?;
         inner.contains(desktop).then(|| Pos2::ZERO + (desktop - inner.min))
+    }
+
+    /// What a point of `from`'s window adds to land at the same desktop place in `to`'s window, by the inner rects
+    /// the windows last reported, as [`Self::pointer_in`] maps the desktop pointer.
+    pub(crate) fn offset_between(&self, from: ViewportId, to: ViewportId) -> Option<Vec2> {
+        Some(self.inner_on_desktop(from)?.min - self.inner_on_desktop(to)?.min)
+    }
+
+    /// The inner rect of `viewport`'s window on the desktop, as the window last reported it.
+    fn inner_on_desktop(&self, viewport: ViewportId) -> Option<Rect> {
+        PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))
     }
 }
 

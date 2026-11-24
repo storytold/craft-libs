@@ -76,7 +76,7 @@ The binding decides who applies the edits. With `Bind::bound` the area writes ev
 
 A panel body, or code a body calls, changes the workspace during the pass with `docking::request_actions(ctx, actions)`, never by writing the workspace the area shows. The running area takes them unapplied and returns them in `DockAreaOutput::requested`, in order, for the host to apply after `actions` in the same frame. With no area over that panel type running, `request_actions` hands the actions back for the caller to apply.
 
-Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collapse`, `locked`, and `flyout`, which binds the open flyout to the host's value (the area keeps it otherwise). A hidden panel keeps its place for restore. Inside an `AppShell`, the shell's hiding wins over `hide`: while it hides the panels and keeps the tools (Shift+Tab, `ShellCx::panels_hidden`), only the panels an `Except` names stay, docked or floating (a toolbar); while it hides the dock (Tab), no panel shows. Protected panels always show.
+Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collapse`, `locked`, and `flyout`, which binds the open flyout to the host's value (the area keeps it otherwise). A hidden panel keeps its place for restore. Inside an `AppShell`, the shell's hiding wins over `hide`: while it hides the panels and keeps the tools (Shift+Tab, `ShellCx::panels_hidden`), only the panels an `Except` names stay, docked or floating (a toolbar); while it hides the dock (Tab), no panel shows. Under Tab and Shift+Tab, an edge the pointer reveals (`ShellCx::edge_revealed`) shows its `Start` or `End` dock, with the host's `hide` applied to it. Protected panels always show.
 
 A panel in a column collapsed to icons shows in its flyout (`Layout::opens_in_flyout`). The host opens and closes it by writing the `flyout` binding, not the layout: `WindowMenuRows` checks such a panel's row while its flyout is open (`WindowMenuRows::flyout`) and reports a pick in `WindowMenuRowsOutput::flyout`.
 
@@ -104,6 +104,8 @@ The host handles these `DockEvent`s:
 | `title_bar_docks` | on | Dragging a floating window's title bar onto a target docks the whole window. |
 | `close_menu_items`, `close_button` | on | Built-in Close items, and the close action on floating windows. |
 | `tab_close_buttons` | off | Close buttons on tabs (middle click closes too), for tabs that act as documents. |
+| `panel_menu_always` | off | Every group shows its panel menu button, with the dock's own rows when the shown panel has none. Off: only a panel with rows of its own (`DockPanels::panel_rows`) gets the button. |
+| `panel_menu_icon` | `more` | The panel menu button's icon; `menu` gives the three-line mark. |
 | `native_windows` | on | Floating windows open as OS windows where the window host opens them and reports their positions (not on Wayland) and `PanelSpec::allow_native` allows. |
 
 The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords` holds the words.

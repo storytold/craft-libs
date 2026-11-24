@@ -5,15 +5,17 @@
 //! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
 //! pointer, the placement of a minimized window, the root frame decided again, a held close, and `act`.
 
-use craft_behavior::{Cursor, CursorIcon, PointerButton};
+use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
 use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
-use craft_ui::runtime::windows::{WindowHost, WindowSpec};
+use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
-use craft_ui::testing::pointer::{moved, press, wheel};
+use craft_ui::testing::input::key_press;
+use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
@@ -359,7 +361,7 @@ fn a_window_an_app_modal_in_another_window_blocks_takes_no_wheel() {
 
 #[trial]
 fn wheel_over_a_modal_never_reaches_a_view_under_it_during_a_drag() {
-    use craft_behavior::{Sense, WheelTaker};
+    use craft_behavior::WheelTaker;
     use craft_ui::testing::wheel::{register, take};
     let windows = Windows::new();
     let view = egui::Id::unique("dragging view");
@@ -464,6 +466,107 @@ fn a_blocking_modal_is_raised_when_the_main_window_gains_focus() {
     assert!(!raised(&frame()), "the main window stays unfocused: the dialog's window is not raised");
     windows.root_info(focus(true));
     assert!(raised(&frame()), "the main window gained focus: the dialog's window is raised");
+}
+
+/// A modal window that opens over a modal in another window comes first in the app's modal stack: the screen picker's
+/// capture windows, one per monitor and all opened in one frame, take the click and the Escape that end the pick and
+/// block none of each other, while the window of the Color Picker under them stays blocked until they close.
+#[trial]
+fn modal_windows_opened_over_a_modal_in_another_window_take_input_and_block_it() {
+    let windows = Windows::new();
+    let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+    windows.child_info(ViewportInfo { inner_rect: Some(screen), focused: Some(true), ..ViewportInfo::default() });
+    let titles = ["monitor 1", "monitor 2"];
+    let seen = [RefCell::new(Seen::default()), RefCell::new(Seen::default())];
+    let closed = RefCell::new(Vec::new());
+    // The capture windows shown, in show order. The trial's renderer hands the child events to the first child pass of
+    // the frame, so the order picks the window a click goes to.
+    let frame = |shown: &[usize], root: Vec<Event>, child: Vec<Event>| {
+        windows.frame(root, child, |ui| {
+            let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+            Modal { common: Common::new(), props }.id_salt("color picker").show(ui, |_, _| {});
+            for &at in shown {
+                Capture::new(titles[at], screen, &closed).show(ui, |ui, _| {
+                    Probe::new(&seen[at]).size(Vec2::splat(120.0)).sense(Sense::CLICK).show(ui);
+                });
+            }
+        })
+    };
+    let (both, flipped) = ([0, 1], [1, 0]);
+    let blocked = Some(Cursor::System(CursorIcon::NotAllowed));
+    for _ in 0..3 {
+        frame(&[], vec![], vec![]);
+    }
+    let mut out = frame(&both, vec![], vec![]);
+    for _ in 0..3 {
+        out = frame(&both, vec![], vec![]);
+    }
+    let captures = titles.map(|title| builder_titled(&out, title).0);
+
+    let at = Pos2::new(50.0, 50.0);
+    for order in [both, flipped] {
+        frame(&order, vec![], vec![moved(at)]);
+        frame(&order, vec![], vec![press(at)]);
+        frame(&order, vec![], vec![release(at)]);
+        frame(&order, vec![], vec![]);
+    }
+    let clicks: Vec<u32> = seen.iter().map(|seen| seen.borrow().activations).collect();
+    assert_eq!(clicks, [1, 1], "a click reaches each capture window");
+
+    assert_eq!(craft_ui::runtime::cursor::current(&windows.ctx), blocked, "the Color Picker's window is blocked");
+    let mut sent = frame(&both, vec![moved(at), press(at)], vec![]).commands;
+    sent.extend(frame(&both, vec![release(at)], vec![]).commands);
+    assert!(
+        sent.iter().any(|(id, command)| captures.contains(id) && *command == ViewportCommand::Focus),
+        "a press in the Color Picker's window raises a capture window: {sent:?}"
+    );
+
+    frame(&both, vec![], vec![key_press(egui::Key::Escape, egui::Modifiers::NONE)]);
+    frame(&both, vec![], vec![]);
+    assert_eq!(*closed.borrow(), [CloseReason::Escape], "Escape closes the capture window, which ends the pick");
+    for _ in 0..3 {
+        frame(&[], vec![], vec![]);
+    }
+    assert_ne!(craft_ui::runtime::cursor::current(&windows.ctx), blocked, "the pick ended: the Color Picker's window takes input again");
+}
+
+/// A modal container in an OS window of its own over `over`, as the screen picker's capture windows mount, that adds
+/// how it closed to `closed`.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Capture<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl<'a> Capture<'a> {
+    fn new(title: &'static str, over: Rect, closed: &'a RefCell<Vec<CloseReason>>) -> Self {
+        let mount = Mount::viewport_with(Overlay::modal().placed(over), WindowSpec::dialog().level(WindowLevel::AlwaysOnTop).taskbar(false));
+        Capture { common: Common::new(), props: ContainerProps::new().mount(mount), closed }.label(title).id_salt(title)
+    }
+}
+
+impl Component for Capture<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: CaptureStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Capture<'_> {
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
 }
 
 /// A container mounted in an OS viewport that opens as `spec`, with a body the trial gives it.
@@ -930,7 +1033,7 @@ fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
     let nan = Pos2::new(f32::NAN, 10.0);
     host.inject_click(ViewportId::ROOT, nan, PointerButton::Primary, 1, Mods::NONE, false);
     host.inject_move(ViewportId::ROOT, Pos2::new(f32::INFINITY, 0.0), Mods::NONE, 0.0);
-    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), Mods::NONE);
+    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), egui::MouseWheelUnit::Point, Mods::NONE);
     host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Primary, nan, Mods::NONE, None));
     frames(6);
     assert_eq!(presses.get(), 0, "no non-finite press reaches egui");
@@ -1061,6 +1164,122 @@ fn a_floating_panel_opened_from_a_full_window_container_takes_input() {
     let probe = fixture.by_label("Probe").expect("the panel's probe is in the access tree");
     fixture.click(&probe).idle(2);
     assert_eq!(seen.borrow().activations, 1, "the click reaches the panel above the full-window container");
+}
+
+/// A button the platform reports up while egui holds it (the window never got the release) is let go once, at the
+/// pointer's last position so no click results. Nothing is released while the platform reports the button down, while
+/// injected input holds it, or while the platform tells nothing.
+#[trial]
+fn a_button_the_platform_reports_up_is_released_once() {
+    use craft_ui::runtime::windows::InjectedPointer;
+    use craft_ui::testing::windows::HeldButtons;
+
+    let system = Arc::new(FakeSystem::new());
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system.clone()));
+    let host = WindowHost::of(&windows.ctx);
+    let secondary = egui::PointerButton::Secondary;
+    let down = Cell::new(false);
+    let clicked = Cell::new(false);
+    let releases = RefCell::new(Vec::new());
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            ui.ctx().input(|input| {
+                down.set(input.pointer.button_down(secondary));
+                clicked.set(clicked.get() || input.pointer.button_clicked(secondary));
+                releases.borrow_mut().extend(input.raw.events.iter().filter_map(|event| match event {
+                    Event::PointerButton { pos, pressed: false, .. } => Some(*pos),
+                    _ => None,
+                }));
+            });
+        });
+    };
+    let at = Pos2::new(20.0, 20.0);
+    frame(vec![]);
+    frame(vec![moved(at)]);
+    system.set_buttons_held(Some(HeldButtons::SECONDARY));
+    frame(vec![Event::PointerButton { pos: at, button: secondary, pressed: true, modifiers: egui::Modifiers::NONE }]);
+    assert!(down.get(), "the press is down");
+
+    frame(vec![moved(Pos2::new(60.0, 20.0))]);
+    assert!(down.get() && releases.borrow().is_empty(), "the system reports the button down: nothing is released");
+    system.set_buttons_held(None);
+    frame(vec![moved(Pos2::new(80.0, 20.0))]);
+    assert!(down.get() && releases.borrow().is_empty(), "the platform tells nothing: nothing is released");
+
+    system.set_buttons_held(Some(HeldButtons::NONE));
+    let away = Pos2::new(120.0, 20.0);
+    frame(vec![moved(away)]);
+    frame(vec![moved(Pos2::new(140.0, 20.0))]);
+    assert!(!down.get(), "the system reports the button up: egui lets it go");
+    assert_eq!(*releases.borrow(), [away], "one release, at the pointer's position in the frame");
+    assert!(!clicked.get(), "a release away from the press is no click");
+
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Secondary, at, Mods::NONE, None));
+    for _ in 0..4 {
+        frame(vec![]);
+    }
+    assert!(down.get(), "the injected press is held");
+    for _ in 0..3 {
+        frame(vec![moved(Pos2::new(160.0, 20.0))]);
+    }
+    assert!(down.get(), "an injected hold between steps is no lost button");
+}
+
+/// A palette window hides while the root window shows an app-modal layer, returns in the frames after it closes, and
+/// one that opens meanwhile opens hidden.
+#[trial]
+fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_closes() {
+    let windows = Windows::new();
+    let frame = |modal: bool, second: bool| {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            if second {
+                Palette::new("second", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            }
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("modal").show(ui, |_, _| {});
+            }
+        })
+    };
+    let visibility = |out: &Out| {
+        out.commands.iter().rev().find_map(|(id, command)| match command {
+            ViewportCommand::Visible(visible) if *id != ViewportId::ROOT => Some(*visible),
+            _ => None,
+        })
+    };
+    for _ in 0..4 {
+        frame(false, false);
+    }
+    assert_eq!((0..2).find_map(|_| visibility(&frame(false, false))), None, "no layer: the palette stays as it is");
+    let hidden = (0..3).filter_map(|_| visibility(&frame(true, false))).reduce(|_, latest| latest);
+    assert_eq!(hidden, Some(false), "the palette hides under the modal");
+    let out = frame(true, true);
+    assert_eq!(builder_titled(&out, "second").1.visible, Some(false), "a palette opened meanwhile opens hidden");
+    let back = (0..3).filter_map(|_| visibility(&frame(false, false))).reduce(|_, latest| latest);
+    assert_eq!(back, Some(true), "the palette returns once the modal closed");
+}
+
+/// A key automation holds is in `keys::held` while it is held and not after its release.
+#[trial]
+fn a_key_held_by_automation_reads_as_held() {
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let seen = RefCell::new(Vec::new());
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| *seen.borrow_mut() = craft_ui::runtime::keys::held(ui.ctx()));
+    };
+    frame();
+    host.inject_hold(ViewportId::ROOT, Key::A);
+    for _ in 0..3 {
+        frame();
+    }
+    assert_eq!(*seen.borrow(), [Key::A], "the held key reads as down");
+    host.inject_let_go(ViewportId::ROOT, Key::A);
+    for _ in 0..3 {
+        frame();
+    }
+    assert!(seen.borrow().is_empty(), "the released key reads as up");
 }
 
 /// SG-30: X11 rejects a window title that holds a NUL, so `act` drops every NUL before it compares the title with the

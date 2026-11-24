@@ -744,8 +744,12 @@ pub fn outline(tokens: &UiTokens, shape: &PaintShape) -> Vec<Shape> {
 /// The outline of [`outline`] with the line in `line`, a colour the user picked (a Navigator proxy colour), over the
 /// overlay halo. Every halo is drawn under every line, so the edges of one mark that meet or cross stay unbroken.
 pub fn outline_in(tokens: &UiTokens, shapes: &[PaintShape], line: Color32) -> Vec<Shape> {
-    let halo = Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo));
-    let line = Stroke::new(tokens.stroke.medium, line);
+    outline_with(Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo)), Stroke::new(tokens.stroke.medium, line), shapes)
+}
+
+/// The outline of `shapes` with the strokes given: the halo under the line. For a component that keeps shapes built in
+/// `update`, where only `style` has read the tokens.
+pub fn outline_with(halo: Stroke, line: Stroke, shapes: &[PaintShape]) -> Vec<Shape> {
     let halos = shapes.iter().flat_map(|shape| stroked(shape, halo));
     halos.chain(shapes.iter().flat_map(|shape| stroked(shape, line))).collect()
 }

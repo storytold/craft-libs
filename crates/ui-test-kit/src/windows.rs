@@ -36,6 +36,8 @@ thread_local! {
     static COMMANDS: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// The AccessKit tree each viewport's last pass produced, in pass order.
     static TREES: RefCell<Vec<(ViewportId, AccessTree)>> = const { RefCell::new(Vec::new()) };
+    /// The shapes each pass of the frame painted, nested shapes flattened.
+    static SHAPES: RefCell<Vec<(ViewportId, Vec<egui::Shape>)>> = const { RefCell::new(Vec::new()) };
     /// The time every pass of the frame runs at.
     static NOW: Cell<f64> = const { Cell::new(0.0) };
     /// Each child's builder as its window has it: a later builder patches it, and what changed goes to the window as
@@ -141,6 +143,15 @@ fn patch_window(ids: egui::ViewportIdPair, builder: ViewportBuilder) {
     });
 }
 
+/// The window OS files hover over and drop on in [`Windows::frame_with_files`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilesOver {
+    /// The root viewport's window.
+    Root,
+    /// The child viewport's window.
+    Child,
+}
+
 /// A dropped file that exists only as a path.
 #[derive(Debug)]
 struct DroppedPath(std::path::PathBuf);
@@ -196,6 +207,18 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
 fn keep_tree(output: &mut FullOutput, viewport: ViewportId) {
     let tree = tree_of(output);
     TREES.with(|kept| kept.borrow_mut().push((viewport, tree)));
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        flatten(&clipped.shape, &mut shapes);
+    }
+    SHAPES.with(|kept| kept.borrow_mut().push((viewport, shapes)));
+}
+
+fn flatten(shape: &egui::Shape, into: &mut Vec<egui::Shape>) {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten(shape, into)),
+        shape => into.push(shape.clone()),
+    }
 }
 
 /// An OS window as macOS runs egui's window commands on it through winit, in desktop points with y down: a position
@@ -247,6 +270,8 @@ pub struct Out {
     /// The AccessKit tree each viewport's pass produced, in pass order: the children's first, as they run inside the
     /// root's pass.
     pub trees: Vec<(ViewportId, AccessTree)>,
+    /// The shapes each viewport's pass painted, nested shapes flattened, in the order of `trees`.
+    pub shapes: Vec<(ViewportId, Vec<egui::Shape>)>,
 }
 
 /// A context with the runtime installed whose child viewports are OS windows.
@@ -255,6 +280,7 @@ pub struct Windows {
     /// The installed context.
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
+    root: RefCell<RootEnv>,
     app_modal: Cell<Option<ViewportId>>,
 }
 
@@ -284,7 +310,7 @@ impl Windows {
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
-        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()), app_modal: Cell::new(None) }
+        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()), root: RefCell::new(RootEnv::default()), app_modal: Cell::new(None) }
     }
 
     /// The window facts child passes report from now on.
@@ -308,30 +334,39 @@ impl Windows {
         *self.root_info.borrow_mut() = info;
     }
 
+    /// The app's root values every frame gives from now on, the defaults until then.
+    pub fn root_env(&self, root: RootEnv) {
+        *self.root.borrow_mut() = root;
+    }
+
     /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
     /// window commands of the frame.
     pub fn frame(&self, root: Vec<Event>, child: Vec<Event>, ui: impl FnMut(&mut Ui)) -> Out {
-        self.frame_with_files(root, child, Vec::new(), Vec::new(), ui)
+        self.frame_with_files(root, child, FilesOver::Root, Vec::new(), Vec::new(), ui)
     }
 
-    /// [`frame`](Self::frame) where the child's next pass also gets the OS files hovering over its window and the
-    /// files dropped on it.
+    /// [`frame`](Self::frame) where the next pass of the window `over` also gets the OS files hovering over it and the
+    /// files dropped on it. The other window gets none, as the OS sends them only to the window under the pointer.
     pub fn frame_with_files(
         &self,
         root: Vec<Event>,
         child: Vec<Event>,
+        over: FilesOver,
         hovered: Vec<HoveredFile>,
         dropped: Vec<String>,
         ui: impl FnMut(&mut Ui),
     ) -> Out {
         CHILD_EVENTS.with(|events| *events.borrow_mut() = child);
-        // The root pass starts before the child's and ends an OS-file session it sees no files for, so it sees them too.
+        let ((root_hovered, root_dropped), child_files) = match over {
+            FilesOver::Root => ((hovered, dropped), Default::default()),
+            FilesOver::Child => (Default::default(), (hovered, dropped)),
+        };
         let root_dropped: Vec<egui::DroppedFileHandle> =
-            dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
-        let root_hovered = hovered.clone();
-        CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
+            root_dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+        CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(RootEnv::default()).app_modal(self.app_modal.get()));
+        SHAPES.with(|kept| kept.borrow_mut().clear());
+        set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).app_modal(self.app_modal.get()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,
@@ -361,6 +396,7 @@ impl Windows {
             commands: COMMANDS.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
             builders,
             trees: TREES.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
+            shapes: SHAPES.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
         }
     }
 }

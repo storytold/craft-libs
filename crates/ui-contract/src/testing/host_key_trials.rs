@@ -11,7 +11,7 @@ use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse,
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
-use crate::testing::focus::{Stop, egui_focused, named_id, pop_scope, push_scope, register_stop, widget};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::sensing::{self, ProbeRoot};
@@ -46,8 +46,9 @@ fn seen(host: &RefCell<Host>) -> (Vec<Key>, usize) {
     (std::mem::take(&mut host.reached), std::mem::take(&mut host.cancels))
 }
 
+/// A press of `key` and its release, in one frame: a second press with no release between is a repeat.
 fn press_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key) {
-    frames.frame(vec![key_press(key, Modifiers::NONE)], &mut *show);
+    frames.frame(vec![key_press(key, Modifiers::NONE), key_release(key, Modifiers::NONE)], &mut *show);
 }
 
 #[trial]
@@ -93,7 +94,7 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
         register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
         host.rect = fixture::host_field(ui, field(), &mut host.text);
         if std::mem::take(&mut host.start_drag) {
-            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), None, DragPreview::None);
+            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), Vec::new(), DragPreview::None);
         }
         if with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
             host.cancels += 1;
@@ -510,6 +511,29 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
+/// `textless_paste` reads it in that pass only.
+#[trial]
+fn a_paste_with_no_text_is_the_paste_chord_and_reads_as_textless() {
+    let picture = Event::PasteImage(Arc::new(crate::testing::pictures::sample_picture(1, [1, 1])));
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, picture.clone()).1.is_empty(), "the picture's paste fires the app's Paste");
+    let read = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&read);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen.set(crate::runtime::keys::textless_paste(ui.ctx()));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
+    assert!(!read.get(), "a paste with text");
+    frames.frame(vec![picture], &mut show);
+    assert!(read.get(), "a paste with no text");
+    frames.frame(Vec::new(), &mut show);
+    assert!(!read.get(), "the pass after it");
+}
+
 /// A pasted image is the same Paste as pasted text: in a window whose canvas does not take it, the app's Paste runs,
 /// and the app reads the image; a canvas that lists Paste reads it from egui, as it does text.
 #[trial]
@@ -606,6 +630,36 @@ fn an_unbound_f6_reaches_a_host_canvas_with_claims() {
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     unbound.insert(NavCommand::PreviousPane.id(), Vec::new());
     assert_eq!(f6_in(&host, show, Some(unbound)), (true, Vec::new()), "the canvas's app reads F6 from egui");
+}
+
+/// What a press of Escape with `mods` did with nothing focused, under `overrides`: the window cancels it raised and the
+/// ids of the commands it fired.
+fn escape_under(overrides: Option<craft_keymap::Overrides>, mods: Modifiers) -> (usize, Vec<String>) {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    seen(&host);
+    frames.frame(vec![key_press(Key::Escape, mods), key_release(Key::Escape, mods)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (seen(&host).1, fired)
+}
+
+/// Tb-8 (3): Shift+Escape bound to a command runs it, as production's keymap ran it under a loaded place cursor; the
+/// key stage read every Escape without Cmd or Ctrl as the scope's escape, so the binding never fired. Plain Escape keeps
+/// its meaning, and an unbound Shift+Escape is still an escape.
+#[trial]
+fn a_command_bound_to_shift_escape_runs_and_plain_escape_still_cancels() {
+    let delete = EditCommands::Delete.id().to_owned();
+    assert_eq!(escape_under(None, Modifiers::SHIFT), (1, Vec::new()), "an unbound Shift+Escape is the window's Cancel");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Shift+Escape".to_owned()]);
+    assert_eq!(escape_under(Some(bound.clone()), Modifiers::SHIFT), (0, vec![delete]), "the bound Shift+Escape runs its command");
+    assert_eq!(escape_under(Some(bound), Modifiers::NONE), (1, Vec::new()), "a plain Escape is still the window's Cancel");
 }
 
 /// The panes the pane trials show, in order: the scope's name, its stop and its label.
@@ -742,7 +796,7 @@ fn a_window_shortcut_runs_from_a_pane_title_and_not_from_a_modal_dialog_or_a_tex
     // The ids of the commands a press of the shortcut's key fired.
     let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| -> Vec<String> {
         take_output(&frames.ctx);
-        frames.frame(vec![key_press(Key::Q, Modifiers::NONE)], &mut *show);
+        frames.frame(vec![key_press(Key::Q, Modifiers::NONE), key_release(Key::Q, Modifiers::NONE)], &mut *show);
         frames.frame(Vec::new(), &mut *show);
         take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
     };
