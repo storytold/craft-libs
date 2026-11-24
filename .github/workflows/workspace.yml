@@ -110,6 +110,9 @@ jobs:
         if [ "$RUNNER_OS" = Linux ]; then
           python3 scripts/test-workspace-concurrency.py
           python3 scripts/test-workspace-tests.py
+          # The design rules over every mapped crate, on every run: the gate runs this test only when the platforms
+          # job selects craft-design-lint itself, so a finding could land unseen.
+          cargo test -p craft-design-lint --locked --test workspace -- mapped_crates_have_no_findings
         fi
         # One rustfmt call gets every source root of the workspace, which is longer than
         # Windows allows for a command line (os error 206). rustfmt's result is the same on
