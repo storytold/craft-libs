@@ -301,57 +301,42 @@ pub fn decimal_point(text: &str) -> Cow<'_, str> {
         return text.into();
     }
     let mut out = String::with_capacity(text.len());
+    let mut operand_start = 0;
+    let mut prev = None;
+    let mut last_non_ws = None;
+
     for (i, c) in text.char_indices() {
-        if c == ',' {
-            let start = operand_start(text, i);
-            let end = operand_end(text, i);
-            let operand = &text[start..end];
-            if thousands(operand) {
-                out.push(',');
-            } else {
-                out.push('.');
-            }
-        } else {
+        let is_leading = last_non_ws.is_none_or(|last| matches!(last, '+' | '-' | '*' | '/' | 'x' | 'X' | '×'));
+        let is_op = matches!(c, '*' | '/') || is_times(c, prev) || (matches!(c, '+' | '-') && !is_leading);
+
+        if is_op {
+            normalize_operand(&text[operand_start..i], &mut out);
             out.push(c);
+            operand_start = i + c.len_utf8();
+        }
+
+        prev = Some(c);
+        if !c.is_whitespace() {
+            last_non_ws = Some(c);
         }
     }
+
+    normalize_operand(&text[operand_start..], &mut out);
     out.into()
 }
 
-fn operand_start(text: &str, comma_idx: usize) -> usize {
-    let mut prev = None;
-    let mut last_op = 0;
-    for (i, c) in text[..comma_idx].char_indices() {
-        let is_op = matches!(c, '*' | '/') || is_times(c, prev) || (matches!(c, '+' | '-') && !is_leading_sign(text, i));
-        if is_op {
-            last_op = i + c.len_utf8();
+fn normalize_operand(operand: &str, out: &mut String) {
+    if operand.contains(',') {
+        if thousands(operand) {
+            out.push_str(operand);
+        } else {
+            for c in operand.chars() {
+                out.push(if c == ',' { '.' } else { c });
+            }
         }
-        prev = Some(c);
+    } else {
+        out.push_str(operand);
     }
-    last_op
-}
-
-fn is_leading_sign(text: &str, idx: usize) -> bool {
-    let before = text[..idx].trim_end();
-    if before.is_empty() {
-        return true;
-    }
-    let last = before.chars().last();
-    matches!(last, Some('+' | '-' | '*' | '/' | 'x' | 'X' | '×'))
-}
-
-fn operand_end(text: &str, comma_idx: usize) -> usize {
-    let mut prev = text[..comma_idx].chars().last();
-    let start_search = comma_idx + 1;
-    for (offset, c) in text[start_search..].char_indices() {
-        let i = start_search + offset;
-        let is_op = matches!(c, '*' | '/') || is_times(c, prev) || (matches!(c, '+' | '-') && !is_leading_sign(text, i));
-        if is_op {
-            return i;
-        }
-        prev = Some(c);
-    }
-    text.len()
 }
 
 fn thousands(text: &str) -> bool {

@@ -194,26 +194,76 @@ fn operator_limit_enforced_in_parse_measure() {
 
 #[test]
 fn label_registration_scoped_to_container_id() {
-    let ctx = Context::default();
-    let label_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 20.0));
-    let field_rect = Rect::from_min_size(pos2(55.0, 10.0), vec2(60.0, 20.0));
-    let bounds = 0.0..=100.0;
-    let id = Id::unique("field-1");
+    let run_drag_in_layers = |field_in_different_layer: bool| -> f64 {
+        let ctx = Context::default();
+        let label_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 20.0));
+        let field_rect = Rect::from_min_size(pos2(55.0, 10.0), vec2(60.0, 20.0));
+        let bounds = 0.0..=100.0;
+        let id = Id::unique("field-layer");
+        let mut val = 10.0;
+        let center = label_rect.center();
 
-    let mut out = ctx.run_ui(RawInput::default(), |ui| {
-        // Register label inside child scope 1
-        ui.scope_builder(egui::UiBuilder::new().id_salt("container_1"), |ui1| {
-            Scrubber::note_label(ui1, label_rect);
-        });
+        let layer1 = egui::LayerId::new(egui::Order::Middle, Id::unique("container_1"));
+        let layer2 = if field_in_different_layer { egui::LayerId::new(egui::Order::Middle, Id::unique("container_2")) } else { layer1 };
 
-        // Field in child scope 2 should NOT claim label from container 1
-        ui.scope_builder(egui::UiBuilder::new().id_salt("container_2"), |ui2| {
-            let params = FieldScrubParams::new(id, field_rect, "10", Some(10.0), 1, &bounds);
-            let res = Scrubber::field(ui2, params, |_, _, _| {});
-            assert!(res.is_none());
-        });
-    });
-    out.textures_delta.clear();
+        let run_frame = |ctx: &Context, events: Vec<Event>, val: &mut f64| {
+            let mut out = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().layer_id(layer1), |ui1| {
+                    Scrubber::note_label(ui1, label_rect);
+                });
+                ui.scope_builder(egui::UiBuilder::new().layer_id(layer2), |ui2| {
+                    let params = FieldScrubParams::new(id, field_rect, "10", Some(*val), 1, &bounds);
+                    if let Some(v) = Scrubber::field(ui2, params, |_, _, _| {}) {
+                        *val = v;
+                    }
+                });
+            });
+            out.textures_delta.clear();
+        };
+
+        // Frame 1: initial layout
+        run_frame(&ctx, vec![], &mut val);
+
+        // Frame 2: mouse down on label
+        run_frame(
+            &ctx,
+            vec![
+                Event::PointerMoved(center),
+                Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::default() },
+            ],
+            &mut val,
+        );
+
+        // Frame 3: drag start
+        let moved = center + vec2(10.0, 0.0);
+        run_frame(&ctx, vec![Event::PointerMoved(moved)], &mut val);
+
+        // Frame 4: drag continues
+        let drag_pos = moved + vec2(40.0, 0.0);
+        run_frame(&ctx, vec![Event::PointerMoved(drag_pos)], &mut val);
+
+        val
+    };
+
+    let diff_layer_val = run_drag_in_layers(true);
+    assert_eq!(diff_layer_val, 10.0, "field in container_2 must not change when label is in container_1");
+
+    let same_layer_val = run_drag_in_layers(false);
+    assert!(same_layer_val > 10.0, "same container control must change value when dragged");
+}
+
+#[test]
+fn decimal_point_linear_scan_performance_and_leading_signs() {
+    let pts = MeasureUnit::Points;
+
+    // Linear scan handles repeated commas without pathological slowdown
+    let repeated = "0,".repeat(5_000);
+    let normalized = decimal_point(&repeated);
+    assert!(normalized.starts_with("0.0."));
+
+    // Leading signs before decimal numbers
+    assert_eq!(pts.parse("-0,5 mm + +0,5 mm"), Some(0.0));
+    assert_eq!(pts.parse("-1,5 pt"), Some(-1.5));
 }
 
 #[test]
