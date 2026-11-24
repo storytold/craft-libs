@@ -1,8 +1,8 @@
 //! Stories of the buttons.
 
 use super::{
-    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PopupMark, PressFocus, SplitButton, SplitMenu,
-    ToggleButton,
+    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PopupMark, PressFocus, PushButtonLook, SplitButton,
+    SplitMenu, ToggleButton,
 };
 use crate::contract::{Bind, BodyCx, Entry, LeastWidth, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger, Validity};
 use crate::display::{Picture, Shade, Text};
@@ -48,6 +48,30 @@ fn button_variants(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let full = Grid::new(ALL).measure_in(ui, Proposal::Ideal, |ui, _| rows(ui, &STATES));
     let (columns, states) = if full.x <= ui.available_width() { (ALL, &STATES[..]) } else { (&ALL[..3], &STATES[..2]) };
     Grid::new(columns).show(ui, |ui, _| rows(ui, states)).into()
+}
+
+/// The push buttons of an app that sets `PushButtonLook::Filled` at its root: a button, a split button and a disabled
+/// button at each size, filled neutral tiles with no edge at rest. Under the pointer they take the hover fill and the
+/// control edge, pressed the pressed fill and the accent edge.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "Filled")]
+fn button_filled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let entries = presets();
+    let shown = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(PushButtonLook::Filled);
+        },
+        |ui| {
+            Grid::new(&[ColumnWidth::Content; 3]).show(ui, |ui, _| {
+                for (size_name, size) in SIZES {
+                    Button::new("Cancel").size(size).id_salt(("rest", size_name)).show(ui);
+                    SplitButton::new("Trace", &entries).size(size).id_salt(("split", size_name)).show(ui);
+                    Button::new("Unavailable").size(size).enabled(false).id_salt(("disabled", size_name)).show(ui);
+                }
+            })
+        },
+    );
+    shown.into()
 }
 
 #[story(Button<'static>, covers = [Default], group = "Playground", title = "Playground")]
