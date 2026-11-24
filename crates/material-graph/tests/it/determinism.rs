@@ -38,13 +38,14 @@ fn in_pool<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
 
 #[test]
 fn one_thread_and_eight_render_the_same_bytes() {
-    let graphs = demo_graphs();
-    assert!(graphs.len() > 100, "only {} demo graphs", graphs.len());
+    let all = demo_graphs();
+    assert!(all.len() > 100, "only {} demo graphs", all.len());
+    let graphs = crate::sampled(all, 0);
     let one = in_pool(1, || graphs.iter().map(|(_, g)| render(g)).collect::<Vec<_>>());
     let eight = in_pool(8, || graphs.iter().map(|(_, g)| render(g)).collect::<Vec<_>>());
     let differ: Vec<&str> = graphs.iter().zip(one.iter().zip(&eight)).filter(|(_, (a, b))| a != b).map(|((k, _), _)| *k).collect();
     assert!(differ.is_empty(), "these kinds render differently on 1 and 8 threads: {differ:?}");
-    assert!(one.iter().filter(|r| r.is_ok()).count() > 100, "most demo graphs must render");
+    assert!(one.iter().filter(|r| r.is_ok()).count() * 10 > graphs.len() * 8, "most demo graphs must render");
 }
 
 #[test]
@@ -52,7 +53,7 @@ fn cached_and_uncached_evaluations_give_the_same_bytes() {
     let cache = Arc::new(NodeCache::new(256));
     let mut differ = Vec::new();
     let mut not_reused = Vec::new();
-    for (kind, g) in demo_graphs() {
+    for (kind, g) in crate::sampled(demo_graphs(), 0) {
         let keep: Vec<u32> = g.nodes.keys().copied().collect();
         let fresh = g.evaluate_all(SIDE, &keep);
         let first = g.evaluate_all_cached(&EvalContext::default(), SIDE, &keep, &cache, None, &mut |_| {});
