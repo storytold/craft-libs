@@ -37,12 +37,19 @@ impl Huffman {
     }
 }
 
+/// Zero bits a scan may borrow after its data ends: about two blocks' worth. A decoder pads a scan cut short with zeros,
+/// so a short tail still decodes, but a scan that ends early must not decode every remaining block from padding alone.
+/// An encoder fills every restart interval before its marker, so the budget is for the whole scan, not per interval.
+const MAX_PADDED_BITS: u32 = 128;
+
 /// Entropy-coded bits, with the stuffed zeros taken out.
 struct Bits<'a> {
     data: &'a [u8],
     at: usize,
     acc: u32,
     n: u32,
+    /// Zero bits handed out in place of missing data, in the whole scan.
+    padded: u32,
 }
 
 impl Bits<'_> {
@@ -52,8 +59,15 @@ impl Bits<'_> {
             if b == 0xff {
                 match self.data.get(self.at + 1)? {
                     0 => self.at += 2,
-                    // A marker ends this entropy interval. Padding cannot supply a missing coefficient.
-                    _ => return None,
+                    // A marker ends this interval's data: pad with zeros, as a decoder does, but only for a short tail.
+                    // The reader stays at the marker, so `restart` still finds it.
+                    _ => {
+                        if self.padded >= MAX_PADDED_BITS {
+                            return None;
+                        }
+                        self.padded += 1;
+                        return Some(0);
+                    }
                 }
             } else {
                 self.at += 1;
@@ -245,15 +259,19 @@ fn sample_count(width: usize, height: usize) -> Result<usize, JpegError> {
 /// Decode supported baseline greyscale JPEGs. Leave other frame types to the fallback decoder.
 pub(super) fn decode(jpeg: &[u8]) -> Result<Option<super::JpegImage>, JpegError> {
     let Some(frame) = frame(jpeg) else { return Ok(None) };
+    sample_count(frame.width, frame.height)?;
     let mut samples = Vec::new();
-    let count = sample_count(frame.width, frame.height)?;
-    samples.try_reserve_exact(count).map_err(|_| JpegError(format!("cannot allocate {count} baseline JPEG samples")))?;
-    samples.resize(count, 0);
-    decode_scan(jpeg, &frame, &mut samples).ok_or_else(|| JpegError("invalid or truncated baseline JPEG scan".into()))?;
+    decode_scan(jpeg, &frame, &mut samples)?;
     Ok(Some(super::JpegImage { width: frame.width, height: frame.height, channels: 1, samples }))
 }
 
-fn decode_scan(jpeg: &[u8], frame: &Frame, out: &mut [u8]) -> Option<()> {
+/// Decodes the scan into `out`. The samples grow one row of blocks at a time, as the scan supplies that row, so the
+/// memory follows the data actually present and not the size the frame header declares.
+fn decode_scan(jpeg: &[u8], frame: &Frame, out: &mut Vec<u8>) -> Result<(), JpegError> {
+    decode_blocks(jpeg, frame, out).unwrap_or_else(|| Err(JpegError("invalid or truncated baseline JPEG scan".into())))
+}
+
+fn decode_blocks(jpeg: &[u8], frame: &Frame, out: &mut Vec<u8>) -> Option<Result<(), JpegError>> {
     let Frame { width: w, height: h, restart, start, selector, quantization: q, tables } = frame;
     let (w, h, restart, start) = (*w, *h, *restart, *start);
     let dc = tables.get(usize::from(selector >> 4 & 3))?;
@@ -264,7 +282,7 @@ fn decode_scan(jpeg: &[u8], frame: &Frame, out: &mut [u8]) -> Option<()> {
         })
     });
     let (columns, rows) = (w.div_ceil(8), h.div_ceil(8));
-    let mut bits = Bits { data: jpeg, at: start, acc: 0, n: 0 };
+    let mut bits = Bits { data: jpeg, at: start, acc: 0, n: 0, padded: 0 };
     let mut pred = 0i32;
     for block in 0..columns * rows {
         if restart != 0 && block != 0 && block % restart == 0 {
@@ -273,6 +291,17 @@ fn decode_scan(jpeg: &[u8], frame: &Frame, out: &mut [u8]) -> Option<()> {
         }
         let (c, flat) = read_coefficients(&mut bits, dc, ac, q, &mut pred)?;
         let (bx, by) = (block % columns, block / columns);
+        if bx == 0 {
+            // The first block of this row decoded: make room for its pixel rows. Capacity doubles when full, up to the image.
+            let len = h.min(by * 8 + 8) * w;
+            if len > out.capacity() {
+                let room = len.max(out.capacity().saturating_mul(2)).min(w * h);
+                if let Err(error) = out.try_reserve_exact(room.saturating_sub(out.len())) {
+                    return Some(Err(JpegError(format!("cannot allocate {room} baseline JPEG samples: {error}"))));
+                }
+            }
+            out.resize(len, 0);
+        }
         let mut rows_done = [0f64; 64];
         if !flat {
             for (row, basis_y) in rows_done.as_chunks_mut::<8>().0.iter_mut().zip(&basis) {
@@ -296,12 +325,34 @@ fn decode_scan(jpeg: &[u8], frame: &Frame, out: &mut [u8]) -> Option<()> {
             }
         }
     }
-    Some(())
+    Some(Ok(()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Bits, decode, sample_count};
+    use super::{Bits, MAX_PADDED_BITS, decode, decode_scan, frame, sample_count};
+
+    /// A greyscale baseline JPEG whose DC and AC tables each hold one 1-bit code: `0` is a DC difference of 0 and
+    /// the AC end of block, so `00` codes one flat block. `scan` is the entropy-coded data between SOS and EOI.
+    fn one_code_jpeg(width: u16, height: u16, restart: u16, scan: &[u8]) -> Vec<u8> {
+        let mut j = vec![0xff, 0xd8, 0xff, 0xdb, 0, 67, 0];
+        j.extend([1u8; 64]);
+        let ([h1, h0], [w1, w0]) = (height.to_be_bytes(), width.to_be_bytes());
+        j.extend([0xff, 0xc0, 0, 11, 8, h1, h0, w1, w0, 1, 1, 0x11, 0]);
+        for class in [0x00, 0x10] {
+            j.extend([0xff, 0xc4, 0, 20, class, 1]);
+            j.extend([0u8; 15]);
+            j.push(0);
+        }
+        if restart != 0 {
+            let [r1, r0] = restart.to_be_bytes();
+            j.extend([0xff, 0xdd, 0, 4, r1, r0]);
+        }
+        j.extend([0xff, 0xda, 0, 8, 1, 1, 0x00, 0, 63, 0]);
+        j.extend(scan);
+        j.extend([0xff, 0xd9]);
+        j
+    }
 
     /// A 16 x 8 image of two blocks, by hand: DC only, table of ones. Huffman: DC symbols 0 and 4 and 6, AC only end of block.
     #[test]
@@ -341,11 +392,63 @@ mod tests {
     }
 
     #[test]
-    fn entropy_reader_leaves_the_restart_marker_for_restart() {
-        let mut bits = Bits { data: &[0xff, 0x00, 0xff, 0xd0, 0x80], at: 0, acc: 0, n: 0 };
+    fn entropy_reader_pads_a_bounded_tail_and_leaves_the_marker_for_restart() {
+        let mut bits = Bits { data: &[0xff, 0x00, 0xff, 0xd0, 0x80], at: 0, acc: 0, n: 0, padded: 0 };
         assert_eq!(bits.take(8), Some(255));
+        for _ in 0..MAX_PADDED_BITS {
+            assert_eq!(bits.bit(), Some(0));
+        }
         assert_eq!(bits.bit(), None);
         assert_eq!(bits.restart(), Some(()));
         assert_eq!(bits.bit(), Some(1));
+    }
+
+    #[test]
+    fn a_short_tail_is_padded_with_zeros() {
+        // The two-block image above without its last data byte: the six bits it held were zeros.
+        let mut j = vec![0xff, 0xd8, 0xff, 0xdb, 0, 67, 0];
+        j.extend([1u8; 64]);
+        j.extend([0xff, 0xc0, 0, 11, 8, 0, 8, 0, 16, 1, 1, 0x11, 0]);
+        j.extend([0xff, 0xc4, 0, 21, 0x00, 0, 2]);
+        j.extend([0u8; 14]);
+        j.extend([0, 8]);
+        j.extend([0xff, 0xc4, 0, 20, 0x10, 1]);
+        j.extend([0u8; 15]);
+        j.push(0);
+        j.extend([0xff, 0xda, 0, 8, 1, 1, 0x00, 0, 63, 0]);
+        j.extend([0b0111_0010, 0xff, 0xd9]);
+        let image = decode(&j).unwrap().unwrap();
+        assert_eq!((image.samples[0], image.samples[15], image.samples[127]), (153, 153, 153));
+    }
+
+    #[test]
+    fn a_scan_that_ends_early_is_not_padded_to_the_last_block() {
+        // 1000 flat blocks take 2000 bits. With them, the image decodes; with no scan data, padding would have to
+        // supply all 2000 bits.
+        let full = one_code_jpeg(8, 8000, 0, &[0u8; 250]);
+        assert_eq!(decode(&full).unwrap().unwrap().samples.len(), 8 * 8000);
+        assert!(decode(&one_code_jpeg(8, 8000, 0, &[])).is_err());
+        // Nor from restart markers alone: each interval of 64 blocks would fit in one budget of padding.
+        let markers: Vec<u8> = (0..15u8).flat_map(|k| [0xff, 0xd0 + k % 8]).collect();
+        assert!(decode(&one_code_jpeg(8, 8000, 64, &markers)).is_err());
+    }
+
+    #[test]
+    fn a_declared_size_takes_memory_only_as_the_scan_supplies_rows() {
+        // The size limit rejects 65535 x 65535 before anything is allocated.
+        assert!(decode(&one_code_jpeg(u16::MAX, u16::MAX, 0, &[])).is_err());
+        // 16384 x 16384 is within it. The empty scan fails in the first row of blocks, before the 256 MiB image exists.
+        let side = zune_core::options::DecoderOptions::default().max_width() as u16;
+        let jpeg = one_code_jpeg(side, side, 0, &[]);
+        let header = frame(&jpeg).unwrap();
+        let mut samples = Vec::new();
+        assert!(decode_scan(&jpeg, &header, &mut samples).is_err());
+        assert!(samples.capacity() <= usize::from(side) * 8, "{} samples reserved", samples.capacity());
+        // 100 flat blocks of data and the padding budget decode before the scan fails: memory stays near those rows.
+        let jpeg = one_code_jpeg(8, 8000, 0, &[0u8; 25]);
+        let header = frame(&jpeg).unwrap();
+        let mut samples = Vec::new();
+        assert!(decode_scan(&jpeg, &header, &mut samples).is_err());
+        assert!(samples.capacity() <= 2 * samples.len(), "{} samples reserved for {}", samples.capacity(), samples.len());
     }
 }

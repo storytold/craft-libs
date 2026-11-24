@@ -298,6 +298,32 @@ mod tests {
         assert_eq!(read_member(&mut data, 5).unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
     }
 
+    /// A 7z archive (LZMA2) holding `members`, each of that many zero bytes.
+    fn zero_archive(members: &[(&str, u64)]) -> Vec<u8> {
+        let mut writer = sevenz_rust2::ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
+        for (name, size) in members {
+            writer.push_archive_entry(sevenz_rust2::ArchiveEntry::new_file(name), Some(io::repeat(0).take(*size))).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_small_archive_that_unpacks_large_is_refused() {
+        const KIB: u64 = 1024;
+        // One member of 1 MiB of zeros packs into a few hundred bytes.
+        let big = zero_archive(&[("graph.sbsasm", 1024 * KIB)]);
+        assert!(big.len() < 4096, "{} bytes", big.len());
+        let roomy = PackageLimits { member: 2048 * KIB, total: 4096 * KIB };
+        assert_eq!(GraphPackage::read_with_limits(&big, roomy).unwrap().members[0].data.len(), 1024 * 1024);
+        let error = GraphPackage::read_with_limits(&big, PackageLimits { member: 64 * KIB, total: 4096 * KIB }).unwrap_err();
+        assert!(error.to_string().contains("byte limit"), "{error}");
+        // Members each within their own limit still share the package's total.
+        let two = zero_archive(&[("a.xml", 48 * KIB), ("a.sbsasm", 48 * KIB)]);
+        assert_eq!(GraphPackage::read_with_limits(&two, PackageLimits { member: 64 * KIB, total: 96 * KIB }).unwrap().members.len(), 2);
+        let error = GraphPackage::read_with_limits(&two, PackageLimits { member: 64 * KIB, total: 64 * KIB }).unwrap_err();
+        assert!(error.to_string().contains("package limit"), "{error}");
+    }
+
     #[test]
     fn stored_assembly_and_xml_share_the_package_budget() {
         let (file, asm, xml) = stored_package();

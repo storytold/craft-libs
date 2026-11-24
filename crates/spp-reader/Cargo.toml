@@ -20,6 +20,10 @@ hayro-jpeg2000 = { version = "0.5", default-features = false, features = ["std",
 zune-jpeg = "0.5"
 zune-core = "0.5"
 
+[dev-dependencies]
+# Writes small 7z archives for the graph package tests.
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress"] }
+
 [lints]
 workspace = true
 

@@ -167,6 +167,34 @@ mod values {
         assert_eq!(fns.warnings.len(), 1);
     }
 
+    /// `rand`, then 20,000 additions each reading the one before, taken by the first arm of an `ifelse`.
+    fn deep_chain() -> Expr {
+        use crate::decode::graph_package::compiled::{Instr, Operands};
+        const FLOAT: u8 = 9;
+        let refs = |op: u8, r: &[u16]| Instr { op, components: 1, ty: FLOAT, operands: Operands::Refs(r.to_vec()) };
+        let mut instrs = vec![
+            Instr { op: 0x00, components: 1, ty: FLOAT, operands: Operands::Constant(vec![0x3f80_0000]) },
+            Instr { op: 0x00, components: 1, ty: 0, operands: Operands::Constant(vec![1]) },
+            refs(0x32, &[0]),
+        ];
+        for previous in 2..20_002u16 {
+            instrs.push(refs(0x12, &[previous, 0]));
+        }
+        let last = instrs.len() as u16 - 1;
+        instrs.push(refs(0x09, &[1, last, 0]));
+        Expr { offset: 0, end: 0, instrs }
+    }
+
+    #[test]
+    fn a_deep_operand_chain_is_walked_without_recursion() {
+        // Each link used to take one call frame in the walk of the draw order and of what leaves an arm, which
+        // overflowed the stack of this test thread.
+        let mut fns = Functions::default();
+        fns.init = vec![deep_chain()];
+        let name = fns.function(&deep_chain(), &description(), None);
+        assert!(body(&fns, &name).contains("f_out"));
+    }
+
     #[test]
     fn init_expressions_are_written_before_the_function_reads_them() {
         let mut fns = Functions::default();
