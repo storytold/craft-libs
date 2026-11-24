@@ -814,6 +814,7 @@ impl BodyHooks<'_> {
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
         let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
+        let grip_name = props.resize_name.as_ref().map(|name| pcx.env.resolve(name).as_str().to_owned());
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
             if held != Some(index) && !grip_stands(edges, pinned, dx, dy) {
                 continue;
@@ -837,6 +838,10 @@ impl BodyHooks<'_> {
                 .pointer_only(reason)
                 .exact_hit()
                 .over();
+            let part = match &grip_name {
+                Some(name) => part.node(crate::runtime::access::Role::SPLITTER, name.as_str()),
+                None => part,
+            };
             // The grips of a window its caller sizes are the app's (`window_resize`), never the platform's.
             if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))).filter(|_| !caller_sizes) {
                 part.exclusive(hit);

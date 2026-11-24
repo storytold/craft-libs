@@ -137,6 +137,26 @@ fn a_grip_window_keeps_no_band_for_a_title_rule() {
     assert!(ruled - grip >= 0.5, "the grip window's body ({grip}) starts above the ruled window's ({ruled})");
 }
 
+// A floating window's resize grips are named, so assistive technology and automation address them: each edge and
+// corner the window declares is one node.
+#[trial]
+fn a_floating_window_names_each_resize_grip() {
+    use craft_ui::contract::Role;
+    use craft_ui::docking::FloatingGroup;
+    let mut fixture = Fixture::new(move |ui| {
+        let group = FloatingGroup::new("Quick tools", Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(120.0, 200.0)));
+        let _ = group.show_group(ui, |ui, _| {
+            Button::new("Select").show(ui);
+        });
+    });
+    fixture.settle();
+    let grips = fixture.by_role(Role::SPLITTER);
+    assert!(grips.len() >= 4, "a resizable window declares a grip on each edge");
+    for grip in &grips {
+        assert_eq!(craft_ui::testing::access::name(fixture.tree(), grip.node), Some("Resize panel window"), "every grip is named");
+    }
+}
+
 // A toolbar's marked grip is a handle (photocraft#16467): the grab cursor over it and grabbing while it is held, as
 // the grips of a collapsed column show. An unmarked band and a grip that does not move keep the plain arrow.
 #[trial]

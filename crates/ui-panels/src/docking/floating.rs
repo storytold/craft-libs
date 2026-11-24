@@ -321,6 +321,10 @@ impl<'a> FloatingGroup<'a> {
             .pad(Pad::None)
             .sizing(Sizing::Content)
             .header(HeaderRegion::new().band(DragBand::Move).rule(true));
+        let props = match <DockWords as craft_i18n::WordSet>::word("floatingGroup.resize") {
+            Some(word) => props.resize_name(Label::from(word)),
+            None => props,
+        };
         FloatingGroup {
             common: Common::new(),
             props,
