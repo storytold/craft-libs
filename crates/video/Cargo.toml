@@ -80,8 +80,13 @@ rav1e = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
-# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test, and the VMD demuxer for the VMD decoder's.
-craft-media = { workspace = true, features = ["avi", "vmd"] }
+# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test; the MP4, MPEG-TS and AVI
+# demuxers, for the track decoder's tests; the VMD demuxer, for the VMD decoder's.
+craft-media = { workspace = true, features = ["avi", "isobmff", "mpegts", "vmd"] }
+
+# Built with any decoder feature; each codec's tests need its own.
+[[test]]
+name = "track"
 
 [[test]]
 name = "vmd"

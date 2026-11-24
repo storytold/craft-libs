@@ -110,6 +110,20 @@ pub(crate) fn el_uint(out: &mut Vec<u8>, id: u32, v: u64) {
     el(out, id, &v.to_be_bytes()[8 - n..]);
 }
 
+pub(crate) fn el_sint(out: &mut Vec<u8>, id: u32, v: i64) {
+    let bytes = v.to_be_bytes();
+    let mut start = 0;
+    while start < 7 {
+        let sign_bit = (bytes[start + 1] & 0x80) != 0;
+        if (bytes[start] == 0x00 && !sign_bit) || (bytes[start] == 0xFF && sign_bit) {
+            start += 1;
+        } else {
+            break;
+        }
+    }
+    el(out, id, &bytes[start..]);
+}
+
 pub(crate) fn el_float(out: &mut Vec<u8>, id: u32, v: f64) {
     el(out, id, &v.to_be_bytes());
 }
@@ -198,6 +212,7 @@ pub struct MkvWriter<W: Write + Seek> {
     /// The cluster number in which each track last had a cue. Starting a cluster bumps
     /// `cluster_number` instead of clearing an entry for every declared track.
     track_cued_in: Vec<u64>,
+    last_ts: Vec<Option<i64>>,
     cluster_number: u64,
     end_ns: i64,
     has_video: bool,
@@ -321,6 +336,7 @@ impl<W: Write + Seek> MkvWriter<W> {
             pending: None,
             cues: Vec::new(),
             track_cued_in: vec![u64::MAX; n],
+            last_ts: vec![None; n],
             cluster_number: 0,
             end_ns: 0,
             has_video,
@@ -386,6 +402,7 @@ impl<W: Write + Seek> MkvWriter<W> {
                 Some(p) => p.frames.push(data.to_vec()),
                 None => self.pending = Some(Pending { track, ts: ts - cts, frames: vec![data.to_vec()] }),
             }
+            self.last_ts[track] = Some(ts);
             return Ok(());
         }
         self.flush_pending();
@@ -399,7 +416,8 @@ impl<W: Write + Seek> MkvWriter<W> {
             el(&mut g, BLOCK, &block);
             el_uint(&mut g, BLOCK_DURATION, ((u128::from(d) + scale as u128 / 2) / scale as u128) as u64);
             if !keyframe {
-                el(&mut g, REFERENCE_BLOCK, &[0xFF]);
+                let ref_delta = self.last_ts[track].map(|prev| prev - ts).unwrap_or(0);
+                el_sint(&mut g, REFERENCE_BLOCK, ref_delta);
             }
             el(&mut self.cluster, BLOCK_GROUP, &g);
         } else {
@@ -407,6 +425,7 @@ impl<W: Write + Seek> MkvWriter<W> {
             block.extend_from_slice(data);
             el(&mut self.cluster, SIMPLE_BLOCK, &block);
         }
+        self.last_ts[track] = Some(ts);
         Ok(())
     }
 
@@ -722,5 +741,25 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), 12, "{:?}", m.cues);
+    }
+
+    #[test]
+    fn dependent_block_group_writes_actual_reference_block_delta() {
+        let mut v = TrackSpec::new(TrackKind::Video, "V_AV1");
+        v.video_size = Some((16, 16));
+        v.default_duration_ns = Some(33_333_333);
+        let mut m = MkvWriter::new(Cursor::new(Vec::new()), vec![v], MuxOptions::default()).unwrap();
+        m.write_frame(0, 0, true, &[1; 4], Some(33_000_000)).unwrap();
+        m.write_frame(0, 33_000_000, true, &[2; 4], Some(33_000_000)).unwrap();
+        m.write_frame(0, 66_000_000, false, &[3; 4], Some(67_000_000)).unwrap();
+        let bytes = m.finish().unwrap().into_inner();
+        // ReferenceBlock (0xFB, len 1 = 0x81, value -33i8 = 0xDF).
+        assert!(bytes.windows(3).any(|w| w == [0xFB, 0x81, (-33i8) as u8]));
+        let mut d = Demuxer::from_slice(&bytes).unwrap();
+        let mut frames = Vec::new();
+        while let Some(p) = d.next_packet().unwrap() {
+            frames.push((p.pts_ns, p.keyframe, p.duration));
+        }
+        assert_eq!(frames, vec![(0, true, 33), (33_000_000, true, 33), (66_000_000, false, 67)]);
     }
 }

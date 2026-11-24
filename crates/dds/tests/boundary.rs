@@ -74,14 +74,17 @@ fn mip_views_reuse_shared_decoders_and_keep_their_bounds() {
 #[test]
 fn sixteen_bit_mip_views_preserve_samples_and_stored_offsets() {
     for (layout, channels) in [(Layout::Gray, 1), (Layout::GrayA, 2), (Layout::Rgba, 4)] {
+        // Two channels are stored as R16G16 and read back as red and green with blue 0.
+        let read =
+            |samples: Vec<u16>| -> Vec<u16> { if channels == 2 { samples.chunks(2).flat_map(|p| [p[0], p[1], 0]).collect() } else { samples } };
         let pixels: Vec<u16> = (0..16).flat_map(|p| (0..channels).map(move |c| (p * 400 + c * 31 + 7) as u16)).collect();
         let bytes = craft_dds::encode16(4, 4, layout, &pixels, DdsOptions { compression: DdsCompression::None, mipmaps: true }).unwrap();
         let texture = Texture::parse(&bytes).unwrap();
         assert_eq!(texture.compression(), DdsCompression::None);
         assert_eq!(texture.levels(), 3);
-        assert_eq!(texture.decode16().unwrap(), pixels);
+        assert_eq!(texture.decode16().unwrap(), read(pixels));
         for (index, averages) in [(1, vec![1000, 1800, 4200, 5000]), (2, vec![3000])] {
-            let expected: Vec<u16> = averages.iter().flat_map(|p| (0..channels).map(move |c| (p + c * 31 + 7) as u16)).collect();
+            let expected = read(averages.iter().flat_map(|p| (0..channels).map(move |c| (p + c * 31 + 7) as u16)).collect());
             let level = texture.mip_level(index).unwrap();
             let budget = (expected.len() * 2) as u64;
             assert!(matches!(level.decode16_with_limit(budget - 1), Err(craft_dds::DdsError::LimitExceeded { .. })));

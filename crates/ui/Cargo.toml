@@ -19,9 +19,11 @@ log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }
 # Same version as epaint's, for reading a face's character map.
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
-# The vendor-neutral vocabulary the share dialog speaks. No IO and no
-# vendor, so this stays buildable for the web.
+# The vendor-neutral vocabulary the share and e-sign dialogs speak. No IO and
+# no vendor, so this stays buildable for the web.
 craft-cloud = { workspace = true, optional = true }
+# The e-sign contract the request-signatures dialog states its work through.
+craft-esign = { workspace = true, optional = true }
 # The control channel's report of the cloud state. One serialiser here
 # rather than one per application. No IO and no vendor.
 serde_json = { workspace = true, optional = true }
@@ -65,6 +67,8 @@ share = ["dep:craft-cloud"]
 # Open and Save against cloud storage. Needs the share dialog, which a
 # document's overflow menu and the Share split button both open.
 cloud = ["share", "dep:serde_json"]
+# Request-signatures dialog.
+esign = ["dep:craft-cloud", "dep:craft-esign"]
 
 [dev-dependencies]
 # serde: the IME tests read events that only the suite's egui fork has from JSON.

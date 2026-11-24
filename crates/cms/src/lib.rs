@@ -31,6 +31,7 @@ pub mod lutfile;
 pub mod math;
 pub mod named;
 mod normalize;
+pub mod palette;
 pub mod pipeline;
 pub mod profile;
 pub mod sony_lut;
