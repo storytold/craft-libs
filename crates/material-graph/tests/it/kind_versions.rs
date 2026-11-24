@@ -93,7 +93,11 @@ fn a_fix_in_one_operation_leaves_most_kinds_alone() {
         let scanned = SourceTree::scan(&edited, DISPATCHERS);
         let scan = started.elapsed();
         let after = versions(&scanned);
-        eprintln!("DIAG kind_versions edit of {:?}: scan {scan:?}, versions {:?}", edits.iter().map(|e| e.0).collect::<Vec<_>>(), started.elapsed() - scan);
+        eprintln!(
+            "DIAG kind_versions edit of {:?}: scan {scan:?}, versions {:?}",
+            edits.iter().map(|e| e.0).collect::<Vec<_>>(),
+            started.elapsed() - scan
+        );
         kinds.iter().zip(before.iter().zip(&after)).filter(|(_, (a, b))| a != b).map(|(k, _)| k.clone()).collect::<Vec<String>>()
     };
     let changed_by = |file: &str, from: &str, to: &str| changed_by_all(&[(file, from, to)]);
