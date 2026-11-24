@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_color_ui::ui::gradient::{ColorStop, GradientStops};
-use craft_draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor};
+use craft_draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMethod};
 use craft_theme::Srgba;
 use craft_ui::testing::{Fixture, trial};
 
@@ -52,4 +52,40 @@ fn gradient_map_names_the_current_preset_and_shows_how_to_add_a_stop() {
     assert!((active.stops.color[1].location - 0.5).abs() < 0.01);
     assert!(active.dither);
     visible(&fixture, "Custom");
+}
+
+#[trial]
+fn gradient_map_method_lists_the_five_methods_and_never_picks_a_disabled_one() {
+    let black = Srgba::rgb(0.0, 0.0, 0.0);
+    let white = Srgba::rgb(1.0, 1.0, 1.0);
+    let stops = GradientStops::new(vec![ColorStop::new(0.0, black), ColorStop::new(1.0, white)]);
+    let value = Rc::new(RefCell::new(GradientMap::new(stops, false, false)));
+    let held = Rc::clone(&value);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = GradientMapEditor::new("Gradient Map", &held.borrow()).disabled_methods(&[GradientMethod::Stripes]).show(ui);
+        if let Some(event) = out.event {
+            event.apply(&mut held.borrow_mut());
+        }
+    });
+    fixture.room(egui::vec2(380.0, 420.0)).settle();
+    let shows = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text && !run.elided);
+    assert!(shows(&fixture, "Smooth"), "a new map shows Smooth; painted {:?}", fixture.texts().iter().map(|r| r.text.as_str()).collect::<Vec<_>>());
+
+    let method = fixture.by_label("Method").expect("a Method list");
+    fixture.click(&method).settle();
+    let rows: Vec<_> = ["Perceptual", "Linear", "Classic", "Smooth", "Stripes"]
+        .iter()
+        .map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("the list offers {name}")))
+        .collect();
+    assert!(rows.windows(2).all(|pair| pair[0].center().y < pair[1].center().y), "the methods are listed in order");
+    assert!(fixture.tree().is_disabled_key(rows[4].node), "Stripes is listed but disabled");
+    let linear = rows[1];
+    fixture.click(&linear).settle();
+    assert_eq!(value.borrow().method, GradientMethod::Linear);
+
+    let method = fixture.by_label("Method").expect("a Method list");
+    fixture.click(&method).settle();
+    let stripes = fixture.by_label("Stripes").expect("the list offers Stripes");
+    fixture.click(&stripes).settle();
+    assert_eq!(value.borrow().method, GradientMethod::Linear, "a click on the disabled Stripes keeps the method");
 }
