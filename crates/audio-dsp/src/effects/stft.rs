@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn paired_effects_match_mono_on_transients() {
         use crate::AudioEffect;
-        use crate::effects::{DeNoise, DeReverb, FftFilter, PitchShifter};
+        use crate::effects::{DeNoise, DeReverb, FftFilter, NoiseSuppression, PitchShifter};
         const SR: f32 = 48_000.0;
         let len = 48_000;
         let material = |f: f64, amp: f32, phase: f64, click_every: usize, click_at: usize, noise: f32, seed: u64| -> Vec<f32> {
@@ -427,6 +427,7 @@ mod tests {
                 "DeReverb" => Box::new(DeReverb::new(SR, ch)),
                 "FftFilter" => Box::new(FftFilter::new(SR, ch)),
                 "DeNoise" => Box::new(DeNoise::new(SR, ch)),
+                "NoiseSuppression" => Box::new(NoiseSuppression::new(SR, ch)),
                 _ => Box::new(PitchShifter::new(SR, ch)),
             };
             if name == "PitchShifter" {
@@ -445,7 +446,7 @@ mod tests {
             y
         };
         let mut failures = Vec::new();
-        for name in ["PitchShifter", "DeNoise", "DeReverb", "FftFilter"] {
+        for name in ["PitchShifter", "DeNoise", "NoiseSuppression", "DeReverb", "FftFilter"] {
             for (label, src) in [("identical", &identical), ("different", &different)] {
                 let joint = run(name, src);
                 for (ch, chan) in src.iter().enumerate() {
@@ -502,17 +503,18 @@ mod tests {
     #[test]
     fn non_finite_sample_stays_in_its_channel() {
         use crate::AudioEffect;
-        use crate::effects::{DeNoise, DeReverb, FftFilter, PitchShifter};
+        use crate::effects::{DeNoise, DeReverb, FftFilter, NoiseSuppression, PitchShifter};
         const SR: f32 = 48_000.0;
         let len = 24_000;
         let mut rng = Rng::new(5);
         let clean_a: Vec<f32> = crate::testutil::sine(440.0, 0.4, SR as f64, len, 0.0).iter().map(|v| v + 0.05 * rng.uniform()).collect();
         let clean_b: Vec<f32> = crate::testutil::sine(1250.0, 0.4, SR as f64, len, 0.3).iter().map(|v| v + 0.05 * rng.uniform()).collect();
         type Make = fn() -> Box<dyn AudioEffect>;
-        let make: [(&str, Make, usize); 4] = [
+        let make: [(&str, Make, usize); 5] = [
             ("DeReverb", || Box::new(DeReverb::new(SR, 2)), 1),
             ("FftFilter", || Box::new(FftFilter::new(SR, 2)), 1),
             ("DeNoise", || Box::new(DeNoise::new(SR, 2)), 1),
+            ("NoiseSuppression", || Box::new(NoiseSuppression::new(SR, 2)), 1),
             ("PitchShifter", || Box::new(PitchShifter::new(SR, 2)), 1),
         ];
         let mono = |name: &str, src: &[f32]| -> Vec<f32> {
@@ -520,6 +522,7 @@ mod tests {
                 "DeReverb" => Box::new(DeReverb::new(SR, 1)),
                 "FftFilter" => Box::new(FftFilter::new(SR, 1)),
                 "DeNoise" => Box::new(DeNoise::new(SR, 1)),
+                "NoiseSuppression" => Box::new(NoiseSuppression::new(SR, 1)),
                 _ => Box::new(PitchShifter::new(SR, 1)),
             };
             if name == "PitchShifter" {

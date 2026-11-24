@@ -83,3 +83,55 @@ fn voice_formant_does_not_allocate_while_processing() {
     assert_eq!(info.count_total, 0, "{info:?}");
     assert!(l.iter().chain(&r).all(|v| v.is_finite()));
 }
+
+/// Noise suppression runs a voiced tone in noise through 10,000 blocks of 480 frames, with its
+/// reduction changed between blocks and set to 0, a stretch of silence, blocks that leave the
+/// second channel out, a NaN sample and a reset, without one heap allocation.
+#[test]
+fn noise_suppression_does_not_allocate_while_processing() {
+    let Some(mut fx) = create_effect("noise_suppression", 48_000.0, 2) else { panic!("noise_suppression is not registered") };
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let input: Vec<f32> = (0..480)
+        .map(|i| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let noise = (seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5;
+            (0.3 * (std::f64::consts::TAU * 150.0 * i as f64 / 48_000.0).sin()) as f32 + 0.05 * noise
+        })
+        .collect();
+    let (mut l, mut r) = (input.clone(), input.clone());
+    let info = allocation_counter::measure(|| {
+        for block in 0..10_000u32 {
+            match block % 500 {
+                0 => {
+                    fx.set_param("reduction", (block / 500 % 5) as f32 * 10.0);
+                }
+                499 => {
+                    fx.set_param("reduction", 0.0);
+                }
+                _ => {}
+            }
+            if block == 7_777 {
+                fx.reset();
+            }
+            if (3_000..3_050).contains(&block) {
+                l.fill(0.0);
+                r.fill(0.0);
+            } else {
+                l.copy_from_slice(&input);
+                r.copy_from_slice(&input);
+            }
+            if block == 5_000 {
+                l[100] = f32::NAN;
+            }
+            if (6_000..6_020).contains(&block) {
+                fx.process(&mut [&mut l]);
+            } else {
+                fx.process(&mut [&mut l, &mut r]);
+            }
+        }
+    });
+    assert_eq!(info.count_total, 0, "{info:?}");
+    assert!(l.iter().chain(&r).all(|v| v.is_finite()));
+}
