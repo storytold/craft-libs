@@ -4,7 +4,7 @@
 //! previous pass's registry, because a drop is decided against what was on screen when the pointer moved. Every
 //! zone is a rect. A spot names a group by an anchor panel, as the dock model does.
 
-use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
+use super::{DockGrid, DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
 use crate::rails::RailDensity;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
@@ -86,6 +86,12 @@ pub struct DockSizes {
     pub dense_rail_first: f32,
     /// [`rail_step`](Self::rail_step) with the buttons of a dense rail ([`RailDensity::Dense`]).
     pub dense_rail_step: f32,
+    /// The inset of a docked tool rail's column shown as a card ([`rail_cards`](Self::rail_cards)) on its outer, top
+    /// and bottom sides: `space.gap.stack`.
+    pub rail_card: f32,
+    /// Whether the dock shows its docked tool rails as cards ([`DockConfig::rail_cards`](super::DockConfig::rail_cards)):
+    /// off in the style, set by the dock that shows them.
+    pub rail_cards: bool,
     /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
     /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
     /// shows itself: the least hit size, or the theme's grip marks with `space.gap.tight` above and below them.
@@ -141,6 +147,8 @@ impl DockSizes {
             rail_step,
             dense_rail_first,
             dense_rail_step,
+            rail_card: cx.tokens.space.gap.stack,
+            rail_cards: false,
             grip: super::group::grip_strip(cx.tokens),
         }
     }
@@ -188,6 +196,23 @@ impl DockSizes {
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
+    /// The inset of `column`'s card: [`rail_card`](Self::rail_card) for an expanded stepped column of a tool rail
+    /// ([`DockGrid::rail`](super::DockGrid::rail)) in a dock that shows [`rail_cards`](Self::rail_cards), else none.
+    /// A docked column is that much wider than its steps.
+    pub fn card_inset<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        let rail = || {
+            column.steps.is_some()
+                && column.panels().find_map(|panel| spec(panel).grid.filter(|grid| grid.resolved(self).valid())).is_some_and(DockGrid::is_rail)
+        };
+        if self.rail_cards && !column.iconic && rail() { self.rail_card } else { 0.0 }
+    }
+
+    /// The width of a docked column before the dock's room shrinks it: its [`width`](Self::width) and its card's
+    /// inset.
+    fn docked_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        self.width(column, spec) + self.card_inset(column, spec)
+    }
+
     /// The width bounds of a column collapsed to icons, docked or floating: the rail width up to the width it expands
     /// to. A docked column's inner edge and a floating window's sides resize it within them.
     pub fn iconic_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
@@ -201,7 +226,8 @@ impl DockSizes {
         if column.iconic {
             self.iconic_bounds(column, spec)
         } else if let Some((grid, _)) = self.stepped(column, spec) {
-            (grid.width(1), grid.width(grid.most))
+            let inset = self.card_inset(column, spec);
+            (grid.width(1) + inset, grid.width(grid.most) + inset)
         } else {
             self.width_bounds(column, spec)
         }
@@ -241,7 +267,7 @@ impl DockSizes {
         let current: Vec<(f32, (f32, f32))> = columns
             .iter()
             .map(|column| {
-                let width = self.width(column, spec);
+                let width = self.docked_width(column, spec);
                 (width, if fixed(column) { (width, width) } else { self.shown_bounds(column, spec) })
             })
             .collect();
@@ -264,7 +290,7 @@ impl DockSizes {
             .iter()
             .map(|column| {
                 let keeps = column.iconic || self.stepped(column, spec).is_some();
-                (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
+                (self.docked_width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
             })
             .collect()
     }

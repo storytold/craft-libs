@@ -254,7 +254,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
     /// Takes a group or tab drag released on the root.
     fn take(&self, cx: &mut Cx<'_, DockRoot<'_, DockDropped<P>>>) -> Option<DockDropped<P>> {
         let ctx = cx.core.ctx.clone();
-        let sizes = *cx.style.sizes();
+        let sizes = area_sizes(*cx.style.sizes(), self.config);
         let shell = cx.env.get::<ShellEntry>().0;
         let bounds = inset_top(shell.as_ref().map_or(cx.rect, ShellCx::float_bounds), self.top_inset);
         let space = float_space(&ctx, bounds, &sizes, self.config, self.specs);
@@ -269,6 +269,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         target.placing = Some(Placing::new(sizes, &spec, &protected).shown(prune.hide(), self.maximized));
         cx.drop_target::<GroupDrag<P>, _>(&target).or_else(|| cx.drop_target::<PanelDrag, _>(&target))
     }
+}
+
+/// The sizes a dock area lays out with: the dock's style, with its docked tool rails as cards when `config` shows
+/// them ([`DockConfig::rail_cards`]).
+fn area_sizes(mut sizes: DockSizes, config: &DockConfig) -> DockSizes {
+    sizes.rail_cards = config.rail_cards;
+    sizes
 }
 
 /// What the area collects while it shows its parts.
@@ -526,7 +533,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         let mut passed = None;
         open_requests::<P>(&ctx);
         let shown = root.show(ui, |ui, body| {
-            let Some(sizes) = body.style::<DockRoot<'_, DockDropped<P>>>().map(|style| *style.sizes()) else { return };
+            let Some(sizes) = body.style::<DockRoot<'_, DockDropped<P>>>().map(|style| area_sizes(*style.sizes(), &config)) else { return };
             let memory = body.memory::<AreaMemory<P>>();
             memory.window_floor = memory.window_floor.max(current.layout().window_floor());
             let input = Input {
@@ -1390,7 +1397,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
-                .auto_collapse(scene.auto_collapse);
+                .auto_collapse(scene.auto_collapse)
+                .card(scene.sizes.rail_cards && !in_window);
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
                 self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
             });
@@ -1421,9 +1429,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let spec = |panel: &P| scene.spec(panel);
         if let Some(width) = work.width {
             match scene.sizes.stepped(column, &spec) {
-                // The edge of a stepped column moves in whole steps: the most that fit where it is dragged.
+                // The edge of a stepped column moves in whole steps: the most that fit where it is dragged, inside its
+                // card.
                 Some((grid, steps)) if !column.iconic => {
-                    let to = grid.steps_within(width);
+                    let to = grid.steps_within(width - scene.sizes.card_inset(column, &spec));
                     if to != steps {
                         self.report.actions.push(Action::set_column_steps(first.clone(), to));
                     }
