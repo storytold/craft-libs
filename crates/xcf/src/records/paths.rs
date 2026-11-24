@@ -597,7 +597,7 @@ fn standalone_with_points<'a>(
             cursor: Cursor { b: raw, pos: scan.end_offset, wide: false },
             source_offset: payload_start,
             limits,
-            points_left: limits.points,
+            points_left: (*points_left).min(limits.points),
             budget: &mut *reader.budget,
             keep_going,
         };
@@ -1091,6 +1091,38 @@ mod tests {
                 let payload = scan.records[0].parasite_payloads().next().unwrap();
                 let raw = super::super::parasites(payload, 0, Default::default(), &mut Budget::default(), &|| true).unwrap();
                 assert_eq!(raw.records[0].name, raw_name.strip_suffix(&[0]).unwrap_or(raw_name));
+            }
+        }
+    }
+    #[test]
+    fn standalone_point_allowance_honors_both_limits_and_commits_only_on_success() {
+        let mut payload = Vec::new();
+        for value in [0, 0, 1, 1] {
+            word(&mut payload, value);
+        }
+        cubic(&mut payload, 1, false);
+        let mut bytes = Vec::new();
+        name(&mut bytes, "path");
+        word(&mut bytes, payload.len() as u32);
+        bytes.extend(payload);
+        for (local, incoming, admitted) in [(3, 2, false), (2, 3, false), (3, 3, true), (6, 6, true)] {
+            let mut remaining = incoming;
+            let mut budget = Budget::default();
+            let retained = budget.retained_remaining();
+            let work = budget.work_remaining();
+            let scan =
+                standalone_with_points(&bytes, 0, 0, Limits { points: local, ..Default::default() }, &mut budget, &|| true, &mut remaining).unwrap();
+            assert!(budget.work_remaining() < work);
+            if admitted {
+                assert!(scan.stopped.is_none());
+                assert_eq!(scan.records[0].strokes[0].knots.len(), 1);
+                assert_eq!(remaining, incoming.min(local) - 3);
+                assert!(budget.retained_remaining() < retained);
+            } else {
+                assert!(scan.records.is_empty());
+                assert_eq!(scan.stopped.unwrap().reason, StopReason::RecordLimit);
+                assert_eq!(remaining, incoming, "rejected geometry does not commit a point debit");
+                assert_eq!(budget.retained_remaining(), retained);
             }
         }
     }
