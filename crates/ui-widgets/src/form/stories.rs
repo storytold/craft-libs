@@ -70,7 +70,7 @@ fn field_link_label_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 }
                 .show(ui);
                 // The field the label names reports the link click; the story is its host.
-                field.inner.as_ref().is_some_and(|field| field.link) || link.clicked()
+                field.inner.as_ref().is_some_and(|field| field.link) || crate::contract::clicked(&link)
             })
             .inner
             == Some(true)

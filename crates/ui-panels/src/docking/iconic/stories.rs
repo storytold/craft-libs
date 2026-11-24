@@ -99,7 +99,7 @@ fn icons_as_a_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = *data.choice("place", 1_usize, &[("At the window edge", 0), ("Inward of another column", 1)]);
     let inset = DockSizes { column_cards: true, ..DockSizes::of_scope(ui) }.card_inset(at);
     let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
-    let column = IconicColumn::new("Panels", global("iconic column", "card story"), &column, Bind::kept(), &spec).card(inset);
+    let column = IconicColumn::new("Panels", global("iconic column", "card story"), &column, Bind::kept(), &spec).card(at);
     at_stage_wider(ui, column, inset, |group, at, ui, _| {
         let GroupAt::Show(rect) = at else { return None };
         let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());

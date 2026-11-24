@@ -207,10 +207,13 @@ fn hover_grip(fixture: &mut Fixture) {
     }
 }
 
+/// How far [`drag_grip`] moves the bar: towards the start and down, clear of where it stood.
+const GRIP_DRAG: egui::Vec2 = egui::vec2(-40.0, 30.0);
+
 /// Drags the bar by its grip and holds it there, the button down.
 fn drag_grip(fixture: &mut Fixture) {
     if let Some(grip) = fixture.by_label("Move bar") {
-        fixture.drag_hold_at(grip.center(), egui::vec2(-40.0, 30.0));
+        fixture.drag_hold_at(grip.center(), GRIP_DRAG);
     }
 }
 

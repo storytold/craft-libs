@@ -64,14 +64,11 @@ fn a_tool_rail_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, width);
     let rect = room.with_max_y(room.top() + CARD_HEIGHT);
     // The column takes the cell a dock gives it, as high as the dock, whatever its rail's height.
-    let shown = DockColumn::new("Panels", global("dock column", "rail card story"), &column, &spec).card(sizes.card_inset(0)).show_groups_at(
-        ui,
-        rect,
-        |_, rect, ui, _| {
+    let shown =
+        DockColumn::new("Panels", global("dock column", "rail card story"), &column, &spec).card(0).show_groups_at(ui, rect, |_, rect, ui, _| {
             let rail = ToolRail::new("Tools", &slots, &BRUSH, &last).density(density);
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| rail.show_rail(ui, |_, _| {}));
-        },
-    );
+        });
     ui.advance_cursor_after_rect(rect);
     shown.into()
 }
@@ -86,7 +83,7 @@ fn a_panel_column_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let inset = DockSizes { column_cards: true, ..DockSizes::of_scope(ui) }.card_inset(at);
     let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, CARD_WIDTH + inset);
     let rect = room.with_max_y(room.top() + 2.0 * CARD_HEIGHT);
-    let shown = DockColumn::new("Panels", global("dock column", "panel card story"), &column, &spec).card(inset).show_groups_at(
+    let shown = DockColumn::new("Panels", global("dock column", "panel card story"), &column, &spec).card(at).show_groups_at(
         ui,
         rect,
         |group, rect, ui, _| {

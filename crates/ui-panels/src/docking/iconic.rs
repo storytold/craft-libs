@@ -225,11 +225,11 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// palette window, the work area.
     #[prop]
     within: Rect,
-    /// The inset on the outer side of the docked column's card, when it shows as one
-    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_inset`]): its bar and icons
-    /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
+    /// The docked column's place from the window edge inwards, when it shows as a card
+    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards)): its bar and icons sit inside the card, inset on
+    /// its outer side by [`DockSizes::card_outer`] at that place and by [`DockSizes::card`] on its top and bottom.
     #[prop]
-    card: Option<f32>,
+    card: Option<usize>,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
     /// The bar's rect this pass.
@@ -365,7 +365,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
     /// a card's inset on top.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
         let (least, most) = sizes.iconic_bounds(self.column, self.spec);
-        let inset = self.card.unwrap_or(0.0);
+        let inset = self.card.map_or(0.0, |at| sizes.card_outer(at));
         let (least, most) = (least + inset, most + inset);
         let most = most.min((self.within.width() - sizes.least_pane).max(rect.width()));
         Divider::column_edge(rect, self.edge, (least, most), sizes.reach)

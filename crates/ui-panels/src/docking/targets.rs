@@ -206,11 +206,13 @@ impl DockSizes {
     /// [`card_gutter`](Self::card_gutter) for the others, which stand that far from their outer neighbour's card. A
     /// docked column is that much wider than its content.
     pub fn card_inset(&self, at: usize) -> f32 {
-        match (self.column_cards, at) {
-            (false, _) => 0.0,
-            (true, 0) => self.card,
-            (true, _) => self.card_gutter,
-        }
+        if self.column_cards { self.card_outer(at) } else { 0.0 }
+    }
+
+    /// The inset on the outer side of the card of the docked column `at` from the window edge inwards, when it shows
+    /// as one: [`card`](Self::card) for the first column, [`card_gutter`](Self::card_gutter) for the others.
+    pub fn card_outer(&self, at: usize) -> f32 {
+        if at == 0 { self.card } else { self.card_gutter }
     }
 
     /// The width bounds of a column collapsed to icons, docked or floating: the rail width up to the width it expands
