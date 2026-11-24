@@ -1007,12 +1007,11 @@ fn shift_and_command_with_the_page_keys_and_arrows_go_to_the_ends() {
         );
         focus_canvas(&mut fixture);
         let keys = [(Key::PageDown, both, 4), (Key::PageUp, both, 0), (Key::ArrowDown, both, 4), (Key::ArrowUp, both, 0)];
-        let ends = [
-            (Key::End, Modifiers::SHIFT, 4),
-            (Key::Home, Modifiers::SHIFT, 0),
-            (Key::End, Modifiers::COMMAND, 4),
-            (Key::Home, Modifiers::COMMAND, 0),
-        ];
+        // Off macOS Ctrl+End and Ctrl+Home go to the ends too; macOS gives Cmd with Home and End no move.
+        let mut ends = vec![(Key::End, Modifiers::SHIFT, 4), (Key::Home, Modifiers::SHIFT, 0)];
+        if !cfg!(target_os = "macos") {
+            ends.extend([(Key::End, Modifiers::COMMAND, 4), (Key::Home, Modifiers::COMMAND, 0)]);
+        }
         for (key, mods, want) in keys.into_iter().chain(ends) {
             fixture.key(key, mods);
             fixture.idle(2);

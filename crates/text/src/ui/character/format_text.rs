@@ -138,8 +138,8 @@ const LINE_PRESETS: [LineSpacing; 5] =
 /// superscript, subscript; line and paragraph spacing; scale and character spacing). A control in `unsupported` is
 /// disabled with its reason. It keeps no state between passes: each pass reports only the edits of its own input.
 ///
-/// - Font: the family field the Character controls show: craft-font-manager's `FontPicker` over
-///   [`font_picker`](Self::font_picker) (with the host's rows), else a `Select` of `families`. A family pick is
+/// - Font: the family field the Character controls show: craft-font-manager's `FontPicker` with
+///   `font-picker` and `font_picker` (with the host's rows), else a `Select` of `families`. A family pick is
 ///   `Character(Family(..))`, a style row pick `Character(Family(..))` then `Character(Style(..))`, and a host row
 ///   pick `HostFont(key)`.
 /// - Size, paragraph spacing and character spacing are lengths in points; horizontal scale is a percentage. A scrub

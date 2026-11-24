@@ -37,6 +37,12 @@ pub enum HeaderStrength {
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
+    /// A sub-heading inside a section, over a group of its controls: label text in the normal ink, as written, with no
+    /// rule.
+    Subheading,
+    /// A muted line over the sections or controls it names: the caption role in the muted ink, as written, with no
+    /// rule. An inspector's kind line over its sections ("Ellipse").
+    Quiet,
     /// A window's drag bar: one text row high (`size.row.text`), with label text; its action parts shrink to the row.
     Bar,
     /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
@@ -349,6 +355,8 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
+            HeaderStrength::Subheading => (cx.control().height, TypeRole::Label, text.normal),
+            HeaderStrength::Quiet => (cx.control().height, TypeRole::Caption, text.muted),
             HeaderStrength::Bar => (cx.tokens.size.row.text, TypeRole::Label, text.normal),
             HeaderStrength::Overline => (cx.control().height, TypeRole::Caption, text.faint),
         };
@@ -506,7 +514,7 @@ impl Component for TitleRow<'_> {
         let overline = self.strength == HeaderStrength::Overline;
         let capitals = overline.then(|| cx.resolved.label.to_uppercase());
         let mut title = TextRun::new(capitals.as_deref().unwrap_or(cx.resolved.label)).role(role).elide();
-        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Overline) {
+        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Quiet | HeaderStrength::Overline) {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
         ui.draw().text_on_centre_line(placed.title, &title);
