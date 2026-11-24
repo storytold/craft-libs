@@ -16,7 +16,7 @@ use crate::runtime::windows::WindowSpec;
 use crate::sections::FooterButton;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
-use egui::Ui;
+use egui::{Ui, Vec2, vec2};
 
 pub use hosted::{FullWindowWorkspace, HostedWorkspace, WorkspaceCx, WorkspacePass};
 
@@ -25,6 +25,11 @@ mod hosted;
 pub(crate) mod stories;
 #[cfg(feature = "suite")]
 pub(crate) mod trials;
+
+/// The least a full-window dialog's own window may be, in points: the OS window's minimum, and the floor a restored
+/// placement is fitted to. A placement saved while photocraft#16595 shrank the window could be 1 pt wide; without
+/// a floor it opened that small and nothing grew it again.
+pub const OWN_WINDOW_MIN_SIZE: Vec2 = vec2(640.0, 480.0);
 
 /// The style of a full-window dialog: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -121,13 +126,14 @@ impl<'a> FullWindowDialog<'a> {
         .label(title)
     }
 
-    /// Shows the dialog in its own OS window described by `spec`, resizable, opening at the saved placement; where
-    /// viewports are unavailable it fills the main window. The dialog's focus policy moves into the fallback overlay.
+    /// Shows the dialog in its own OS window described by `spec`, resizable down to [`OWN_WINDOW_MIN_SIZE`], opening at
+    /// the saved placement; where viewports are unavailable it fills the main window. The dialog's focus policy moves
+    /// into the fallback overlay.
     #[must_use]
     pub fn own_window(mut self, spec: WindowSpec) -> Self {
         // A viewport mount takes its scope from the fallback overlay and holds `props.focus` at none.
         let focus = std::mem::replace(self.focus_mut(), FocusPolicy::NONE);
-        self.props.mount = Mount::viewport_with(Overlay::full_window(focus), spec);
+        self.props.mount = Mount::viewport_with(Overlay::full_window(focus).min_size(OWN_WINDOW_MIN_SIZE), spec);
         self
     }
 

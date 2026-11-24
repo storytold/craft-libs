@@ -509,6 +509,54 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// Which of the arrow keys, Home and End reached egui's input, one press each, in a window whose host declares a canvas;
+/// with `focus_field` the host's text field has the focus; and whether Left moved the field's caret.
+fn navigation_keys_with_canvas(focus_field: bool) -> (Vec<Key>, bool) {
+    const KEYS: [Key; 6] = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End];
+    let canvas = named_id("host canvas");
+    let reached = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&reached);
+    let (host, mut base) = host_window();
+    host.borrow_mut().text = "abc".to_owned();
+    let mut show = move |ui: &mut Ui| {
+        seen.borrow_mut().extend(KEYS.into_iter().filter(|key| key_reached(ui.ctx(), *key)));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if focus_field {
+        fixture::host_focus(&frames.ctx, field());
+        frames.frame(Vec::new(), &mut show);
+        frames.frame(vec![key_press(Key::End, Modifiers::NONE), key_release(Key::End, Modifiers::NONE)], &mut show);
+    }
+    reached.borrow_mut().clear();
+    let caret = |frames: &Frames| {
+        egui::TextEdit::load_state(&frames.ctx, field()).and_then(|state| state.cursor.char_range()).map(|range| range.primary.index)
+    };
+    let at_end = caret(&frames);
+    let mut moved = false;
+    for key in KEYS {
+        press_key(&mut frames, &mut show, key);
+        if key == Key::ArrowLeft {
+            moved = caret(&frames) != at_end;
+        }
+    }
+    let mut reached = reached.take();
+    reached.dedup();
+    (reached, moved)
+}
+
+#[trial]
+fn a_host_canvas_leaves_navigation_keys_in_egui_for_the_app_s_widget() {
+    const KEYS: [Key; 6] = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End];
+    let (reached, caret) = navigation_keys_with_canvas(true);
+    assert_eq!(reached, KEYS, "a focused app field reads the arrows, Home and End from egui");
+    assert!(caret, "the field's caret moved left from the end");
+    assert_eq!(navigation_keys_with_canvas(false).0, KEYS, "with nothing focused, the host canvas's own keys stay in egui");
+}
+
 /// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
 /// `textless_paste` reads it in that pass only.
 #[trial]

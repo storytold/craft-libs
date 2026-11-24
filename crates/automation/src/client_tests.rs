@@ -88,7 +88,10 @@ fn an_unasked_line_makes_the_connection_unusable_before_sending() {
         reader.read_line(&mut line).unwrap();
         writeln!(out, "{}", json!({"id": 1, "ok": true})).unwrap();
         wait.recv().unwrap();
-        writeln!(out, "{}", json!({"id": null, "ok": false, "error": "idle connection closed"})).unwrap();
+        // One write: `writeln!` on a bare stream sends the line and its newline apart, and the client closes on
+        // the first bytes, so the newline met a reset (BrokenPipe) now and then.
+        let unasked = format!("{}\n", json!({"id": null, "ok": false, "error": "idle connection closed"}));
+        out.write_all(unasked.as_bytes()).unwrap();
         out.flush().unwrap();
         // The client's close shows as an end of input or, with the unread line, a reset.
         line.clear();

@@ -568,6 +568,32 @@ fn an_owner_change_mid_composition_interrupts_it_and_drops_its_late_input() {
     );
 }
 
+/// An editor that stops being shown while it composes is interrupted in the pass it vanished in. egui keeps its focus
+/// until the end of that pass, so waiting for the owner change at the next begin interrupted it a frame late. Guards
+/// against the interrupt depending on a second pass of the frame.
+#[trial]
+fn an_editor_that_vanishes_while_composing_is_interrupted_in_that_pass() {
+    let log = RefCell::new(Vec::new());
+    let shown = Cell::new(true);
+    let mut ui = |ui: &mut egui::Ui| {
+        if shown.get() {
+            Probe::new(&log, true).label("Source").id_salt("code").show_at(ui, AT);
+        }
+    };
+    let mut frames = Frames::new();
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert!(matches!(log.take().as_slice(), [EditorInput::Preedit { .. }]), "the editor composes");
+
+    shown.set(false);
+    let passes = frames.frame(Vec::new(), &mut ui);
+    let seen = frames.ime().cloned();
+    assert!(seen.as_ref().is_some_and(|ime| ime.interrupt && ime.reset.is_some()), "the pass the editor vanished in interrupts it: {seen:?}");
+    assert_eq!(passes, 1, "the interrupt needs no second pass");
+    frames.frame(Vec::new(), &mut ui);
+    assert!(frames.ime().is_none(), "with the editor gone, no one owns the IME: {:?}", frames.ime());
+}
+
 /// An editor losing focus while it composes asks the system once to discard the marked text: later frames and a retired
 /// request asked again add no discard.
 #[trial]

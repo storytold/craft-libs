@@ -179,6 +179,21 @@ impl RootEnv {
         self.resolved_for(super::system_appearance(ctx).appearance)
     }
 
+    /// The mode the root's theme actually shows on `ctx`: the resolved mode clamped to the theme's supported
+    /// variants (for example, `Mode::Light` for a light-only theme even when dark mode is requested).
+    pub(crate) fn effective_mode(&self, ctx: &Context) -> Mode {
+        let wanted = self.resolved(ctx).mode;
+        if let Some(def) = &self.theme_def {
+            return def.variants.mode_for(wanted);
+        }
+        let themes = craft_theme::builtins();
+        let theme = [self.theme.as_str(), craft_theme::SUITE_DEFAULT]
+            .into_iter()
+            .find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id))
+            .unwrap_or(&themes[0]);
+        theme.variants.mode_for(wanted)
+    }
+
     /// What the choices resolve to when the OS reports `system`.
     pub fn resolved_for(&self, system: SystemAppearance) -> ResolvedRoot {
         let mode = match self.mode {
