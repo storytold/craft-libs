@@ -1959,6 +1959,7 @@ name = "craft-dwg"
 version = "0.1.0"
 dependencies = [
  "acadrust",
+ "craft-dxf",
  "log",
 ]
 

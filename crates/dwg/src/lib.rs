@@ -816,12 +816,115 @@ mod native {
         orphans.len()
     }
 
+    /// The old fixed-property layout cannot be written faithfully as DWG 2007 (#3240).
+    /// Inspect the original tags: an explicitly present zero 176/177 group is still modern.
+    pub(super) fn fixed_visualstyles(dxf: &[u8], doc: &acadrust::CadDocument) -> Result<std::collections::HashSet<acadrust::Handle>, String> {
+        use acadrust::objects::ObjectType;
+        let mut fixed = std::collections::HashSet::new();
+        if doc.version != acadrust::DxfVersion::AC1021 || !doc.objects.values().any(|o| matches!(o, ObjectType::VisualStyle(_))) {
+            return Ok(fixed);
+        }
+        // Every encoded tag takes at least one input byte, in ASCII and binary alike. This
+        // upper bound adds no tag-count policy or environment dependence to accepted input.
+        let tags = craft_dxf::parse_with_limit(dxf, dxf.len()).map_err(|e| format!("DXF: the VISUALSTYLE layout couldn't be read ({e})"))?;
+        for section in craft_dxf::section_slices(&tags).into_iter().filter(|s| s.name == "OBJECTS") {
+            for (kind, record) in craft_dxf::record_slices(section.tags) {
+                if kind != "VISUALSTYLE" {
+                    continue;
+                }
+                let handle = record
+                    .iter()
+                    .find(|t| t.code == 5)
+                    .and_then(craft_dxf::Tag::str_ref)
+                    .and_then(|h| u64::from_str_radix(h.trim(), 16).ok().map(acadrust::Handle::new));
+                let Some(handle) = handle.filter(|h| matches!(doc.objects.get(h), Some(ObjectType::VisualStyle(_)))) else { continue };
+                if fixed_visualstyle_record(record) {
+                    fixed.insert(handle);
+                }
+            }
+        }
+        // Only handles escape this scope; the temporary tag list is gone before DWG writing.
+        Ok(fixed)
+    }
+
+    fn fixed_visualstyle_record(record: &[craft_dxf::Tag]) -> bool {
+        let mut visual_style = false;
+        let mut fixed = false;
+        let mut modern = false;
+        for tag in record {
+            if tag.code == 100 {
+                visual_style = tag.str_ref() == Some("AcDbVisualStyle");
+            } else if visual_style {
+                fixed |= matches!(tag.code, 40..=44 | 62..=67 | 70..=79 | 90..=93 | 170 | 171 | 173..=175 | 290 | 291 | 421);
+                modern |= matches!(tag.code, 176 | 177);
+            }
+        }
+        fixed && !modern
+    }
+
+    fn clear_style_handle(handle: &mut acadrust::Handle, removed: &std::collections::HashSet<acadrust::Handle>) {
+        if removed.contains(handle) {
+            *handle = acadrust::Handle::NULL;
+        }
+    }
+
+    fn clear_style_common(common: &mut acadrust::entities::EntityCommon, removed: &std::collections::HashSet<acadrust::Handle>) {
+        for handle in [&mut common.full_visual_style_handle, &mut common.face_visual_style_handle, &mut common.edge_visual_style_handle] {
+            if handle.is_some_and(|h| removed.contains(&h)) {
+                *handle = None;
+            }
+        }
+    }
+
+    fn clear_style_object(object: &mut acadrust::objects::ObjectType, removed: &std::collections::HashSet<acadrust::Handle>) {
+        use acadrust::objects::ObjectType;
+        match object {
+            ObjectType::Dictionary(d) => {
+                let mut keys: std::collections::HashSet<String> =
+                    d.entries.iter().filter(|(_, h)| removed.contains(h)).map(|(key, _)| key.to_ascii_lowercase()).collect();
+                d.entries.retain(|(_, h)| !removed.contains(h));
+                // A duplicate key can still have a retained entry. Do not change unrelated
+                // ownership metadata, including metadata that was already orphaned.
+                for (key, _) in &d.entries {
+                    keys.remove(&key.to_ascii_lowercase());
+                }
+                d.hard_owner_entries.retain(|key| !keys.contains(&key.to_ascii_lowercase()));
+            }
+            ObjectType::Layout(layout) => clear_style_handle(&mut layout.visual_style_handle, removed),
+            ObjectType::PlotSettings(settings) => clear_style_handle(&mut settings.visual_style_handle, removed),
+            ObjectType::TableContent(table) => clear_style_common(&mut table.common, removed),
+            _ => {}
+        }
+    }
+
+    fn clear_style_references(doc: &mut acadrust::CadDocument, removed: &std::collections::HashSet<acadrust::Handle>) {
+        if removed.is_empty() {
+            return;
+        }
+        for object in doc.objects.values_mut() {
+            clear_style_object(object, removed);
+        }
+        for view in doc.views.iter_mut() {
+            clear_style_handle(&mut view.visual_style_handle, removed);
+        }
+        for vport in doc.vports.iter_mut() {
+            clear_style_handle(&mut vport.visual_style_handle, removed);
+        }
+        for entity in doc.entities_mut() {
+            clear_style_common(entity.common_mut(), removed);
+            if let acadrust::entities::EntityType::Viewport(viewport) = entity {
+                clear_style_handle(&mut viewport.visual_style_handle, removed);
+                clear_style_handle(&mut viewport.shade_plot_handle, removed);
+            }
+        }
+    }
+
     /// Leave out what acadrust can't write as this DWG version: other programs' custom entities
     /// and objects without raw DWG data of that version. acadrust 0.6.4 refuses the whole file
     /// for one of them (0.6.3 left them out); CADCraft already tells the user which entity types
     /// a DWG doesn't keep (`not_saved`), so the rest of the drawing is written. Returns how many
     /// records of each DXF type were left out, so a save can say so.
-    fn drop_unwritable(doc: &mut acadrust::CadDocument) -> super::Unwritten {
+    pub(super) fn drop_unwritable(doc: &mut acadrust::CadDocument, fixed_styles: &std::collections::HashSet<acadrust::Handle>) -> super::Unwritten {
         let version = doc.version;
         let mut dropped = super::Unwritten::new();
         let mut count = |name: &str| {
@@ -847,6 +950,10 @@ mod native {
             .objects
             .iter()
             .filter_map(|(h, o)| match o {
+                acadrust::objects::ObjectType::VisualStyle(_) if version == acadrust::DxfVersion::AC1021 && fixed_styles.contains(h) => {
+                    count("VISUALSTYLE");
+                    Some(*h)
+                }
                 acadrust::objects::ObjectType::Unknown { type_name, raw_dwg_data, raw_dwg_version, .. }
                     if raw_dwg_data.is_none() || raw_dwg_version.is_some_and(|v| v != version) || version == acadrust::DxfVersion::AC1009 =>
                 {
@@ -856,9 +963,11 @@ mod native {
                 _ => None,
             })
             .collect();
+        let removed_styles = objects.iter().filter(|h| fixed_styles.contains(h)).copied().collect();
         for h in &objects {
             doc.objects.remove(h);
         }
+        clear_style_references(doc, &removed_styles);
         dropped
     }
 
@@ -1310,6 +1419,8 @@ mod native {
             None if doc.version < MIN_DWG_VERSION => doc.version = MIN_DWG_VERSION,
             None => {}
         }
+        let fixed_styles = guarded(AssertUnwindSafe(|| fixed_visualstyles(dxf, &doc)))
+            .map_err(|()| "the DXF visual style inspection failed on this file".to_string())??;
         // The fix-ups run on the third-party reader's document, so a panic in one is an error, not a crash.
         let unwritten = guarded(AssertUnwindSafe(|| {
             super::fail_in_test("convert");
@@ -1328,7 +1439,7 @@ mod native {
             table_style_rows(&mut doc, true);
             field_formats(&mut doc, &legacy);
             dimension_flags(&mut doc);
-            let mut unwritten = drop_unwritable(&mut doc);
+            let mut unwritten = drop_unwritable(&mut doc, &fixed_styles);
             for (kind, n) in proxies {
                 let total = unwritten.entry(kind).or_insert(0);
                 *total = total.saturating_add(n);
@@ -2363,5 +2474,174 @@ mod bridge {
         let back = acadrust::DwgReader::from_stream(Cursor::new(dwg)).read().unwrap();
         assert_eq!(back.entities().filter(|e| matches!(e, acadrust::entities::EntityType::Line(_))).count(), 1);
         assert!(!matches!(back.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
+    }
+
+    #[test]
+    fn fixed_visualstyle_tag_presence_survives_text_and_binary() {
+        for (tail, omitted) in
+            [("", true), ("176\n0\n", false), ("177\n0\n", false), ("176\n0\n177\n0\n", false), ("100\nOtherSubclass\n176\n0\n", true)]
+        {
+            let ascii = visualstyle_dxf(tail);
+            let tags = craft_dxf::parse_with_limit(&ascii, ascii.len()).unwrap();
+            let binary = craft_dxf::write_binary(&tags, true);
+            for bytes in [&ascii, &binary] {
+                let doc = acadrust::DxfReader::from_reader(Cursor::new(bytes.to_vec())).unwrap().read().unwrap();
+                assert!(matches!(doc.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
+                let fixed = native::fixed_visualstyles(bytes, &doc).unwrap();
+                assert_eq!(fixed.contains(&acadrust::Handle::new(0xE)), omitted, "tail {tail:?}, binary {}", craft_dxf::is_binary(bytes));
+                let (_, report) = dxf_to_dwg_noted(bytes, "AC1021").unwrap();
+                assert_eq!(report.get("VISUALSTYLE").copied().unwrap_or(0), usize::from(omitted));
+            }
+        }
+        // Opacity is a fixed field in Autodesk's 2007 VISUALSTYLE table too, even without
+        // the smaller set of fixed fields exposed directly by acadrust's typed model.
+        let full = visualstyle_dxf("");
+        let fixed = full.windows(b"70\n0\n".len()).position(|w| w == b"70\n0\n").unwrap();
+        let mut opacity = full[..fixed].to_vec();
+        opacity.extend_from_slice(b"40\n0.6\n0\nENDSEC\n0\nEOF\n");
+        let tags = craft_dxf::parse_with_limit(&opacity, opacity.len()).unwrap();
+        let binary = craft_dxf::write_binary(&tags, true);
+        for bytes in [&opacity, &binary] {
+            let doc = acadrust::DxfReader::from_reader(Cursor::new(bytes.to_vec())).unwrap().read().unwrap();
+            assert!(matches!(doc.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
+            assert!(native::fixed_visualstyles(bytes, &doc).unwrap().contains(&acadrust::Handle::new(0xE)));
+            let (_, report) = dxf_to_dwg_noted(bytes, "AC1021").unwrap();
+            assert_eq!(report.get("VISUALSTYLE"), Some(&1), "opacity-only fixed style, binary {}", craft_dxf::is_binary(bytes));
+        }
+    }
+
+    #[test]
+    fn omitted_visualstyle_references_are_cleared() {
+        use acadrust::entities::{EntityType, Table, Viewport};
+        use acadrust::objects::{Layout, ObjectType, PlotSettings, VisualStyle};
+        use acadrust::tables::{VPort, View};
+        use acadrust::{Handle, types::Vector3};
+
+        let dxf = visualstyle_dxf("");
+        let mut doc = acadrust::DxfReader::from_reader(Cursor::new(dxf.clone())).unwrap().read().unwrap();
+        let gone = Handle::new(0xE);
+        let dictionary = Handle::new(0xD);
+        let kept = doc.allocate_handle();
+        let mut style = VisualStyle::new();
+        style.handle = kept;
+        style.owner = dictionary;
+        style.description = "Kept".to_string();
+        doc.objects.insert(kept, ObjectType::VisualStyle(style));
+        let Some(ObjectType::Dictionary(entries)) = doc.objects.get_mut(&dictionary) else { panic!("fixture style dictionary") };
+        entries.add_entry("Kept", kept);
+        entries.add_entry("Duplicate", gone);
+        entries.add_entry("Duplicate", kept);
+        entries.hard_owner_entries = ["FIXED", "Kept", "Duplicate", "already-orphan"].map(str::to_string).into();
+        doc.header.acad_visualstyle_dict_handle = dictionary;
+        let root = doc.header.acad_visualstyle_dict_handle;
+        let Some(line) = doc.entities_mut().find(|e| matches!(e, EntityType::Line(_))) else { panic!("fixture LINE") };
+        line.common_mut().full_visual_style_handle = Some(gone);
+        line.common_mut().face_visual_style_handle = Some(kept);
+        line.common_mut().edge_visual_style_handle = Some(gone);
+        let mut handles = Vec::new();
+        for (name, target) in [("Dropped", gone), ("Retained", kept)] {
+            let mut view = View::new(name);
+            view.handle = doc.allocate_handle();
+            view.visual_style_handle = target;
+            doc.views.add(view).unwrap();
+            let mut vport = VPort::new(name);
+            vport.handle = doc.allocate_handle();
+            vport.visual_style_handle = target;
+            doc.vports.add(vport).unwrap();
+            let mut viewport = Viewport::new();
+            viewport.visual_style_handle = target;
+            viewport.shade_plot_handle = target;
+            viewport.common.full_visual_style_handle = Some(target);
+            let viewport = doc.add_entity(EntityType::Viewport(Box::new(viewport))).unwrap();
+            let mut layout = Layout::new(name);
+            layout.handle = doc.allocate_handle();
+            layout.visual_style_handle = target;
+            let layout_handle = layout.handle;
+            doc.objects.insert(layout_handle, ObjectType::Layout(layout));
+            let mut settings = PlotSettings::new(name);
+            settings.handle = doc.allocate_handle();
+            settings.visual_style_handle = target;
+            let settings_handle = settings.handle;
+            doc.objects.insert(settings_handle, ObjectType::PlotSettings(settings));
+            handles.push((name, target, viewport, layout_handle, settings_handle));
+        }
+        let mut table = Table::new(Vector3::ZERO, 1, 1);
+        table.common.full_visual_style_handle = Some(gone);
+        table.common.edge_visual_style_handle = Some(kept);
+        let table_handle = doc.allocate_handle();
+        table.common.handle = table_handle;
+        doc.objects.insert(table_handle, ObjectType::TableContent(table));
+        let fixed = native::fixed_visualstyles(&dxf, &doc).unwrap();
+        assert_eq!(fixed, [gone].into_iter().collect());
+        let report = native::drop_unwritable(&mut doc, &fixed);
+        assert_eq!(report, [("VISUALSTYLE".to_string(), 1)].into_iter().collect::<Unwritten>());
+        assert!(!doc.objects.contains_key(&gone));
+        assert!(matches!(doc.objects.get(&kept), Some(ObjectType::VisualStyle(_))));
+        assert_eq!(doc.header.acad_visualstyle_dict_handle, root, "the retained dictionary's header handle stays valid");
+        let Some(ObjectType::Dictionary(entries)) = doc.objects.get(&dictionary) else { panic!("style dictionary retained") };
+        assert!(!entries.entries.iter().any(|(_, h)| *h == gone));
+        assert!(entries.entries.iter().any(|(name, h)| name == "Kept" && *h == kept));
+        assert_eq!(entries.hard_owner_entries, ["Kept", "Duplicate", "already-orphan"]);
+        let line = doc.entities().find(|e| matches!(e, EntityType::Line(_))).unwrap();
+        assert_eq!(line.common().full_visual_style_handle, None);
+        assert_eq!(line.common().edge_visual_style_handle, None);
+        assert_eq!(line.common().face_visual_style_handle, Some(kept));
+        for (name, target, viewport, layout, settings) in handles {
+            let expected = if target == gone { Handle::NULL } else { kept };
+            assert_eq!(doc.views.get(name).unwrap().visual_style_handle, expected);
+            assert_eq!(doc.vports.get(name).unwrap().visual_style_handle, expected);
+            let Some(EntityType::Viewport(view)) = doc.get_entity(viewport) else { panic!("viewport retained") };
+            assert_eq!(view.visual_style_handle, expected);
+            assert_eq!(view.shade_plot_handle, expected);
+            assert_eq!(view.common.full_visual_style_handle, (!expected.is_null()).then_some(kept));
+            let Some(ObjectType::Layout(layout)) = doc.objects.get(&layout) else { panic!("layout retained") };
+            assert_eq!(layout.visual_style_handle, expected);
+            let Some(ObjectType::PlotSettings(settings)) = doc.objects.get(&settings) else { panic!("plot settings retained") };
+            assert_eq!(settings.visual_style_handle, expected);
+        }
+        let Some(ObjectType::TableContent(table)) = doc.objects.get(&table_handle) else { panic!("table content retained") };
+        assert_eq!(table.common.full_visual_style_handle, None);
+        assert_eq!(table.common.edge_visual_style_handle, Some(kept));
+    }
+
+    #[test]
+    fn visualstyle_controls_keep_modern_and_other_paths() {
+        use acadrust::objects::ObjectType;
+        let original = visualstyle_dxf("");
+        let source = String::from_utf8(original.clone()).unwrap();
+        for target in ["AC1018", "AC1024", "AC1032"] {
+            let (dwg, report) = dxf_to_dwg_noted(&original, target).unwrap();
+            assert_eq!(version(&dwg).as_deref(), Some(target));
+            assert!(report.is_empty(), "{target}: {report:?}");
+        }
+        let default = dxf_to_dwg(&original).unwrap();
+        assert_eq!(version(&default).as_deref(), Some("AC1021"));
+        let (_, report) = dxf_to_dwg_kept_noted(source.replace("AC1021", "AC1015").as_bytes(), "AC1021", "AC1032").unwrap();
+        assert_eq!(report.get("VISUALSTYLE"), Some(&1), "final target, not kept/source version, selects the omission");
+        let newer = source.replace("AC1021", "AC1032").into_bytes();
+        let (dwg, report) = dxf_to_dwg_noted(&newer, "AC1032").unwrap();
+        assert!(report.is_empty());
+        let dxf = dwg_to_dxf(&dwg).unwrap();
+        let back = acadrust::DxfReader::from_reader(Cursor::new(dxf)).unwrap().read().unwrap();
+        assert!(
+            back.objects.values().any(|o| matches!(o, ObjectType::VisualStyle(s) if s.description == "Fixed")),
+            "the DXF read path retains the style"
+        );
+        let mut no_style = acadrust::CadDocument::new();
+        no_style.objects.retain(|_, object| !matches!(object, ObjectType::VisualStyle(_)));
+        assert!(!no_style.objects.values().any(|object| matches!(object, ObjectType::VisualStyle(_))));
+        no_style.version = acadrust::DxfVersion::AC1021;
+        assert!(native::fixed_visualstyles(b"not DXF", &no_style).unwrap().is_empty(), "no style needs no extra parse");
+        let mut doc = acadrust::DxfReader::from_reader(Cursor::new(original.clone())).unwrap().read().unwrap();
+        assert!(native::fixed_visualstyles(b"not DXF", &doc).is_err(), "inspection failure cannot silently write a known candidate");
+        doc.version = acadrust::DxfVersion::AC1032;
+        assert!(native::fixed_visualstyles(b"not DXF", &doc).unwrap().is_empty(), "other targets need no extra parse");
+        let empty = original.windows(b"70\n0\n".len()).position(|w| w == b"70\n0\n").unwrap();
+        let mut empty_subclass = original.clone();
+        empty_subclass.splice(empty.., b"0\nENDSEC\n0\nEOF\n".iter().copied());
+        let doc = acadrust::DxfReader::from_reader(Cursor::new(empty_subclass.clone())).unwrap().read().unwrap();
+        assert!(matches!(doc.objects.get(&acadrust::Handle::new(0xE)), Some(ObjectType::VisualStyle(_))));
+        assert!(native::fixed_visualstyles(&empty_subclass, &doc).unwrap().is_empty(), "no fixed fields is not fixed-layout evidence");
+        assert_eq!(original, visualstyle_dxf(""));
     }
 }
