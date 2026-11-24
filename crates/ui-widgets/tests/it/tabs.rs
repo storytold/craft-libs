@@ -317,6 +317,36 @@ fn a_document_tab_shows_its_own_tooltip() {
     }
 }
 
+/// A modified document tab with a name part shows the `*` right after the name, inside its text, and takes the mark's
+/// room once, as the same tab whose `*` follows the whole label does.
+#[trial]
+fn a_modified_tab_shows_its_mark_after_the_name_part() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const NAME: &str = "Untitled-1";
+    const LABEL: &str = "Untitled-1 @ 93.5 % (RGB/Preview)";
+    let shown = |name_len: Option<usize>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut tab = DocumentTab::new(0_usize, LABEL).modified(true);
+            if let Some(len) = name_len {
+                tab = tab.name_len(len);
+            }
+            let _ = DocumentTabs::new("Documents", &[tab]).show(ui);
+        });
+        fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+        let texts: Vec<(String, Rect)> = fixture.texts().iter().map(|run| (run.text.clone(), run.rect)).collect();
+        (texts, tab_rects(fixture.tree(), &format!("{LABEL}, modified")).first().copied())
+    };
+    let (named, named_tab) = shown(Some(NAME.len()));
+    let (whole, whole_tab) = shown(None);
+    assert!(named.iter().any(|(text, _)| text == "Untitled-1* @ 93.5 % (RGB/Preview)"), "the mark follows the name: {named:?}");
+    assert!(!named.iter().any(|(text, _)| text == "*"), "and is not drawn again after the label: {named:?}");
+    let star = whole.iter().find(|(text, _)| text == "*").map(|(_, rect)| *rect).expect("without a name part the mark follows the label");
+    assert!(whole.iter().any(|(text, _)| text == LABEL), "and the label is drawn whole: {whole:?}");
+    let (named_tab, whole_tab) = (named_tab.expect("the named tab's node"), whole_tab.expect("the whole tab's node"));
+    let apart = (named_tab.width() - whole_tab.width()).abs();
+    assert!(apart < star.width() / 2.0, "the mark takes its room once: {named_tab:?} against {whole_tab:?}, the mark {star:?}");
+}
+
 /// A middle click on a document tab asks to close it, unless the tab cannot close; it does not show the tab.
 #[trial]
 fn a_middle_click_closes_a_closable_document_tab() {
