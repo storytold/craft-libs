@@ -839,7 +839,7 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
             Kind::Real => {
                 out.extend_from_slice(&code_bytes);
                 let r = match &t.value {
-                    Value::Invalid(s) => s.parse::<f64>().unwrap_or_else(|_| t.value.as_f64()),
+                    Value::Invalid(s) => s.parse::<f64>().unwrap_or(f64::NAN),
                     _ => t.value.as_f64(),
                 };
                 out.extend_from_slice(&r.to_le_bytes());
@@ -1416,7 +1416,11 @@ mod tests {
         let back_bin = parse(&bin_out).unwrap();
         assert_eq!(back_bin[0], Tag::invalid(10, "NaN"));
         assert_eq!(back_bin[1], Tag::invalid(20, "inf"));
-        assert_eq!(back_bin[2], Tag::f(30, 0.0));
+        // Invalid text that cannot be parsed as a float is preserved in binary DXF as NaN,
+        // so it remains invalid rather than silently converting to genuine zero.
+        assert_eq!(back_bin[2], Tag::invalid(30, "NaN"));
+        assert_eq!(back_bin[2].f64(), 0.0);
+        assert!(back_bin[2].is_invalid());
     }
 }
 
