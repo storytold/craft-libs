@@ -389,11 +389,10 @@ fn read_system() -> Region {
     Region::from_tag(&sys_locale::get_locale().unwrap_or_default())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix, not(any(target_vendor = "apple", target_os = "android"))))]
 mod tests {
     use super::*;
 
-    #[cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))]
     #[test]
     fn each_locale_category_decides_its_own_part_and_lc_all_all_of_them() {
         let env =

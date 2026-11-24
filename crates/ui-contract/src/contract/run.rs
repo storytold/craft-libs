@@ -500,8 +500,9 @@ pub(crate) trait Erased {
     fn common(&self) -> &Common;
     /// Moves `Common` out of the component (step 1).
     fn take_common(&mut self) -> Common;
-    /// The variant asked for (or the style's first) and the variant the type accepts for it.
-    fn variants(&self, asked: Option<Variant>) -> (Variant, Variant);
+    /// The variant asked for (or the type's default in `env`, or the style's first) and the variant the type accepts
+    /// for it.
+    fn variants(&self, asked: Option<Variant>, env: &Env) -> (Variant, Variant);
     /// Step 2.
     fn style(&mut self, ctx: &Context, scx: &StyleCx<'_>) -> Arc<dyn StyleView>;
     /// Step 4: keeps the shown value, and outside a sizing pass the cancels it read. Returns whether the binding is mixed.
@@ -954,8 +955,9 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     let (rect, held) = place_root(p, ui, at, env, size, inert, rtl);
     p.trace.mark(Step::Place);
     // What the content wants past the room counts where the root's width comes from its content: a content-sized
-    // root, or a fill-width one held at its measured width. A root that fills the flow keeps to the room it fills.
-    let overflow = if held || !p.p.fills_width() { p.p.overflow() } else { 0.0 };
+    // root, or a fill-width one held at its measured width. A root that fills the flow keeps to the room it fills, and
+    // a unit its row dropped takes no place.
+    let overflow = if !p.dropped && (held || !p.p.fills_width()) { p.p.overflow() } else { 0.0 };
     expand_for_overflow(ui, host_at.unwrap_or(p.at), rect, overflow, rtl);
     // The component sits where the interface puts it; a component whose axis keeps its order flows its content left to right.
     let rtl = rtl && !resolved.ltr_axis;
@@ -1565,7 +1567,7 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Box<Begun> {
     // scope, and everything it shows inherits it.
     let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
     let common: Common = t.take_common();
-    let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
+    let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant, &env));
     // 2 style
     let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
     // 3 id
@@ -1932,7 +1934,7 @@ pub(super) fn measure_shape(
     let env = scoped_env(ui.ctx(), env, t.theme_scope());
     let id = id.unwrap_or_else(|| steps::id(ui, &t.common().id, false, false, facts.style_key, facts.name));
     let common = t.common().clone();
-    let step1 = steps::env(ui.ctx(), &env, &common, t.variants(common.variant));
+    let step1 = steps::env(ui.ctx(), &env, &common, t.variants(common.variant, &env));
     let mixed = t.peek_value(ui.ctx(), id, step1.command.as_deref());
     let scx = steps::style_cx(ui.ctx(), &env, &step1);
     let style = t.style(ui.ctx(), &scx);

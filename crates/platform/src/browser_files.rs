@@ -38,7 +38,10 @@ pub struct BrowserFiles {
 
 /// An embedding page's save ([`BrowserFiles::page_saves`]): given the file name, the bytes and whether the user asked
 /// for Save As, `None` when no page hosts the app, else the page's answer.
-pub type PageSave = Arc<dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync>;
+pub type PageSave = Arc<PageSaveFn>;
+
+/// The callback behind a [`PageSave`].
+pub type PageSaveFn = dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync;
 
 /// Tickets of one service, shared with the tasks that answer them.
 #[derive(Default)]
@@ -178,7 +181,7 @@ fn write_name(path: &Path) -> String {
 
 /// A write's route: the embedding page when `page` answers (`Ok(true)`), else `download` (`Ok(false)`).
 pub(crate) fn page_or_download(
-    page: Option<&(dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync)>,
+    page: Option<&PageSaveFn>,
     name: &str,
     bytes: &[u8],
     save_as: bool,
