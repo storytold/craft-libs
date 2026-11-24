@@ -21,6 +21,12 @@ const SCHEMA: &[Operation<'_>] = &[
 fn read(raw: &str) -> Graph<'_> {
     parse(raw, SCHEMA, &mut Budget::default(), &|| true).unwrap()
 }
+/// Three tokens for id=base and each ref=base, followed by two one-token operations:
+/// 3 + 681 * 3 + 2 = 2048 logical lexical items.
+fn exact_token_cap_graph() -> String {
+    format!("id=base {}invert-linear invert-linear", "ref=base ".repeat(681))
+}
+
 fn check_edges(graph: &Graph<'_>) {
     for (index, node) in graph.nodes.iter().enumerate() {
         for input in node
@@ -159,10 +165,11 @@ fn syntax_caps_have_small_exact_boundary_controls() {
         let raw = format!("id=source {body}");
         assert_eq!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_ok(), depth == 8);
     }
-    for repeats in [681, 682] {
-        let raw = format!("id=base {}", "ref=base ".repeat(repeats));
-        assert_eq!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_ok(), repeats == 681);
-    }
+    let exact_tokens = exact_token_cap_graph();
+    assert_eq!(tokenize(&exact_tokens, &mut Budget::default(), &|| true).unwrap().len(), 2048);
+    assert!(parse(&exact_tokens, SCHEMA, &mut Budget::default(), &|| true).is_ok());
+    let excessive = format!("{exact_tokens} invert-linear");
+    assert!(parse(&excessive, SCHEMA, &mut Budget::default(), &|| true).unwrap_err().to_string().contains("2048 lexical items"));
     let mut exact = String::from("invert-linear");
     exact.extend(std::iter::repeat_n(' ', MAX_BYTES - exact.len()));
     assert!(parse(&exact, SCHEMA, &mut Budget::default(), &|| true).is_ok());
@@ -266,7 +273,7 @@ fn unquoted_line_continuations_do_not_emit_words_but_explicit_empty_quotes_do() 
     assert_eq!(read("gain text=\"a\\\nb\"").nodes[0].properties[0].literal, "a\nb");
     assert_eq!(read("gain text=a\\\nb").nodes[0].properties[0].literal, "ab");
     assert!(parse("invert-linear ''", SCHEMA, &mut Budget::default(), &|| true).is_err());
-    let exact_tokens = format!("id=base {}\\\n", "ref=base ".repeat(681));
+    let exact_tokens = format!("{} \\\n", exact_token_cap_graph());
     assert!(parse(&exact_tokens, SCHEMA, &mut Budget::default(), &|| true).is_ok(), "a continuation contributes no item at the lexical cap");
 }
 
@@ -560,5 +567,85 @@ fn color_function_names_accept_ascii_case_and_separating_whitespace_without_conv
     for literal in ["RGBX (1,0,0)", "RGB junk (1,0,0)", "RGB (1,0)", "RGBA (1,0,0,2)", "CMYK (0,25,100)", "CMYKA (0,25,100,0,NaN)"] {
         let source = format!("color value='{literal}'");
         assert!(parse(&source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
+    }
+}
+
+#[test]
+fn empty_and_comment_only_root_graphs_preserve_the_source_input() {
+    for raw in ["", " \t\n", "# default pipeline\n# still a comment", "\\\n # comment"] {
+        let mut budget = Budget::default();
+        let work = budget.remaining_work();
+        let storage = budget.remaining_storage();
+        let graph = parse(raw, SCHEMA, &mut budget, &|| true).unwrap();
+        assert_eq!(graph.raw, raw);
+        assert_eq!(graph.output, Input::Source);
+        assert!(graph.nodes.is_empty() && graph.labels.is_empty() && graph.diagnostics.is_empty());
+        assert_eq!(budget.remaining_storage(), storage);
+        assert!(budget.remaining_work() < work);
+    }
+    for raw in ["over aux=[]", "over aux=[ # no source\n ]", "[]", "# comment\0"] {
+        assert!(parse(raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{raw:?}");
+    }
+    let checks = Cell::new(0);
+    let keep_going = || {
+        checks.set(checks.get() + 1);
+        checks.get() < 2
+    };
+    assert!(matches!(parse("", SCHEMA, &mut Budget::default(), &keep_going), Err(Error::Source(crate::Error::Cancelled))));
+}
+
+#[test]
+fn whole_shell_word_assignments_keep_the_first_equals_and_the_complete_value() {
+    let fields = [Field { name: "string", kind: FieldType::Text }];
+    let schema = [Operation { name: "gegl:text", fields: &fields }];
+    for (source, expected) in [
+        ("gegl:text 'string=hello world'", "hello world"),
+        ("gegl:text \"string=hello world\"", "hello world"),
+        ("gegl:text string='hello world'", "hello world"),
+        ("gegl:text 'str'\"ing=a=b\"", "a=b"),
+        ("gegl:text 'string='", ""),
+        ("gegl:text 'string=[kept]'", "[kept]"),
+        ("gegl:text string\\=a=b", "a=b"),
+        ("gegl:text 'string=\u{03bb}=\u{03b2}'", "\u{03bb}=\u{03b2}"),
+    ] {
+        let graph = parse(source, &schema, &mut Budget::default(), &|| true).unwrap_or_else(|error| panic!("{source:?}: {error}"));
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].properties[0].name, "string");
+        assert_eq!(graph.nodes[0].properties[0].literal, expected, "{source}");
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Text);
+        assert!(graph.diagnostics.is_empty());
+    }
+    let graph = read("'id=base' over aux=[ 'ref=base' gain 'n=1.5' 'text=a[b]c' ]");
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Number(1.5));
+    assert_eq!(graph.nodes[0].properties[1].literal, "a[b]c");
+    check_edges(&graph);
+    let quoted_tokens = format!("'id=base' {}invert-linear invert-linear", "'ref=base' ".repeat(681));
+    assert_eq!(tokenize(&quoted_tokens, &mut Budget::default(), &|| true).unwrap().len(), 2048);
+    assert!(parse(&quoted_tokens, SCHEMA, &mut Budget::default(), &|| true).is_ok());
+    assert!(parse(&format!("{quoted_tokens} invert-linear"), SCHEMA, &mut Budget::default(), &|| true).is_err());
+}
+
+#[test]
+fn color_function_outer_ascii_whitespace_does_not_change_the_retained_literal() {
+    for literal in [" rgb(1,0,0) ", "\tRGB (1,0,0)\r\n", "\n rGb(1,0,0)\t"] {
+        let raw = format!("color value='{literal}'");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Color(Color { rgba: [1., 0., 0., 1.], space: ColorSpace::LinearRgb }));
+    }
+    let rgba = "\tRGBA (1,0,0,0.5)\n";
+    assert_eq!(
+        read(&format!("color value='{rgba}'")).nodes[0].properties[0].value,
+        Value::Color(Color { rgba: [1., 0., 0., 0.5], space: ColorSpace::LinearRgb })
+    );
+    for literal in [" CMYK (0,25,100,0) ", "\ncMyK(0,25,100,0)\t"] {
+        let raw = format!("color value='{literal}'");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::CmykColor { cmyk: [0., 25., 100., 0.], alpha: 1. });
+    }
+    for literal in ["red ", " red", "#ff0000 ", " #ff0000", " RGB (1,2) ", " RGBA (1,0,0,2) ", " CMYK (0,25,100) ", "rgbx(1,0,0) "] {
+        let raw = format!("color value='{literal}'");
+        assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "do not broaden nonfunction or component rules: {literal:?}");
     }
 }

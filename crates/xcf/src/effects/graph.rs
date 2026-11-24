@@ -149,7 +149,9 @@ pub fn parse<'a>(raw: &'a str, declarations: &[Operation<'_>], budget: &mut Budg
     let result = (|| {
         let tokens = tokenize(raw, budget, keep_going)?;
         if tokens.is_empty() {
-            return Err(invalid("graph has no input or operation"));
+            // The root already has its source input; an empty/comment-only chain
+            // passes it through. Still observe cancellation after scanning the source.
+            check(keep_going)?;
         }
         let mut decoder = Decoder {
             tokens,
@@ -219,6 +221,36 @@ fn token(tokens: &mut Vec<Token>, value: Token, budget: &mut Budget) -> Result<(
     push(tokens, value, budget)
 }
 
+/// Emit a decoded shell word, splitting only a whole-word assignment. A word
+/// already lexed as a scalar value must retain every embedded '=' literally.
+fn word_tokens(tokens: &mut Vec<Token>, mut word: String, scalar: bool, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<()> {
+    if !scalar && let Some(equal) = word.find('=') {
+        // Shell quoting may surround an entire assignment, not just its value.
+        // Copy the bounded name fallibly, then keep the value in the original
+        // prepaid string allocation. Never split a second '=' in the value.
+        let mut name = String::new();
+        for (index, ch) in word.get(..equal).ok_or_else(|| invalid("invalid graph assignment boundary"))?.chars().enumerate() {
+            if index % 1024 == 0 {
+                check(keep_going)?;
+            }
+            character(&mut name, ch, budget)?;
+        }
+        let start = equal.checked_add(1).ok_or_else(|| invalid("invalid graph assignment boundary"))?;
+        let mut offset = 0usize;
+        word.retain(|ch| {
+            let keep = offset >= start;
+            offset = offset.saturating_add(ch.len_utf8());
+            keep
+        });
+        token(tokens, Token::Word(name), budget)?;
+        token(tokens, Token::Equal, budget)?;
+        token(tokens, Token::Word(word), budget)?;
+    } else {
+        token(tokens, Token::Word(word), budget)?;
+    }
+    Ok(())
+}
+
 // Public chain syntax uses inert shell quoting: no variable, command or path expansion.
 // Only the first assignment '=' separates name and scalar value. Auxiliary delimiters
 // apply at the value's start/end; brackets in the middle of a scalar remain literal data.
@@ -275,13 +307,14 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
         expect_value = false;
         let mut word = String::new();
         let mut started = false;
+        let mut decoded_equal = false;
         let mut trailing_closes = 0usize;
         while let Some(ch) = next(at) {
             if at >= next_check {
                 check(keep_going)?;
                 next_check = at.saturating_add(1024);
             }
-            if ch.is_ascii_whitespace() || !scalar && matches!(ch, '=' | '[' | ']') {
+            if ch.is_ascii_whitespace() || !scalar && !decoded_equal && matches!(ch, '=' | '[' | ']') {
                 break;
             }
             if matches!(ch, '\'' | '"') {
@@ -309,6 +342,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                             character(&mut word, '\\', budget)?;
                         }
                     } else {
+                        decoded_equal |= ch == '=';
                         character(&mut word, ch, budget)?;
                     }
                 }
@@ -318,12 +352,13 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 at += escaped.len_utf8();
                 if escaped != '\n' {
                     started = true;
+                    decoded_equal |= escaped == '=';
                     trailing_closes = 0;
                     character(&mut word, escaped, budget)?;
                 }
             } else {
                 started = true;
-                trailing_closes = if scalar && ch == ']' { trailing_closes.saturating_add(1) } else { 0 };
+                trailing_closes = if (scalar || decoded_equal) && ch == ']' { trailing_closes.saturating_add(1) } else { 0 };
                 character(&mut word, ch, budget)?;
                 at += ch.len_utf8();
             }
@@ -332,7 +367,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
         let length = word.len().checked_sub(trailing_closes).ok_or_else(|| invalid("invalid graph scalar boundary"))?;
         word.truncate(length);
         if started || scalar {
-            token(&mut tokens, Token::Word(word), budget)?;
+            word_tokens(&mut tokens, word, scalar, budget, keep_going)?;
         }
         for index in 0..trailing_closes {
             if index % 64 == 0 {
@@ -639,6 +674,9 @@ fn unsigned_integer(literal: &str) -> Result<u32> {
 /// GEGL color functions have an ASCII-case-insensitive name and may separate it
 /// from '(' with ASCII whitespace. Keep component parsing and source units separate.
 fn color_function(literal: &str) -> Option<(&str, &str)> {
+    // Trim only the scanner view for functions. Hex/named colors still inspect the
+    // original literal, and Property::literal keeps every source whitespace byte.
+    let literal = literal.trim_matches(|ch: char| ch.is_ascii_whitespace());
     let (name, arguments) = literal.split_once('(')?;
     let name = name.trim_end_matches(|ch: char| ch.is_ascii_whitespace());
     Some((name, arguments.strip_suffix(')')?))
