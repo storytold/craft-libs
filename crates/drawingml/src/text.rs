@@ -578,7 +578,12 @@ impl RunProps {
         macro_rules! take {
             ($($f:ident),*) => { $( if self.$f.is_none() { self.$f.clone_from(&p.$f); } )* };
         }
-        take!(shadow, inner_shadow, glow, reflection, soft_edge, own_effects);
+        take!(shadow, inner_shadow, glow, reflection, soft_edge);
+        // `p`'s own list passes down even over a run's explicit `Some(false)`, so a more distant
+        // style inherited next can't add its effects back.
+        if self.own_effects.is_none() || p.own_effects == Some(true) {
+            self.own_effects = p.own_effects;
+        }
     }
 }
 
@@ -838,6 +843,14 @@ mod tests {
         via_layout.inherit(&RunProps { own_effects: Some(true), ..Default::default() });
         via_layout.inherit(&level);
         assert!(via_layout.shadow.is_none() && via_layout.soft_edge.is_none());
+
+        // The same holds for a run that says explicitly it has no list of its own.
+        let mut explicit_none = RunProps { own_effects: Some(false), ..Default::default() };
+        explicit_none.inherit(&RunProps { own_effects: Some(true), ..Default::default() });
+        assert_eq!(explicit_none.own_effects, Some(true), "the layout's own list passes down");
+        explicit_none.inherit(&level);
+        assert!(explicit_none.shadow.is_none() && explicit_none.soft_edge.is_none(), "the master's effects stay hidden");
+        assert_eq!(explicit_none.bold, Some(true));
     }
 
     #[test]
