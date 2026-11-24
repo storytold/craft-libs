@@ -432,6 +432,10 @@ impl StandardKind {
         })
     }
 
+    pub(super) fn base_encoding(&self) -> &Encoding {
+        &self.encoding
+    }
+
     pub(crate) fn code_to_ps_name(&self, code: u8) -> Option<&str> {
         let bf = self.base_font;
 

@@ -108,6 +108,23 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     assert_eq!(texts, ["fi", "fl", "-", "", "", "", "", "", "fi", "", ""]);
 }
 
+/// Craft patch (numbered names in a base encoding): the Windows PostScript driver names the glyphs
+/// of the fonts it converts `/G41` … over WinAnsiEncoding. A numbered name at its own code reads
+/// as the base encoding's character there, so 0x92 and 0x96 are a quote and a dash rather than C1
+/// controls, MacRoman's 0x8A is `ä` and Standard's 0xAE is `ﬁ`. A font that names no base
+/// encoding keeps Latin-1.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn numbered_glyph_names_read_through_the_base_encoding_the_font_names() {
+    let names = "/Differences [65 /G41 128 /G80 133 /G85 138 /G8A 146 /G92 /G93 /G94 /G95 /G96 /G97 174 /GAE 233 /GE9]";
+    let content = b"BT /F1 20 Tf 20 150 Td (A\x80\x85\x92\x93\x94\x95\x96\x97\xe9) Tj ET";
+    let read = |base: &str, content: &[u8]| helvetica_texts(&format!("<< /Type /Encoding {base} {names} >>"), content).concat();
+    assert_eq!(read("/BaseEncoding /WinAnsiEncoding", content), "A\u{20ac}\u{2026}\u{2019}\u{201c}\u{201d}\u{2022}\u{2013}\u{2014}\u{e9}");
+    assert_eq!(read("/BaseEncoding /MacRomanEncoding", b"BT /F1 20 Tf 20 150 Td (\x8a) Tj ET"), "\u{e4}");
+    assert_eq!(read("/BaseEncoding /StandardEncoding", b"BT /F1 20 Tf 20 150 Td (\xae) Tj ET"), "\u{fb01}");
+    assert_eq!(read("", content), "A\u{e9}", "Latin-1 has C1 controls at 0x80-0x9F");
+}
+
 /// PdfCraft ledger hayro-interpret P6: the `uni` and `u` forms take uppercase hex digits only.
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

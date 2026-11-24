@@ -226,17 +226,18 @@ impl<'a> Type3<'a> {
                     .or_else(|| (0x20..0x7f).contains(&code).then_some(code as char))
                     .map(BfString::Char)
                     // PdfCraft patch (100): above 126, a name that only numbers its glyph reads
-                    // as the code's Latin-1 character when the number is that code and every
-                    // numbered name in the font names its own code (`C174` at 174 reads `®`),
-                    // as in a Type 1 font.
+                    // as the code's character (see `numbered_glyph_name_at_its_code`) when the
+                    // number is that code and every numbered name in the font names its own
+                    // code (`C174` at 174 reads `®`), as in a Type 1 font.
                     .or_else(|| {
                         let own_codes = *self.own_code_names.get_or_init(|| {
                             numbered_names_name_their_codes(
                                 (0..=u8::MAX).filter_map(|c| Some((c, self.code_to_name(c)?))),
                             )
                         });
-                        name.filter(|_| own_codes)
-                            .and_then(|name| numbered_glyph_name_at_its_code(name, code))
+                        name.filter(|_| own_codes).and_then(|name| {
+                            numbered_glyph_name_at_its_code(name, code, &self.encoding)
+                        })
                     })
             })
     }
