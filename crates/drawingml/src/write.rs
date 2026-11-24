@@ -706,7 +706,13 @@ pub fn rpr(w: &mut Writer, out: &mut dyn Sink, tag: &str, r: &RunProps) {
         .o("baseline", r.baseline.map(|b| pct(b.clamp(-10.0, 10.0))))
         .b("noProof", r.no_proof)
         .b("normalizeH", r.normalize_height);
-    let has_fx = r.shadow.is_some() || r.inner_shadow.is_some() || r.glow.is_some() || r.reflection.is_some() || r.soft_edge.is_some();
+    // A run with its own list writes it even when empty: that empty list turns inherited effects off.
+    let has_fx = r.shadow.is_some()
+        || r.inner_shadow.is_some()
+        || r.glow.is_some()
+        || r.reflection.is_some()
+        || r.soft_edge.is_some()
+        || r.own_effects == Some(true);
     let has_kids = r.outline.is_some()
         || r.fill.is_some()
         || has_fx
