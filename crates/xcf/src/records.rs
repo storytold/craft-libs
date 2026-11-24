@@ -75,7 +75,7 @@ impl Budget {
         result
     }
 
-    fn work(&mut self, bytes: usize) -> std::result::Result<(), StopReason> {
+    pub(crate) fn work(&mut self, bytes: usize) -> std::result::Result<(), StopReason> {
         self.work_left = self.work_left.checked_sub(bytes).ok_or(StopReason::WorkLimit)?;
         Ok(())
     }

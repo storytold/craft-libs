@@ -401,6 +401,8 @@ pub struct Layer {
     pub floating_selection: bool,
     // Source wire identity; never dereferenced to infer an unrecorded encoding.
     floating_target: Option<u64>,
+    // Complete parsed drawable framing, excluded from all pixel entry points.
+    source_record: std::ops::Range<usize>,
     /// 0 to 1: `PROP_FLOAT_OPACITY` when present (it wins whatever the order), else
     /// `PROP_OPACITY` / 255.
     pub opacity: f32,
@@ -783,7 +785,7 @@ impl<'a> Xcf<'a> {
             return Ok(None);
         }
         let (source_channels, indexed) = layer.source_layout(self.image.base_type)?;
-        let px = self.hierarchy(layer.hierarchy, source_channels, indexed, budget, keep_going)?;
+        let px = self.hierarchy_excluding(layer.hierarchy, source_channels, indexed, Some(&layer.source_record), budget, keep_going)?;
         if (px.width, px.height) != (layer.width, layer.height) {
             let (name, lw, lh) = (&layer.name, layer.width, layer.height);
             return Err(invalid(format!("layer '{name}' pixels are {}x{} where {lw}x{lh} were declared", px.width, px.height)));
@@ -833,14 +835,28 @@ impl<'a> Xcf<'a> {
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
         let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
         let hptr = c.ptr()?;
+        self.channel_effects_tail(&mut c, keep_going, None)?;
         // Channels are always one plain sample per pixel, even in indexed images.
-        let px = self.hierarchy(hptr, 1, false, budget, keep_going)?;
+        let px = self.hierarchy_excluding(hptr, 1, false, Some(&(ptr..c.pos)), budget, keep_going)?;
         Ok((Channel { name, selection }, px))
     }
 
     /// Reads a hierarchy: the first level's tiles into floats, `source_channels` as stored
     /// (indexed pixels expand to RGB here).
+    #[cfg(test)]
     fn hierarchy(&self, hptr: usize, source_channels: usize, indexed: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Pixels> {
+        self.hierarchy_excluding(hptr, source_channels, indexed, None, budget, keep_going)
+    }
+
+    fn hierarchy_excluding(
+        &self,
+        hptr: usize,
+        source_channels: usize,
+        indexed: bool,
+        excluded: Option<&std::ops::Range<usize>>,
+        budget: &mut usize,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<Pixels> {
         if !keep_going() {
             return Err(Error::Cancelled);
         }
@@ -852,7 +868,7 @@ impl<'a> Xcf<'a> {
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
         let across = w.div_ceil(TILE) as usize;
-        let tiles = self.hierarchy_tiles(&head, false, None, keep_going)?;
+        let tiles = self.hierarchy_tiles(&head, false, excluded, keep_going)?;
         if !keep_going() {
             return Err(Error::Cancelled);
         }
@@ -867,7 +883,7 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            let input = self.tile_input(&head, at, tiles.get(i + 1).copied(), None)?;
+            let input = self.tile_input(&head, at, tiles.get(i + 1).copied(), tw * th * bpp, excluded)?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
                 let start = (ty * side + py) * stride + tx * side * channels;
@@ -975,6 +991,7 @@ fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {
 
 /// Reads a layer structure at `c`.
 fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<Layer> {
+    let source_start = c.pos;
     let (width, height, layer_type) = (c.u32()?, c.u32()?, c.u32()?);
     let name = c.string()?;
     // Charge the owned name against the image-wide metadata budget: repeated layer offsets
@@ -1009,6 +1026,7 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         name,
         floating_selection: false,
         floating_target: None,
+        source_record: source_start..c.pos,
         opacity: 1.0,
         mode: 0,
         visible: true,
@@ -1041,9 +1059,9 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
             5 => {
                 l.floating_selection = true;
                 l.floating_target = if c.wide {
-                    p.data.get(..8).and_then(|bytes| bytes.try_into().ok()).map(u64::from_be_bytes)
+                    p.data.try_into().ok().map(u64::from_be_bytes)
                 } else {
-                    p.data.get(..4).and_then(|bytes| bytes.try_into().ok()).map(u32::from_be_bytes).map(u64::from)
+                    p.data.try_into().ok().map(u32::from_be_bytes).map(u64::from)
                 };
             }
             6 => l.opacity = (v.min(255) as f32) / 255.0,

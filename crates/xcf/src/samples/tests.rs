@@ -1380,3 +1380,238 @@ fn excluded_source_records_cannot_supply_tile_or_table_bytes() {
         .unwrap();
     assert_eq!(actual, [22, 44]);
 }
+
+#[test]
+fn public_drawable_visitors_exclude_their_complete_source_records_and_preserve_adjacency() {
+    for version in [10, 11, 26] {
+        for role in ["layer", "mask", "channel"] {
+            for placement in ["inside", "tail", "crossing", "adjacent"] {
+                let mut source = Source::gray(150, 1, vec![22, 44]);
+                source.width = 2;
+                source.version = version;
+                source.mask = Some(vec![22, 44]);
+                source.channel = Some(vec![22, 44]);
+                let mut file = W { out: source.write(), wide: version >= 11 };
+                let reader = Xcf::parse(&file.out).unwrap();
+                let mut master = reader.c.at(14 + 12 + if version >= 4 { 4 } else { 0 });
+                props(&mut master).unwrap();
+                let layer_slot = master.pos;
+                master.ptr().unwrap();
+                master.ptr().unwrap();
+                let channel_slot = master.pos;
+                let layer = &reader.image.layers[0];
+                let mut layer_cursor = reader.c.at(reader.layer_sources[0]);
+                layer_cursor.take(12).unwrap();
+                layer_cursor.string().unwrap();
+                props(&mut layer_cursor).unwrap();
+                layer_cursor.ptr().unwrap();
+                let mask_slot = layer_cursor.pos;
+                let (start, slot) = match role {
+                    "layer" => (reader.layer_sources[0], layer_slot),
+                    "mask" => (layer.mask, mask_slot),
+                    _ => (reader.channels[0], channel_slot),
+                };
+                let (end, hierarchy) = if role == "layer" {
+                    (layer.source_record.end, layer.hierarchy)
+                } else {
+                    let mut cursor = reader.c.at(start);
+                    cursor.take(8).unwrap();
+                    cursor.string().unwrap();
+                    props(&mut cursor).unwrap();
+                    let hierarchy = cursor.ptr().unwrap();
+                    reader.channel_effects_tail(&mut cursor, GO, None).unwrap();
+                    (cursor.pos, hierarchy)
+                };
+                let record = file.out[start..end].to_vec();
+                let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+                let level = head.level;
+                // Relocate only the source record, retaining its already validated
+                // hierarchy. This lets a real tile end exactly at its record.
+                let payload = file.out.len();
+                file.out.extend([22, 44]);
+                let relocated = file.out.len();
+                file.out.extend(record);
+                file.patch(slot, relocated);
+                file.patch(
+                    level + 8,
+                    match placement {
+                        "inside" => relocated,
+                        "tail" => file.out.len() - if file.wide { 8 } else { 4 },
+                        "crossing" => relocated - 1,
+                        _ => payload,
+                    },
+                );
+                let reader = Xcf::parse(&file.out).unwrap();
+                let mut seen = Vec::new();
+                let mut budget = 2;
+                let visit = |tile: SourceTile<'_>| {
+                    seen.extend_from_slice(tile.data);
+                    Ok(())
+                };
+                let raw = match role {
+                    "layer" => reader.visit_layer_tiles(0, SampleOptions::default(), &mut budget, GO, visit).map(|_| ()),
+                    "mask" => reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut budget, GO, visit).map(|_| ()),
+                    _ => reader.visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, visit).map(|_| ()),
+                };
+                let legacy = match role {
+                    "layer" => reader.layer_pixels(0, &mut 8, GO).map(|_| ()),
+                    "mask" => reader.layer_mask(0, &mut 8, GO).map(|_| ()),
+                    _ => reader.channel(0, &mut 8, GO).map(|_| ()),
+                };
+                if placement == "adjacent" {
+                    raw.unwrap();
+                    legacy.unwrap();
+                    assert_eq!(seen, [22, 44]);
+                } else {
+                    assert!(raw.is_err(), "{version} {role} {placement}");
+                    assert!(legacy.is_err(), "legacy {version} {role} {placement}");
+                    assert!(seen.is_empty());
+                }
+                assert!(matches!(
+                    reader.visit_channel_tiles(0, SampleOptions::default(), &mut 2, &|| false, |_| panic!("cancelled")),
+                    Err(Error::Cancelled)
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn inert_dummy_pointer_inside_a_complete_nonfinal_raw_tile_does_not_truncate_samples() {
+    for version in [10, 11] {
+        let mut source = Source::gray(150, 1, vec![0]);
+        source.version = version;
+        let mut file = W { out: source.write(), wide: version >= 11 };
+        let hierarchy = file.out.len();
+        for word in [65, 1, 1] {
+            file.u32(word);
+        }
+        let level_slot = file.slot();
+        let dummy_slot = file.slot();
+        file.ptr(0);
+        let level = file.out.len();
+        file.patch(level_slot, level);
+        file.u32(65);
+        file.u32(1);
+        let first_slot = file.slot();
+        let last_slot = file.slot();
+        file.ptr(0);
+        let first = file.out.len();
+        file.patch(first_slot, first);
+        let mut expected = vec![33; 64];
+        expected[12..24].copy_from_slice(&[32u32.to_be_bytes(), 0u32.to_be_bytes(), 0u32.to_be_bytes()].concat());
+        file.out.extend(&expected);
+        file.patch(dummy_slot, first + 12);
+        let last = file.out.len();
+        file.patch(last_slot, last);
+        file.out.push(77);
+        expected.push(77);
+        let reader = Xcf::parse(&file.out).unwrap();
+        let legacy = reader.hierarchy(hierarchy, 1, false, &mut (65 * 4), GO).unwrap();
+        assert_eq!(legacy.data, expected.iter().map(|v| f32::from(*v) / 255.0).collect::<Vec<_>>());
+        let mut seen = Vec::new();
+        reader
+            .visit_hierarchy(
+                VisitTarget {
+                    pointer: hierarchy,
+                    channels: 1,
+                    indexed: false,
+                    dimensions: Some((65, 1)),
+                    coverage: false,
+                    transfer_is_assumed: false,
+                    excluded_source: None,
+                },
+                SampleOptions::default(),
+                &mut 65,
+                GO,
+                |tile| {
+                    seen.extend_from_slice(tile.data);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(seen, expected);
+    }
+}
+
+#[test]
+fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_header() {
+    use crate::tests::{TestImage, TestLayer};
+    for version in [10, 11, 26] {
+        for state in ["valid", "oversized", "short", "dangling", "mismatched"] {
+            let width = if version >= 11 { 8 } else { 4 };
+            let mut image = TestImage::rgb8(1, 1);
+            image.version = version;
+            image.precision = 650;
+            let mut floating = TestLayer::rgba("Floating", 1, 1, [0.25f32, 0.75].into_iter().flat_map(f32::to_be_bytes).collect());
+            floating.kind = 3;
+            floating.props.push((
+                5,
+                vec![
+                    0;
+                    if state == "oversized" {
+                        width + 1
+                    } else if state == "short" {
+                        width - 1
+                    } else {
+                        width
+                    }
+                ],
+            ));
+            image.layers.push(floating);
+            let mut owner = TestLayer::rgba("Owner", 1, 1, [0.2f32, 0.3, 0.4, 1.0].into_iter().flat_map(f32::to_be_bytes).collect());
+            owner.mask = Some(0.5f32.to_be_bytes().to_vec());
+            image.layers.push(owner);
+            let mut file = W { out: image.write(), wide: version >= 11 };
+            let reader = Xcf::parse(&file.out).unwrap();
+            let mask = reader.image.layers[1].mask;
+            let mut cursor = reader.c.at(reader.layer_sources[0]);
+            cursor.take(12).unwrap();
+            cursor.string().unwrap();
+            let (length, slot) = loop {
+                let kind = cursor.u32().unwrap();
+                let length = cursor.u32().unwrap() as usize;
+                assert_ne!(kind, 0);
+                if kind == 5 {
+                    break (length, cursor.pos);
+                }
+                cursor.take(length).unwrap();
+            };
+            let target = if file.wide { (mask as u64).to_be_bytes().to_vec() } else { (mask as u32).to_be_bytes().to_vec() };
+            let copied = length.min(target.len());
+            file.out[slot..slot + copied].copy_from_slice(&target[..copied]);
+            if state == "dangling" {
+                file.out.truncate(mask);
+            }
+            if state == "mismatched" {
+                file.out[mask..mask + 4].copy_from_slice(&2u32.to_be_bytes());
+            }
+            let reader = Xcf::parse(&file.out).unwrap();
+            let info = reader
+                .visit_layer_tiles(0, SampleOptions::default(), &mut 8, GO, |tile| {
+                    assert_eq!(tile.sample(0)?, SourceSample::F32(0.25));
+                    Ok(())
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(info.transfer_is_assumed, state != "valid", "v{version} {state}");
+            assert_eq!(info.precision.transfer, if state == "valid" { Transfer::Linear } else { Transfer::Nonlinear });
+        }
+    }
+}
+
+#[test]
+fn channel_effect_tail_is_bounded_metered_and_cancellable_including_the_terminator() {
+    let bytes = Source::gray(150, 1, vec![22]).write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    let data = [1u64.to_be_bytes(), 0u64.to_be_bytes()].concat();
+    let cursor = crate::Cursor { b: &data, pos: 0, wide: true };
+    let mut work = crate::records::Budget::new(16, 0);
+    reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)).unwrap();
+    assert_eq!(work.work_remaining(), 0);
+    assert!(reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)).is_err());
+    assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), &|| false, Some(&mut work)), Err(Error::Cancelled)));
+    let too_many = vec![1; 1025 * 8];
+    assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &too_many, pos: 0, wide: true }, GO, None).is_err());
+    assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &data[..15], pos: 0, wide: true }, GO, None).is_err());
+}

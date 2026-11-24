@@ -234,7 +234,7 @@ impl Xcf<'_> {
                 dimensions: Some((layer.width, layer.height)),
                 coverage,
                 transfer_is_assumed,
-                excluded_source: None,
+                excluded_source: Some(layer.source_record.clone()),
             },
             options,
             budget,
@@ -251,7 +251,18 @@ impl Xcf<'_> {
             return (false, false);
         }
         let Some(target) = layer.floating_target.filter(|offset| *offset != 0) else { return (false, true) };
-        if self.image.layers.iter().any(|owner| owner.mask != 0 && u64::try_from(owner.mask).ok() == Some(target)) {
+        if self.image.layers.iter().any(|owner| {
+            owner.mask != 0
+                && u64::try_from(owner.mask).ok() == Some(target)
+                // A pointer identity alone does not establish a stored mask. Its
+                // fixed dimensions/name-length header must exist and match the owner.
+                && self.c.b.get(owner.mask..).is_some_and(|bytes| {
+                    bytes.get(..12).is_some_and(|header| {
+                        header.get(..4) == Some(owner.width.to_be_bytes().as_slice())
+                            && header.get(4..8) == Some(owner.height.to_be_bytes().as_slice())
+                    })
+                })
+        }) {
             return (true, false); // A known mask is linear coverage, including alpha.
         }
         if self
@@ -329,6 +340,7 @@ impl Xcf<'_> {
                 return Err(invalid("selection dimensions do not match the canvas"));
             }
             let hierarchy = cursor.ptr()?;
+            self.channel_effects_tail(&mut cursor, keep_going, None)?;
             // Saved channels/selections use linear coverage at high precision too;
             // preserve the existing nonlinear U8 channel-format exception.
             let nonlinear_u8 =
@@ -341,7 +353,7 @@ impl Xcf<'_> {
                     dimensions: Some(dimensions),
                     coverage: owner.is_some() || selection || !nonlinear_u8,
                     transfer_is_assumed: owner.is_none() && !selection,
-                    excluded_source: None,
+                    excluded_source: Some(ptr..cursor.pos),
                 },
                 options,
                 budget,
@@ -356,6 +368,35 @@ impl Xcf<'_> {
             self.meta_budget.set(self.meta_budget.get().saturating_add(name_bytes));
         }
         result
+    }
+
+    // Since v26 channels append an effect-pointer list. Treat the entire
+    // bounded list, including its terminator, as framing rather than samples.
+    pub(super) fn channel_effects_tail(
+        &self,
+        cursor: &mut crate::Cursor<'_>,
+        keep_going: &dyn Fn() -> bool,
+        mut budget: Option<&mut crate::records::Budget>,
+    ) -> Result<()> {
+        if self.image.version < 26 {
+            return Ok(());
+        }
+        let width = if self.c.wide { 8 } else { 4 };
+        for count in 0..=1024 {
+            if !keep_going() {
+                return Err(Error::Cancelled);
+            }
+            if let Some(budget) = budget.as_deref_mut() {
+                budget.work(width).map_err(|_| invalid("channel effect pointers exceed the metadata work limit"))?;
+            }
+            if cursor.take(width)?.iter().all(|byte| *byte == 0) {
+                return Ok(());
+            }
+            if count == 1024 {
+                return Err(invalid("too many channel effects"));
+            }
+        }
+        Err(invalid("unterminated channel effects"))
     }
 
     pub(super) fn hierarchy_head(&self, pointer: usize, channels: usize) -> Result<HierarchyHead> {
@@ -440,6 +481,7 @@ impl Xcf<'_> {
         head: &HierarchyHead,
         start: usize,
         next: Option<usize>,
+        raw_bytes: usize,
         excluded: Option<&std::ops::Range<usize>>,
     ) -> Result<&[u8]> {
         if head.header.contains(&start) {
@@ -453,6 +495,14 @@ impl Xcf<'_> {
             end = end.min(head.level);
         }
         for &(begin, stop) in head.dummy_headers.iter().flatten() {
+            // Dummy levels are inert. Pixel bytes inside a complete nonfinal
+            // uncompressed tile can coincidentally resemble a dummy header;
+            // only the validated next primary pointer frames that tile.
+            if self.image.compression == crate::Compression::None
+                && next.is_some_and(|next| start.checked_add(raw_bytes).is_some_and(|end| end <= next && start < begin && begin < end))
+            {
+                continue;
+            }
             if (begin..stop).contains(&start) {
                 return Err(invalid("a tile pointer is inside a dummy-level header"));
             }
@@ -557,7 +607,13 @@ impl Xcf<'_> {
             let width = (head.width - x).min(TILE);
             let height = (head.height - y).min(TILE);
             let raw = if let Some(&start) = offsets.get(index) {
-                let input = self.tile_input(&head, start, offsets.get(index + 1).copied(), excluded_source.as_ref())?;
+                let input = self.tile_input(
+                    &head,
+                    start,
+                    offsets.get(index + 1).copied(),
+                    width as usize * height as usize * head.bpp,
+                    excluded_source.as_ref(),
+                )?;
                 tiles::decode(input, self.image.compression, head.bpp, width as usize * height as usize)?
             } else {
                 let length = (width as usize)
