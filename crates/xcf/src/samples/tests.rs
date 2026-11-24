@@ -1558,7 +1558,12 @@ fn inert_dummy_pointer_is_ignored_only_inside_a_complete_contiguous_raw_tile() {
 fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_header() {
     use crate::tests::{TestImage, TestLayer};
     for version in [10, 11, 26] {
-        for state in ["valid", "oversized", "short", "dangling", "mismatched"] {
+        for state in
+            ["valid", "oversized", "short", "dangling", "mismatched", "short-name", "short-properties", "short-hierarchy", "short-tail", "bad-end"]
+        {
+            if state == "short-tail" && version < 26 {
+                continue;
+            }
             let width = if version >= 11 { 8 } else { 4 };
             let mut image = TestImage::rgb8(1, 1);
             image.version = version;
@@ -1585,6 +1590,14 @@ fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_hea
             let mut file = W { out: image.write(), wide: version >= 11 };
             let reader = Xcf::parse(&file.out).unwrap();
             let mask = reader.image.layers[1].mask;
+            let mut mask_cursor = reader.c.at(mask);
+            mask_cursor.take(8).unwrap();
+            mask_cursor.string_bytes().unwrap();
+            let properties = mask_cursor.pos;
+            props(&mut mask_cursor).unwrap();
+            let hierarchy_slot = mask_cursor.pos;
+            mask_cursor.ptr().unwrap();
+            let tail = mask_cursor.pos;
             let mut cursor = reader.c.at(reader.layer_sources[0]);
             cursor.take(12).unwrap();
             cursor.string().unwrap();
@@ -1606,7 +1619,26 @@ fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_hea
             if state == "mismatched" {
                 file.out[mask..mask + 4].copy_from_slice(&2u32.to_be_bytes());
             }
+            match state {
+                "short-name" => file.out.truncate(mask + 12),
+                "short-properties" => file.out.truncate(properties + 4),
+                "short-hierarchy" => file.out.truncate(hierarchy_slot + width - 1),
+                "short-tail" => file.out.truncate(tail + width - 1),
+                "bad-end" => file.out[properties + 4..properties + 8].copy_from_slice(&4u32.to_be_bytes()),
+                _ => {}
+            }
             let reader = Xcf::parse(&file.out).unwrap();
+            if state == "valid" {
+                let mask = reader
+                    .visit_layer_mask_tiles(1, SampleOptions::default(), &mut 4, GO, |tile| {
+                        assert_eq!(tile.sample(0)?, SourceSample::F32(0.5));
+                        Ok(())
+                    })
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(mask.1.precision.transfer, Transfer::Linear);
+            }
+            let metadata_before = reader.meta_budget.get();
             let info = reader
                 .visit_layer_tiles(0, SampleOptions::default(), &mut 8, GO, |tile| {
                     assert_eq!(tile.sample(0)?, SourceSample::F32(0.25));
@@ -1614,6 +1646,7 @@ fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_hea
                 })
                 .unwrap()
                 .unwrap();
+            assert_eq!(reader.meta_budget.get(), metadata_before, "role checks retain no channel metadata");
             assert_eq!(info.transfer_is_assumed, state != "valid", "v{version} {state}");
             assert_eq!(info.precision.transfer, if state == "valid" { Transfer::Linear } else { Transfer::Nonlinear });
         }
@@ -1719,4 +1752,78 @@ fn failed_legacy_channel_refunds_only_name_storage_after_pixel_admission() {
     assert_eq!(reader.meta_budget.get(), 4);
     reader.layer_mask(0, &mut 8, GO).unwrap().unwrap();
     assert_eq!(reader.meta_budget.get(), 0);
+}
+
+#[test]
+fn parsed_layer_identity_wins_over_an_aliased_mask_pointer() {
+    use crate::tests::{TestImage, TestLayer};
+    for base in [0, 1] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.version = 26;
+        image.precision = 650;
+        image.base_type = base;
+        let mut floating = TestLayer::rgba("Floating", 1, 1, [0.25f32, 0.75].into_iter().flat_map(f32::to_be_bytes).collect());
+        floating.kind = 3;
+        floating.props.push((5, vec![0; 8]));
+        image.layers.push(floating);
+        let mut target = TestLayer::rgba(
+            "Target",
+            1,
+            1,
+            if base == 0 { [0.2f32, 0.3, 0.4, 1.0].into_iter().flat_map(f32::to_be_bytes).collect() } else { 0.5f32.to_be_bytes().to_vec() },
+        );
+        if base == 1 {
+            target.kind = 2;
+        }
+        image.layers.push(target);
+        let mut file = W { out: image.write(), wide: true };
+        let reader = Xcf::parse(&file.out).unwrap();
+        let target = reader.layer_sources[1];
+        let mut cursor = reader.c.at(reader.layer_sources[0]);
+        cursor.take(12).unwrap();
+        cursor.string_bytes().unwrap();
+        let floating_slot = loop {
+            let kind = cursor.u32().unwrap();
+            let len = cursor.u32().unwrap() as usize;
+            assert_ne!(kind, 0);
+            if kind == 5 {
+                let slot = cursor.pos;
+                cursor.take(len).unwrap();
+                break slot;
+            }
+            cursor.take(len).unwrap();
+        };
+        props(&mut cursor).unwrap();
+        cursor.ptr().unwrap();
+        let mask_slot = cursor.pos;
+        file.patch(floating_slot, target);
+        file.patch(mask_slot, target);
+        let reader = Xcf::parse(&file.out).unwrap();
+        let info = reader
+            .visit_layer_tiles(0, SampleOptions::default(), &mut 8, GO, |tile| {
+                assert_eq!(tile.sample(0)?, SourceSample::F32(0.25));
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.precision.transfer, Transfer::Nonlinear);
+        assert!(!info.transfer_is_assumed);
+    }
+}
+
+#[test]
+fn mask_role_framing_polls_cancellation_without_retaining_metadata() {
+    let mut source = Source::gray(650, 4, 0.25f32.to_be_bytes().to_vec());
+    source.mask = Some(0.5f32.to_be_bytes().to_vec());
+    let bytes = source.write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    let owner = &reader.image.layers[0];
+    let metadata = reader.meta_budget.get();
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 2
+    };
+    assert!(matches!(reader.confirm_mask_record(owner, &keep), Err(Error::Cancelled)));
+    assert_eq!(reader.meta_budget.get(), metadata);
 }

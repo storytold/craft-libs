@@ -250,7 +250,7 @@ impl Xcf<'_> {
             return Ok(None);
         }
         let (channels, indexed) = layer.source_layout(self.image.base_type)?;
-        let (coverage, transfer_is_assumed) = self.floating_gray_transfer(layer);
+        let (coverage, transfer_is_assumed) = self.floating_gray_transfer(layer, keep_going)?;
         self.visit_hierarchy(
             VisitTarget {
                 pointer: layer.hierarchy,
@@ -269,41 +269,61 @@ impl Xcf<'_> {
         .map(Some)
     }
 
-    // Resolve only already-parsed source identities. Never follow an arbitrary
-    // floating-selection pointer or rescan untrusted channel properties here.
-    fn floating_gray_transfer(&self, layer: &crate::Layer) -> (bool, bool) {
+    // Parsed layer identities take precedence over a conflicting mask pointer.
+    // Corroborate only an already recorded mask target, without retaining its
+    // metadata or following effect targets/pixels to infer a transfer.
+    fn floating_gray_transfer(&self, layer: &crate::Layer, keep_going: &dyn Fn() -> bool) -> Result<(bool, bool)> {
         if !layer.floating_selection || layer.layer_type != 3 {
-            return (false, false);
+            return Ok((false, false));
         }
-        let Some(target) = layer.floating_target.filter(|offset| *offset != 0) else { return (false, true) };
-        if self.image.layers.iter().any(|owner| {
-            owner.mask != 0
-                && u64::try_from(owner.mask).ok() == Some(target)
-                // A pointer identity alone does not establish a stored mask. Its
-                // fixed dimensions/name-length header must exist and match the owner.
-                && self.c.b.get(owner.mask..).is_some_and(|bytes| {
-                    bytes.get(..12).is_some_and(|header| {
-                        header.get(..4) == Some(owner.width.to_be_bytes().as_slice())
-                            && header.get(4..8) == Some(owner.height.to_be_bytes().as_slice())
-                    })
-                })
-        }) {
-            return (true, false); // A known mask is linear coverage, including alpha.
+        let Some(target) = layer.floating_target.filter(|offset| *offset != 0) else { return Ok((false, true)) };
+        if let Some((_, owner)) = self.layer_sources.iter().zip(&self.image.layers).find(|(source, _)| u64::try_from(**source).ok() == Some(target)) {
+            return Ok((false, owner.floating_selection)); // Ordinary layer color retains the canvas transfer.
         }
-        if self
-            .layer_sources
-            .iter()
-            .zip(&self.image.layers)
-            .any(|(source, owner)| u64::try_from(*source).ok() == Some(target) && !owner.floating_selection)
-        {
-            return (false, false); // Ordinary layer color retains the canvas transfer.
+        if let Some(owner) = self.image.layers.iter().find(|owner| owner.mask != 0 && u64::try_from(owner.mask).ok() == Some(target)) {
+            match self.confirm_mask_record(owner, keep_going) {
+                Ok(()) => return Ok((true, false)),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(_) => return Ok((false, true)),
+            }
         }
         if self.channels.iter().any(|source| u64::try_from(*source).ok() == Some(target)) {
             let nonlinear_u8 =
                 self.image.precision.bytes == 1 && !self.image.precision.float && self.source_precision().transfer == Transfer::Nonlinear;
-            return (!nonlinear_u8, true); // Same unconfirmed default as a saved channel.
+            return Ok((!nonlinear_u8, true)); // Same unconfirmed default as a saved channel.
         }
-        (false, true) // Unknown targets cannot establish the stored transfer.
+        Ok((false, true)) // Unknown targets cannot establish the stored transfer.
+    }
+
+    fn confirm_mask_record(&self, owner: &crate::Layer, keep_going: &dyn Fn() -> bool) -> Result<()> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let mut cursor = self.c.at(owner.mask);
+        if (cursor.u32()?, cursor.u32()?) != (owner.width, owner.height) {
+            return Err(invalid("mask dimensions do not match their owner"));
+        }
+        cursor.string_bytes()?; // Validate declared name bytes without an owned copy.
+        for count in 0..=4096 {
+            if !keep_going() {
+                return Err(Error::Cancelled);
+            }
+            let kind = cursor.u32()?;
+            let length = cursor.u32()? as usize;
+            if kind == 0 {
+                if length != 0 {
+                    return Err(invalid("mask property terminator has a payload"));
+                }
+                cursor.ptr()?;
+                self.channel_effects_tail(&mut cursor, keep_going, None)?;
+                return Ok(());
+            }
+            if count == 4096 || length > crate::MAX_PAYLOAD {
+                return Err(invalid("mask properties exceed the source limits"));
+            }
+            cursor.take(length)?;
+        }
+        Err(invalid("unterminated mask properties"))
     }
 
     pub fn visit_layer_mask_tiles(

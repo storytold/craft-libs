@@ -287,6 +287,9 @@ impl TestImage {
                 w.string("mask");
                 w.end();
                 let hs = w.slot();
+                if self.version >= 26 {
+                    w.ptr(0); // v26 channel/mask effect-list terminator.
+                }
                 let h = hierarchy(&mut w, layer.width, layer.height, bytes, mask, self.compression);
                 w.patch(hs, h);
             }
