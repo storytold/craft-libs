@@ -58,7 +58,7 @@ pub struct UserSource {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use http::{Cancel, Client, FetchError, Timeouts, USER_AGENT};
+pub use http::{Cancel, Client, FetchError, SERVICE_BACKOFF, Timeouts, USER_AGENT};
 #[cfg(not(target_arch = "wasm32"))]
 pub use language_packs::{
     InstalledLanguagePack, LANGUAGE_PACK_INDEX_ENV, LANGUAGE_PACKS, MAX_PACK_ARCHIVE_BYTES, MAX_PACK_ENTRIES, MAX_PACK_FILE_BYTES,
