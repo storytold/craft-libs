@@ -23,13 +23,18 @@ fn stepped_taps(uv: vec2f, extent: vec2u, wraps: vec2<bool>) -> BilinearTaps {
     let half_texel = 0.5 / size;
     let coords = select(clamp(uv, half_texel, 1.0 - half_texel), uv, wraps);
     let scaled = coords * size;
-    let whole = floor(scaled);
-    let fraction = scaled - whole;
+    // Split at truncation: that remainder is exact, while scaled - floor(scaled) can round a negative coordinate onto a tie
+    let toward_zero = trunc(scaled);
+    let remainder = scaled - toward_zero;
+    let negative = remainder < vec2<f32>(0.0);
+    let whole = vec2<i32>(toward_zero) - select(vec2<i32>(0), vec2<i32>(1), negative);
+    // Below zero the fraction is remainder + 1: compare and round it in that form
+    let previous = select(remainder < vec2<f32>(0.5), remainder < vec2<f32>(-0.5), negative);
     // Subtract the half-texel in separate integer units so a large coordinate cannot move a rounding tie
-    let previous = fraction < vec2<f32>(0.5);
-    let base = vec2<i32>(whole) - select(vec2<i32>(0), vec2<i32>(1), previous);
-    let steps = fraction * 256.0;
-    let rounded = floor(steps) + select(vec2<f32>(0.0), vec2<f32>(1.0), fract(steps) >= vec2<f32>(0.5));
+    let base = whole - select(vec2<i32>(0), vec2<i32>(1), previous);
+    let steps = remainder * 256.0;
+    let half_up = select(vec2<f32>(0.0), vec2<f32>(1.0), steps - floor(steps) >= vec2<f32>(0.5));
+    let rounded = floor(steps) + half_up + select(vec2<f32>(0.0), vec2<f32>(256.0), negative);
     let weights = (rounded + select(vec2<f32>(-128.0), vec2<f32>(128.0), previous)) / 256.0;
     return BilinearTaps(base, weights);
 }

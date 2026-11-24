@@ -37,6 +37,50 @@ impl Headless {
     pub(crate) fn accelerator(&self) -> GraphAccelerator {
         GraphAccelerator::new(&self.device, &self.queue, || 4 << 30)
     }
+
+    /// Run the `main` entry of `source` once per workgroup for `invocations` workgroups. It reads `input` at binding 0 and writes
+    /// `output_bytes` at binding 1, which come back.
+    pub(crate) fn run_compute(&self, source: &str, input: &[u8], output_bytes: u64, invocations: u32) -> Vec<u8> {
+        use wgpu::util::DeviceExt;
+        let device = &self.device;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("test compute"), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("test compute"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("test input"), contents: input, usage: wgpu::BufferUsages::STORAGE });
+        let buffer = |label, usage| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: output_bytes, usage, mapped_at_creation: false });
+        let output = buffer("test output", wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC);
+        let readback = buffer("test readback", wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
+        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("test compute"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: input.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: output.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &binding, &[]);
+            pass.dispatch_workgroups(invocations, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, output_bytes);
+        let submission = self.queue.submit([encoder.finish()]);
+        readback.slice(..).map_async(wgpu::MapMode::Read, |result| result.unwrap());
+        device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None }).unwrap();
+
+        let bytes = readback.slice(..).get_mapped_range().unwrap().to_vec();
+        readback.unmap();
+        bytes
+    }
 }
 
 #[test]

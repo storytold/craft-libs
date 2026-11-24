@@ -353,6 +353,41 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_taps_just_below_a_negative_tie_keep_the_reference_weight() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        let side = 256.0_f32;
+        let source = format!(
+            "{}\n@group(0) @binding(0) var<storage, read> positions: array<vec2f>;\n\
+             @group(0) @binding(1) var<storage, read_write> taps: array<vec4f>;\n\
+             @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3u) {{\n\
+                 let read = stepped_taps(positions[id.x], vec2u({side}u), vec2(true));\n\
+                 taps[id.x] = vec4f(vec2f(read.base), read.weights);\n\
+             }}",
+            include_str!("shaders/graph_sampling.wgsl")
+        );
+        // Texel coordinates at, and a few floats either side of, every 1/256 tie on both sides of zero
+        let mut scaled = Vec::new();
+        for tie in -256..256 {
+            let tie = (tie as f32 + 0.5) / 256.0;
+            let below = |x: f32, n: u32| if x < 0.0 { f32::from_bits(x.to_bits() + n) } else { f32::from_bits(x.to_bits() - n) };
+            let above = |x: f32, n: u32| if x < 0.0 { f32::from_bits(x.to_bits() - n) } else { f32::from_bits(x.to_bits() + n) };
+            scaled.extend([tie, below(tie, 1), below(tie, 2), above(tie, 1), above(tie, 2)]);
+        }
+        let positions = scaled.iter().map(|&s| [s / side, s / side]).collect::<Vec<_>>();
+
+        let bytes = gpu.run_compute(&source, bytemuck::cast_slice(&positions), (positions.len() * 16) as u64, positions.len() as u32);
+
+        let taps = bytemuck::cast_slice::<u8, [f32; 4]>(&bytes);
+        for (&s, tap) in scaled.iter().zip(taps) {
+            // The reference read in double precision: the texel before the position and its weight in steps of 1/256, half up
+            let x = f64::from(s) - 0.5;
+            let base = x.floor();
+            let weight = (((x - base) * 256.0 + 0.5).floor() / 256.0) as f32;
+            assert_eq!([tap[0], tap[2]], [base as f32, weight], "texel coordinate {s:e}");
+        }
+    }
+
+    #[test]
     fn imported_levels_and_gradient_keep_a_smaller_warp_resident() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
