@@ -45,7 +45,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -55,23 +55,27 @@ pub const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-ind
 /// The `source` Cargo writes for a package from the git repository at `url`, pinned with
 /// `rev = "<rev>"` where `rev` is a full commit hash: `git+<url>?rev=<rev>#<rev>`, with `url` written
 /// as Cargo writes it. For `http` and `https` that is the scheme and host in lowercase, without the
-/// default port: `https://github.com:443/o/r` becomes `https://github.com/o/r`.
+/// default port, and with the `.` and `..` segments of the path resolved:
+/// `https://github.com:443/o/./r` becomes `https://github.com/o/r`.
 pub fn git_source(url: &str, rev: &str) -> String {
     format!("git+{}?rev={rev}#{rev}", cargo_url(url))
 }
 
-/// `url` as Cargo writes it in a `source`: the scheme in lowercase and, for `http` and `https`, the
-/// host in lowercase, an empty port or the scheme's default port (80 or 443) left out, and `/` for an
-/// empty path. Other URLs are kept apart from the scheme.
+/// `url` as Cargo writes it in a `source`: the scheme in lowercase, the `.` and `..` segments of the
+/// path resolved, and, for `http` and `https`, the host in lowercase, an empty port or the scheme's
+/// default port (80 or 443) left out, and `/` for an empty path. Other URLs keep their authority as
+/// written.
 fn cargo_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else { return url.to_owned() };
     let scheme = scheme.to_ascii_lowercase();
+    let (authority, tail) = rest.split_at_checked(rest.find(['/', '?', '#']).unwrap_or(rest.len())).unwrap_or((rest, ""));
+    let (path, query) = tail.split_at_checked(tail.find(['?', '#']).unwrap_or(tail.len())).unwrap_or((tail, ""));
+    let path = if path.is_empty() { String::new() } else { resolve_dot_segments(path) };
     let default_port = match scheme.as_str() {
         "http" => "80",
         "https" => "443",
-        _ => return format!("{scheme}://{rest}"),
+        _ => return format!("{scheme}://{authority}{path}{query}"),
     };
-    let (authority, tail) = rest.split_at_checked(rest.find(['/', '?', '#']).unwrap_or(rest.len())).unwrap_or((rest, ""));
     let (user, host_port) = match authority.rsplit_once('@') {
         Some((user, host_port)) => (Some(user), host_port),
         None => (None, authority),
@@ -91,11 +95,37 @@ fn cargo_url(url: &str) -> String {
         out.push(':');
         out.push_str(port);
     }
-    if !tail.starts_with('/') {
+    if path.is_empty() {
         out.push('/');
     }
-    out.push_str(tail);
+    out.push_str(&path);
+    out.push_str(query);
     out
+}
+
+/// `path`, which starts with `/`, with its `.` and `..` segments resolved as Cargo's URL parser
+/// resolves them: `.` is dropped, `..` drops the segment before it, and either one as the last segment
+/// leaves the path ending in `/`. `%2e` counts as a `.`, in either case.
+fn resolve_dot_segments(path: &str) -> String {
+    let segments: Vec<&str> = path.strip_prefix('/').unwrap_or(path).split('/').collect();
+    let last = segments.len().saturating_sub(1);
+    let mut out: Vec<&str> = Vec::with_capacity(segments.len());
+    for (i, segment) in segments.iter().enumerate() {
+        let dots = match segment.to_ascii_lowercase().as_str() {
+            "." | "%2e" => 1,
+            ".." | ".%2e" | "%2e." | "%2e%2e" => 2,
+            _ => 0,
+        };
+        if dots == 2 {
+            out.pop();
+        }
+        if dots == 0 {
+            out.push(segment);
+        } else if i == last {
+            out.push("");
+        }
+    }
+    format!("/{}", out.join("/"))
 }
 
 /// One pinned package.
@@ -437,11 +467,11 @@ pub fn check_commits(metadata_json: &[u8], rules: &[OneCommit<'_>], limits: &Lim
     }
     let meta: Value = serde_json::from_slice(metadata_json).map_err(|e| invalid(format!("not JSON: {e}")))?;
     let packages = meta.get("packages").and_then(Value::as_array).ok_or_else(|| invalid("packages is missing"))?;
+    let names = packages.iter().map(|package| str_field(package, "name", "a package")).collect::<Result<Vec<_>, _>>()?;
     for rule in rules {
         let url = cargo_url(rule.url);
         let mut commits: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for package in packages {
-            let name = str_field(package, "name", "a package")?;
+        for (package, &name) in packages.iter().zip(&names) {
             let Some(source) = package.get("source").and_then(Value::as_str) else { continue };
             let Some(commit) = git_commit(source, &url)? else { continue };
             if rule.extra.iter().any(|extra| extra.name == name && extra.rev == commit) {
@@ -729,13 +759,17 @@ fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) ->
         stop(&mut child);
         return Err(read_error(source));
     }
-    // The output, or `None` when it is still open `DRAIN` after the command exited.
+    // The output, or `None` when it is still open `DRAIN` after the command exited, and the exit with
+    // the time it was seen when that came first.
     let (read, exited) = loop {
         match receiver.recv_timeout(POLL) {
             Ok(read) => break (Some(read), None),
             Err(RecvTimeoutError::Disconnected) => break (Some(Err(io::Error::other("the output reader stopped"))), None),
             Err(RecvTimeoutError::Timeout) => match child.try_wait() {
-                Ok(Some(status)) => break (receiver.recv_timeout(DRAIN).ok(), Some(status)),
+                Ok(Some(status)) => {
+                    let exit = Instant::now();
+                    break (receiver.recv_timeout(DRAIN).ok(), Some((status, exit)));
+                }
                 Ok(None) => {}
                 Err(source) => {
                     stop(&mut child);
@@ -756,14 +790,17 @@ fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) ->
         }
         None => None,
     };
-    let status = match exited {
-        Some(status) => status,
-        None => child.wait().map_err(read_error)?,
+    let (status, exit) = match exited {
+        Some(exited) => exited,
+        None => (child.wait().map_err(read_error)?, Instant::now()),
+    };
+    let Some(stdout) = stdout else {
+        return Err(read_error(io::Error::new(io::ErrorKind::TimedOut, "the output stayed open after the command exited")));
     };
     if status.success() {
-        return stdout.ok_or_else(|| read_error(io::Error::new(io::ErrorKind::TimedOut, "the output stayed open after the command exited")));
+        return Ok(stdout);
     }
-    let stderr = stderr.map(|head| head.finish(DRAIN)).unwrap_or_default();
+    let stderr = stderr.map(|head| head.finish((exit + DRAIN).saturating_duration_since(Instant::now()))).unwrap_or_default();
     let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
     // An incomplete character at the end of the kept bytes decodes to a three-byte replacement.
     while stderr.len() > stderr_limit {
@@ -913,6 +950,19 @@ mod tests {
     }
 
     #[test]
+    fn git_sources_resolve_dot_segments_as_cargo_does() {
+        assert_eq!(git_source("https://github.com/o/./r", "abc"), "git+https://github.com/o/r?rev=abc#abc");
+        assert_eq!(git_source("https://github.com/o/x/../r", "abc"), "git+https://github.com/o/r?rev=abc#abc");
+        assert_eq!(git_source("https://github.com/o/%2E/r/%2e%2E/r", "abc"), "git+https://github.com/o/r?rev=abc#abc");
+        assert_eq!(git_source("https://host/o/r/.", "abc"), "git+https://host/o/r/?rev=abc#abc");
+        assert_eq!(git_source("https://host/o/..", "abc"), "git+https://host/?rev=abc#abc");
+        assert_eq!(git_source("https://host/../r", "abc"), "git+https://host/r?rev=abc#abc");
+        assert_eq!(git_source("ssh://git@Host/o/./r", "abc"), "git+ssh://git@Host/o/r?rev=abc#abc");
+        // Segments that only contain dots are kept.
+        assert_eq!(git_source("https://host/o/.../r.", "abc"), "git+https://host/o/.../r.?rev=abc#abc");
+    }
+
+    #[test]
     fn target_features_without_any_enabled_match_an_empty_list() {
         assert!(check_target_features("krilla v0.8.2|\n", "krilla", &[]).is_ok());
         assert!(check_target_features("krilla v0.8.2|\n", "krilla", &["rayon"]).is_err());
@@ -1006,10 +1056,33 @@ mod tests {
     }
 
     #[test]
+    fn a_package_without_a_name_is_an_error_without_rules_too() {
+        let limits = Limits::default();
+        assert!(output_error(check_commits(&bytes(&json!({"packages": [{}]})), &[], &limits)).contains("name"));
+        assert!(check_commits(&bytes(&json!({"packages": [{"name": "app"}]})), &[], &limits).is_ok());
+    }
+
+    #[test]
     fn a_rule_url_with_the_default_port_matches_the_source_cargo_writes() {
         let m = libs_metadata(&[("craft-xml", &git_source(LIBS, "aaa")), ("craft-zip", &git_source(LIBS, "bbb"))]);
         let rule = OneCommit { url: "https://github.com:443/storytold/craft-libs", extra: &[] };
         assert!(matches!(violation(check_commits(&bytes(&m), &[rule], &Limits::default())), Violation::Commits { .. }));
+    }
+
+    #[test]
+    fn a_rule_url_with_dot_segments_matches_the_source_cargo_writes() {
+        let m = libs_metadata(&[
+            ("craft-xml", "git+https://github.com/storytold/craft-libs?rev=aaa#aaa"),
+            ("craft-zip", "git+https://github.com/storytold/craft-libs?rev=bbb#bbb"),
+            ("other", "git+https://github.com/storytold/craft-libs-extra?rev=ccc#ccc"),
+        ]);
+        let rule = OneCommit { url: "https://github.com/storytold/./x/../craft-libs", extra: &[] };
+        match violation(check_commits(&bytes(&m), &[rule], &Limits::default())) {
+            Violation::Commits { commits, .. } => {
+                assert_eq!(commits, vec![("aaa".into(), vec!["craft-xml".into()]), ("bbb".into(), vec!["craft-zip".into()])]);
+            }
+            other => panic!("expected a commits violation, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1411,12 +1484,14 @@ mod tests {
     /// The commands run as children: the test binary itself, running [`fake_child`].
     mod process {
         use super::super::{Error, Limits, TargetFeatures, Violation, host_target, metadata, run_target_features};
-        use std::io::Write;
+        use std::io::{BufRead, BufReader, Read, Write};
         use std::process::{Command, Stdio};
 
         const MODE: &str = "CRAFT_XTASK_PINS_FAKE";
         /// The file whose lock a `linger` child waits for.
         const RELEASE: &str = "CRAFT_XTASK_PINS_RELEASE";
+        /// The line a `linger` child prints once it holds its pipe.
+        const READY: &str = "craft-xtask-pins-linger-ready";
 
         fn fake(mode: &str) -> Command {
             let mut cmd = Command::new(std::env::current_exe().unwrap());
@@ -1450,31 +1525,56 @@ mod tests {
                     let _ = std::io::stderr().write_all("é".as_bytes());
                     std::process::exit(3);
                 }
-                // Starts a `linger` child that keeps one of this process's pipes open after it exits.
-                "orphan-out" | "orphan-err" => {
-                    let mut linger = fake("linger");
+                // Starts a `linger` child that keeps one of this process's pipes open after it exits,
+                // and waits until it reports that it holds the pipe. Exits with code 4 when it does not.
+                "orphan-out" | "orphan-out-fail" | "orphan-err" => {
+                    let holds_stdout = mode != "orphan-err";
+                    let mut linger = fake(if holds_stdout { "linger-out" } else { "linger-err" });
                     linger.stdin(Stdio::null());
-                    if mode == "orphan-out" {
-                        linger.stdout(Stdio::inherit()).stderr(Stdio::null());
+                    if holds_stdout {
+                        linger.stdout(Stdio::inherit()).stderr(Stdio::piped());
                     } else {
-                        linger.stdout(Stdio::null()).stderr(Stdio::inherit());
+                        linger.stdout(Stdio::piped()).stderr(Stdio::inherit());
                     }
-                    let _ = linger.spawn();
+                    let Ok(mut child) = linger.spawn() else {
+                        std::process::exit(4);
+                    };
+                    let signal: Option<Box<dyn Read>> = if holds_stdout {
+                        child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read>)
+                    } else {
+                        child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read>)
+                    };
+                    let ready = signal.is_some_and(|pipe| BufReader::new(pipe).lines().any(|line| line.is_ok_and(|line| line.contains(READY))));
+                    if !ready {
+                        std::process::exit(4);
+                    }
                     if mode == "orphan-out" {
                         std::process::exit(0);
                     }
                     eprint!("failed");
                     std::process::exit(3);
                 }
-                // Waits for the lock the test holds on the release file, which the test drops once the
-                // call it checks has returned.
-                "linger" => {
+                // Holds the pipe it inherited until the test drops its lock on the release file, once
+                // the call it checks has returned. It reports [`READY`] on its other pipe once it has
+                // found the file locked, and exits without reporting when it cannot.
+                "linger-out" | "linger-err" => {
                     let Ok(release) = std::env::var(RELEASE) else {
                         return;
                     };
-                    if let Ok(file) = std::fs::File::open(release) {
-                        let _ = file.lock();
+                    let Ok(file) = std::fs::File::open(release) else {
+                        return;
+                    };
+                    if !matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)) {
+                        return;
                     }
+                    if mode == "linger-out" {
+                        let mut err = std::io::stderr().lock();
+                        let _ = writeln!(err, "{READY}").and_then(|()| err.flush());
+                    } else {
+                        let mut out = std::io::stdout().lock();
+                        let _ = writeln!(out, "{READY}").and_then(|()| out.flush());
+                    }
+                    let _ = file.lock();
                 }
                 "host" => println!("rustc 1.0.0\nhost: fake-target\nrelease: 1.0.0"),
                 "tree" => println!("app-pdf v0.1.0|\ncraft-pdf v0.1.0|write\nkrilla v0.8.2|raster-images,simple-text"),
@@ -1551,6 +1651,14 @@ mod tests {
         #[test]
         fn output_that_stays_open_after_the_command_exits_is_an_error() {
             match orphaned("orphan-out") {
+                Err(Error::Read { source, .. }) => assert_eq!(source.kind(), std::io::ErrorKind::TimedOut),
+                other => panic!("expected Read, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn output_that_stays_open_after_a_failing_exit_is_an_error() {
+            match orphaned("orphan-out-fail") {
                 Err(Error::Read { source, .. }) => assert_eq!(source.kind(), std::io::ErrorKind::TimedOut),
                 other => panic!("expected Read, got {other:?}"),
             }
