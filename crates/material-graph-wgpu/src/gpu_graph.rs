@@ -409,7 +409,9 @@ impl GraphAccelerator {
                             ImgRef::Grey(_) => 4,
                             ImgRef::Rgba(_) => 16,
                         };
-                        let Some(reservation) = rasterizer.reserve_texture((image.w() as u64) * (image.h() as u64) * bytes_per_pixel) else { return false };
+                        let Some(reservation) = rasterizer.reserve_texture((image.w() as u64) * (image.h() as u64) * bytes_per_pixel) else {
+                            return false;
+                        };
                         views.push(upload(&self.device, &self.queue, *image));
                         uploaded.push(reservation);
                     }
@@ -736,7 +738,8 @@ mod tests {
         let environment = FnEnv::new([128.0, 1024.0]);
         let cancel = Cancel::new();
 
-        let output = gpu.accelerator().pixel(PixelRequest { program: &program, environment: &environment, size: [128, 1024], cancel: &cancel }).unwrap();
+        let output =
+            gpu.accelerator().pixel(PixelRequest { program: &program, environment: &environment, size: [128, 1024], cancel: &cancel }).unwrap();
 
         let Some(PixelOutput::Grey(pixels)) = output else { panic!("a 128 pixel wide program fits 16 workgroups per row") };
         let expected = Grey::from_fn(128, 1024, |u, v| program.run(&environment, [f64::from(u), f64::from(v)]).unwrap().as_f32());
@@ -815,8 +818,7 @@ mod tests {
             if !(0..=48).contains(&shift) {
                 return false;
             }
-            let (near_high, near_low) =
-                if shift > 24 { (n.0 << (shift - 24), 0) } else { (n.0 >> (24 - shift), (n.0 << shift) & 0xff_ffff) };
+            let (near_high, near_low) = if shift > 24 { (n.0 << (shift - 24), 0) } else { (n.0 >> (24 - shift), (n.0 << shift) & 0xff_ffff) };
             near_high > high || (near_high == high && near_low > low)
         };
         let near = x * (std::f32::consts::FRAC_1_PI / 2.0);

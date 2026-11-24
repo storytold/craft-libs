@@ -43,7 +43,8 @@ impl Headless {
     pub(crate) fn run_compute(&self, source: &str, input: &[u8], output_bytes: u64, invocations: u32) -> Vec<u8> {
         use wgpu::util::DeviceExt;
         let device = &self.device;
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("test compute"), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let module = device
+            .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("test compute"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("test compute"),
             layout: None,
@@ -52,8 +53,13 @@ impl Headless {
             compilation_options: Default::default(),
             cache: None,
         });
-        let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("test input"), contents: input, usage: wgpu::BufferUsages::STORAGE });
-        let buffer = |label, usage| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: output_bytes, usage, mapped_at_creation: false });
+        let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("test input"),
+            contents: input,
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let buffer =
+            |label, usage| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: output_bytes, usage, mapped_at_creation: false });
         let output = buffer("test output", wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC);
         let readback = buffer("test readback", wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
         let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
