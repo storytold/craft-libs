@@ -748,7 +748,11 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         // release activates, as a mouse release does, and the press alone does nothing. `apply_press` holds the
         // button down for the frames between. Every other stop leaves Space to the app, where it is the canvas's Hand
         // key.
-        None if press.key == Key::Space && plain && stop.keys.space_activates => PressRoute::Space,
+        // Space activates a stop that asks for it, as a button does, whether it names Space there
+        // (`space_activates`) or among its activation keys (`ActivateKeys::Space`/`Both`).
+        None if press.key == Key::Space && plain && (stop.keys.space_activates || stop.keys.activate.space()) => {
+            PressRoute::Space
+        }
         None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
         // A document canvas's editor reads Shift+Tab itself (a word processor's outdent, the previous slot of an
         // equation). No other stop that keeps Tab gets it as an intent.

@@ -215,6 +215,9 @@ fn arrange<K: Value>(cx: &MeasureCx<'_, WordRun<'_, K>>, words: &[RunWord<K>], r
 
 impl<K: Value + 'static> Component for WordRun<'_, K> {
     const ROLE: Role = Role::LIST_BOX;
+    /// Space and Enter pick the focused word, as a click does.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_space_activation();
     const OVERLAYS: bool = false;
     const SINGLE_VALUE: bool = true;
     type Style = WordRunStyle;

@@ -285,7 +285,11 @@ fn step(stops: &[usize], from: Option<usize>, mv: NavMove) -> Option<usize> {
 
 impl<T: Value + 'static> Component for Select<'_, T> {
     const ROLE: Role = Role::COMBO_BOX;
-    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves().with_type_ahead();
+    /// Enter and Space toggle the list, as a press on the face does; the arrows step it.
+    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer)
+        .with_moves()
+        .with_type_ahead()
+        .with_space_activation();
     type Style = SelectStyle;
     type Output = EditResponse<T>;
 

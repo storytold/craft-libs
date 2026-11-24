@@ -128,6 +128,9 @@ fn origin(content: Rect, flow: &Flow, layout: &TextLayout) -> Pos2 {
 
 impl Component for Link {
     const ROLE: Role = Role::LINK;
+    /// Enter and Space follow it, as a click does.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_space_activation();
     const ALT_ROLES: &'static [Role] = &[Role::PARAGRAPH];
     const PARTS: bool = true;
     const OVERLAYS: bool = false;
