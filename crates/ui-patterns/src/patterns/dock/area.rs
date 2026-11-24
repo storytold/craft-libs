@@ -1187,6 +1187,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                                     .command(spec.command)
                                     .count(spec.count)
                                     .caption(spec.caption)
+                                    .swatch(spec.swatch)
+                                    .documents(spec.documents)
                             })
                             .collect(),
                     )
@@ -1318,7 +1320,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let torn = torn.map(|(panel, pointer)| {
             float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel)), None, scene.rtl).action
         });
-        let clicked = output.picked.and_then(|key| scene.panel(key));
+        // A document's tab shows its panel, as the panel's own tab does, and names the document to the host.
+        let document = output.picked_document.and_then(|(key, document)| Some((scene.panel(key)?, document)));
+        let clicked = output.picked.and_then(|key| scene.panel(key)).or(document.map(|(panel, _)| panel));
         if let Some(panel) = clicked {
             self.report.picked = Some(panel.clone());
         }
@@ -1326,6 +1330,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let picked = clicked.or(focus.filter(|panel| *panel != shown));
         if let Some(panel) = picked {
             self.report.actions.push(Action::activate(panel.clone()));
+        }
+        if let Some((panel, document)) = document {
+            self.report.events.push(DockEvent::DocumentPicked { panel: panel.clone(), document });
+        }
+        for (panel, document) in output.closed_documents.into_iter().filter_map(|(key, document)| Some((scene.panel(key)?, document))) {
+            self.report.events.push(DockEvent::DocumentClosed { panel: panel.clone(), document });
         }
         // A tab picked in this pass is the group's shown panel from now on, though this pass drew the one before.
         if focus_within(ui.ctx(), output.response.id) {
