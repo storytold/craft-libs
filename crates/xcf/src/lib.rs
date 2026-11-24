@@ -847,12 +847,21 @@ impl<'a> Xcf<'a> {
         let name = c.string()?;
         // As for layers: repeated channel pointers must not retain unbounded copies of one name.
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
-        let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
-        let hptr = c.ptr()?;
-        self.channel_effects_tail(&mut c, keep_going, None)?;
-        // Channels are always one plain sample per pixel, even in indexed images.
-        let px = self.hierarchy_excluding(hptr, 1, false, Some(&(ptr..c.pos)), budget, keep_going)?;
-        Ok((Channel { name, selection }, px))
+        let name_bytes = name.len();
+        let result = (|| {
+            let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
+            let hptr = c.ptr()?;
+            self.channel_effects_tail(&mut c, keep_going, None)?;
+            // Channels are always one plain sample per pixel, even in indexed images.
+            let px = self.hierarchy_excluding(hptr, 1, false, Some(&(ptr..c.pos)), budget, keep_going)?;
+            Ok((Channel { name, selection }, px))
+        })();
+        if result.is_err() {
+            // Only this failed name is released; admitted pixel work and any
+            // successful nested channel reservations must remain charged.
+            self.meta_budget.set(self.meta_budget.get().saturating_add(name_bytes));
+        }
+        result
     }
 
     /// Reads a hierarchy: the first level's tiles into floats, `source_channels` as stored

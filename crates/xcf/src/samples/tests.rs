@@ -1629,8 +1629,19 @@ fn channel_effect_tail_is_bounded_metered_and_cancellable_including_the_terminat
     let mut work = crate::records::Budget::new(16, 0);
     reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)).unwrap();
     assert_eq!(work.work_remaining(), 0);
-    assert!(reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)).is_err());
-    assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), &|| false, Some(&mut work)), Err(Error::Cancelled)));
+    assert!(matches!(
+        reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)),
+        Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+    ));
+    assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), &|| false, Some(&mut work)), Err(ChannelTailError::Source(Error::Cancelled))));
+    let mut short = crate::records::Budget::new(15, 0);
+    let mut position = cursor.at(0);
+    assert!(matches!(
+        reader.channel_effects_tail(&mut position, GO, Some(&mut short)),
+        Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+    ));
+    assert_eq!(position.pos, 8, "the terminator is not read before admission");
+    assert_eq!(short.work_remaining(), 7);
     assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &data[..15], pos: 0, wide: true }, GO, None).is_err());
 }
 
@@ -1647,6 +1658,65 @@ fn channel_effect_tail_count_limit_is_independent_of_eof() {
     let mut too_many = vec![1; 1025 * 8];
     too_many.extend([0; 8]);
     let mut cursor = crate::Cursor { b: &too_many, pos: 0, wide: true };
-    let error = Error::from(reader.channel_effects_tail(&mut cursor, GO, None).unwrap_err());
-    assert!(matches!(error, Error::Invalid(ref problem) if problem == "too many channel effects"));
+    assert!(matches!(
+        reader.channel_effects_tail(&mut cursor, GO, None),
+        Err(ChannelTailError::Source(Error::Invalid(ref problem))) if problem == "too many channel effects"
+    ));
+}
+
+#[test]
+fn failed_legacy_channel_tail_releases_its_name_for_another_channel_on_the_same_reader() {
+    let mut source = Source::gray(150, 1, vec![1, 2]);
+    source.width = 2;
+    source.mask = Some(vec![3, 4]);
+    source.channel = Some(vec![5, 6]);
+    let mut file = W { out: source.write(), wide: true };
+    let reader = Xcf::parse(&file.out).unwrap();
+    let mut mask = reader.c.at(reader.image.layers[0].mask);
+    mask.take(8).unwrap();
+    mask.string().unwrap();
+    props(&mut mask).unwrap();
+    let hierarchy = mask.ptr().unwrap();
+    let failed = file.out.len();
+    file.u32(2);
+    file.u32(1);
+    file.string("Bad!");
+    file.end();
+    file.ptr(hierarchy);
+    // No v26 tail follows. The complete pixels are elsewhere in the file.
+    let mut reader = Xcf::parse(&file.out).unwrap();
+    reader.channels.push(failed);
+    reader.meta_budget.set(4);
+    let mut pixels = 8;
+    assert!(reader.channel(1, &mut pixels, GO).is_err());
+    assert_eq!(pixels, 8, "tail refusal precedes pixel admission");
+    assert_eq!(reader.meta_budget.get(), 4);
+    let (channel, image) = reader.layer_mask(0, &mut pixels, GO).unwrap().unwrap();
+    assert_eq!(channel.name, "Mask");
+    assert_eq!(image.data, [3. / 255., 4. / 255.]);
+    assert_eq!(pixels, 0);
+    assert_eq!(reader.meta_budget.get(), 0, "successful name storage remains retained");
+}
+
+#[test]
+fn failed_legacy_channel_refunds_only_name_storage_after_pixel_admission() {
+    let mut source = Source::gray(150, 1, vec![1, 2]);
+    source.width = 2;
+    source.mask = Some(vec![3, 4]);
+    let bytes = source.write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    reader.meta_budget.set(4);
+    let polls = std::cell::Cell::new(0);
+    let mut pixels = 8;
+    assert!(matches!(
+        reader.layer_mask(0, &mut pixels, &|| {
+            polls.set(polls.get() + 1);
+            polls.get() < 3
+        }),
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(pixels, 0, "admitted pixel work must not be refunded");
+    assert_eq!(reader.meta_budget.get(), 4);
+    reader.layer_mask(0, &mut 8, GO).unwrap().unwrap();
+    assert_eq!(reader.meta_budget.get(), 0);
 }

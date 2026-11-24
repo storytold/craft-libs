@@ -5,6 +5,31 @@ use crate::{Channel, Error, Precision, Result, TILE, Xcf, invalid, props, tiles}
 #[cfg(test)]
 mod tests;
 
+/// Preserve optional metadata policy separately from malformed source framing.
+#[derive(Debug)]
+pub(super) enum ChannelTailError {
+    Source(Error),
+    Metadata(crate::records::StopReason),
+}
+
+impl From<Error> for ChannelTailError {
+    fn from(error: Error) -> Self {
+        Self::Source(error)
+    }
+}
+
+impl From<ChannelTailError> for Error {
+    fn from(error: ChannelTailError) -> Self {
+        match error {
+            ChannelTailError::Source(error) => error,
+            ChannelTailError::Metadata(reason) => invalid(match reason {
+                crate::records::StopReason::WorkLimit => "channel effect pointers exceed the metadata work limit",
+                _ => "channel effect pointer scan exceeds a metadata limit",
+            }),
+        }
+    }
+}
+
 /// Byte order of drawable samples only. Structural words/pointers are always big-endian.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleOrder {
@@ -377,26 +402,26 @@ impl Xcf<'_> {
         cursor: &mut crate::Cursor<'_>,
         keep_going: &dyn Fn() -> bool,
         mut budget: Option<&mut crate::records::Budget>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), ChannelTailError> {
         if self.image.version < 26 {
             return Ok(());
         }
         let width = if self.c.wide { 8 } else { 4 };
         for count in 0..=1024 {
             if !keep_going() {
-                return Err(Error::Cancelled);
+                return Err(Error::Cancelled.into());
             }
             if let Some(budget) = budget.as_deref_mut() {
-                budget.work(width).map_err(|_| invalid("channel effect pointers exceed the metadata work limit"))?;
+                budget.work(width).map_err(ChannelTailError::Metadata)?;
             }
             if cursor.take(width)?.iter().all(|byte| *byte == 0) {
                 return Ok(());
             }
             if count == 1024 {
-                return Err(invalid("too many channel effects"));
+                return Err(invalid("too many channel effects").into());
             }
         }
-        Err(invalid("unterminated channel effects"))
+        Err(invalid("unterminated channel effects").into())
     }
 
     pub(super) fn hierarchy_head(&self, pointer: usize, channels: usize) -> Result<HierarchyHead> {
