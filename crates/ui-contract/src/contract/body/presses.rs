@@ -8,7 +8,7 @@ use crate::runtime::egui::areas;
 use crate::runtime::memory::sub;
 use crate::runtime::pointer;
 use craft_behavior::{Cursor, CursorPriority, PartRef, PointerButton, PressState};
-use egui::Pos2;
+use egui::{Pos2, Ui};
 
 /// Whether the second press of a double click went down on the container's move band in this pass.
 #[derive(Clone, Default)]
@@ -45,6 +45,16 @@ impl BodyCx<'_> {
     /// does); it is no click and moves no focus by itself.
     pub fn surface_pressed(&self) -> bool {
         self.memory.recall::<SurfacePress>(sub(self.id, "surface_press")).pressed
+    }
+
+    /// Whether the primary press of this pass went down in the body's rect, on the layer `ui` (a `Ui` of this body)
+    /// paints on, whatever takes it: a child, a part, an app's own egui widget or the surface itself. A press on a
+    /// popup or a window above the body is not in it. The container decides what it means (a dock group whose body is
+    /// the app's own egui code names its panel as the one pressed into); it moves no focus by itself. A measuring run
+    /// sees none, for the reason [`band_double_pressed`](Self::band_double_pressed) gives.
+    pub fn pressed_within(&self, ui: &Ui) -> bool {
+        let ctx = self.memory.ctx();
+        !self.memory.is_peek() && pointer::primary_press_in(ctx, ui.layer_id(), self.rect).is_some()
     }
 
     /// Whether the press of [`surface_pressed`](Self::surface_pressed) is the second press of a double click: no child
@@ -85,15 +95,10 @@ impl BodyHooks<'_> {
         let ctx = core.ctx.clone();
         let pass = pointer::pass_pointer(&ctx);
         let (layer, rect) = (core.response.layer_id, core.rect);
-        // Whether `pos` lies in the container's rect, on its layer.
-        let inside = |pos: Pos2| {
-            let at = areas::layer_map(&ctx, layer).map_or(pos, |map| map.to_layer(pos));
-            areas::layer_at(&ctx, pos) == Some(layer) && rect.contains(at)
-        };
+        let inside = |pos: Pos2| areas::lies_in(&ctx, layer, rect, pos);
         let surface = if sensed {
-            pass.frame.as_ref().and_then(|frame| frame.press).filter(|press| press.button == PointerButton::Primary).filter(|press| {
-                inside(press.origin)
-                    && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
+            pointer::primary_press_in(&ctx, layer, rect).filter(|press| {
+                pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
                     && !pointer::text_takes_press(&ctx, pass.press_targets)
                     && ![pass.press_targets.click, pass.press_targets.drag].into_iter().flatten().any(|widget| pointer::foreign_target(&ctx, widget))
             })

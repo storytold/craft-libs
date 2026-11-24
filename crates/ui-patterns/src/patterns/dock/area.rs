@@ -80,6 +80,11 @@ pub struct DockAreaOutput<P> {
     pub events: Vec<DockEvent<P>>,
     /// The shown panel of the group that holds key focus: focus is on the group or on a control inside it.
     pub focused: Option<P>,
+    /// The shown panel of the group whose body the primary press of this pass went down in, whatever took the press: a
+    /// framework control, the group's empty body or the app's own egui widget in a host body
+    /// ([`PanelSpec::host_body`](crate::docking::PanelSpec::host_body)), which keeps its presses and focus, so
+    /// `focused` does not name its group. A host that keeps a focused panel of its own makes it this one.
+    pub pressed: Option<P>,
     /// The panel whose tab the user clicked or picked this pass; a pick of the host's `DockArea::focus` is not the
     /// user's and shows only in `actions`.
     pub picked: Option<P>,
@@ -321,6 +326,7 @@ struct Report<P> {
     actions: Vec<Action<P>>,
     events: Vec<DockEvent<P>>,
     focused: Option<P>,
+    pressed: Option<P>,
     picked: Option<P>,
     flyout: Vec<EditEvent<Option<P>>>,
     placed: Vec<(P, Rect)>,
@@ -488,6 +494,7 @@ struct Passed<P> {
     actions: Vec<Action<P>>,
     events: Vec<DockEvent<P>>,
     focused: Option<P>,
+    pressed: Option<P>,
     picked: Option<P>,
     edit: EditEvents<Arc<Workspace<P>>>,
     space: Option<FloatSpace<P>>,
@@ -657,19 +664,21 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             passed = Some(result);
         });
         let requested = close_requests::<P>(&ctx);
-        let Passed { geometry, actions, events, focused, picked, edit, space, columns, windows, files, sources } = passed.unwrap_or_else(|| Passed {
-            geometry: Vec::new(),
-            actions: Vec::new(),
-            events: Vec::new(),
-            focused: None,
-            picked: None,
-            edit: EditEvents::new(),
-            space: None,
-            columns: Vec::new(),
-            windows: Vec::new(),
-            files: Vec::new(),
-            sources: Vec::new(),
-        });
+        let Passed { geometry, actions, events, focused, pressed, picked, edit, space, columns, windows, files, sources } =
+            passed.unwrap_or_else(|| Passed {
+                geometry: Vec::new(),
+                actions: Vec::new(),
+                events: Vec::new(),
+                focused: None,
+                pressed: None,
+                picked: None,
+                edit: EditEvents::new(),
+                space: None,
+                columns: Vec::new(),
+                windows: Vec::new(),
+                files: Vec::new(),
+                sources: Vec::new(),
+            });
         if shown.output.dropped.is_some() {
             cross_window::accept_cross_window(&ctx);
         }
@@ -679,6 +688,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             requested,
             events,
             focused,
+            pressed,
             picked,
             error,
             edit,
@@ -838,6 +848,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             actions: Vec::new(),
             events: Vec::new(),
             focused: None,
+            pressed: None,
             picked: None,
             flyout: Vec::new(),
             placed: Vec::new(),
@@ -943,6 +954,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         actions: report.actions,
         events: report.events,
         focused: report.focused,
+        pressed: report.pressed,
         picked: report.picked,
         edit,
         space: Some(space),
@@ -1274,6 +1286,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // the group's room, never in the room the area has left. Where the host leaves the group to the dock, the
         // group shows in its place. Both run every pass; the host memoizes inside its view, the group inside its
         // header and its bodies.
+        let pressed = Cell::new(false);
         let (strip, view) = if grip > 0.0 { rect.split_top_bottom_at_y(rect.top() + grip.min(rect.height())) } else { (Rect::NOTHING, rect) };
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
@@ -1288,7 +1301,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     None => {
                         let group = make(active, look.minimized);
                         let group = if focus.is_some() { group.take_focus() } else { group };
-                        Some(group.show_at(ui, rect, |ui, body| panel_body(scene, &panels, shown, ui, body)).output)
+                        Some(
+                            group
+                                .show_at(ui, rect, |ui, body| {
+                                    pressed.set(pressed.get() || body.pressed_within(ui));
+                                    panel_body(scene, &panels, shown, ui, body);
+                                })
+                                .output,
+                        )
                     }
                 }
             })
@@ -1360,6 +1380,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         for (panel, document) in output.closed_documents.into_iter().filter_map(|(key, document)| Some((scene.panel(key)?, document))) {
             self.report.events.push(DockEvent::DocumentClosed { panel: panel.clone(), document });
+        }
+        if pressed.get() {
+            self.report.pressed = Some(shown.clone());
         }
         // A tab picked in this pass is the group's shown panel from now on, though this pass drew the one before.
         if focus_within(ui.ctx(), output.response.id) {
