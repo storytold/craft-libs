@@ -589,6 +589,35 @@ impl<'a> Parser<'a, '_> {
     }
 }
 
+// Required record storage is admitted by the caller before optional notices.
+fn record_notices(markup: &mut Markup<'_>, limit: usize, budget: &mut Budget, keep: &dyn Fn() -> bool) -> ReadResult<()> {
+    for (index, context) in markup.contexts.iter().enumerate() {
+        if !keep() {
+            return Err(Failure::Cancelled);
+        }
+        if context.role == Role::Unhandled {
+            let notice = Notice { kind: NoticeKind::UnhandledElement, context: index, attribute: None, source: context.source.clone() };
+            if markup.notices.len() >= limit || budget.retain(&mut markup.notices, notice).is_err() {
+                markup.notices_truncated = true;
+            }
+        }
+        for (attribute, value) in context.attributes.iter().enumerate() {
+            // Poll before filtering: recognized attributes still consume work.
+            if attribute.is_multiple_of(64) && !keep() {
+                return Err(Failure::Cancelled);
+            }
+            if value.kind != AttributeKind::Unhandled {
+                continue;
+            }
+            let notice = Notice { kind: NoticeKind::UnhandledAttribute, context: index, attribute: Some(attribute), source: value.source.clone() };
+            if markup.notices.len() >= limit || budget.retain(&mut markup.notices, notice).is_err() {
+                markup.notices_truncated = true;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Tokenize one decoded source markup string. No DTD, PI, custom entity or
 /// namespace interpretation is performed. Unsupported syntax declines the whole
 /// optional record; unknown ordinary vocabulary stays available with notices.
@@ -645,26 +674,7 @@ pub fn tokenize<'a>(raw: &'a str, limits: Limits, budget: &mut Budget, keep_goin
         // result slot. Derive them from the retained vocabulary only after all
         // usable markup storage has been admitted.
         if let Some(markup) = records.first_mut() {
-            for (index, context) in markup.contexts.iter().enumerate() {
-                if !keep_going() {
-                    return Err(Failure::Cancelled);
-                }
-                let element = (context.role == Role::Unhandled).then(|| Notice {
-                    kind: NoticeKind::UnhandledElement,
-                    context: index,
-                    attribute: None,
-                    source: context.source.clone(),
-                });
-                let attributes =
-                    context.attributes.iter().enumerate().filter(|(_, value)| value.kind == AttributeKind::Unhandled).map(|(attribute, value)| {
-                        Notice { kind: NoticeKind::UnhandledAttribute, context: index, attribute: Some(attribute), source: value.source.clone() }
-                    });
-                for notice in element.into_iter().chain(attributes) {
-                    if markup.notices.len() >= limits.notices || budget.retain(&mut markup.notices, notice).is_err() {
-                        markup.notices_truncated = true;
-                    }
-                }
-            }
+            record_notices(markup, limits.notices, budget, keep_going)?;
         }
         Ok(Scan::complete(records, raw.len()))
     })();

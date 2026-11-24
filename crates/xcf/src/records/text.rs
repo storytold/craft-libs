@@ -333,7 +333,7 @@ impl<'a> Parser<'a, '_> {
             }
             Some(b')') | None => Err(StopReason::Malformed.into()),
             Some(_) => {
-                while self.bytes.get(self.at).is_some_and(|byte| !byte.is_ascii_whitespace() && !b"()\"'".contains(byte)) {
+                while self.bytes.get(self.at).is_some_and(|byte| !byte.is_ascii_whitespace() && !b"()\"'#".contains(byte)) {
                     self.tick()?;
                     self.at += 1;
                 }
@@ -453,6 +453,9 @@ fn legacy_separator(bytes: &[u8], keep_going: &dyn Fn() -> bool) -> ReadResult<O
     for (index, byte) in bytes.iter().enumerate() {
         if index.is_multiple_of(256) && !keep_going() {
             return Err(Failure::Cancelled);
+        }
+        if *byte == 0 {
+            return Err(StopReason::Malformed.into());
         }
         if *byte == b'}' && bytes.get(index + 1) == Some(&b'{') {
             return Ok(Some(index));
@@ -720,7 +723,22 @@ mod tests {
             checks.set(checks.get() + 1);
             checks.get() < 5
         };
-        assert!(matches!(gimp(&raw, 0, Limits::default(), &mut super::super::Budget::default(), &keep), Err(crate::Error::Cancelled)));
+        // Admission still polls above; enter after the opening quote so this
+        // escape-boundary case can only cancel inside the quoted decoder.
+        let mut budget = super::super::Budget::default();
+        let mut parser = Parser {
+            bytes: &raw,
+            source_offset: 0,
+            at: 7,
+            checked_at: 7,
+            nodes: 0,
+            limits: Limits::default(),
+            budget: &mut budget,
+            keep_going: &keep,
+        };
+        assert!(matches!(parser.quoted(true), Err(Failure::Cancelled)));
+        assert!(parser.at < raw.len() - 2, "decoder cancellation precedes the closing quote");
+        assert!(parser.budget.retained_remaining() < crate::MAX_METADATA_BYTES, "the decoder actually emitted and charged bytes");
     }
 
     #[test]

@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn notice_attribute_scan_polls_recognized_fields_before_filtering() {
+    for raw in ["<markup font='Example' weight='bold'/>", "<markup unknown='value'/>"] {
+        let mut budget = Budget::default();
+        let mut markup = parser(raw, &mut budget, &|| true).parse().unwrap_or_else(|_| panic!("valid fixture"));
+        assert!(!markup.contexts[0].attributes.is_empty());
+        let calls = std::cell::Cell::new(0);
+        let keep = || {
+            calls.set(calls.get() + 1);
+            calls.get() < 2
+        };
+        assert!(matches!(record_notices(&mut markup, Limits::default().notices, &mut budget, &keep), Err(Failure::Cancelled)));
+        assert_eq!(calls.get(), 2, "context then attribute, including recognized attributes");
+        assert!(markup.notices.is_empty());
+    }
+}
+
+#[test]
+fn notice_attribute_scan_cancels_after_a_bounded_prefix_and_preserves_notice_caps() {
+    let attributes = (0..130).map(|index| format!(" x{index}='value'")).collect::<String>();
+    let raw = format!("<markup{attributes}/>");
+    let mut budget = Budget::default();
+    let mut markup = parser(&raw, &mut budget, &|| true).parse().unwrap_or_else(|_| panic!("valid fixture"));
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 3
+    };
+    assert!(matches!(record_notices(&mut markup, 128, &mut budget, &keep), Err(Failure::Cancelled)));
+    assert_eq!(calls.get(), 3);
+    assert_eq!(markup.notices.len(), 64, "cancellation is observed before visiting the remaining attributes");
+    let control = tokenize(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(control.stopped, None);
+    assert_eq!(control.records[0].notices.len(), 128);
+    assert!(control.records[0].notices_truncated);
+}
+
+#[test]
 fn an_explicit_markup_element_can_have_fragment_siblings_and_trailing_text() {
     for (raw, expected) in
         [("<markup>A</markup><i>B</i>", "AB"), ("<markup>A</markup> tail", "A tail"), (" before <markup>A</markup> after ", " before A after ")]

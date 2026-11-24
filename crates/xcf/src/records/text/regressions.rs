@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn bare_atoms_end_at_comments_but_quoted_hashes_remain_literal() {
+    for raw in [b"(base-direction rtl#note\n) (text \"#literal\")".as_slice(), b"(base-direction rtl #note\n) (text '#literal')"] {
+        let scan = gimp(raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        assert_eq!(scan.records[0].direction, Direction::Rtl);
+        assert_eq!(scan.records[0].text().unwrap(), Some("#literal"));
+    }
+    let scan = gimp(b"(base-direction rtl#note)", 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed, "the comment consumes the closing delimiter without a newline");
+}
+
+#[test]
+fn literal_legacy_nul_is_rejected_in_every_field_except_the_optional_terminator() {
+    let original = super::tests::legacy_bytes("valid text", "iso8859");
+    let scan = gdyntext(&original, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    let Source::Gdyntext(legacy) = &scan.records[0].source else { panic!("legacy") };
+    for span in &legacy.spans {
+        let mut raw = original.clone();
+        raw.splice(span.start + 1..span.start + 1, b"\0junk".iter().copied());
+        let scan = gdyntext(&raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(scan.records.is_empty());
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+    }
+    let mut terminal = original;
+    terminal.push(0);
+    let scan = gdyntext(&terminal, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped, None);
+    assert_eq!(scan.records[0].text().unwrap(), Some("valid text"));
+    terminal.push(0);
+    let scan = gdyntext(&terminal, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+    assert!(matches!(legacy_separator(b"\0", &|| false), Err(Failure::Cancelled)));
+}
+
+#[test]
 fn literal_nul_declines_modern_configuration_but_escaped_nul_remains_source_data() {
     for raw in [b"(text before\0after)".as_slice(), b"(text \"before\")\0(text \"after\")", b"(text 'before\0after')"] {
         let scan = gimp(raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
