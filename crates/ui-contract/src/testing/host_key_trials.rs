@@ -215,6 +215,42 @@ fn a_press_during_an_app_editor_s_composition_fences_its_late_ime_events() {
     assert_eq!(*editor.borrow(), "abX", "the commit after the completion reaches the editor");
 }
 
+/// An app editor that asks for its own reset at the press that interrupts its composition keeps that request: the
+/// platform is asked to answer the app's id, the late events stay fenced, and the completion reaches the editor, which
+/// takes the events after it and composes again.
+#[trial]
+fn an_app_editor_s_own_reset_at_the_press_reaches_it_and_it_composes_again() {
+    let editor = Rc::new(RefCell::new(fixture::ResettingEditor::default()));
+    let held = Rc::clone(&editor);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    let mut show = move |ui: &mut Ui| fixture::host_resetting_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut());
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("ab".to_owned()))], &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "z".to_owned(), active_range_chars: None })], &mut show);
+    let at = Pos2::new(150.0, 115.0);
+    let late = vec![
+        moved(at),
+        press(at),
+        Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+        Event::Ime(ImeEvent::Commit("Q".to_owned())),
+    ];
+    frames.frame(late, &mut show);
+    let own = editor.borrow().reset;
+    assert!(own.is_some(), "the editor asked for its own reset at the press");
+    let reset = frames.ime().and_then(|ime| ime.interrupt.then_some(ime.reset).flatten());
+    assert_eq!(reset, own, "the interrupt asks the platform to answer the editor's own request");
+    let Some(reset) = reset else { return };
+    frames.frame(vec![release(at)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(editor.borrow().text, "ab", "the composition's late deletion and commit never reach the editor");
+    frames.frame(vec![Event::ImeResetCompleted { request_id: reset }, Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(editor.borrow().reset, None, "the completion of its own request reaches the editor");
+    assert_eq!(editor.borrow().text, "abX", "the commit after it reaches the editor");
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "y".to_owned(), active_range_chars: None })], &mut show);
+    assert!(editor.borrow().composing, "the editor composes again");
+}
+
 #[trial]
 fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     let (host, mut show) = host_window();
