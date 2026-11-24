@@ -529,3 +529,38 @@ fn cancelled_owned_text(legacy: bool) {
     assert_eq!(retry.stopped, None);
     assert_eq!(retry.records[0].text().unwrap(), Some(text.as_str()));
 }
+
+#[test]
+fn opaque_inactive_rotation_keeps_legacy_text_and_exact_field_bytes() {
+    let original = super::tests::legacy_bytes("hello", "unknown");
+    let start = original.windows(2).enumerate().filter(|(_, pair)| *pair == b"}{").nth(2).unwrap().0 + 2;
+    let mut changed = original.clone();
+    changed[start] = 0xff;
+    for (raw, rotation, view) in [(original, b"17".as_slice(), Some("17")), (changed, b"\xff7".as_slice(), None)] {
+        let scan = gdyntext(&raw, 27, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        let record = &scan.records[0];
+        assert_eq!(record.text().unwrap(), Some("hello"));
+        assert_eq!(record.legacy_field_bytes(3), Some(rotation));
+        assert_eq!(record.legacy_field_str(3), view);
+        let Source::Gdyntext(legacy) = &record.source else { panic!("legacy") };
+        assert_eq!(legacy.fields[3], view.unwrap_or(""));
+    }
+}
+
+#[test]
+fn public_gdyntext_polls_inside_the_eighth_field_before_decoding_text() {
+    let font = "example".repeat(256);
+    let raw = format!("GDT10{{hello}}{{1}}{{2}}{{17}}{{3}}{{0xff00aa}}{{0}}{{{font}}}");
+    let checks = std::cell::Cell::new(0);
+    let keep = || {
+        checks.set(checks.get() + 1);
+        // Admission, the seven short fields and entry into field eight
+        // account for 16 polls. Cancel inside its long delimiter scan.
+        checks.get() < 20
+    };
+    let mut budget = Budget::default();
+    assert!(matches!(gdyntext(raw.as_bytes(), 0, Limits::default(), &mut budget, &keep), Err(crate::Error::Cancelled)));
+    let scan = gdyntext(raw.as_bytes(), 0, Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(scan.records[0].text().unwrap(), Some("hello"));
+    assert_eq!(scan.records[0].legacy_field_str(7), Some(font.as_str()));
+}

@@ -228,3 +228,52 @@ fn an_unused_mip_offset_in_a_channel_tail_cannot_claim_a_complete_tile() {
     assert_eq!(raw, samples);
     assert_eq!(reader.channel(0, &mut (65 * 4), GO).unwrap().1.data, samples.map(|sample| f32::from(sample) / 255.));
 }
+
+#[test]
+fn channel_and_mask_pixel_apis_reject_a_sized_property_terminator_before_pixels() {
+    let mut image = TestImage::rgb8(2, 1);
+    image.version = 26;
+    image.channels.push(("Saved", vec![29, 74], false));
+    let mut layer = TestLayer::rgba("Owner", 2, 1, vec![0; 8]);
+    layer.mask = Some(vec![83, 117]);
+    image.layers.push(layer);
+    let valid = image.write();
+    let reader = Xcf::parse(&valid).unwrap();
+    for (saved, record, expected) in [(true, reader.channels[0], [29, 74]), (false, reader.image.layers[0].mask, [83, 117])] {
+        let mut header = reader.c.at(record);
+        header.take(8).unwrap();
+        header.string().unwrap();
+        let length_field = header.pos + 4; // The fixture's property list is empty.
+        let mut broken = valid.clone();
+        broken[length_field..length_field + 4].copy_from_slice(&8u32.to_be_bytes());
+        for (bytes, valid) in [(&valid, true), (&broken, false)] {
+            let reader = Xcf::parse(bytes).unwrap();
+            let mut legacy_budget = 8;
+            let mut raw_budget = 2;
+            let before = reader.meta_budget.get();
+            let legacy = if saved { reader.channel(0, &mut legacy_budget, GO).map(Some) } else { reader.layer_mask(0, &mut legacy_budget, GO) };
+            let mut raw = Vec::new();
+            let visit = |tile: SourceTile<'_>| {
+                raw.extend_from_slice(tile.data);
+                Ok(())
+            };
+            let visited = if saved {
+                reader.visit_channel_tiles(0, SampleOptions::default(), &mut raw_budget, GO, visit).map(Some)
+            } else {
+                reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut raw_budget, GO, visit)
+            };
+            if valid {
+                assert!(legacy.unwrap().is_some());
+                assert!(visited.unwrap().is_some());
+                assert_eq!(raw, expected);
+            } else {
+                for result in [legacy.map(|_| ()), visited.map(|_| ())] {
+                    assert!(matches!(result, Err(Error::Invalid(ref message)) if message == "channel property terminator must have zero length"));
+                }
+                assert_eq!((legacy_budget, raw_budget), (8, 2));
+                assert_eq!(reader.meta_budget.get(), before);
+                assert!(raw.is_empty());
+            }
+        }
+    }
+}

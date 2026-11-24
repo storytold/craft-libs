@@ -912,20 +912,16 @@ fn cancellation_after_numeric_conversion_precedes_property_publication() {
 fn choice_lookup_polls_before_reaching_a_late_match() {
     let mut choices = [("other", 1); 130];
     choices[129] = ("target", 7);
-    let fields = [Field { name: "mode", kind: FieldType::Choice(&choices) }];
-    let schema = [Operation { name: "long-choices", fields: &fields }];
-    let raw = "long-choices mode=target";
+    let kind = Some(FieldType::Choice(&choices));
     let checks = Cell::new(0);
     let keep = || {
         checks.set(checks.get() + 1);
-        // Admission, tokenization, block, declaration, assignment and field
-        // matching all pass. Cancel the second in-loop choice check.
-        checks.get() < 8
+        checks.get() < 2
     };
     let mut budget = Budget::default();
-    let before = budget.retained;
-    assert!(matches!(parse(raw, &schema, &mut budget, &keep), Err(Error::Source(crate::Error::Cancelled))));
-    assert!(budget.retained < before);
-    let graph = parse(raw, &schema, &mut Budget::default(), &|| true).unwrap();
-    assert_eq!(graph.nodes[0].properties[0].value, Value::Choice(7));
+    let before = budget.remaining_work();
+    assert!(matches!(typed_value("target", kind, &mut budget, &keep), Err(Error::Source(crate::Error::Cancelled))));
+    let comparison = "target".len().min("other".len()) + 1;
+    assert_eq!(before - budget.remaining_work(), 64 * comparison);
+    assert_eq!(typed_value("target", kind, &mut budget, &|| true).unwrap(), Value::Choice(7));
 }

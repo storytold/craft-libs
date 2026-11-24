@@ -272,15 +272,22 @@ struct Prop<'a> {
 /// Reads a property list, measuring known payloads whose length words GIMP writes incorrectly.
 /// Ends at PROP_END (type 0).
 fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
-    props_version(c, None)
+    props_version(c, None, false)
 }
 
-fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Result<Vec<Prop<'a>>> {
+fn channel_props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
+    props_version(c, None, true)
+}
+
+fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>, strict_end: bool) -> Result<Vec<Prop<'a>>> {
     let mut out = Vec::new();
     loop {
         let kind = c.u32()?;
         let len = c.u32()? as usize;
         if kind == 0 {
+            if strict_end && len != 0 {
+                return Err(invalid("channel property terminator must have zero length"));
+            }
             return Ok(out);
         }
         // PROP_COLORMAP's length word was wrong in some releases (n+4 for 3n+4 bytes); its real
@@ -858,7 +865,7 @@ impl<'a> Xcf<'a> {
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
         let name_bytes = name.len();
         let result = (|| {
-            let properties = props(&mut c)?;
+            let properties = channel_props(&mut c)?;
             let selection = saved && properties.iter().any(|property| property.kind == 4);
             let hptr = c.ptr()?;
             self.channel_effects_tail(&mut c, hptr, keep_going, None)?;
@@ -941,9 +948,15 @@ impl<'a> Xcf<'a> {
     }
 }
 
-/// The first level has one increasing offset per tile, then a zero terminator.
-/// Validate before allocating the output or deriving a compressed tile's byte extent.
-fn tile_offsets(level: &mut Cursor<'_>, level_start: usize, count: usize, keep_going: &dyn Fn() -> bool) -> Result<Vec<usize>> {
+/// The first level has one offset per tile, then a zero terminator.
+/// Raw tiles may share an offset. Compressed tile ranges require distinct starts.
+fn tile_offsets(
+    level: &mut Cursor<'_>,
+    level_start: usize,
+    count: usize,
+    compression: Compression,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Vec<usize>> {
     let mut tiles = Vec::new();
     tiles.try_reserve_exact(count).map_err(|_| invalid("not enough memory for tile offsets"))?;
     for index in 0..count {
@@ -957,8 +970,8 @@ fn tile_offsets(level: &mut Cursor<'_>, level_start: usize, count: usize, keep_g
         if offset >= level.b.len() {
             return Err(invalid("a tile pointer is outside the file"));
         }
-        if tiles.last().is_some_and(|&previous| offset <= previous) {
-            return Err(invalid("tile offsets must increase"));
+        if tiles.last().is_some_and(|&previous| offset < previous || (offset == previous && compression != Compression::None)) {
+            return Err(invalid("tile offsets are out of order or share a compressed range"));
         }
         tiles.push(offset);
     }
@@ -972,7 +985,7 @@ fn tile_offsets(level: &mut Cursor<'_>, level_start: usize, count: usize, keep_g
 }
 
 fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {
-    for p in &props_version(c, Some(image.version))? {
+    for p in &props_version(c, Some(image.version), false)? {
         match p.kind {
             1 => {
                 let n = be_u32(p.data).unwrap_or(0) as usize;

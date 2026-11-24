@@ -1,6 +1,7 @@
 //! Independently chosen precision codes, component widths and byte orders.
 use super::*;
 use crate::Compression;
+use crate::props;
 use crate::tests::{W, hierarchy};
 
 fn f32_source_tile(data: &[u8], order: SampleOrder) -> SourceTile<'_> {
@@ -1122,6 +1123,90 @@ fn corroborated_dummy_level_headers_bound_tile_payloads() {
                 assert!(raw.is_err());
                 assert!(seen.is_empty());
             }
+        }
+    }
+}
+
+#[test]
+fn a_matching_dummy_inside_a_complete_final_tile_cannot_hide_its_samples() {
+    for short_by in [0, 1, 12] {
+        let mut source = Source::gray(150, 1, vec![0]);
+        source.version = 11;
+        let mut file = W { out: source.write(), wide: true };
+        let hierarchy = file.out.len();
+        for word in [128, 64, 1] {
+            file.u32(word);
+        }
+        let level_slot = file.slot();
+        let dummy_slot = file.slot();
+        file.ptr(0);
+        let level = file.out.len();
+        file.patch(level_slot, level);
+        file.u32(128);
+        file.u32(64);
+        let first_slot = file.slot();
+        let final_slot = file.slot();
+        file.ptr(0);
+        let first = file.out.len();
+        file.patch(first_slot, first);
+        let tile_bytes = 64 * 64;
+        file.out.extend(std::iter::repeat_n(71, tile_bytes));
+        let last = file.out.len();
+        file.patch(final_slot, last);
+        let mut final_pixels = vec![155; tile_bytes - short_by];
+        let dummy = if short_by == 0 {
+            let mut bytes = Vec::new();
+            for word in [64u32, 32, 0] {
+                bytes.extend(word.to_be_bytes());
+            }
+            final_pixels[16..16 + bytes.len()].copy_from_slice(&bytes);
+            last + 16
+        } else {
+            last + final_pixels.len()
+        };
+        file.out.extend(&final_pixels);
+        file.patch(dummy_slot, dummy);
+        if short_by != 0 {
+            for word in [64, 32, 0] {
+                file.u32(word);
+            }
+        }
+
+        let reader = Xcf::parse(&file.out).unwrap();
+        let legacy = reader.hierarchy(hierarchy, 1, false, &mut (4 * 2 * tile_bytes), GO);
+        let mut visited = Vec::new();
+        let raw = reader.visit_hierarchy(
+            VisitTarget {
+                pointer: hierarchy,
+                channels: 1,
+                indexed: false,
+                dimensions: Some((128, 64)),
+                coverage: false,
+                transfer_is_assumed: false,
+                excluded_source: &[],
+            },
+            SampleOptions::default(),
+            &mut (2 * tile_bytes),
+            GO,
+            |tile| {
+                visited.push(tile.data.to_vec());
+                Ok(())
+            },
+        );
+        assert!(visited[0].iter().all(|&sample| sample == 71));
+        if short_by == 0 {
+            raw.unwrap();
+            assert_eq!(visited[1], final_pixels);
+            let image = legacy.unwrap();
+            assert_eq!(image.data.len(), 2 * tile_bytes);
+            for (row, final_row) in image.data.as_chunks::<128>().0.iter().zip(final_pixels.as_chunks::<64>().0) {
+                assert!(row[..64].iter().all(|&sample| sample == 71. / 255.));
+                assert!(row[64..].iter().zip(final_row).all(|(&decoded, &source)| decoded == f32::from(source) / 255.));
+            }
+        } else {
+            assert!(matches!(raw, Err(Error::Invalid(ref message)) if message == "an uncompressed tile is cut short"));
+            assert!(matches!(legacy, Err(Error::Invalid(ref message)) if message == "an uncompressed tile is cut short"));
+            assert_eq!(visited.len(), 1, "the final tile was short by {short_by} bytes");
         }
     }
 }

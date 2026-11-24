@@ -1,6 +1,6 @@
 //! Precision-preserving, tile-sized source delivery. No profile/transfer conversion
 //! or indexed expansion is performed; the existing f32 APIs retain their behavior.
-use crate::{Channel, Error, Precision, Result, TILE, Xcf, invalid, props, tiles};
+use crate::{Channel, Compression, Error, Precision, Result, TILE, Xcf, channel_props, invalid, tiles};
 
 mod effect_masks;
 pub use effect_masks::{EffectMaskError, EffectMaskHeader};
@@ -399,7 +399,7 @@ impl Xcf<'_> {
             // Only the saved-channel list can establish the image selection.
             // A stray marker on an owner's mask does not change its role/extent.
             let selection = {
-                let properties = props(&mut cursor)?;
+                let properties = channel_props(&mut cursor)?;
                 if owner.is_none() {
                     if properties.iter().any(|property| property.kind == 4 && !property.data.is_empty()) {
                         return Err(invalid("selection marker payload must be empty"));
@@ -584,21 +584,33 @@ impl Xcf<'_> {
         if head.header.contains(&start) {
             return Err(invalid("a tile pointer is inside its hierarchy header"));
         }
-        let mut end = next.unwrap_or(self.c.b.len());
+        let uncompressed = self.image.compression == Compression::None;
+        let mut end = if uncompressed { self.c.b.len() } else { next.unwrap_or(self.c.b.len()) };
         if start < head.header.start {
             end = end.min(head.header.start);
         }
         if start < head.level {
             end = end.min(head.level);
         }
+        for range in excluded {
+            if range.contains(&start) {
+                return Err(invalid("a tile pointer is inside its source record"));
+            }
+            if start < range.start {
+                end = end.min(range.start);
+            }
+        }
+        let raw_end = if uncompressed { Some(start.checked_add(raw_bytes).ok_or_else(|| invalid("raw tile extent overflow"))?) } else { None };
         for &(begin, stop) in head.dummy_headers.iter().flatten() {
-            // Dummy levels are inert. Pixel bytes inside a complete nonfinal
-            // uncompressed tile can coincidentally resemble a dummy header;
-            // require the next primary pointer at the computed tile end. A
-            // gap is not evidence that the bytes before it are all samples.
-            if self.image.compression == crate::Compression::None
-                && next.is_some_and(|next| start.checked_add(raw_bytes).is_some_and(|end| end == next && start < begin && begin < end))
-            {
+            // A raw tile's byte count, together with a following primary
+            // pointer or exact record/EOF boundary, can disprove a dummy
+            // header inside its samples. A dummy ending exactly at EOF or
+            // at a record boundary may instead be all that follows a short tile.
+            if raw_end.is_some_and(|raw_end| {
+                start < begin
+                    && raw_end <= end
+                    && ((next == Some(raw_end) && begin < raw_end) || (next.is_none_or(|next| next == start) && raw_end == end && stop < raw_end))
+            }) {
                 continue;
             }
             if (begin..stop).contains(&start) {
@@ -608,13 +620,8 @@ impl Xcf<'_> {
                 end = end.min(begin);
             }
         }
-        for range in excluded {
-            if range.contains(&start) {
-                return Err(invalid("a tile pointer is inside its source record"));
-            }
-            if start < range.start {
-                end = end.min(range.start);
-            }
+        if let Some(raw_end) = raw_end {
+            end = end.min(raw_end);
         }
         self.c.b.get(start..end).ok_or_else(|| invalid("a tile pointer is outside the file"))
     }
@@ -647,7 +654,7 @@ impl Xcf<'_> {
         }
         let count =
             (head.width.div_ceil(TILE) as usize).checked_mul(head.height.div_ceil(TILE) as usize).ok_or_else(|| invalid("tile count overflow"))?;
-        let offsets = crate::tile_offsets(&mut level, head.level, count, keep_going)?;
+        let offsets = crate::tile_offsets(&mut level, head.level, count, self.image.compression, keep_going)?;
         if head.level < head.header.end && level.pos > head.header.start {
             return Err(invalid("a level table overlaps its hierarchy header"));
         }

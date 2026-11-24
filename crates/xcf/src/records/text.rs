@@ -177,7 +177,7 @@ pub enum LegacyEncoding {
 #[derive(Debug)]
 pub struct Legacy<'a> {
     /// Compatibility string views of the eight fields. Explicit Latin-1
-    /// lexical text is converted as before. Unavailable text or font string
+    /// lexical text is converted as before. Unavailable text, rotation or font string
     /// views use an empty slot; use [TextRecord::legacy_field_bytes] and
     /// [TextRecord::legacy_field_str] for exact source access.
     pub fields: Vec<Cow<'a, str>>,
@@ -770,8 +770,8 @@ pub fn gdyntext<'a>(
                     Cow::Owned(String::from_utf8(output).map_err(|_| Failure::Stop(StopReason::Malformed))?)
                 }
                 // The decoded text already passed validation. Its lexical bytes,
-                // and an unusable font request, remain available through the spans.
-                Err(_) if index == 0 || index == 7 => Cow::Borrowed(""),
+                // inactive rotation, and an unusable font request remain available through the spans.
+                Err(_) if matches!(index, 0 | 3 | 7) => Cow::Borrowed(""),
                 Err(_) => return Err(StopReason::Malformed.into()),
             };
             parser.budget.retain(&mut stored_fields, field)?;

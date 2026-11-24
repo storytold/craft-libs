@@ -1032,18 +1032,49 @@ fn tile_tables_are_terminated_and_cannot_point_into_themselves() {
 }
 
 #[test]
-fn nonincreasing_tile_offsets_are_rejected() {
-    let mut img = TestImage::rgb8(TILE + 1, 1);
-    img.compression = Compression::None;
-    img.layers.push(TestLayer::rgba("L", TILE + 1, 1, rgba(TILE + 1, 1, |_, _| [22, 44, 66, 255])));
-    let mut file = W { out: img.write(), wide: true };
-    let xcf = open(&file.out).unwrap();
-    let hierarchy = xcf.image.layers[0].hierarchy;
-    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
-    let first_tile = xcf.c.at(level + 8).ptr().unwrap();
-    assert!(read_all(&file.out).is_ok());
-    file.patch(level + 16, first_tile);
-    assert!(read_all(&file.out).is_err());
+fn tile_offsets_can_alias_only_uncompressed_data_and_cannot_decrease() {
+    for compression in [Compression::None, Compression::Rle, Compression::Zlib] {
+        let samples: Vec<u8> = (1..=65).collect();
+        let mut image = TestImage::rgb8(TILE + 1, 1);
+        image.compression = compression;
+        image.channels.push(("Saved", samples.clone(), false));
+        let mut file = W { out: image.write(), wide: true };
+        let reader = open(&file.out).unwrap();
+        let mut channel = reader.c.at(reader.channels[0]);
+        channel.take(8).unwrap();
+        channel.string().unwrap();
+        props(&mut channel).unwrap();
+        let hierarchy = channel.ptr().unwrap();
+        let level = reader.c.at(hierarchy + 12).ptr().unwrap();
+        let mut table = reader.c.at(level + 8);
+        let first_slot = table.pos;
+        let first = table.ptr().unwrap();
+        let second_slot = table.pos;
+        let second = table.ptr().unwrap();
+        assert_eq!(reader.channel(0, &mut 260, GO).unwrap().1.data.len(), 65);
+
+        for equal in [false, true] {
+            file.patch(first_slot, if equal { first } else { second });
+            file.patch(second_slot, first);
+            let reader = open(&file.out).unwrap();
+            let decoded = reader.channel(0, &mut 260, GO);
+            let mut raw = Vec::new();
+            let visited = reader.visit_channel_tiles(0, crate::samples::SampleOptions::default(), &mut 65, GO, |tile| {
+                raw.extend_from_slice(tile.data);
+                Ok(())
+            });
+            if equal && compression == Compression::None {
+                let expected: Vec<_> = samples[..64].iter().copied().chain([samples[0]]).collect();
+                assert_eq!(decoded.unwrap().1.data, expected.iter().map(|&sample| f32::from(sample) / 255.).collect::<Vec<_>>());
+                visited.unwrap();
+                assert_eq!(raw, expected);
+            } else {
+                assert!(matches!(decoded, Err(Error::Invalid(ref message)) if message.contains("tile offsets")));
+                assert!(matches!(visited, Err(Error::Invalid(ref message)) if message.contains("tile offsets")));
+                assert!(raw.is_empty());
+            }
+        }
+    }
 }
 
 #[test]
