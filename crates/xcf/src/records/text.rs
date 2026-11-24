@@ -110,6 +110,13 @@ impl Config<'_> {
                     let value = std::str::from_utf8(bytes).map_err(|_| FieldError::InvalidUtf8)?;
                     config_number(value, *quoted)
                 }
+                [Value::Atom { bytes: sign, quoted: false, .. }, Value::Atom { bytes, quoted: false, .. }] if sign.as_ref() == b"-" => {
+                    let value = std::str::from_utf8(bytes).map_err(|_| FieldError::InvalidUtf8)?;
+                    if value.starts_with(['+', '-']) {
+                        return Err(FieldError::InvalidNumber);
+                    }
+                    config_number(value, false).map(|value| -value)
+                }
                 _ => Err(FieldError::ExpectedScalar),
             })
             .transpose()
@@ -200,14 +207,19 @@ pub struct TextRecord<'a> {
 }
 
 impl TextRecord<'_> {
-    /// Checked paragraph interpretation. Duplicate source direction forms are
-    /// retained but cannot be interpreted singularly; no last-value policy is guessed.
-    pub fn interpreted_direction(&self) -> std::result::Result<Direction, FieldError> {
+    /// Checked paragraph interpretation. Duplicate forms refuse a singular
+    /// interpretation. For modern records, an omitted automatic flag is unresolved:
+    /// its default depends on the producer era, which these neutral records do not
+    /// assume. Saved writing/gravity direction remains in `base_direction`.
+    pub fn interpreted_direction(&self) -> std::result::Result<Option<Direction>, FieldError> {
         if let Some(config) = self.config() {
             config.field("base-direction")?;
             config.field("base-dir-auto")?;
+            if self.automatic_direction.is_none() {
+                return Ok(None);
+            }
         }
-        Ok(self.direction)
+        Ok(Some(self.direction))
     }
     pub fn config(&self) -> Option<&Config<'_>> {
         match &self.source {
@@ -217,7 +229,17 @@ impl TextRecord<'_> {
     }
     pub fn text(&self) -> std::result::Result<Option<&str>, FieldError> {
         match &self.source {
-            Source::Gimp(config) => config.scalar("text"),
+            Source::Gimp(config) => config
+                .field("text")?
+                .map(|values| match values {
+                    [value] => {
+                        let bytes = value.bytes()?;
+                        let prefix = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
+                        std::str::from_utf8(prefix).map_err(|_| FieldError::InvalidUtf8)
+                    }
+                    _ => Err(FieldError::ExpectedScalar),
+                })
+                .transpose(),
             Source::Gdyntext(legacy) => Ok(Some(&legacy.text)),
         }
     }
@@ -442,8 +464,8 @@ fn integer_direction(source: &str, keep: &dyn Fn() -> bool) -> ReadResult<Direct
     }
 }
 
-fn direction(config: &Config<'_>, keep: &dyn Fn() -> bool) -> ReadResult<(Direction, Option<Direction>, Option<bool>)> {
-    let base = match config.scalar("base-direction")? {
+fn base_direction_value(source: Option<&str>, quoted: bool, keep: &dyn Fn() -> bool) -> ReadResult<Option<Direction>> {
+    Ok(match source {
         Some("ltr") => Some(Direction::Ltr),
         Some("rtl") => Some(Direction::Rtl),
         Some("ttb-rtl") => Some(Direction::TtbRtl),
@@ -458,16 +480,57 @@ fn direction(config: &Config<'_>, keep: &dyn Fn() -> bool) -> ReadResult<(Direct
         Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_RTL_UPRIGHT") => Some(Direction::TtbRtlUpright),
         Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_LTR") => Some(Direction::TtbLtr),
         Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_LTR_UPRIGHT") => Some(Direction::TtbLtrUpright),
-        Some(value) if matches!(config.field("base-direction")?, Some([Value::Atom { quoted: false, .. }])) => Some(integer_direction(value, keep)?),
+        Some(value) if !quoted => Some(integer_direction(value, keep)?),
         None => None,
         _ => return Err(StopReason::Malformed.into()),
-    };
-    let automatic = match config.scalar("base-dir-auto")? {
-        Some(value) if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") => Some(true),
-        Some(value) if value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false") => Some(false),
-        None => None,
-        _ => return Err(StopReason::Malformed.into()),
-    };
+    })
+}
+
+fn direction(config: &Config<'_>, keep: &dyn Fn() -> bool) -> ReadResult<(Direction, Option<Direction>, Option<bool>)> {
+    let (mut base, mut automatic) = (None, None);
+    let (mut seen_base, mut seen_auto, mut duplicate) = (false, false, false);
+    // Validate every occurrence independently: duplication is ambiguous, but
+    // cannot hide a malformed setting in either field family. The bounded scan
+    // polls even when thousands of unrelated short forms have no direction.
+    for (index, form) in config.forms.iter().enumerate() {
+        if index.is_multiple_of(64) && !keep() {
+            return Err(Failure::Cancelled);
+        }
+        let values = form.list()?;
+        let name = values.first().ok_or(FieldError::ExpectedScalar)?.text()?;
+        if !matches!(name, "base-direction" | "base-dir-auto") {
+            continue;
+        }
+        let [Value::Atom { bytes, quoted, .. }] = values.get(1..).unwrap_or_default() else {
+            return Err(StopReason::Malformed.into());
+        };
+        let value = std::str::from_utf8(bytes).map_err(|_| FieldError::InvalidUtf8)?;
+        if name == "base-direction" {
+            let parsed = base_direction_value(Some(value), *quoted, keep)?;
+            duplicate |= seen_base;
+            seen_base = true;
+            base = parsed;
+        } else {
+            let parsed = if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") {
+                true
+            } else if value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false") {
+                false
+            } else {
+                return Err(StopReason::Malformed.into());
+            };
+            duplicate |= seen_auto;
+            seen_auto = true;
+            automatic = Some(parsed);
+        }
+    }
+    if !keep() {
+        return Err(Failure::Cancelled);
+    }
+    if duplicate {
+        return Ok((Direction::Auto, None, None));
+    }
+    // Keep historical public fields as compatibility evidence; the checked
+    // accessor leaves omitted automatic policy unresolved without producer context.
     let direction = match automatic {
         Some(true) => Direction::Auto,
         Some(false) => base.unwrap_or(Direction::Ltr),
@@ -543,16 +606,7 @@ pub fn gimp<'a>(
             parser.budget.retain(&mut forms, form)?;
         }
         let config = Config { forms };
-        let (direction, base_direction, automatic_direction) = match direction(&config, keep_going) {
-            Ok(policy) => policy,
-            Err(Failure::Stop(StopReason::Malformed))
-                if matches!(config.field("base-direction"), Err(FieldError::Duplicate))
-                    || matches!(config.field("base-dir-auto"), Err(FieldError::Duplicate)) =>
-            {
-                (Direction::Auto, None, None)
-            }
-            Err(error) => return Err(error),
-        };
+        let (direction, base_direction, automatic_direction) = direction(&config, keep_going)?;
         Ok(TextRecord {
             raw: bytes,
             span: parser.span(0, bytes.len())?,
