@@ -49,6 +49,20 @@ use egui::{Context, Pos2, Rect, Response, Ui, Vec2};
 const TITLE: PartKey = PartKey::new("title");
 const MORE: PartKey = PartKey::new("more");
 
+/// How much room a menu bar's titles take on each side of their text, and so how far apart they stand. An app sets it
+/// once at its root (`RootEnv::values`); the default is the regular padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MenuTitlePad {
+    /// The padding inside panels (`space.pad.regular`).
+    #[default]
+    Regular,
+    /// The padding inside controls (`space.pad.control`): titles set closer, as in an app bar whose menus share the
+    /// line with many controls.
+    Control,
+}
+
 /// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the accent fill
 /// and `text.on_accent` under the pointer and while its menu is open or the keyboard is on it.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -103,7 +117,10 @@ impl Component for TitleFace {
         TitleFaceStyle {
             surface,
             metrics: Metrics::new()
-                .padding(craft_behavior::Insets::horizontal(tokens.space.pad.regular))
+                .padding(craft_behavior::Insets::horizontal(match cx.env::<MenuTitlePad>() {
+                    MenuTitlePad::Regular => tokens.space.pad.regular,
+                    MenuTitlePad::Control => tokens.space.pad.control,
+                }))
                 .min_size(Vec2::new(0.0, control.height))
                 .gap(control.gap),
             focus: cx.focus_look(),

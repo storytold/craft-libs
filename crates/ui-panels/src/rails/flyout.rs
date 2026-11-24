@@ -1,6 +1,6 @@
 //! `FlyoutButton`: a rail button that stands for a group of tools and opens them as a flyout.
 
-use super::tool::{RailTool, SlotDrop, SlotId, ToolDrag, ToolDropped, ToolTips};
+use super::tool::{RailDensity, RailTool, SlotDrop, SlotId, ToolDrag, ToolDropped, ToolTips};
 use super::words::RailWords;
 use crate::buttons::{IconButton, PopupMark};
 use crate::contract::overlay::{Anchor, Place};
@@ -237,7 +237,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
     type Output = FlyoutOutput<T>;
 
     fn style(cx: &StyleCx<'_>, _: FlyoutButtonStyleKey<T>) -> FlyoutButtonStyle {
-        let side = cx.tokens.size.rail.button;
+        let side = cx.env::<RailDensity>().button(cx.tokens);
         FlyoutButtonStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), mark: cx.tokens.space.gap.tight, glyphs: cx.glyph_role() }
     }
 

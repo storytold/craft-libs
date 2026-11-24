@@ -492,12 +492,22 @@ pub struct EndRegion {
     /// Whether a rule separates the end region from the body, in a band of its own along the region's edge that
     /// faces it.
     pub rule: bool,
+    /// Whether the region joins the body's fit: when the body's units ask for more than the line the region leaves,
+    /// the region's units that carry a `fit_rank` leave first, lowest rank first, until the body's units fit at their
+    /// ideal widths, before any body unit narrows or leaves.
+    pub fit: bool,
 }
 
 impl EndRegion {
     /// An end region as high as the line, `space.gap.tight` from the body, with no rule.
     pub const fn new() -> Self {
-        EndRegion { full_height: false, gap: Gap::Tight, rule: false }
+        EndRegion { full_height: false, gap: Gap::Tight, rule: false, fit: false }
+    }
+
+    /// Whether the region joins the body's fit.
+    pub const fn fit(mut self, on: bool) -> Self {
+        self.fit = on;
+        self
     }
 
     /// Whether a rule separates the end region from the body.

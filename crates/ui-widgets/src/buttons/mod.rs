@@ -63,6 +63,19 @@ pub enum ControlPlace {
     SideMenu,
 }
 
+/// How an icon button that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`), so the
+/// current tool can show the look an app's tools had.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ActiveLook {
+    /// The accent's soft fill and edge, with the accent's text colour.
+    #[default]
+    Accent,
+    /// The pressed state's fill with no edge, and the glyph in the normal text colour.
+    Pressed,
+}
+
 /// The look of a push or split button that asks for no variant. An app sets it once at its root (`RootEnv::values`);
 /// the default is the outline. A button that asks for a variant, `Variant::SECONDARY` included, keeps it; a ribbon's
 /// flat look (`ControlPlace::Ribbon`) wins over it, and toggles keep the outline.

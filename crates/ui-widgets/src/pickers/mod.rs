@@ -22,7 +22,7 @@ pub use date::{
 pub use dress::RowDress;
 pub use face::{FaceKind, SelectFace, SelectFaceStyle, toggle_on_key};
 pub use icon_picker::{IconPicker, IconPickerGroup, IconPickerGroups, IconPickerItem, IconPickerOutput};
-pub use select::{Select, SelectStyle};
+pub use select::{Select, SelectLook, SelectStyle};
 pub use tree_picker::{TreeEntry, TreePicker, TreePickerStyle};
 pub use unit_select::{UnitSelect, UnitSelectOutput, UnitSelectStyle};
 

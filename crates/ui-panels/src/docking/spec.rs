@@ -3,6 +3,7 @@
 use super::DockSizes;
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
+use crate::rails::RailDensity;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
@@ -71,8 +72,8 @@ enum GridWidths {
     /// `first`: the content's width at one column, a cell and the content's own padding on both sides; `step`: the
     /// width each further column adds, a cell and the gap before it.
     Content { first: f32, step: f32 },
-    /// A tool rail's cells, sized by the dock's style.
-    Rail,
+    /// A tool rail's cells at a density, sized by the dock's style.
+    Rail(RailDensity),
 }
 
 impl DockGrid {
@@ -84,15 +85,31 @@ impl DockGrid {
     /// The grid of a tool rail of `cells` cells: a rail button and the control padding on both sides at one column,
     /// a button and the tight gap for each further column, in the style the dock shows it in.
     pub fn rail(cells: usize) -> Self {
-        DockGrid { widths: GridWidths::Rail, most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+        DockGrid { widths: GridWidths::Rail(RailDensity::Regular), most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+    }
+
+    /// A [`rail`](Self::rail) grid whose cells are the buttons of a rail at `density`, as the rail shows them
+    /// ([`ToolRail::density`](crate::rails::ToolRail::density)); a content grid is left as it is.
+    #[must_use]
+    pub fn density(mut self, density: RailDensity) -> Self {
+        if let GridWidths::Rail(at) = &mut self.widths {
+            *at = density;
+        }
+        self
     }
 
     /// The grid with its widths in points: a [`rail`](Self::rail) grid takes the rail widths of `sizes`.
     pub fn resolved(self, sizes: &DockSizes) -> Self {
         match self.widths {
             GridWidths::Content { .. } => self,
-            GridWidths::Rail => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Regular) => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Dense) => DockGrid::new(sizes.dense_rail_first, sizes.dense_rail_step, self.most),
         }
+    }
+
+    /// Whether the grid is a [`rail`](Self::rail) grid, before it is [`resolved`](Self::resolved).
+    pub(crate) fn is_rail(self) -> bool {
+        matches!(self.widths, GridWidths::Rail(_))
     }
 
     /// The content's width at one column and the width each further column adds; zero for a rail grid not yet
@@ -100,7 +117,7 @@ impl DockGrid {
     fn first_step(self) -> (f32, f32) {
         match self.widths {
             GridWidths::Content { first, step } => (first, step),
-            GridWidths::Rail => (0.0, 0.0),
+            GridWidths::Rail(_) => (0.0, 0.0),
         }
     }
 
