@@ -266,6 +266,11 @@ fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize, work: &m
             if cursor.pos != cursor.b.len() {
                 return Err(invalid("effect argument has unconsumed trailing bytes"));
             }
+            // Configuration arguments require an actual serialized value, not
+            // a null/empty string that merely parses as an empty syntax tree.
+            if raw.is_empty() {
+                return Err(invalid("effect configuration argument is null or empty"));
+            }
             work.charge(raw.len())?;
             ArgumentValue::Config(parse_config(raw, budget, ctl).map_err(Error::from)?)
         }

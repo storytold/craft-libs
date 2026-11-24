@@ -418,11 +418,43 @@ fn malformed_operation_version_never_becomes_an_absent_constraint() {
     let start = 8 + text_value("Stored effect").len() + text_value("").len() + text_value("example:inert-operation").len();
     for wire in [vec![0, 0], vec![0, 0, 0, 1, 1], vec![0, 0, 0, 2, 0, 0], vec![0, 0, 0, 2, 255, 0]] {
         let mut bytes = effect(26, &[]);
-        bytes.truncate(start);
-        bytes.extend(wire);
+        if wire.len() < 4 {
+            // Only the incomplete length-word case deliberately ends the file.
+            bytes.truncate(start);
+            bytes.extend(wire);
+        } else {
+            // Keep the valid properties and mask pointer: accepting malformed
+            // version text must not fail later for an unrelated missing suffix.
+            drop(bytes.splice(start..start + text_value("1:0").len(), wire));
+        }
         let mut budget = Budget::default();
         let before = budget.remaining_storage();
         assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut budget, &|| true), Err(Error::Source(crate::Error::Invalid(_)))));
         assert_eq!(budget.remaining_storage(), before);
+    }
+}
+
+#[test]
+fn null_and_empty_configs_are_invalid_without_hiding_later_values_or_source_bytes() {
+    for version in [20, 26] {
+        let null = vec![0; 4];
+        let empty = text_value("");
+        let bytes = effect(
+            version,
+            &[
+                ("null-config", 6, null.clone()),
+                ("empty-config", 6, empty.clone()),
+                ("valid-config", 6, text_value("(x 1)")),
+                ("later", 1, 7u32.to_be_bytes().to_vec()),
+            ],
+        );
+        let parsed = read(&bytes, version).record;
+        for (argument, wire) in parsed.arguments[..2].iter().zip([null.as_slice(), empty.as_slice()]) {
+            assert!(matches!(&argument.value, ArgumentValue::Invalid { kind: 6, bytes, message }
+                if *bytes == wire && message.contains("null or empty")));
+        }
+        assert!(matches!(&parsed.arguments[2].value, ArgumentValue::Config(config) if config.raw == "(x 1)" && config.forms.len() == 1));
+        assert!(matches!(parsed.arguments[3].value, ArgumentValue::Int(7)));
+        assert_eq!(parsed.raw, &bytes[8..]);
     }
 }
