@@ -45,6 +45,7 @@ pub enum HostEvent {
     ShowExisting { slot: usize, key_frame: bool, grain: bool },
 }
 
+#[derive(Clone)]
 struct Pending {
     sequence: SequenceHeader,
     header: FrameHeader,
@@ -54,6 +55,7 @@ struct Pending {
 
 /// Parses a stream's headers. Scalable streams are refused: which layers to output is a decision
 /// of the full decoder.
+#[derive(Clone)]
 pub struct HostParser {
     sequence: Option<SequenceHeader>,
     refs: [RefInfo; NUM_REF_FRAMES],
@@ -86,7 +88,19 @@ impl HostParser {
     }
 
     /// The events of `data`, one or more low-overhead OBUs (a temporal unit, configuration OBUs).
+    ///
+    /// An error refuses all of `data`: the parser is left as it was before the call (no reference
+    /// slot holds a frame whose event was not returned), so the caller can drop the unit and go on.
     pub fn parse(&mut self, data: &[u8]) -> Result<Vec<HostEvent>> {
+        let before = self.clone();
+        let parsed = self.parse_unit(data);
+        if parsed.is_err() {
+            *self = before;
+        }
+        parsed
+    }
+
+    fn parse_unit(&mut self, data: &[u8]) -> Result<Vec<HostEvent>> {
         let mut events = Vec::new();
         let mut pos = 0usize;
         while pos < data.len() {

@@ -97,3 +97,34 @@ fn host_parser_sizes_superres_frames_like_the_decoder() {
         &["-preset", "8", "-svtav1-params", "superres-mode=1:superres-denom=12:superres-kf-denom=13"],
     ));
 }
+
+/// A temporal unit that fails to parse leaves no trace: here each unit, with a damaged OBU after
+/// its frames, is refused, and the real stream then parses exactly as it does without it.
+#[test]
+fn a_refused_temporal_unit_leaves_the_parser_as_it_was() {
+    let Some(ff) = ffmpeg() else { return };
+    let spec = Spec::new(
+        "host_tiles_hidden",
+        "testsrc2=s=512x256:r=25",
+        20,
+        "yuv420p",
+        &["-preset", "8", "-g", "12", "-svtav1-params", "tile-columns=1:tile-rows=1"],
+    );
+    let frames = ivf_frames(&make(&ff, &spec));
+    let events = |parser: &mut HostParser, data: &[u8]| format!("{:?}", parser.parse(data).unwrap());
+    let mut clean = HostParser::new();
+    let expected: Vec<String> = frames.iter().map(|f| events(&mut clean, f)).collect();
+    for k in 0..frames.len() {
+        let mut parser = HostParser::new();
+        for f in &frames[..k] {
+            events(&mut parser, f);
+        }
+        // A tile group OBU whose size runs past the end of the data.
+        let mut damaged = frames[k].clone();
+        damaged.extend([4 << 3 | 2, 0x7f]);
+        assert!(parser.parse(&damaged).is_err(), "temporal unit {k}: the damaged copy was accepted");
+        for (i, f) in frames.iter().enumerate().skip(k) {
+            assert_eq!(events(&mut parser, f), expected[i], "temporal unit {i}, after refusing a damaged copy of {k}");
+        }
+    }
+}
