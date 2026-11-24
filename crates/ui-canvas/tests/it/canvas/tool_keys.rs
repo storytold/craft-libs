@@ -20,7 +20,7 @@ use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
 use craft_ui::primitives::Draw;
-use craft_ui::runtime::commands::{self, EditCommands, FireSource};
+use craft_ui::runtime::commands::{self, CommandSet as _, EditCommands, FireSource};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::focus::{AccessActionKind, key_release};
@@ -167,6 +167,21 @@ fn a_fired_command_whose_key_the_tool_claims_reaches_it_with_nothing_focused() {
     canvas.fixture().settle();
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }], "the tool took Edit ▸ Delete as its Delete");
     assert!(take_output(canvas.fixture().ctx()).fired.is_empty(), "no app command ran");
+}
+
+/// A command a button fires runs as the button's command, though the tool claims its key: only a menu's or the
+/// palette's stands for the key (a toolbar's tool button finishes a gesture the tool holds the keyboard for).
+#[trial]
+fn a_pointer_fired_command_whose_key_the_tool_claims_runs_as_a_command() {
+    let mut canvas = ToolFixture::new("Document", Outline::new(true));
+    canvas.fixture().settle();
+    assert_eq!(canvas.fixture().focused(), None, "nothing is focused");
+    take_output(canvas.fixture().ctx());
+    assert!(commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Pointer), "Delete runs");
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen, [], "the tool got no Delete");
+    let fired = take_output(canvas.fixture().ctx()).fired;
+    assert!(fired.iter().any(|fired| fired.command.id == EditCommands::Delete.id()), "the app's Delete ran: {fired:?}");
 }
 
 /// A tool that takes every key the host offers it, and the lone Alt tap while `taps`.
