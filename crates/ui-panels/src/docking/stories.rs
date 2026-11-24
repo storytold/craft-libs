@@ -13,9 +13,10 @@ use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, 
 use crate::menu::{Menu, PanelRow};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Message;
+use crate::tabs::PanelTabLook;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Layout, Node, SplitSize};
-use craft_behavior::{Axis, Mixed};
+use craft_behavior::{Axis, IconId, Mixed};
 use egui::{Ui, Vec2};
 
 const LAYERS: usize = 0;
@@ -130,6 +131,21 @@ fn panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).menu(move || rows.clone()).show(ui, |_, _| ()).output.into()
+}
+
+/// VectorCraft's group header (`DockConfig::tab_look(PanelTabLook::Pill)`): the shown tab on a filled pill in the
+/// strip's middle, and the panel menu button, the three-line mark, level with it at the strip's end.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn pill_tabs_and_the_panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
+        .menu(move || rows.clone())
+        .panel_menu_icon(IconId::new("menu"))
+        .tab_look(PanelTabLook::Pill)
+        .show(ui, |_, _| ())
+        .output
+        .into()
 }
 
 #[story(GroupGrip<usize>, covers = [Default])]

@@ -265,3 +265,43 @@ fn a_corner_drag_the_host_cancelled_lands_nothing_at_its_release() {
     fixture.settle();
     assert_eq!(*zero.borrow(), host, "the release after the host's change leaves the zero point where the host put it");
 }
+
+/// A right-click on a ruler strip or on the corner is the rulers': they report the part, for their units menu, and
+/// the tool host under them asks for no menu of its own.
+#[trial]
+fn a_right_click_on_a_ruler_is_the_rulers_not_the_tools() {
+    use craft_ui::canvas::{RulerPart, ToolHost, tool_pass};
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let asked: Rc<RefCell<(Option<RulerPart>, bool)>> = Rc::new(RefCell::new((None, false)));
+    let (shown_zero, seen) = (Rc::clone(&zero), Rc::clone(&asked));
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let tool = RefCell::new(Overpaint);
+    let mut fixture = Fixture::new(move |ui| {
+        let at = ui.available_rect_before_wrap();
+        shown_room.set(at);
+        let view = CanvasView::new(at, Point::new(f64::from(at.center().x), f64::from(at.center().y)), 1.0);
+        let mut zero = shown_zero.borrow_mut();
+        let mut host_asked = false;
+        let canvas = Canvas::new("Document").view(view).with_rulers(Some(Rulers::new("Rulers", Bind::bound(&mut *zero)))).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                host_asked = ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()).context.is_some();
+            }
+        });
+        let mut seen = seen.borrow_mut();
+        seen.0 = seen.0.or(canvas.output.rulers.as_ref().and_then(|rulers| rulers.context));
+        seen.1 |= host_asked;
+    });
+    fixture.room(Vec2::new(500.0, 400.0)).settle();
+    let mut right_click = |at: Pos2| {
+        *asked.borrow_mut() = (None, false);
+        fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+        fixture.frame(vec![craft_ui::testing::pointer::secondary(at, true)]);
+        fixture.frame(vec![craft_ui::testing::pointer::secondary(at, false)]);
+        fixture.settle();
+        *asked.borrow()
+    };
+    let canvas = room.get();
+    assert_eq!(right_click(egui::pos2(canvas.center().x, canvas.min.y + 4.0)), (Some(RulerPart::Horizontal), false), "the top strip");
+    assert_eq!(right_click(canvas.min + Vec2::splat(4.0)), (Some(RulerPart::Corner), false), "the corner, its zero point unlocked");
+}

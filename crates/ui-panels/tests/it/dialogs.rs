@@ -738,6 +738,17 @@ fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
     assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
 }
 
+/// VectorCraft's dialogs (`DialogButtonLook::Filled`) show Cancel and Don't Save as filled neutral tiles beside the
+/// accented answer, not as outlines.
+#[trial]
+fn a_footer_cancel_is_a_filled_button_beside_the_accent_answer() {
+    use craft_theme::Variant;
+    let seen = footer_variants(Some(craft_ui::sections::DialogButtonLook::Filled));
+    assert!(seen.contains(&craft_ui::buttons::FILLED), "Cancel is a filled button: {seen:?}");
+    assert!(seen.contains(&Variant::PRIMARY), "Save is the accented button: {seen:?}");
+    assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
+}
+
 /// The left edges of a Save anyway / Save as… / Cancel prompt's buttons on Linux, with the Alternate's role set to
 /// `role` when it names one.
 fn alternate_edges(role: Option<DialogRole>) -> (f32, f32, f32) {

@@ -959,14 +959,26 @@ pub(crate) struct Ghost {
     pub mark: Option<(DropMark, Arc<UiTokens>)>,
 }
 
-/// The running session's ghost data.
+/// The running session's ghost data for the running viewport. The mark paints in the window whose target registered
+/// it, and also in the window the session moves, mapped to the same desktop place: that window lies over the mark,
+/// which would otherwise show only through it.
 pub(crate) fn ghost(ctx: &Context) -> Option<Ghost> {
     let viewport = pass::current_viewport(ctx);
-    board(ctx, |board| {
-        board.session.as_ref().map(|session| Ghost {
-            preview: session.preview.clone(),
-            env: session.env.clone(),
-            mark: session.mark.as_ref().filter(|shown| shown.viewport == viewport).map(|shown| (shown.mark, shown.tokens.clone())),
-        })
-    })
+    let (preview, env, mark, moves_this) = board(ctx, |board| {
+        board
+            .session
+            .as_ref()
+            .map(|session| (session.preview.clone(), session.env.clone(), session.mark.clone(), session.moving.viewport == Some(viewport)))
+    })?;
+    let mark = mark.and_then(|shown| {
+        let offset = if shown.viewport == viewport {
+            Vec2::ZERO
+        } else if moves_this {
+            WindowHost::of(ctx).offset_between(shown.viewport, viewport)?
+        } else {
+            return None;
+        };
+        Some((shown.mark.mapped(|point| point + offset), shown.tokens))
+    });
+    Some(Ghost { preview, env, mark })
 }

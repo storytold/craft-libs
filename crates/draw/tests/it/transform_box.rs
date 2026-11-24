@@ -1070,20 +1070,28 @@ fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     assert_eq!(h.host.borrow().applied, 1, "the double click applies");
 }
 
-/// A secondary click on the session's box opens the mode menu (its rows are on the page); with the menu closed again, a
-/// secondary click away from the box opens none.
+/// A secondary click on the session's box opens the mode menu (its rows are on the page) and is the box's alone: the
+/// tool host under it asks for no menu of its own. With the menu closed again, a secondary click away from the box
+/// opens none.
 #[trial]
 fn a_secondary_click_on_the_box_opens_the_mode_menu() {
+    use craft_draw::ui::transform::TransformTool;
+    use craft_ui::canvas::{ToolHost, tool_pass};
     let session = TransformSession::<()>::new(RECT);
     let settings = TransformSettings::default();
     let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
-    let shown_view = Rc::clone(&view);
+    let host_asked = Rc::new(Cell::new(false));
+    let (shown_view, asked) = (Rc::clone(&view), Rc::clone(&host_asked));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
         *shown_view.borrow_mut() = at;
         Canvas::new("Document").view(at).show(ui, |ui, body| {
-            TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            let shown = TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            if let Some(pass) = tool_pass(&body.env) {
+                let mut tool = TransformTool::new(&session, shown.snapped.clone());
+                asked.set(asked.get() || ToolHost::new().run(ui, &pass, &mut tool).context.is_some());
+            }
         });
     });
     fixture.settle();
@@ -1098,8 +1106,10 @@ fn a_secondary_click_on_the_box_opens_the_mode_menu() {
     right_click(&mut fixture, screen(Point::new(1000.0, 1000.0)));
     assert!(fixture.by_label("Distort").is_none(), "a secondary click away from the box opens no mode menu");
 
+    host_asked.set(false);
     right_click(&mut fixture, screen(Point::new(200.0, 150.0)));
     assert!(fixture.by_label("Distort").is_some(), "a secondary click on the box opens the mode menu");
+    assert!(!host_asked.get(), "the tool host under the box asks for no menu");
 }
 
 /// A drag from inside snaps the moved box's edges, not the pointer: the right edge lands on the guide at 310 while the
