@@ -711,6 +711,38 @@ fn predefined_quit_reads_target_folders_below_the_package_folder_only() {
     let found =
         predefined_quit([("outer/src/lib.rs", ""), ("outer/tools/src/bin/tool.rs", "mod helper;\n"), ("outer/tools/src/bin/helper.rs", local)]);
     assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("outer/tools/src/bin/helper.rs", 2)]);
+    // A file in the package's modules that a `#[path]` attribute loads from a `tests` folder is a module too,
+    // so its `extern crate` does not reach the crate's extern prelude.
+    let lib = "extern crate other_menu as menu;\n#[path = \"foo/tests/helper.rs\"]\nmod helper;\n";
+    let found = predefined_quit([("src/lib.rs", lib), ("src/foo/tests/helper.rs", local)]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn predefined_quit_reads_an_extern_crate_in_a_block_inside_call_arguments() {
+    let call = "fn f() {\n    consume({\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    });\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/child.rs", call)])), vec![4]);
+    let array = "fn f() {\n    let items = [{\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    }];\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/child.rs", array)])), vec![4]);
+    // In a crate root, a block in an argument binds the name in the block, not in the extern prelude.
+    let lib = "fn f() {\n    consume({\n        extern crate muda as menu;\n    });\n}\nmod child;\n";
+    let child = "fn g() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    assert!(predefined_quit([("src/lib.rs", lib), ("src/child.rs", child)]).is_empty());
+    // A `macro_rules!` template is not a declaration where it is written, in any delimiter.
+    for body in [
+        "macro_rules! m {\n    () => (\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    );\n}\n",
+        "macro_rules! m {\n    () => [\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    ];\n}\n",
+        "macro_rules! m (\n    () => {\n        extern crate muda as menu;\n        menu::PredefinedMenuItem::quit(None)\n    };\n);\n",
+    ] {
+        assert!(predefined_quit([("src/child.rs", body)]).is_empty(), "{body}");
+    }
+    // Nor is an attribute's input, in a crate root or a module.
+    for attr in ["#[attr(extern crate muda as menu;)]\nfn h() {}\n", "#![attr(extern crate muda as menu;)]\n"] {
+        let lib = format!("{attr}mod child;\n");
+        assert!(predefined_quit([("src/lib.rs", lib.as_str()), ("src/child.rs", child)]).is_empty(), "{attr}");
+        let module = format!("{attr}fn g() {{ menu::PredefinedMenuItem::quit(None); }}\n");
+        assert!(predefined_quit([("src/child.rs", module.as_str())]).is_empty(), "{attr}");
+    }
 }
 
 #[test]

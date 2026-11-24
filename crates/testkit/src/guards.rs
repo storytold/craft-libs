@@ -1463,18 +1463,30 @@ type CrateBindings<'a> = BTreeMap<(&'a str, Option<usize>), (bool, bool)>;
 
 /// Each `extern crate c;` or `extern crate c as n;` in a file: whether `c` is muda, the name it binds, and
 /// the index of that name. A declaration in an item that `never` marks (see [`Cover::Never`]) is left out,
-/// and so are the tokens inside parentheses or brackets, such as the input of `m!(...)`, since an item
-/// is not written there.
+/// and so are the tokens of a macro's input in parentheses or brackets, `m!(...)` or `m![...]`, of an
+/// attribute, `#[...]` or `#![...]`, and the whole body of a `macro_rules!` definition, whose templates are
+/// not expanded where they are written. A
+/// declaration in a block inside other parentheses or brackets, such as a call's argument, is kept.
 fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, usize)> {
     let mut externs = Vec::new();
-    let mut depth = 0usize;
+    // For each open delimiter, whether it starts a macro's input, an attribute or a `macro_rules!` body; and
+    // how many of those are open.
+    let mut open = Vec::new();
+    let mut in_macro = 0usize;
     for i in 0..toks.len() {
-        if toks[i].is_punct('(') || toks[i].is_punct('[') {
-            depth += 1;
-        } else if toks[i].is_punct(')') || toks[i].is_punct(']') {
-            depth = depth.saturating_sub(1);
+        if toks[i].is_punct('(') || toks[i].is_punct('[') || toks[i].is_punct('{') {
+            let ident = |k: usize| matches!(toks[k].kind, Kind::Ident(_));
+            let definition = i >= 3 && ident(i - 1) && toks[i - 2].is_punct('!') && toks[i - 3].is_ident("macro_rules");
+            let input = !toks[i].is_punct('{') && i >= 2 && toks[i - 1].is_punct('!') && ident(i - 2);
+            let attribute =
+                toks[i].is_punct('[') && i >= 1 && (toks[i - 1].is_punct('#') || (i >= 2 && toks[i - 1].is_punct('!') && toks[i - 2].is_punct('#')));
+            let skip = input || definition || attribute;
+            open.push(skip);
+            in_macro += usize::from(skip);
+        } else if (toks[i].is_punct(')') || toks[i].is_punct(']') || toks[i].is_punct('}')) && open.pop() == Some(true) {
+            in_macro = in_macro.saturating_sub(1);
         }
-        if depth == 0
+        if in_macro == 0
             && !never.get(i).copied().unwrap_or(false)
             && toks[i].is_ident("extern")
             && toks.get(i + 1).is_some_and(|t| t.is_ident("crate"))
@@ -1497,7 +1509,8 @@ fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, u
 /// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`; each file that [`cargo_target`]
 /// accepts; another `build.rs`, `lib.rs` or `main.rs` when no `mod` declaration in another of the files names
 /// it, plainly or through a `#[path]` attribute; and each other file directly in a `bin`, `examples`, `tests`
-/// or `benches` folder other than `mod.rs` when no declaration without a `#[path]` attribute names it. A root's
+/// or `benches` folder other than `mod.rs` when no package folder holds it and no declaration without a
+/// `#[path]` attribute names it. A root's
 /// names reach every file that a chain of declarations
 /// from it names, where a crate root and a file loaded through a `#[path]` attribute have their modules in their
 /// own folder, as [`module_files`] reads them. A declaration in an item whose `cfg` is false on every
@@ -1555,7 +1568,10 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
         match (segments.next(), segments.next()) {
             (Some("lib.rs" | "main.rs"), Some("src")) => true,
             (Some("lib.rs" | "main.rs" | "build.rs"), _) => !named[file],
-            (Some(name), Some("bin" | "examples" | "tests" | "benches")) => name.ends_with(".rs") && name != "mod.rs" && !named_plainly[file],
+            // In a known package, `cargo_target` has already placed the target folders.
+            (Some(name), Some("bin" | "examples" | "tests" | "benches")) => {
+                name.ends_with(".rs") && name != "mod.rs" && !named_plainly[file] && package_relative(&paths[file], &packages).is_none()
+            }
             _ => false,
         }
     };
@@ -1614,8 +1630,7 @@ fn package_folders(paths: &[String]) -> BTreeSet<&str> {
 /// modules. With one, only those places directly below it count, so `src/foo/tests/helper.rs` and
 /// `src/foo/src/bin/helper.rs` hold modules.
 fn cargo_target(path: &str, packages: &BTreeSet<&str>) -> bool {
-    let inside = path.rmatch_indices('/').map(|(i, _)| i).find(|&i| i > 0 && packages.contains(&path[..i])).map(|i| &path[i + 1..]);
-    let inside = inside.or_else(|| (packages.contains("") && !path.starts_with('/')).then_some(path));
+    let inside = package_relative(path, packages);
     let mut segments = inside.unwrap_or(path).rsplit('/');
     let Some(name) = segments.next() else { return false };
     if !name.ends_with(".rs") {
@@ -1641,6 +1656,13 @@ fn cargo_target(path: &str, packages: &BTreeSet<&str>) -> bool {
     }
 }
 
+/// `path` relative to the nearest folder above it in `packages` (see [`package_folders`]), or `None` when no
+/// package folder holds it.
+fn package_relative<'a>(path: &'a str, packages: &BTreeSet<&str>) -> Option<&'a str> {
+    let inside = path.rmatch_indices('/').map(|(i, _)| i).find(|&i| i > 0 && packages.contains(&path[..i])).map(|i| &path[i + 1..]);
+    inside.or_else(|| (packages.contains("") && !path.starts_with('/')).then_some(path))
+}
+
 /// The names of the muda crate in a file, and where each is bound. The names are `muda` itself, each name
 /// in `prelude` (see [`extern_prelude_names`]), which names the crate as `muda` does, and each name that
 /// `use muda as m;`, `use muda::{self as m};` or `extern crate muda as m;` gives it. For each
@@ -1648,7 +1670,7 @@ fn cargo_target(path: &str, packages: &BTreeSet<&str>) -> bool {
 /// the name to the crate, and whether a `use`, an `extern crate` or a `mod` in them binds it to something
 /// else. A binding to something else inside an item with a `cfg` attribute, or through `crate::`, `self::`
 /// or `super::` (which may be a re-export of the crate), is left out, and so is an `extern crate` in an
-/// item that `never` marks or inside parentheses or brackets (see [`extern_crates`]).
+/// item that `never` marks, in a macro's input, in an attribute or in a `macro_rules!` body (see [`extern_crates`]).
 fn muda_crate_bindings<'a>(
     toks: &'a [Token],
     leaves: &'a [UseLeaf],
@@ -1736,8 +1758,8 @@ fn muda_crate_bindings<'a>(
 /// imported under (`use muda as menu;`, `use muda::{self as menu};`, `extern crate muda as menu;`) is read
 /// like `muda` in the braces that bind it, so `menu::PredefinedMenuItem::quit` is reported there. An
 /// `extern crate muda as menu;` outside any braces of a crate root (`src/lib.rs` and `src/main.rs`; `build.rs`,
-/// another `lib.rs` or `main.rs`, or a file directly in a `bin`, `examples`, `tests` or `benches` folder other
-/// than `mod.rs`, unless a `mod` declaration in another of `files` names it, for a file in those folders one
+/// another `lib.rs` or `main.rs`, or a file outside any package folder directly in a `bin`, `examples`, `tests`
+/// or `benches` folder other than `mod.rs`, unless a `mod` declaration in another of `files` names it, for a file in those folders one
 /// without a `#[path]` attribute; a file directly in `src/bin`, a package's `build.rs`, a file directly in its
 /// `tests`, `examples` or `benches` folder, `mod.rs` included, and a `main.rs` one folder below those, are crate
 /// roots even when a declaration names them, where the package folder is the nearest folder above the file
@@ -1746,8 +1768,8 @@ fn muda_crate_bindings<'a>(
 /// the crate's extern prelude, so in that file and in every file of `files` that a chain of `mod`
 /// declarations from it names, `menu` is read like `muda` and `::menu::PredefinedMenuItem::quit` is
 /// reported. An `extern crate` or `mod` declaration in an item whose `cfg` is false on every configuration
-/// (`cfg(any())`, `cfg(false)`) is read as absent, and so are the tokens of an `extern crate` inside
-/// parentheses or brackets, such as a macro's input. Elsewhere a path that starts with `::` names the crate
+/// (`cfg(any())`, `cfg(false)`) is read as absent, and so are the tokens of an `extern crate` in a macro's
+/// input in parentheses or brackets (`m!(...)`, `m![...]`), in an attribute or in a `macro_rules!` body. Elsewhere a path that starts with `::` names the crate
 /// only through `muda`. It also
 /// follows a `use` or a `type` alias that renames muda's type (`use muda::PredefinedMenuItem as Item;` then
 /// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed, including one through a
