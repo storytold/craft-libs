@@ -96,3 +96,36 @@ fn a_scheme_steps_and_clamps_in_its_own_units_about_its_hundred() {
     assert!(near(doubled.step(2.0, 1, small), 4.0), "the rung after the scheme's 100 % is the next rung times it");
     assert!(near(photoshop.clamp(f64::NAN, small), 1.0) && near(doubled.clamp(f64::NAN, small), 2.0), "a non-finite zoom is 100 %");
 }
+
+#[test]
+fn a_stretched_view_draws_and_reads_the_document_over_whole_pixels_while_its_zoom_stays_nominal() {
+    // A 600×450 document at a third: the host shows it over 201×151 device pixels (ceil(size × zoom)) and says so
+    // through the stretch; the zoom behind it stays 1/3, so Zoom Out steps to 25 %, not back onto 33.33 %.
+    let zoom = f64::from(1.0f32 / 3.0);
+    let stretch = [201.0 / 600.0 / zoom, 151.0 / 450.0 / zoom];
+    let plain = CanvasView::new(ScreenRect::from_min_max(pos2(0.0, 0.0), pos2(640.0, 400.0)), Point::new(300.0, 225.0), zoom);
+    let view = plain.stretch(stretch);
+    let shown = view.to_screen(Point::new(600.0, 450.0)) - view.to_screen(Point::new(0.0, 0.0));
+    assert!((f64::from(shown.x) - 201.0).abs() < 1e-4 && (f64::from(shown.y) - 151.0).abs() < 1e-4, "{shown:?}");
+    let moved = view.to_doc(pos2(100.0, 137.0)) - view.to_doc(pos2(100.0, 100.0));
+    assert!(near(moved.y, 37.0 * 450.0 / 151.0) && near(moved.x, 0.0), "{moved:?}");
+    let moved = view.to_doc(pos2(180.0, 100.0)) - view.to_doc(pos2(100.0, 100.0));
+    assert!(near(moved.x, 80.0 * 600.0 / 201.0), "{moved:?}");
+    for p in [Point::new(0.0, 0.0), Point::new(512.0, 300.0), Point::new(-40.0, 1200.0)] {
+        let back = view.to_doc(view.to_screen(p));
+        assert!(near(back.x, p.x) && near(back.y, p.y), "{p:?} came back as {back:?}");
+    }
+    let turned = view.rotation(33.0).flip_x(true).aspect(1.5);
+    for p in [Point::new(0.0, 0.0), Point::new(512.0, 300.0)] {
+        let back = turned.to_doc(turned.to_screen(p));
+        assert!(near(back.x, p.x) && near(back.y, p.y), "{p:?} came back as {back:?} through {turned:?}");
+    }
+    assert!(near(view.zoom_x(), 201.0 / 600.0) && near(view.doc_len(151.0), 450.0));
+    assert!(view.layer_transform().is_none() && plain.layer_transform().is_some());
+    let mut stepped = view;
+    assert!(zoom::step(&mut stepped, -1, Size::new(600.0, 450.0), 1.0, &ZoomScheme::PHOTOSHOP));
+    assert!(near(stepped.zoom, 0.25), "{}", stepped.zoom);
+    // A stretch that is no number or not positive counts as none.
+    let odd = plain.stretch([f64::NAN, 0.0]);
+    assert_eq!(odd.to_screen(Point::new(600.0, 450.0)), plain.to_screen(Point::new(600.0, 450.0)));
+}
