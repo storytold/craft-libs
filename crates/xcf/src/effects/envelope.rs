@@ -93,7 +93,15 @@ pub(super) fn decode_with_work<'a>(
     let name = string(&mut cursor, work)?;
     let icon = string(&mut cursor, work)?;
     let operation = string(&mut cursor, work)?;
-    let stored_version = if version >= 22 { Some(string(&mut cursor, work)?) } else { None };
+    let stored_version = if version >= 22 {
+        // A null wire string supplies no version constraint. A one-NUL string
+        // is an explicitly empty constraint and must remain distinguishable.
+        let null = cursor.b.get(cursor.pos..).is_some_and(|bytes| bytes.starts_with(&[0; 4]));
+        let value = string(&mut cursor, work)?;
+        if null { None } else { Some(value) }
+    } else {
+        None
+    };
     charge(budget, name.len().saturating_add(icon.len()).saturating_add(operation.len()).saturating_add(stored_version.map_or(0, str::len)))?;
     let mut effect = StoredEffect {
         source_span: super::SourceSpan { bytes: base.b, version, start: offset, end: offset, mask: 0 },

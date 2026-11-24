@@ -284,7 +284,11 @@ fn property_counts_and_declared_argument_sizes_are_bounded_before_payload_reads(
         ],
     );
     let parsed = read(&bytes, 26).record;
-    assert!(parsed.arguments[..3].iter().all(|argument| matches!(argument.value, ArgumentValue::Invalid { .. })));
+    for (argument, expected) in
+        parsed.arguments[..3].iter().zip(["effect string exceeds 1 MiB", "effect color pixel exceeds 256 bytes", "effect color ICC exceeds 64 MiB"])
+    {
+        assert!(matches!(&argument.value, ArgumentValue::Invalid { message, .. } if message.contains(expected)), "{argument:?}");
+    }
     assert!(matches!(parsed.arguments[3].value, ArgumentValue::UInt(17)));
 }
 
@@ -388,5 +392,37 @@ fn malformed_first_config_form_does_not_spend_retention_on_the_suffix() {
         let parsed = Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::new(2048, 1 << 20), &|| true).unwrap().record;
         assert!(matches!(&parsed.arguments[0].value, ArgumentValue::Invalid { message, .. } if message.contains("named lists")));
         assert!(matches!(parsed.arguments[1].value, ArgumentValue::Int(7)));
+    }
+}
+
+#[test]
+fn operation_version_preserves_absence_empty_and_unknown_constraints() {
+    for version in [22, 26] {
+        for (wire, expected) in
+            [(vec![0; 4], None), (text_value(""), Some("")), (text_value("1:0"), Some("1:0")), (text_value("future"), Some("future"))]
+        {
+            let mut bytes = effect(version, &[("later", 1, 7u32.to_be_bytes().to_vec())]);
+            let start = 8 + text_value("Stored effect").len() + text_value("").len() + text_value("example:inert-operation").len();
+            drop(bytes.splice(start..start + text_value("1:0").len(), wire));
+            let parsed = read(&bytes, version).record;
+            assert_eq!(parsed.version, expected);
+            assert!(matches!(parsed.arguments[0].value, ArgumentValue::Int(7)));
+            assert_eq!(parsed.operation, "example:inert-operation");
+            assert_eq!(parsed.raw, &bytes[8..]);
+        }
+    }
+}
+
+#[test]
+fn malformed_operation_version_never_becomes_an_absent_constraint() {
+    let start = 8 + text_value("Stored effect").len() + text_value("").len() + text_value("example:inert-operation").len();
+    for wire in [vec![0, 0], vec![0, 0, 0, 1, 1], vec![0, 0, 0, 2, 0, 0], vec![0, 0, 0, 2, 255, 0]] {
+        let mut bytes = effect(26, &[]);
+        bytes.truncate(start);
+        bytes.extend(wire);
+        let mut budget = Budget::default();
+        let before = budget.remaining_storage();
+        assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut budget, &|| true), Err(Error::Source(crate::Error::Invalid(_)))));
+        assert_eq!(budget.remaining_storage(), before);
     }
 }
