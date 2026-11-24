@@ -549,3 +549,70 @@ fn dropped_image_properties_free_their_allowance_before_standalone_geometry() {
     assert_eq!(paths.records[0].strokes[0].knots.len(), 1);
     assert_eq!(budget.retained_remaining(), 0);
 }
+
+#[test]
+fn decoded_names_reject_interior_nuls_in_every_saved_path_encoding() {
+    for label in ["A\0B", "\0", "end\0", "", "AB", "路径"] {
+        let malformed = label.as_bytes().contains(&0);
+        for kind in [23, 25] {
+            let (bytes, _, _) = file(26, &[(kind, historical(kind, "kept")), (kind, historical(kind, label))], 0);
+            let xcf = Xcf::parse(&bytes).unwrap();
+            let mut budget = Budget::default();
+            let paths = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+            assert_eq!(paths.records[0].name, "kept");
+            if malformed {
+                assert_eq!(paths.records.len(), 1);
+                assert_eq!(paths.stopped.unwrap().reason, StopReason::Malformed);
+                let (control, _, _) = file(26, &[(kind, historical(kind, "kept"))], 0);
+                let mut retained = Budget::default();
+                Xcf::parse(&control).unwrap().paths(Limits::default(), &mut retained, &|| true).unwrap();
+                assert_eq!(budget.retained_remaining(), retained.retained_remaining(), "only the returned prefix stays charged");
+            } else {
+                assert!(paths.stopped.is_none());
+                assert_eq!(paths.records[1].name, label);
+            }
+        }
+        let (mut bytes, _, source) = file(26, &[], 1);
+        bytes.truncate(source);
+        bytes.extend(standalone(label));
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let mut budget = Budget::default();
+        let initial = budget.retained_remaining();
+        let paths = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+        if malformed {
+            assert!(paths.records.is_empty());
+            assert_eq!(paths.stopped.unwrap().reason, StopReason::Malformed);
+            assert_eq!(budget.retained_remaining(), initial);
+        } else {
+            assert!(paths.stopped.is_none());
+            assert_eq!(paths.records[0].name, label);
+            assert_eq!(paths.records[0].strokes[0].knots.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn opaque_parasite_names_keep_interior_nuls_without_becoming_path_labels() {
+    let mut source = W { out: Vec::new(), wide: false };
+    for value in [1, 0, 1] {
+        source.u32(value);
+    }
+    source.string("decoded label");
+    for value in [1, 1, 0, 1, 1] {
+        source.u32(value);
+    }
+    source.u32(4);
+    source.out.extend(b"A\0B\0");
+    source.u32(7);
+    source.u32(0);
+    cubic(&mut source);
+    let paths = super::super::vectors(&source.out, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(paths.stopped.is_none());
+    assert_eq!(paths.records[0].name, "decoded label");
+    assert_eq!(paths.records[0].strokes[0].knots.len(), 1);
+    let payload = paths.records[0].parasite_payloads().next().unwrap();
+    let raw = super::super::super::parasites(payload, 0, Default::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(raw.stopped.is_none());
+    assert_eq!(raw.records[0].name, b"A\0B");
+    assert_eq!(raw.records[0].flags, 7);
+}

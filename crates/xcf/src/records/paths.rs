@@ -149,7 +149,12 @@ impl<'a> Reader<'a, '_> {
             return Ok("");
         }
         let raw = raw.strip_suffix(&[0]).ok_or(Failure::Stop(StopReason::Malformed))?;
-        self.budget.work(raw.len())?;
+        // Admit both scans before checking the decoded label. Opaque parasite
+        // names have their own framing path and are not subjected to this rule.
+        self.budget.work(raw.len().checked_mul(2).ok_or(StopReason::WorkLimit)?)?;
+        if raw.contains(&0) {
+            return Err(StopReason::Malformed.into());
+        }
         std::str::from_utf8(raw).map_err(|_| StopReason::Malformed.into())
     }
     fn flag(&mut self) -> ReadResult<bool> {
