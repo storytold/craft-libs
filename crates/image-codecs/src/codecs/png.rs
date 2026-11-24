@@ -1360,12 +1360,12 @@ fn start<W: Write>(
     if opts.embed_icc
         && let Some(icc) = icc
     {
-        info.icc_profile = Some(icc.clone().into());
+        info.icc_profile = Some(std::borrow::Cow::Borrowed(icc.as_slice()));
     }
     if opts.embed_metadata {
         if let Some(exif) = &meta.exif {
             // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi).into_owned().into());
+            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi));
         }
         if let Some((x, y)) = meta.dpi
             && x > 0.0
