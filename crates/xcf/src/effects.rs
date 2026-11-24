@@ -141,7 +141,8 @@ pub struct StoredEffect<'a> {
     // later auxiliary mask read to another source or unrelated record bytes.
     pub(crate) source_span: SourceSpan<'a>,
     pub name: &'a str,
-    pub icon: &'a str,
+    /// None is the null wire form; Some("") is an explicitly empty icon.
+    pub icon: Option<&'a str>,
     pub operation: &'a str,
     pub version: Option<&'a str>,
     pub arguments: Vec<Argument<'a>>,

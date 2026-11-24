@@ -251,7 +251,10 @@ fn essential_truncation_and_oversized_properties_are_errors_without_partial_reco
     }
     word(&mut oversized, 45);
     word(&mut oversized, (crate::MAX_PAYLOAD + 1) as u32);
-    assert!(Reader::new(&oversized, 26).read(OWNER, 8, &mut Budget::default(), &|| true).is_err());
+    // Enough work to reach the absent payload if the declaration cap regresses.
+    let mut budget = Budget::new(1 << 20, crate::MAX_PAYLOAD + 4096);
+    assert!(matches!(Reader::new(&oversized, 26).read(OWNER, 8, &mut budget, &|| true),
+        Err(Error::Source(crate::Error::Invalid(message))) if message.contains("stored effect property exceeds 64 MiB")));
     assert!(Reader::new(&bytes, 19).read(OWNER, 8, &mut Budget::default(), &|| true).is_err());
 }
 
@@ -456,5 +459,42 @@ fn null_and_empty_configs_are_invalid_without_hiding_later_values_or_source_byte
         assert!(matches!(&parsed.arguments[2].value, ArgumentValue::Config(config) if config.raw == "(x 1)" && config.forms.len() == 1));
         assert!(matches!(parsed.arguments[3].value, ArgumentValue::Int(7)));
         assert_eq!(parsed.raw, &bytes[8..]);
+    }
+}
+
+#[test]
+fn missing_argument_type_retains_later_arguments_mask_and_exact_envelope() {
+    for tail in [vec![], vec![0], vec![0, 0, 0]] {
+        let mut bytes = effect(26, &[("later", 1, 7u32.to_be_bytes().to_vec())]);
+        let at = 8 + text_value("Stored effect").len() + text_value("").len() + text_value("example:inert-operation").len() + text_value("1:0").len();
+        let mut payload = text_value("missing-type");
+        payload.extend(tail);
+        let mut malformed = Vec::new();
+        property(&mut malformed, 45, &payload);
+        drop(bytes.splice(at..at, malformed));
+        let mask = bytes.len() - 8;
+        bytes[mask..].copy_from_slice(&8u64.to_be_bytes());
+        let parsed = read(&bytes, 26).record;
+        assert_eq!(parsed.arguments.len(), 1);
+        assert!(matches!(parsed.arguments[0].value, ArgumentValue::Int(7)));
+        assert_eq!(parsed.mask_offset, 8);
+        assert_eq!(parsed.errors, ["effect argument is missing its type word"]);
+        assert_eq!(parsed.raw, &bytes[8..]);
+    }
+}
+
+#[test]
+fn effect_icons_preserve_null_empty_and_named_wire_forms() {
+    for version in [20, 26] {
+        for (wire, expected) in [(vec![0; 4], None), (text_value(""), Some("")), (text_value("example-icon"), Some("example-icon"))] {
+            let mut bytes = effect(version, &[("later", 1, 7u32.to_be_bytes().to_vec())]);
+            let at = 8 + text_value("Stored effect").len();
+            drop(bytes.splice(at..at + text_value("").len(), wire));
+            let parsed = read(&bytes, version).record;
+            assert_eq!(parsed.icon, expected);
+            assert_eq!(parsed.version, if version >= 22 { Some("1:0") } else { None });
+            assert!(matches!(parsed.arguments[0].value, ArgumentValue::Int(7)));
+            assert_eq!(parsed.raw, &bytes[8..]);
+        }
     }
 }

@@ -91,18 +91,13 @@ pub(super) fn decode_with_work<'a>(
     let mut cursor = base.at(offset);
     work.charge(64)?;
     let name = string(&mut cursor, work)?;
-    let icon = string(&mut cursor, work)?;
+    let icon = optional_string(&mut cursor, work)?;
     let operation = string(&mut cursor, work)?;
-    let stored_version = if version >= 22 {
-        // A null wire string supplies no version constraint. A one-NUL string
-        // is an explicitly empty constraint and must remain distinguishable.
-        let null = cursor.b.get(cursor.pos..).is_some_and(|bytes| bytes.starts_with(&[0; 4]));
-        let value = string(&mut cursor, work)?;
-        if null { None } else { Some(value) }
-    } else {
-        None
-    };
-    charge(budget, name.len().saturating_add(icon.len()).saturating_add(operation.len()).saturating_add(stored_version.map_or(0, str::len)))?;
+    let stored_version = if version >= 22 { optional_string(&mut cursor, work)? } else { None };
+    charge(
+        budget,
+        name.len().saturating_add(icon.map_or(0, str::len)).saturating_add(operation.len()).saturating_add(stored_version.map_or(0, str::len)),
+    )?;
     let mut effect = StoredEffect {
         source_span: super::SourceSpan { bytes: base.b, version, start: offset, end: offset, mask: 0 },
         name,
@@ -152,7 +147,15 @@ pub(super) fn decode_with_work<'a>(
                 let mut argument_cursor = Cursor { b: bytes, pos: 0, wide: base.wide };
                 let argument_name = string(&mut argument_cursor, work)?;
                 charge(budget, argument_name.len())?;
-                let value_kind = argument_cursor.u32()?;
+                let value_kind = match argument_cursor.u32() {
+                    Ok(kind) => kind,
+                    Err(_) => {
+                        // Outer property framing is intact, so a missing type
+                        // cannot hide later arguments or the auxiliary mask.
+                        push_error(&mut effect, "effect argument is missing its type word".into(), budget)?;
+                        continue;
+                    }
+                };
                 let value_bytes = bytes.get(argument_cursor.pos..).ok_or_else(|| invalid("effect argument framing"))?;
                 let before_value = *budget;
                 let value = match argument(&mut argument_cursor, value_kind, budget, work, ctl) {
@@ -214,6 +217,14 @@ pub(super) fn decode_with_work<'a>(
     effect.source_span.end = cursor.pos;
     effect.source_span.mask = mask;
     Ok(effect)
+}
+
+/// Preserve null versus explicitly empty source strings without relaxing
+/// termination, UTF-8, work or size validation for non-null values.
+fn optional_string<'a>(cursor: &mut Cursor<'a>, work: &mut DecodeWork) -> Result<Option<&'a str>> {
+    let null = cursor.b.get(cursor.pos..).is_some_and(|bytes| bytes.starts_with(&[0; 4]));
+    let value = string(cursor, work)?;
+    if null { Ok(None) } else { Ok(Some(value)) }
 }
 
 /// Reads a bounded NUL-terminated UTF-8 effect string and rejects embedded NULs or truncated framing.
