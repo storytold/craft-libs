@@ -3,7 +3,8 @@
 //! no count.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::list::{List, ListRow};
 use craft_ui::runtime::lock_keys;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::layout::{allocate, in_region};
@@ -433,4 +434,30 @@ fn a_view_replayed_moved_inside_a_run_is_kept_at_its_new_place() {
     assert!(runs.iter().any(|(name, _, run)| name.contains("Holder") && *run == MemoRun::Ran), "the holder ran: {runs:?}");
     assert!(runs.iter().any(|(name, _, run)| name.contains("Card") && *run == MemoRun::Replayed), "the card replayed in it: {runs:?}");
     frames.idle(SETTLE, &mut show);
+}
+
+/// A view holding a capped list that reveals its last row on every run.
+#[derive(MemoProps)]
+struct RevealedRows {}
+
+fn revealed_rows(_: &mut RevealedRows, ui: &mut Ui) {
+    let keys: Vec<usize> = (0..40).collect();
+    let source = craft_behavior::keyed(&keys, |key: &usize| *key);
+    List::new("Rows").max_rows(8).reveal(39).show_items(ui, &source, &mut |key, _| ListRow::new(format!("Row {key}")));
+}
+
+/// A reveal moves the rows after the list declared its scroll bar at the old offset: the view runs again rather than
+/// replay a run whose thumb stands where the rows no longer are, so its replays match a real run.
+#[trial]
+fn a_list_revealing_a_row_in_a_memoized_view_replays_as_it_runs() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 400.0)), |ui| {
+            MemoView::new("revealed", RevealedRows {}, revealed_rows).show(ui);
+        });
+    };
+    frames.idle(SETTLE, &mut show);
+    let ran: Vec<_> = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).collect();
+    assert!(ran.is_empty(), "the view settles: {ran:?}");
 }

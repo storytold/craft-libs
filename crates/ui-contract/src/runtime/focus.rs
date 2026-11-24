@@ -89,6 +89,10 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu_bar: Option<Id>,
     /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics (`register_menu_bar_by_claim`).
     pub(crate) menu_bar_by_claim: bool,
+    /// The window's document canvas (`KeyUse::chrome_key`) the last pass registered, while no stop has focus and no
+    /// modal layer is open: its state-dependent claims hold, as its tool takes the arrows, Enter and Escape with nothing
+    /// focused.
+    pub(crate) canvas: Option<Id>,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
@@ -160,6 +164,8 @@ pub(crate) struct State {
     pub(super) seen: FastMap<Id, u64>,
     /// A scope moved focus to its initial stop in the running pass.
     pub(super) entered: bool,
+    /// A component asked for the focus in the running pass (`request`), as an editor that appears under a press does.
+    pub(super) asked: bool,
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
     pub(super) menu_bar: Option<Id>,
@@ -431,11 +437,28 @@ pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<Fo
         if state.stop_ids.contains(&id) {
             return None;
         }
-        let rec = state.stops.get(from..)?.first()?;
-        Some(match rec.stop.part {
-            Some(part) => FocusTarget::Part(rec.stop.id, part),
-            None => FocusTarget::Id(rec.stop.id),
-        })
+        state.stops.get(from..)?.first().map(target_of)
+    })
+}
+
+/// The first stop the running pass registered in `range` (of `stop_count`s) that Tab and a request reach.
+pub(crate) fn first_stop_in(ctx: &Context, range: std::ops::Range<usize>) -> Option<FocusTarget> {
+    with(ctx, |state| state.stops.get(range.start..range.end.min(state.stops.len()))?.iter().find(|rec| !rec.stop.press_only).map(target_of))
+}
+
+/// The request target of the stop `rec`.
+fn target_of(rec: &StopRec) -> FocusTarget {
+    match rec.stop.part {
+        Some(part) => FocusTarget::Part(rec.stop.id, part),
+        None => FocusTarget::Id(rec.stop.id),
+    }
+}
+
+/// Whether focus is on a stop the running pass registered in `range` (of `stop_count`s).
+pub(crate) fn focus_in(ctx: &Context, range: std::ops::Range<usize>) -> bool {
+    let Some(focused) = focused_stop(ctx) else { return false };
+    with(ctx, |state| {
+        state.stops.get(range.start..range.end.min(state.stops.len())).is_some_and(|recs| recs.iter().any(|rec| rec.stop.key() == focused))
     })
 }
 
@@ -601,6 +624,16 @@ pub(crate) fn bar_return_of(ctx: &Context, focused: Id) -> Option<StopKey> {
     with(ctx, |state| state.bar_return.as_ref().filter(|(bar, _)| *bar == focused).map(|(_, key)| *key))
 }
 
+/// The stop the keyboard goes back to while `focused` holds it inside open menus or on a menu bar, and whether a menu
+/// bar took it from that stop: a shortcut pressed there matches at that stop, and a text part keeps its selection for
+/// the menus' picks. `None` when the focus is in neither, or a menu opened with nothing focused.
+pub(crate) fn returning(ctx: &Context, focused: Id) -> Option<(StopKey, bool)> {
+    match focused_rec(ctx).and_then(|rec| out_of_menus(ctx, rec.scope)) {
+        Some(out) => Some((out.to, out.bar)),
+        None => bar_return_of(ctx, focused).map(|held| (held, true)),
+    }
+}
+
 /// Where focus goes once every menu around the scope `from` closes, as `out_of_menus` finds it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OutOfMenus {
@@ -678,13 +711,15 @@ pub(crate) fn register_doc(ctx: &Context, key: DocKey, id: Id) {
 
 /// Moves focus to `target`, leaves modality unchanged and asks the enclosing scroll owner to reveal it. Called
 /// while a pass runs, it moves focus in that pass, so the rest of the pass reads the new focus; called between
-/// passes, it moves focus at the next pass's begin hook. The one public path to programmatic focus. `false` in a measuring
+/// passes, it moves focus at the next pass's begin hook; a pointer press of the pass moves it no further at the pass's
+/// end. The one public path to programmatic focus. `false` in a measuring
 /// run, which moves nothing: a caller that keeps a pending request keeps it until a run takes it.
 pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     if !crate::runtime::measure::effect(ctx, "focus::request") {
         return false;
     }
     if crate::runtime::frame::in_pass(ctx) {
+        with(ctx, |state| state.asked = true);
         request_now(ctx, target);
         return true;
     }
@@ -818,9 +853,8 @@ pub(crate) enum FocusOrigin {
     /// A scope shown for the first time moved focus to its initial stop (a dialog's first field): a request too, so
     /// it counts as an arrival by key, and a text part selects its whole text so typing replaces it.
     Open,
-    /// The focused stop went away and handed focus to its neighbour: neither the keyboard nor a request chose it, so
-    /// it is no arrival by key (a deleted guide selects no other guide) and no scroll owner reveals it (a closed canvas
-    /// text editor does not pan the canvas to the stop before it).
+    /// The focused child of a collection row went away and handed focus back to its row: neither the keyboard nor a
+    /// request chose it, so it is no arrival by key and no scroll owner reveals it.
     Removal,
 }
 
@@ -1010,7 +1044,10 @@ pub(crate) fn end(ctx: &Context) {
     let foreign = host_focus || (!captured && crate::runtime::egui::areas::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
     let host_text = host_focus && ctx.text_edit_focused();
+    // A modal layer keeps the canvas's claims from it, as it keeps the arrows (`overlay::end_pass` ran before).
+    let modal = crate::runtime::overlay::top_modal_in(ctx, viewport).is_some();
     with(ctx, |state| {
+        state.record.canvas = state.record.canvas.filter(|_| !modal);
         state.record.foreign = foreign;
         state.record.host_focus = host_focus;
         state.record.host_text = host_text;

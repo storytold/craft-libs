@@ -2,9 +2,50 @@
 //! and the stacking keys' move. A collection's row drag and a section stack both use them.
 
 use crate::runtime::drag::DropMark;
+use crate::runtime::egui::pass;
+use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::keys::Intents;
 use craft_behavior::{Axis, Intent, NavOutline, keys};
-use egui::{Pos2, Rect};
+use egui::{Context, Pos2, Rect};
+
+/// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
+pub(crate) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
+
+/// The signed scroll step, in the view's units, of a drag whose pointer is `at` from the view's top edge in a `view`
+/// tall view of `row` tall rows: the band is `row.min(view / 2.0)`, the step grows with the depth into it (past the
+/// edge it is the full rate), and `dt` is the frame's time. Zero outside both bands, and linear in `dt`, so a step of
+/// `dt = 1.0` tells whether the pointer is in a band.
+pub(crate) fn edge_step(view: f32, row: f32, at: f32, dt: f32) -> f32 {
+    let band = row.min(view / 2.0);
+    if band <= 0.0 {
+        return 0.0;
+    }
+    let (depth, direction) = if at < band { ((band - at) / band, -1.0) } else { ((at - (view - band)) / band, 1.0) };
+    if depth <= 0.0 {
+        return 0.0;
+    }
+    direction * depth.min(1.0) * EDGE_ROWS_PER_SECOND * row * dt
+}
+
+/// Whether a scroller under the pointer took the drag's edge step in this pass.
+#[derive(Default)]
+pub(crate) struct EdgeStepTaken(bool);
+
+fn with_edge_step<R>(ctx: &Context, f: impl FnOnce(&mut EdgeStepTaken) -> R) -> R {
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Stamped<EdgeStepTaken>>::with_pass(ctx, viewport, pass::pass_nr(ctx, viewport), |taken, _| taken.0 = false, f)
+}
+
+/// Whether a scroller took this pass's drag edge step. A collection takes it before the body around it settles, so the
+/// innermost scroller under the pointer is the only one that steps.
+pub(crate) fn edge_step_taken(ctx: &Context) -> bool {
+    with_edge_step(ctx, |taken| taken.0)
+}
+
+/// Marks this pass's drag edge step as taken.
+pub(crate) fn mark_edge_step(ctx: &Context) {
+    with_edge_step(ctx, |taken| taken.0 = true);
+}
 
 /// The gap a drop would land in.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,8 +118,8 @@ pub fn take_move_item(intents: &mut Intents) -> Option<ItemMove> {
 }
 
 /// The share of a group row's height, at its top and at its bottom, where a drop lands before or after the row; the
-/// middle drops into the group.
-const GROUP_EDGE: f32 = 0.25;
+/// middle drops into the group. A list that takes a payload both between and onto rows splits every row so.
+pub(crate) const GROUP_EDGE: f32 = 0.25;
 
 /// Where a drop in a tree lands: before row `insert` of the display order, inside the group row `parent` (`None` at the
 /// top level).

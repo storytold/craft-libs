@@ -2,6 +2,7 @@
 
 use craft_behavior::Mixed;
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
+use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::pictures::{SampleTip, paint_tip, paint_wave};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -21,10 +22,10 @@ const MAX_SIZE: f64 = 5000.0;
 /// The tip and stroke of a preset with `tip`, in the ink of the surface; a soft tip's stroke is wider and half
 /// opaque.
 fn paint(tip: SampleTip) -> BrushRowPaint {
-    let (width, alpha) = if tip == SampleTip::Soft { (0.19, 0.5) } else { (0.12, 1.0) };
+    let ((width, alpha), (tip_key, stroke_key)) = if tip == SampleTip::Soft { ((0.19, 0.5), (1, 2)) } else { ((0.12, 1.0), (3, 4)) };
     BrushRowPaint::new(
-        move |cx, rect| paint_tip(cx, rect, tip, cx.ink()),
-        move |cx, rect| paint_wave(cx, rect, width, cx.ink().gamma_multiply(alpha)),
+        FacePaint::new(tip_key, move |cx, rect| paint_tip(cx, rect, tip, cx.ink())),
+        FacePaint::new(stroke_key, move |cx, rect| paint_wave(cx, rect, width, cx.ink().gamma_multiply(alpha))),
     )
 }
 
