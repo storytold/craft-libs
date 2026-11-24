@@ -973,8 +973,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let has_focus = focus::is_focused(ctx, editor.response.id);
             // The field lost the focus with nothing typed (a click elsewhere): the text field reports no event for an
             // unedited name, so the rename ends here, as it does by Tab and as a typed name does by committing.
-            // An open edit menu holds the editor's editing focus: key focus is with the menu then, which is no blur.
-            let blurred = real && self.renaming.held && !has_focus && !focus::holds_opened_layer(ctx, editor.response.id);
+            let blurred = real && self.renaming.held && !has_focus;
             self.renaming.held |= real && has_focus;
             match end {
                 None if !editor.events.is_empty() => {}
