@@ -62,12 +62,21 @@ pub struct Color {
 #[derive(Debug, PartialEq)]
 pub enum Value {
     Number(f64),
+    /// A finite `rel` coefficient, not yet scaled by the consumer's reference dimension.
+    /// Applies to any declared numeric field without rounding to its eventual integer type.
+    RelativeNumber(f64),
     Integer(i64),
     UnsignedInteger(u32),
     Boolean(bool),
     Choice(i32),
     Text,
     Color(Color),
+    /// Source CMYK components and alpha in their written units. No profile conversion,
+    /// component normalization, clamping or native color policy is applied here.
+    CmykColor {
+        cmyk: [f64; 4],
+        alpha: f64,
+    },
     Configuration,
     Unknown,
     Input(Input),
@@ -192,11 +201,21 @@ enum Token {
     Consumed,
 }
 
+fn token(tokens: &mut Vec<Token>, value: Token, budget: &mut Budget) -> Result<()> {
+    if tokens.len() >= MAX_TOKENS {
+        return Err(invalid("graph exceeds 2048 lexical items"));
+    }
+    push(tokens, value, budget)
+}
+
 // Public chain syntax uses inert shell quoting: no variable, command or path expansion.
+// Only the first assignment '=' separates name and scalar value. Auxiliary delimiters
+// apply at the value's start/end; brackets in the middle of a scalar remain literal data.
 fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut at = 0;
     let mut next_check = 0;
+    let mut expect_value = false;
     let next = |at| raw.get(at..).and_then(|text| text.chars().next());
     while let Some(ch) = next(at) {
         if at >= next_check {
@@ -204,6 +223,10 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             next_check = at.saturating_add(1024);
         }
         if ch.is_ascii_whitespace() {
+            if expect_value {
+                token(&mut tokens, Token::Word(String::new()), budget)?;
+                expect_value = false;
+            }
             at += ch.len_utf8();
             continue;
         }
@@ -217,11 +240,8 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             }
             continue;
         }
-        if matches!(ch, '=' | '[' | ']') {
-            if tokens.len() >= MAX_TOKENS {
-                return Err(invalid("graph exceeds 2048 lexical items"));
-            }
-            push(
+        if ch == '[' || !expect_value && matches!(ch, '=' | ']') {
+            token(
                 &mut tokens,
                 match ch {
                     '=' => Token::Equal,
@@ -230,21 +250,26 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 },
                 budget,
             )?;
+            expect_value = ch == '=';
             at += 1;
             continue;
         }
+        let scalar = expect_value;
+        expect_value = false;
         let mut word = String::new();
         let mut started = false;
+        let mut trailing_closes = 0usize;
         while let Some(ch) = next(at) {
             if at >= next_check {
                 check(keep_going)?;
                 next_check = at.saturating_add(1024);
             }
-            if ch.is_ascii_whitespace() || matches!(ch, '=' | '[' | ']') {
+            if ch.is_ascii_whitespace() || !scalar && matches!(ch, '=' | '[' | ']') {
                 break;
             }
             if matches!(ch, '\'' | '"') {
                 started = true; // Explicit empty quotes still contribute a word.
+                trailing_closes = 0;
                 let quote = ch;
                 at += ch.len_utf8();
                 loop {
@@ -261,8 +286,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                         let escaped = next(at).ok_or_else(|| invalid("unterminated graph quoted escape"))?;
                         if matches!(escaped, '$' | '`' | '"' | '\\' | '\n') {
                             at += escaped.len_utf8();
-                            // GLib's public shell parser keeps a quoted escaped newline;
-                            // only an unquoted backslash-newline is a continuation.
+                            // Quoted escaped newlines are literal; only unquoted ones continue.
                             character(&mut word, escaped, budget)?;
                         } else {
                             character(&mut word, '\\', budget)?;
@@ -277,20 +301,31 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 at += escaped.len_utf8();
                 if escaped != '\n' {
                     started = true;
+                    trailing_closes = 0;
                     character(&mut word, escaped, budget)?;
                 }
             } else {
                 started = true;
+                trailing_closes = if scalar && ch == ']' { trailing_closes.saturating_add(1) } else { 0 };
                 character(&mut word, ch, budget)?;
                 at += ch.len_utf8();
             }
         }
-        if started {
-            if tokens.len() >= MAX_TOKENS {
-                return Err(invalid("graph exceeds 2048 lexical items"));
-            }
-            push(&mut tokens, Token::Word(word), budget)?;
+        // Each removed character is an ASCII ']', so this remains a UTF-8 boundary.
+        let length = word.len().checked_sub(trailing_closes).ok_or_else(|| invalid("invalid graph scalar boundary"))?;
+        word.truncate(length);
+        if started || scalar {
+            token(&mut tokens, Token::Word(word), budget)?;
         }
+        for index in 0..trailing_closes {
+            if index % 64 == 0 {
+                check(keep_going)?;
+            }
+            token(&mut tokens, Token::Close, budget)?;
+        }
+    }
+    if expect_value {
+        token(&mut tokens, Token::Word(String::new()), budget)?;
     }
     Ok(tokens)
 }
@@ -473,6 +508,15 @@ impl<'b, 's> Decoder<'b, 's> {
 }
 
 fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) -> Result<Value> {
+    if matches!(kind, Some(FieldType::Number | FieldType::Integer | FieldType::UnsignedInteger))
+        && let Some(coefficient) = literal.strip_suffix("rel")
+    {
+        let coefficient = coefficient.parse::<f64>().map_err(|_| invalid("relative graph coefficient is not a number"))?;
+        if !coefficient.is_finite() {
+            return Err(invalid("relative graph coefficient is not finite"));
+        }
+        return Ok(Value::RelativeNumber(coefficient));
+    }
     Ok(match kind {
         None => Value::Unknown,
         Some(FieldType::Number) => {
@@ -511,8 +555,37 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
             }
             Value::Choice(found.or(numeric_fallback).ok_or_else(|| invalid("unknown graph choice value"))?)
         }
-        Some(FieldType::Color) => Value::Color(color(literal)?),
+        Some(FieldType::Color) => match cmyk_color(literal)? {
+            Some(value) => value,
+            None => Value::Color(color(literal)?),
+        },
     })
+}
+
+fn cmyk_color(literal: &str) -> Result<Option<Value>> {
+    let Some((parts, count)) = literal
+        .strip_prefix("cmyka(")
+        .and_then(|value| value.strip_suffix(')'))
+        .map(|parts| (parts, 5))
+        .or_else(|| literal.strip_prefix("cmyk(").and_then(|value| value.strip_suffix(')')).map(|parts| (parts, 4)))
+    else {
+        return Ok(None);
+    };
+    let mut components: [f64; 5] = [0., 0., 0., 0., 1.];
+    let mut parsed = 0;
+    for (index, item) in parts.split(',').enumerate() {
+        let component = components.get_mut(index).ok_or_else(|| invalid("too many graph CMYK components"))?;
+        *component = item.trim().parse().map_err(|_| invalid("invalid graph CMYK component"))?;
+        if !component.is_finite() {
+            return Err(invalid("graph CMYK component is not finite"));
+        }
+        parsed += 1;
+    }
+    if parsed != count {
+        return Err(invalid("wrong graph CMYK component count"));
+    }
+    let [c, m, y, k, alpha] = components;
+    Ok(Some(Value::CmykColor { cmyk: [c, m, y, k], alpha }))
 }
 
 fn color(value: &str) -> Result<Color> {

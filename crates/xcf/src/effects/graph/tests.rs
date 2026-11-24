@@ -271,3 +271,101 @@ fn unquoted_line_continuations_do_not_emit_words_but_explicit_empty_quotes_do() 
     let exact_tokens = format!("id=base {}\\\n", "ref=base ".repeat(681));
     assert!(parse(&exact_tokens, SCHEMA, &mut Budget::default(), &|| true).is_ok(), "a continuation contributes no item at the lexical cap");
 }
+
+#[test]
+fn relative_numeric_coefficients_remain_inert_until_a_dimension_is_known() {
+    for (field, absolute) in [("n", Value::Number(0.5)), ("signed", Value::Integer(1)), ("seed", Value::UnsignedInteger(1))] {
+        for literal in ["0.1rel", "0.5rel", "-0.25rel", "1e-3rel"] {
+            let source = format!("gain {field}={literal}");
+            let graph = read(&source);
+            assert_eq!(graph.nodes[0].properties[0].literal, literal);
+            let expected = literal.strip_suffix("rel").unwrap().parse::<f64>().unwrap();
+            assert_eq!(graph.nodes[0].properties[0].value, Value::RelativeNumber(expected));
+            assert!(graph.diagnostics.is_empty());
+        }
+        let literal = if field == "n" { "0.5" } else { "1" };
+        let source = format!("gain {field}={literal}");
+        assert_eq!(read(&source).nodes[0].properties[0].value, absolute);
+        for literal in ["rel", "NaNrel", "infrel", "-infrel", "1e999rel", "0.5relrel", "junkrel"] {
+            let source = format!("gain {field}={literal}");
+            assert!(parse(&source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{source}");
+        }
+    }
+    let graph = read("gain unknown=0.5rel text=0.5rel");
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Unknown);
+    assert_eq!(graph.nodes[0].properties[1].value, Value::Text);
+    assert_eq!(graph.nodes[0].properties[0].literal, "0.5rel");
+}
+
+#[test]
+fn scalar_assignments_preserve_internal_delimiters_and_empty_right_hand_sides() {
+    let fields = [Field { name: "string", kind: FieldType::Text }];
+    let schema = [Operation { name: "gegl:text", fields: &fields }];
+    for (source, expected) in [
+        ("gegl:text string=a=b", "a=b"),
+        ("gegl:text string=a[b]c", "a[b]c"),
+        ("gegl:text string=a]]b", "a]]b"),
+        ("gegl:text string=", ""),
+        ("gegl:text string==", "="),
+        ("gegl:text string=a=b=c", "a=b=c"),
+        ("gegl:text string='[a=b]'", "[a=b]"),
+    ] {
+        let graph = parse(source, &schema, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].properties[0].literal, expected, "{source}");
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Text);
+        assert!(graph.diagnostics.is_empty());
+    }
+    let graph = read("gain text= n=1 configuration=(x[0]=1)");
+    assert_eq!(graph.nodes[0].properties[0].literal, "");
+    assert_eq!(graph.nodes[0].properties[1].value, Value::Number(1.));
+    assert_eq!(graph.nodes[0].properties[2].literal, "(x[0]=1)");
+    assert_eq!(graph.nodes[0].properties[2].value, Value::Configuration);
+}
+
+#[test]
+fn scalar_delimiters_do_not_consume_auxiliary_block_boundaries() {
+    for (source, expected) in [
+        ("id=base over aux=[ref=base gain text=a[b]c n=1]", "a[b]c"),
+        ("over aux=[gain text=a=b]", "a=b"),
+        ("over aux=[gain text=]", ""),
+        ("over aux=[over aux=[gain text=a[b]c]]", "a[b]c"),
+    ] {
+        let graph = read(source);
+        assert_eq!(graph.nodes[0].operation, "gain");
+        assert_eq!(graph.nodes[0].properties[0].literal, expected, "{source}");
+        assert_eq!(graph.nodes.last().unwrap().operation, "over");
+        assert!(graph.diagnostics.is_empty());
+        check_edges(&graph);
+    }
+    for source in ["over aux=[]", "over aux=[gain text=a[b]c", "gain n=a=b", "gain enabled="] {
+        assert!(parse(source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn cmyk_components_are_retained_without_rgb_conversion_or_unit_normalization() {
+    for (literal, cmyk, alpha) in [
+        ("cmyk(0.0,25.0,100.0,0.0)", [0., 25., 100., 0.], 1.),
+        ("cmyka(0.0,25.0,100.0,0.0,0.5)", [0., 25., 100., 0.], 0.5),
+        ("cmyka(0,25,100,0,50)", [0., 25., 100., 0.], 50.),
+    ] {
+        let source = format!("color value='{literal}'");
+        let graph = read(&source);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::CmykColor { cmyk, alpha });
+        assert!(graph.diagnostics.is_empty());
+    }
+    assert_eq!(
+        read("color value='rgb(0,0.25,1)'").nodes[0].properties[0].value,
+        Value::Color(Color { rgba: [0., 0.25, 1., 1.], space: ColorSpace::LinearRgb })
+    );
+    assert_eq!(
+        read("color value='#0040ff'").nodes[0].properties[0].value,
+        Value::Color(Color { rgba: [0., 64. / 255., 1., 1.], space: ColorSpace::Srgb })
+    );
+    for literal in ["cmyk(1,2,3)", "cmyk(1,2,3,4,5)", "cmyka(1,2,3,4)", "cmyka(1,2,3,4,5,6)", "cmyk(NaN,2,3,4)", "cmyka(1,2,3,4,inf)"] {
+        let source = format!("color value='{literal}'");
+        assert!(parse(&source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{source}");
+    }
+}
