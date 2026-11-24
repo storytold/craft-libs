@@ -67,6 +67,8 @@ pub struct Stroke<'a> {
 pub struct SourcePath<'a> {
     pub source_index: usize,
     pub offset: usize,
+    /// UTF-8 label, or an empty compatibility placeholder for an undecodable
+    /// legacy label. Use `decoded_name` to distinguish that case from empty.
     pub name: &'a str,
     pub tattoo: Option<u32>,
     pub selected: bool,
@@ -83,7 +85,45 @@ pub struct SourcePath<'a> {
     pub raw: &'a [u8],
 }
 
+/// Borrowed framed parasite bytes and their absolute source offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParasiteSpan<'a> {
+    pub offset: usize,
+    pub bytes: &'a [u8],
+}
+
 impl SourcePath<'_> {
+    /// Original label bytes without the optional final wire NUL. Legacy labels
+    /// may use an unknown locale encoding; no encoding is guessed here.
+    pub fn name_bytes(&self) -> &[u8] {
+        let length = self.raw.get(..4).and_then(crate::be_u32).unwrap_or(0) as usize;
+        let bytes = self.raw.get(4..).and_then(|bytes| bytes.get(..length)).unwrap_or_default();
+        bytes.strip_suffix(&[0]).unwrap_or(bytes)
+    }
+
+    /// A decoded label when its original bytes are UTF-8. Modern labels are
+    /// always decoded; `None` preserves an undecodable legacy label explicitly.
+    pub fn decoded_name(&self) -> Option<&str> {
+        std::str::from_utf8(self.name_bytes()).ok()
+    }
+
+    /// The same ordered payloads as `parasite_payloads`, with absolute offsets
+    /// suitable for `super::parasites`. No payload is copied or scanned.
+    pub fn parasite_spans(&self) -> impl Iterator<Item = ParasiteSpan<'_>> {
+        let vector = (!self.parasites.is_empty())
+            .then(|| {
+                let relative = self.parasites.as_ptr().addr().checked_sub(self.raw.as_ptr().addr())?;
+                Some(ParasiteSpan { offset: self.offset.checked_add(relative)?, bytes: self.parasites })
+            })
+            .flatten();
+        vector.into_iter().chain(
+            self.properties
+                .iter()
+                .filter(|property| property.kind == 21)
+                .filter_map(|property| Some(ParasiteSpan { offset: property.offset.checked_add(8)?, bytes: property.payload })),
+        )
+    }
+
     /// Borrow the framed parasite payloads in source order, for decoding with
     /// [`super::parasites`]. Historical vectors supply one nonempty span;
     /// standalone paths supply every PROP_PARASITES payload, including empty or
@@ -139,14 +179,14 @@ impl<'a> Reader<'a, '_> {
         let count = self.word()? as usize;
         if count > limit { Err(StopReason::RecordLimit.into()) } else { Ok(count) }
     }
-    fn name(&mut self) -> ReadResult<&'a str> {
+    fn name_bytes(&mut self) -> ReadResult<&'a [u8]> {
         let length = self.word()? as usize;
         if length > self.limits.name_bytes {
             return Err(StopReason::StringLimit.into());
         }
         let raw = self.take(length)?;
         if raw.is_empty() {
-            return Ok("");
+            return Ok(raw);
         }
         let raw = raw.strip_suffix(&[0]).ok_or(Failure::Stop(StopReason::Malformed))?;
         // Admit both scans before checking the decoded label. Opaque parasite
@@ -155,7 +195,10 @@ impl<'a> Reader<'a, '_> {
         if raw.contains(&0) {
             return Err(StopReason::Malformed.into());
         }
-        std::str::from_utf8(raw).map_err(|_| StopReason::Malformed.into())
+        Ok(raw)
+    }
+    fn name(&mut self) -> ReadResult<&'a str> {
+        std::str::from_utf8(self.name_bytes()?).map_err(|_| StopReason::Malformed.into())
     }
     fn flag(&mut self) -> ReadResult<bool> {
         match self.word()? {
@@ -302,7 +345,9 @@ impl<'a> Reader<'a, '_> {
     fn legacy(&mut self, source_index: usize, active: u32) -> ReadResult<SourcePath<'a>> {
         let start = self.cursor.pos;
         let offset = self.offset()?;
-        let name = self.name()?;
+        // Old locale-encoded labels do not invalidate their saved geometry.
+        // The exact source remains available through SourcePath::name_bytes.
+        let name = std::str::from_utf8(self.name_bytes()?).unwrap_or_default();
         let linked = self.word()?;
         let state = self.take(1)?.first().copied().unwrap_or(0);
         let closed = self.flag()?;
@@ -733,6 +778,41 @@ mod tests {
     }
 
     #[test]
+    fn undecodable_legacy_names_keep_both_paths_and_exact_geometry() {
+        for version in 1..=3 {
+            let mut bytes = legacy_bytes(version, true);
+            // Same wire length as "old": an original locale-encoded label.
+            bytes[12..16].copy_from_slice(&[b'C', b'a', 0xe9, 0]);
+            bytes[4..8].copy_from_slice(&2u32.to_be_bytes());
+            bytes.extend_from_slice(&legacy_bytes(version, true)[8..]);
+            let scan = legacy(&bytes, 97, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert!(scan.stopped.is_none());
+            assert_eq!(scan.records.len(), 2);
+            let first = &scan.records[0];
+            assert_eq!(first.offset, 105);
+            assert_eq!(first.name_bytes(), &[b'C', b'a', 0xe9]);
+            assert_eq!(first.decoded_name(), None);
+            assert_eq!(first.name, "");
+            assert_eq!(first.strokes[0].knots[0].anchor.position, [-4.0, 2.0]);
+            assert_eq!(first.strokes[0].knots[0].outgoing.position, [6.0, 7.0]);
+            assert!(first.strokes[0].closed);
+            assert_eq!(scan.records[1].decoded_name(), Some("old"));
+            assert_eq!(scan.records[1].strokes[0].knots[0].anchor.position, [-4.0, 2.0]);
+            assert_eq!(first.name_bytes().as_ptr(), bytes[12..].as_ptr());
+        }
+        let mut modern = vectors_bytes();
+        modern[16] = 0xff;
+        let scan = vectors(&modern, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+        let mut bad = legacy_bytes(1, false);
+        bad[15] = b'X';
+        assert_eq!(legacy(&bad, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap().stopped.unwrap().reason, StopReason::Malformed);
+        bad[15] = 0;
+        bad[13] = 0;
+        assert_eq!(legacy(&bad, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap().stopped.unwrap().reason, StopReason::Malformed);
+    }
+
+    #[test]
     fn legacy_versions_preserve_signed_coordinates_closure_and_source_flags() {
         for version in 1..=3 {
             for closed in [false, true] {
@@ -955,6 +1035,12 @@ mod tests {
         let payloads = scan.records[0].parasite_payloads().collect::<Vec<_>>();
         assert_eq!(payloads, [&bytes[start..]]);
         assert_eq!(payloads[0].as_ptr(), bytes[start..].as_ptr());
+        let shifted = vectors(&bytes, 113, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        let span = shifted.records[0].parasite_spans().next().unwrap();
+        assert_eq!((span.offset, span.bytes.as_ptr()), (113 + start, payloads[0].as_ptr()));
+        let decoded = super::super::parasites(span.bytes, span.offset, Default::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(decoded.records[0].offset, span.offset);
+        assert_eq!(decoded.records[1].offset, span.offset + decoded.records[0].raw.len());
         let records = super::super::parasites(payloads[0], start, Default::default(), &mut Budget::default(), &|| true).unwrap();
         assert!(records.stopped.is_none());
         assert_eq!(
@@ -964,6 +1050,39 @@ mod tests {
         let empty = legacy_bytes(3, true);
         let legacy = legacy(&empty, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
         assert_eq!(legacy.records[0].parasite_payloads().count(), 0);
+    }
+
+    #[test]
+    fn standalone_parasite_spans_preserve_duplicate_empty_payloads_and_offsets() {
+        let mut payload = Vec::new();
+        let mut starts = Vec::new();
+        for body in [b"".as_slice(), b"opaque", b""] {
+            word(&mut payload, 21);
+            word(&mut payload, body.len() as u32);
+            starts.push(payload.len());
+            payload.extend_from_slice(body);
+        }
+        for value in [0, 0, 1, 0] {
+            word(&mut payload, value);
+        }
+        let mut bytes = vec![0; 19];
+        name(&mut bytes, "standalone");
+        word(&mut bytes, payload.len() as u32);
+        let base = bytes.len();
+        bytes.extend(payload);
+        let scan = standalone(&bytes, 19, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(scan.stopped.is_none());
+        let path = &scan.records[0];
+        let spans = path.parasite_spans().collect::<Vec<_>>();
+        assert_eq!(spans.len(), 3);
+        assert_eq!(path.parasite_payloads().collect::<Vec<_>>(), spans.iter().map(|span| span.bytes).collect::<Vec<_>>());
+        for (span, start) in spans.iter().zip(starts) {
+            assert_eq!(span.offset, base + start);
+            assert_eq!(span.bytes.as_ptr(), bytes[span.offset..].as_ptr());
+        }
+        assert!(spans[0].bytes.is_empty() && spans[2].bytes.is_empty());
+        assert_eq!(spans[1].bytes, b"opaque");
+        assert_eq!(path.decoded_name(), Some("standalone"));
     }
     #[test]
     fn overflowing_source_spans_are_rejected_before_path_retention() {

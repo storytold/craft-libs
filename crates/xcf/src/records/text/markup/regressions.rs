@@ -263,14 +263,49 @@ fn long_numeric_entity_polls_inside_decoding_without_bypassing_source_limits() {
     let mut budget = Budget::default();
     // Skip XML pre-validation and cursor traversal so only entity decoding can
     // observe this cancellation; no output has been retained yet.
-    let mut parser = parser(&raw, &mut budget, &keep);
-    assert!(matches!(parser.decoded(0..raw.len(), false, true), Err(Failure::Cancelled)));
+    let mut decoder = parser(&raw, &mut budget, &keep);
+    assert!(matches!(decoder.decoded(0..raw.len(), false, true), Err(Failure::Cancelled)));
     assert_eq!(calls.get(), 2);
+    // The delimiter scan polls at 0..=4096 (17 calls); allow the first digit
+    // poll too, then cancel at digit 256. Neither earlier walk can satisfy this.
+    calls.set(0);
+    let keep_digits = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 19
+    };
+    let mut budget = Budget::default();
+    let retained = budget.retained_remaining();
+    assert!(matches!(parser(&raw, &mut budget, &keep_digits).decoded(0..raw.len(), false, true), Err(Failure::Cancelled)));
+    assert_eq!(calls.get(), 19);
+    assert_eq!(budget.retained_remaining(), retained, "cancel before producing the scalar");
     let raw = format!("<markup>{raw}</markup>");
     let scan = tokenize(&raw, Limits { bytes: raw.len() - 1, ..Limits::default() }, &mut Budget::default(), &|| true).unwrap();
     assert_eq!(scan.stopped.unwrap().reason, StopReason::PayloadLimit);
     let scan = tokenize(&raw, Limits::default(), &mut Budget::new(16 + 8 * raw.len() - 1, crate::MAX_METADATA_BYTES), &|| true).unwrap();
     assert_eq!(scan.stopped.unwrap().reason, StopReason::WorkLimit);
+}
+
+#[test]
+fn long_comment_body_polls_before_reaching_its_terminator() {
+    let raw = format!("<!--{}--><markup/>", "x".repeat(4096));
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 2
+    };
+    let mut budget = Budget::default();
+    let mut reader = parser(&raw, &mut budget, &keep);
+    reader.at = 4;
+    reader.checked_at = 4;
+    assert!(matches!(reader.through("-->"), Err(Failure::Cancelled)));
+    assert_eq!(calls.get(), 2);
+    assert!(reader.at < raw.find("-->").unwrap());
+    assert_eq!(reader.at, 516);
+    let mut budget = Budget::default();
+    let mut reader = parser(&raw, &mut budget, &|| true);
+    reader.at = 4;
+    assert_eq!(reader.through("-->").unwrap_or_else(|_| panic!("valid comment")), 4..4100);
+    assert_eq!(reader.at, 4103);
 }
 
 #[test]
