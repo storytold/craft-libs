@@ -291,22 +291,37 @@ impl Xcf<'_> {
         self.source_order(options)?;
         let name = cursor.string()?;
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
-        let selection = props(&mut cursor)?.iter().any(|p| p.kind == 4);
-        if selection && dimensions != (self.image.width, self.image.height) {
-            return Err(invalid("selection dimensions do not match the canvas"));
+        let name_bytes = name.len();
+        let result = (|| {
+            let selection = props(&mut cursor)?.iter().any(|p| p.kind == 4);
+            if selection && dimensions != (self.image.width, self.image.height) {
+                return Err(invalid("selection dimensions do not match the canvas"));
+            }
+            let hierarchy = cursor.ptr()?;
+            // Saved channels/selections use linear coverage at high precision too;
+            // preserve the existing nonlinear U8 channel-format exception.
+            let nonlinear_u8 = self.image.precision.bytes == 1 && !self.image.precision.float && !self.image.precision.linear;
+            let info = self.visit_hierarchy(
+                VisitTarget {
+                    pointer: hierarchy,
+                    channels: 1,
+                    indexed: false,
+                    dimensions: Some(dimensions),
+                    coverage: owner.is_some() || !nonlinear_u8,
+                },
+                options,
+                budget,
+                keep_going,
+                visit,
+            )?;
+            Ok((Channel { name, selection }, info))
+        })();
+        if result.is_err() {
+            // Refund only this name: a callback may have retained other channels
+            // through the same XCF. Decoded pixel work is never refunded.
+            self.meta_budget.set(self.meta_budget.get().saturating_add(name_bytes));
         }
-        let hierarchy = cursor.ptr()?;
-        // Saved channels/selections use linear coverage at high precision too;
-        // preserve the existing nonlinear U8 channel-format exception.
-        let nonlinear_u8 = self.image.precision.bytes == 1 && !self.image.precision.float && !self.image.precision.linear;
-        let info = self.visit_hierarchy(
-            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some(dimensions), coverage: owner.is_some() || !nonlinear_u8 },
-            options,
-            budget,
-            keep_going,
-            visit,
-        )?;
-        Ok((Channel { name, selection }, info))
+        result
     }
 
     pub(super) fn hierarchy_head(&self, pointer: usize, channels: usize) -> Result<HierarchyHead> {

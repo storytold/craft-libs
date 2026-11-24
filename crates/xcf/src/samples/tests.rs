@@ -728,3 +728,36 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
         }
     }
 }
+
+#[test]
+fn failed_channel_visits_release_only_their_name_reservation() {
+    let mut source = Source::gray(150, 1, vec![1, 2]);
+    source.width = 2;
+    source.mask = Some(vec![3, 4]);
+    source.channel = Some(vec![5, 6]);
+    let bytes = source.write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    reader.meta_budget.set("Mask".len());
+    let mut short = 1;
+    assert!(reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut short, GO, |_| panic!("unadmitted pixels")).is_err());
+    assert_eq!(short, 1);
+    assert_eq!(reader.meta_budget.get(), "Mask".len());
+    let mut exact = 2;
+    let (mask, _) = reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut exact, GO, |_| Ok(())).unwrap().unwrap();
+    assert_eq!(mask.name, "Mask");
+    assert_eq!(reader.meta_budget.get(), 0, "returned names remain retained");
+    assert_eq!(exact, 0);
+
+    reader.meta_budget.set("Mask".len() + "Selection".len());
+    let mut outer_pixels = 2;
+    let result = reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut outer_pixels, GO, |_| {
+        let mut nested_pixels = 2;
+        let (nested, _) = reader.visit_channel_tiles(0, SampleOptions::default(), &mut nested_pixels, GO, |_| Ok(()))?;
+        assert_eq!(nested.name, "Selection");
+        assert_eq!(nested_pixels, 0);
+        Err(Error::Cancelled)
+    });
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert_eq!(outer_pixels, 0, "decoded pixel work is never refunded");
+    assert_eq!(reader.meta_budget.get(), "Mask".len(), "only the failed outer name is released");
+}
