@@ -426,6 +426,12 @@ pub trait Component: Meta + Sized {
         0.0
     }
 
+    /// The variant an instance that asks for none takes in `env`; `None` takes the style's first. A variant the caller
+    /// asks for always stands. Read only `#[env(style)]` values, which the style cache keys on.
+    fn default_variant(_env: &crate::runtime::env::Env) -> Option<craft_theme::Variant> {
+        None
+    }
+
     /// Pure function of the resolved context and the key.
     fn style(cx: &StyleCx<'_>, key: Self::StyleKey) -> Self::Style;
 
