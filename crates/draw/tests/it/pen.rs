@@ -644,6 +644,38 @@ fn auto_add_delete_stays_off_for_the_curvature_pen() {
     assert_eq!(pen.draft().knots.len(), 3, "the key takes it back, as today");
 }
 
+// The host's Undo keeps today's rule while another anchor is selected: it takes back the draft's last anchor,
+// and with the selection spent the next key takes back the next-to-last as well.
+#[trial]
+fn remove_last_takes_back_the_last_anchor_even_with_another_one_selected() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    assert!(pen.fixture.tool_mut().remove_last());
+    pen.sync();
+    let drawn = curvature_drawn(&CURVE5[..4]);
+    assert_eq!(pen.draft(), drawn.draft(), "the Undo takes back E, not the selected C");
+    pen.delete_key(egui::Key::Delete);
+    let drawn = curvature_drawn(&CURVE5[..3]);
+    assert_eq!(pen.draft(), drawn.draft(), "and the key now takes back the next-to-last, D");
+}
+
+// The double-click toggle is a press on that anchor too: afterwards Delete removes the toggled anchor. Not a
+// measured row of the issue; it follows the selected-anchor rule the issue states for a click.
+#[trial]
+fn a_double_clicked_curvature_anchor_then_deletes_as_the_selected_one() {
+    let mut pen = curvature_drawn(&CURVE5);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    pen.click_doc(CURVE5[2].0, CURVE5[2].1);
+    let toggled = pen.draft();
+    assert_eq!(toggled.knots.len(), 5, "the toggle changes the anchor, not the count");
+    assert!(!toggled.knots[2].smooth, "C became a corner");
+    pen.delete_key(egui::Key::Delete);
+    assert_eq!(pen.draft().knots.len(), 4, "C is gone");
+    assert!(pen.draft().knots.iter().all(|k| k.smooth), "the toggled anchor is the one removed, the rest are smooth again");
+    let drawn = curvature_drawn(&CURVE4);
+    assert_eq!(pen.draft(), drawn.draft(), "the curve re-solves through A, B, D, E as always");
+}
+
 // ---- Path modes and Path Options ----
 
 /// A host that ended the draft itself hands in no draft: the pen drops its run without an event, and the next press
