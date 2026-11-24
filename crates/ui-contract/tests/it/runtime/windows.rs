@@ -3,7 +3,8 @@
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
 //! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
 //! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
-//! pointer, the placement of a minimized window, the root frame decided again, a held close, and `act`.
+//! pointer, the placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted
+//! window's Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -19,7 +20,7 @@ use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
-use craft_ui_test_kit::windows::{Out, Windows};
+use craft_ui_test_kit::windows::{FilesOver, Out, Windows};
 use craft_window::policy::{Decision, Desktop, DesktopKind, Frame, MacInset, Runtime, TitleBarPref};
 use craft_window::restore::Store;
 use egui::{Event, Pos2, Rect, Response, UserAttentionType, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
@@ -1309,4 +1310,90 @@ fn a_title_with_nul_reaches_the_window_without_it() {
     assert!(send("Report draft.docx").is_empty(), "a title that differs only by NULs is the one already sent");
     assert_eq!(send("Notes.docx"), ["Notes.docx"], "a changed title is sent");
     assert_eq!(send("\0Report\0\0 draft.docx\0"), ["Report draft.docx"], "a title changed back is sent again, every NUL dropped");
+}
+
+/// What the hosted child window's passes saw: its last pass's pointer, events and OS files, and the clicks since the
+/// last reset.
+#[derive(Clone, Copy, Debug, Default)]
+struct ChildSeen {
+    pointer: bool,
+    events: usize,
+    files: usize,
+    primary: bool,
+    secondary: bool,
+}
+
+/// One frame of a root window that hosts the child window as an OS window with a 200-point click area at its origin:
+/// `root` events go to the root, `events` and `dropped` files to the child. Returns whether the root knows the pointer.
+fn hosted_frame(windows: &Windows, root: Vec<Event>, events: Vec<Event>, dropped: Vec<String>, seen: &Cell<ChildSeen>) -> bool {
+    let root_pointer = Cell::new(false);
+    windows.frame_with_files(root, events, FilesOver::Child, Vec::new(), dropped, |ui| {
+        root_pointer.set(ui.ctx().input(|input| input.pointer.latest_pos().is_some()));
+        ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |cui, _| {
+            let area = cui.allocate_rect(Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)), egui::Sense::click());
+            let (pointer, events, files) = cui.ctx().input(|input| {
+                (input.pointer.latest_pos().is_some(), input.events.len(), input.raw.hovered_files.len() + input.raw.dropped_files.len())
+            });
+            let was = seen.get();
+            seen.set(ChildSeen {
+                pointer,
+                events,
+                files,
+                primary: was.primary || area.clicked(),
+                secondary: was.secondary || area.secondary_clicked(),
+            });
+        });
+    });
+    root_pointer.get()
+}
+
+/// A panel floated into its own OS window gets a macOS Control+Click as a secondary click, as the main window does:
+/// the Control-click mapping runs on every hosted window's input, which eframe's `raw_input_hook` never sees.
+#[trial]
+fn a_control_click_in_a_hosted_window_is_a_secondary_click_on_macos() {
+    let shell = ShellInfo::default().os(Os::Mac).caps(Caps::native(Os::Mac));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(FakeSystem::new())));
+    let seen = Cell::new(ChildSeen::default());
+    let at = Pos2::new(50.0, 50.0);
+    let control = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::CTRL };
+    hosted_frame(&windows, vec![], vec![], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![moved(at)], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![control(true)], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![control(false)], vec![], &seen);
+    hosted_frame(&windows, vec![], vec![], vec![], &seen);
+    assert!(seen.get().secondary && !seen.get().primary, "the Control+Click is a secondary click there: {:?}", seen.get());
+}
+
+/// `WindowInput::Dropped` (an agent-driven session): a hosted window's own events and OS files reach none of its
+/// passes, while the root's input stays the host's and injected input still reaches the hosted window. Under `Live`
+/// the same input reaches it.
+#[trial]
+fn dropped_window_input_leaves_a_hosted_window_only_injected_input() {
+    use craft_ui::runtime::frame::WindowInput;
+    let at = Pos2::new(50.0, 50.0);
+    for policy in [WindowInput::Live, WindowInput::Dropped] {
+        let windows = Windows::new();
+        windows.window_input(policy);
+        let seen = Cell::new(ChildSeen::default());
+        hosted_frame(&windows, vec![], vec![], vec![], &seen);
+        let root_pointer = hosted_frame(&windows, vec![moved(at)], vec![moved(at)], vec!["clip.mov".to_owned()], &seen);
+        assert!(root_pointer, "{policy:?}: the root's input is the host's");
+        let after_move = seen.get();
+        hosted_frame(&windows, vec![], vec![press(at)], vec![], &seen);
+        hosted_frame(&windows, vec![], vec![release(at)], vec![], &seen);
+        hosted_frame(&windows, vec![], vec![], vec![], &seen);
+        let live = policy == WindowInput::Live;
+        assert_eq!(after_move.pointer, live, "{policy:?}: the window's pointer move {after_move:?}");
+        assert_eq!(after_move.events > 0, live, "{policy:?}: the window's events {after_move:?}");
+        assert_eq!(after_move.files > 0, live, "{policy:?}: the files dropped on the window {after_move:?}");
+        assert_eq!(seen.get().primary, live, "{policy:?}: the window's own click {:?}", seen.get());
+
+        seen.set(ChildSeen::default());
+        let host = WindowHost::of(&windows.ctx);
+        host.inject_click(child(), Pos2::new(60.0, 60.0), PointerButton::Primary, 1, Mods::NONE, false);
+        for _ in 0..8 {
+            hosted_frame(&windows, vec![], vec![], vec![], &seen);
+        }
+        assert!(seen.get().primary, "{policy:?}: the injected click reaches the window: {:?}", seen.get());
+    }
 }
