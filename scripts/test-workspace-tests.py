@@ -26,6 +26,7 @@ LINT_SOURCE = """
 if [ "$RUNNER_OS" = Linux ]; then
   python3 scripts/test-workspace-concurrency.py
   python3 scripts/test-workspace-tests.py
+  cargo test -p craft-design-lint --locked --test workspace -- mapped_crates_have_no_findings
 fi
 if [ "$RUNNER_OS" != Windows ]; then
   cargo fmt --check
@@ -110,6 +111,8 @@ COMMON = [
     "clippy --workspace --all-targets --locked -- -D warnings",
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
+# Linux also runs the design rules over every mapped crate, whichever crates the run selects.
+LINUX_LINT = ["test -p craft-design-lint --locked --test workspace -- mapped_crates_have_no_findings"] + COMMON
 def test_commands(test_filter="all()"):
     return [line.strip()[len("cargo "):].replace('"$CRAFT_TEST_FILTER"', test_filter)
             for line in TEST_RUN.splitlines() if line.strip()]
@@ -136,7 +139,7 @@ class WorkspaceTests(unittest.TestCase):
         # Windows skips only rustfmt: one call with every source root of the workspace is longer
         # than a Windows command line may be (os error 206), and Linux and macOS check the same
         # formatting.
-        for os_name, expected in (("Linux", COMMON), ("macOS", COMMON), ("Windows", COMMON[1:])):
+        for os_name, expected in (("Linux", LINUX_LINT), ("macOS", COMMON), ("Windows", COMMON[1:])):
             with self.subTest(os=os_name):
                 result = commands(os_name, name="lint-command")
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -165,7 +168,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(), ["No crate changed: no tests to run."])
 
     def test_each_stage_failure_remains_fatal(self):
-        for name, stages in (("lint-command", COMMON), ("command", LINUX_TESTS)):
+        for name, stages in (("lint-command", LINUX_LINT), ("command", LINUX_TESTS)):
             for index, command in enumerate(stages):
                 with self.subTest(block=name, command=command):
                     result = commands("Linux", command, name)
