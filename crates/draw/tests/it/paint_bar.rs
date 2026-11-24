@@ -255,8 +255,9 @@ fn value_of(values: &PaintValues<u32>, label: &str) -> f64 {
 /// nearest one, the clamp reported once with the range it belongs to; a 1 % entry itself commits without an alert.
 #[trial]
 fn a_mixer_load_or_flow_below_one_percent_keeps_one_percent_and_reports_the_clamp() {
-    let cases: [(&str, &str, f64, usize); 4] = [("Load", "0", 0.01, 1), ("Flow", "0", 0.01, 1), ("Load", "-8", 0.01, 1), ("Load", "1", 0.01, 0)];
-    for (label, typed, kept, alerts) in cases {
+    let cases: [(&str, &str, f64, f64, usize); 4] =
+        [("Load", "0", 0.0, 0.01, 1), ("Flow", "0", 0.0, 0.01, 1), ("Load", "-8", -8.0, 0.01, 1), ("Load", "1", 1.0, 0.01, 0)];
+    for (label, typed, typed_number, kept, alerts) in cases {
         let (mut fixture, host) = harness(PaintTool::MixerBrush, EraserMode::Brush, |v| {
             v.mixer.load = 0.5;
             v.mixer.flow = 0.42;
@@ -268,7 +269,7 @@ fn a_mixer_load_or_flow_below_one_percent_keeps_one_percent_and_reports_the_clam
         assert_eq!(stored, kept, "{label}: {typed} stores {kept}");
         assert_eq!(host.alerts.len(), alerts, "{label}: {typed} reports {alerts} alerts: {:?}", host.alerts);
         if let Some(alert) = host.alerts.first() {
-            assert_eq!(alert.typed, typed.parse::<f64>().unwrap_or(f64::NAN), "{label}: the alert names what was typed");
+            assert_eq!(alert.typed, typed_number, "{label}: the alert names what was typed");
             assert_eq!(alert.kept, 1.0, "{label}: the alert names the nearest value");
             assert_eq!(alert.range, 1.0..=100.0, "{label}: the field holds 1 to 100 %");
             assert!(alert.whole, "{label}: the field commits whole percents");
