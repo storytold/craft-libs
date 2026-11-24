@@ -750,7 +750,7 @@ pub(super) fn stamp_of(area: &AreaId, query: &str, filter: &str) -> u64 {
     hasher.finish()
 }
 
-/// The style of a shortcut chip: no look of its own (the chord is written as one text, `Ctrl+N`), the focus edge.
+/// The style of a shortcut chip: no look of its own (the keys are drawn as keycaps), the focus edge.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub(crate) struct ChordChipStyle {
@@ -760,8 +760,8 @@ pub(crate) struct ChordChipStyle {
     focus: FocusLook,
 }
 
-/// One shortcut of a row: its chord as text, the way the framework writes a chord. A click, Enter or Space asks to
-/// record over it.
+/// One shortcut of a row: its chord as keycaps, the look the framework gives a chord. A click, Enter or Space asks
+/// to record over it.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(sample = ChordChip::sample)]
 struct ChordChip {
@@ -782,7 +782,7 @@ impl ChordChip {
     }
 
     fn face(&self) -> Kbd {
-        Kbd::new(self.chord.clone())
+        Kbd::new(self.chord.clone()).keycap(true)
     }
 }
 

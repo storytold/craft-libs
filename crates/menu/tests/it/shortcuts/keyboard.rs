@@ -1,6 +1,6 @@
 //! The keyboard pane, the set row's buttons and the shortcut column keep the look the dialog had before the port: readable keys
-//! beside the clicked key's shortcuts, filled keys and a legend in the same fills, framed set buttons, a shortcut written as one
-//! text, and the add button right after the chips of every row.
+//! beside the clicked key's shortcuts, filled keys and a legend in the same fills, framed set buttons, and the add button right
+//! after the chips of every row.
 
 use craft_keymap::{Platform, Profiles};
 use craft_ui::contract::Role;
@@ -63,12 +63,13 @@ fn the_set_row_buttons_are_framed() {
     assert!(framed, "New Set\u{2026} is drawn as a framed button: {new:?}");
 }
 
-/// A shortcut is one text (`Ctrl+S`), not a keycap for every key.
+/// A shortcut is one keycap per key (`Ctrl`, `S`), the framework's look for a chord.
 #[trial]
-fn a_shortcut_is_written_as_one_text() {
+fn a_shortcut_is_one_keycap_per_key() {
     let rig = Rig::tuned(Platform::Windows, |_| {});
     let texts: Vec<&str> = rig.fixture.texts().iter().map(|text| text.text.as_str()).collect();
-    assert!(texts.contains(&"Ctrl+S"), "Save's shortcut reads Ctrl+S: {texts:?}");
+    assert!(texts.contains(&"Ctrl") && texts.contains(&"S"), "Save's shortcut shows a keycap for Ctrl and one for S: {texts:?}");
+    assert!(!texts.contains(&"Ctrl+S"), "not one text for the chord: {texts:?}");
 }
 
 /// The add button stands right after the last text of its row's shortcut cell, whether the cell holds a chord or None.
