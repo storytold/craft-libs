@@ -50,6 +50,14 @@ pub enum HeaderStrength {
     Overline,
 }
 
+impl HeaderStrength {
+    /// Whether a header of this weight stands with a rule beside it: every weight but the quiet ones over a group
+    /// of controls (`Caption`, `Subheading`, `Quiet`, `Overline`).
+    pub(crate) const fn ruled(self) -> bool {
+        !matches!(self, HeaderStrength::Caption | HeaderStrength::Subheading | HeaderStrength::Quiet | HeaderStrength::Overline)
+    }
+}
+
 /// What a title row's action parts ask the container to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

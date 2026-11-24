@@ -1,18 +1,15 @@
 //! [`LassoTool`]: the freehand Lasso with Alt-latched straight segments, and the pieces the Polygonal Lasso shares.
 
 use craft_behavior::geometry::{ConstrainStyle, DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
-use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerButton};
+use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerButton, PointerGlyph};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
-use egui::{Pos2, Vec2};
+use egui::Pos2;
 use kurbo::Rect;
 
 use super::drag::{InsideDrag, PressRule, cursor_over, drag_kind, moved_selection_snap};
 use super::{DragKind, Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectWords, SelectionProbe, SelectionShape};
-
-/// Where a lasso cursor's icon touches the document: the icon's own origin.
-const ICON_HOTSPOT: Vec2 = Vec2::ZERO;
 
 /// The reach of an outline's closing presses in this pass: a press within the slop of the first vertex or of the last
 /// closes.
@@ -54,7 +51,8 @@ pub(super) struct LassoCursor<'a> {
     pub(super) rule: PressRule,
 }
 
-/// The lasso icon with the operation's badge: the latched one while an outline is open, else the live modifiers';
+/// The arrow with its tip on the point the outline starts from, the lasso icon below and right of it and the
+/// operation's badge beside the icon: the latched one while an outline is open, else the live modifiers';
 /// Cmd is the Move tool's, so it shows none. Over the selection, the cursors of [`cursor_over`].
 pub(super) fn cursor(shown: &LassoCursor<'_>, probe: &dyn SelectionProbe, cx: &ToolContext<'_>) -> Cursor {
     let LassoCursor { icon, draft, operation, bar, inside, rule } = shown;
@@ -71,7 +69,7 @@ pub(super) fn cursor(shown: &LassoCursor<'_>, probe: &dyn SelectionProbe, cx: &T
     } else {
         SelectionOperation::resolve(*bar, cx.mods, probe.has_selection()).badge()
     };
-    PaintedCursor::tool(icon.icon(), ICON_HOTSPOT, badge).into()
+    PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, icon.icon(), badge).into()
 }
 
 /// The outline as marching ants and, between straight segments, the rubber band: the one painter of an

@@ -775,3 +775,25 @@ fn a_percent_field_reads_one_decimal_then_the_sign() {
     let sign = painted("%").unwrap_or_else(|| panic!("the field shows the sign"));
     assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
 }
+
+/// A percent field whose committed values carry no decimals (`commit_decimals(0)`, a paint bar's Opacity) shows none,
+/// "10%"; one that sets no decimals of its own keeps the one-decimal look, "10.0%".
+#[trial]
+fn a_percent_field_shows_the_decimals_its_caller_commits() {
+    let shown = |commit: Option<usize>| {
+        let mut value = Some(10.0f64);
+        let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+            let field = NumberField::new("Opacity", Bind::bound(&mut value)).unit_kind(UnitKind::Percent).range(0.0..=100.0);
+            let _ = match commit {
+                Some(decimals) => field.commit_decimals(decimals).show(ui),
+                None => field.show(ui),
+            };
+        });
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    let whole = shown(Some(0));
+    assert!(whole.iter().any(|text| text == "10") && !whole.iter().any(|text| text == "10.0"), "commit_decimals(0) shows 10%: {whole:?}");
+    let default = shown(None);
+    assert!(default.iter().any(|text| text == "10.0"), "with no decimals set the field shows 10.0%: {default:?}");
+}

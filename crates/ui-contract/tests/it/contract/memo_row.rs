@@ -58,3 +58,89 @@ fn a_memoized_row_unit_replays_after_the_rows_counting_call() {
     let calls = of_view(last_frame_memo_runs(&frames.ctx));
     assert!(calls.iter().all(|run| *run == MemoRun::Replayed), "the next frame replays the view in every call: {calls:?}");
 }
+
+thread_local! {
+    /// The rect the fill panel of a `Filled` view took in its last run.
+    static FILLED: RefCell<Seen> = RefCell::default();
+}
+
+/// A view whose content is one panel that fills the main axis of the body around it (`axis`: 0 the width, 1 the height).
+#[derive(MemoProps)]
+struct Filled {
+    axis: u8,
+}
+
+fn filled(props: &mut Filled, ui: &mut Ui) {
+    fill_panel(ui, props.axis);
+}
+
+/// The panel that fills `axis`, holding one probe.
+fn fill_panel(ui: &mut Ui, axis: u8) {
+    let sizing = if axis == 0 { Sizing::FillWidth } else { Sizing::FillHeight };
+    FILLED.with(|seen| {
+        Panel::new().seen(seen).sizing(sizing).id_salt("fill").show(ui, |ui, _| {
+            let inner = RefCell::new(Seen::default());
+            Probe::new(&inner).id_salt("inner").show(ui);
+        });
+    });
+}
+
+/// The rects of the fill panel and the probes before and after it in a body along `axis` (0 a row, 1 a stack) given its
+/// room, the panel shown through a memoized view when `memo`, after the frames settle; and how the view took part in
+/// the calls of one more frame.
+fn shared_body(axis: u8, memo: bool) -> ([Rect; 3], Vec<MemoRun>) {
+    let (before, after) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let mut frames = Frames::new();
+    let (layout, room) = if axis == 0 { (BodyLayout::row(), Vec2::new(400.0, 40.0)) } else { (BodyLayout::stack(), Vec2::new(200.0, 300.0)) };
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), room), |ui| {
+                Panel::new().layout(layout.clone()).sizing(Sizing::Fill).id_salt("body").show(ui, |ui, _| {
+                    Probe::new(&before).id_salt("before").show(ui);
+                    if memo {
+                        let _ = MemoView::new("view", Filled { axis }, filled).show(ui);
+                    } else {
+                        fill_panel(ui, axis);
+                    }
+                    Probe::new(&after).id_salt("after").show(ui);
+                });
+            });
+        });
+    };
+    for _ in 0..30 {
+        frame(&mut frames);
+    }
+    frame(&mut frames);
+    let runs = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(name, _, _)| name.contains("Filled")).map(|(_, _, run)| run).collect();
+    ([before.borrow().rect, FILLED.with(|seen| seen.borrow().rect), after.borrow().rect], runs)
+}
+
+/// A memoized view whose content fills the width of the row around it is one of the children that fill the row, as the
+/// content shown without the view is: it takes the row's free width and the probe after it keeps its place at the row's
+/// end. With nothing changed every call of a frame replays the view.
+#[trial]
+fn a_memoized_view_whose_content_fills_the_row_takes_its_free_width() {
+    let (direct, _) = shared_body(0, false);
+    let (memo, runs) = shared_body(0, true);
+    let [before, fill, after] = memo;
+    assert!(fill.left() >= before.right() && after.left() >= fill.right(), "the view lies between the probes: {memo:?}");
+    for (shown, alone) in memo.iter().zip(direct) {
+        assert!(shown.min.distance(alone.min) < 0.5 && shown.max.distance(alone.max) < 0.5, "as without the view: {memo:?} and {direct:?}");
+    }
+    assert!(!runs.is_empty() && runs.iter().all(|run| *run == MemoRun::Replayed), "an idle frame replays the view in every call: {runs:?}");
+}
+
+/// A memoized view whose content fills the height of the stack around it takes its share of the stack's height, as the
+/// content shown without the view does: the probe after it stays inside the stack. With nothing changed every call of a
+/// frame replays the view.
+#[trial]
+fn a_memoized_view_whose_content_fills_the_stack_takes_its_share_of_the_height() {
+    let (direct, _) = shared_body(1, false);
+    let (memo, runs) = shared_body(1, true);
+    let [before, fill, after] = memo;
+    assert!(fill.top() >= before.bottom() && after.top() >= fill.bottom(), "the view lies between the probes: {memo:?}");
+    for (shown, alone) in memo.iter().zip(direct) {
+        assert!(shown.min.distance(alone.min) < 0.5 && shown.max.distance(alone.max) < 0.5, "as without the view: {memo:?} and {direct:?}");
+    }
+    assert!(!runs.is_empty() && runs.iter().all(|run| *run == MemoRun::Replayed), "an idle frame replays the view in every call: {runs:?}");
+}

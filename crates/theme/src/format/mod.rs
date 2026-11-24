@@ -42,7 +42,7 @@ const KNOB: &str = "\"round\" or \"tab\"";
 /// What `shape.wells` takes.
 const WELLS: &str = "\"square\" or \"round\"";
 /// What `shape.grip.mark` takes.
-const GRIP_MARK: &str = "\"ticks\" or \"dots\"";
+const GRIP_MARK: &str = "\"ticks\", \"dots\" or \"bar\"";
 /// What the numbers of `shape.grip` take.
 const GRIP_NUMBER: &str = "a number";
 /// What `icon_pack` takes.

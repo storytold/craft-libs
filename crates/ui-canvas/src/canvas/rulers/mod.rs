@@ -402,7 +402,7 @@ impl Component for Rulers<'_> {
         for (part, strip) in [(RulerPart::Horizontal, top), (RulerPart::Vertical, left)] {
             let declared = cx.part(part.part(), strip).priority(handle).pointer_only("the New Guide... command places a guide by number");
             if self.interactive {
-                let declared = declared.sense(Sense::DRAG | Sense::CLICK);
+                let declared = declared.sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK);
                 if let Some(space) = space {
                     declared.cursor(resize_cursor(&space.view, motion_across(part.guide_along())));
                 }
@@ -410,7 +410,11 @@ impl Component for Rulers<'_> {
         }
         let declared = cx.part(CORNER, corner).priority(handle);
         if self.interactive {
-            let sense = if self.origin_locked { Sense::CLICK | Sense::CONTEXT_CLICK } else { Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS };
+            let sense = if self.origin_locked {
+                Sense::CLICK | Sense::CONTEXT_CLICK
+            } else {
+                Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS
+            };
             let declared = declared.sense(sense);
             if self.origin_locked {
                 declared.pointer_only("the zero point is locked");

@@ -212,6 +212,8 @@ enum Target {
         knot: KnotRef,
         side: HandleSide,
         from: Point,
+        /// The handle's anchor at the press: ⇧ turns the handle about it.
+        anchor: Point,
     },
     /// A curved segment, grabbed at `t` where it passes `from`.
     Bend {
@@ -635,7 +637,8 @@ impl<'a> BezierOverlay<'a> {
         let knot_at = |path: u64, knot: KnotRef| Self::path(paths, path).and_then(|p| p.knot(knot));
         match (self.tool, hit) {
             (_, BezierHit::Handle { path, knot, side }) if self.tool != BezierTool::Curvature => {
-                Target::Handle { path, knot, side, from: knot_at(path, knot).map_or(Point::ZERO, |k| k.handle(side)) }
+                let at = knot_at(path, knot);
+                Target::Handle { path, knot, side, from: at.map_or(Point::ZERO, |k| k.handle(side)), anchor: at.map_or(Point::ZERO, |k| k.anchor) }
             }
             (BezierTool::Curvature, BezierHit::Anchor { path, knot }) => {
                 self.report.select = Some(self.selecting(path, vec![knot], None));
@@ -728,8 +731,10 @@ impl<'a> BezierOverlay<'a> {
             Target::Anchors { path, anchors, from } => {
                 PathEdit::MoveAnchors { path: *path, anchors: anchors.clone(), by: snapped(*from + locked(delta)) - *from }
             }
-            &Target::Handle { path, knot, side, from } => {
-                PathEdit::MoveHandle { path, knot, side, to: snapped(from + delta), alone: tool == BezierTool::Convert || mods.alt }
+            &Target::Handle { path, knot, side, from, anchor } => {
+                // ⇧ turns the handle to the nearest 45° about its anchor, as the Pen's pull does.
+                let to = if mods.shift { handle_45(anchor, from + delta) } else { snapped(from + delta) };
+                PathEdit::MoveHandle { path, knot, side, to, alone: tool == BezierTool::Convert || mods.alt }
             }
             &Target::Bend { path, segment, t, from } => PathEdit::BendSegment { path, segment, t, by: snapped(from + delta) - from },
             &Target::Convert { path, knot } => PathEdit::Convert { path, knot, out: Some(snapped(view.to_doc(pointer))) },
