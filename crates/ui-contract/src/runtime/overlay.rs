@@ -976,17 +976,21 @@ pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
     (root.is_some() || modal_in_other_viewports(ctx, viewport), root)
 }
 
-/// The live viewports with a modal layer open as of their last finished pass.
+/// The live viewports with a modal open: a modal layer as of their last finished pass, or the app's own egui modal
+/// this frame (`FrameInput::app_modal`), which blocks the app's other windows as a modal layer does.
 fn modal_viewports(ctx: &Context) -> impl Iterator<Item = ViewportId> + '_ {
-    pass::live_viewports(ctx).into_iter().filter(|viewport| with_persist(ctx, *viewport, |persist| persist.modal))
+    let app_modal = crate::runtime::frame::app_modal(ctx);
+    pass::live_viewports(ctx)
+        .into_iter()
+        .filter(move |viewport| app_modal == Some(*viewport) || with_persist(ctx, *viewport, |persist| persist.modal))
 }
 
-/// A viewport other than `viewport` that has a modal layer open: the window a blocked press raises.
+/// A viewport other than `viewport` that has a modal open (`modal_viewports`): the window a blocked press raises.
 pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<ViewportId> {
     modal_viewports(ctx).find(|other| *other != viewport)
 }
 
-/// A viewport that has a modal layer open: the window that blocks the app's other windows.
+/// A viewport that has a modal open (`modal_viewports`): the window that blocks the app's other windows.
 pub(crate) fn app_modal_viewport(ctx: &Context) -> Option<ViewportId> {
     modal_viewports(ctx).next()
 }

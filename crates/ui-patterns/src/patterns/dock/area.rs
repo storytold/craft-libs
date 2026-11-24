@@ -343,14 +343,38 @@ impl<P: Clone + Eq + Hash> DockModel<P> {
     }
 }
 
+/// The parts of a group that show the host's code (`Scene::hosted`).
+#[derive(Clone, Copy, Debug, Hash)]
+enum HostPart {
+    Body,
+    Footer,
+    Header,
+    RailFooter,
+    View,
+}
+
 impl<P: Clone + Eq + Hash> Scene<'_, P> {
-    /// Runs `run`, which shows host code of `panel`, on `ui`: with the style of the `Ui` the area was shown in when the
-    /// panel's body is the app's own egui code (`PanelSpec::host_body`), and `ui`'s own style back after it.
-    fn hosted<R>(&self, panel: &P, ui: &mut Ui, run: impl FnOnce(&mut Ui) -> R) -> R {
-        if !self.specs.get(panel).is_some_and(|spec| spec.host_body) {
+    /// Runs `run`, which shows host code of `panel` as its `part`, on `ui`. Where the panel's body is the app's own egui
+    /// code (`PanelSpec::host_body`), it runs with the style of the `Ui` the area was shown in, and only in the pass's
+    /// real run: a measuring run takes what its last real run took (`HostStyle::show`).
+    fn hosted<R: Clone + Default + Send + Sync + 'static>(&self, panel: &P, part: HostPart, ui: &mut Ui, run: impl FnOnce(&mut Ui) -> R) -> R {
+        if !self.host_body(panel) {
+            return run(ui);
+        }
+        self.host_style.show(ui, self.dock.with(("host", part, PanelKey::of(panel))), run)
+    }
+
+    /// Runs `run`, which measures `panel`'s host view at a width (`GroupAt::Measure`), on `ui`: with the style of the
+    /// `Ui` the area was shown in where the panel's body is the app's own egui code.
+    fn hosted_measure<R>(&self, panel: &P, ui: &mut Ui, run: impl FnOnce(&mut Ui) -> R) -> R {
+        if !self.host_body(panel) {
             return run(ui);
         }
         self.host_style.run(ui, run)
+    }
+
+    fn host_body(&self, panel: &P) -> bool {
+        self.specs.get(panel).is_some_and(|spec| spec.host_body)
     }
 
     fn spec(&self, panel: &P) -> PanelSpec {
@@ -1035,7 +1059,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // column bar, as the references' toolbar: the host's view takes the room under it.
         let grip = if members.get(active).is_some_and(|panel| scene.spec(panel).grid.is_some()) { scene.sizes.grip } else { 0.0 };
         if let GroupAt::Measure(_) = at
-            && let Some(height) = scene.hosted(&members[active], ui, |ui| self.panels.group_view(members, active, ui, at, body))
+            && let Some(height) = scene.hosted_measure(&members[active], ui, |ui| self.panels.group_view(members, active, ui, at, body))
         {
             return Some(height + grip);
         }
@@ -1079,7 +1103,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let words = &words;
             let GroupParts { titles, hosted, states } = parts_of();
             let mut group = DockGroup::new(anchor.clone(), titles.clone(), PanelKey::of(&members[at]))
-                .extra(move |ui, body| scene.hosted(&members[at], ui, |ui| panels.borrow_mut().group_header(members, at, ui, body)))
+                .extra(move |ui, body| scene.hosted(&members[at], HostPart::Header, ui, |ui| panels.borrow_mut().group_header(members, at, ui, body)))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
@@ -1100,7 +1124,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 group = group.host_body();
             }
             if spec.footer {
-                group = group.footer(move |ui, body| scene.hosted(&members[at], ui, |ui| panels.borrow_mut().footer(&members[at], ui, body)));
+                group = group.footer(move |ui, body| {
+                    scene.hosted(&members[at], HostPart::Footer, ui, |ui| panels.borrow_mut().footer(&members[at], ui, body))
+                });
             }
             if scene.config.tab_close_buttons {
                 group = group.closable();
@@ -1131,7 +1157,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // The view is a layout room of its own: a view that fills takes the whole group.
                 let taken = in_room(ui, view, |ui| {
-                    scene.hosted(&members[active], ui, |ui| panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body))
+                    scene.hosted(&members[active], HostPart::View, ui, |ui| {
+                        panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body)
+                    })
                 });
                 match taken {
                     Some(_) => None,
@@ -1345,10 +1373,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .pad(Pad::None)
                     .footer(|ui, _| {
                         // Compact rail controls leave room for the scrolling panel icons in short windows.
-                        Stack::new()
-                            .fill_width()
-                            .gap(Gap::None)
-                            .show(ui, |ui, body| scene.hosted(panel, ui, |ui| pass.borrow_mut().panels.rail_footer(panel, ui, body)));
+                        Stack::new().fill_width().gap(Gap::None).show(ui, |ui, body| {
+                            scene.hosted(panel, HostPart::RailFooter, ui, |ui| pass.borrow_mut().panels.rail_footer(panel, ui, body))
+                        });
                     })
                     .show_at(ui, cell, |ui, _| {
                         // design: allow[contract/allocate](the rail lays its icons out in a rect of its own: the panel body claims their height, so the host's footer sits under them)
@@ -1727,8 +1754,8 @@ fn window_edit<P: Clone + Eq + Hash>(
     }
 }
 
-/// Shows `panel`'s body in a group's body, in the host's style where the body is the app's own egui code
-/// (`Scene::hosted`). It runs every pass the group shows; the host memoizes inside it.
+/// Shows `panel`'s body in a group's body, in the host's style and once per pass where the body is the app's own egui
+/// code (`Scene::hosted`). It runs every pass the group shows; the host memoizes inside it.
 fn panel_body<'p, P: Clone + Eq + Hash>(
     scene: &Scene<'_, P>,
     panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>,
@@ -1736,12 +1763,15 @@ fn panel_body<'p, P: Clone + Eq + Hash>(
     ui: &mut Ui,
     body: &mut BodyCx<'_>,
 ) {
-    // The app's own egui body keeps its background: the host's panel fill over the group's surface, as it showed
-    // outside the dock. A measuring run paints nothing.
-    if scene.spec(panel).host_body && !crate::runtime::measure::active(ui.ctx()) {
-        scene.host_style.paint_panel(ui, ui.max_rect());
-    }
-    scene.hosted(panel, ui, |ui| panels.borrow_mut().body(panel, ui, body));
+    let host = scene.host_body(panel);
+    scene.hosted(panel, HostPart::Body, ui, |ui| {
+        // The app's own egui body keeps its background: the host's panel fill over the group's surface, as it showed
+        // outside the dock.
+        if host {
+            scene.host_style.paint_panel(ui, ui.max_rect());
+        }
+        panels.borrow_mut().body(panel, ui, body);
+    });
 }
 
 /// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to, with

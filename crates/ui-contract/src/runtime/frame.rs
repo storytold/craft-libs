@@ -32,12 +32,18 @@ pub struct FrameInput {
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
+    /// The window in which the app's own egui code shows a modal this frame (a dialog the app draws itself, not a
+    /// framework layer). It blocks the app's other windows as a framework app-modal layer open in it does: their
+    /// presses, keys, wheel and text go nowhere, a press there brings the modal's window forward, and they refuse to
+    /// close. A panel floated into a window of its own is one of them. `None` (the default) when the app shows no such
+    /// modal; set every frame from the app's own state.
+    pub app_modal: Option<ViewportId>,
 }
 
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE }
+        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, app_modal: None }
     }
 
     /// Sets the command input.
@@ -49,6 +55,12 @@ impl FrameInput {
     /// Sets the modifiers latched beyond the window's input.
     pub fn latched(mut self, mods: Mods) -> Self {
         self.latched = mods;
+        self
+    }
+
+    /// Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`](Self::app_modal)).
+    pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self {
+        self.app_modal = viewport;
         self
     }
 
@@ -418,6 +430,11 @@ impl RootInput {
 pub(crate) fn root_input(ctx: &Context) -> RootInput {
     pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| RootInput::of(&input.root)))
         .unwrap_or_else(|| RootInput::of(&RootEnv::default()))
+}
+
+/// The window in which the app's own egui code shows a modal this frame (`FrameInput::app_modal`).
+pub(crate) fn app_modal(ctx: &Context) -> Option<ViewportId> {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().and_then(|input| input.app_modal))
 }
 
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own

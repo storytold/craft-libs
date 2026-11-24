@@ -21,11 +21,13 @@ pub(crate) mod floating_area;
 pub(crate) mod floating_rail;
 pub(crate) mod hidden;
 
+pub(crate) mod app_modal;
 pub(crate) mod columns;
 pub(crate) mod dock_back;
 pub(crate) mod group_view;
 pub(crate) mod host_body;
 pub(crate) mod host_keys;
+pub(crate) mod host_runs;
 pub(crate) mod tab_focus;
 pub(crate) mod workspace_dialogs;
 

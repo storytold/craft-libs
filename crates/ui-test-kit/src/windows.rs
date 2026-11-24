@@ -255,6 +255,7 @@ pub struct Windows {
     /// The installed context.
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
+    app_modal: Cell<Option<ViewportId>>,
 }
 
 impl Default for Windows {
@@ -283,7 +284,7 @@ impl Windows {
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
-        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()) }
+        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()), app_modal: Cell::new(None) }
     }
 
     /// The window facts child passes report from now on.
@@ -295,6 +296,11 @@ impl Windows {
     /// [`child_info`](Self::child_info) gave.
     pub fn facts(&self, viewport: ViewportId) -> ViewportInfo {
         with_facts(viewport, |info| info.clone())
+    }
+
+    /// The window in which the app's own egui code shows a modal (`FrameInput::app_modal`), from the next frame on.
+    pub fn app_modal(&self, viewport: Option<ViewportId>) {
+        self.app_modal.set(viewport);
     }
 
     /// The window facts the root viewport reports from now on.
@@ -325,7 +331,7 @@ impl Windows {
         let root_hovered = hovered.clone();
         CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
         TREES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(RootEnv::default()));
+        set_input(&self.ctx, FrameInput::new(RootEnv::default()).app_modal(self.app_modal.get()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,
