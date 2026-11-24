@@ -33,8 +33,8 @@ impl std::error::Error for JpegError {}
 
 /// The JPEG's samples, keeping its channel count: greyscale stays greyscale, anything else becomes RGB.
 pub fn decode(jpeg: &[u8]) -> Result<JpegImage, JpegError> {
-    if let Some((width, height, samples)) = baseline_gray::decode(jpeg) {
-        return Ok(JpegImage { width, height, channels: 1, samples });
+    if let Some(image) = baseline_gray::decode(jpeg)? {
+        return Ok(image);
     }
     let mut probe = JpegDecoder::new(ZCursor::new(jpeg));
     probe.decode_headers().map_err(|e| JpegError(e.to_string()))?;

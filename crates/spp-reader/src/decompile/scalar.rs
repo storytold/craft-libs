@@ -16,6 +16,10 @@ pub(super) const OP_SEQUENCE: u8 = 0x0c;
 const OP_VECTOR: u8 = 0x0d;
 const OP_SWIZZLE: u8 = 0x10;
 
+/// The lane rewrite uses more than one call frame per operand. Larger graphs can still be emitted
+/// in their original instruction order, with a warning that lane-by-lane rewriting was skipped.
+const MAX_REWRITE_DEPTH: usize = 64;
+
 struct Rewrite<'a> {
     e: &'a Expr,
     effect: Vec<bool>,
@@ -180,41 +184,56 @@ impl Rewrite<'_> {
     }
 }
 
-/// `e` lane by lane if it draws random numbers and has anything with more than one lane; `None` if that changes nothing.
-pub fn scalarize(e: &Expr) -> Option<Expr> {
+/// `e` lane by lane if it draws random numbers and has anything with more than one lane.
+pub(super) fn scalarize(e: &Expr) -> Result<Option<Expr>, &'static str> {
     let draws = e.instrs.iter().any(|i| i.name() == "rand");
     if !draws || !e.instrs.iter().any(|i| i.value_type() != ValueType::Bool && i.components > 1) {
-        return None;
+        return Ok(None);
     }
-    let root = e.instrs.len().checked_sub(1)? as u16;
-    let mut below = vec![false; e.instrs.len()];
-    for (i, ins) in e.instrs.iter().enumerate() {
-        let at = |r: &u16| below.get(usize::from(*r)).copied().unwrap_or(false);
-        let v = ins.name() == "rand"
-            || match &ins.operands {
-                Operands::Refs(r) | Operands::Loop(r, _) => r.iter().any(at),
-                Operands::RefSlot(a, _) => at(a),
-                Operands::Sample(p, ..) => at(p),
-                _ => false,
+    let Some(root) = e.instrs.len().checked_sub(1).and_then(|last| u16::try_from(last).ok()).filter(|&last| last != NO_OPERAND) else {
+        return Err("expression is too large to rewrite lane by lane");
+    };
+    let mut below = Vec::with_capacity(e.instrs.len());
+    let mut depths: Vec<usize> = Vec::with_capacity(e.instrs.len());
+    for ins in &e.instrs {
+        let refs = match &ins.operands {
+            Operands::Refs(refs) | Operands::Loop(refs, _) => refs.as_slice(),
+            Operands::RefSlot(r, _) | Operands::Sample(r, ..) => std::slice::from_ref(r),
+            _ => &[],
+        };
+        let mut depth = 1;
+        let mut draws = ins.name() == "rand";
+        for &r in refs.iter().filter(|&&r| r != NO_OPERAND) {
+            let at = usize::from(r);
+            let (Some(&operand_depth), Some(&operand_draws)) = (depths.get(at), below.get(at)) else {
+                return Err("expression has an operand that does not refer to an earlier instruction");
             };
-        if let Some(b) = below.get_mut(i) {
-            *b = v;
+            depth = depth.max(operand_depth + 1);
+            draws |= operand_draws;
         }
+        if depth > MAX_REWRITE_DEPTH {
+            return Err("expression is too deep to rewrite lane by lane");
+        }
+        depths.push(depth);
+        below.push(draws);
     }
     let mut w = Rewrite { e, effect: has_effect(e), draws: below, out: Vec::new(), lanes: HashMap::new(), whole: HashMap::new() };
     let top = w.all(root);
     // the last instruction is the result
     if usize::from(top) + 1 != w.out.len() {
-        let ins = e.instrs.get(usize::from(root))?;
+        let Some(ins) = e.instrs.get(usize::from(root)) else { return Ok(None) };
         let ty = w.out.get(usize::from(top)).map_or(ins.ty, |t| t.ty);
         w.emit(Instr { op: OP_SEQUENCE, components: ins.components, ty, operands: Operands::Refs(vec![top, top]) });
     }
-    Some(Expr { offset: e.offset, end: e.end, instrs: w.out })
+    if w.out.len() > usize::from(NO_OPERAND) {
+        return Err("lane-by-lane rewrite needs too many instructions");
+    }
+    Ok(Some(Expr { offset: e.offset, end: e.end, instrs: w.out }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::scalarize;
+    use super::{MAX_REWRITE_DEPTH, scalarize};
     use crate::decode::graph_package::compiled::{Expr, Instr, Operands};
 
     const FLOAT: u8 = 9;
@@ -241,7 +260,7 @@ mod tests {
             ins(0x0d, 2, refs(&[1, 2])),
             ins(0x10, 1, Operands::RefSlot(3, 1)),
         ]);
-        let s = scalarize(&e).unwrap();
+        let s = scalarize(&e).unwrap().unwrap();
         assert_eq!(draws(&s), 1);
     }
 
@@ -258,9 +277,9 @@ mod tests {
                 ins(0x10, 1, Operands::RefSlot(5, 0)),
             ])
         };
-        let neg = scalarize(&through(ins(0x17, 2, refs(&[4])))).unwrap();
+        let neg = scalarize(&through(ins(0x17, 2, refs(&[4])))).unwrap().unwrap();
         assert_eq!(draws(&neg), 1);
-        let set = scalarize(&through(ins(0x07, 2, Operands::RefSlot(4, 0)))).unwrap();
+        let set = scalarize(&through(ins(0x07, 2, Operands::RefSlot(4, 0)))).unwrap().unwrap();
         assert_eq!(draws(&set), 2);
     }
 
@@ -302,18 +321,29 @@ mod tests {
     #[test]
     fn a_set_of_a_vector_runs_lane_by_lane() {
         let e = four_draws(vec![ins(0x14, 2, refs(&[8, 9])), ins(0x07, 2, Operands::RefSlot(10, 0))]);
-        assert_eq!(run_order(&scalarize(&e).unwrap()), vec![1, 3, 2, 4]);
+        assert_eq!(run_order(&scalarize(&e).unwrap().unwrap()), vec![1, 3, 2, 4]);
     }
 
     #[test]
     fn a_dot_runs_lane_by_lane() {
         let e = four_draws(vec![ins(0x18, 1, refs(&[8, 9]))]);
-        assert_eq!(run_order(&scalarize(&e).unwrap()), vec![1, 3, 2, 4]);
+        assert_eq!(run_order(&scalarize(&e).unwrap().unwrap()), vec![1, 3, 2, 4]);
     }
 
     #[test]
     fn an_expression_without_random_numbers_stays() {
         let e = expr(vec![ins(0x00, 2, Operands::Constant(vec![0, 0])), ins(0x10, 1, Operands::RefSlot(0, 0))]);
-        assert!(scalarize(&e).is_none());
+        assert!(scalarize(&e).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_deep_lane_rewrite_stops_before_the_recursive_pass() {
+        let mut steps = vec![ins(0x00, 1, Operands::Constant(vec![0])), ins(0x32, 1, refs(&[0])), ins(0x0d, 2, refs(&[0, 1]))];
+        for at in 2..MAX_REWRITE_DEPTH {
+            steps.push(ins(0x17, 2, refs(&[at as u16])));
+        }
+        assert!(scalarize(&expr(steps.clone())).is_err());
+        steps.pop();
+        assert!(scalarize(&expr(steps)).unwrap().is_some());
     }
 }

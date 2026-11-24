@@ -187,31 +187,45 @@ pub(super) fn has_effect(e: &Expr) -> Vec<bool> {
 
 /// The `rand` instructions `e` runs, in order, when it computes instruction `root`: operands left to right.
 fn draw_order(e: &Expr, root: usize) -> BTreeMap<usize, u32> {
-    fn walk(e: &Expr, effect: &[bool], i: usize, seen: &mut Vec<bool>, order: &mut BTreeMap<usize, u32>) {
-        let (Some(ins), Some(s)) = (e.instrs.get(i), seen.get_mut(i)) else { return };
+    enum Visit {
+        Enter(usize),
+        Draw(usize),
+    }
+    let effect = has_effect(e);
+    let mut order = BTreeMap::new();
+    let mut seen = vec![false; e.instrs.len()];
+    let mut pending = vec![Visit::Enter(root)];
+    while let Some(visit) = pending.pop() {
+        let i = match visit {
+            Visit::Enter(i) => i,
+            Visit::Draw(i) => {
+                let n = order.len() as u32 + 1;
+                order.insert(i, n);
+                continue;
+            }
+        };
+        let (Some(ins), Some(s)) = (e.instrs.get(i), seen.get_mut(i)) else { continue };
         if *s {
-            return;
+            continue;
         }
         *s = true;
+        if ins.name() == "rand" {
+            pending.push(Visit::Draw(i));
+        }
+        // Stack is last-in first-out. Reverse the pushes to preserve left-to-right operand order.
         match &ins.operands {
             Operands::Refs(r) if ins.name() == "sequence" => {
-                for (k, x) in r.iter().enumerate() {
+                for (k, x) in r.iter().enumerate().rev() {
                     if *x != NO_OPERAND && (k > 0 || ins.ty & super::scalar::KEEP != 0 || effect.get(usize::from(*x)).copied().unwrap_or(false)) {
-                        walk(e, effect, usize::from(*x), seen, order);
+                        pending.push(Visit::Enter(usize::from(*x)));
                     }
                 }
             }
-            Operands::Refs(r) => r.iter().filter(|x| **x != NO_OPERAND).for_each(|x| walk(e, effect, usize::from(*x), seen, order)),
-            Operands::RefSlot(a, _) => walk(e, effect, usize::from(*a), seen, order),
+            Operands::Refs(r) => pending.extend(r.iter().rev().filter(|&&x| x != NO_OPERAND).map(|&x| Visit::Enter(usize::from(x)))),
+            Operands::RefSlot(a, _) => pending.push(Visit::Enter(usize::from(*a))),
             _ => {}
         }
-        if ins.name() == "rand" {
-            let n = order.len() as u32 + 1;
-            order.insert(i, n);
-        }
     }
-    let mut order = BTreeMap::new();
-    walk(e, &has_effect(e), root, &mut vec![false; e.instrs.len()], &mut order);
     order
 }
 
@@ -265,10 +279,16 @@ impl Functions {
     /// The name of a function computing `e`, created on first use. `lane` picks one component of a vector
     /// result (for parameters stored per channel).
     pub fn function(&mut self, e: &Expr, desc: &Description, lane: Option<usize>) -> String {
-        let lanewise = super::scalar::scalarize(e);
-        let e = lanewise.as_ref().unwrap_or(e);
         let mut body = String::new();
         let mut warn = Vec::new();
+        let lanewise = match super::scalar::scalarize(e) {
+            Ok(rewritten) => rewritten,
+            Err(reason) => {
+                warn.push(reason.into());
+                None
+            }
+        };
+        let e = lanewise.as_ref().unwrap_or(e);
         // node ids: instructions from 2 on, one expression after the other; helpers above them all
         let draws = |x: &Expr| x.instrs.iter().any(|i| i.name() == "rand");
         let seed = self

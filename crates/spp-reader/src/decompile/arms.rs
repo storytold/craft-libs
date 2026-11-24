@@ -157,23 +157,20 @@ impl<'a> Arms<'a> {
         let Some(&root) = root else { return Vec::new() };
         let mut out = Vec::new();
         let mut seen = vec![false; self.e.instrs.len()];
-        self.walk(root, arm, &mut seen, &mut out);
+        let mut pending = vec![root];
+        while let Some(r) = pending.pop() {
+            let at = usize::from(r);
+            match seen.get_mut(at) {
+                Some(s) if !*s && self.matters.get(at).copied().unwrap_or(false) => *s = true,
+                _ => continue,
+            }
+            if self.inside(self.place_of(at), arm) {
+                pending.extend(operands(self.e, at).into_iter().rev());
+            } else {
+                out.push(r);
+            }
+        }
         out
-    }
-
-    fn walk(&self, r: u16, arm: u32, seen: &mut [bool], out: &mut Vec<u16>) {
-        let at = usize::from(r);
-        match seen.get_mut(at) {
-            Some(s) if !*s && self.matters.get(at).copied().unwrap_or(false) => *s = true,
-            _ => return,
-        }
-        if !self.inside(self.place_of(at), arm) {
-            out.push(r);
-            return;
-        }
-        for x in operands(self.e, at) {
-            self.walk(x, arm, seen, out);
-        }
     }
 }
 

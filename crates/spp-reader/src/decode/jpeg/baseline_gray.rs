@@ -4,6 +4,8 @@
 //! the rest are one level off at values within .05 of a half). Those one-level differences, carried through a graph, were what
 //! kept many bitmap graphs under 99 % within one step.
 
+use super::JpegError;
+
 const ZIGZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43,
     36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
@@ -50,13 +52,8 @@ impl Bits<'_> {
             if b == 0xff {
                 match self.data.get(self.at + 1)? {
                     0 => self.at += 2,
-                    // a marker: nothing more in this interval, as a decoder pads with zeros
-                    _ => {
-                        self.acc = 0;
-                        self.n = 8;
-                        self.n -= 1;
-                        return Some(0);
-                    }
+                    // A marker ends this entropy interval. Padding cannot supply a missing coefficient.
+                    _ => return None,
                 }
             } else {
                 self.at += 1;
@@ -187,8 +184,17 @@ fn read_coefficients(bits: &mut Bits<'_>, dc: &Huffman, ac: &Huffman, quantizati
     Some((coefficients, flat))
 }
 
-/// Samples of a JPEG if it is baseline, 8 bits and one channel: (width, height, samples); `None` for anything else.
-pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
+struct Frame {
+    width: usize,
+    height: usize,
+    restart: usize,
+    start: usize,
+    selector: u8,
+    quantization: [i32; 64],
+    tables: [Huffman; 8],
+}
+
+fn frame(jpeg: &[u8]) -> Option<Frame> {
     if jpeg.get(..2)? != SOI {
         return None;
     }
@@ -207,7 +213,7 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
             DQT => read_quantization_tables(body, &mut quant)?,
             DHT => read_huffman_tables(body, &mut tables)?,
             SOF0 => {
-                // one 8-bit channel, sampled 1 x 1
+                // One 8-bit channel. A single-component scan codes one block at a time.
                 if *body.first()? != 8 || *body.get(5)? != 1 {
                     return None;
                 }
@@ -223,20 +229,41 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         }
         at += 2 + len;
     };
-    if w == 0 || h == 0 {
-        return None;
-    }
     let (start, selector) = scan;
+    Some(Frame { width: w, height: h, restart, start, selector, quantization: *quant.get(tq)?, tables })
+}
+
+/// A baseline scan uses the same dimension limits as the fallback decoder.
+fn sample_count(width: usize, height: usize) -> Result<usize, JpegError> {
+    let limits = zune_core::options::DecoderOptions::default();
+    if width == 0 || height == 0 || width > limits.max_width() || height > limits.max_height() {
+        return Err(JpegError(format!("baseline JPEG dimensions {width}x{height} exceed the supported range")));
+    }
+    width.checked_mul(height).ok_or_else(|| JpegError("baseline JPEG sample count overflows".into()))
+}
+
+/// Decode supported baseline greyscale JPEGs. Leave other frame types to the fallback decoder.
+pub(super) fn decode(jpeg: &[u8]) -> Result<Option<super::JpegImage>, JpegError> {
+    let Some(frame) = frame(jpeg) else { return Ok(None) };
+    let mut samples = Vec::new();
+    let count = sample_count(frame.width, frame.height)?;
+    samples.try_reserve_exact(count).map_err(|_| JpegError(format!("cannot allocate {count} baseline JPEG samples")))?;
+    samples.resize(count, 0);
+    decode_scan(jpeg, &frame, &mut samples).ok_or_else(|| JpegError("invalid or truncated baseline JPEG scan".into()))?;
+    Ok(Some(super::JpegImage { width: frame.width, height: frame.height, channels: 1, samples }))
+}
+
+fn decode_scan(jpeg: &[u8], frame: &Frame, out: &mut [u8]) -> Option<()> {
+    let Frame { width: w, height: h, restart, start, selector, quantization: q, tables } = frame;
+    let (w, h, restart, start) = (*w, *h, *restart, *start);
     let dc = tables.get(usize::from(selector >> 4 & 3))?;
     let ac = tables.get(4 + usize::from(selector & 3))?;
-    let q = *quant.get(tq)?;
     let basis: [[f64; 8]; 8] = std::array::from_fn(|x| {
         std::array::from_fn(|u| {
             (std::f64::consts::PI * (2 * x + 1) as f64 * u as f64 / 16.0).cos() * if u == 0 { std::f64::consts::FRAC_1_SQRT_2 } else { 1.0 } * 0.5
         })
     });
     let (columns, rows) = (w.div_ceil(8), h.div_ceil(8));
-    let mut out = vec![0u8; w * h];
     let mut bits = Bits { data: jpeg, at: start, acc: 0, n: 0 };
     let mut pred = 0i32;
     for block in 0..columns * rows {
@@ -244,7 +271,7 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
             bits.restart()?;
             pred = 0;
         }
-        let (c, flat) = read_coefficients(&mut bits, dc, ac, &q, &mut pred)?;
+        let (c, flat) = read_coefficients(&mut bits, dc, ac, q, &mut pred)?;
         let (bx, by) = (block % columns, block / columns);
         let mut rows_done = [0f64; 64];
         if !flat {
@@ -269,12 +296,12 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
             }
         }
     }
-    Some((w, h, out))
+    Some(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::{Bits, decode, sample_count};
 
     /// A 16 x 8 image of two blocks, by hand: DC only, table of ones. Huffman: DC symbols 0 and 4 and 6, AC only end of block.
     #[test]
@@ -294,14 +321,31 @@ mod tests {
         // block 1: DC symbol 8 = code 01, value 0b11001000 = 200 -> 200 / 8 = 25 above 128; AC end of block 0.
         // block 2: difference symbol 0 = code 00, AC 0. Bits: 01 11001000 0 00 0, padded.
         j.extend([0b0111_0010, 0b0000_0000, 0xff, 0xd9]);
-        let (w, h, s) = decode(&j).unwrap();
-        assert_eq!((w, h), (16, 8));
+        let image = decode(&j).unwrap().unwrap();
+        let s = image.samples;
+        assert_eq!((image.width, image.height), (16, 8));
         assert_eq!((s[0], s[15], s[127]), (153, 153, 153));
     }
 
     #[test]
     fn anything_else_is_left_to_the_library() {
-        assert!(decode(&[0xff, 0xd8, 0xff, 0xc2, 0, 2]).is_none());
-        assert!(decode(b"nope").is_none());
+        assert!(decode(&[0xff, 0xd8, 0xff, 0xc2, 0, 2]).unwrap().is_none());
+        assert!(decode(b"nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn dimensions_use_the_fallback_decoders_limits() {
+        let max_width = zune_core::options::DecoderOptions::default().max_width();
+        assert_eq!(sample_count(max_width, 8).unwrap(), max_width * 8);
+        assert!(sample_count(max_width + 1, 8).is_err());
+    }
+
+    #[test]
+    fn entropy_reader_leaves_the_restart_marker_for_restart() {
+        let mut bits = Bits { data: &[0xff, 0x00, 0xff, 0xd0, 0x80], at: 0, acc: 0, n: 0 };
+        assert_eq!(bits.take(8), Some(255));
+        assert_eq!(bits.bit(), None);
+        assert_eq!(bits.restart(), Some(()));
+        assert_eq!(bits.bit(), Some(1));
     }
 }
