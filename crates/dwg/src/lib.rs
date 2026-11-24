@@ -2322,3 +2322,46 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, not(no_dwg_bridge)))]
+mod bridge {
+    use std::io::Cursor;
+
+    use super::*;
+
+    /// Original fixture from Autodesk's 2007/2010 DXF VISUALSTYLE fields, for BreenMac's
+    /// report #3240 (CADCraft #3393). No CAD application or external drawing produced it.
+    fn visualstyle_dxf(tail: &str) -> Vec<u8> {
+        format!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1021\n0\nENDSEC\n\
+             0\nSECTION\n2\nENTITIES\n0\nLINE\n5\n50\n100\nAcDbEntity\n8\n0\n\
+             100\nAcDbLine\n10\n1\n20\n2\n30\n0\n11\n4\n21\n6\n31\n0\n0\nENDSEC\n\
+             0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n100\nAcDbDictionary\n281\n1\n3\nACAD_VISUALSTYLE\n350\nD\n\
+             0\nDICTIONARY\n5\nD\n330\nC\n100\nAcDbDictionary\n281\n1\n3\nFixed\n350\nE\n\
+             0\nVISUALSTYLE\n5\nE\n330\nD\n100\nAcDbVisualStyle\n2\nFixed\n70\n0\n71\n1\n72\n1\n73\n0\n\
+             90\n0\n40\n0.6\n41\n0.6\n62\n7\n63\n7\n74\n1\n91\n0\n291\n0\n{tail}0\nENDSEC\n0\nEOF\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn dwg2007_reports_fixed_visualstyle_omissions() {
+        let dxf = visualstyle_dxf("");
+        let original = dxf.clone();
+        let source = acadrust::DxfReader::from_reader(Cursor::new(dxf.clone())).unwrap().read().unwrap();
+        assert!(matches!(source.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
+        assert_eq!(source.entities().filter(|e| matches!(e, acadrust::entities::EntityType::Line(_))).count(), 1);
+        let (dwg, unwritten) = dxf_to_dwg_noted(&dxf, "AC1021").unwrap();
+        assert!(is_dwg(&dwg));
+        assert_eq!(version(&dwg).as_deref(), Some("AC1021"));
+        assert_eq!(dxf, original, "conversion leaves the caller's original DXF unchanged");
+        assert_eq!(
+            unwritten,
+            [("VISUALSTYLE".to_string(), 1)].into_iter().collect::<Unwritten>(),
+            "fixed-property VISUALSTYLE omission must be reported"
+        );
+        let back = acadrust::DwgReader::from_stream(Cursor::new(dwg)).read().unwrap();
+        assert_eq!(back.entities().filter(|e| matches!(e, acadrust::entities::EntityType::Line(_))).count(), 1);
+        assert!(!matches!(back.objects.get(&acadrust::Handle::new(0xE)), Some(acadrust::objects::ObjectType::VisualStyle(_))));
+    }
+}
