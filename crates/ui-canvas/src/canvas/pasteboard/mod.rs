@@ -90,7 +90,7 @@ pub enum ArtboardEdge {
 }
 
 /// The edge of the active artboard under [`ArtboardEdge::Plain`]: black.
-const PLAIN_ACTIVE: DataColor = DataColor::new(Color32::BLACK);
+const PLAIN_ACTIVE: DataColor = DataColor::new(Color32::from_gray(0));
 /// The edge of another artboard under [`ArtboardEdge::Plain`]: grey 120.
 const PLAIN_OTHER: DataColor = DataColor::new(Color32::from_gray(120));
 

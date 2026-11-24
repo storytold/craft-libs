@@ -124,7 +124,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
 - Split handles are Tab stops, and the arrow keys move them. A divider drag is one gesture in `DockAreaOutput::edit`.
 - A pointer press on a panel tab (a click, a drag's press, the tab menu's secondary press) leaves key focus where it was, so the document's keys keep working; Tab still reaches the tab row.
-- Floating windows stack with the app's own egui windows in egui's area order: the one shown or pressed last is on top, so a dialog the app opens over a floating panel shows above it.
+- Floating windows stack with the app's own egui windows in egui's area order: the one shown, pressed or raised last (`FloatingGroup::raise`, which the host's `DockArea::focus` request sets on the window holding the panel) is on top, so a dialog the app opens over a floating panel shows above it.
 - A panel command (`DockCommands`) acts on the shown panel of the group that takes it. A menu row, a key and the command palette run the same code: `actions` turns the command into `Action`s.
 
 ## Commands and workspaces
