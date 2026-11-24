@@ -256,7 +256,14 @@ fn essential_truncation_and_oversized_properties_are_errors_without_partial_reco
     let mut budget = Budget::new(1 << 20, crate::MAX_PAYLOAD + 4096);
     assert!(matches!(Reader::new(&oversized, 26).read(OWNER, 8, &mut budget, &|| true),
         Err(Error::Source(crate::Error::Invalid(message))) if message.contains("stored effect property exceeds 64 MiB")));
-    assert!(Reader::new(&bytes, 19).read(OWNER, 8, &mut Budget::default(), &|| true).is_err());
+    // Use the same otherwise valid envelope for both versions. A v26 envelope
+    // would fail v19 framing even if the version guard were accidentally removed.
+    let v20 = effect(20, &[("finite", 3, 0.5f32.to_be_bytes().to_vec())]);
+    let accepted = Reader::new(&v20, 20).read(OWNER, 8, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(accepted.record.version, None);
+    assert!(matches!(accepted.record.arguments[0].value, ArgumentValue::Float(0.5)));
+    let rejected = Reader::new(&v20, 19).read(OWNER, 8, &mut Budget::default(), &|| true).unwrap_err();
+    assert_eq!(rejected, Error::Source(crate::Error::Invalid("stored effect envelopes are not defined before XCF 20".into())));
 }
 
 #[test]
