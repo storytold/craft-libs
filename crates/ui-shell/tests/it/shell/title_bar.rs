@@ -354,6 +354,73 @@ fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
     assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
 }
 
+/// The props of a whole title bar an app shows through a memoized view.
+#[derive(craft_ui::contract::MemoProps)]
+struct WholeBar {
+    version: u64,
+}
+
+/// A Windows title bar with a brand button, a menu bar of an image editor's menus and the document title.
+fn whole_bar(_: &mut WholeBar, ui: &mut Ui) {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::menu::MenuItem;
+    use craft_ui::menu::bar::{MenuBar, MenuTitle};
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let _ = TitleBar::new().frame(frame).show_titled(
+        ui,
+        Title::new("Untitled-1.psd"),
+        |ui, _| {
+            Button::new("Brand").show(ui);
+            let names = ["&File", "&Edit", "&Image", "&Layer", "&Type", "&Select", "Fil&ter", "&3D", "&View", "&Plugins", "&Window", "&Help"];
+            let titles = names
+                .into_iter()
+                .map(|name| {
+                    MenuTitle::new(name, |ui| {
+                        MenuItem::new("Row").show(ui);
+                    })
+                })
+                .collect();
+            MenuBar::new("Main menu", titles).show(ui);
+        },
+        |_, _| {},
+    );
+}
+
+/// A whole title bar an app shows through a memoized view in the shell's title slot (1600 × 1000 px at 125 %) fills
+/// the slot as the bar shown directly does: the captions end at the slot's end edge and the document title is drawn
+/// whole after the last menu.
+#[trial]
+fn a_memoized_title_bar_fills_the_title_slot() {
+    use craft_host::target::Os;
+    use craft_ui::contract::MemoView;
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&slot);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .title_bar(|ui, _, _: &mut ()| {
+                let _ = MemoView::new("title bar", WholeBar { version: 0 }, whole_bar).show(ui);
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == "title").map(|(_, rect)| *rect) {
+            seen.set(rect);
+        }
+    });
+    fixture.os(Os::Windows);
+    fixture.ctx().set_pixels_per_point(1.25);
+    fixture.room(vec2(1280.0, 800.0)).settle();
+    let slot = slot.get();
+    let close = fixture.by_label("Close").expect("the Close caption").rect;
+    assert!((close.right() - slot.right()).abs() <= 1.0, "the Close caption {close:?} ends at the slot's end {slot:?}");
+    let help = fixture.by_label("Help").expect("Help is a title of the menu bar").rect;
+    let (title, elided) =
+        fixture.texts().iter().find(|run| run.text == "Untitled-1.psd").map(|run| (run.rect, run.elided)).expect("the document title is painted");
+    assert!(title.left() > help.right() && title.right() < close.left(), "the title {title:?} lies between Help {help:?} and the captions");
+    assert!(!elided, "the document title is whole");
+}
+
 /// What a bar with Windows captions `width` wide shows in `direction`, with its trailing content fitted after the
 /// leading content or, without `fitted`, in the end region, by label: the leading button, the trailing buttons ranked 1
 /// and 2 when they are there, the unranked trailing button and the Minimize caption.

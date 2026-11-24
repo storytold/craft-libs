@@ -78,7 +78,8 @@ pub(crate) struct FooterSlotOf {
 }
 
 /// The flow facts of the body around a memoized view that its content is laid out by: whether that body is a
-/// content-sized or a given column, the axes it sizes from its content, whether the view runs in a least measure, the
+/// content-sized or a given column, the axes it sizes from its content, the axis it shares among the children that fill
+/// it, whether the view runs in a least measure, the
 /// axes a scrolling body leaves unbounded, whether it fills a beside label's cell and whether its leaves fit the view's
 /// room (`Scoped::view_fits`). A measuring run of a container or a row lays the view out under other facts than its
 /// real run, so they are a fact of the view's place, which each kind of run compares on its own (`lazy::Place`,
@@ -88,6 +89,7 @@ pub(crate) struct Flow {
     content_column: bool,
     given_column: bool,
     content: (bool, bool),
+    shares: Option<craft_behavior::Axis>,
     least: bool,
     unbounded: (bool, bool),
     cell_fills: bool,
@@ -187,6 +189,10 @@ pub struct Scoped {
     /// extents of the other children and the gaps, over the number of children that fill. `None` while the body is
     /// measured, and without a measuring run of this pass.
     pub(crate) fill_share: Option<f32>,
+    /// The memoized view whose content the scope's direct children run in, with the axis the body around that view
+    /// shares (its `fill_body`'s): a child given that axis to fill tells the view (`layout::fill_size`), which then is
+    /// a child that fills that body (`contract::lazy`).
+    pub(crate) fill_view: Option<(Id, craft_behavior::Axis)>,
     /// The shrink step of the unwrapped `Row` or `Stack` body that encloses the scope, as its direct children in flow
     /// take part in it.
     pub(crate) shrink: Option<Shrink>,
@@ -464,6 +470,7 @@ impl Scoped {
         self.column_row = false;
         self.fill_body = None;
         self.fill_share = None;
+        self.fill_view = None;
         self.shrink = None;
         self.column = None;
         self.offered = None;
@@ -483,6 +490,7 @@ impl Scoped {
             || self.column_row
             || self.fill_body.is_some()
             || self.fill_share.is_some()
+            || self.fill_view.is_some()
             || self.shrink.is_some()
             || self.column.is_some()
             || self.offered.is_some()
@@ -493,12 +501,17 @@ impl Scoped {
     /// content axes. The view's content then measures and
     /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
     /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
-    /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
-    /// content along x, as the row counted it: a child that fills there takes its measured width, not the row's flow
-    /// region a view the row does not narrow is shown in.
-    pub(crate) fn start_view_room(&mut self) {
+    /// content fit the room the view is given (`Shrink::Fit`).
+    ///
+    /// In a body that shares an axis among the children that fill it (`fill_body`), a direct child of the content
+    /// given that axis to fill tells the view `view` (`fill_view`): the view is then one of the children that fill the
+    /// body, given its share as its room, as the child shown without the view would be. A view that is a unit of a
+    /// shrinking `Row` that does not share its width sizes from its content along x, as the row counted it: a child
+    /// that fills there takes its measured width, not the row's flow region a view the row does not narrow is shown in.
+    pub(crate) fn start_view_room(&mut self, view: Id) {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
+        let shares = self.shares();
         let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
         // The view stands on the line of the row around it only to fill it, as a levelled unit does: a fill-width row in
         // it (a bar in a shell slot) takes the line's height and centres on it, as shown without the view; its children
@@ -507,11 +520,20 @@ impl Scoped {
         self.start_room();
         (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
         self.row_line = line;
+        self.fill_view = shares.map(|axis| (view, axis));
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
-        if row_unit {
+        if row_unit && shares != Some(craft_behavior::Axis::X) {
             self.content.0 = true;
+        }
+    }
+
+    /// The axis the enclosing body shares among its direct children that fill it (`fill_body`).
+    pub(crate) const fn shares(&self) -> Option<craft_behavior::Axis> {
+        match self.fill_body {
+            Some((_, axis)) => Some(axis),
+            None => None,
         }
     }
 
@@ -568,6 +590,7 @@ impl Scoped {
             content_column: self.content_column,
             given_column: self.given_column,
             content: self.content,
+            shares: self.shares(),
             least: self.least,
             unbounded: self.unbounded,
             cell_fills: self.cell_fills,
@@ -717,6 +740,7 @@ impl Env {
                 footer_slot: None,
                 fill_body: None,
                 fill_share: None,
+                fill_view: None,
                 shrink: None,
                 column: None,
                 least: false,
