@@ -152,6 +152,7 @@ size.rail.width = 40
 size.rail.button = 30
 size.bar.title = 32
 size.bar.tab = 26
+size.bar.tab_large = 32
 size.bar.status = 24
 size.bar.options = 36
 size.bar.options_narrow = 28

@@ -1,8 +1,10 @@
 //! Stories of `Section`.
 
 use super::Section;
-use crate::contract::{Role, Show as _, ShowContainer as _};
+use crate::contract::{Props as _, Role, SectionRhythm, Show as _, ShowContainer as _};
 use crate::display::Text;
+use crate::layout_components::Stack;
+use crate::runtime::env::with_env;
 use crate::sections::sample::body;
 use crate::sections::{HeaderAction, HeaderStrength};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -60,4 +62,27 @@ fn section_with_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         })
         .show(ui, |ui, _| body(ui));
     shown.output.into()
+}
+
+/// A row and two sections under each `SectionRhythm`: `Tight` (the default) gives each rule the stack's gap and its
+/// header follows at once; `Spaced` stands each rule `space.gap.section` off what precedes it and its header
+/// `space.gap.row` below it.
+#[story(Section<'static>, covers = [], drive = Drive::Never)]
+fn section_rhythm(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut column = |ui: &mut Ui, key: &'static str| {
+        Stack::new().id_salt(key).show(ui, |ui, _| {
+            Text::new("Fill").show(ui);
+            Section::new("Stroke").open(data.bind(key, true)).show(ui, |ui, _| body(ui));
+            Section::fixed("Effects").show(ui, |ui, _| body(ui));
+        });
+    };
+    column(ui, "tight");
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(SectionRhythm::Spaced);
+        },
+        |ui| column(ui, "spaced"),
+    );
+    StoryOutput::default()
 }

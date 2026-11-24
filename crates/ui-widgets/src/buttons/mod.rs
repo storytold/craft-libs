@@ -63,8 +63,9 @@ pub enum ControlPlace {
     SideMenu,
 }
 
-/// How an icon button that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`), so the
-/// current tool can show the look an app's tools had.
+/// How an icon button or a segment that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`),
+/// so the current tool can show the look an app's tools had; an app sets it at its root (`RootEnv::values`) for its
+/// segmented pickers as well.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
@@ -90,8 +91,9 @@ pub enum PushButtonLook {
     Filled,
 }
 
-/// The filled neutral variant a push button takes under [`PushButtonLook::Filled`].
-pub(crate) const FILLED: craft_theme::Variant = craft_theme::Variant::look(craft_theme::Emphasis::Filled, craft_theme::variant::Tone::Neutral);
+/// The filled neutral variant a push button takes under [`PushButtonLook::Filled`]: `surface.control` with no edge at
+/// rest.
+pub const FILLED: craft_theme::Variant = craft_theme::Variant::look(craft_theme::Emphasis::Filled, craft_theme::variant::Tone::Neutral);
 
 /// The variant a push or split button that asks for none takes in `env` (`Component::default_variant`): the filled one
 /// under [`PushButtonLook::Filled`], outside a ribbon.

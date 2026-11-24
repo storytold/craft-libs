@@ -783,7 +783,7 @@ impl Component for PaintChip<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let (well, mark) = self.layout(cx.rect, &cx.style, cx.flow.is_rtl());
+        let (well, mark) = self.layout(cx.rect, cx.style, cx.flow.is_rtl());
         if self.popup_mark == PopupMark::Menu {
             let mut arrow = DisclosureGlyph::dropdown_of(cx.env.get());
             arrow.color = Some(cx.style.arrow_color);

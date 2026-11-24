@@ -271,7 +271,7 @@ impl<'b> BodyHooks<'b> {
         } else {
             ((line.x + gap(end.x, end_gap)).max(across.x), line.y.max(end.y) + across.y)
         };
-        let above = self.rules.above;
+        let above = self.rules.above_band();
         if inline {
             Vec2::new(width, height + above)
         } else {
