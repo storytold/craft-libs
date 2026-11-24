@@ -406,6 +406,48 @@ fn an_editor_the_app_opens_takes_the_focus_once() {
     assert_eq!(state.borrow().new_comment, "Elsewhere", "the add box keeps it");
 }
 
+/// While a message of the selected card is in its editor, a new comment not yet saved among them, the card offers no
+/// reply box; "Add a comment" stays. Saving or cancelling the edit brings the reply box back (storytold/pdfcraft#7761).
+#[trial]
+fn a_card_offers_no_reply_while_its_message_is_edited() {
+    let mut initial = CommentsPanelState::default();
+    initial.selected = Selection::single(ThreadId(1));
+    let state = Rc::new(RefCell::new(initial));
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let (shown_state, shown_edits) = (state.clone(), edits.clone());
+    let threads = vec![thread(1, 1, "Note 1.")];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let out = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+        shown_edits.borrow_mut().extend(out.edits);
+    });
+    fixture.in_room(Room::Panel).settle();
+    assert!(fixture.by_label("Add a reply").is_some(), "the selected card offers a reply");
+
+    // A new comment's note, opened by the app and not yet saved.
+    state.borrow_mut().edit(ThreadId(1), 0, String::new());
+    fixture.settle();
+    assert!(fixture.by_label("Add a reply").is_none(), "no reply while the comment is composed");
+    assert!(fixture.by_label("Add a comment").is_some(), "the add box stays");
+    fixture.type_text("Initial comment").settle();
+    assert!(fixture.by_label("Add a reply").is_none(), "typing alone does not end the edit");
+    let save = fixture.by_label("Save").expect("the editor's Save");
+    fixture.click(&save).settle();
+    assert!(
+        edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Edit { text, .. } if text == "Initial comment")),
+        "Save reports the comment: {:?}",
+        edits.borrow()
+    );
+    assert!(fixture.by_label("Add a reply").is_some(), "a saved comment offers a reply");
+
+    state.borrow_mut().edit(ThreadId(1), 0, "Note 1.");
+    fixture.settle();
+    assert!(fixture.by_label("Add a reply").is_none(), "no reply while the comment is edited");
+    let cancel = fixture.by_label("Cancel").expect("the editor's Cancel");
+    fixture.click(&cancel).settle();
+    assert!(fixture.by_label("Add a reply").is_some(), "a cancelled edit offers the reply again");
+}
+
 /// A value the rig and its trial share.
 type Shared<T> = Rc<RefCell<T>>;
 

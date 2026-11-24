@@ -6,8 +6,10 @@ use std::rc::Rc;
 use craft_pages::ui::PlacedPage;
 use craft_review::comments::{CommentAnchor, CommentMessage, CommentThread, ThreadId};
 use craft_review::ui::{BalloonItem, BalloonPlace, CommentBalloons, CommentEdit, CommentsPanelState, CommentsWords};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::Direction;
 use craft_ui::testing::{Fixture, trial};
+use craft_ui::text::TextField;
 use egui::{Pos2, Rect, Vec2, pos2, vec2};
 
 fn thread(id: u64, text: &str) -> CommentThread {
@@ -173,27 +175,39 @@ fn reselecting_a_card_keeps_its_edit_draft() {
 
 /// The inline editor takes the keyboard in the pass it opens, so typing needs no second click on its field, as the
 /// old WordCraft's balloon took typing once selected. An editor that stays open does not take the keyboard back.
+/// While the edit is open the card offers no reply, so the keyboard goes elsewhere through a field of the host.
 #[trial]
 fn an_edit_that_opens_takes_the_keyboard() {
-    let threads = vec![(thread(1, "First"), 100.0)];
-    let selected = selecting(1);
-    let mut shown = Shown::new(threads, selected, BalloonPlace::Column, room(), Direction::Ltr);
+    let threads = [(thread(1, "First"), 100.0)];
+    let state = Rc::new(RefCell::new(selecting(1)));
+    let host = Rc::new(RefCell::new(String::new()));
+    let (shown_state, shown_host) = (state.clone(), host.clone());
+    let pages = [page()];
+    let mut fixture = Fixture::new(move |ui| {
+        TextField::new("Elsewhere", Bind::bound(&mut shown_host.borrow_mut())).show(ui);
+        let items: Vec<BalloonItem<'_>> = threads.iter().map(|(thread, y)| BalloonItem::thread(thread, 0, Pos2::new(30.0, *y))).collect();
+        let mut state = shown_state.borrow_mut();
+        let _ = CommentBalloons::new("Comments", &pages, &items, &mut state).place(BalloonPlace::Column).now(Some(3_600)).show(ui);
+    });
+    fixture.room(room()).settle();
     let words = CommentsWords::default();
     // The app opens the edit of the selected card's comment, as on a click on its balloon.
-    shown.state.borrow_mut().editing = Some((ThreadId(1), 0, "First".into()));
-    shown.fixture.settle();
-    shown.fixture.type_text("!").settle();
-    let draft = shown.state.borrow().editing.as_ref().map(|(.., text)| text.clone());
-    assert!(
-        draft.as_deref().is_some_and(|text| text.contains('!') && text.len() == "First!".len()),
-        "typing reaches the edit that opened: {draft:?}"
-    );
+    state.borrow_mut().editing = Some((ThreadId(1), 0, "First".into()));
+    fixture.settle();
+    fixture.type_text("!").settle();
+    let draft = || state.borrow().editing.as_ref().map(|(.., text)| text.clone());
+    assert!(draft().is_some_and(|text| text.contains('!') && text.len() == "First!".len()), "typing reaches the edit that opened: {:?}", draft());
+    assert!(fixture.by_label(words.reply.as_str()).is_none(), "the card offers no reply field while the edit is open");
+    assert!(fixture.by_label(words.reply_button.as_str()).is_none(), "nor the Reply button that focuses it");
+    assert!(fixture.by_label(words.resolve.as_str()).is_some(), "Resolve stays");
 
-    // The reply field takes the keyboard; the open edit does not take it back.
-    let reply = shown.fixture.by_label(words.reply.as_str()).expect("the selected card's reply field");
-    shown.fixture.click(&reply).settle();
-    shown.fixture.type_text("x").settle();
-    assert_eq!(shown.state.borrow().reply, "x", "the reply field keeps the keyboard");
+    // Another field takes the keyboard; the open edit does not take it back.
+    let elsewhere = fixture.by_label("Elsewhere").expect("the host's field");
+    fixture.click(&elsewhere).settle();
+    fixture.idle(3);
+    fixture.type_text("x").settle();
+    assert_eq!(host.borrow().as_str(), "x", "the other field keeps the keyboard");
+    assert!(draft().is_some_and(|text| !text.contains('x')), "the edit does not take the keyboard back: {:?}", draft());
 }
 
 /// Guards `CommentBalloons::read_only`: while comments cannot change, a selected card takes no typing, as the panel's
