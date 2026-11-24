@@ -629,7 +629,15 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.label_step(ui, env, cx.core, &mut plan);
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if plan.is_open {
+            let fits_end = !plan.real && self.end_fit.is_none() && props.end.is_some_and(|end| end.fit);
+            if fits_end {
+                layout::ask_shortfall(&plan.ctx, plan.layout_id);
+            }
             self.body_step(comp, ui, env, cx.core, &mut plan);
+            // The end region's ranked units take the body's shortfall off what the region took.
+            if fits_end && let (Some(short), Some(end)) = (layout::take_shortfall(&plan.ctx, plan.layout_id), self.end_size) {
+                self.end_unfit = Some(end.x - short);
+            }
             self.after_body(ui, env, &mut plan);
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
@@ -820,10 +828,41 @@ impl BodyHooks<'_> {
         (layer, rect): (areas::LayerKey, Rect),
         values: &AppValues,
     ) {
-        if self.props.label_column {
+        if self.props.end.is_some_and(|end| end.fit) {
+            self.fitting_sweeps(comp, at, cx, (layer, rect), values);
+        } else if self.props.label_column {
             self.settling_sweeps(comp, at, cx, (layer, rect), values);
         } else {
             self.sweep(comp, at, cx, (layer, rect), values);
+        }
+    }
+
+    /// An end region that joins the body's fit (`EndRegion::fit`) gives way before the body: when the body's units ask
+    /// for more than the line the region leaves, the sweep is taken back and the content runs once more with the
+    /// region's ranked units fitted into what it took less the body's shortfall, so they leave before a body unit
+    /// narrows or leaves.
+    #[inline(never)]
+    fn fitting_sweeps<C: Container>(
+        &mut self,
+        comp: &mut C,
+        at: &Measuring<'_, '_>,
+        cx: &mut Cx<'_, C>,
+        (layer, rect): (areas::LayerKey, Rect),
+        values: &AppValues,
+    ) {
+        let ctx = at.ui.ctx().clone();
+        let (unfit, _) = crate::contract::draft(
+            &ctx,
+            || {
+                self.sweep(comp, at, cx, (layer, rect), values);
+                self.end_unfit.take()
+            },
+            Option::is_none,
+        );
+        if let Some(room) = unfit {
+            self.end_fit = Some(room);
+            self.sweep(comp, at, cx, (layer, rect), values);
+            (self.end_fit, self.end_unfit) = (None, None);
         }
     }
 
@@ -1291,7 +1330,8 @@ impl BodyHooks<'_> {
                 ..line
             });
         }
-        let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: &plan.line_env, gap: plan.gap };
+        let fitted = self.end_fit.filter(|_| !plan.real).map(|room| plan.line_env.derive_local(|scoped| scoped.rank_room = Some(room)));
+        let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: fitted.as_ref().unwrap_or(&plan.line_env), gap: plan.gap };
         let closed = self.end_region(comp, ui, &mut end_cx, &frame, props, end, line);
         plan.close = plan.close.or(closed);
     }

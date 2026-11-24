@@ -128,6 +128,10 @@ pub(super) struct BodyHooks<'b> {
     /// found it has to run again at (`ColumnGroup::scope_measured`).
     settle: Option<crate::layout::Columns>,
     unsettled: Option<crate::layout::Columns>,
+    /// The room the ranked units of an end region that joins the body's fit (`EndRegion::fit`) fit into in the
+    /// measuring run's second sweep, and the room a first sweep found they have to fit into.
+    end_fit: Option<f32>,
+    end_unfit: Option<f32>,
     extent: Option<Vec2>,
     /// The content extent a measuring run found that leaves another view than the one the run laid the content out
     /// for: the run lays it out again at that view.
@@ -232,6 +236,8 @@ impl<'b> BodyHooks<'b> {
             reached: None,
             settle: None,
             unsettled: None,
+            end_fit: None,
+            end_unfit: None,
             extent: None,
             view_moves: None,
             view: None,

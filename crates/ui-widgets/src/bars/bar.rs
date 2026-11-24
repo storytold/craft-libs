@@ -196,11 +196,14 @@ impl<'a> Bar<'a> {
 
     /// Ends the bar with a group of controls that stays at the reading end, outside the scroll, while the members
     /// before it scroll. The group sits after the cancel and commit buttons and gets the bar's body context, so it can
-    /// read and write the state the body reads. In a measuring run it runs before the body.
+    /// read and write the state the body reads. In a measuring run it runs before the body. The group joins the body's
+    /// fit: on a bar too short for the body's members, the group's members that carry a `fit_rank` (a `Row` given one)
+    /// leave first, lowest rank first, before any member of the body narrows or leaves, as a status bar drops its
+    /// readouts at its end before its message.
     #[must_use]
     pub fn trailing(mut self, group: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
         self.trailing = Some(Box::new(group));
-        self.props = self.props.end(EndRegion::new().gap(Gap::Stack));
+        self.props = self.props.end(EndRegion::new().gap(Gap::Stack).fit(true));
         self
     }
 }

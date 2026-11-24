@@ -954,8 +954,9 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     let (rect, held) = place_root(p, ui, at, env, size, inert, rtl);
     p.trace.mark(Step::Place);
     // What the content wants past the room counts where the root's width comes from its content: a content-sized
-    // root, or a fill-width one held at its measured width. A root that fills the flow keeps to the room it fills.
-    let overflow = if held || !p.p.fills_width() { p.p.overflow() } else { 0.0 };
+    // root, or a fill-width one held at its measured width. A root that fills the flow keeps to the room it fills, and
+    // a unit its row dropped takes no place.
+    let overflow = if !p.dropped && (held || !p.p.fills_width()) { p.p.overflow() } else { 0.0 };
     expand_for_overflow(ui, host_at.unwrap_or(p.at), rect, overflow, rtl);
     // The component sits where the interface puts it; a component whose axis keeps its order flows its content left to right.
     let rtl = rtl && !resolved.ltr_axis;
