@@ -217,10 +217,10 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             }
             continue;
         }
-        if tokens.len() >= MAX_TOKENS {
-            return Err(invalid("graph exceeds 2048 lexical items"));
-        }
         if matches!(ch, '=' | '[' | ']') {
+            if tokens.len() >= MAX_TOKENS {
+                return Err(invalid("graph exceeds 2048 lexical items"));
+            }
             push(
                 &mut tokens,
                 match ch {
@@ -234,6 +234,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             continue;
         }
         let mut word = String::new();
+        let mut started = false;
         while let Some(ch) = next(at) {
             if at >= next_check {
                 check(keep_going)?;
@@ -243,6 +244,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 break;
             }
             if matches!(ch, '\'' | '"') {
+                started = true; // Explicit empty quotes still contribute a word.
                 let quote = ch;
                 at += ch.len_utf8();
                 loop {
@@ -259,9 +261,9 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                         let escaped = next(at).ok_or_else(|| invalid("unterminated graph quoted escape"))?;
                         if matches!(escaped, '$' | '`' | '"' | '\\' | '\n') {
                             at += escaped.len_utf8();
-                            if escaped != '\n' {
-                                character(&mut word, escaped, budget)?;
-                            }
+                            // GLib's public shell parser keeps a quoted escaped newline;
+                            // only an unquoted backslash-newline is a continuation.
+                            character(&mut word, escaped, budget)?;
                         } else {
                             character(&mut word, '\\', budget)?;
                         }
@@ -274,14 +276,21 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
                 let escaped = next(at).ok_or_else(|| invalid("unterminated graph literal escape"))?;
                 at += escaped.len_utf8();
                 if escaped != '\n' {
+                    started = true;
                     character(&mut word, escaped, budget)?;
                 }
             } else {
+                started = true;
                 character(&mut word, ch, budget)?;
                 at += ch.len_utf8();
             }
         }
-        push(&mut tokens, Token::Word(word), budget)?;
+        if started {
+            if tokens.len() >= MAX_TOKENS {
+                return Err(invalid("graph exceeds 2048 lexical items"));
+            }
+            push(&mut tokens, Token::Word(word), budget)?;
+        }
     }
     Ok(tokens)
 }
@@ -327,12 +336,17 @@ impl<'b, 's> Decoder<'b, 's> {
         Ok(word)
     }
     fn declaration(&mut self, operation: &str) -> Result<Option<Operation<'s>>> {
+        // GEGL's default namespace is optional. Other namespaces stay exact, and the
+        // node continues to retain the operation spelling written in the source.
+        let unqualified = if operation.contains(':') { operation.strip_prefix("gegl:").filter(|name| !name.contains(':')) } else { Some(operation) };
         for (index, declaration) in self.declarations.iter().enumerate() {
             if index % 64 == 0 {
                 check(self.keep_going)?;
             }
-            self.budget.work.charge(declaration.name.len().min(operation.len()).saturating_add(1))?;
-            if declaration.name == operation {
+            self.budget.work.charge(declaration.name.len().min(operation.len()).saturating_add(1).saturating_mul(3))?;
+            if declaration.name == operation
+                || unqualified.is_some_and(|name| declaration.name == name || declaration.name.strip_prefix("gegl:") == Some(name))
+            {
                 return Ok(Some(*declaration));
             }
         }
@@ -484,14 +498,18 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
             }
             let numeric = literal.parse::<i32>().ok();
             let mut found = None;
+            let mut numeric_fallback = None;
             for (name, value) in choices {
                 budget.work.charge(name.len().min(literal.len()).saturating_add(1))?;
-                if *name == literal || Some(*value) == numeric {
+                if *name == literal {
                     found = Some(*value);
                     break;
                 }
+                if Some(*value) == numeric {
+                    numeric_fallback = Some(*value);
+                }
             }
-            Value::Choice(found.ok_or_else(|| invalid("unknown graph choice value"))?)
+            Value::Choice(found.or(numeric_fallback).ok_or_else(|| invalid("unknown graph choice value"))?)
         }
         Some(FieldType::Color) => Value::Color(color(literal)?),
     })
@@ -522,6 +540,9 @@ fn color(value: &str) -> Result<Color> {
     }
     let mut rgba = [0, 0, 0, 255];
     if let Some(hex) = value.strip_prefix('#') {
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid("invalid graph hexadecimal color"));
+        }
         match hex.len() {
             3 | 4 => {
                 for (out, digit) in rgba.iter_mut().zip(hex.chars()) {
@@ -538,6 +559,8 @@ fn color(value: &str) -> Result<Color> {
             }
             _ => return Err(invalid("wrong graph hexadecimal color length")),
         }
+    } else if value.eq_ignore_ascii_case("transparent") || value.eq_ignore_ascii_case("none") {
+        rgba = [0; 4];
     } else {
         let named = [
             ("black", [0, 0, 0]),

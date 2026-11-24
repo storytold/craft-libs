@@ -135,7 +135,7 @@ fn shell_quoting_comments_and_escapes_only_change_literal_bytes() {
         (r#"gain text="one\"two\\three\n\$HOME\`tick""#, "one\"two\\three\\n$HOME`tick"),
         (r#"gain text='foo'\''bar'"#, "foo'bar"),
         ("gain text=foo\\ bar", "foo bar"),
-        ("gain text=\"a\\\nb\"", "ab"),
+        ("gain text=\"a\\\nb\"", "a\nb"),
     ] {
         assert_eq!(read(source).nodes[0].properties[0].literal, expected);
     }
@@ -192,4 +192,82 @@ fn failed_or_cancelled_graphs_keep_the_shared_budget_contract() {
     assert!(matches!(parse(&raw, SCHEMA, &mut budget, &keep), Err(Error::Source(crate::Error::Cancelled))));
     assert!(budget.remaining_storage() < Budget::default().remaining_storage());
     assert!(budget.remaining_work() < Budget::default().remaining_work());
+}
+
+#[test]
+fn qualified_and_unqualified_gegl_declarations_share_types_without_rewriting_source() {
+    for declaration in ["gegl:exposure", "exposure"] {
+        let schema = [Operation { name: declaration, fields: &[Field { name: "exposure", kind: FieldType::Number }] }];
+        for spelling in ["exposure", "gegl:exposure"] {
+            let raw = format!("{spelling} exposure=1.25");
+            let graph = parse(&raw, &schema, &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(graph.nodes[0].operation, spelling);
+            assert_eq!(graph.nodes[0].properties[0].value, Value::Number(1.25));
+            assert!(graph.diagnostics.is_empty());
+        }
+        for spelling in ["other:exposure", "gegl:other:exposure"] {
+            let raw = format!("{spelling} exposure=1.25");
+            let graph = parse(&raw, &schema, &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(graph.nodes[0].operation, spelling);
+            assert_eq!(graph.nodes[0].properties[0].value, Value::Unknown);
+            assert_eq!(graph.diagnostics.len(), 2);
+        }
+    }
+    let schema = [Operation { name: "other:exposure", fields: &[] }];
+    let graph = parse("other:exposure", &schema, &mut Budget::default(), &|| true).unwrap();
+    assert!(graph.diagnostics.is_empty());
+    assert_eq!(parse("exposure", &schema, &mut Budget::default(), &|| true).unwrap().diagnostics.len(), 1);
+}
+
+#[test]
+fn exact_choice_names_take_priority_over_numeric_values_in_either_declaration_order() {
+    for choices in [[("second", 7), ("7", -1)], [("7", -1), ("second", 7)]] {
+        let fields = [Field { name: "mode", kind: FieldType::Choice(&choices) }];
+        let schema = [Operation { name: "choice", fields: &fields }];
+        for (literal, expected) in [("7", -1), ("second", 7), ("-1", -1)] {
+            let raw = format!("choice mode={literal}");
+            let graph = parse(&raw, &schema, &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(graph.nodes[0].properties[0].value, Value::Choice(expected));
+        }
+    }
+    let graph = read("gain mode=7");
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Choice(7), "numeric fallback remains supported");
+}
+
+#[test]
+fn hexadecimal_color_bytes_require_exactly_two_ascii_digits() {
+    for literal in ["#+f0000", "#00+f00", "#000000+f", "#0g0000", "#１２３", "#f", "#fffff"] {
+        let raw = format!("color value='{literal}'");
+        assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
+    }
+    for (literal, rgba) in [("#fF0000", [1., 0., 0., 1.]), ("#fF000080", [1., 0., 0., 128. / 255.])] {
+        let raw = format!("color value='{literal}'");
+        assert_eq!(read(&raw).nodes[0].properties[0].value, Value::Color(Color { rgba, space: ColorSpace::Srgb }));
+    }
+}
+
+#[test]
+fn transparent_color_names_keep_zero_alpha_and_opaque_names_keep_one() {
+    for literal in ["transparent", "none", "TRANSPARENT", "None"] {
+        let raw = format!("color value={literal}");
+        assert_eq!(read(&raw).nodes[0].properties[0].value, Value::Color(Color { rgba: [0.; 4], space: ColorSpace::Srgb }));
+    }
+    assert_eq!(read("color value=aqua").nodes[0].properties[0].value, Value::Color(Color { rgba: [0., 1., 1., 1.], space: ColorSpace::Srgb }));
+    assert!(parse("color value=not-a-color", SCHEMA, &mut Budget::default(), &|| true).is_err());
+}
+
+#[test]
+fn unquoted_line_continuations_do_not_emit_words_but_explicit_empty_quotes_do() {
+    for raw in ["invert-linear \\\n", "\\\n invert-linear", "invert-linear \\\n \\\n", "invert-\\\nlinear"] {
+        let graph = read(raw);
+        assert_eq!(graph.nodes.len(), 1, "{raw:?}");
+        assert_eq!(graph.nodes[0].operation, "invert-linear");
+        assert!(graph.diagnostics.is_empty());
+    }
+    assert_eq!(read("gain text='' \\\n").nodes[0].properties[0].literal, "");
+    assert_eq!(read("gain text=\"a\\\nb\"").nodes[0].properties[0].literal, "a\nb");
+    assert_eq!(read("gain text=a\\\nb").nodes[0].properties[0].literal, "ab");
+    assert!(parse("invert-linear ''", SCHEMA, &mut Budget::default(), &|| true).is_err());
+    let exact_tokens = format!("id=base {}\\\n", "ref=base ".repeat(681));
+    assert!(parse(&exact_tokens, SCHEMA, &mut Budget::default(), &|| true).is_ok(), "a continuation contributes no item at the lexical cap");
 }
