@@ -9,7 +9,7 @@ use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse,
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
-use crate::testing::focus::{Stop, egui_focused, named_id, pop_scope, push_scope, register_stop, widget};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::sensing::{self, ProbeRoot};
@@ -44,8 +44,40 @@ fn seen(host: &RefCell<Host>) -> (Vec<Key>, usize) {
     (std::mem::take(&mut host.reached), std::mem::take(&mut host.cancels))
 }
 
+/// A press of `key` and its release, in one frame: a second press with no release between is a repeat.
 fn press_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key) {
-    frames.frame(vec![key_press(key, Modifiers::NONE)], &mut *show);
+    frames.frame(vec![key_press(key, Modifiers::NONE), key_release(key, Modifiers::NONE)], &mut *show);
+}
+
+#[trial]
+fn escape_unused_by_a_focused_control_reaches_the_window() {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(seen(&host).1, 1, "the focused button leaves Escape for the window");
+}
+
+#[trial]
+fn a_canvas_cannot_take_escape_before_an_unrelated_focused_control() {
+    let (host, mut base) = host_window();
+    let stolen = Rc::new(std::cell::Cell::new(false));
+    let canvas_seen = Rc::clone(&stolen);
+    let mut show = move |ui: &mut Ui| {
+        if crate::runtime::keys::with_canvas_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
+            canvas_seen.set(true);
+        }
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert!(!stolen.get());
+    assert_eq!(seen(&host).1, 1);
 }
 
 /// A window with a framework button and the host's own egui text field, with what the host saw.
@@ -60,7 +92,7 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
         register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
         host.rect = fixture::host_field(ui, field(), &mut host.text);
         if std::mem::take(&mut host.start_drag) {
-            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), None, DragPreview::None);
+            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), Vec::new(), DragPreview::None);
         }
         if with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
             host.cancels += 1;
@@ -477,6 +509,89 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// Which of the arrow keys, Home and End reached egui's input, one press each, in a window whose host declares a canvas;
+/// with `focus_field` the host's text field has the focus; and whether Left moved the field's caret.
+fn navigation_keys_with_canvas(focus_field: bool) -> (Vec<Key>, bool) {
+    const KEYS: [Key; 6] = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End];
+    let canvas = named_id("host canvas");
+    let reached = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&reached);
+    let (host, mut base) = host_window();
+    host.borrow_mut().text = "abc".to_owned();
+    let mut show = move |ui: &mut Ui| {
+        seen.borrow_mut().extend(KEYS.into_iter().filter(|key| key_reached(ui.ctx(), *key)));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if focus_field {
+        fixture::host_focus(&frames.ctx, field());
+        frames.frame(Vec::new(), &mut show);
+        frames.frame(vec![key_press(Key::End, Modifiers::NONE), key_release(Key::End, Modifiers::NONE)], &mut show);
+    }
+    reached.borrow_mut().clear();
+    let caret = |frames: &Frames| {
+        // design: allow[contract/egui-widget](the trial reads the caret of the app's own egui TextEdit, which is what it checks)
+        egui::TextEdit::load_state(&frames.ctx, field()).and_then(|state| state.cursor.char_range()).map(|range| range.primary.index)
+    };
+    let at_end = caret(&frames);
+    let mut moved = false;
+    for key in KEYS {
+        press_key(&mut frames, &mut show, key);
+        if key == Key::ArrowLeft {
+            moved = caret(&frames) != at_end;
+        }
+    }
+    let mut reached = reached.take();
+    reached.dedup();
+    (reached, moved)
+}
+
+#[trial]
+fn a_host_canvas_leaves_navigation_keys_in_egui_for_the_app_s_widget() {
+    const KEYS: [Key; 6] = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End];
+    let (reached, caret) = navigation_keys_with_canvas(true);
+    assert_eq!(reached, KEYS, "a focused app field reads the arrows, Home and End from egui");
+    assert!(caret, "the field's caret moved left from the end");
+    assert_eq!(navigation_keys_with_canvas(false).0, KEYS, "with nothing focused, the host canvas's own keys stay in egui");
+}
+
+/// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
+/// `textless_paste` reads it in that pass only.
+#[trial]
+fn a_paste_with_no_text_is_the_paste_chord_and_reads_as_textless() {
+    let picture = Event::PasteImage(Arc::new(crate::testing::pictures::sample_picture(1, [1, 1])));
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, picture.clone()).1.is_empty(), "the picture's paste fires the app's Paste");
+    let read = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&read);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen.set(crate::runtime::keys::textless_paste(ui.ctx()));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
+    assert!(!read.get(), "a paste with text");
+    frames.frame(vec![picture], &mut show);
+    assert!(read.get(), "a paste with no text");
+    frames.frame(Vec::new(), &mut show);
+    assert!(!read.get(), "the pass after it");
+}
+
+/// A pasted image is the same Paste as pasted text: in a window whose canvas does not take it, the app's Paste runs,
+/// and the app reads the image; a canvas that lists Paste reads it from egui, as it does text.
+#[trial]
+fn a_pasted_image_runs_the_paste_a_pasted_text_runs() {
+    // The pixels are image data the trial never reads; any grey stands for them.
+    let image = Event::PasteImage(Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::from_gray(128))));
+    assert_eq!(clipboard_with_canvas(KeyUse::CANVAS, image.clone()).1, [EditCommands::Paste.id()], "the app's Paste runs");
+    let typing = KeyUse::CANVAS.with_edits(EditSet::NONE.with(EditCommand::Paste));
+    assert_eq!(clipboard_with_canvas(typing, image), (true, Vec::new()), "the canvas's paste stays in egui and fires nothing");
+}
+
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let (host, mut show) = host_window();
@@ -501,6 +616,36 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     let mut unbound = craft_keymap::Overrides::default();
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
+}
+
+/// What a press of Escape with `mods` did with nothing focused, under `overrides`: the window cancels it raised and the
+/// ids of the commands it fired.
+fn escape_under(overrides: Option<craft_keymap::Overrides>, mods: Modifiers) -> (usize, Vec<String>) {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    seen(&host);
+    frames.frame(vec![key_press(Key::Escape, mods), key_release(Key::Escape, mods)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (seen(&host).1, fired)
+}
+
+/// Tb-8 (3): Shift+Escape bound to a command runs it, as production's keymap ran it under a loaded place cursor; the
+/// key stage read every Escape without Cmd or Ctrl as the scope's escape, so the binding never fired. Plain Escape keeps
+/// its meaning, and an unbound Shift+Escape is still an escape.
+#[trial]
+fn a_command_bound_to_shift_escape_runs_and_plain_escape_still_cancels() {
+    let delete = EditCommands::Delete.id().to_owned();
+    assert_eq!(escape_under(None, Modifiers::SHIFT), (1, Vec::new()), "an unbound Shift+Escape is the window's Cancel");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Shift+Escape".to_owned()]);
+    assert_eq!(escape_under(Some(bound.clone()), Modifiers::SHIFT), (0, vec![delete]), "the bound Shift+Escape runs its command");
+    assert_eq!(escape_under(Some(bound), Modifiers::NONE), (1, Vec::new()), "a plain Escape is still the window's Cancel");
 }
 
 /// The panes the pane trials show, in order: the scope's name, its stop and its label.
@@ -637,7 +782,7 @@ fn a_window_shortcut_runs_from_a_pane_title_and_not_from_a_modal_dialog_or_a_tex
     // The ids of the commands a press of the shortcut's key fired.
     let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| -> Vec<String> {
         take_output(&frames.ctx);
-        frames.frame(vec![key_press(Key::Q, Modifiers::NONE)], &mut *show);
+        frames.frame(vec![key_press(Key::Q, Modifiers::NONE), key_release(Key::Q, Modifiers::NONE)], &mut *show);
         frames.frame(Vec::new(), &mut *show);
         take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
     };

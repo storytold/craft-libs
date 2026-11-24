@@ -4,7 +4,8 @@ use super::CELL;
 use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
-use crate::docking::{ColumnBar, GroupAt, IconicColumn, IconicColumnOutput, PanelSpec};
+use crate::docking::{ColumnBar, DockSizes, GroupAt, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
+use crate::runtime::commands::{CommandState, CommandStates};
 use crate::runtime::env::{Env, Message};
 use crate::sections::Panel;
 use crate::testing::memory::global;
@@ -19,6 +20,36 @@ fn spec(panel: &u8) -> PanelSpec {
     PanelSpec::new(["Brushes", "Swatches", "History"].get(usize::from(*panel)).copied().unwrap_or("Panel"))
 }
 
+/// The toggle commands of the story panels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui_macros::CommandSet)]
+#[command(prefix = "iconicStory", story)]
+#[non_exhaustive]
+pub(crate) enum PanelToggles {
+    /// Brushes.
+    #[command(label = "Show Brushes")]
+    Brushes,
+    /// Swatches.
+    #[command(label = "Show Swatches")]
+    Swatches,
+    /// History.
+    #[command(label = "Show History")]
+    History,
+}
+
+/// The story panels, each bound to its toggle command.
+fn toggled(panel: &u8) -> PanelSpec {
+    let command = [PanelToggles::Brushes, PanelToggles::Swatches, PanelToggles::History][usize::from(*panel) % 3];
+    spec(panel).command(command)
+}
+
+/// Brushes has something to show while it is closed, so its cell carries the marker; Swatches has something to show
+/// but is open, so its cell carries none; History has nothing to show.
+fn marked_states(states: &mut CommandStates) {
+    states.set(PanelToggles::Brushes, CommandState::new().checked(false).marked(true).hint("3 new brushes"));
+    states.set(PanelToggles::Swatches, CommandState::new().checked(true).marked(true).hint("2 new swatches"));
+    states.set(PanelToggles::History, CommandState::new().checked(false));
+}
+
 /// Shows `column` as a dock shows it: at the end edge of a stage, as wide as the rail, its flyouts opening over the
 /// stage.
 fn at_stage<'a>(
@@ -26,9 +57,19 @@ fn at_stage<'a>(
     column: IconicColumn<'a, u8>,
     view: impl FnMut(&Group<u8>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
 ) -> IconicColumnOutput<u8> {
+    at_stage_wider(ui, column, 0.0, view)
+}
+
+/// [`at_stage`] with the column `extra` wider than the rail: a card's inset.
+fn at_stage_wider<'a>(
+    ui: &mut Ui,
+    column: IconicColumn<'a, u8>,
+    extra: f32,
+    view: impl FnMut(&Group<u8>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
+) -> IconicColumnOutput<u8> {
     let room = stage(ui);
     let env = Env::of(ui);
-    let width = env.tokens.tokens().size.rail.width; // design: allow[style/token-read](a story sizes its stage from the rail token)
+    let width = env.tokens.tokens().size.rail.width + extra; // design: allow[style/token-read](a story sizes its stage from the rail token)
     let cell = if env.direction.is_rtl() {
         Rect::from_min_max(room.min, egui::pos2(room.left() + width, room.bottom()))
     } else {
@@ -41,6 +82,43 @@ fn at_stage<'a>(
 fn icon_groups(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
     let column = IconicColumn::new("Panels", global("iconic column", "story"), &column, Bind::kept(), &spec);
+    at_stage(ui, column, |group, at, ui, _| {
+        let GroupAt::Show(rect) = at else { return None };
+        let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
+        Panel::new(title).titled().show_at(ui, rect, |_, _| ());
+        None
+    })
+    .into()
+}
+
+/// A docked column of icons shown as a card (`DockConfig::column_cards`), at the window edge or inward of another
+/// column: inset on its top and bottom, and on its outer side by the window edge's inset or by the gutter between two
+/// cards, its bar and icons on the rounded panel card over the dock's background.
+#[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Never)]
+fn icons_as_a_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let at = *data.choice("place", 1_usize, &[("At the window edge", 0), ("Inward of another column", 1)]);
+    let sizes = DockSizes { column_cards: true, ..DockSizes::of_scope(ui) };
+    let inset = sizes.card_inset(at);
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "card story"), &column, Bind::kept(), &spec);
+    let column = match sizes.card_place(at) {
+        Some(place) => column.card(place),
+        None => column,
+    };
+    at_stage_wider(ui, column, inset, |group, at, ui, _| {
+        let GroupAt::Show(rect) = at else { return None };
+        let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
+        Panel::new(title).titled().show_at(ui, rect, |_, _| ());
+        None
+    })
+    .into()
+}
+
+/// Cells bound to their panels' toggle commands: a marked command whose panel is closed shows the marker.
+#[story(IconicColumn<'static, u8>, covers = [Default], drive = Drive::Never, commands = marked_states)]
+fn icon_groups_with_marked_panels(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "marked story"), &column, Bind::kept(), &toggled);
     at_stage(ui, column, |group, at, ui, _| {
         let GroupAt::Show(rect) = at else { return None };
         let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
@@ -63,6 +141,15 @@ fn icons_in_a_floating_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         None
     })
     .into()
+}
+
+/// The icons as a rail ([`IconicMode::Rail`]) beside their expanded column: the panels in front of their groups
+/// show selected, and the bar's chevron collapses the column. A click opens no flyout.
+#[story(IconicColumn<'static, u8>, covers = [Default], drive = Drive::Never)]
+fn icons_as_a_rail_beside_the_expanded_column(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let column = Column::new(vec![Group::new(vec![0, 1], 1), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "rail story"), &column, Bind::kept(), &spec).mode(IconicMode::Rail);
+    at_stage(ui, column, |_, _, _, _| None).into()
 }
 
 /// A click on the first icon opens the flyout of its panel, which the bound value then names.

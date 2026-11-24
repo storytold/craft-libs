@@ -39,6 +39,12 @@ pub(super) fn take_rename<K: Send + Sync + 'static>(ctx: &Context, collection: I
     })
 }
 
+/// The rename request addressed to `collection`, left in place for the pass's own step to take. L-154's kept row
+/// covers a requested rename too, so a row the filter excludes is still listed while its rename starts.
+pub(super) fn peek_rename<K: Clone + Send + Sync + 'static>(ctx: &Context, collection: Id) -> Option<K> {
+    store::Service::<RenameRequests<K>>::run(ctx, |requests| requests.0.iter().find(|(id, _)| *id == collection).map(|(_, key)| key.clone()))
+}
+
 /// The lead's position as the item step left it at the end of its last pass.
 #[derive(Clone, Copy)]
 struct LeadFact(Option<usize>);

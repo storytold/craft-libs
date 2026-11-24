@@ -1,8 +1,10 @@
-//! Stories of `PreviewPane` and `PreviewZoom`.
+//! Stories of `PreviewPane`, `PreviewZoom` and `PanePager`.
 
-use super::{PreviewPane, PreviewState, PreviewView, PreviewZoom, WELL};
-use crate::contract::Show as _;
+use super::{PagerStep, PagerUnit, PanePager, PreviewPane, PreviewState, PreviewView, PreviewZoom, WELL};
+use crate::contract::{Show as _, ShowContainer as _};
+use crate::layout_components::Row;
 use crate::primitives::TextureCache;
+use crate::style::DataColor;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::load::SizedTexture;
 use egui::{Color32, ColorImage, Ui, Vec2};
@@ -51,6 +53,43 @@ fn preview_pane_pending_unknown(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 fn preview_pane_failed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = data.value("view", PreviewView::default());
     PreviewPane::state("Preview", PreviewState::Failed("The preview could not be rendered.".into()), view).show(ui).into()
+}
+
+#[story(PreviewPane<'static>, covers = [], drive = Drive::Never)]
+fn preview_pane_tint(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = data.value("view", PreviewView::fitting());
+    let tint = DataColor::new(Color32::from_rgb(0xff, 0xc0, 0x80));
+    PreviewPane::state("Preview", PreviewState::Ready(picture(ui)), view).tint(tint).show(ui).into()
+}
+
+/// A pager of `count` units that steps the shown one it keeps in `data`.
+fn pager(ui: &mut Ui, data: &mut StoryData, count: usize, unit: PagerUnit) -> StoryOutput {
+    let shown = data.value("shown", count.min(1));
+    Row::new()
+        .show(ui, |ui, _| {
+            let pager = PanePager { shown: *shown, count, back: *shown > 1, next: *shown < count, unit, ..PanePager::default() };
+            match pager.show(ui) {
+                Some(PagerStep::Back) => *shown -= 1,
+                Some(PagerStep::Next) => *shown += 1,
+                None => {}
+            }
+        })
+        .into()
+}
+
+#[story(PanePager, covers = [], drive = Drive::Never)]
+fn pane_pager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    pager(ui, data, 12, PagerUnit::Page)
+}
+
+#[story(PanePager, covers = [], drive = Drive::Never)]
+fn pane_pager_sheets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    pager(ui, data, 3, PagerUnit::Sheet)
+}
+
+#[story(PanePager, covers = [], drive = Drive::Never)]
+fn pane_pager_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    pager(ui, data, 0, PagerUnit::Page)
 }
 
 #[story(PreviewPane<'static>, covers = [], drive = Drive::Drag(Grip::new(WELL)))]

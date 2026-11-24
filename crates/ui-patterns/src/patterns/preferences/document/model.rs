@@ -6,7 +6,7 @@ use super::texts::OPEN_RANGE;
 use super::{CustomSettings, SettingsDocument, table_of};
 use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesModel};
 use craft_theme::Rgba;
-use egui::{Context, Ui};
+use egui::Ui;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeSet;
@@ -108,12 +108,14 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         insert(&mut self.draft.table, key, new);
     }
 
-    fn custom_row(&mut self, ui: &mut Ui, key: &str) {
-        self.custom.row(ui, key, &mut self.draft);
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
+        let before = self.draft.clone();
+        self.custom.row(ui, key, &mut self.draft) || self.draft != before
     }
 
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
-        self.custom.page(ui, page, &mut self.draft);
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
+        let before = self.draft.clone();
+        self.custom.page(ui, page, &mut self.draft) || self.draft != before
     }
 
     fn reset_page(&mut self, page: &str) {
@@ -133,8 +135,8 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         self.custom.reset_page(page);
     }
 
-    fn nested(&mut self, ctx: &Context) {
-        self.custom.nested(ctx, &mut self.draft);
+    fn nested(&mut self, ui: &mut Ui) {
+        self.custom.nested(ui, &mut self.draft);
     }
 
     fn nested_open(&self) -> bool {

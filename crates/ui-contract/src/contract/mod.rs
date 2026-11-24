@@ -5,7 +5,7 @@ mod collection;
 mod container;
 mod cx;
 pub(crate) mod editor;
-pub use editor::EditorHandle;
+pub use editor::{EditorHandle, EditorStep};
 mod entry;
 mod faces;
 pub(crate) mod footer_slot;
@@ -59,9 +59,9 @@ pub use body::pad_of;
 pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
-    ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest,
-    HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed,
-    RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DeleteTarget, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress,
+    HeaderMenuRequest, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight,
+    RowPressed, RowPreview, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -69,8 +69,8 @@ pub use container::InBar;
 pub use container::InMenu;
 pub use container::{
     BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
-    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope,
-    WrapWidth,
+    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, SectionRhythm, ShellPane,
+    Sizing, ThemeScope, WrapWidth,
 };
 pub use craft_tracked::{PlainData, Revision, Tracked};
 pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
@@ -85,6 +85,7 @@ pub use footer_slot::FooterSlot;
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
 pub use hosted::{Hosted, HostedKey, Hosting};
+pub use items::item_node;
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
@@ -92,7 +93,10 @@ pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_r
 pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
-pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
+pub use label::{
+    CaptionColumn, CaptionInk, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme,
+    LinkLabelInk, Scrub, SideLabel,
+};
 pub use lazy::Lazy;
 #[doc(hidden)]
 #[cfg(feature = "suite")]
@@ -109,23 +113,24 @@ pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, Patter
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed, response_of};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Flags, StyleCx, StyleKey};
 pub use craft_behavior::Input;
 use craft_behavior::{CellSpace, ItemLayout, ItemSource, Proposal, ScrollPos, SelectionModel, Sense};
-use egui::{Id, IdSalt, Rect, Ui, Vec2};
+use egui::{Id, IdSalt, Pos2, Rect, Ui, Vec2};
 use run::ShowAt;
 use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "suite")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
+pub use craft_behavior::MiddleButton;
+pub use craft_behavior::ReorderKeys;
 pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
@@ -362,6 +367,11 @@ pub trait Component: Meta + Sized {
     /// goes away with focus inside (a canvas text editor hands it back to the canvas). Containers and collections take
     /// their scope from their props, not from this.
     const FOCUS_SCOPE: crate::runtime::focus::FocusPolicy = crate::runtime::focus::FocusPolicy::NONE;
+    /// The focus scope this instance runs in. The default is `FOCUS_SCOPE`; a component whose scope is a choice of its
+    /// caller (an editor that hands focus back to where it came from, or not) overrides it.
+    fn focus_scope(&self) -> crate::runtime::focus::FocusPolicy {
+        Self::FOCUS_SCOPE
+    }
     /// Keys the focused component keeps from egui and the shortcut dispatcher.
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(Self::INPUT);
     /// The keys this instance keeps in its current state. The default is `KEYS`; a component whose key use depends
@@ -405,10 +415,22 @@ pub trait Component: Meta + Sized {
         Self::SHOWS_LABEL
     }
 
+    /// The muted line a `LABELLED_AFTER` control's label shows after its text (`SideLabel::detail`), as a radio's
+    /// `detail`; none by default. It reads props only.
+    fn label_detail(&self) -> Option<crate::runtime::env::Label> {
+        None
+    }
+
     /// How far the component paints outside its rect by design, in points (a graph node's ports sit on its edge).
     /// Steps 13 and 14 clip to the rect grown by this much; the paint-bounds suite case reads it.
     fn paint_outset(_tokens: &crate::style::UiTokens) -> f32 {
         0.0
+    }
+
+    /// The variant an instance that asks for none takes in `env`; `None` takes the style's first. A variant the caller
+    /// asks for always stands. Read only `#[env(style)]` values, which the style cache keys on.
+    fn default_variant(_env: &crate::runtime::env::Env) -> Option<craft_theme::Variant> {
+        None
     }
 
     /// Pure function of the resolved context and the key.
@@ -655,8 +677,14 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         0.0
     }
 
-    /// A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is.
-    fn filtered<'s>(&self, _source: &'s dyn ItemSource<Self::Key>, _env: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
+    /// A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is. `kept` is the
+    /// item whose rename runs: the view keeps it whether or not it matches, so it is named in place.
+    fn filtered<'s>(
+        &self,
+        _source: &'s dyn ItemSource<Self::Key>,
+        _env: &crate::runtime::env::Env,
+        _kept: Option<&Self::Key>,
+    ) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
         None
     }
 
@@ -716,11 +744,22 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): it reports
-    /// `CollectionEvent::Zoom` and the app sets its zoom and, through `Component::scroll`, the scroll position that
-    /// keeps the content under the pointer fixed.
+    /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): the items step reports
+    /// it as `CollectionEvent::Zoom`. A collection that leaves the zoom to the app reports the event and the app sets
+    /// its zoom and, through `Component::scroll`, the scroll position. A collection that applies the zoom itself takes
+    /// the event and names the point to keep in place through [`Collection::zoom_anchor`], so the step keeps the row
+    /// under it where it is.
     fn zooms(&self) -> bool {
         false
+    }
+
+    /// The point whose row stays in place across a zoom step this collection takes in the current pass, in screen
+    /// points. `wheel` is the point of the `CollectionEvent::Zoom` the items step reported in this pass, `None` when
+    /// it reported none; a collection that also takes zoom keys answers the pointer it read with them. Read by the
+    /// items step in `content` of the same pass, against the layout the zoom changes from. `None` by default: the
+    /// step keeps its usual anchor.
+    fn zoom_anchor(&self, _wheel: Option<Pos2>) -> Option<Pos2> {
+        None
     }
 
     /// The height of the empty state at `width`: a `Sizing::Content` collection with no rows is this tall. The

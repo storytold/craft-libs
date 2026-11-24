@@ -1,6 +1,6 @@
 //! Stories of the transform fields: the panel form, and the options-bar form in percent and in a length unit.
 
-use super::{TransformFields, TransformGroups, TransformRow, size_unit_of};
+use super::{FieldArrangement, TransformFields, TransformGroups, TransformRow, size_unit_of};
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::{Rect, Size};
 use craft_behavior::{RulerUnits, Ticks};
@@ -37,6 +37,16 @@ fn inches() -> RulerText {
 fn panel_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (state, state_at) = data.value_at("state", sample());
     TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1)).show(ui).into()
+}
+
+/// The panel form with X and W on the first row and Y and H on the second.
+#[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
+fn panel_form_position_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (state, state_at) = data.value_at("state", sample());
+    TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1))
+        .arrangement(FieldArrangement::PositionFirst)
+        .show(ui)
+        .into()
 }
 
 /// The panel form of a layer's properties: position and size only, percentages read against the document.
@@ -88,7 +98,7 @@ fn bar_form_in_a_length_unit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .show(ui, |ui, _| {
             TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1))
                 .bar()
-                .units(inches(), inches())
+                .rulers(craft_ui::canvas::CanvasRulers::new(inches(), inches(), craft_behavior::kurbo::Point::ZERO))
                 .size_unit(size_unit_of(UnitKind::Inches, inches(), UnitKind::POINTS_PER_INCH))
                 .size_units(&units)
                 .show(ui);

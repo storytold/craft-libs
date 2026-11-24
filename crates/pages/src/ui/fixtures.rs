@@ -2,7 +2,7 @@
 
 use super::view::{PageSource, PlacedPage};
 use craft_behavior::CanvasView;
-use craft_ui::primitives::textures::{FakeThumbSource, Revision, ThumbRender, ThumbRequest, ThumbSource};
+use craft_ui::primitives::textures::{FakeThumbSource, Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Vec2, pos2};
 use kurbo::Size;
@@ -21,7 +21,7 @@ const FIT_MARGIN: f64 = 24.0;
 /// screen whatever the size of `view.rect`.
 pub fn fitted_page(view: &mut CanvasView, pixels_per_point: f32) -> PlacedPage {
     let size = Size::new(LETTER_WIDTH, LETTER_HEIGHT);
-    craft_behavior::canvas::zoom::fit(view, size, pixels_per_point, FIT_MARGIN);
+    craft_behavior::canvas::zoom::fit(view, size, pixels_per_point, FIT_MARGIN, &craft_behavior::ZoomScheme::PHOTOSHOP);
     let rect = Rect::from_min_max(view.to_screen(kurbo::Point::ZERO), view.to_screen(kurbo::Point::new(LETTER_WIDTH, LETTER_HEIGHT)));
     PlacedPage::new(0, rect, view.zoom, (0.0, rect.height()))
 }
@@ -41,6 +41,17 @@ impl DemoPages {
     /// A document of `count` pages.
     pub fn new(count: usize) -> Self {
         DemoPages { count, fake: FakeThumbSource::new().aspect(612, 792) }
+    }
+
+    /// A document of `count` pages whose pictures render as jobs on the loader's queue, so a page shows its loading
+    /// state until its job lands.
+    pub fn rendering(count: usize) -> Self {
+        DemoPages { count, fake: FakeThumbSource::new().aspect(612, 792).later(true) }
+    }
+
+    /// A document of `count` pages whose every picture fails to render.
+    pub fn failing(count: usize) -> Self {
+        DemoPages { count, fake: FakeThumbSource::new().aspect(612, 792).failing(0..count) }
     }
 }
 
@@ -71,7 +82,15 @@ pub fn demo_placed(count: usize, origin: Pos2) -> Vec<PlacedPage> {
     (0..count)
         .map(|page| {
             let top = origin.y + page as f32 * (height + GAP);
-            PlacedPage { page, rect: Rect::from_min_size(pos2(origin.x, top), Vec2::new(width, height)), scale: 1.0, band: (0.0, height) }
+            // A fixture has no texture to show, so its pages have no picture yet.
+            PlacedPage {
+                page,
+                rect: Rect::from_min_size(pos2(origin.x, top), Vec2::new(width, height)),
+                scale: 1.0,
+                band: (0.0, height),
+                picture: TextureState::Missing,
+                picture_revision: None,
+            }
         })
         .collect()
 }

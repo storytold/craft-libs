@@ -4,6 +4,7 @@ use super::{
     AtomicBool, Condvar, Downloaded, Family, HashMap, Index, Installer, Mutex, Ordering, Path, PathBuf, Progress, RemoveRequest, StoreError,
     UserSource, err,
 };
+use super::{LegalText, PreviewServiceSource, PreviewStore};
 
 /// What a [`FakeStore`] was asked to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +36,8 @@ pub struct FakeStore {
     /// Index files user sources "download", by URL.
     served_indexes: HashMap<String, Vec<u8>>,
     user: Mutex<Vec<UserSource>>,
+    preview_service: Mutex<Option<String>>,
+    previews: Mutex<bool>,
     /// User sources downloaded so far, and those whose file changed since.
     fetched: Mutex<Vec<String>>,
     changed: Mutex<Vec<String>>,
@@ -55,6 +58,8 @@ impl FakeStore {
             builtin: None,
             served_indexes: HashMap::new(),
             user: Mutex::new(Vec::new()),
+            preview_service: Mutex::new(None),
+            previews: Mutex::new(true),
             fetched: Mutex::new(Vec::new()),
             changed: Mutex::new(Vec::new()),
             held: (Mutex::new(false), Condvar::new()),
@@ -264,5 +269,48 @@ impl Installer for FakeStore {
     fn remove_user_source(&self, url: &str) -> Result<(), StoreError> {
         self.user.lock().map_err(err)?.retain(|s| s.url != url);
         Ok(())
+    }
+
+    fn preview_service_source(&self) -> PreviewServiceSource {
+        if self.preview_service().is_some() { PreviewServiceSource::Saved } else { PreviewServiceSource::None }
+    }
+
+    fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
+        *self.previews.lock().map_err(err)? = enabled;
+        Ok(())
+    }
+
+    fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        let url = url.map(craft_font_store::check_preview_service).transpose().map_err(err)?;
+        *self.preview_service.lock().map_err(err)? = url;
+        Ok(())
+    }
+
+    /// Served from the file table by the index path, like a font.
+    fn legal_text(&self, _: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
+        let path = match which {
+            LegalText::License => family.license_file.as_ref().map(|f| f.path.as_str()).or(family.license_path.as_deref()),
+            LegalText::Notice => family.notice_file.as_ref().map(|f| f.path.as_str()),
+        };
+        let Some(path) = path else { return Ok(None) };
+        if !self.downloads_allowed() {
+            return Err(StoreError("downloading fonts is turned off".into()));
+        }
+        let bytes = self.files.get(path).ok_or_else(|| StoreError(format!("{path} isn't available")))?;
+        Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
+    }
+}
+
+impl PreviewStore for FakeStore {
+    fn preview_service(&self) -> Option<String> {
+        self.preview_service.lock().ok()?.clone()
+    }
+
+    fn previews_enabled(&self) -> bool {
+        self.previews.lock().map_or(true, |p| *p)
+    }
+
+    fn preview_cache(&self) -> Option<PathBuf> {
+        Some(self.dir.join("previews"))
     }
 }

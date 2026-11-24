@@ -364,7 +364,7 @@ impl Harness {
 
     fn press_at(&mut self, at: Pos2) {
         self.fixture.frame(vec![pointer::moved(at)]);
-        self.fixture.frame(vec![pointer::press(at)]);
+        self.fixture.frame_held(vec![pointer::press(at)]);
     }
 
     fn move_to(&mut self, at: Pos2) {
@@ -372,7 +372,7 @@ impl Harness {
     }
 
     fn release_at(&mut self, at: Pos2) {
-        self.fixture.frame(vec![pointer::release(at)]);
+        self.fixture.frame_held(vec![pointer::release(at)]);
         self.fixture.frame(Vec::new());
     }
 
@@ -413,6 +413,56 @@ fn hit_test_matches_the_overlays_press_priority() {
         h.drag(handle, vec2(0.0, FAR));
         assert!(matches!(h.last_change(), Some(PathEdit::MoveHandle { side: HandleSide::Out, .. })), "{:?}", h.last_change());
     }
+}
+
+/// The paint of `selection` over both paths, as text.
+fn painted(selection: PathSelection) -> String {
+    let mut h = two_paths();
+    h.update(|st| st.selection = selection);
+    format!("{:?}", h.fixture.frame_shapes())
+}
+
+// An anchor listed in `others` draws selected but is no part of the edit: no handle of it answers a hit, and a press
+// on it edits only that anchor, never the edited path's selected knots.
+#[trial]
+fn anchors_of_other_paths_draw_selected_and_stay_out_of_the_edit() {
+    let mut other = path_b();
+    other.subpaths[0].knots[0] = Knot::smooth(p(60.0, 200.0), p(90.0, 170.0));
+    let mut h = harness(vec![path_a(), other]);
+    h.update(|st| st.selection = sel(1, &[(0, 1)]).also(2, vec![kr(0)]));
+    let view = h.state.borrow().view.expect("shown");
+    {
+        let st = h.state.borrow();
+        let at = h.screen(p(90.0, 170.0));
+        let hit = BezierOverlay::hit_test(&st.paths, &st.selection, HandlesShown::Selected, &view, at, 6.0);
+        assert!(!matches!(hit, Some(BezierHit::Handle { .. })), "{hit:?}");
+    }
+    let anchor = h.screen(p(60.0, 200.0));
+    h.drag(anchor, vec2(0.0, FAR));
+    let change = h.last_change();
+    assert!(matches!(&change, Some(PathEdit::MoveAnchors { path: 2, anchors, .. }) if *anchors == vec![kr(0)]), "{change:?}");
+
+    let listed = painted(sel(1, &[]).also(2, vec![kr(0)]));
+    assert_eq!(listed, painted(sel(2, &[(0, 0)])), "a listed anchor fills as a selected one");
+    assert_ne!(listed, painted(sel(1, &[])), "and differs from an unselected one");
+}
+
+// One anchor selected over all paths shows its handles; one in each path is two, so none.
+#[trial]
+fn one_anchor_shows_handles_only_while_one_anchor_is_selected_over_all_paths() {
+    let mut h = two_paths();
+    h.update(|st| st.handles = HandlesShown::OneAnchor);
+    let view = h.state.borrow().view.expect("shown");
+    let handle = h.screen(p(290.0, 100.0));
+    let test = |selection: PathSelection| {
+        let st = h.state.borrow();
+        BezierOverlay::hit_test(&st.paths, &selection, HandlesShown::OneAnchor, &view, handle, 6.0)
+    };
+    assert!(matches!(test(sel(1, &[(0, 2)])), Some(BezierHit::Handle { path: 1, .. })));
+    let two = test(sel(1, &[(0, 2)]).also(2, vec![kr(0)]));
+    assert!(!matches!(two, Some(BezierHit::Handle { .. })), "{two:?}");
+    let none = test(PathSelection::default());
+    assert!(!matches!(none, Some(BezierHit::Handle { .. })), "{none:?}");
 }
 
 // Hovering a segment under Add reports the segment with its parameter, which the preview anchor stands at.
@@ -686,6 +736,33 @@ fn shift_keeps_an_anchor_drag_on_the_axis_or_the_diagonal() {
         assert!(proposed.distance(want) < 1e-3, "({dx}, {dy}) proposes {proposed:?}, wants {want:?}");
         assert!(committed.distance(proposed) < 1e-9, "({dx}, {dy}) commits {committed:?}, proposed {proposed:?}");
         assert_eq!(st.seen.last(), Some(&Seen::Commit));
+    }
+}
+
+// ⇧ during a handle drag turns the handle to the nearest 45° about its anchor, also when pressed mid-drag: about 20°
+// lands on the axis, about 40° on the diagonal, and photocraft#15760's measured (-78, +140) on (-78, +78); without ⇧
+// the handle follows the pointer.
+#[trial]
+fn shift_locks_a_handle_drag_to_the_nearest_45_degrees() {
+    let anchor = p(260.0, 60.0);
+    let cases =
+        [(p(360.0, 96.0), p(360.0, 60.0)), (p(340.0, 127.0), p(327.0, 127.0)), (anchor + Vec2::new(-78.0, 140.0), anchor + Vec2::new(-78.0, 78.0))];
+    for (shift, (target, locked)) in cases.iter().flat_map(|c| [(true, *c), (false, *c)]) {
+        let mut h = two_paths();
+        h.update(|st| st.selection = sel(1, &[(0, 2)]));
+        let handle = h.screen(p(290.0, 100.0));
+        let to = h.screen(target);
+        h.press_at(handle);
+        h.move_to(handle + (to - handle) * 0.5);
+        if shift {
+            h.fixture.hold(egui::Modifiers::SHIFT);
+        }
+        h.move_to(to);
+        let Some(PathEdit::MoveHandle { to: got, .. }) = h.last_change() else { panic!("a handle move: {:?}", h.last_change()) };
+        h.release_at(to);
+        h.fixture.hold(egui::Modifiers::NONE);
+        let want = if shift { locked } else { target };
+        assert!(got.distance(want) < 1e-3, "shift {shift}: {target:?} gives {got:?}, wants {want:?}");
     }
 }
 
