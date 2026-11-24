@@ -247,6 +247,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.parent = parent;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
+    entry.asked = placed.asked;
     entry.exiting = layer.exiting;
     entry.cover = cover;
     entry.region = layer.region;
@@ -325,6 +326,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.parent = parent;
     entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
     entry.side = placed.side;
+    entry.asked = placed.asked;
     entry.exiting = layer.exiting;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
@@ -406,6 +408,7 @@ fn show_in_popup(
     overlay::end_layer(&ctx);
     let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
     entry.side = placed.side;
+    entry.asked = placed.asked;
     entry.exiting = layer.exiting;
     entry.cover = cover;
     entry.scoped = scope.is_some();

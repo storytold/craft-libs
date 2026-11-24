@@ -37,7 +37,8 @@ pub(crate) mod stories;
 pub use run::{nudge_size, ruler_text, snap_step};
 
 use geometry::{Geometry, Shapes};
-use items::{COLUMN, GAP, GAP_RANK, Item, MARKER_RANK, SELECTOR, STRIP, gap_part};
+pub use items::RulerItem;
+use items::{COLUMN, GAP, GAP_RANK, MARKER_RANK, SELECTOR, STRIP, gap_part};
 
 craft_ui::words! {
     /// The ruler's AccessKit names and readout (Word's).
@@ -236,13 +237,23 @@ pub struct GapDrag {
     pub position: f32,
 }
 
+/// The dragged item and its position from the paragraph's start edge, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct RulerDrag {
+    /// The dragged item.
+    pub item: RulerItem,
+    /// Its position from the paragraph's start edge, in points.
+    pub position: f32,
+}
+
 /// What the ruler did this pass.
 #[non_exhaustive]
 pub struct TextRulerOutput {
     /// A placed, moved or cleared stop or a moved indent marker, as the whole new values.
     pub edit: EditResponse<RulerValues>,
-    /// The stop the user clicked (the Tabs panel's position field edits it).
-    pub picked: Option<usize>,
+    /// The stop or marker the user pressed (the Tabs panel's position field edits it).
+    pub picked: Option<RulerItem>,
     /// A double-click on a stop (Word opens the Tabs dialog).
     pub open_tabs_dialog: bool,
     /// A table column border dragged ([`TextRuler::columns`]).
@@ -269,7 +280,7 @@ impl Outcome for TextRulerOutput {
 /// What the ruler reports besides the edit.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Report {
-    pub(super) picked: Option<usize>,
+    pub(super) picked: Option<RulerItem>,
     pub(super) open_tabs_dialog: bool,
     pub(super) column: Option<ColumnDrag>,
     pub(super) gap: Option<GapDrag>,
@@ -415,6 +426,14 @@ pub struct TextRuler<'a> {
     report: Report,
 }
 
+impl TextRuler<'_> {
+    /// The running drag of the ruler whose id is `ruler`, read outside its pass; `None` while no drag runs and while
+    /// the dragged stop is off the ruler.
+    pub fn dragging(ctx: &egui::Context, ruler: egui::Id) -> Option<RulerDrag> {
+        craft_ui::runtime::edit::gesture_note::<RulerValues, Option<RulerDrag>>(ctx, ruler).flatten()
+    }
+}
+
 impl<'a> TextRuler<'a> {
     /// The ruler named `label` over `value`, for a column `width` points wide.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, value: Bind<'a, RulerValues>, width: f32) -> Self {
@@ -478,13 +497,13 @@ impl<'a> TextRuler<'a> {
         }
     }
 
-    fn item_name<'w>(words: &'w TextRulerWords, item: Item, values: &RulerValues) -> &'w str {
+    fn item_name<'w>(words: &'w TextRulerWords, item: RulerItem, values: &RulerValues) -> &'w str {
         match item {
-            Item::FirstLine => words.first_line_indent.as_str(),
-            Item::Hanging => words.hanging_indent.as_str(),
-            Item::LeftBox => words.left_indent.as_str(),
-            Item::Right => words.right_indent.as_str(),
-            Item::Stop(at) => Self::tab_name(words, values.stops.get(at).map(|stop| stop.align).unwrap_or_default()),
+            RulerItem::FirstLine => words.first_line_indent.as_str(),
+            RulerItem::Hanging => words.hanging_indent.as_str(),
+            RulerItem::LeftBox => words.left_indent.as_str(),
+            RulerItem::Right => words.right_indent.as_str(),
+            RulerItem::Stop(at) => Self::tab_name(words, values.stops.get(at).map(|stop| stop.align).unwrap_or_default()),
         }
     }
 }
@@ -563,7 +582,7 @@ impl Component for TextRuler<'_> {
         let handle = HitPriority::new(HitLevel::Handle, MARKER_RANK);
         let below = HitPriority::new(HitLevel::Handle, GAP_RANK);
         cx.part(STRIP, layout.g.strip).sense(Sense::CLICK | Sense::DRAG).pointer_only("the Tabs dialog sets a stop by number");
-        for item in Item::all(&values) {
+        for item in RulerItem::all(&values) {
             let part = cx
                 .part(item.part(), layout.shapes.rect(&layout.g, item, &values))
                 .sense(Sense::DRAG | Sense::CLICK)
@@ -573,7 +592,7 @@ impl Component for TextRuler<'_> {
                 .nudges()
                 .focus_shape(FocusShape::Rect)
                 .value_part();
-            if matches!(item, Item::Stop(at) if self.selected == Some(at)) {
+            if matches!(item, RulerItem::Stop(at) if self.selected == Some(at)) {
                 part.selected().flags(Flags::SELECTED);
             }
         }
@@ -617,12 +636,12 @@ impl Component for TextRuler<'_> {
         let text = run::ruler_text(self.unit, &numbers);
         let step = f64::from(run::snap_step(&text, self.unit));
         let range = 0.0..=f64::from(self.width);
-        for item in Item::all(&values) {
+        for item in RulerItem::all(&values) {
             let at = f64::from(item.position(&values, self.width));
             let shown = text.format_value(&numbers, at, 0.0);
             let node = access.node(item.part(), Role::SLIDER);
             let kind = Self::item_name(&words, item, &values);
-            node.name = Name::Text(if matches!(item, Item::Stop(_)) {
+            node.name = Name::Text(if matches!(item, RulerItem::Stop(_)) {
                 words.stop.fill(&[("kind", kind), ("position", shown.as_str())])
             } else {
                 kind.to_owned()

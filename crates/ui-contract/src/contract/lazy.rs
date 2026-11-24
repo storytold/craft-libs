@@ -301,7 +301,7 @@ fn at_most(region: Rect, rtl: bool, width: f32) -> Rect {
 /// from what it takes in no room down to what it takes with every leaf at its least.
 fn report_unit(ctx: &egui::Context, shrink: Option<Shrink>, id: egui::Id, size: Vec2) {
     match shrink {
-        Some(Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
+        Some(Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, (false, None)),
         Some(Shrink::Least(row)) => crate::layout::report_least(ctx, row, id, size.x),
         _ => {}
     }

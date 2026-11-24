@@ -5,7 +5,7 @@ use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, Perm
 use craft_ui::contract::{Bind, BodyCx, PlainData, Tracked};
 use craft_ui::docking::{DockConfig, DockPanels, HidePanels, PanelKey, PanelSpec, PanelSpecs};
 use craft_ui::patterns::dock::DockArea;
-use craft_ui::runtime::env::{BodyMode, ShellCx, ShellEntry, WindowKey};
+use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, ShellEntry, WindowKey};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
@@ -91,4 +91,20 @@ fn shift_tab_keeps_the_panels_the_host_names_docked_and_floating_and_tab_hides_t
     assert_eq!(shown_under(shift_tab, false), BTreeSet::from([CANVAS]), "Shift+Tab with nothing named keeps the canvas only");
     let tab = ShellCx::detached(WindowKey::main(), BodyMode::Only, room);
     assert_eq!(shown_under(tab, true), BTreeSet::from([CANVAS]), "Tab keeps the canvas only, whatever the host names");
+}
+
+#[trial]
+fn a_revealed_edge_shows_its_dock_alone_under_tab_and_shift_tab() {
+    let room = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+    let tab = ShellCx::detached(WindowKey::main(), BodyMode::Only, room);
+    let shift_tab = ShellCx::detached(WindowKey::main(), BodyMode::Normal, room).with_panels_hidden(true);
+    for (keys, hiding) in [("Tab", tab), ("Shift+Tab", shift_tab)] {
+        let under = |edge: Option<RevealEdge>| match edge {
+            Some(edge) => shown_under(hiding.clone().with_edge_reveal(edge, true), false),
+            None => shown_under(hiding.clone(), false),
+        };
+        assert_eq!(under(Some(RevealEdge::Start)), BTreeSet::from([CANVAS, TOOLBAR]), "{keys}: the start edge shows the start dock alone");
+        assert_eq!(under(Some(RevealEdge::End)), BTreeSet::from([CANVAS, LAYERS]), "{keys}: the end edge shows the end dock alone");
+        assert_eq!(under(None), BTreeSet::from([CANVAS]), "{keys}: with no edge revealed no dock shows");
+    }
 }

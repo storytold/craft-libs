@@ -138,6 +138,11 @@ impl<'a> ComboBox<'a> {
         [Adornment::button(CHEVRON, crate::controls::disclosure::DisclosureGlyph::dropdown_of(arrow), name)]
     }
 
+    /// Whether the list has anything to offer: a list of separators and headings opens nothing.
+    fn has_items(&self) -> bool {
+        self.options.iter().any(Entry::is_item)
+    }
+
     /// Whether any option's label matches `query`.
     fn matches_any(&self, cx: &Cx<'_, Self>, query: &str) -> bool {
         let matcher = Matcher::new(&cx.env.folder(), query);
@@ -186,11 +191,16 @@ impl Component for ComboBox<'_> {
         let trailing = Self::trailing(name, cx.env.get());
         let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.flow.is_rtl());
         if let Some(at) = placed.trailing.first() {
-            cx.part(CHEVRON, *at)
-                .sense(Sense::CLICK | Sense::KEEP_FOCUS)
-                .priority(HitPriority::new(HitLevel::Handle, 0))
-                .pointer_only("Alt+Down opens the list")
-                .toggles("options");
+            let chevron = cx.part(CHEVRON, *at);
+            if self.has_items() {
+                chevron
+                    .sense(Sense::CLICK | Sense::KEEP_FOCUS)
+                    .priority(HitPriority::new(HitLevel::Handle, 0))
+                    .pointer_only("Alt+Down opens the list")
+                    .toggles("options");
+            } else {
+                chevron.inactive(true);
+            }
         }
         if let Some(value) = value.or(Some(&self.empty)) {
             cx.text(text_key(), placed.text, &PlainText, value, &self.text_options());

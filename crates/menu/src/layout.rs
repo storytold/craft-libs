@@ -503,7 +503,7 @@ fn appearance_node(bar: &mut MenuBar, options: &LayoutOptions) -> Vec<Node> {
     }
 }
 
-fn node_commands(node: &Node) -> Vec<CommandRef> {
+pub(crate) fn node_commands(node: &Node) -> Vec<CommandRef> {
     match node {
         Node::Item(it) => vec![it.command.clone()],
         Node::Submenu { children, .. } => children.iter().flat_map(node_commands).collect(),

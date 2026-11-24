@@ -25,3 +25,4 @@ Every set folder's files come from the npm package of the version in the table (
 - `key-linear`, `key-linear-filled`, `key-hold`, `key-bezier`, `key-auto-bezier`, `key-continuous-bezier`, `key-ease-in`, `key-ease-out`, `keyframe-easy-ease` (the timeline's single keyframe marks and the graph editor's Easy Ease button, after FilmCraft's diamond, square and circle and After Effects' keys; solid shapes except the outline diamond and the rings)
 - `font-variable`, `scaling`, `slice-select`, `square-dashed-mouse-pointer`, `text-warp`, `triangle-right`, `type-mask`, `type-mask-vertical`
 - `crop-overlay-*` (the crop overlay menu's glyphs), `text-align-top`, `text-align-middle`, `text-align-bottom` (the vertical type options), `dash-align-exact`, `dash-align-corners` (the dash alignment options)
+- `eye-outline` (Phosphor's `eye` without the pupil: the Outline view), `layer-template` (a dashed layer: the Template view)
