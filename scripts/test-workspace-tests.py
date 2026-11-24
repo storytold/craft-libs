@@ -202,6 +202,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn('os: \'["ubuntu-latest"]\'', source)
         self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
         self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
+        # Pull requests run Linux only, unless labelled full-ci; every other event runs every leg.
+        self.assertIn("&& (github.event_name != 'pull_request'"
+                      " || contains(github.event.pull_request.labels.*.name, 'full-ci'))", source)
         # Every leg reads the test selection of the platforms job.
         self.assertIn("  native:\n    name: Workspace\n    needs: platforms\n", source)
         self.assertIn("          select-tests: true\n", source)

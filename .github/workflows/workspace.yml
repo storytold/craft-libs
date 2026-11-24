@@ -25,10 +25,10 @@ concurrency:
 
 jobs:
   # Whether this run needs the macOS and Windows legs, and which tests every leg runs
-  # (craft-common-actions' select-platforms). On a pull request the macOS and Windows legs run only
-  # when it can change platform behaviour: a crate with platform cfg code or one that depends on
-  # it, the build setup, or a file outside the crates. The tests are those of the crates a change
-  # reaches: the crates that own a changed file, the crates whose Cargo.toml declares a read of it
+  # (craft-common-actions' select-platforms). A pull request runs the Linux legs only, unless it
+  # has the full-ci label (see native-platforms); every other event runs the macOS and Windows legs
+  # too. The tests are those of the crates a change reaches: the crates that own a changed file,
+  # the crates whose Cargo.toml declares a read of it
   # (`[package.metadata.craft] reads`, which this job checks is complete), and every crate that
   # depends on those. The build setup, a crate's own Cargo.toml or a file outside the crates other
   # than documentation runs every test; documentation alone runs none. The full-ci label runs
@@ -142,12 +142,14 @@ jobs:
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
-  # The macOS and Windows legs, when `platforms` says this run needs them, with the Linux leg's
-  # inputs.
+  # The macOS and Windows legs, with the Linux leg's inputs. They take 1.5-2 hours against the Linux
+  # leg's 15-40 minutes, so a pull request does not wait for them: they run after the merge, on
+  # every push to main and on main's scheduled runs (nightly.yml starts the same on next).
+  # A pull request that needs them before it merges gets the full-ci label.
   native-platforms:
     name: Workspace
     needs: platforms
-    if: needs.platforms.outputs.platform == 'true'
+    if: needs.platforms.outputs.platform == 'true' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["windows-latest","macos-latest"]'
