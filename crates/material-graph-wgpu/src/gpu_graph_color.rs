@@ -115,8 +115,11 @@ impl ColorRasterizer {
         params.formats = [format_f, format_b, format_m, u32::from(mask.is_some())];
         params.alphas[..3].copy_from_slice(&[alpha_f, alpha_b, alpha_m]);
         self.device.poll(wgpu::PollType::Poll).map_err(|error| error.to_string())?;
+        let (front_input, back_input) = (front, back);
         let Some(front) = self.bind(pool, front, w * h)? else { return Ok(None) };
+        // An image connected to several slots is uploaded once
         let back = match back {
+            Some(image) if same_input(image, front_input) => Some(front.clone()),
             Some(image) => {
                 let [width, height] = input_size(image);
                 let Some(bound) = self.bind(pool, image, width * height)? else { return Ok(None) };
@@ -125,6 +128,8 @@ impl ColorRasterizer {
             None => None,
         };
         let mask = match mask {
+            Some(image) if same_input(image, front_input) => Some(front.clone()),
+            Some(image) if back_input.is_some_and(|back_input| same_input(image, back_input)) => back.clone(),
             Some(image) => {
                 let Some(bound) = self.bind(pool, image, w * h)? else { return Ok(None) };
                 Some(bound)
@@ -179,6 +184,17 @@ fn input_size(input: ColorInput<'_>) -> [usize; 2] {
     }
 }
 
+fn same_input(a: ColorInput<'_>, b: ColorInput<'_>) -> bool {
+    use craft_material_graph::accelerator::GreyInput;
+    match (a, b) {
+        (ColorInput::Host(a), ColorInput::Host(b)) => std::ptr::eq(a, b),
+        (ColorInput::Device(a), ColorInput::Device(b)) => std::ptr::eq(a, b),
+        (ColorInput::Grey(GreyInput::Host(a)), ColorInput::Grey(GreyInput::Host(b))) => std::ptr::eq(a, b),
+        (ColorInput::Grey(GreyInput::Device(a)), ColorInput::Grey(GreyInput::Device(b))) => std::ptr::eq(a, b),
+        _ => false,
+    }
+}
+
 fn input_format(input: ColorInput<'_>) -> Option<(u32, f32)> {
     match input {
         ColorInput::Grey(image) => {
@@ -222,6 +238,30 @@ mod tests {
         fn resident_readback(&self, _: u32, _: usize) {
             *self.0.lock().unwrap().entry("readback".into()).or_default() += 1;
         }
+    }
+
+    #[test]
+    fn a_blend_of_one_host_image_with_itself_uploads_it_once() {
+        use craft_material_graph::accelerator::{ColorInput, ResidentColorPass};
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        // A 2 MiB resident budget holds one 1 MiB upload and the 512 KiB output, not a second upload
+        let pool = crate::gpu_graph_grey::GreyRasterizer::new(&gpu.device, &gpu.queue, || 16 << 20).unwrap();
+        let rasterizer = super::ColorRasterizer::new(&gpu.device, &gpu.queue).unwrap();
+        let image = Tex::from_fn(256, 256, |u, v| [u, v, u * v, 1.0]);
+        let cancel = craft_material_graph::context::Cancel::new();
+        let pass = ResidentColorPass::Blend {
+            foreground: ColorInput::Host(&image),
+            background: ColorInput::Host(&image),
+            mask: Some(ColorInput::Host(&image)),
+            mode: 0,
+            opacity: 0.5,
+            alpha_mode: 0,
+            alpha: None,
+        };
+
+        let output = rasterizer.render(pass, &pool, &cancel).unwrap();
+
+        assert!(output.is_some(), "the blend must stay on the GPU within the budget");
     }
 
     #[test]
