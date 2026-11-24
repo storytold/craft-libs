@@ -497,9 +497,10 @@ impl Xcf<'_> {
         for &(begin, stop) in head.dummy_headers.iter().flatten() {
             // Dummy levels are inert. Pixel bytes inside a complete nonfinal
             // uncompressed tile can coincidentally resemble a dummy header;
-            // only the validated next primary pointer frames that tile.
+            // require the next primary pointer at the computed tile end. A
+            // gap is not evidence that the bytes before it are all samples.
             if self.image.compression == crate::Compression::None
-                && next.is_some_and(|next| start.checked_add(raw_bytes).is_some_and(|end| end <= next && start < begin && begin < end))
+                && next.is_some_and(|next| start.checked_add(raw_bytes).is_some_and(|end| end == next && start < begin && begin < end))
             {
                 continue;
             }

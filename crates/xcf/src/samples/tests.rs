@@ -1477,7 +1477,7 @@ fn public_drawable_visitors_exclude_their_complete_source_records_and_preserve_a
 }
 
 #[test]
-fn inert_dummy_pointer_inside_a_complete_nonfinal_raw_tile_does_not_truncate_samples() {
+fn inert_dummy_pointer_is_ignored_only_inside_a_complete_contiguous_raw_tile() {
     for version in [10, 11] {
         let mut source = Source::gray(150, 1, vec![0]);
         source.version = version;
@@ -1509,28 +1509,48 @@ fn inert_dummy_pointer_inside_a_complete_nonfinal_raw_tile_does_not_truncate_sam
         let reader = Xcf::parse(&file.out).unwrap();
         let legacy = reader.hierarchy(hierarchy, 1, false, &mut (65 * 4), GO).unwrap();
         assert_eq!(legacy.data, expected.iter().map(|v| f32::from(*v) / 255.0).collect::<Vec<_>>());
+        let target = || VisitTarget {
+            pointer: hierarchy,
+            channels: 1,
+            indexed: false,
+            dimensions: Some((65, 1)),
+            coverage: false,
+            transfer_is_assumed: false,
+            excluded_source: None,
+        };
         let mut seen = Vec::new();
         reader
-            .visit_hierarchy(
-                VisitTarget {
-                    pointer: hierarchy,
-                    channels: 1,
-                    indexed: false,
-                    dimensions: Some((65, 1)),
-                    coverage: false,
-                    transfer_is_assumed: false,
-                    excluded_source: None,
-                },
-                SampleOptions::default(),
-                &mut 65,
-                GO,
-                |tile| {
-                    seen.extend_from_slice(tile.data);
-                    Ok(())
-                },
-            )
+            .visit_hierarchy(target(), SampleOptions::default(), &mut 65, GO, |tile| {
+                seen.extend_from_slice(tile.data);
+                Ok(())
+            })
             .unwrap();
         assert_eq!(seen, expected);
+
+        // A short tile followed by genuine dummy framing must fail before
+        // delivery. The next primary tile starts after that header.
+        file.out.truncate(first + 63);
+        file.out[first + 12..first + 24].fill(33);
+        let dummy = file.out.len();
+        file.patch(dummy_slot, dummy);
+        for word in [32, 0, 0] {
+            file.u32(word);
+        }
+        let last = file.out.len();
+        file.patch(last_slot, last);
+        file.out.push(77);
+        let reader = Xcf::parse(&file.out).unwrap();
+        assert!(reader.hierarchy(hierarchy, 1, false, &mut (65 * 4), GO).is_err());
+        let mut callbacks = 0;
+        assert!(
+            reader
+                .visit_hierarchy(target(), SampleOptions::default(), &mut 65, GO, |_| {
+                    callbacks += 1;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert_eq!(callbacks, 0);
     }
 }
 
@@ -1611,7 +1631,22 @@ fn channel_effect_tail_is_bounded_metered_and_cancellable_including_the_terminat
     assert_eq!(work.work_remaining(), 0);
     assert!(reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)).is_err());
     assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), &|| false, Some(&mut work)), Err(Error::Cancelled)));
-    let too_many = vec![1; 1025 * 8];
-    assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &too_many, pos: 0, wide: true }, GO, None).is_err());
     assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &data[..15], pos: 0, wide: true }, GO, None).is_err());
+}
+
+#[test]
+fn channel_effect_tail_count_limit_is_independent_of_eof() {
+    let bytes = Source::gray(150, 1, vec![22]).write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    let mut maximum = vec![1; 1024 * 8];
+    maximum.extend([0; 8]);
+    let mut cursor = crate::Cursor { b: &maximum, pos: 0, wide: true };
+    reader.channel_effects_tail(&mut cursor, GO, None).unwrap();
+    assert_eq!(cursor.pos, maximum.len());
+
+    let mut too_many = vec![1; 1025 * 8];
+    too_many.extend([0; 8]);
+    let mut cursor = crate::Cursor { b: &too_many, pos: 0, wide: true };
+    let error = Error::from(reader.channel_effects_tail(&mut cursor, GO, None).unwrap_err());
+    assert!(matches!(error, Error::Invalid(ref problem) if problem == "too many channel effects"));
 }
