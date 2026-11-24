@@ -79,6 +79,10 @@ struct Repr<'a> {
     luminosity_in_device_cmyk: bool,
     xref: &'a XRef,
     nesting_depth: u32,
+    // PdfCraft patch (#7380).
+    /// The Type 3 glyph procedures the mask was set inside; its group is drawn inside them,
+    /// not inside the ones whose paints it is applied to.
+    glyph_procs: crate::context::GlyphProcs,
     /// Craft patch (CMYK masks): the group's `/CS` is DeviceCMYK.
     device_cmyk: bool,
     /// Craft patch (CMYK masks): the page plate's printing condition, for [`SoftMask::plate`].
@@ -176,6 +180,7 @@ impl<'a> SoftMask<'a> {
             _ => return None,
         };
         let nesting_depth = context.nesting_depth() + 1;
+        let glyph_procs = context.glyph_procs().clone();
         let root_transform = context.get().ctm;
         let bbox = context.bbox();
         let resources_key = resources_cache_key(&parent_resources);
@@ -190,6 +195,7 @@ impl<'a> SoftMask<'a> {
             root_transform.cache_key(),
             [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
             resources_key,
+            &glyph_procs,
             nesting_depth,
         ));
 
@@ -215,6 +221,7 @@ impl<'a> SoftMask<'a> {
             parent_resources,
             nesting_depth,
             device_cmyk,
+            glyph_procs,
             simulation,
         })))
     }
@@ -256,6 +263,7 @@ impl<'a> SoftMask<'a> {
             state,
             self.0.nesting_depth,
         );
+        ctx.set_glyph_procs(self.0.glyph_procs.clone());
         draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
     }
 
@@ -271,6 +279,7 @@ impl<'a> SoftMask<'a> {
             state,
             self.0.nesting_depth,
         );
+        ctx.set_glyph_procs(self.0.glyph_procs.clone());
         ctx.luminosity_in_device_cmyk = self.0.luminosity_in_device_cmyk;
         draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
     }
