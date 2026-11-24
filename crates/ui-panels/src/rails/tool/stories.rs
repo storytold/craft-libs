@@ -1,6 +1,7 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
 use super::{LastUsed, RailDensity, RailTool, ToolRail, ToolRailOutput, ToolSlot, ToolTips};
+use crate::buttons::ActiveLook;
 use crate::contract::{MemoProps, Show as _, Tracked};
 use crate::display::{Shade, Text};
 use crate::runtime::env::Env;
@@ -124,6 +125,16 @@ fn tool_rail_density(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let slots = Tracked::new(slots());
     let last = Tracked::new(LastUsed::default());
     in_columns(ui, columns, slots.len(), None, ToolRail::new("Tools", &slots, &BRUSH, &last).density(density)).into()
+}
+
+/// The current tool (the brush) in each active look: the accent's soft fill and edge, or the pressed fill with no
+/// edge.
+#[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
+fn tool_rail_active_look(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let look = *data.choice("active look", ActiveLook::Pressed, &[("Accent", ActiveLook::Accent), ("Pressed", ActiveLook::Pressed)]);
+    let slots = Tracked::new(slots());
+    let last = Tracked::new(LastUsed::default());
+    in_columns(ui, 1, slots.len(), None, ToolRail::new("Tools", &slots, &BRUSH, &last).active_look(look)).into()
 }
 
 /// The tips of the brush and the eraser: the tool's name over what it does.

@@ -63,6 +63,19 @@ pub enum ControlPlace {
     SideMenu,
 }
 
+/// How an icon button that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`), so the
+/// current tool can show the look an app's tools had.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ActiveLook {
+    /// The accent's soft fill and edge, with the accent's text colour.
+    #[default]
+    Accent,
+    /// The pressed state's fill with no edge, and the glyph in the normal text colour.
+    Pressed,
+}
+
 /// The style context a push or split button draws in: in a ribbon (`ControlPlace::Ribbon`) the default variant
 /// becomes the ghost one, so the button is flat at rest; any other variant, and any other place, stays as it is.
 pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleCx<'a> {

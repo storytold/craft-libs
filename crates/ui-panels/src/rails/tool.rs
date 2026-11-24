@@ -3,7 +3,7 @@
 
 use super::flyout::{FlyoutButton, SlotEdit};
 use super::words::RailWords;
-use crate::buttons::IconButton;
+use crate::buttons::{ActiveLook, IconButton};
 use crate::contract::{
     Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, NoValue, Outcome, Pad, Pointer as _, Props as _, Role, Scroll,
     Show as _, ShowContainer as _, Sizing, WordSetCx as _,
@@ -185,6 +185,9 @@ pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     /// How tightly the rail packs its buttons; its columns follow the rail grid at that density.
     #[prop]
     density: RailDensity,
+    /// How the button of the current tool shows it is on.
+    #[prop]
+    active_look: ActiveLook,
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
@@ -222,6 +225,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             reveal: None,
             tips: None,
             density: RailDensity::Regular,
+            active_look: ActiveLook::Accent,
             footer: None,
             columns: 1,
             shown: Rc::default(),
@@ -545,9 +549,10 @@ impl<T: Value + MemoProps + PlainData + 'static> Component for ToolRail<'_, T> {
         }
     }
 
-    /// The rail's density reaches its buttons.
+    /// The rail's density and active look reach its buttons.
     fn content_env(&self, _: &Cx<'_, Self>, values: &mut AppValues) {
         values.set(self.density);
+        values.set(self.active_look);
     }
 
     /// While the toolbar is edited the rail takes the drops its buttons do not: a blank toolbar's, and those in the room
