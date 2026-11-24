@@ -163,8 +163,7 @@ impl<'a> Section<'a> {
     #[must_use]
     pub fn strength(mut self, strength: HeaderStrength) -> Self {
         self.strength = strength;
-        let quiet = matches!(strength, HeaderStrength::Caption | HeaderStrength::Subheading | HeaderStrength::Quiet | HeaderStrength::Overline);
-        self.update_header(|header| header.rule_above(!quiet));
+        self.update_header(|header| header.rule_above(strength.ruled()));
         self
     }
 

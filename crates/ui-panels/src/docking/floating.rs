@@ -23,7 +23,7 @@ use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::WindowSpec;
+use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
@@ -194,6 +194,11 @@ pub struct FloatingGroupOutput {
     pub collapsed_width: Option<f32>,
     /// The files dropped on the group's window that no target there took.
     pub files: Vec<OsFile>,
+    /// The band the group is moved by this pass, with the id of its accessibility node; `None` when it has none.
+    pub grip: Option<(Rect, Id)>,
+    /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
+    /// accessibility node; none while it does not resize (minimized).
+    pub resize: Vec<(ResizeEdge, Rect, Id)>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -226,7 +231,8 @@ impl Outcome for FloatingGroupOutput {
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
-///   the platform has no windows. The window comes to the front when the user begins to move or resize it.
+///   the platform has no windows. The window comes to the front when the user begins to move or resize it, and in
+///   the pass [`raise`](FloatingGroup::raise) is set.
 /// - Menu: the Menu action and a context request on the title row open the `menu` rows, under the action's part.
 /// - Show it with [`show_group`](FloatingGroup::show_group): the closure fills the body, and is not called while
 ///   the group is minimized.
@@ -305,6 +311,11 @@ pub struct FloatingGroup<'a> {
     /// ([`native`](FloatingGroup::native)) moves only when pressed again.
     #[prop(quantity = "grab point")]
     continue_move: Option<Vec2>,
+    /// Brings the window to the front of the windows it overlaps in this pass: its layer above the other floating
+    /// layers, or its OS window raised and focused. A request of the pass, for the pass the host reveals a panel of the
+    /// window in.
+    #[prop(flag)]
+    raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
 }
@@ -321,6 +332,10 @@ impl<'a> FloatingGroup<'a> {
             .pad(Pad::None)
             .sizing(Sizing::Content)
             .header(HeaderRegion::new().band(DragBand::Move).rule(true));
+        let props = match <DockWords as craft_i18n::WordSet>::word("floatingGroup.resize") {
+            Some(word) => props.resize_name(Label::from(word)),
+            None => props,
+        };
         FloatingGroup {
             common: Common::new(),
             props,
@@ -352,6 +367,7 @@ impl<'a> FloatingGroup<'a> {
             take_drop: None,
             moving: false,
             continue_move: None,
+            raise: false,
             files: Vec::new(),
         }
         .label(title)
@@ -553,8 +569,10 @@ impl Component for FloatingGroup<'_> {
             iconic,
             collapsed_width: self.collapsed_width,
             files: self.files,
+            grip: cx.move_band(),
+            resize: cx.resize_grips(),
         };
-        native::raise(&cx.core.ctx, &output);
+        native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);
         output
     }
