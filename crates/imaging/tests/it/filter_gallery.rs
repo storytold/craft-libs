@@ -382,9 +382,10 @@ fn folder_tiles_wrap_long_filter_names() {
     });
     fixture.host(host());
     fixture.room(Vec2::new(220.0, 200.0)).pixels_per_point(1.25).record_paint().settle();
-    let output = fixture.take_paint().expect("the folder was painted");
+    let mut output = fixture.take_paint().expect("the folder was painted");
+    output.textures_delta.clear();
     assert!(
-        output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == NAME && !text.galley.elided)),
+        output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == NAME && !text.galley.elided && text.galley.rows.len() > 1)),
         "the tile paints the full filter name"
     );
     assert!(fixture.by_label(NAME).is_some(), "the tile exposes the same name");
