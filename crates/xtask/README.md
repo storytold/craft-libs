@@ -106,13 +106,17 @@ fn production_display_names_stay_neutral() {
   character, byte and lifetime tokens, and the rest of a module after `#![cfg(test)]` are skipped.
   So is the code under `#[cfg(test)]`, comments in the attribute included: a `const`, `static` or
   `let` up to its `;`, another item up to the `}` that closes it or the `;` that ends it, and a
-  field, argument, arm or statement up to its `,` or `;`. An item keyword counts only when nothing
+  field, argument, arm or statement up to its `,` or `;`. A `,` in an expression's generic
+  arguments (`f::<A, B>`) or in the parameters of a closure that starts the expression does not
+  end it. An item keyword counts only when nothing
   but qualifiers (`pub`, `unsafe`, `extern "C"` and the like) comes before it, so the `fn` in
   `f::<fn()>(…)` or in a field's type does not start an item, and the braces of a macro in an
   item's header (`-> ty! { u8 }`) are not its body. A block expression (a block, a macro's braces, a labeled block, or
   `if`, `match`, `loop`, `while`, `for`, `unsafe`, `async` or `const`), as the whole statement or as
   an arm's expression after `=>`, ends at its `}`, or at the last `}` of an `if` with `else`
-  branches. When a method call, field or `?` follows that `}`, it runs up to its `,` or `;`
+  branches. Braces in the condition of an `if`, `while`, `match` or `for` (a macro's, or a block
+  operand such as `if { ready } { … }`) are not its block. When a method call, field or `?` follows
+  that `}`, it runs up to its `,` or `;`
   instead. Other `cfg` expressions and macros are not evaluated. A source the lexer cannot read
   (an unterminated literal or comment, an unknown escape, unbalanced delimiters) is an error.
 - A word matches as a whole word: the characters next to it are not letters, digits or `_`, in any
@@ -122,8 +126,9 @@ fn production_display_names_stay_neutral() {
 - In Rust, the marker counts only inside a comment on a line the literal spans. In a manifest it
   counts anywhere on a line the description spans, and in a text file anywhere on the line.
 - `scan` identifies a file by its input path joined to the base folder, and joins a relative base
-  folder to the current folder first, so a relative and an absolute input for one file are read
-  once; `..` and links are not resolved.
+  folder to the current folder before it lists any input (on Windows, a drive-relative base such as
+  `C:src` to the current folder of its drive), so a relative and an absolute input for one file are
+  read once; `..` and links are not resolved.
 - `scan` reads each file once, in path order, and returns the findings in path order, then source
   order, then the order of `banned`. A `Finding` has the path, the first line of the literal or
   description, the word, the decoded text or text line and the kind; its `Display` text is

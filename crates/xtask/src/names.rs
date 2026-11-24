@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The limits [`Policy::new`] sets: 8 MiB per file, 512 MiB in all, folders 64 deep.
 pub const DEFAULT_LIMITS: Limits = Limits { max_file_bytes: 8 << 20, max_total_bytes: 512 << 20, max_depth: 64 };
@@ -293,8 +293,9 @@ impl From<Error> for String {
 /// findings come in path order, then in source order, then in the order of [`Policy::banned`].
 ///
 /// A file is identified by its path joined to `base`, and a relative `base` is joined to the
-/// current folder first, so a relative and an absolute path to it are one file, read once and
-/// reported by the input path that sorts first; `..` and links are not resolved.
+/// current folder (on Windows, a drive-relative `base` such as `C:src` to the current folder of
+/// its drive) before any input is listed, so a relative and an absolute path to it are one file,
+/// read once and reported by the input path that sorts first; `..` and links are not resolved.
 ///
 /// A [`Kind::Rust`] folder is read recursively for `.rs` files that [`Policy::skip`] keeps; links to
 /// folders are not followed, also when the link is an input. A file input is read whatever its
@@ -302,21 +303,17 @@ impl From<Error> for String {
 /// is over a limit, and a Rust source the lexer cannot read. Inputs must not include binary files.
 pub fn scan(base: &Path, inputs: &[Input<'_>], policy: &Policy<'_>) -> Result<Vec<Finding>, Error> {
     policy.validate()?;
+    // The base is made absolute once, so that every input is listed and read under one folder.
+    let root = absolute_base(base)?;
     let mut files = Vec::new();
     for input in inputs {
         if input.kind == Kind::Rust {
-            collect_rust(base, input.path, policy, &mut files)?;
+            collect_rust(&root, input.path, policy, &mut files)?;
         } else {
             files.push((input.path.to_path_buf(), input.kind));
         }
     }
     // A file is known by the path that is opened, so a relative and an absolute input for it are one.
-    // A relative base is joined to the current folder first, so the keys of both inputs are absolute.
-    let root = if base.is_absolute() {
-        base.to_path_buf()
-    } else {
-        std::env::current_dir().map_err(|source| Error::Io { path: base.to_path_buf(), source })?.join(base)
-    };
     let mut files: Vec<(PathBuf, Kind, PathBuf)> = files.into_iter().map(|(path, kind)| (root.join(&path), kind, path)).collect();
     files.sort();
     files.dedup_by(|later, first| later.0 == first.0 && later.1 == first.1);
@@ -331,6 +328,20 @@ pub fn scan(base: &Path, inputs: &[Input<'_>], policy: &Policy<'_>) -> Result<Ve
         findings.extend(scan_source(path, &source, *kind, policy)?);
     }
     Ok(findings)
+}
+
+/// `base` as an absolute path: a relative base is joined to the current folder, and a Windows
+/// drive-relative base (`C:src`) to the current folder of its drive. `..` is not resolved.
+fn absolute_base(base: &Path) -> Result<PathBuf, Error> {
+    if base.is_absolute() {
+        return Ok(base.to_path_buf());
+    }
+    let error = |source: io::Error| Error::Io { path: base.to_path_buf(), source };
+    let mut parts = base.components();
+    match parts.next() {
+        Some(Component::Prefix(drive)) => Ok(std::path::absolute(drive.as_os_str()).map_err(error)?.join(parts.as_path())),
+        _ => Ok(std::env::current_dir().map_err(error)?.join(base)),
+    }
 }
 
 /// The findings in one source that is already in memory. `path` is only reported. A
@@ -574,9 +585,12 @@ pub struct Literal {
 /// Test-only code is the code under `#[cfg(test)]` and the rest of a module that starts with
 /// `#![cfg(test)]`. Under `#[cfg(test)]`, a `const`, `static` or `let` runs up to its `;`, another
 /// item up to its closing `}` or its `;`, and a field, argument, arm or statement up to its `,` or
-/// `;`. A block expression (a block, a macro's braces, a labeled block, or `if`, `match`, `loop`,
-/// `while`, `for`, `unsafe`, `async` or `const`), as the whole statement or as an arm's expression
-/// after `=>`, ends at its `}`, or at the last `}` of an `if` with `else` branches. When a method
+/// `;`; a `,` in an expression's generic arguments (`f::<A, B>`) or in the parameters of a closure
+/// that starts the expression does not end it. A block expression (a block, a macro's braces, a
+/// labeled block, or `if`, `match`, `loop`, `while`, `for`, `unsafe`, `async` or `const`), as the
+/// whole statement or as an arm's expression after `=>`, ends at its `}`, or at the last `}` of an
+/// `if` with `else` branches; braces in the condition of an `if`, `while`, `match` or `for` (a
+/// macro's, or a block operand such as `if { ready } { .. }`) are not its block. When a method
 /// call, field or `?` follows that `}`, it runs up to its `,` or `;` instead. Character, byte and
 /// lifetime tokens are read, so a quote in them does not start a string. A shebang first line is
 /// skipped.
@@ -726,9 +740,11 @@ enum TestRegion {
     /// expression (a block, a macro's braces, or `if`, `match`, `loop` and the like), which ends at
     /// its `}` unless an `else` follows. A `.` or `?` after that `}` clears `block`, so the expression
     /// ends at its `;` or `,`. A `{` does not count as the first while `pattern` is set (between the
-    /// `let` of an `if` or `while` condition and its `=`, or a `for` and its `in`) or while `angle`
-    /// generic brackets of an item's header are open.
-    Item { level: usize, start: usize, opened: bool, item: bool, semi: bool, block: bool, pattern: bool, angle: usize },
+    /// `let` of an `if` or `while` condition and its `=`, or a `for` and its `in`), while `angle`
+    /// generic brackets are open (of an item's header, or after a `::` in an expression), or while
+    /// `params` is set (between the `|`s of a closure that starts the expression). A `,` does not
+    /// end it while `angle` or `params` is set either.
+    Item { level: usize, start: usize, opened: bool, item: bool, semi: bool, block: bool, pattern: bool, angle: usize, params: bool },
     /// The rest of the module that `#![cfg(test)]` starts, at this delimiter depth.
     Inner { level: usize },
 }
@@ -736,7 +752,7 @@ enum TestRegion {
 impl TestRegion {
     /// Test-only code at `level` whose code starts at `start`.
     fn item(level: usize, start: usize) -> Self {
-        TestRegion::Item { level, start, opened: false, item: false, semi: false, block: false, pattern: false, angle: 0 }
+        TestRegion::Item { level, start, opened: false, item: false, semi: false, block: false, pattern: false, angle: 0, params: false }
     }
 }
 
@@ -758,6 +774,12 @@ struct Lexer<'s> {
     /// Whether the last token read, past whitespace and comments, is a macro's `!`: a `!` after a
     /// word, not the `!` of a never type (`-> !`).
     after_bang: bool,
+    /// The first character of the last token read, past whitespace and comments.
+    prev: Option<char>,
+    /// The first character of the token before that one.
+    prev_prev: Option<char>,
+    /// The index where the last word or number read starts.
+    last_word: usize,
     out: Lexed,
 }
 
@@ -772,6 +794,9 @@ fn lex(source: &str, kinds: Literals, marker: Option<&str>) -> Result<Lexed, Syn
         test: None,
         after_word: false,
         after_bang: false,
+        prev: None,
+        prev_prev: None,
+        last_word: 0,
         out: Lexed { literals: Vec::new(), marked_lines: HashSet::new() },
     };
     lexer.run()?;
@@ -794,14 +819,16 @@ impl Lexer<'_> {
     }
 
     fn run(&mut self) -> Result<(), SyntaxError> {
-        // A first line that starts with `#!` is a shebang, unless a `[` follows (an inner attribute).
+        // A first line that starts with `#!` is a shebang, unless a `[` follows past whitespace and
+        // comments that are not doc comments (an inner attribute).
         let start = usize::from(self.peek(0) == Some('\u{feff}'));
-        if self.chars.get(start..start + 2) == Some(&['#', '!'][..]) && self.chars.get(self.skip_space(start + 2)) != Some(&'[') {
+        if self.chars.get(start..start + 2) == Some(&['#', '!'][..]) && self.chars.get(self.skip_plain_space(start + 2)) != Some(&'[') {
             while self.peek(0).is_some_and(|c| c != '\n') {
                 self.at += 1;
             }
         }
         while let Some(c) = self.peek(0) {
+            let begin = self.at;
             let token = !c.is_whitespace() && !(c == '/' && matches!(self.peek(1), Some('/' | '*')));
             match c {
                 '\n' => {
@@ -823,6 +850,7 @@ impl Lexer<'_> {
                 '=' if self.peek(1) == Some('>') => self.arrow(),
                 '=' => self.equals(),
                 '<' | '>' => self.angle(c),
+                '|' => self.pipe(),
                 c if c.is_ascii_digit() => self.number(),
                 c if is_word(c) => self.word()?,
                 _ => self.at += 1,
@@ -830,6 +858,11 @@ impl Lexer<'_> {
             if token {
                 self.after_bang = c == '!' && self.after_word;
                 self.after_word = is_word(c);
+                self.prev_prev = self.prev;
+                self.prev = Some(c);
+                if is_word(c) {
+                    self.last_word = begin;
+                }
             }
         }
         match self.delims.last() {
@@ -1080,15 +1113,36 @@ impl Lexer<'_> {
         self.at += 1;
     }
 
-    /// A `<` or `>` (not the `>` of `->`) in an item's header before its body opens or closes a
-    /// generic bracket.
+    /// A `<` or `>` (not the `>` of `->`) opens or closes a generic bracket in an item's header
+    /// before its body, and in an expression from a `::<` until its brackets close
+    /// (`pair::<u8, u16>`), so that a comparison does not.
     fn angle(&mut self, c: char) {
         let arrow = c == '>' && self.at.checked_sub(1).and_then(|i| self.chars.get(i)) == Some(&'-');
-        if let Some(TestRegion::Item { level, opened: false, item: true, angle, .. }) = &mut self.test
+        let turbofish = c == '<' && self.prev == Some(':') && self.prev_prev == Some(':');
+        if let Some(TestRegion::Item { level, opened, item, angle, .. }) = &mut self.test
             && *level == self.delims.len()
             && !arrow
+            && if *item { !*opened } else { turbofish || *angle > 0 }
         {
             *angle = if c == '<' { *angle + 1 } else { angle.saturating_sub(1) };
+        }
+        self.at += 1;
+    }
+
+    /// A `|` at the start of a test-only expression, after any `async` and `move`, opens the
+    /// parameters of a closure (`|a, b| ..`), and the next `|` at its level closes them.
+    fn pipe(&mut self) {
+        if let Some(TestRegion::Item { level, start, item: false, params, .. }) = self.test
+            && level == self.delims.len()
+        {
+            let mut code = self.code_start(start);
+            while matches!(self.word_at(code).as_str(), "async" | "move") {
+                code = self.skip_space(code + self.word_at(code).chars().count());
+            }
+            let opens = !params && code == self.at;
+            if let Some(TestRegion::Item { params, .. }) = &mut self.test {
+                *params = opens;
+            }
         }
         self.at += 1;
     }
@@ -1121,35 +1175,71 @@ impl Lexer<'_> {
     /// The index after the whitespace and comments at `at`.
     fn skip_space(&self, mut at: usize) -> usize {
         loop {
-            match (self.chars.get(at), self.chars.get(at + 1)) {
-                (Some(c), _) if c.is_whitespace() => at += 1,
-                (Some('/'), Some('/')) => {
-                    while self.chars.get(at).is_some_and(|&c| c != '\n') {
-                        at += 1;
-                    }
-                }
-                (Some('/'), Some('*')) => {
-                    let mut depth = 0_usize;
-                    loop {
-                        match (self.chars.get(at), self.chars.get(at + 1)) {
-                            (None, _) => return at,
-                            (Some('/'), Some('*')) => {
-                                depth += 1;
-                                at += 2;
-                            }
-                            (Some('*'), Some('/')) => {
-                                depth -= 1;
-                                at += 2;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            _ => at += 1,
-                        }
-                    }
-                }
-                _ => return at,
+            if self.chars.get(at).is_some_and(|c| c.is_whitespace()) {
+                at += 1;
+            } else if let Some(end) = self.comment_end(at) {
+                at = end;
+            } else {
+                return at;
             }
+        }
+    }
+
+    /// The index after the whitespace and the comments that are not doc comments at `at`.
+    fn skip_plain_space(&self, mut at: usize) -> usize {
+        loop {
+            if self.chars.get(at).is_some_and(|c| c.is_whitespace()) {
+                at += 1;
+            } else if let Some(end) = self.comment_end(at).filter(|_| !self.doc_comment(at)) {
+                at = end;
+            } else {
+                return at;
+            }
+        }
+    }
+
+    /// The index after the comment that starts at `at`, or `None` when none starts there.
+    fn comment_end(&self, mut at: usize) -> Option<usize> {
+        match (self.chars.get(at), self.chars.get(at + 1)) {
+            (Some('/'), Some('/')) => {
+                while self.chars.get(at).is_some_and(|&c| c != '\n') {
+                    at += 1;
+                }
+            }
+            (Some('/'), Some('*')) => {
+                let mut depth = 0_usize;
+                loop {
+                    match (self.chars.get(at), self.chars.get(at + 1)) {
+                        (None, _) => break,
+                        (Some('/'), Some('*')) => {
+                            depth += 1;
+                            at += 2;
+                        }
+                        (Some('*'), Some('/')) => {
+                            depth -= 1;
+                            at += 2;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => at += 1,
+                    }
+                }
+            }
+            _ => return None,
+        }
+        Some(at)
+    }
+
+    /// Whether the comment at `at` is a doc comment: `//!`, `/*!`, `///` but not `////`, or `/**`
+    /// but not `/***` or `/**/`.
+    fn doc_comment(&self, at: usize) -> bool {
+        let c = |n: usize| self.chars.get(at + n).copied();
+        match (c(0), c(1), c(2)) {
+            (Some('/'), Some('/' | '*'), Some('!')) => true,
+            (Some('/'), Some('/'), Some('/')) => c(3) != Some('/'),
+            (Some('/'), Some('*'), Some('*')) => !matches!(c(3), Some('*' | '/')),
+            _ => false,
         }
     }
 
@@ -1334,26 +1424,50 @@ impl Lexer<'_> {
         }
     }
 
+    /// The word at `at`, with the `r#` of a raw identifier (`r#try`), which is never a keyword.
     fn word_at(&self, at: usize) -> String {
-        self.chars.get(at..).unwrap_or_default().iter().take_while(|&&c| is_word(c)).collect()
+        let raw = self.chars.get(at..at + 2) == Some(&['r', '#'][..]) && self.chars.get(at + 2).is_some_and(|&c| is_word(c) && !c.is_ascii_digit());
+        let from = if raw { at + 2 } else { at };
+        let word: String = self.chars.get(from..).unwrap_or_default().iter().take_while(|&&c| is_word(c)).collect();
+        if raw { format!("r#{word}") } else { word }
     }
 
     fn open(&mut self, c: char) {
-        if let Some(TestRegion::Item { level, start, opened: false, item, pattern: false, angle: 0, .. }) = self.test
+        if let Some(TestRegion::Item { level, start, opened: false, item, pattern: false, angle: 0, params: false, .. }) = self.test
             && level == self.delims.len()
             && c == '{'
         {
             let starts = !item && self.starts_block(start);
-            // In an item's header, the braces of a macro (`fn f() -> ty! { u8 } { .. }`) are not its body.
-            if !(item && self.after_bang)
-                && let Some(TestRegion::Item { opened, block, .. }) = &mut self.test
-            {
+            // In an item's header, the braces of a macro (`fn f() -> ty! { u8 } { .. }`) are not its
+            // body, and neither are braces in the condition of an `if` and the like.
+            let header = if item { self.after_bang } else { self.in_condition(start) };
+            if !header && let Some(TestRegion::Item { opened, block, .. }) = &mut self.test {
                 *opened = true;
                 *block = starts;
             }
         }
         self.delims.push((c, self.line));
         self.at += 1;
+    }
+
+    /// Whether the `{` at the current index is in the condition of the test-only `if`, `while`,
+    /// `match` or `for` whose code starts at `start`, not its body: the braces of a macro
+    /// (`if ready! { } { .. }`), or a block where an operand starts, after the keyword, an `in`, an
+    /// operator or a block keyword (`if { ready } { .. }`, `while !{ done } { .. }`,
+    /// `if const { true } { .. }`).
+    fn in_condition(&self, start: usize) -> bool {
+        if !matches!(self.word_at(self.code_start(start)).as_str(), "if" | "while" | "match" | "for") {
+            return false;
+        }
+        if self.after_bang {
+            return true;
+        }
+        if self.after_word {
+            let raw = self.last_word.checked_sub(1).and_then(|i| self.chars.get(i)) == Some(&'#');
+            let word = self.word_at(self.last_word);
+            return !raw && matches!(word.as_str(), "if" | "while" | "match" | "in" | "const" | "unsafe" | "loop" | "async" | "move");
+        }
+        matches!(self.prev, Some('!' | '&' | '|' | '=' | '<' | '+' | '-' | '*' | '/' | '%' | '^'))
     }
 
     fn close(&mut self, c: char) -> Result<(), SyntaxError> {
@@ -1409,11 +1523,12 @@ impl Lexer<'_> {
 
     /// A `;` ends a test-only statement, or an item that has no body or ends at its `;`, and a `,`
     /// inside a delimiter ends a test-only field, argument or arm. A `,` in an item's header
-    /// (`impl<A, B>`, a `where` clause) does not.
+    /// (`impl<A, B>`, a `where` clause) does not, and neither does one in an expression's generic
+    /// arguments (`f::<A, B>`) or in the parameters of a closure that starts it.
     fn item_end(&mut self, comma: bool) {
-        if let Some(TestRegion::Item { level, opened, item, semi, .. }) = self.test
+        if let Some(TestRegion::Item { level, opened, item, semi, angle, params, .. }) = self.test
             && level == self.delims.len()
-            && if comma { level > 0 && !item } else { !item || !opened || semi }
+            && if comma { level > 0 && !item && angle == 0 && !params } else { !item || !opened || semi }
         {
             self.test = None;
         }
@@ -2027,6 +2142,75 @@ fn after() { let _ = "seven"; }
     }
 
     #[test]
+    fn a_doc_comment_after_a_shebang_does_not_make_it_an_attribute() {
+        assert_eq!(literals("#! /*! doc */ [allow(unused)] \"AzureKit\"\n\"live\""), ["live"]);
+        assert_eq!(literals("#! /** doc */ [allow(unused)] \"AzureKit\"\n\"live\""), ["live"]);
+        assert_eq!(literals("#! /**/ /*** note */ [cfg(test)]\nfn a() { \"AzureKit\"; }\n"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_only_generic_arguments_and_closure_parameters_keep_their_commas() {
+        let source = r#"fn arms(x: u8) {
+    match x {
+        #[cfg(test)]
+        0 => pair::<u8, u16>("AzureKit"),
+        #[cfg(test)]
+        1 => pair::<Vec<u8>, u16>("AzureKit"),
+        #[cfg(test)]
+        2 => |_: u8, _: u8| "AzureKit",
+        #[cfg(test)]
+        3 => move |P { a, b }: P, _: u8| "AzureKit",
+        #[cfg(test)]
+        4 => pair:: /* spaced */ <u8, u16>("AzureKit"),
+        _ => pair::<u8, u16>("one"),
+    }
+    call(#[cfg(test)] pair::<u8, u16>("AzureKit"), "two");
+    call(#[cfg(test)] |a, b| a | b, "three");
+    call(#[cfg(test)] a < b, "four");
+}
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "four"]);
+    }
+
+    #[test]
+    fn braces_in_a_test_only_condition_are_not_its_body() {
+        let source = r#"fn statements(ready: bool) {
+    #[cfg(test)] if ready! { } { let _ = "AzureKit"; }
+    let _ = "one";
+    #[cfg(test)] if { ready } { "AzureKit"; }
+    let _ = "two";
+    #[cfg(test)] while !{ ready } { "AzureKit"; }
+    let _ = "three";
+    #[cfg(test)] if ready { "AzureKit"; } else if { ready } { "AzureKit"; } else { "AzureKit"; }
+    let _ = "four";
+    #[cfg(test)] match { 1 } { _ => "AzureKit" }
+    let _ = "five";
+    #[cfg(test)] if ready() { "AzureKit"; }
+    let _ = "six";
+    #[cfg(test)] for x in { [1] } { "AzureKit"; }
+    let _ = "seven";
+    #[cfg(test)] if const { true } { "AzureKit"; }
+    let _ = "eight";
+    #[cfg(test)] while unsafe { ready } { "AzureKit"; }
+    let _ = "nine";
+}
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]);
+    }
+
+    #[test]
+    fn a_raw_identifier_macro_is_read_as_one_word() {
+        let source = r#"fn statements() {
+    #[cfg(test)] r#try! {}
+    let _ = "one";
+    #[cfg(test)] r#try! { "AzureKit" }
+    let _ = "two";
+}
+"#;
+        assert_eq!(literals(source), ["one", "two"]);
+    }
+
+    #[test]
     fn test_only_item_headers_do_not_end_items_early() {
         let source = r#"#[cfg(test)] fn generic<const N: usize>() {}
 fn one() { let _ = "one"; }
@@ -2141,6 +2325,18 @@ fn seven() { let _ = "seven"; }
         let fits = Policy { limits: Limits { max_total_bytes: size, ..DEFAULT_LIMITS }, ..POLICY };
         let same = [Input::manifest(Path::new("Cargo.toml")), Input::manifest(&absolute)];
         scan(Path::new("."), &same, &fits).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn aliases_under_a_drive_relative_base_are_read_once() {
+        let current = std::env::current_dir().unwrap();
+        let Some(Component::Prefix(drive)) = current.components().next() else { panic!("no drive in {}", current.display()) };
+        let absolute = current.join("Cargo.toml");
+        let size = std::fs::metadata(&absolute).unwrap().len();
+        let fits = Policy { limits: Limits { max_total_bytes: size, ..DEFAULT_LIMITS }, ..POLICY };
+        let same = [Input::manifest(Path::new("Cargo.toml")), Input::manifest(&absolute)];
+        scan(Path::new(drive.as_os_str()), &same, &fits).unwrap();
     }
 
     #[test]
