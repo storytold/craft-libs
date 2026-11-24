@@ -253,6 +253,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.region = layer.region;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
+    entry.closes_on_commands = overlay.dismiss.commands;
     overlay::record(ctx, entry);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
     // The layer closes after its body ran: the run shows it open, so a record of the run is not replayed.
@@ -330,6 +331,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.exiting = layer.exiting;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
+    entry.closes_on_commands = overlay.dismiss.commands;
     entry.window = true;
     entry.popup = true;
     overlay::record(ctx, entry);

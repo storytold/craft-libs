@@ -2,23 +2,23 @@
 //!
 //! On Windows a file created in a folder inherits the folder's access list, and folders such as
 //! a new folder at a drive root, `C:\Users\Public` or `C:\ProgramData` let every signed-in user
-//! read what is created in them. [`restrict_to_owner`] replaces the whole list with the current
-//! user and SYSTEM only, makes that user the owner, and checks the result. [`create_private_dir`]
+//! read what is created in them. `restrict_to_owner` replaces the whole list with the current
+//! user and SYSTEM only, makes that user the owner, and checks the result. `create_private_dir`
 //! does the same for a new folder whose list the files created in it inherit, so a file can be
-//! private from the moment it exists. [`read_with_sddl`] reads a file and its security descriptor
+//! private from the moment it exists. `read_with_sddl` reads a file and its security descriptor
 //! through one handle. [`foreign_access`] reads the descriptor in SDDL form, which names accounts
 //! by SID and so reads the same in every Windows language, and says why another user could have
 //! written or could read the file. They run the tools Windows ships rather than calling the
 //! security API directly, which would need `unsafe`.
 
 /// Why the file whose security descriptor is `sddl` (`O:` owner and `D:` access list, in SDDL or
-/// as [`read_with_sddl`] writes it) can't be trusted as user `me`'s own: it is owned by someone else, it has no
+/// as `read_with_sddl` writes it) can't be trusted as user `me`'s own: it is owned by someone else, it has no
 /// access list (everyone may use it), or it lets an account other than `me` or SYSTEM use it.
 /// Accounts are compared by SID; `None` means it is `me`'s alone.
 ///
 /// Stricter than OpenSSH's rule for private keys, which also lets Administrators in: an entry for
 /// the Administrators group would let another administrator read the token without taking the
-/// file over. [`restrict_to_owner`] never grants it, so the app's own file always passes; a file
+/// file over. `restrict_to_owner` never grants it, so the app's own file always passes; a file
 /// that inherited it from a user's folder is refused.
 pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
     let me = me.trim();

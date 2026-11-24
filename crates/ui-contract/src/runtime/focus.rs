@@ -62,7 +62,7 @@ pub(crate) struct ScopeRec {
     /// The stop that held focus when the scope was first pushed, or for a scope that does not trap the stop focus last
     /// entered it from, which `restore` returns to.
     pub(crate) opener: Option<StopKey>,
-    /// The scope's layer is playing its exit: focus inside it already returns to the opener.
+    /// The scope's layer is playing its exit: focus inside it leaves at once, to the opener or nowhere.
     pub(crate) closing: bool,
     /// For a layer's scope: whether this is its first pass since the layer appeared, as the layer's memory says;
     /// none for other scopes, which are new after a gap of a frame.

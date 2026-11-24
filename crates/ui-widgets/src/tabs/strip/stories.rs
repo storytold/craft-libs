@@ -3,7 +3,7 @@
 use super::{StripEnd, TabKind, TabStrip};
 use crate::contract::{CollectionEvent, Entry, ReorderRule, ShowCollection as _};
 use crate::runtime::commands::{CommandRef, EditCommands};
-use crate::tabs::{Tab, TabRole};
+use crate::tabs::{PanelTabLook, Tab, TabRole};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, SelectionChange};
 use egui::{Key, Modifiers, Ui};
@@ -92,6 +92,13 @@ fn tab_strip_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
 fn tab_strip_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     strip(ui, data, TabStrip::new("Panels").shown(1), &TITLES, 4, TabKind::Panel)
+}
+
+/// Panel tabs in the pill look (`PanelTabLook::Pill`, a dock's `DockConfig::tab_look`): the shown tab on a filled
+/// rounded pill in the middle of the strip, the others bare until the pointer rests on one.
+#[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
+fn tab_strip_panel_pill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::Pill), &TITLES, 4, TabKind::Panel)
 }
 
 /// The width the narrow panel story's room is held to: the shown tab whole, the others at their first letters.
