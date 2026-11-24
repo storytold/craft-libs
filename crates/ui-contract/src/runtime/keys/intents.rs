@@ -4,7 +4,7 @@ use super::route::push;
 use super::{Nudge, Source, Stage, current};
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
-use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, PartRef};
+use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, OwnerClass, PartRef};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Context, Id, Vec2};
 use std::sync::Arc;
@@ -287,7 +287,7 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
 /// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with a framework
-/// stop focused, its unused Escape. A component or a
+/// stop focused, its unused Escape, unless it is a text field. A component or a
 /// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
 /// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
 /// component took. `rtl` reads horizontal moves in the window's direction.
@@ -305,7 +305,11 @@ pub fn with_canvas_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&m
 }
 
 fn offer_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
-    let focused = focus::focused_rec(ctx).map(|rec| rec.stop.id);
+    // A focused text field keeps the Escape it does not use, so typing in a palette's field never closes the
+    // palette; the document's editor and a canvas control lend it as any other control does.
+    let focused = focus::focused_rec(ctx)
+        .filter(|rec| rec.stop.keys.owner != OwnerClass::Text || rec.stop.keys.is_document_editor() || focus::is_canvas_member(ctx, rec))
+        .map(|rec| rec.stop.id);
     let mut window = intents_of(ctx, None, rtl);
     // The focused stop's leftover Escape stays in its slot until taken.
     let lent_cancel =
