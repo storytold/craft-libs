@@ -677,3 +677,28 @@ fn pictures_without_an_extension_are_named_by_their_bytes() {
     let keys: Vec<&String> = doc.media.keys().collect();
     assert!(keys.len() == 1 && keys[0].ends_with(".jpg"), "{keys:?}");
 }
+
+/// With a bold, italic default character shape, a run whose own shape is neither reads as
+/// neither, and one whose shape is reads as both. Before, the plain run took the default's
+/// bold and italic.
+#[test]
+fn plain_runs_stay_plain_under_a_bold_default() {
+    let header = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:refList><hh:charProperties><hh:charPr id="0" height="1000"><hh:bold/><hh:italic/></hh:charPr><hh:charPr id="1" height="1000"/></hh:charProperties><hh:styles><hh:style id="0" type="PARA" name="바탕글" paraPrIDRef="0" charPrIDRef="0"/></hh:styles></hh:refList></hh:head>"#;
+    let section = format!(
+        r#"<hs:sec {NS}><hp:p styleIDRef="0"><hp:run charPrIDRef="1"><hp:t>보통</hp:t></hp:run><hp:run charPrIDRef="0"><hp:t>굵게</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx_with(header, &section)).unwrap();
+    let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    let style = p.props.style.as_deref();
+    let shown: Vec<(bool, bool)> = p
+        .runs
+        .iter()
+        .filter(|r| r.len > 0)
+        .map(|r| {
+            let rc = doc.styles.resolve_char(style, &r.props);
+            (rc.bold, rc.italic)
+        })
+        .collect();
+    assert_eq!(shown.first(), Some(&(false, false)), "{shown:?}");
+    assert_eq!(shown.last(), Some(&(true, true)), "{shown:?}");
+}

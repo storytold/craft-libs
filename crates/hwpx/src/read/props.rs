@@ -220,9 +220,33 @@ impl Converter<'_> {
         if let Some(c) = self.char_cache.get(&key) {
             return c.clone();
         }
-        let c = self.char_props(&self.h.char_pr_id(key));
+        let cp = self.h.char_pr_id(key);
+        let mut c = self.char_props(&cp);
+        // A run's shape is whole in HWPX: not bold is not bold, even where the document's
+        // default or the paragraph's style is (the model would let them through).
+        let (bold, italic) = self.emphasis_inherited();
+        if bold && !cp.bold {
+            c.bold = Some(false);
+            c.bold_cs = Some(false);
+        }
+        if italic && !cp.italic {
+            c.italic = Some(false);
+            c.italic_cs = Some(false);
+        }
         self.char_cache.insert(key, c.clone());
         c
+    }
+
+    /// Whether the default character shape or a style's is bold, and italic.
+    fn emphasis_inherited(&mut self) -> (bool, bool) {
+        if let Some(e) = self.emphasis_inherited {
+            return e;
+        }
+        let base = self.h.style(0).map(|s| s.char_pr).unwrap_or(0);
+        let shapes: Vec<i64> = std::iter::once(base).chain(self.h.styles.iter().map(|s| s.char_pr)).collect();
+        let e = shapes.iter().map(|&id| self.h.char_pr_id(id)).fold((false, false), |(b, i), cp| (b || cp.bold, i || cp.italic));
+        self.emphasis_inherited = Some(e);
+        e
     }
 
     /// A paragraph shape as paragraph properties. `font_h`: the HWPUNIT height the line spacing

@@ -148,6 +148,9 @@ pub(crate) struct Converter<'a> {
     pub carry: section::Carry,
     pub unsupported: BTreeMap<String, i64>,
     char_cache: HashMap<i64, CharProps>,
+    /// Whether the document's default or one of its styles is bold, and italic: a run whose
+    /// own shape isn't then says so (see `run_props`).
+    emphasis_inherited: Option<(bool, bool)>,
     num_ids: Vec<((&'static str, i64), u32)>,
     /// Where each list of `num_ids` is, by its key.
     num_index: HashMap<(&'static str, i64), u32>,
@@ -209,6 +212,7 @@ pub(crate) fn read(pkg: &Package) -> Result<Document> {
         carry: section::Carry::default(),
         unsupported: BTreeMap::new(),
         char_cache: HashMap::new(),
+        emphasis_inherited: None,
         num_ids: Vec::new(),
         num_index: HashMap::new(),
         tiles_left: background::MAX_DOCUMENT_TILES,
