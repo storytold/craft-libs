@@ -7,6 +7,7 @@ use craft_ui::runtime::commands::{
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::measure::chord_texts;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Frames, trial};
@@ -76,10 +77,12 @@ fn an_enclosing_scopes_shortcut_beats_the_applications() {
     let mut frames = Frames::new();
     frames.idle(3, &mut show);
     focus_on(&mut frames, tap.get().unwrap(), &mut show);
-    frames.frame(vec![key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT)], &mut show);
+    // Each press is released: a second press with no release between is a repeat.
+    let chord = || vec![key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT), key_release(Key::J, Modifiers::COMMAND | Modifiers::ALT)];
+    frames.frame(chord(), &mut show);
     assert_eq!((closed.get(), take_output(&frames.ctx).fired.len()), (1, 0), "the dock takes it");
     focus_on(&mut frames, outside.get().unwrap(), &mut show);
-    frames.frame(vec![key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT)], &mut show);
+    frames.frame(chord(), &mut show);
     assert_eq!((closed.get(), ids(&take_output(&frames.ctx).fired)), (1, vec!["trial.jump"]), "outside the dock the application's command fires");
 }
 

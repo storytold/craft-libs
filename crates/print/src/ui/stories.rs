@@ -2,10 +2,12 @@
 
 use super::dialog::PrintPreview;
 use super::{
-    Destination, DriverControls, Duplex, PrintDialog, PrintLayout, PrintMarks, PrintPanel, PrintSection, PrintSheet, Printer, Settings, SheetPage,
+    Destination, DriverControls, Duplex, PrintDialog, PrintLayout, PrintMarks, PrintMode, PrintPanel, PrintPanelLayout, PrintPresets, PrintSection,
+    PrintSheet, Printer, Settings, SheetPage,
 };
 use craft_ui::contract::{Bind, Show as _, Validity};
 use craft_ui::patterns::form_dialogs::{DialogFields, PagerUnit, PanePager, Param, ParamKind};
+use craft_ui::patterns::presets::{PresetError, PresetRow};
 use craft_ui::primitives::TextureCache;
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::pictures::sample_picture;
@@ -36,6 +38,12 @@ fn print_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PrintPanel<'static>, covers = [], drive = Drive::Never)]
 fn print_panel_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     PrintPanel::new(data.bind("settings", Settings::default()), &[]).discovering(true).show(ui).into()
+}
+
+#[story(PrintPanel<'static>, covers = [], drive = Drive::Never)]
+fn print_panel_printer_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let printers = printers();
+    PrintPanel::new(data.bind("settings", office()), &printers).layout(PrintPanelLayout::PrinterOnly).driver(DriverControls::Page).show(ui).into()
 }
 
 /// Collate unchecked beside Copies, and Properties… after Refresh.
@@ -115,20 +123,82 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { duplex: Some(Duplex::LongEdge), ..office() };
     let printers = printers();
     let sheet = sheet(ui, true);
-    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet).ready(true).show(ui).into()
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default())).sheet(&sheet).ready(true).show(ui).into()
+}
+
+/// The artwork outlines of the sections story's document, in document points: the page inset half an inch and the
+/// image box of [`sheet`].
+const SECTIONS_OUTLINES: [Rect; 2] =
+    [Rect::from_min_max(pos2(36.0, 36.0), pos2(576.0, 756.0)), Rect::from_min_max(pos2(72.0, 72.0), pos2(540.0, 384.0))];
+
+/// The sections beside the shown one, with a preset row, a one-line header and a document on three sheets.
+#[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
+fn print_dialog_sections(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let start = office();
+    let printers = printers();
+    let sheet = sheet(ui, true).count(3).outlines(SECTIONS_OUTLINES.to_vec());
+    let rows = [PresetRow::item("Default".to_owned(), "Default", 0), PresetRow::item("Proof".to_owned(), "Proof", 0)];
+    let built_in = ["Default".to_owned()];
+    let header = [Param::number("pagesPerSheet", "Pages per sheet", 1.0, 1.0, 0)];
+    let sections = [
+        PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)]),
+        PrintSection::new("Printing Marks", vec![Param::number("markWeight", "Mark weight", 0.25, 0.25, 2)]),
+    ];
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()))
+        .layout(PrintLayout::Sections)
+        .sheet(&sheet)
+        .presets(PrintPresets::new(&rows, Some("Proof".to_owned()), &built_in))
+        .header(&header)
+        .sections(&sections)
+        .driver(DriverControls::Page)
+        .ready(true)
+        .show(ui)
+        .into()
+}
+
+/// The sections layout while the host has no sheet to show: its message stands where the preview would.
+#[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
+fn print_dialog_sections_no_sheet(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let printers = printers();
+    let sections = [PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)])];
+    PrintDialog::new(data.bind("settings", Settings::default()), &printers, Bind::given(DialogFields::default()))
+        .layout(PrintLayout::Sections)
+        .message("The document has no printable artwork")
+        .sections(&sections)
+        .show(ui)
+        .into()
+}
+
+/// The preset editor: a name field whose refusal shows under it.
+#[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
+fn print_dialog_preset_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let sections = [PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)])];
+    let ((settings, settings_at), (name, name_at)) = data.pair_at(("settings", Settings::default()), ("name", "Default".to_owned()));
+    PrintDialog::new(settings_at.bind(settings), &[], Bind::given(DialogFields::default()))
+        .layout(PrintLayout::Sections)
+        .mode(PrintMode::PresetEditor)
+        .preset_name(name_at.bind(name))
+        .check_name(|name| name.eq_ignore_ascii_case("Default").then_some(PresetError::NameTaken))
+        .sections(&sections)
+        .show(ui)
+        .into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = sheet(ui, false);
-    PrintDialog::new(data.bind("settings", Settings::default()), &[], Bind::given(DialogFields::default()), &sheet).discovering(true).show(ui).into()
+    PrintDialog::new(data.bind("settings", Settings::default()), &[], Bind::given(DialogFields::default()))
+        .sheet(&sheet)
+        .discovering(true)
+        .show(ui)
+        .into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = sheet(ui, false);
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet).busy(true).show(ui).into()
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default())).sheet(&sheet).busy(true).show(ui).into()
 }
 
 /// Letter paper in points.
@@ -205,7 +275,8 @@ fn print_dialog_document(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = document_sheet(ui);
     let sections = [page_handling()];
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .sections(&sections)
         .ready(true)
@@ -219,7 +290,8 @@ fn print_dialog_to_file(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = document_sheet(ui);
     let start = Settings { destination: Destination::File, ..Settings::default() };
-    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .ready(true)
         .show(ui)
@@ -234,7 +306,8 @@ fn print_dialog_browser_printer(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     printers.push(Printer::new("Browser").own_dialog("The browser's print dialog sets copies, collate, two-sided and colour."));
     let sheet = document_sheet(ui);
     let start = Settings { destination: Destination::Printer("Browser".to_owned()), ..Settings::default() };
-    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .ready(true)
         .show(ui)
@@ -246,7 +319,8 @@ fn print_dialog_browser_printer(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 fn print_dialog_booklet(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = booklet_sheet(ui);
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .duplex_by_layout(true)
         .ready(true)
@@ -260,7 +334,8 @@ fn print_dialog_four_up(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = four_up_sheet(ui);
     let pager = PanePager { shown: 1, count: 3, back: false, next: true, unit: PagerUnit::Sheet, ..PanePager::default() };
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .preview_pager(pager)
         .ready(true)
@@ -274,7 +349,8 @@ fn print_dialog_message(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = PrintSheet::message(LETTER, "The page range selects no pages.".into(), "No pages".into());
     let pager = PanePager { shown: 0, count: 0, back: false, next: false, unit: PagerUnit::Sheet, ..PanePager::default() };
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .preview_pager(pager)
         .show(ui)
@@ -287,7 +363,8 @@ fn print_dialog_last_sheet(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = four_up_sheet(ui);
     let pager = PanePager { shown: 3, count: 3, back: true, next: false, unit: PagerUnit::Sheet, ..PanePager::default() };
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .preview_pager(pager)
         .ready(true)
@@ -302,7 +379,8 @@ fn print_dialog_folded_section(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
     let sheet = document_sheet(ui);
     let comments = PrintSection::new("Comments and Forms", vec![Param::new("comments", "Print comments", ParamKind::bool(false))]).folded(false);
     let sections = [page_handling().folded(true), comments];
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .sections(&sections)
         .ready(true)
@@ -316,7 +394,8 @@ fn print_dialog_section_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let printers = printers();
     let sheet = document_sheet(ui);
     let sections = [page_handling().button("pageSetup", "Page Setup…", true).button("resetPaper", "Reset", false)];
-    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", office()), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
         .layout(PrintLayout::Document)
         .sections(&sections)
         .ready(true)

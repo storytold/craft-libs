@@ -439,6 +439,63 @@ fn a_panel_that_docks_only_in_columns_never_lands_in_a_frame() {
     assert_eq!(sorted(saved.layout()), [1, 2, 3, 4, 6]);
 }
 
+/// A location whose anchor, sibling and tab-before name `anchor`.
+fn recorded(layout: &Layout<u32>, anchor: u32) -> craft_behavior::dock::Location<u32> {
+    let mut location = layout.location(&5).unwrap();
+    location.anchor = Some(anchor);
+    location.sibling = vec![anchor];
+    location.placement = DockPlacement::tab(Some(anchor));
+    location
+}
+
+/// Every place of `workspace` that holds the panel `id`: the layout, the keys of the records and their locations.
+fn mentions(workspace: &Workspace<u32>, id: u32) -> bool {
+    let records = workspace.hidden().iter().chain(workspace.floated());
+    let named = records.clone().any(|(panel, location)| {
+        let before = matches!(&location.placement, DockPlacement::Tab { before: Some(p) } if *p == id);
+        *panel == id || location.anchor == Some(id) || location.sibling.contains(&id) || before
+    });
+    named || workspace.layout().contains(&id)
+}
+
+/// A rename keeps the panel's place wherever the id sits (tab group, dock column, floating window, records and the
+/// anchors of other records), refuses a missing source and a taken name, and leaves the workspace as it was then.
+#[test]
+fn a_renamed_panel_keeps_its_place_and_a_taken_name_changes_nothing() {
+    for from in [11, 3, 7, 50, 51] {
+        let layout = docked();
+        let mut base = Workspace::default();
+        base.replace(Workspace::from_parts(
+            layout.clone(),
+            vec![(50, recorded(&layout, from)), (52, recorded(&layout, 5))],
+            vec![(51, recorded(&layout, from))],
+        ));
+        base.validate().unwrap();
+        let swap = |panel: u32| if panel == from { 99 } else { panel };
+
+        let mut renamed = base.clone();
+        let (revision, generation) = (renamed.revision(), renamed.generation());
+        renamed.rename(&from, 99).unwrap_or_else(|e| panic!("{from}: {e:?}"));
+        let panels = |workspace: &Workspace<u32>| workspace.layout().panels().into_iter().copied().collect::<Vec<_>>();
+        assert_eq!(panels(&renamed), panels(&base).into_iter().map(swap).collect::<Vec<_>>(), "{from}: the panel keeps its position");
+        let keys = |records: &[(u32, _)]| records.iter().map(|(panel, _)| *panel).collect::<Vec<_>>();
+        assert_eq!(keys(renamed.hidden()), keys(base.hidden()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: hidden keys");
+        assert_eq!(keys(renamed.floated()), keys(base.floated()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: floated keys");
+        assert!(!mentions(&renamed, from) && mentions(&renamed, 99), "{from}: no field holds the old id");
+        renamed.validate().unwrap();
+        assert!(renamed.revision() != revision && renamed.generation() == generation, "{from}: a rename is an edit");
+
+        for (source, name, error) in [(40, 99, DockError::MissingPanel), (from, 4, DockError::DuplicatePanel), (from, 52, DockError::DuplicatePanel)]
+        {
+            let mut refused = base.clone();
+            let revision = refused.revision();
+            assert_eq!(refused.rename(&source, name), Err(error), "{from}: {source} to {name}");
+            assert_eq!(refused, base, "{from}: a refused rename changes nothing");
+            assert_eq!(refused.revision(), revision);
+        }
+    }
+}
+
 /// A stepped column (a toolbar's) keeps its step count docked, floating and through JSON, and its width moves only
 /// by steps.
 #[test]
@@ -494,6 +551,7 @@ fn every_workspace_mutator_moves_the_revision() {
     moves("set_visible", &|workspace| workspace.set_visible(5, false, None, false, allow).unwrap());
     moves("reconcile", &|workspace| workspace.reconcile(|panel| *panel != 5, allow, &Workspace::new(docked())));
     moves("raise_window_floor", &|workspace| workspace.raise_window_floor(1000));
+    moves("rename", &|workspace| workspace.rename(&5, 99).unwrap());
     moves("forget_hidden", &|workspace| {
         workspace.apply(Action::close(5), false, allow).unwrap();
         let revision = workspace.revision();

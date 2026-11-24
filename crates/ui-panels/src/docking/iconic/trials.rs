@@ -13,6 +13,7 @@ use crate::runtime::env::Direction;
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
+use crate::testing::relations::{equals_token, grows_with};
 use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
@@ -139,6 +140,11 @@ struct Flyouts {
 impl Flyouts {
     /// A column of `groups` on the right window edge when `right`, else the left one; its flyouts stay in `within`.
     fn new(groups: &[&[u8]], right: bool, within: Rect) -> Self {
+        Self::with(groups, right, within, false)
+    }
+
+    /// [`Flyouts::new`] with Auto-Collapse Iconic Panels on when `auto_collapse`.
+    fn with(groups: &[&[u8]], right: bool, within: Rect, auto_collapse: bool) -> Self {
         let mut column = Column::new(groups.iter().map(|panels| Group::new(panels.to_vec(), 0)).collect());
         column.iconic = true;
         let edge = if right { DockEdge::End } else { DockEdge::Start };
@@ -158,6 +164,7 @@ impl Flyouts {
                 .edge(edge)
                 .opens(if right { Side::Start } else { Side::End })
                 .within(within)
+                .auto_collapse(auto_collapse)
                 .show_flyouts_at(ui, place, |group, at, ui, _| {
                     let GroupAt::Show(rect) = at else { return None };
                     let panel = *group.active_panel()?;
@@ -216,6 +223,18 @@ impl Flyouts {
     /// How far a resize grip reaches in from the edge it moves.
     fn grip_reach(&self) -> f32 {
         StyleCx::with_root(self.fixture.ctx(), |cx| crate::contract::grip_band(cx.tokens))
+    }
+}
+
+/// A press outside the open flyout leaves it open; with Auto-Collapse Iconic Panels on it closes it.
+#[trial]
+fn a_press_outside_closes_the_flyout_only_with_auto_collapse() {
+    for auto_collapse in [false, true] {
+        let mut d = Flyouts::with(&[&[1, 2]], false, screen(), auto_collapse);
+        d.open("Brushes");
+        let away = d.rect().right_center() + Vec2::new(100.0, 0.0);
+        d.fixture.click_at(away).settle();
+        assert_eq!(d.shown.get().is_none(), auto_collapse, "auto-collapse {auto_collapse}: a press outside closes the flyout only with it on");
     }
 }
 
@@ -560,9 +579,10 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
         let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+        let (above, below) = (run.top() - strip.top(), strip.bottom() - run.bottom());
         assert!(
-            run.top() - strip.top() >= tight + GRIP_ABOVE - EPS && strip.bottom() - run.bottom() >= tight - EPS,
-            "group {group}: the marks keep space.gap.tight ({tight}) and GRIP_ABOVE more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
+            grows_with(tight, below) && equals_token(above - below, GRIP_ABOVE),
+            "group {group}: the marks keep space.gap.tight ({tight}) off the strip's bottom and {GRIP_ABOVE} points more off its top: {run:?} in {strip:?}"
         );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
@@ -614,11 +634,8 @@ fn a_themes_grip_shape_reaches_the_grips() {
     let shapes = fixture.frame_shapes();
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
-    assert!(
-        marks.iter().all(|m| (m.width() - shape.width).abs() < EPS && (m.height() - shape.width).abs() < EPS),
-        "dots the theme's width across: {marks:?}"
-    );
-    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < EPS), "the theme's gap apart: {marks:?}");
+    assert!(marks.iter().all(|m| equals_token(m.width(), shape.width) && equals_token(m.height(), shape.width)), "two-point dots: {marks:?}");
+    assert!(marks.windows(2).all(|w| equals_token(w[1].min.x - w[0].max.x, shape.gap)), "three points apart: {marks:?}");
     assert_ne!(ink, egui::Color32::TRANSPARENT);
 }
 
@@ -646,8 +663,8 @@ fn outside_column(outside_closes: bool, auto_collapse: bool) -> (Fixture, Rc<Cel
     (fixture, open)
 }
 
-/// A press outside the open flyout closes it by default; with `outside_closes` off it stays open, unless Auto-Collapse
-/// Iconic Panels is on, which closes it there as before.
+/// A press outside the open flyout closes it with `outside_closes` on; off (the default) it stays open, unless
+/// Auto-Collapse Iconic Panels is on, which closes it there.
 #[trial]
 fn a_press_outside_closes_the_flyout_only_where_outside_closes_or_auto_collapse_is_on() {
     for (outside_closes, auto_collapse, stays) in [(true, false, false), (false, false, true), (false, true, false)] {

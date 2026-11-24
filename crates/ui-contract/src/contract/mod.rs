@@ -5,7 +5,7 @@ mod collection;
 mod container;
 mod cx;
 pub(crate) mod editor;
-pub use editor::EditorHandle;
+pub use editor::{EditorHandle, EditorStep};
 mod entry;
 mod faces;
 pub(crate) mod footer_slot;
@@ -92,7 +92,9 @@ pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_r
 pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
-pub use label::{CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
+pub use label::{
+    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, Scrub, SideLabel,
+};
 pub use lazy::Lazy;
 #[doc(hidden)]
 #[cfg(feature = "suite")]
@@ -109,7 +111,7 @@ pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, Patter
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed, response_of};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
@@ -410,6 +412,12 @@ pub trait Component: Meta + Sized {
     /// `icon_only` does. It reads props only, never the paint record.
     fn shows_label(&self) -> bool {
         Self::SHOWS_LABEL
+    }
+
+    /// The muted line a `LABELLED_AFTER` control's label shows after its text (`SideLabel::detail`), as a radio's
+    /// `detail`; none by default. It reads props only.
+    fn label_detail(&self) -> Option<crate::runtime::env::Label> {
+        None
     }
 
     /// How far the component paints outside its rect by design, in points (a graph node's ports sit on its edge).

@@ -48,12 +48,12 @@ impl Outcome for FlyoutOutput {
     }
 }
 
-/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape closes it, and
-/// a press outside it unless [`outside_closes`](Flyout::outside_closes) is off; with Auto-Collapse Iconic Panels a
-/// press outside and the focus leaving it close it too. Its body is measured at the flyout's width first: the flyout is
-/// as tall as the body measures, at most the height of `within`, and at least its `size`'s height, and the body then
-/// shows in the rect that takes. A flyout taller than the room below its top moves up to stay inside `within` (the
-/// layer keeps inside its bounds) and scrolls only when it is taller than `within`.
+/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape closes it; with
+/// Auto-Collapse Iconic Panels, or with [`outside_closes`](Flyout::outside_closes) on, a press outside it closes it, and
+/// with Auto-Collapse the focus leaving it too. Its body is measured at the flyout's width first: the flyout is as tall
+/// as the body measures, at most the height of `within`, and at least its `size`'s height, and the body then shows in
+/// the rect that takes. A flyout taller than the room below its top moves up to stay inside `within` (the layer keeps
+/// inside its bounds) and scrolls only when it is taller than `within`.
 ///
 /// The user resizes it by its top and bottom edges, the edge away from the column and the two corners there; the
 /// column side stays. The flyout keeps no rect of its own: each step comes back in [`FlyoutShown::placed`] and the
@@ -74,9 +74,9 @@ pub struct Flyout {
     /// The least size a resize leaves the flyout.
     #[prop(quantity = "least room a resize leaves, from the dock's measured sizes, in points")]
     least: Vec2,
-    /// Whether a press outside closes the flyout. Off, only Escape, the column's icons and, with Auto-Collapse Iconic
-    /// Panels, a press outside and the focus leaving it close it: work on the canvas leaves it open, as an application
-    /// whose flyouts stay open until the person closes them wants.
+    /// Whether a press outside closes the flyout without Auto-Collapse Iconic Panels. Off (the default), only Escape, the
+    /// column's icons and, with Auto-Collapse, a press outside and the focus leaving it close it: work on the canvas
+    /// leaves it open.
     #[prop]
     outside_closes: bool,
     placed: Option<PlacementChange>,
@@ -84,7 +84,7 @@ pub struct Flyout {
 
 impl Flyout {
     /// A flyout at least `size` that opens on the side `opens` of its column, in reading order (`Side::Start` or
-    /// `Side::End`), closing when the focus leaves it if `auto_collapse`.
+    /// `Side::End`), closing on a press outside it and when the focus leaves it if `auto_collapse`.
     pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
         Flyout {
@@ -95,7 +95,7 @@ impl Flyout {
             auto_collapse,
             within: Rect::EVERYTHING,
             least: Vec2::ZERO,
-            outside_closes: true,
+            outside_closes: false,
             placed: None,
         }
     }
@@ -113,11 +113,11 @@ impl Flyout {
             .placed_at(top_left)
             .size_limits(SizeLimits::at_least(least))
             .resize_edges(free.union(ResizeEdges::TOP).union(ResizeEdges::BOTTOM))
-            .dismiss(Dismiss::new().focus_left(self.auto_collapse).outside(if self.outside_closes || self.auto_collapse {
-                Outside::Close
-            } else {
-                Outside::Keep
-            }))
+            .dismiss(
+                Dismiss::new()
+                    .outside(if self.outside_closes || self.auto_collapse { Outside::Close } else { Outside::Keep })
+                    .focus_left(self.auto_collapse),
+            )
             .body_scroll(false);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }

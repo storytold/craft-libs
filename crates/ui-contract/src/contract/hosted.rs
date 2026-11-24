@@ -1,7 +1,7 @@
 //! A leaf a component hosts in a slot of its own (a row's field, a notice's drop hint), erased so the host can keep
 //! leaves of different types: measured under the slot's key, then shown once at the rect the host placed it in.
 
-use super::{Component, MeasureCx, PaintUi, Show};
+use super::{Component, MeasureCx, PaintUi, Role, Show};
 use craft_behavior::Proposal;
 use egui::{Rect, Vec2};
 
@@ -15,6 +15,9 @@ pub trait Hosted<H: Component> {
 
     /// Shows the leaf at `rect` under `key` and hands its output on.
     fn show(self: Box<Self>, ui: &mut PaintUi<'_>, key: HostedKey, rect: Rect);
+
+    /// The leaf's kind of component, for a host that places some kinds apart (a link only as wide as its text).
+    fn role(&self) -> Role;
 }
 
 /// A hosted leaf and what takes its output; a hidden one keeps its slot's room and shows nothing.
@@ -47,5 +50,9 @@ impl<H: Component, C: Show, F: FnOnce(C::Output)> Hosted<H> for Hosting<C, F> {
         if self.shown {
             (self.output)(ui.child(key, rect, self.component));
         }
+    }
+
+    fn role(&self) -> Role {
+        C::ROLE
     }
 }

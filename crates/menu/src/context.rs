@@ -22,7 +22,8 @@ use crate::model::{Builtin, Item, ItemKind, Node};
 /// Shows `nodes` as rows of the menu body `ui` is in: a context menu's
 /// (`Menu::context(label, &response).show(ui, |ui, _| craft_menu::context::rows(ui, &nodes))`) or any other menu's.
 ///
-/// A [`Node::Item`] is a command row, a [`Node::Separator`] a divider and a [`Node::Submenu`] a submenu row;
+/// A [`Node::Item`] is a command row, a [`Node::Separator`] a divider, a [`Node::Heading`] a caption that takes no
+/// mnemonic letter and a [`Node::Submenu`] a submenu row;
 /// AppKit's own items ([`Node::Standard`]) are left out. The chord of a row without a binding is the item's own
 /// shortcut, written for the shell's operating system.
 pub fn rows(ui: &mut Ui, nodes: &[Node]) {
@@ -122,7 +123,7 @@ impl<'a> Rows<'a> {
 
     /// The label a node shows as the menu's sibling, for the preferred letters and the English labels.
     pub(crate) fn node_labels(&self, nodes: &[Node]) -> Vec<String> {
-        let shown: Vec<&Node> = nodes.iter().filter(|node| !matches!(node, Node::Separator | Node::Standard { .. })).collect();
+        let shown: Vec<&Node> = nodes.iter().filter(|node| !takes_no_letter(node)).collect();
         let mut labels = self
             .labels(
                 &shown,
@@ -143,10 +144,7 @@ impl<'a> Rows<'a> {
                 },
             )
             .into_iter();
-        nodes
-            .iter()
-            .map(|node| if matches!(node, Node::Separator | Node::Standard { .. }) { String::new() } else { labels.next().unwrap_or_default() })
-            .collect()
+        nodes.iter().map(|node| if takes_no_letter(node) { String::new() } else { labels.next().unwrap_or_default() }).collect()
     }
 
     /// The text of `nodes` and of every submenu below them, with shortcuts written for `platform`.
@@ -160,7 +158,7 @@ impl<'a> Rows<'a> {
                     RowLabels { label, shortcut: item.shortcut.as_ref().map(|chord| chord.display(platform)), children: LevelLabels::default() }
                 }
                 Node::Submenu { children, .. } => RowLabels { label, shortcut: None, children: self.level_labels(children, platform) },
-                Node::Separator | Node::Standard { .. } => RowLabels::default(),
+                Node::Separator | Node::Heading(_) | Node::Standard { .. } => RowLabels::default(),
             })
             .collect();
         LevelLabels { rows }
@@ -187,6 +185,9 @@ impl<'a> Rows<'a> {
                     } else {
                         Menu::submenu_row(ui, label, |ui, _| self.show(ui, children, &text.children));
                     }
+                }
+                Node::Heading(text) => {
+                    MenuItem::heading(text.clone()).show(ui);
                 }
                 Node::Standard { .. } => {}
             }
@@ -250,7 +251,16 @@ fn command_row<'a>(ui: &Ui, item: &Item, label: String, shortcut: Option<String>
     if let Some(tooltip) = &item.tooltip {
         row = row.tooltip(tooltip.clone());
     }
+    if let Some((aspect, face)) = &item.sample {
+        row = row.sample(*aspect, face.clone());
+    }
     row
+}
+
+/// Whether `node` shows no row of its own to choose, so it takes no mnemonic letter and leaves its siblings'
+/// letters as they are.
+fn takes_no_letter(node: &Node) -> bool {
+    matches!(node, Node::Separator | Node::Heading(_) | Node::Standard { .. })
 }
 
 /// The checked state the command itself reports.
@@ -263,7 +273,7 @@ fn is_dead(nodes: &[Node]) -> bool {
     !nodes.iter().any(|node| match node {
         Node::Item(item) => item.enabled,
         Node::Submenu { children, enabled, .. } => *enabled && !is_dead(children),
-        Node::Separator | Node::Standard { .. } => false,
+        Node::Separator | Node::Heading(_) | Node::Standard { .. } => false,
     })
 }
 

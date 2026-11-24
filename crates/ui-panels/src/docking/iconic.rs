@@ -170,9 +170,9 @@ pub struct IconicColumnStyle {
 /// icon, cut with an ellipsis to the cell; a click or drag on the name acts as one on the icon. A click or Enter on an icon
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
 /// time. A drag of an icon starts a move of its panel, a drag of the grip on top of a group a move of the group, a
-/// drag of the bar beside its button a move of the column; each starts through the drag session, and a press outside
-/// the flyout closes it unless `outside_closes` is off. Escape closes the flyout; with `auto_collapse` a press outside
-/// and the focus leaving it do too.
+/// drag of the bar beside its button a move of the column; each starts through the drag session. Escape closes the
+/// flyout; with `auto_collapse` a press outside it and the focus leaving it do too, and with `outside_closes` a press
+/// outside it does.
 ///
 /// The open flyout is the bound `Option<P>` of [`new`](IconicColumn::new), owned by the host like the layout: a click
 /// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The
@@ -218,7 +218,7 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// What the icons open: flyouts, or the column itself as a rail.
     #[prop]
     mode: IconicMode,
-    /// Whether a press outside the open flyout closes it ([`Flyout::outside_closes`]); on by default.
+    /// Whether a press outside the open flyout closes it ([`Flyout::outside_closes`]) without `auto_collapse`; off by default.
     #[prop]
     outside_closes: bool,
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column, and the rect its
@@ -286,7 +286,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             bar: ColumnBar::Own,
             auto_collapse: false,
             mode: IconicMode::Flyouts,
-            outside_closes: true,
+            outside_closes: false,
             within: Rect::NOTHING,
             open,
             view: None,
