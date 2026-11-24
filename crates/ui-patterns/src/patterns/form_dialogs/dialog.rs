@@ -2000,12 +2000,21 @@ impl StackDialog for HostedParamDialog {
         self.requests.answer_color(key, color);
     }
 
-    /// Sets the fields on a clone of the values and commits the clone only when every field is accepted.
+    /// Sets the fields on a clone of the values and commits the clone only when every field is accepted. The rows are
+    /// those the user sees: the host's labels and shown states over every tab's rows; a read-only dialog refuses all.
     fn set_json_fields(&mut self, _: &Context, fields: &[(String, Value)]) -> Result<(), String> {
-        let params = (self.build)(&mut self.fields).params.into_owned();
+        let (params, read_only) = {
+            let mut dialog = (self.build)(&mut self.fields);
+            self.rows.apply(&mut dialog);
+            let ParamDialog { params, tabs, read_only, .. } = dialog;
+            (every_param(params, &tabs).into_owned(), read_only)
+        };
         let mut staged = self.fields.clone();
         let mut preview = self.preview_on;
         for (field, value) in fields {
+            if read_only {
+                return Err(FieldRefusal::Inactive.message(field));
+            }
             match (field.as_str(), &self.presets) {
                 ("preview", _) if self.previews => {
                     preview = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(value).message(field))?;
@@ -2018,11 +2027,7 @@ impl StackDialog for HostedParamDialog {
                 _ => set_param_field(&params, &mut staged, field, value.clone())?,
             }
         }
-        for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
-            if let Some(request) = param.listing_after(&self.fields, &staged) {
-                self.requests.request_listing(request);
-            }
-        }
+        self.requests.request_set(&params, &self.fields, &staged);
         self.fields = staged;
         self.preview_on = preview;
         Ok(())

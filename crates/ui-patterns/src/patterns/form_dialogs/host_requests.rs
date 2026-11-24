@@ -223,13 +223,18 @@ impl HostRequests {
     pub fn set_field(&mut self, params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
         let before = fields.clone();
         super::set_param_field(params, fields, field, value)?;
+        self.request_set(params, &before, fields);
+        Ok(())
+    }
+
+    /// Files what a set through automation of the rows `params` from `before` to `after` files ([`set_field`](Self::set_field)).
+    pub fn request_set(&mut self, params: &[Param], before: &DialogFields, after: &DialogFields) {
         for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
-            if let Some(request) = param.listing_after(&before, fields) {
+            if let Some(request) = param.listing_after(before, after) {
                 self.request_listing(request);
             }
         }
-        self.request_edited(edited_rows(params, &before, fields));
-        Ok(())
+        self.request_edited(edited_rows(params, before, after));
     }
 
     /// The row keys an edit changed since the last take.
