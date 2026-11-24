@@ -77,15 +77,23 @@ impl PixelCache {
         if bytes > limit || self.values.contains_key(&key) {
             return;
         }
-        while self.bytes + bytes > limit {
+        self.trim(limit - bytes);
+        if self.bytes + bytes > limit {
+            return;
+        }
+        self.order.push_back(key);
+        self.values.insert(key, (bytes, pixels.clone()));
+        self.bytes += bytes;
+    }
+
+    /// Drop the oldest entries until the cache holds at most `limit` bytes.
+    fn trim(&mut self, limit: usize) {
+        while self.bytes > limit {
             let Some(key) = self.order.pop_front() else { return };
             if let Some((bytes, _)) = self.values.remove(&key) {
                 self.bytes -= bytes;
             }
         }
-        self.order.push_back(key);
-        self.values.insert(key, (bytes, pixels.clone()));
-        self.bytes += bytes;
     }
 }
 
@@ -105,6 +113,10 @@ impl GraphAccelerator {
             filters: OnceLock::new(),
             half: OnceLock::new(),
         }
+    }
+
+    fn pixel_cache_limit(&self) -> usize {
+        ((self.memory_budget_bytes)() / 32).min(512 << 20) as usize
     }
 
     fn pixel_key(&self, request: &PixelRequest<'_>, shader: &PixelShader) -> Option<[u64; 2]> {
@@ -523,7 +535,9 @@ impl Accelerator for GraphAccelerator {
         }
         let Some(shader) = request.program.pixel_shader(request.environment) else { return Ok(None) };
         let bytes = request.size[0] * request.size[1] * if shader.grey { 4 } else { 16 };
-        let limit = ((self.memory_budget_bytes)() / 32).min(512 << 20) as usize;
+        let limit = self.pixel_cache_limit();
+        // A lowered host budget also applies to the outputs cached before it
+        self.pixels.lock().unwrap_or_else(PoisonError::into_inner).trim(limit);
         let key = (bytes <= limit && !request.cancel.is_cancelled()).then(|| self.pixel_key(&request, &shader)).flatten();
         if let Some(key) = key
             && let Some(cached) = self.pixels.lock().unwrap_or_else(PoisonError::into_inner).get(key)
@@ -537,7 +551,8 @@ impl Accelerator for GraphAccelerator {
             }
             Ok(Some(output)) => {
                 if let Some(key) = key {
-                    self.pixels.lock().unwrap_or_else(PoisonError::into_inner).put(key, bytes, &output, limit);
+                    // The budget may have been lowered while the job ran
+                    self.pixels.lock().unwrap_or_else(PoisonError::into_inner).put(key, bytes, &output, self.pixel_cache_limit());
                 }
                 Ok(Some(output))
             }
@@ -730,6 +745,26 @@ mod tests {
         let expected = Grey::from_fn(128, 1024, |u, v| program.run(&environment, [f64::from(u), f64::from(v)]).unwrap().as_f32());
         assert_eq!((pixels.w, pixels.h, pixels.px.len()), (expected.w, expected.h, expected.px.len()));
         assert!(expected.px.iter().zip(pixels.px).all(|(&a, b)| (a - b).abs() < 2e-6));
+    }
+
+    #[test]
+    fn a_lowered_budget_shrinks_the_pixel_cache_it_already_filled() {
+        static BUDGET_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(4 << 30);
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        let backend = GraphAccelerator::new(&gpu.device, &gpu.queue, || BUDGET_BYTES.load(std::sync::atomic::Ordering::Relaxed));
+        let graph = Graph::parse("size 256\nsubgraph example\nmeta kind \"function\"\nmeta float32 \"1\"\nnode 1 f_pos\nnode 2 f_swizzle a=@1 mask=\"x\"\nnode 3 f_out in=@2\nend\nnode 1 pixel_processor fn=\"example\"\noutput out 1\n").unwrap();
+        let program = compile_named(&graph.subgraphs, "example").unwrap();
+        let environment = FnEnv::new([256.0, 256.0]);
+        let cancel = Cancel::new();
+        let request = || PixelRequest { program: &program, environment: &environment, size: [256, 256], cancel: &cancel };
+        assert!(backend.pixel(request()).unwrap().is_some());
+        let cached_bytes = || backend.pixels.lock().unwrap().bytes;
+        assert!(cached_bytes() > 0, "a 256 KiB output fits the cache of a 4 GiB budget");
+
+        BUDGET_BYTES.store(1 << 20, std::sync::atomic::Ordering::Relaxed);
+        backend.pixel(request()).unwrap();
+
+        assert!(cached_bytes() <= backend.pixel_cache_limit(), "{} cached bytes over the lowered limit", cached_bytes());
     }
 
     #[test]
