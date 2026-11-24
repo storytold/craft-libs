@@ -85,6 +85,19 @@ pub enum NumberLook {
     Inline,
 }
 
+/// How many decimals a number field without a codec, fixed or maximum decimals of its own shows. An app sets it once
+/// at its root (`RootEnv::values`); the default is the standard precision.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum NumberPrecision {
+    /// A percentage reads one decimal, written in full ("100.0%"); other numbers their unit kind's decimals.
+    #[default]
+    Standard,
+    /// A percentage reads whole ("60%"): a drawing app's opacity and scale.
+    Measured,
+}
+
 /// The placeholder of a mixed field.
 const BLANK: &str = "\u{2014}";
 
@@ -207,6 +220,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     scale: f64,
     /// The scope's look, read from the env in measure and parts.
     look: NumberLook,
+    /// The scope's precision, read from the env in measure and parts.
+    precision: NumberPrecision,
     options: TextOptions,
     positive_only: bool,
     scrub: bool,
@@ -286,6 +301,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             lengths: None,
             scale: 1.0,
             look: NumberLook::Centred,
+            precision: NumberPrecision::Standard,
             options: TextOptions::default(),
             positive_only: false,
             scrub: false,
@@ -344,10 +360,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Rule::new(range.as_ref(), self.step)
     }
 
-    /// Reads the scope's look and a length field's scale from stored to shown from the env. The status bar's zoom
+    /// Reads the scope's look and precision and a length field's scale from stored to shown from the env. The status bar's zoom
     /// well keeps its own look.
     fn settle(&mut self, env: &EnvView<'_>) {
         self.look = if self.status_zoom { NumberLook::Centred } else { env.get() };
+        self.precision = env.get();
         if let Some(lengths) = self.lengths {
             self.scale = env.units().length_scale(lengths).unwrap_or(1.0);
         }
@@ -423,7 +440,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
-    /// Whether the field counts percent: it shows one decimal and its sign right after the number.
+    /// Whether the field counts percent: it writes its precision's decimals in full, its sign right after the number.
     fn is_percent(&self) -> bool {
         self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
     }
@@ -450,8 +467,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     fn shown_decimals(&self) -> RangeInclusive<usize> {
         match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
             (Some(codec), _, _, _) => 0..=codec.decimals(),
-            // A percentage reads "100.0%": one decimal, written in full.
-            (None, _, _, Some(UnitKind::Percent)) => 1..=1,
+            // A percentage reads "100.0%": one decimal, written in full; whole at the measured precision.
+            (None, _, _, Some(UnitKind::Percent)) => match self.precision {
+                NumberPrecision::Standard => 1..=1,
+                NumberPrecision::Measured => 0..=0,
+            },
             (None, Some(fixed), _, _) => fixed..=fixed,
             (None, None, Some(max), _) => 0..=max.min(12),
             (None, None, None, Some(kind)) => kind.decimals(),

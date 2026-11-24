@@ -1,10 +1,11 @@
-//! The number field's inline look (`NumberLook::Inline`): the number and its unit are one run of the text part, so
-//! editing reaches the unit's text as it reaches the number's.
+//! The number field's looks an app sets at its root: the inline look (`NumberLook::Inline`), where the number and its
+//! unit are one run of the text part, so editing reaches the unit's text as it reaches the number's; and the measured
+//! precision (`NumberPrecision::Measured`).
 
 use craft_ui::contract::{Bind, Props as _, Show as _};
 use craft_ui::runtime::env::{LengthUnits, UnitKind};
 use craft_ui::testing::{Fixture, trial};
-use craft_ui::text::{NumberField, NumberLook};
+use craft_ui::text::{NumberField, NumberLook, NumberPrecision};
 use egui::{Id, Key, Modifiers, Rect};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -69,4 +70,23 @@ fn an_inline_field_edits_its_whole_run_and_commits_the_number() {
     fixture.key(Key::Enter, Modifiers::NONE);
     fixture.settle();
     assert_eq!(value.get(), Some(46.0), "the number edited inside the run commits without its unit");
+}
+
+/// At the measured precision a percentage reads whole where the standard precision writes one decimal: the same
+/// field shows fewer digits.
+#[trial]
+fn a_percent_at_the_measured_precision_reads_whole() {
+    let number = |precision: Option<NumberPrecision>| {
+        let mut fixture = Fixture::new(|ui| {
+            NumberField::new("Opacity", Bind::bound(&mut Some(60.0f64))).unit_kind(UnitKind::Percent).range(0.0..=100.0).show(ui);
+        });
+        if let Some(precision) = precision {
+            fixture.root_value(precision);
+        }
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).find(|text| text.starts_with("60")).unwrap_or_default()
+    };
+    let (standard, measured) = (number(None), number(Some(NumberPrecision::Measured)));
+    assert!(standard.starts_with("60") && measured.starts_with("60"), "both show the value: {standard:?} {measured:?}");
+    assert!(measured.len() < standard.len() && !measured.contains(['.', ',']), "the measured percent is whole: {measured:?}, standard {standard:?}");
 }

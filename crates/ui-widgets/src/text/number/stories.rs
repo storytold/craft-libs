@@ -1,6 +1,6 @@
 //! Stories of `NumberField`.
 
-use super::{NamedOr, NumberField, NumberLook, NumberName, NumberPick, StepArrows, UnitPlacement};
+use super::{NamedOr, NumberField, NumberLook, NumberName, NumberPick, NumberPrecision, StepArrows, UnitPlacement};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -254,4 +254,26 @@ fn focus_first(fixture: &mut Fixture) {
 #[story(NumberField<'static>, covers = [], drive = Drive::Custom(focus_first), title = "Inline unit, focused")]
 fn number_field_inline_focused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     inline_fields(ui, data)
+}
+
+/// Fields at the measured precision ([`NumberPrecision::Measured`]): a percentage reads whole.
+#[story(NumberField<'static>, covers = [], drive = Drive::Never, title = "Measured precision")]
+fn number_field_measured(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let out = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(NumberPrecision::Measured);
+        },
+        |ui| {
+            FieldGroup::new("Measured precision")
+                .show(ui, |ui, _| {
+                    let first = row("Percent").show(ui, |ui, _| {
+                        NumberField::new("Opacity", data.bind("opacity", Some(60.0))).range(RANGE).unit_kind(UnitKind::Percent).show(ui).edit
+                    });
+                    first.inner
+                })
+                .inner
+        },
+    );
+    out.flatten().map(StoryOutput::from).unwrap_or_default()
 }
