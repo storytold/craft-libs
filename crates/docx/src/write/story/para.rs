@@ -213,29 +213,18 @@ impl Writer<'_> {
                 i += 1;
                 continue;
             }
-            // Hyperlinks with different ScreenTips stay separate even if their target is shared.
+            // Hyperlinks with different ScreenTips or history flags stay separate even if their target is shared.
             let link = props
                 .link
                 .as_deref()
                 .filter(|target| !target.is_empty())
-                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)));
+                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip), props.link_history));
             if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
                 }
-                if let Some((link, tip)) = link {
-                    let id;
-                    let target = if let Some(anchor) = link.strip_prefix('#') {
-                        ("w:anchor", anchor)
-                    } else {
-                        id = rels.add(rt::HYPERLINK, link, true);
-                        ("r:id", id.as_str())
-                    };
-                    if let Some(tip) = tip {
-                        w.open("w:hyperlink", &[target, ("w:history", "1"), ("w:tooltip", tip)]);
-                    } else {
-                        w.open("w:hyperlink", &[target, ("w:history", "1")]);
-                    }
+                if let Some((link, tip, history)) = link {
+                    open_hyperlink(w, rels, link, history, tip);
                 }
                 open_link = link;
             }
@@ -362,4 +351,18 @@ impl Writer<'_> {
             }
         }
     }
+}
+
+fn open_hyperlink(w: &mut W, rels: &mut PartRels, link: &str, history: Option<bool>, tip: Option<&str>) {
+    let id;
+    let target = if let Some(anchor) = link.strip_prefix('#') {
+        ("w:anchor", anchor)
+    } else {
+        id = rels.add(rt::HYPERLINK, link, true);
+        ("r:id", id.as_str())
+    };
+    let history = history.map(|h| ("w:history", if h { "1" } else { "0" }));
+    let tip = tip.map(|t| ("w:tooltip", t));
+    let attrs: Vec<(&str, &str)> = [Some(target), history, tip].into_iter().flatten().collect();
+    w.open("w:hyperlink", &attrs);
 }
