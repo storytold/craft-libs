@@ -5,8 +5,8 @@ name = "icon-trial-fixed-tint"
 kind = "marker"
 rule = "raw-colour/const"
 path = "crates/ui-contract/src/testing/icon_trials.rs"
-reason = "A fixed layer keeps the colours it is drawn in: the trial expects the white tint that leaves them unchanged."
-count = 3
+reason = "A fixed layer keeps the colours it is drawn in: the trials expect the white tint that leaves them unchanged, and an icon's fill keeps its colour under it."
+count = 4
 
 [[exception]]
 name = "face-runs-text-size"

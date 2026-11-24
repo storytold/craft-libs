@@ -406,6 +406,47 @@ fn a_space_between_child_leaves_room_for_the_siblings_after_it() {
     assert!(first.width() >= WORD - SLACK, "the wrapping row asked for its one-line width as its least: {dump}");
 }
 
+/// The children of a wrapping `Row` stand on the line they wrap onto: one-line children sit at the middle of their
+/// line, a child of more than one line at its top, and each line is as tall as its tallest child, also in the frames
+/// that reuse the row's measurement. The row is sized from its content, so its real run is narrower than its
+/// measuring run's room.
+#[trial]
+fn a_wrapping_row_sets_its_children_on_the_middle_of_their_line() {
+    const SIZES: [Vec2; 5] = [ITEM, Vec2::new(40.0, 30.0), ITEM, Vec2::new(40.0, 40.0), ITEM];
+    let seen: Rc<[RefCell<Seen>; 7]> = Rc::new(Default::default());
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new().layout(BodyLayout::row().wrap(true)).id_salt("wrapping").show(ui, |ui, _| {
+            for (i, size) in SIZES.iter().take(3).enumerate() {
+                Probe::new(&shown[i]).size(*size).id_salt(i).show(ui);
+            }
+            // A column of two lines: it starts the second line.
+            Panel::new().layout(BodyLayout::Stack).id_salt("column").show(ui, |ui, _| {
+                Probe::new(&shown[5]).size(ITEM).id_salt("upper").show(ui);
+                Probe::new(&shown[6]).size(ITEM).id_salt("lower").show(ui);
+            });
+            for (i, size) in SIZES.iter().enumerate().skip(3) {
+                Probe::new(&shown[i]).size(*size).id_salt(i).show(ui);
+            }
+        });
+    });
+    fixture.room(Vec2::new(150.0, 400.0)).settle();
+    let rects = || seen.each_ref().map(|seen| seen.borrow().rect);
+    let settled = rects();
+    let [first, tall, third, taller, last, upper, lower] = settled;
+    let dump = format!("{settled:?}");
+    assert!(
+        (first.center().y - tall.center().y).abs() < SLACK && (third.center().y - tall.center().y).abs() < SLACK,
+        "the first line's one-line children share its middle: {dump}"
+    );
+    assert!(upper.min.x < tall.min.x && upper.top() >= tall.bottom() - SLACK, "the column wraps onto the second line: {dump}");
+    assert!((upper.top() - taller.top()).abs() < SLACK && lower.bottom() < taller.bottom(), "the column sits at the top of its line: {dump}");
+    assert!((last.center().y - taller.center().y).abs() < SLACK, "the second line's one-line children share its middle: {dump}");
+    assert!(upper.top() - tall.bottom() < ITEM.y, "the first line is as tall as its tallest child: {dump}");
+    fixture.idle(3);
+    assert_eq!(rects(), settled, "the frames that reuse the measurement set the children on the same lines");
+}
+
 /// A container whose body is the caller's closure and whose end region holds a probe that records into `end`.
 #[derive(Component)]
 #[component(container)]

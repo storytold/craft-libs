@@ -88,7 +88,7 @@ impl Outcome for BarOutput {
 /// left-to-right. A select in a bar fits its widest entry, up to a field length. A rule between groups of members is a
 /// `Divider::vertical()`; it shows only with the member after it. A bar with `commit_cancel` ends with a
 /// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
-/// members' line; they run `BarCommands`.
+/// members' line; they run `BarCommands`. A bar made [`wrap`](Bar::wrap) continues on a new line instead of scrolling.
 ///
 /// The bar is a plain container; its members are the host's. A host memoizes them with a `MemoView` inside the body
 /// closure, over props that hold what the members read (`BarItem`, `StatusMessage`, `StatusProgress` and the other
@@ -152,11 +152,36 @@ impl<'a> Bar<'a> {
         self
     }
 
+    /// Lays out the members as a row that wraps instead of scrolling under an overlay bar: no horizontal scroll, no row
+    /// cap; a member wider than the bar narrows and elides by the shared rules.
+    #[must_use]
+    pub fn wrap(mut self) -> Self {
+        self.props.layout = self.props.layout.clone().wrap(true);
+        self.props.scroll = None;
+        self
+    }
+
     /// Makes each member its own Tab stop, in reading order, as media controls are; the arrows no longer move between
     /// them.
     #[must_use]
     pub fn tab_stops(mut self) -> Self {
         self.props.roving = None;
+        self
+    }
+
+    /// Makes the bar compact: its members at the small control size and a tight pad around them, as a small floating
+    /// action bar beside an edit (PdfCraft's text box Done and Discard).
+    #[must_use]
+    pub fn compact(mut self) -> Self {
+        self.props = self.props.child_size(ControlSize::Sm).pad(Pad::Tight);
+        self
+    }
+
+    /// Spaces the members `gap` apart in place of the kind's spacing: a canvas's task bar can set its members the bar's
+    /// control gap (`Gap::Item`) apart.
+    #[must_use]
+    pub fn gap(mut self, gap: Gap) -> Self {
+        self.props = self.props.body_gap(gap);
         self
     }
 

@@ -148,10 +148,10 @@ fn focused(comma: bool, beside: bool) -> (Fixture, Kept) {
     (fixture, kept)
 }
 
-/// The field's text.
+/// The field's text: its text runs, which the node's value reads with the unit after it.
 fn text(fixture: &Fixture) -> String {
     let field = fixture.by_label(ZOOM).expect("the zoom field");
-    fixture.tree().value_of(field.node).unwrap_or_default().to_owned()
+    fixture.tree().run_texts_of(field.node).concat()
 }
 
 /// How an entry reaches the field.
@@ -163,6 +163,26 @@ enum Input {
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
+}
+
+#[trial]
+fn zero_zoom_keeps_the_previous_view() {
+    let (mut fixture, kept) = focused(false, false);
+    let before = kept.zoom();
+    fixture.type_text("0");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(close(kept.zoom(), before), "zero must not change the zoom: {}", kept.zoom());
+}
+
+#[trial]
+fn negative_zoom_keeps_the_previous_view() {
+    let (mut fixture, kept) = focused(false, false);
+    let before = kept.zoom();
+    fixture.type_text("-5");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(close(kept.zoom(), before), "a negative zoom must not change the view: {}", kept.zoom());
 }
 
 /// The field reads digits, `/` as a ratio and one decimal separator of the locale; it drops every other character
@@ -312,4 +332,45 @@ fn cut_copy_and_delete_with_a_caret_never_reach_the_app() {
     fixture.settle();
     assert_eq!(text(&fixture), "", "with a selection, Cmd+X cuts the field's text");
     assert_eq!(app_edits_fired(&fixture), Vec::<String>::new(), "and the app's Cut stays unfired");
+}
+
+/// A host with a narrow fixed slot can keep the zoom field and its editable text inside it.
+#[trial]
+fn zoom_field_fits_a_narrow_host_slot() {
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let held = slot.clone();
+    let kept = Kept::new();
+    let app = kept.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(40.0, 24.0), egui::Sense::hover());
+        held.set(rect);
+        let out = ZoomField::new(ZOOM, Some(app.view.get()), DOCUMENT).show_at(ui, rect);
+        if let Some(view) = out.view.committed() {
+            app.view.set(*view);
+        }
+    });
+    fixture.settle();
+    let field = fixture.by_label(ZOOM).expect("the zoom field");
+    assert!(slot.get().contains_rect(field.rect), "zoom field {:?} fits its host slot {:?}", field.rect, slot.get());
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text("200");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!((kept.zoom() - 200.0).abs() < 0.01, "the field remains editable");
+}
+
+/// A rail-width field shows all of a three-digit zoom and its percent sign.
+#[trial]
+fn rail_width_zoom_shows_its_whole_value() {
+    let mut fixture = Fixture::new(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(40.0, 30.0), egui::Sense::hover());
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), 2.44);
+        ZoomField::new(ZOOM, Some(view), DOCUMENT).show_at(ui, rect);
+    });
+    fixture.settle();
+    for text in ["244", "%"] {
+        let run = fixture.texts().iter().find(|run| run.text == text).expect("the zoom value is painted");
+        assert!(!run.elided && run.clip.contains_rect(run.rect), "{text} must be visible: {run:?}");
+    }
 }

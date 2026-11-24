@@ -1,7 +1,7 @@
 //! The full-window parts' own logic: the view's fit and zoom rules, the wheel zoom, Escape on a focused canvas, the
 //! close of the dialog's own window and the mapped overlay.
 
-use craft_behavior::PixelSize;
+use craft_behavior::{PixelSize, ZoomScheme};
 use craft_ui::canvas::ViewCommands;
 use craft_ui::dialog::FullWindowView;
 use craft_ui::testing::trial;
@@ -20,7 +20,7 @@ const SCALE: f32 = 1.0;
 const SAME: f64 = 1e-6;
 
 fn fitted() -> FullWindowView {
-    FullWindowView::new().settled(Rect::from_min_size(Pos2::ZERO, CANVAS), IMAGE, SCALE)
+    FullWindowView::new().settled(Rect::from_min_size(Pos2::ZERO, CANVAS), IMAGE, SCALE, &ZoomScheme::PHOTOSHOP)
 }
 
 #[trial]
@@ -32,17 +32,17 @@ fn a_zoom_command_ends_the_fit_and_fit_returns_to_it() {
     assert!(!view.apply(ViewCommands::FitOnScreen), "fitting a fitted view changes nothing");
     assert!(view.apply(ViewCommands::ZoomIn));
     assert!(!view.is_fit() && view.device_zoom() > fit);
-    let kept = view.settled(rect, IMAGE, SCALE);
+    let kept = view.settled(rect, IMAGE, SCALE, &ZoomScheme::PHOTOSHOP);
     assert!((kept.device_zoom() - view.device_zoom()).abs() < SAME, "a view that does not fit keeps its zoom when settled");
     assert!(view.apply(ViewCommands::FitOnScreen));
-    assert!((view.settled(rect, IMAGE, SCALE).device_zoom() - fit).abs() < SAME, "settling a fitted view fits again");
+    assert!((view.settled(rect, IMAGE, SCALE, &ZoomScheme::PHOTOSHOP).device_zoom() - fit).abs() < SAME, "settling a fitted view fits again");
 }
 
 /// The canvas's navigation: the wheel, the middle button and the Hand tool it falls back to.
 pub(crate) mod canvas_navigation {
     use craft_behavior::PixelSize;
     use craft_behavior::kurbo::Point;
-    use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource};
+    use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource, WheelScheme};
     use craft_ui::contract::Bind;
     use craft_ui::dialog::{FullWindowCanvas, FullWindowView};
     use craft_ui::primitives::Revision;
@@ -112,7 +112,7 @@ pub(crate) mod canvas_navigation {
         assert_eq!(plain.zoom(), fitted, "the plain wheel does not zoom by default");
 
         let mut navigation = NavigationOptions::default();
-        navigation.zoom_with_wheel = true;
+        navigation.wheel = WheelScheme::Zoom;
         navigation.animated_zoom = false;
         // Overscroll on: the fit leaves room around the image, and with Overscroll off an image still smaller than the
         // canvas after one notch is centred again, whatever the pointer.

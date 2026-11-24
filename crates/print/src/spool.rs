@@ -95,7 +95,9 @@ impl Spool {
     #[cfg(feature = "ui")]
     pub fn discoverer(&self) -> crate::ui::Discover {
         let spool = self.clone();
-        Box::new(move || spool.listed(|printer| crate::ui::Printer { name: printer.name, label: printer.description, default: printer.default }))
+        Box::new(move || {
+            spool.listed(|printer| crate::ui::Printer { name: printer.name, label: printer.description, default: printer.default, own_dialog: None })
+        })
     }
 
     /// Asks the backend for its printers in a job and sends them through `map`; a platform that

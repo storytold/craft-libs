@@ -35,6 +35,8 @@ pub(crate) struct FontSampleStyle {
 pub(crate) enum SampleFace<'a> {
     /// A face of `catalog`, which the document-face registry loads when the sample is measured or painted.
     Face { catalog: &'a Arc<Catalog>, owner: Owner, face: &'a FaceInfo },
+    /// A face the host gives, ready as it is (a host row of the picker).
+    Font(&'a FontRef),
     /// No face is here to draw with: the sample keeps its band and shows nothing.
     Missing,
 }
@@ -49,6 +51,7 @@ impl SampleFace<'_> {
                 Shown::Ready(font) => Some(font),
                 _ => None,
             },
+            SampleFace::Font(font) => Some((*font).clone()),
             SampleFace::Missing => None,
         }
     }
@@ -71,6 +74,9 @@ pub(crate) struct FontSample<'a> {
     text: Cow<'a, str>,
     face: SampleFace<'a>,
     points: f32,
+    /// Black type on a white paper over the whole rect, in every theme (`FontPickerSettings::samples_on_white`).
+    #[prop]
+    on_white: bool,
     /// The height of the band the sample is set in, from the caller's sizes (a list row's thumbnail side), instead of
     /// [`LINE_EM`] of its size.
     #[prop(quantity = "band height the caller's layout gives, in points")]
@@ -80,7 +86,7 @@ pub(crate) struct FontSample<'a> {
 impl<'a> FontSample<'a> {
     /// A sample of `text` in `face` at `points`, named `label`.
     pub(crate) fn new(label: impl Into<Label>, text: impl Into<Cow<'a, str>>, face: SampleFace<'a>, points: f32) -> Self {
-        FontSample { common: Common::new(), text: text.into(), face, points, band: None }.label(label)
+        FontSample { common: Common::new(), text: text.into(), face, points, on_white: false, band: None }.label(label)
     }
 }
 
@@ -112,9 +118,10 @@ impl Component for FontSample<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let painter = ui.content_painter(cx);
+        let ink = faces::sample_ink(&painter, cx.rect, self.on_white, cx.style.ink.egui());
         if let Some(font) = self.face.ready(cx) {
-            let ink = DataColor::new(cx.style.ink.egui());
-            faces::paint_sample(&ui.content_painter(cx), cx.content_rect, &font, &self.text, self.points, ink);
+            faces::paint_sample(&painter, cx.content_rect, &font, &self.text, self.points, ink);
         }
     }
 

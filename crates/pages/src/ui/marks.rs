@@ -1,6 +1,7 @@
 //! `TextFrameMarks`: InDesign's View > Show Hidden Characters and Extras over text frames, a canvas control that only
 //! paints (it has no parts, so a press never lands on it). Hidden characters: · spaces, » tabs, ¬ forced line breaks,
-//! ° no-break spaces, ¶ paragraph ends, # the end of a story. Extras: the overset mark (a red + in the out port) on a
+//! ° no-break spaces, ˚ narrow no-break spaces, ˈ spaces of a set width, ¬ discretionary hyphens, ¶ paragraph ends, #
+//! the end of a story. Extras: the overset mark (a red + in the out port) on a
 //! frame whose story does not fit, and frame outlines with their in and out ports.
 
 #[cfg(feature = "suite")]
@@ -42,6 +43,12 @@ pub enum HiddenMark {
     ParagraphEnd,
     /// #.
     StoryEnd,
+    /// ˚ (centred on the space).
+    NarrowNoBreakSpace,
+    /// ˈ (centred on the space).
+    FixedSpace,
+    /// ¬ (the discretionary hyphen's mark).
+    DiscretionaryHyphen,
 }
 
 impl HiddenMark {
@@ -54,6 +61,9 @@ impl HiddenMark {
             HiddenMark::NoBreakSpace => "°",
             HiddenMark::ParagraphEnd => "¶",
             HiddenMark::StoryEnd => "#",
+            HiddenMark::NarrowNoBreakSpace => "˚",
+            HiddenMark::FixedSpace => "ˈ",
+            HiddenMark::DiscretionaryHyphen => "¬",
         }
     }
 
@@ -64,13 +74,31 @@ impl HiddenMark {
             '\t' => Some(HiddenMark::Tab),
             '\u{2028}' => Some(HiddenMark::LineBreak),
             '\u{A0}' => Some(HiddenMark::NoBreakSpace),
+            '\u{202F}' => Some(HiddenMark::NarrowNoBreakSpace),
+            '\u{2000}'..='\u{200A}' | '\u{205F}' | '\u{3000}' => Some(HiddenMark::FixedSpace),
+            '\u{00AD}' => Some(HiddenMark::DiscretionaryHyphen),
             _ => None,
         }
     }
 }
 
-/// One mark to draw, in frame points: where it sits on the baseline, whether it is centred on that x (spaces) or starts
-/// at it, and the line's ascent (its size follows the text's).
+/// How a mark sits on the point it is placed at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarkAnchor {
+    /// The mark starts at the point.
+    #[default]
+    Start,
+    /// The mark is centred on the point (spaces centre on their advance).
+    Centre,
+    /// The mark ends at the point (right-to-left text).
+    End,
+    /// The mark hangs from the point (vertical text).
+    Top,
+}
+
+/// One mark to draw, in frame points: where it sits on the baseline, how it is anchored there, and the line's ascent
+/// (its size follows the text's).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PlacedMark {
@@ -78,16 +106,16 @@ pub struct PlacedMark {
     pub mark: HiddenMark,
     /// Where the mark sits on the baseline, in frame points.
     pub at: Point,
-    /// Whether the mark is centred on `at.x` (spaces) or starts at it.
-    pub centred: bool,
+    /// How the mark is anchored at `at`.
+    pub anchor: MarkAnchor,
     /// The ascent of the line the mark is on, points.
     pub ascent: f64,
 }
 
 impl PlacedMark {
-    /// A `mark` on the baseline at `at`, centred on it or starting at it, on a line of `ascent`.
-    pub fn new(mark: HiddenMark, at: Point, centred: bool, ascent: f64) -> Self {
-        PlacedMark { mark, at, centred, ascent }
+    /// A `mark` on the baseline at `at`, anchored there as `anchor` says, on a line of `ascent`.
+    pub fn new(mark: HiddenMark, at: Point, anchor: MarkAnchor, ascent: f64) -> Self {
+        PlacedMark { mark, at, anchor, ascent }
     }
 }
 
@@ -214,8 +242,13 @@ impl Component for TextFrameMarks<'_> {
             let size = (placed.ascent as f32 * MARK_SHARE * zoom).clamp(*MARK_SIZES.start(), *MARK_SIZES.end());
             let run = [DocRun::new(placed.mark.glyph(), FontRef::proportional(), size, self.color)];
             let at = self.view.to_screen(placed.at);
-            let left = if placed.centred { at.x - size / 2.0 } else { at.x };
-            let room = egui::Rect::from_min_size(Pos2::new(left, at.y - size), Vec2::splat(size));
+            let (left, top) = match placed.anchor {
+                MarkAnchor::Centre => (at.x - size / 2.0, at.y - size),
+                MarkAnchor::End => (at.x - size, at.y - size),
+                MarkAnchor::Top => (at.x, at.y),
+                _ => (at.x, at.y - size),
+            };
+            let room = egui::Rect::from_min_size(Pos2::new(left, top), Vec2::splat(size));
             draw.doc(room, &DocText::new(&run));
         }
         for frame in self.frames {

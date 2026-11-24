@@ -8,9 +8,11 @@ pub mod group;
 pub(crate) mod hit;
 pub(crate) mod inside;
 pub mod kit;
+pub(crate) mod link;
 pub(crate) mod reach;
 pub(crate) mod reset;
 pub(crate) mod scheme;
+pub(crate) mod scrub_drags;
 pub(crate) mod short;
 pub(crate) mod tooltip;
 

@@ -217,7 +217,8 @@ impl<'a, P: Clone + Eq + Hash> DeleteWorkspaceDialog<'a, P> {
 }
 
 /// A [`NewWorkspaceDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns, over a copy of the workspace set. It
-/// answers with the [`NewWorkspace`] at OK.
+/// answers with the [`NewWorkspace`] at OK. It opens with its [`value`](HostedNewWorkspace::value): an empty name with
+/// every box off unless the app gives one.
 pub struct HostedNewWorkspace<P> {
     id: DialogId,
     set: WorkspaceSet<P>,
@@ -251,6 +252,13 @@ impl<P: Clone> HostedNewWorkspace<P> {
     #[must_use]
     pub fn offered(mut self, keeps: WorkspaceKeeps) -> Self {
         self.offered = keeps;
+        self
+    }
+
+    /// The name and captures the dialog opens with; without it, `NewWorkspace::default()`.
+    #[must_use]
+    pub fn value(mut self, value: NewWorkspace) -> Self {
+        self.value = value;
         self
     }
 }

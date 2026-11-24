@@ -3,11 +3,26 @@
 use craft_behavior::fit::{TabFit, fit, fit_whole};
 use craft_host::target::Os;
 
+/// The look of document tabs ([`TabKind::Document`]) app-wide. An app sets it once at its root (`RootEnv::values`);
+/// the strip and its tabs read it from the env.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum DocumentTabLook {
+    /// Whole titles side by side, a `*` after a modified tab's text.
+    #[default]
+    Whole,
+    /// PdfCraft's tabs: they shrink before they overflow (a name at most 22 digits wide, at its least a readable
+    /// prefix), stand the inline gap apart, and a modified tab shows the marker dot in place of the `*`.
+    Shrinking,
+}
+
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TabKind {
-    /// Document tabs: whole titles, a close button on every closable tab, every document in the overflow menu.
+    /// Document tabs: whole titles, a close button on every closable tab, every document in the overflow menu. An app
+    /// may give them PdfCraft's look ([`DocumentTabLook::Shrinking`]).
     #[default]
     Document,
     /// Panel tabs: tabs shrink before they overflow, no close button, only the hidden tabs in the overflow menu.
@@ -76,6 +91,17 @@ impl TabKind {
         }
     }
 
+    /// How tab widths are fitted under the app's document tab look: [`DocumentTabLook::Shrinking`] shrinks document
+    /// tabs as panel tabs do; every other kind and look is [`TabKind::fit_mode`].
+    pub fn fit_mode_in(self, look: DocumentTabLook) -> FitMode {
+        if self.shrinks_in(look) { FitMode::Shrink { keep_selected: self.keeps_active_width() } } else { self.fit_mode() }
+    }
+
+    /// Whether these are document tabs under [`DocumentTabLook::Shrinking`].
+    pub fn shrinks_in(self, look: DocumentTabLook) -> bool {
+        self == Self::Document && look == DocumentTabLook::Shrinking
+    }
+
     /// Whether the shown tab keeps its whole title while the other tabs shrink: panel tabs.
     pub fn keeps_active_width(self) -> bool {
         self == Self::Panel
@@ -122,6 +148,12 @@ impl TabKind {
     /// Whether a middle click closes a closable tab.
     pub fn middle_click_closes(self) -> bool {
         self == Self::Document
+    }
+
+    /// Whether only a primary press shows a tab: a secondary click on a document tab opens its menu and a middle click
+    /// closes it, and neither shows it.
+    pub const fn primary_shows(self) -> bool {
+        matches!(self, Self::Document)
     }
 
     /// Whether a drag resting over an unselected tab selects it.

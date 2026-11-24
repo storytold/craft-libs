@@ -4,7 +4,7 @@ use crate::runtime::access::{FieldLabel, scope};
 use egui::{Context, Id};
 
 pub use crate::runtime::access::layer_root;
-pub use crate::runtime::egui::access::{AccessTree, Declared, NodeKey, prune_controls};
+pub use crate::runtime::egui::access::{AccessTree, Declared, NodeKey, is_interactive, name, prune_controls};
 
 /// The AccessKit tree a finished pass of a viewport produced, taken out of its output; empty when it made none.
 pub fn tree_of(output: &mut crate::runtime::egui::fixture::FullOutput) -> AccessTree {
@@ -20,20 +20,6 @@ pub fn begin_label_scope(ctx: &Context, container: Id, label: FieldLabel) {
 /// The node AccessKit reports as focused.
 pub fn focused_key(tree: &AccessTree) -> NodeKey {
     tree.focused_key()
-}
-
-/// Whether the node declares an action a user can take: focus, click or a value change.
-pub fn is_interactive(tree: &AccessTree, key: NodeKey) -> bool {
-    [Declared::Focus, Declared::Click, Declared::Increment, Declared::Decrement, Declared::SetValue, Declared::Expand, Declared::Collapse]
-        .into_iter()
-        .any(|action| tree.declares_key(key, action))
-}
-
-/// The accessible name of the node, when it has a non-empty one: its own, else the first non-empty name of the nodes
-/// that label it (`labelled_by`).
-pub fn name(tree: &AccessTree, key: NodeKey) -> Option<&str> {
-    let named = |key: NodeKey| tree.name_of(key).filter(|name| !name.trim().is_empty());
-    named(key).or_else(|| tree.labelled_by_key(key).into_iter().find_map(named))
 }
 
 /// The rule violations of a frame: interactive nodes with no name, and every finding the runtime's role rules

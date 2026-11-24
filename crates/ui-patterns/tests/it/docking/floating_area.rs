@@ -62,6 +62,8 @@ struct Bed {
     float_height: Rc<Cell<f32>>,
     /// The height above a floating window's body (`FloatSpace::chrome`), as the area reported it.
     chrome: Rc<Cell<f32>>,
+    /// The panel whose window the next pass asks to continue the held press, with its grab point.
+    hand_over: Rc<Cell<Option<(usize, Vec2)>>>,
 }
 
 fn bed(layout: Layout<usize>) -> Bed {
@@ -76,12 +78,18 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
     let chrome = Rc::new(Cell::new(0.0));
     let (held, seen_actions, shows_second, seen_height) = (Rc::clone(&workspace), Rc::clone(&actions), Rc::clone(&second), Rc::clone(&float_height));
     let seen_chrome = Rc::clone(&chrome);
+    let hand_over: Rc<Cell<Option<(usize, Vec2)>>> = Rc::default();
+    let asked = Rc::clone(&hand_over);
     let mut other = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![SECOND], 0)), Vec::new())));
     let specs = Tracked::new(Numbered);
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
         let mut panels = Panels;
-        let out = DockArea::new("Floating dock", Bind::bound(&mut workspace), &specs, &mut panels, config.clone()).show(ui);
+        let mut area = DockArea::new("Floating dock", Bind::bound(&mut workspace), &specs, &mut panels, config.clone());
+        if let Some((panel, grab)) = asked.take() {
+            area = area.continue_move((panel, grab));
+        }
+        let out = area.show(ui);
         *held.borrow_mut() = workspace;
         seen_actions.borrow_mut().extend(out.actions);
         if let Some(space) = out.float_space {
@@ -93,7 +101,7 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
         }
     });
     fixture.settle();
-    Bed { fixture, workspace, actions, second, float_height, chrome }
+    Bed { fixture, workspace, actions, second, float_height, chrome, hand_over }
 }
 
 /// A point on the floating window's title row, on its band: clear of the actions and the double arrow at its end.
@@ -219,6 +227,38 @@ fn a_dragged_floating_window_stands_under_the_pointer_in_each_frame_and_moves_on
     bed.fixture.settle();
     let rect = bed.workspace.borrow().layout().floating.first().map(|window| window.rect);
     assert!(rect.is_some_and(|rect| (rect.min - (WINDOW_AT.min + step * 4.0)).length() < SLACK), "the drop moves the window: {rect:?}");
+}
+
+/// A floating window the host asks to continue the held press takes it over from the tab it went down on: the window
+/// follows the pointer at the grab point with its dock drag running, and the release lands it. Asked for a panel no
+/// window holds, no window takes the press.
+#[trial]
+fn a_window_asked_to_continue_the_held_press_follows_the_pointer() {
+    let grab = Vec2::new(40.0, 12.0);
+    let follows = |panel: usize| {
+        let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))));
+        let tab = bed.fixture.by_role(Role::TAB).into_iter().find(|tab| !WINDOW_AT.contains(tab.center())).expect("the docked tab shows");
+        let from = tab.center();
+        bed.fixture.frame(vec![moved(from)]);
+        bed.fixture.frame(vec![press(from)]);
+        bed.hand_over.set(Some((panel, grab)));
+        bed.fixture.frame(Vec::new());
+        let to = from + Vec2::new(60.0, 120.0);
+        for step in 1..=4 {
+            bed.fixture.frame(vec![moved(from + (to - from) * (step as f32 / 4.0))]);
+        }
+        let follows = layer_rects(bed.fixture.ctx()).iter().any(|rect| (rect.min + grab - to).length() < SLACK);
+        (bed, follows, to)
+    };
+    let (mut bed, followed, to) = follows(WINDOW);
+    assert!(followed, "the window holds the pointer at its grab point: {:?}", layer_rects(bed.fixture.ctx()));
+    assert!(dragging(&bed), "the move runs the window's dock drag");
+    let before = bed.workspace.borrow().layout().clone();
+    bed.fixture.frame(vec![release(to)]).settle();
+    assert!(*bed.workspace.borrow().layout() != before, "the release lands the window: {:?}", bed.actions.borrow());
+
+    let (_, followed, _) = follows(DOCKED);
+    assert!(!followed, "no window holds the docked panel, so none takes the press");
 }
 
 /// A dock area's first pass leaves a drag running in another area alone.
@@ -700,4 +740,37 @@ fn a_settled_collapsed_window_runs_no_more_passes_than_an_expanded_one() {
     };
     let (collapsed, expanded) = (passes(collapsed_at(WINDOW_AT)), passes(with_window(None)));
     assert!(collapsed <= expanded, "a still frame runs {collapsed} passes collapsed, {expanded} expanded");
+}
+
+/// A floating window at the top of the area sits below the top inset (the notice bars it floats over), and goes back up
+/// when the inset does.
+#[trial]
+fn a_floating_window_clears_the_top_inset_and_follows_it() {
+    let inset = Rc::new(Cell::new(0.0_f32));
+    let seen = Rc::clone(&inset);
+    let layout = Layout::new(
+        Some(Node::tabs(vec![DOCKED], 0)),
+        vec![Floating::single(103, vec![WINDOW], 0, Rect::from_min_size(Pos2::new(130.0, 0.0), Vec2::new(200.0, 120.0)))],
+    );
+    let held = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
+    let (shown, specs) = (Rc::clone(&held), Tracked::new(Numbered));
+    let mut fixture = Fixture::new(move |ui| {
+        let given = shown.borrow().clone();
+        let mut panels = Panels;
+        let _ = DockArea::new("Inset dock", Bind::given(given), &specs, &mut panels, DockConfig::default()).top_inset(seen.get()).show(ui);
+    });
+    fixture.settle();
+    let window_top = |fixture: &Fixture| {
+        fixture.by_role(Role::TAB).iter().filter(|tab| tab.rect.left() >= 130.0).map(|tab| tab.rect.top()).fold(f32::INFINITY, f32::min)
+    };
+    let free = window_top(&fixture);
+    assert!(free < 60.0, "without an inset the window is at the top: {free}");
+    inset.set(60.0);
+    fixture.settle();
+    let clear = window_top(&fixture);
+    assert!(clear >= free + 59.0, "the window moves down by the 60 point inset: {free} to {clear}");
+    inset.set(0.0);
+    fixture.settle();
+    let back = window_top(&fixture);
+    assert!((back - free).abs() < 1.0, "the window goes back up when the notices close: {back}");
 }
