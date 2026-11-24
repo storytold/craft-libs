@@ -3,9 +3,10 @@
 use super::{CommandPalette, PaletteFace};
 use crate::buttons::Button;
 use crate::contract::{Bind, Show as _};
+use crate::list::CommandHighlight;
 use crate::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use crate::runtime::commands::{CommandRef, CommandState, CommandStates, EditCommands};
-use crate::runtime::env::{Label, WordTemplate};
+use crate::runtime::env::{Label, WordTemplate, with_env};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -162,4 +163,18 @@ fn command_palette_hidden_home(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 fn command_palette_many_results(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     // PLAN: the sheet has the story data type "a"; the query is the palette's own session memory, which story data cannot set.
     palette(ui, data, MANY.as_slice(), Vec::new())
+}
+
+/// The active row under `CommandHighlight::Hover`: the hover tint with the row's own ink, as an app sets it at its root
+/// for a quiet command highlight.
+#[story(CommandPalette<'static>, covers = [], drive = Drive::Never, title = "Hover highlight", commands = commands)]
+fn command_palette_hover_highlight(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let recents = [PhotoCraftCommand::Levels, PhotoCraftCommand::Brush].map(CommandRef::from).to_vec();
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(CommandHighlight::Hover);
+        },
+        |ui| palette(ui, data, ENTRIES.as_slice(), recents),
+    )
 }
