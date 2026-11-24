@@ -284,9 +284,7 @@ impl Collection for Probe<'_> {
             }
             // The probe field is no focus stop, so it asks for the focus a real text field keeps: a field that holds the focus
             // and then loses it ends the rename.
-            None => {
-                request(ui.ctx(), FocusTarget::Id(editor.response.id));
-            }
+            None => request(ui.ctx(), FocusTarget::Id(editor.response.id)),
         }
         editor.submitted = submitted;
         editor.submit_mods = mods;
@@ -295,16 +293,11 @@ impl Collection for Probe<'_> {
 }
 
 /// What a layer opened from a rename editor shows and where its editor stands.
+#[derive(Default)]
 struct Layered {
     open: Cell<bool>,
     editor: Cell<Id>,
     seen: RefCell<Seen>,
-}
-
-impl Layered {
-    fn new() -> Self {
-        Layered { open: Cell::new(false), editor: Cell::new(Id::NULL), seen: RefCell::new(Seen::default()) }
-    }
 }
 
 /// A popup layer that holds one focusable probe, opened from a rename editor.
@@ -853,7 +846,7 @@ fn a_rename_whose_item_leaves_the_source_ends_with_a_removed_cancel() {
 /// is no longer the focused stop, which is no blur, so the rename stays open until the layer is gone.
 #[trial]
 fn a_layer_opened_from_the_rename_editor_does_not_end_the_rename_as_a_blur() {
-    let (log, enter, layer) = (Log::new(), Cell::new(false), Layered::new());
+    let (log, enter, layer) = (Log::new(), Cell::new(false), Layered::default());
     let words = Words::flat(&["a", "b", "c"]);
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
