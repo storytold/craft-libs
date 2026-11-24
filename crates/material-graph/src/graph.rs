@@ -2014,6 +2014,11 @@ impl Graph {
         let mut seen = HashSet::new();
         order.retain(|i| seen.insert(*i));
         for id in order {
+            // already run (and thumbnailed) as an input of an earlier node of this call; its result was freed after its
+            // readers finished, so running it again would only compute and thumbnail the same node a second time
+            if cache.thumbs.as_ref().is_some_and(|t| t.contains_key(&id)) {
+                continue;
+            }
             match eval_node(self, id, &ctx, &[], &mut cache).and_then(|value| value.into_host(id, ec)) {
                 Ok(t) => {
                     if Some(id) == first || keep.contains(&id) {
