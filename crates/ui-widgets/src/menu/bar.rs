@@ -556,6 +556,7 @@ impl Component for MenuBar<'_> {
             let titles = &mut self.titles;
             let step = ui.show(popup, layer, |ui, _| {
                 Menu::inline(Label::from(name.clone()))
+                    .wraps(true)
                     .show(ui, |ui, menu| match slot {
                         Open::Title(at) => {
                             if let (Some(_), Some(rows), Some(entries)) =

@@ -10,7 +10,7 @@ use crate::contract::{
     TooltipSpec, Trigger,
 };
 use crate::display::Divider;
-use crate::runtime::env::{Env, Label, with_env};
+use crate::runtime::env::{Env, EnvValue, Label, with_env};
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
@@ -39,6 +39,18 @@ pub enum MenuStep {
     Prev,
     /// The Right key.
     Next,
+}
+
+/// Whether Up on a menu's first row and Down on its last continue at the other end: the menus of a menu bar do, as a
+/// window's menu bar does; a context menu, a button's menu, a value list and their submenus stop at their ends
+/// (photocraft#15227). A submenu takes it from the menu its row is in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
+pub(crate) struct MenuWraps(pub(crate) bool);
+
+impl EnvValue for MenuWraps {
+    fn root() -> Self {
+        MenuWraps(false)
+    }
 }
 
 /// What a menu returns: its response and how it closed in this pass.
@@ -192,7 +204,7 @@ impl<'a> Menu<'a> {
             .pad(POPUP_PAD)
             .body_gap(Gap::None)
             .least_width(LeastWidth::Popup)
-            .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))
+            .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical))
             .label_column(true)
             .scroll(Scroll::vertical().strips())
             .mount(Mount::Layer(layer(false)));
@@ -211,6 +223,15 @@ impl<'a> Menu<'a> {
         .label(label)
     }
 
+    /// Whether Up on the first row and Down on the last continue at the other end. Off by default: a context menu,
+    /// a button's menu and a value list stop at their ends. A menu bar turns it on for its menus, whose submenus
+    /// follow.
+    #[must_use]
+    pub fn wraps(mut self, wraps: bool) -> Self {
+        self.props.roving = self.props.roving.map(|roving| roving.wrap(wraps));
+        self
+    }
+
     /// Marks the menu as a value menu: every row is a radio item, whether or not an entry is checked, and the checked
     /// entry holds the lead when the menu opens.
     #[must_use]
@@ -225,7 +246,7 @@ impl<'a> Menu<'a> {
         let props = ContainerProps::new()
             .body_gap(Gap::None)
             .least_width(LeastWidth::Popup)
-            .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))
+            .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical))
             .label_column(true)
             .scroll(Scroll::vertical().strips());
         Menu {
@@ -287,10 +308,12 @@ impl<'a> Menu<'a> {
     /// submenu none of whose rows can run).
     pub fn submenu_row_enabled(ui: &mut Ui, label: impl Into<Label>, enabled: bool, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> MenuItemOutput {
         let label = label.into();
+        let wraps = Env::of(ui).get::<MenuWraps>().0;
         let head = MenuItem::submenu(label.clone()).enabled(enabled).show(ui);
         let mut open = head.submenu_open;
         let show = |ui: &mut Ui| {
             Menu::submenu(label, &head.response)
+                .wraps(wraps)
                 .id(head.response.id.with("submenu"))
                 .anchor(Anchor::Rect(head.frame))
                 .open(Bind::bound(&mut open))
@@ -402,6 +425,7 @@ impl Component for Menu<'_> {
     fn content_env(&self, cx: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
         level_env(cx, values, self.submenu, self.values, cx.style.pad);
         values.set(InMenu(true));
+        values.set(MenuWraps(self.props.roving.is_some_and(|roving| roving.wrap)));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> MenuOutput {

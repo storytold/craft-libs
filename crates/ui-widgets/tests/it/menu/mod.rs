@@ -6,6 +6,8 @@ pub(crate) mod closed;
 
 pub(crate) mod companion;
 
+pub(crate) mod ends;
+
 pub(crate) mod icon_row;
 
 pub(crate) mod native;
