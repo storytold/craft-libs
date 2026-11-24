@@ -1,0 +1,118 @@
+{
+  "board": {
+    "height_mm": 150.0,
+    "width_mm": 100.0
+  },
+  "kerf": {
+    "apply_to_exports": false,
+    "width_mm": 0.0
+  },
+  "layers": [
+    {
+      "kind": "engrave",
+      "name": "engrave",
+      "shapes": [
+        {
+          "id": 1,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 10.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 40.0,
+                "y": 10.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "engrave",
+          "tool": {
+            "op": "score",
+            "tip": "fine"
+          }
+        },
+        {
+          "id": 2,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 30.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 40.0,
+                "y": 30.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "engrave",
+          "tool": {
+            "op": "score",
+            "tip": "wide",
+            "passes": 3
+          }
+        },
+        {
+          "id": 3,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 50.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 40.0,
+                "y": 50.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "engrave",
+          "tool": {
+            "op": "emboss",
+            "tip": "fine",
+            "passes": 2,
+            "deboss": false
+          }
+        },
+        {
+          "id": 4,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 70.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 40.0,
+                "y": 70.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "engrave",
+          "tool": {
+            "op": "power-engrave"
+          }
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "next-shape-id": 5,
+  "stencilcraft": {
+    "name": "stencilcraft",
+    "version": 1
+  }
+}

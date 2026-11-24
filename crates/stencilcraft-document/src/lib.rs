@@ -7,6 +7,8 @@
 pub mod canvas;
 pub mod geom;
 pub mod metadata;
+pub mod migrate;
+pub mod wire_v1;
 
 use crate::geom::{GeomError, bounds_of_shape, check_finite_mm};
 pub use canvas::{Grid, Group, GroupChild, Guide, GuideAxis, Metadata, Orientation, Page, PagePreset, PageSetup, SnapSettings};
@@ -15,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod production;
 pub use metadata::{LibraryIndex, LibraryTrashEntry, MAX_RECENT_FILES, RecentFiles};
-pub use production::{CombineOp, GroupKind, Operation, SendAssign, ShapeProduction, SourceGroup};
+pub use migrate::OperationDefaults;
+pub use production::{CombineOp, GroupKind, Operation, OperationSettings, Process, SendAssign, ShapeProduction, SourceGroup, Strategy, Tab};
 
 /// Native format identity and supported version, defined by the shared wire-format crate.
 pub use craft_stencilcraft_format::{FORMAT_NAME, FORMAT_VERSION};
@@ -84,63 +87,61 @@ impl Default for Board {
     }
 }
 
-/// One layer of the document: a group of shapes with a production style and a
-/// visibility flag.
+/// One layer of the document: a named container of shapes. `operation: Some(..)`
+/// makes it a production pass over all of its `members` (D-01/D-03); `None` is a
+/// workspace container that produces nothing. Every layer embeds its operation
+/// settings snapshot; `preset_id` is optional provenance, not a dependency (D-10).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
-    pub kind: CutStyle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<Operation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub preset_linked: bool,
     pub visible: bool,
-    pub shapes: Vec<Shape>,
     /// A locked layer's shapes cannot be selected or edited.
     #[serde(default, skip_serializing_if = "is_false")]
     pub locked: bool,
-    /// A template (guide) layer is shown on the canvas but never exported or cut.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub template: bool,
     /// Material colour label, `#rrggbb`; Color Sync merges similar ones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Member shape ids, in intra-layer order (D-20). Geometry lives once in
+    /// `Document::shapes`; a shape may be a member of many layers (D-02).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<u64>,
 }
 
 impl Layer {
-    pub fn new(name: impl Into<String>, kind: CutStyle) -> Self {
-        Self { name: name.into(), kind, visible: true, shapes: Vec::new(), locked: false, template: false, color: None }
+    pub fn new(name: impl Into<String>, operation: Option<Operation>) -> Self {
+        Self { name: name.into(), operation, preset_id: None, preset_linked: false, visible: true, locked: false, color: None, members: Vec::new() }
     }
 
-    /// Whether exports and cuts include this layer: visible and not a template.
+    /// Whether exports and cuts include this layer: visible, with a non-guide operation.
     pub fn is_output(&self) -> bool {
-        self.visible && !self.template
+        self.visible && self.produces()
     }
 
-    /// Whether newly created shapes may land here: not locked, not a template.
+    /// Whether newly created shapes may land here: not locked. An operation-less
+    /// container still accepts new shapes (D-18).
     pub fn takes_new_shapes(&self) -> bool {
-        !self.locked && !self.template
+        !self.locked
     }
 
-    /// Sum of per-shape bounds; `None` when the layer has no shapes or only empty
-    /// paths.
-    pub fn bounds(&self) -> Option<kurbo::Rect> {
-        let mut acc: Option<kurbo::Rect> = None;
-        for shape in &self.shapes {
-            if let Some(r) = shape.bounds() {
-                acc = Some(match acc {
-                    Some(prev) => prev.union(r),
-                    None => r,
-                });
-            }
-        }
-        acc
+    /// Whether this layer is a production pass: it has an operation and it is not Guide.
+    pub fn produces(&self) -> bool {
+        self.operation.as_ref().is_some_and(|op| !op.is_guide())
     }
 }
 
-/// A path plus its production style. kurbo's `BezPath` serialises with the
-/// workspace's `serde` feature on — no wrapper needed.
+/// A path. kurbo's `BezPath` serialises with the workspace's `serde` feature on —
+/// no wrapper needed. The v1 `style`/`tool` fields are legacy read-only (D-16),
+/// deserialized by `wire_v1` for migration only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub id: u64,
     pub path: BezPath,
-    pub style: CutStyle,
     /// Hidden shapes are not drawn, selected or exported.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
@@ -151,11 +152,7 @@ pub struct Shape {
     /// (`text.edit` lays it out again). Absent for plain paths and in older files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Box<TextSpec>>,
-    /// A tool-specific operation for this path (score, emboss, engrave, foil, punch);
-    /// `None` is a plain cut or engrave pass by `style`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<ToolOp>,
-    /// Production metadata (operation, colours, attach, contours, combine sources).
+    /// Production metadata (colours, attach, contours, combine sources).
     #[serde(default, skip_serializing_if = "ShapeProduction::is_default")]
     pub production: ShapeProduction,
 }
@@ -378,12 +375,17 @@ impl RasterImage {
     }
 }
 
-/// A StencilCraft document: artboard, kerf configuration, layers.
+/// A StencilCraft document: artboard, kerf configuration, operation layers, and the
+/// shape store. Geometry is stored once in `shapes`; layers reference shapes by id
+/// through `members` (D-02).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub board: Board,
     pub kerf: KerfSettings,
     pub layers: Vec<Layer>,
+    /// All shapes, stored once; layers reference them by id.
+    #[serde(default)]
+    pub shapes: Vec<Shape>,
     /// Next free shape id; maintained by whoever mutates the document.
     #[serde(default)]
     pub next_shape_id: u64,
@@ -409,12 +411,28 @@ pub struct Document {
     pub meta: Metadata,
 }
 
-/// Typed fields in the native wire format. Field names and version-1 defaults are owned by
+/// Typed fields in the native v2 wire format. Field names and defaults are owned by
 /// `craft-stencilcraft-format`; this alias supplies only StencilCraft's domain types.
 type NativeFileFields = craft_stencilcraft_format::DocumentFields<
     Board,
     KerfSettings,
     Vec<Layer>,
+    RasterImage,
+    PageSetup,
+    Vec<Page>,
+    Vec<Guide>,
+    Grid,
+    SnapSettings,
+    Vec<Group>,
+    Metadata,
+    Vec<Shape>,
+>;
+
+/// Typed fields of a version 1 file: v1 layers embedded inline, no top-level shapes.
+type V1FileFields = craft_stencilcraft_format::DocumentFields<
+    Board,
+    KerfSettings,
+    Vec<wire_v1::V1Layer>,
     RasterImage,
     PageSetup,
     Vec<Page>,
@@ -430,7 +448,10 @@ impl Default for Document {
         Self {
             board: Board::default(),
             kerf: KerfSettings::default(),
-            layers: vec![Layer::new("cut", CutStyle::Cut)],
+            // One operation-less base layer: a workspace container that accepts new
+            // shapes, not an implicit Cut layer (D-18).
+            layers: vec![Layer::new("base", None)],
+            shapes: Vec::new(),
             next_shape_id: 1,
             images: Vec::new(),
             board_setup: PageSetup::default(),
@@ -445,26 +466,82 @@ impl Default for Document {
 }
 
 impl Document {
-    /// Shapes across all layers, in order, paired with their layer index.
-    pub fn shapes(&self) -> impl Iterator<Item = (usize, &Shape)> {
-        self.layers.iter().enumerate().flat_map(|(li, l)| l.shapes.iter().map(move |s| (li, s)))
+    /// All shapes in document order.
+    pub fn shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.shapes.iter()
     }
 
     pub fn shape_count(&self) -> usize {
-        self.layers.iter().map(|l| l.shapes.len()).sum()
+        self.shapes.len()
     }
 
     pub fn get_shape(&self, id: u64) -> Option<&Shape> {
-        self.shapes().map(|(_, s)| s).find(|s| s.id == id)
+        self.shapes.iter().find(|s| s.id == id)
     }
 
     pub fn get_shape_mut(&mut self, id: u64) -> Option<&mut Shape> {
-        self.layers.iter_mut().flat_map(|l| l.shapes.iter_mut()).find(|s| s.id == id)
+        self.shapes.iter_mut().find(|s| s.id == id)
     }
 
-    /// Allocates the next shape id and records the shape in `layer_index`.
-    /// Errors come out printable: messages name the layer and the fault.
-    pub fn push_shape(&mut self, layer_index: usize, path: BezPath, style: CutStyle) -> Result<Shape, DocError> {
+    /// Shapes that belong to no operation layer (D-04). A shape that is a member of any
+    /// layer with an operation — a Guide layer included — counts as assigned; a shape in
+    /// an operation-less container only is unassigned.
+    pub fn unassigned_shapes(&self) -> impl Iterator<Item = &Shape> {
+        let assigned: std::collections::BTreeSet<u64> =
+            self.layers.iter().filter(|l| l.operation.is_some()).flat_map(|l| l.members.iter().copied()).collect();
+        self.shapes.iter().filter(move |s| !assigned.contains(&s.id))
+    }
+
+    /// The production passes in document order (D-19): every layer that produces output,
+    /// paired with its member shapes in membership order. A layer with `Some(operation)`
+    /// includes all of its members in that pass (D-03); operation-less and Guide layers
+    /// are skipped (D-17).
+    pub fn production_sequence(&self) -> impl Iterator<Item = (&Layer, Vec<&Shape>)> {
+        self.layers.iter().filter(|l| l.produces()).map(|layer| {
+            let members = layer.members.iter().filter_map(|id| self.get_shape(*id)).collect();
+            (layer, members)
+        })
+    }
+
+    /// Union of the member shapes' bounds; `None` for an unknown or empty layer.
+    pub fn layer_bounds(&self, layer_index: usize) -> Option<kurbo::Rect> {
+        let layer = self.layers.get(layer_index)?;
+        let mut bounds: Option<kurbo::Rect> = None;
+        for id in &layer.members {
+            if let Some(b) = self.get_shape(*id).and_then(Shape::bounds) {
+                bounds = Some(match bounds {
+                    Some(acc) => acc.union(b),
+                    None => b,
+                });
+            }
+        }
+        bounds
+    }
+
+    /// Removes a layer and its memberships, keeping every shape's geometry in `shapes`
+    /// (MODEL-07): former members become unassigned. Removing the last layer is allowed;
+    /// the model has no minimum-layer invariant.
+    pub fn remove_layer(&mut self, layer_index: usize) -> Result<Layer, DocError> {
+        if layer_index >= self.layers.len() {
+            return Err(DocError::Model(format!("layer {layer_index}: no such layer (document has {})", self.layers.len())));
+        }
+        Ok(self.layers.remove(layer_index))
+    }
+
+    /// Drops member ids that reference no shape and deduplicates repeats, keeping
+    /// first-seen order within each layer.
+    pub fn prune_members(&mut self) {
+        let live: std::collections::BTreeSet<u64> = self.shapes.iter().map(|s| s.id).collect();
+        for layer in &mut self.layers {
+            let mut seen = std::collections::BTreeSet::new();
+            layer.members.retain(|id| live.contains(id) && seen.insert(*id));
+        }
+    }
+
+    /// Allocates the next shape id, stores the shape once in `self.shapes`, and records
+    /// its membership in `layer_index`. Errors come out printable: messages name the
+    /// layer and the fault.
+    pub fn push_shape(&mut self, layer_index: usize, path: BezPath) -> Result<Shape, DocError> {
         if layer_index >= self.layers.len() {
             return Err(DocError::Model(format!("layer {layer_index}: no such layer (document has {})", self.layers.len())));
         }
@@ -473,8 +550,9 @@ impl Document {
         };
         let id = self.next_shape_id;
         self.next_shape_id = self.next_shape_id.checked_add(1).ok_or_else(|| DocError::Model("shape ids exhausted".to_string()))?;
-        let shape = Shape { id, path, style, hidden: false, locked: false, tool: None, text: None, production: ShapeProduction::default() };
-        layer.shapes.push(shape.clone());
+        let shape = Shape { id, path, hidden: false, locked: false, text: None, production: ShapeProduction::default() };
+        layer.members.push(id);
+        self.shapes.push(shape.clone());
         Ok(shape)
     }
 
@@ -495,8 +573,16 @@ impl Document {
         self.images.iter().find(|image| image.id == id)
     }
 
-    /// Checks the board is a sane sheet: positive, finite dimensions.
+    /// Full validation: model invariants, then canvas fields.
     pub fn validate(&self) -> Result<(), DocError> {
+        self.validate_model()?;
+        self.validate_canvas()
+    }
+
+    /// Model-level invariants: a sane board and kerf, sane images, unique shape ids with
+    /// `next_shape_id` above them all, memberships referencing existing shapes, and valid
+    /// operation settings on every layer.
+    pub fn validate_model(&self) -> Result<(), DocError> {
         check_finite_mm(self.board.width_mm, "board width")?;
         check_finite_mm(self.board.height_mm, "board height")?;
         check_finite_mm(self.kerf.width_mm, "kerf width")?;
@@ -510,41 +596,78 @@ impl Document {
             return Err(DocError::Model(format!("a document holds at most {MAX_IMAGES} images")));
         }
         self.images.iter().try_for_each(RasterImage::validate)?;
-        self.validate_canvas()
+        let mut ids = std::collections::BTreeSet::new();
+        for shape in &self.shapes {
+            if !ids.insert(shape.id) {
+                return Err(DocError::Model(format!("shape {}: duplicate id", shape.id)));
+            }
+        }
+        if let Some(max) = ids.last()
+            && self.next_shape_id <= *max
+        {
+            return Err(DocError::Model(format!("next_shape_id {}: not above the highest shape id {max}", self.next_shape_id)));
+        }
+        for (i, layer) in self.layers.iter().enumerate() {
+            for id in &layer.members {
+                if !ids.contains(id) {
+                    return Err(DocError::Model(format!("layer {i} ({}): member {id} is not a shape", layer.name)));
+                }
+            }
+            if let Some(operation) = &layer.operation {
+                operation.validate().map_err(|e| match e {
+                    DocError::Model(m) => DocError::Model(format!("layer {i} ({}): {m}", layer.name)),
+                    other => other,
+                })?;
+            }
+        }
+        Ok(())
     }
 
     /// Serialises with the format header. The header wraps the document so a reader
     /// knows what it is before reading the rest. Canvas fields are written only when
     /// set, so a plain document saves exactly as it did before they existed.
     pub fn save_json(&self) -> Result<String, DocError> {
-        self.validate()?;
+        // Stale members are repaired, not rejected: validate and serialise a pruned
+        // clone so `save_json` can stay `&self`.
+        let mut clean = self.clone();
+        clean.prune_members();
+        clean.validate()?;
         let fields = NativeFileFields {
-            board: self.board.clone(),
-            kerf: self.kerf.clone(),
-            layers: self.layers.clone(),
-            next_shape_id: self.next_shape_id,
-            images: self.images.clone(),
-            board_setup: self.board_setup.clone(),
-            pages: self.pages.clone(),
-            guides: self.guides.clone(),
-            grid: self.grid.clone(),
-            snap: self.snap.clone(),
-            groups: self.pruned_groups(),
-            meta: self.meta.clone(),
+            board: clean.board.clone(),
+            kerf: clean.kerf.clone(),
+            layers: clean.layers.clone(),
+            shapes: clean.shapes.clone(),
+            next_shape_id: clean.next_shape_id,
+            images: clean.images.clone(),
+            board_setup: clean.board_setup.clone(),
+            pages: clean.pages.clone(),
+            guides: clean.guides.clone(),
+            grid: clean.grid.clone(),
+            snap: clean.snap.clone(),
+            groups: clean.pruned_groups(),
+            meta: clean.meta.clone(),
         };
         craft_stencilcraft_format::File::<NativeFileFields>::new(fields)
             .to_json_pretty()
             .map_err(|e| DocError::Structure { path: "output".to_string(), message: e.to_string() })
     }
 
-    /// Parses a document from JSON with calm, positioned error messages.
+    /// Parses a document from JSON with calm, positioned error messages, using neutral
+    /// migration defaults for v1 files.
     pub fn load_json(json: &str) -> Result<Document, DocError> {
-        load_json_named(json, "input")
+        Document::load_json_with_seed(json, &OperationDefaults::default())
+    }
+
+    /// Like [`Document::load_json`], but v1 files are migrated with `seed` supplying the
+    /// default per-operation settings (D-15). v1 is migrated in memory only; the file is
+    /// rewritten as v2 on the next save (D-13).
+    pub fn load_json_with_seed(json: &str, seed: &OperationDefaults) -> Result<Document, DocError> {
+        load_json_named(json, "input", seed)
     }
 }
 
-fn load_json_named(json: &str, path: &str) -> Result<Document, DocError> {
-    let file = craft_stencilcraft_format::File::<NativeFileFields>::read_typed(json).map_err(|e| match e {
+fn format_err(path: &str, e: craft_stencilcraft_format::Error) -> DocError {
+    match e {
         craft_stencilcraft_format::Error::Json(source) => DocError::Parse { path: path.to_string(), source },
         craft_stencilcraft_format::Error::NotStencilCraft => DocError::NotAStencilcraftFile { path: path.to_string() },
         craft_stencilcraft_format::Error::Version { found, supported } => {
@@ -552,22 +675,56 @@ fn load_json_named(json: &str, path: &str) -> Result<Document, DocError> {
         }
         craft_stencilcraft_format::Error::Document { source } => structure_err(path, &source),
         _ => DocError::NotAStencilcraftFile { path: path.to_string() },
-    })?;
-    let fields = file.document;
-    let mut doc = Document {
-        board: fields.board,
-        kerf: fields.kerf,
-        layers: fields.layers,
-        next_shape_id: fields.next_shape_id,
-        images: fields.images,
-        board_setup: fields.board_setup,
-        pages: fields.pages,
-        guides: fields.guides,
-        grid: fields.grid,
-        snap: fields.snap,
-        groups: fields.groups,
-        meta: fields.meta,
+    }
+}
+
+fn load_json_named(json: &str, path: &str, seed: &OperationDefaults) -> Result<Document, DocError> {
+    // Version dispatch: the format crate accepts every supported header version and
+    // reports which one it found; v1 bodies migrate, v2 bodies parse directly.
+    let (version, raw) =
+        craft_stencilcraft_format::File::<craft_stencilcraft_format::DocumentFields>::read_versioned(json).map_err(|e| format_err(path, e))?;
+    let raw_value = serde_json::to_value(raw.document).map_err(|source| DocError::Parse { path: path.to_string(), source })?;
+    let mut doc = match version {
+        1 => {
+            let fields: V1FileFields = serde_json::from_value(raw_value).map_err(|e| structure_err(path, &e))?;
+            let (shapes, layers, next_shape_id) = migrate::migrate_v1_layers(fields.layers, fields.next_shape_id, seed)?;
+            Document {
+                board: fields.board,
+                kerf: fields.kerf,
+                layers,
+                shapes,
+                next_shape_id,
+                images: fields.images,
+                board_setup: fields.board_setup,
+                pages: fields.pages,
+                guides: fields.guides,
+                grid: fields.grid,
+                snap: fields.snap,
+                groups: fields.groups,
+                meta: fields.meta,
+            }
+        }
+        _ => {
+            let fields: NativeFileFields = serde_json::from_value(raw_value).map_err(|e| structure_err(path, &e))?;
+            Document {
+                board: fields.board,
+                kerf: fields.kerf,
+                layers: fields.layers,
+                shapes: fields.shapes,
+                next_shape_id: fields.next_shape_id,
+                images: fields.images,
+                board_setup: fields.board_setup,
+                pages: fields.pages,
+                guides: fields.guides,
+                grid: fields.grid,
+                snap: fields.snap,
+                groups: fields.groups,
+                meta: fields.meta,
+            }
+        }
     };
+    // Dangling and duplicate memberships are pruned, never fatal, before validation.
+    doc.prune_members();
     doc.validate()?;
     doc.groups = doc.pruned_groups();
     Ok(doc)
@@ -585,7 +742,7 @@ pub fn save_to(doc: &Document, path: &str) -> Result<(), DocError> {
 
 pub fn load_from(path: &str) -> Result<Document, DocError> {
     let json = std::fs::read_to_string(path).map_err(|source| DocError::Io { path: path.to_string(), source })?;
-    load_json_named(&json, path)
+    load_json_named(&json, path, &OperationDefaults::default())
 }
 
 #[cfg(test)]
@@ -606,7 +763,8 @@ mod tests {
     fn sample() -> Document {
         let mut doc = Document::default();
         doc.kerf.width_mm = 0.2;
-        doc.push_shape(0, rect_path(10.0, 20.0, 30.0, 40.0), CutStyle::Cut).unwrap();
+        doc.layers[0].operation = Some(Operation::Cut(OperationSettings::default()));
+        doc.push_shape(0, rect_path(10.0, 20.0, 30.0, 40.0)).unwrap();
         doc
     }
 
@@ -623,8 +781,8 @@ mod tests {
         let mut doc = sample();
         let plain = doc.save_json().unwrap();
         assert!(!plain.contains("hidden") && !plain.contains("locked"));
-        doc.layers[0].shapes[0].hidden = true;
-        doc.layers[0].shapes[0].locked = true;
+        doc.shapes[0].hidden = true;
+        doc.shapes[0].locked = true;
         let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
         assert_eq!(doc, back);
     }
@@ -634,7 +792,7 @@ mod tests {
         let mut doc = sample();
         let plain = doc.save_json().unwrap();
         assert!(!plain.contains("\"text\""));
-        doc.layers[0].shapes[0].text = Some(Box::new(TextSpec {
+        doc.shapes[0].text = Some(Box::new(TextSpec {
             text: "Hi".into(),
             font: FontSpec { family: "Sans".into(), style: "Bold".into(), file: None },
             size: 72.0,
@@ -653,11 +811,9 @@ mod tests {
         let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
         assert_eq!(doc, back);
         // A minimal hand-written text object fills in the defaults.
-        let json = plain.replace(
-            "\"style\": \"cut\"",
-            "\"style\": \"cut\", \"text\": {\"text\": \"A\", \"font\": {\"family\": \"X\"}, \"size\": 12, \"x\": 0, \"y\": 0}",
-        );
-        let spec = Document::load_json(&json).unwrap().layers[0].shapes[0].text.clone().unwrap();
+        let json =
+            plain.replace("\"id\": 1", "\"id\": 1, \"text\": {\"text\": \"A\", \"font\": {\"family\": \"X\"}, \"size\": 12, \"x\": 0, \"y\": 0}");
+        let spec = Document::load_json(&json).unwrap().shapes[0].text.clone().unwrap();
         assert_eq!(spec.line_spacing, 100.0);
         assert!(spec.kerning && spec.flow.is_straight());
         assert_eq!(spec.font.style, "Regular");
@@ -681,12 +837,12 @@ mod tests {
     #[test]
     fn future_version_is_rejected_calmly() {
         let json = r#"{"stencilcraft": {"name": "stencilcraft", "version": 99}}"#;
-        assert!(matches!(Document::load_json(json), Err(DocError::FormatVersion { found: 99, expected: 1, .. })));
+        assert!(matches!(Document::load_json(json), Err(DocError::FormatVersion { found: 99, expected: FORMAT_VERSION, .. })));
     }
 
     #[test]
     fn missing_field_has_structure_error() {
-        let json = r#"{"stencilcraft": {"name": "stencilcraft", "version": 1},
+        let json = r#"{"stencilcraft": {"name": "stencilcraft", "version": 2},
             "board": {"width_mm": 1, "height_mm": 1}}"#;
         assert!(matches!(
             Document::load_json(json),
@@ -719,18 +875,28 @@ mod tests {
     }
 
     #[test]
-    fn push_shape_assigns_ids() {
+    fn push_shape_assigns_ids_and_records_membership() {
         let mut doc = Document::default();
-        let s = doc.push_shape(0, rect_path(0.0, 0.0, 5.0, 5.0), CutStyle::Cut).unwrap();
+        // The operation-less base layer accepts new shapes (D-18).
+        assert!(doc.layers[0].operation.is_none() && doc.layers[0].takes_new_shapes());
+        let s = doc.push_shape(0, rect_path(0.0, 0.0, 5.0, 5.0)).unwrap();
         assert_eq!(s.id, 1);
-        let s2 = doc.push_shape(0, rect_path(5.0, 5.0, 5.0, 5.0), CutStyle::Cut).unwrap();
+        let s2 = doc.push_shape(0, rect_path(5.0, 5.0, 5.0, 5.0)).unwrap();
         assert_eq!(s2.id, 2);
-        assert!(matches!(doc.push_shape(9, rect_path(0.0, 0.0, 1.0, 1.0), CutStyle::Cut), Err(DocError::Model(_))));
+        assert_eq!(doc.layers[0].members, vec![1, 2]);
+        assert_eq!(doc.shape_count(), 2);
+        assert!(matches!(doc.push_shape(9, rect_path(0.0, 0.0, 1.0, 1.0)), Err(DocError::Model(_))));
+        // One shape id can be a member of more than one layer (N:M).
+        doc.layers.push(Layer::new("second", Some(Operation::Score(OperationSettings::default()))));
+        doc.layers[1].members.push(1);
+        let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
+        assert_eq!(back.layers[1].members, vec![1]);
+        assert_eq!(back.shapes.len(), 2);
     }
 
     fn canvas_sample() -> Document {
         let mut doc = sample();
-        doc.push_shape(0, rect_path(50.0, 50.0, 5.0, 5.0), CutStyle::Cut).unwrap();
+        doc.push_shape(0, rect_path(50.0, 50.0, 5.0, 5.0)).unwrap();
         doc.board_setup.mat = Some("12x12".to_string());
         doc.pages.push(Page {
             x_mm: 120.0,
@@ -744,7 +910,7 @@ mod tests {
         doc.grid.subdivisions = 4;
         doc.snap.grid = true;
         doc.layers[0].color = Some("#112233".to_string());
-        doc.layers.push(Layer { template: true, locked: true, ..Layer::new("guide", CutStyle::Cut) });
+        doc.layers.push(Layer { locked: true, ..Layer::new("guide", Some(Operation::Guide)) });
         doc.groups = vec![
             Group { id: 1, name: "inner".to_string(), children: vec![GroupChild::Shape(1)] },
             Group { id: 2, name: String::new(), children: vec![GroupChild::Group(1), GroupChild::Shape(2)] },
@@ -773,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn version_1_files_without_canvas_fields_still_load() {
+    fn version_1_files_migrate_in_memory_and_resave_as_v2() {
         for json in [
             include_str!("../tests/fixtures/starter.stencilcraft"),
             include_str!("../tests/fixtures/poster.stencilcraft"),
@@ -782,14 +948,25 @@ mod tests {
             let doc = Document::load_json(json).unwrap();
             assert!(doc.pages.is_empty() && doc.groups.is_empty() && doc.guides.is_empty());
             assert_eq!(doc.grid, Grid::default());
-            assert!(doc.layers.iter().all(|l| !l.template && !l.locked));
+            assert!(doc.layers.iter().all(|l| !l.locked));
+            // Migration hoists geometry once and gives every layer an operation pass.
+            assert!(doc.shape_count() > 0);
+            assert!(doc.layers.iter().all(|l| l.operation.is_some()));
+            let membered: usize = doc.layers.iter().map(|l| l.members.len()).sum();
+            assert_eq!(membered, doc.shape_count());
+            // The in-memory migration is not written back until save, which writes v2.
+            let saved = doc.save_json().unwrap();
+            let v: serde_json::Value = serde_json::from_str(&saved).unwrap();
+            assert_eq!(v["stencilcraft"]["version"].as_u64(), Some(FORMAT_VERSION));
+            assert!(v.get("shapes").is_some());
+            assert_eq!(Document::load_json(&saved).unwrap(), doc);
         }
     }
 
     #[test]
     fn dangling_group_members_are_pruned_not_fatal() {
         let mut doc = canvas_sample();
-        doc.layers[0].shapes.retain(|s| s.id != 1);
+        doc.shapes.retain(|s| s.id != 1);
         // Group 1 loses its only member and disappears; group 2 keeps shape 2.
         let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
         assert_eq!(back.groups.len(), 1);
@@ -824,11 +1001,12 @@ mod tests {
     #[test]
     fn page_document_takes_the_shapes_on_that_page() {
         let mut doc = canvas_sample();
-        doc.push_shape(0, rect_path(130.0, 10.0, 10.0, 10.0), CutStyle::Cut).unwrap();
+        doc.push_shape(0, rect_path(130.0, 10.0, 10.0, 10.0)).unwrap();
         let page = doc.page_document(1).unwrap();
         assert_eq!((page.board.width_mm, page.board.height_mm), (210.0, 297.0));
         assert_eq!(page.shape_count(), 1);
-        let b = page.layers[0].shapes[0].bounds().unwrap();
+        assert_eq!(page.layers[0].members, vec![3]);
+        let b = page.shapes[0].bounds().unwrap();
         assert!((b.x0 - 10.0).abs() < 1e-9 && (b.y0 - 10.0).abs() < 1e-9);
         assert_eq!(doc.page_document(0).unwrap().shape_count(), 2);
         assert!(doc.page_document(5).is_none());

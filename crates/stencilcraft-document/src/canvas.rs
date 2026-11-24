@@ -371,14 +371,16 @@ impl Document {
         Ok(())
     }
 
-    /// Whether shape `id` may not be edited: the shape or its layer is locked.
+    /// Whether shape `id` may not be edited: the shape is locked, or any layer whose
+    /// `members` contain it is locked.
     pub fn shape_locked(&self, id: u64) -> bool {
-        self.layers.iter().any(|layer| layer.shapes.iter().any(|s| s.id == id && (s.locked || layer.locked)))
+        let shape_locked = self.get_shape(id).is_some_and(|s| s.locked);
+        shape_locked || self.layers.iter().any(|layer| layer.locked && layer.members.contains(&id))
     }
 
-    /// Index of the layer holding shape `id`.
+    /// Index of the first layer whose `members` contain shape `id`.
     pub fn layer_of_shape(&self, id: u64) -> Option<usize> {
-        self.layers.iter().position(|layer| layer.shapes.iter().any(|s| s.id == id))
+        self.layers.iter().position(|layer| layer.members.contains(&id))
     }
 
     pub fn group(&self, id: u64) -> Option<&Group> {
@@ -418,12 +420,12 @@ impl Document {
                 }
             }
         }
-        self.shapes().map(|(_, s)| s.id).filter(|s| members.contains(s)).collect()
+        self.shapes().map(|s| s.id).filter(|s| members.contains(s)).collect()
     }
 
     /// The groups without members that no longer exist; groups left empty go too.
     pub fn pruned_groups(&self) -> Vec<Group> {
-        let shapes: BTreeSet<u64> = self.shapes().map(|(_, s)| s.id).collect();
+        let shapes: BTreeSet<u64> = self.shapes().map(|s| s.id).collect();
         let mut groups = self.groups.clone();
         loop {
             let before: usize = groups.iter().map(|g| g.children.len() + 1).sum();
@@ -473,11 +475,15 @@ impl Document {
         out.pages.clear();
         out.guides.clear();
         let shift = kurbo::Affine::translate((-page.x_mm, -page.y_mm));
+        // Retain the page's shapes (unassigned shapes are never dropped), move each
+        // surviving path to the page origin exactly once, then prune memberships.
+        out.shapes.retain(|s| self.page_of_shape(s) == index);
+        for shape in &mut out.shapes {
+            shape.path.apply_affine(shift);
+        }
+        let live: BTreeSet<u64> = out.shapes.iter().map(|s| s.id).collect();
         for layer in &mut out.layers {
-            layer.shapes.retain(|s| self.page_of_shape(s) == index);
-            for shape in &mut layer.shapes {
-                shape.path.apply_affine(shift);
-            }
+            layer.members.retain(|id| live.contains(id));
         }
         out.groups = out.pruned_groups();
         Some(out)
@@ -501,7 +507,10 @@ impl Document {
         }
         let mut remaining = max_bytes - empty_len;
         'layers: for layer in self.layers.iter().filter(|l| l.is_output()) {
-            for shape in layer.shapes.iter().filter(|s| !s.hidden) {
+            for id in &layer.members {
+                let Some(shape) = self.get_shape(*id).filter(|s| !s.hidden) else {
+                    continue;
+                };
                 let mut element = craft_svg::write::SvgWriter::fragment();
                 element.line(2);
                 element.tag("path").attr("d", craft_svg::write::path_data_fixed(&shape.path, 2)).empty();

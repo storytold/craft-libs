@@ -7,30 +7,208 @@
 use kurbo::{Affine, BezPath, PathEl};
 use serde::{Deserialize, Serialize};
 
-use crate::Shape;
+use crate::geom::check_finite_mm;
+use crate::{DocError, Shape, Tip};
 
-/// What the machine does with a shape. `None` on a shape means "follow its cut/engrave style".
+/// The physical process a pass runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Operation {
-    /// Cut the outline (the default for cut shapes).
-    Cut,
-    /// Sticker kiss cut: through the face material only, the backing stays whole.
-    KissCut,
-    /// Sticker die cut: through the face material and the backing.
-    DieCut,
-    /// Draw the outline with a pen.
-    Draw,
-    /// Crease a fold line.
+pub enum Process {
+    Laser,
+    Mill,
+    Knife,
+    Pen,
+    Creaser,
+    Punch,
+    Print,
+}
+
+/// The cutting strategy within a process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Strategy {
+    Line,
+    Fill,
+    Pocket,
+    Drill,
     Score,
-    /// Engrave the line (the default for engrave shapes).
-    Engrave,
-    /// A dashed tear line.
+    KissCut,
+    DieCut,
     Perforate,
+    Guide,
+}
+
+/// One bridge tab keeping a cut part in the sheet: starts `offset_mm` along the
+/// contour, `width_mm` wide.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Tab {
+    pub offset_mm: f64,
+    pub width_mm: f64,
+}
+
+/// The complete per-operation settings snapshot a layer carries (D-09). Emission of
+/// these settings is a later phase; here they are stored and validated only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OperationSettings {
+    /// Laser power, percent.
+    pub power: f64,
+    pub speed_mm_per_min: f64,
+    pub passes: u32,
+    pub focus_mm: f64,
+    pub kerf_mm: f64,
+    pub tabs: Vec<Tab>,
+    /// Score/emboss tip, when the pass uses one.
+    pub tip: Option<Tip>,
+    /// Emboss from the reverse side (deboss) instead of the front.
+    pub deboss: bool,
+    /// Punch diameter for `Operation::Punch`.
+    pub punch_diameter_mm: Option<f64>,
+}
+
+impl Default for OperationSettings {
+    fn default() -> Self {
+        Self {
+            power: 0.0,
+            speed_mm_per_min: 0.0,
+            passes: 1,
+            focus_mm: 0.0,
+            kerf_mm: 0.0,
+            tabs: Vec::new(),
+            tip: None,
+            deboss: false,
+            punch_diameter_mm: None,
+        }
+    }
+}
+
+/// A production pass a layer runs over all of its member shapes: a cooked preset
+/// (D-07) tagged with its kind, carrying the full settings snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Operation {
+    /// Cut the outline.
+    Cut(OperationSettings),
+    /// Sticker kiss cut: through the face material only, the backing stays whole.
+    KissCut(OperationSettings),
+    /// Sticker die cut: through the face material and the backing.
+    DieCut(OperationSettings),
+    /// Draw the outline with a pen.
+    Draw(OperationSettings),
+    /// Crease a fold line.
+    Score(OperationSettings),
+    /// Engrave the surface.
+    Engrave(OperationSettings),
+    /// A dashed tear line.
+    Perforate(OperationSettings),
     /// Print on a home printer, then cut around the print using registration marks.
-    PrintThenCut,
+    PrintThenCut(OperationSettings),
+    /// One punch per contour.
+    Punch(OperationSettings),
     /// Shown on the canvas only, never sent to the machine or printer.
     Guide,
+}
+
+impl Operation {
+    /// The settings snapshot; `None` for `Guide`.
+    pub fn settings(&self) -> Option<&OperationSettings> {
+        match self {
+            Operation::Guide => None,
+            Operation::Cut(s)
+            | Operation::KissCut(s)
+            | Operation::DieCut(s)
+            | Operation::Draw(s)
+            | Operation::Score(s)
+            | Operation::Engrave(s)
+            | Operation::Perforate(s)
+            | Operation::PrintThenCut(s)
+            | Operation::Punch(s) => Some(s),
+        }
+    }
+
+    /// The physical process this pass runs on; `None` for `Guide`.
+    pub fn process(&self) -> Option<Process> {
+        Some(match self {
+            Operation::Cut(_) | Operation::KissCut(_) | Operation::DieCut(_) | Operation::Engrave(_) | Operation::Perforate(_) => Process::Laser,
+            Operation::Draw(_) => Process::Pen,
+            Operation::Score(_) => Process::Creaser,
+            Operation::Punch(_) => Process::Punch,
+            Operation::PrintThenCut(_) => Process::Print,
+            Operation::Guide => return None,
+        })
+    }
+
+    /// The cutting strategy within the process.
+    pub fn strategy(&self) -> Strategy {
+        match self {
+            Operation::Cut(_) | Operation::Draw(_) | Operation::PrintThenCut(_) => Strategy::Line,
+            Operation::KissCut(_) => Strategy::KissCut,
+            Operation::DieCut(_) => Strategy::DieCut,
+            Operation::Score(_) => Strategy::Score,
+            Operation::Engrave(_) => Strategy::Fill,
+            Operation::Perforate(_) => Strategy::Perforate,
+            Operation::Punch(_) => Strategy::Drill,
+            Operation::Guide => Strategy::Guide,
+        }
+    }
+
+    /// Whether this pass is canvas-only guidance and excluded from production output.
+    pub fn is_guide(&self) -> bool {
+        matches!(self, Operation::Guide)
+    }
+
+    /// Kebab-case wire name of the pass.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Operation::Cut(_) => "cut",
+            Operation::KissCut(_) => "kiss-cut",
+            Operation::DieCut(_) => "die-cut",
+            Operation::Draw(_) => "draw",
+            Operation::Score(_) => "score",
+            Operation::Engrave(_) => "engrave",
+            Operation::Perforate(_) => "perforate",
+            Operation::PrintThenCut(_) => "print-then-cut",
+            Operation::Punch(_) => "punch",
+            Operation::Guide => "guide",
+        }
+    }
+
+    /// Rejects non-finite or nonsensical settings before they reach a file or machine.
+    pub fn validate(&self) -> Result<(), DocError> {
+        let Some(s) = self.settings() else { return Ok(()) };
+        let name = self.kind_name();
+        let finite = |value: f64, field: &'static str| check_finite_mm(value, field).map_err(|e| DocError::Model(format!("operation {name}: {e}")));
+        finite(s.power, "power")?;
+        finite(s.speed_mm_per_min, "speed")?;
+        finite(s.focus_mm, "focus")?;
+        finite(s.kerf_mm, "kerf")?;
+        if s.power < 0.0 {
+            return Err(DocError::Model(format!("operation {name}: power cannot be negative")));
+        }
+        if s.speed_mm_per_min < 0.0 {
+            return Err(DocError::Model(format!("operation {name}: speed cannot be negative")));
+        }
+        if s.kerf_mm < 0.0 {
+            return Err(DocError::Model(format!("operation {name}: kerf cannot be negative")));
+        }
+        if s.passes < 1 {
+            return Err(DocError::Model(format!("operation {name}: passes must be at least 1")));
+        }
+        if let Some(diameter) = s.punch_diameter_mm {
+            finite(diameter, "punch diameter")?;
+            if diameter <= 0.0 {
+                return Err(DocError::Model(format!("operation {name}: punch diameter must be positive")));
+            }
+        }
+        for (i, tab) in s.tabs.iter().enumerate() {
+            finite(tab.offset_mm, "tab offset")?;
+            finite(tab.width_mm, "tab width")?;
+            if tab.width_mm < 0.0 {
+                return Err(DocError::Model(format!("operation {name}: tab {i} width cannot be negative")));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A per-shape tool assignment from the send preview, overriding the group settings.
@@ -137,11 +315,10 @@ fn bounds_map(old: &BezPath, new: &BezPath) -> Affine {
     Affine::translate((b.x0, b.y0)) * Affine::scale_non_uniform(sx, sy) * Affine::translate((-a.x0, -a.y0))
 }
 
-/// Production metadata of one shape. Every field is optional.
+/// Production metadata of one shape. Every field is optional. The v1 `operation`
+/// field is gone from v2 (legacy read-only, deserialized by `wire_v1` only).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ShapeProduction {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation: Option<Operation>,
     /// Canonical `#rrggbb` line colour: the cut-by-line-colour key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_color: Option<String>,
@@ -194,13 +371,5 @@ impl Shape {
             }
         }
         std::borrow::Cow::Owned(out)
-    }
-
-    /// The shape's operation, falling back to its cut/engrave style.
-    pub fn operation(&self) -> Operation {
-        self.production.operation.unwrap_or(match self.style {
-            crate::CutStyle::Cut => Operation::Cut,
-            crate::CutStyle::Engrave => Operation::Engrave,
-        })
     }
 }

@@ -2,6 +2,35 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
+## v0.2.0 — 2026-11-24
+
+Breaking 0.x minor release (per the versioning policy, a minor bump under 0.x signals a
+breaking change): the StencilCraft native document format moves from v1 to v2.
+
+### Before (format v1)
+
+- Geometry lived inside each layer: every `Layer` embedded its own `shapes` array, so a
+  shape shared by two layers was stored twice.
+- Each shape carried a per-shape `style` and each layer a per-layer `kind`, and production
+  parameters were not snapshotted on the layer.
+
+### After (format v2)
+
+- Geometry is stored once in the top-level `Document.shapes`; layers reference shapes by id
+  through `Layer.members` and carry their production pass as `Layer.operation` with a full
+  `OperationSettings` snapshot. `Guide` layers are operation layers that produce nothing.
+- The file header is `{"stencilcraft":{"name":"stencilcraft","version":2}}`;
+  `SUPPORTED_VERSIONS` is 1 and 2, and `FORMAT_VERSION` written is 2.
+
+### Migration guidance
+
+- v1 files load and migrate automatically in memory; the file on disk is not rewritten until
+  the next save, which writes v2. There is no downgrade path: v2 files are rejected by
+  0.1.x builds (format version error), so do not share v2 files with apps pinned to 0.1.x.
+- `Layer.kind`, `Shape.style`, and `ShapeProduction.operation` remain as legacy read-only
+  compatibility fields: they are deserialized for v1 migration only and are never written
+  into v2 output.
+
 ## v0.1.0 — 2026-10-12
 
 First coordinated Git release of craft-libs. Applications can pin a named baseline instead of
