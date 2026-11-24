@@ -979,7 +979,12 @@ mod tests {
         assert!(Lexer::new(wide(MAX_NODES).as_bytes(), 0).object().is_err());
         // The gate stops at the plain array (each case parses millions of operands); nightly adds the same budget inside a
         // dictionary value, behind tolerated junk, and per top-level object.
-        if craft_testkit::hostile::divisor() > 1 {
+        // wasm32 has no divisor and always runs the gate's part.
+        #[cfg(not(target_arch = "wasm32"))]
+        let full = craft_testkit::hostile::divisor() == 1;
+        #[cfg(target_arch = "wasm32")]
+        let full = false;
+        if !full {
             return;
         }
         assert!(Lexer::new(format!("<< /A {} >>", wide(MAX_NODES)).as_bytes(), 0).object().is_err());
