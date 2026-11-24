@@ -31,7 +31,7 @@ const OBJECTS: &[&str] =
 /// Deepest group nesting flattened into the outermost group.
 const MAX_GROUP_DEPTH: usize = 8;
 /// Largest length kept, points (200 inches).
-const MAX_LEN_PT: f32 = 14_400.0;
+pub(crate) const MAX_LEN_PT: f32 = 14_400.0;
 /// The stacking order floating objects start from (Hancom's z-order is added to it).
 const Z_BASE: i64 = 251_658_240;
 /// A text box's inner margins when the file gives none (1mm, EMU).

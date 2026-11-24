@@ -527,3 +527,16 @@ fn a_note_inside_a_hyperlink_keeps_its_own_text_unlinked() {
         .expect("no note paragraph");
     assert!(!linked(&note, "각주"), "the note's text isn't linked");
 }
+
+/// A tab stop past any page (a position no page holds) is kept within the longest length the
+/// model takes, as the DOCX reader keeps one, instead of millions of points.
+#[test]
+fn tab_stops_past_any_page_are_bounded() {
+    let head = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:refList><hh:tabProperties><hh:tabPr id="1"><hh:tabItem pos="2147483000" type="LEFT" leader="NONE"/></hh:tabPr></hh:tabProperties><hh:paraProperties><hh:paraPr id="0" tabPrIDRef="1"/></hh:paraProperties></hh:refList></hh:head>"#;
+    let doc =
+        read_bytes(&hwpx_with(head, &format!(r#"<hs:sec {NS}><hp:p paraPrIDRef="0"><hp:run><hp:t>탭</hp:t></hp:run></hp:p></hs:sec>"#))).unwrap();
+    let p = doc.body.iter().filter_map(|b| b.as_para()).next().expect("no paragraph");
+    let tabs = p.props.tabs.clone().unwrap_or_default();
+    assert!(!tabs.is_empty(), "the tab stop is read");
+    assert!(tabs.iter().all(|t| t.pos <= super::drawing::MAX_LEN_PT), "{tabs:?}");
+}

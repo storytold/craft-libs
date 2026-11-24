@@ -12,6 +12,7 @@ use craft_wordmodel::section::NumFormat;
 use craft_wordmodel::styles::{Style, StyleKind, StyleSheet};
 
 use super::Converter;
+use super::drawing::MAX_LEN_PT;
 use crate::header::{CharPr, ParaPr};
 use crate::units::{round_even, tw, tw_f};
 
@@ -273,14 +274,14 @@ impl Converter<'_> {
         let mut stops: Vec<TabStop> = tabs
             .iter()
             .filter(|t| t.pos > 0)
-            .map(|t| TabStop { pos: pt(tw(t.pos)), align: tab_align(&t.kind), leader: tab_leader(&t.leader) })
+            .map(|t| TabStop { pos: pt(tw(t.pos)).min(MAX_LEN_PT), align: tab_align(&t.kind), leader: tab_leader(&t.leader) })
             .collect();
         if self.h.auto_tab_right.contains(&pp.tab_pr) {
             // The automatic tab at the right end (Hancom: 오른쪽 끝 자동 탭): a right tab where the line ends (tab
             // positions count from the text column's left edge).
             let end = self.line_width() - tw(pp.right);
             if end > 0 && tabs.iter().all(|t| tw(t.pos) < end) {
-                stops.push(TabStop { pos: pt(end), align: TabAlign::Right, leader: TabLeader::None });
+                stops.push(TabStop { pos: pt(end).min(MAX_LEN_PT), align: TabAlign::Right, leader: TabLeader::None });
             }
         }
         if !stops.is_empty() {
