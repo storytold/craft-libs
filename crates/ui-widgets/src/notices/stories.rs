@@ -4,7 +4,8 @@ use super::{
     Notice, NoticeAction, NoticeCenter, NoticeIcon, NoticeLayout, PostedNotice, SaveResult, SettingsLoad, SettingsNoticeState, SettingsNotices,
     ToastStack,
 };
-use crate::contract::{Politeness, Show as _};
+use crate::buttons::Button;
+use crate::contract::{Politeness, Show as _, clicked};
 use crate::display::{Shade, Text};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Label, WindowKey};
@@ -28,6 +29,15 @@ fn notice(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Notice<'static>, covers = [], drive = Drive::Never)]
 fn notice_warning(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Notice::new(Tone::Warn, "ICO is limited to 256 by 256 pixels.").show(ui).into()
+}
+
+#[story(Notice<'static>, covers = [], drive = Drive::Never)]
+fn notice_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Notice::new(Tone::Info, "This document contains fillable fields.")
+        .layout(NoticeLayout::Bar)
+        .action(NoticeAction::new("Hide highlights"))
+        .show(ui)
+        .into()
 }
 
 #[story(Notice<'static>, covers = [], drive = Drive::Never)]
@@ -111,6 +121,27 @@ fn notice_center(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     NoticeCenter::new().window(window).show(ui).into()
 }
 
+/// A notice with a title, a message, its own action and Don't Show Again in the bottom corner of the story's stage. It
+/// stays until closed, and comes back once closed.
+#[story(NoticeCenter, covers = [], drive = Drive::Never)]
+fn notice_center_with_message(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let ctx = ui.ctx().clone();
+    let window = WindowKey::new("notice-center-message-story");
+    if toast::cards(&ctx, &window).is_empty() {
+        let center = NoticeCenter::new().window(window.clone());
+        let notice = PostedNotice::new("Form submitted")
+            .message("The server accepted all 12 fields.")
+            .action("Show Response")
+            .tone(Tone::Good)
+            .dismiss_key("form-submitted".to_owned())
+            .sticky();
+        let _ = center.post(&ctx, &notice, &[]);
+    }
+    let area = stage(ui);
+    ToastStack::show(ui, &window, area);
+    NoticeCenter::new().window(window).show(ui).into()
+}
+
 /// A neutral toast, a warning with ten lines and an error in the bottom corner of the story's stage.
 #[story(ToastStack, covers = [], drive = Drive::Never)]
 fn toast_stack(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -122,6 +153,26 @@ fn toast_stack(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         toast::post(&ctx, &window, toast::Toast::new(Label::Empty).title("Opened with 10 warnings").lines(lines).tone(Tone::Warn).timeout(None));
         let error = toast::Toast::new(Label::Empty).title("Couldn't save the document").lines(["The disk is full."]).tone(Tone::Bad);
         toast::post(&ctx, &window, error.timeout(None));
+    }
+    let area = stage(ui);
+    ToastStack::show(ui, &window, area);
+    Text::new("Toasts").show(ui).into()
+}
+
+/// A plain toast in the bottom corner of the story's stage; the button posts a progress card with Cancel under it,
+/// and Cancel ends that card.
+#[story(ToastStack, covers = [], drive = Drive::Never)]
+fn toast_stack_progress(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let ctx = ui.ctx().clone();
+    let window = WindowKey::new("toast-stack-progress-story");
+    let cards = toast::cards(&ctx, &window);
+    if cards.is_empty() {
+        toast::post(&ctx, &window, toast::Toast::new(Label::Empty).title("Pasted from the clipboard").timeout(None));
+    }
+    let running = cards.iter().any(|card| card.toast.progress.is_some());
+    if clicked(&Button::new("Export").show(ui)) && !running {
+        let job = toast::Toast::new("Page 3 of 8").title("Exporting poster.pdf").progress(0.375).action(toast::ToastAction::new("Cancel"));
+        toast::post(&ctx, &window, job);
     }
     let area = stage(ui);
     ToastStack::show(ui, &window, area);

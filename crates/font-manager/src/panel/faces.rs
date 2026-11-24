@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use craft_i18n::{Direction, base_direction};
+use craft_theme::Srgba;
 use craft_ui::fonts::{FaceBytes, FontRef};
 use craft_ui::primitives::{ContentPainterCx, DocRun, DocText, FacesCx, TextLayout};
 use craft_ui::style::DataColor;
@@ -128,6 +129,15 @@ fn share(room: f32, ink: f32) -> f32 {
 
 /// `text` on one line in `font` at `points` in the band `rect` ([`sample_line`]), at the reading start of `rect`,
 /// clipped to `rect`. The sample keeps its own direction whatever the interface's.
+/// The ink of a sample over `rect`: black on a white paper it fills, in every theme, when `on_white`; else `ink`.
+pub(crate) fn sample_ink(painter: &ContentPainterCx<'_>, rect: Rect, on_white: bool, ink: Color32) -> DataColor {
+    if !on_white {
+        return DataColor::new(ink);
+    }
+    painter.painter.rect_filled(rect, 0.0, Color32::from(Srgba::WHITE));
+    DataColor::new(Color32::from(Srgba::BLACK))
+}
+
 pub(crate) fn paint_sample(painter: &ContentPainterCx<'_>, rect: Rect, font: &FontRef, text: &str, points: f32, color: DataColor) {
     let line = sample_line(|doc| painter.layout(doc), font, text, points, rect.height(), Some(rect.width()), color);
     let size = line.layout.size();

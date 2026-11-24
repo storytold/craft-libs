@@ -1084,6 +1084,25 @@ fn prompt_id() -> craft_ui::dialog::DialogId {
 
 #[cfg(any(test, feature = "screen-testing"))]
 impl Updater {
+    /// An updater for `app`, running `version`, whose update to `release` has installed and waits for the app to close,
+    /// as a finished installation leaves it, for a screen test of the app's Restart to Update path: a requested check
+    /// reports [`Status::Ready`], [`Self::restart_to_update`] asks the app to close, and the exit runs `restart` in place
+    /// of the install helper. Nothing checks, downloads or installs. The close the installation asked for as it finished
+    /// is taken as answered, so the app is asked to close only after Restart to Update. A `restart` that fails is
+    /// recorded as a failed update: give the updater [`Self::with_paths`] so the record stays out of the app's folders.
+    pub fn ready_for_tests(
+        app: &'static App,
+        version: impl Into<String>,
+        release: Release,
+        restart: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        let mut updater = Self::new(app, version);
+        updater.installed = true;
+        updater.known = Some((release.clone(), true));
+        updater.restart = Some((Restart::later(restart), release));
+        updater
+    }
+
     /// Waits for the running check's answer on its channel (its thread always sends one, or ends
     /// and closes the channel), then hands it to `tick` as a pass would; then does the same for
     /// each offer still being inspected, until none is left (tests).

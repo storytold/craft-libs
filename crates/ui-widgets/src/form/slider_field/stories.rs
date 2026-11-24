@@ -17,9 +17,21 @@ fn slider_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     SliderField::new("Opacity", data.bind("opacity", 40.0), PERCENT).unit_kind(UnitKind::Percent).show(ui).into()
 }
 
+/// Words at the two ends of the track, as a softness or a contrast control names its extremes.
+#[story(SliderField<'static>, covers = [], drive = Drive::Never)]
+fn slider_field_end_words(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    SliderField::new("Softness", data.bind("softness", 50.0), PERCENT).marks_labelled([(0.0, "Soft"), (100.0, "Hard")]).show(ui).into()
+}
+
 #[story(SliderField<'static>, covers = [], drive = Drive::Never)]
 fn slider_field_log(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     SliderField::new("Brush size", data.bind("size", 8.0), 1.0..=200.0).scale(SliderScale::Log).step(1.0).show(ui).into()
+}
+
+/// A whole-step slider whose field keeps finer typed values.
+#[story(SliderField<'static>, covers = [], drive = Drive::Never)]
+fn slider_field_typed_precision(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    SliderField::new("Size", data.bind("precise_size", 36.1231), 1.0..=100.0).step(1.0).typed_decimals(4).show(ui).into()
 }
 
 #[story(SliderField<'static>, covers = [Mixed], drive = Drive::Never)]

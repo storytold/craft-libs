@@ -36,6 +36,18 @@ pub fn system_appearance(ctx: &Context) -> SystemState {
     })
 }
 
+/// The desktop text scale from the installed [`SystemReader`], `None` where the OS gives none.
+pub fn system_text_scale(ctx: &Context) -> Option<f32> {
+    Service::<Source>::run(ctx, |source| source.0.text_scale())
+}
+
+/// Tells the reader whether the app is active, so a desktop source that reports the appearance only for an active app
+/// reads again when the root window gains focus.
+pub(crate) fn set_active(ctx: &Context, active: bool) {
+    // PLAN: assumed SystemReader::set_active(&self, bool) (pdf-shell-w3)
+    Service::<Source>::run(ctx, |source| source.0.set_active(active));
+}
+
 pub(crate) fn install(ctx: &Context, reader: SystemReader) {
     Service::<Source>::run(ctx, |source| source.0 = reader);
 }
@@ -58,6 +70,12 @@ pub(crate) fn input_hook(ctx: &Context, events: &[Event]) {
 #[cfg(feature = "testing")]
 pub(crate) fn report_theme(ctx: &Context, dark: bool) {
     Service::<Source>::run(ctx, |source| source.0.report_theme(if dark { Theme::Dark } else { Theme::Light }));
+}
+
+/// Reports `scale` as the OS's text scale (`None`: no scaling), as a desktop source would.
+#[cfg(feature = "testing")]
+pub(crate) fn report_text_scale(ctx: &Context, scale: Option<f32>) {
+    Service::<Source>::run(ctx, |source| source.0.report_text_scale(scale));
 }
 
 /// Reports `contrast` as the OS's, as a desktop source would.

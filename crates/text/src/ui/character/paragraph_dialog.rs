@@ -73,6 +73,7 @@ craft_ui::words! {
         preview: "paragraphDialog.preview" = "Preview";
         tabs: "paragraphDialog.tabs" = "Tabs…";
         at_least: "paragraphDialog.atLeast" = "At least";
+        auto: "paragraphDialog.auto" = "Auto";
         sample: "paragraphDialog.sample" = "Sample Text";
         out_of_range: template "paragraphDialog.outOfRange" = "{field} must be from {min} to {max}";
         indents_and_spacing: "paragraphDialog.tabIndents" = "Indents and Spacing";
@@ -151,6 +152,8 @@ pub enum SpacingKind {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum LineSpacing {
+    /// The font's own line height; it replaces the `Multiple(0.0)` sentinel.
+    Auto,
     /// A multiple of single spacing: Single is 1, 1.5 lines 1.5, Double 2, Multiple any other.
     Multiple(f32),
     /// A fixed distance, points.
@@ -388,6 +391,7 @@ const CANCEL: usize = 1;
 /// The entries of Line spacing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinePreset {
+    Auto,
     Single,
     OneAndHalf,
     Double,
@@ -399,6 +403,7 @@ enum LinePreset {
 impl LinePreset {
     fn of(spacing: LineSpacing) -> Self {
         match spacing {
+            LineSpacing::Auto => LinePreset::Auto,
             LineSpacing::Multiple(1.0) => LinePreset::Single,
             LineSpacing::Multiple(1.5) => LinePreset::OneAndHalf,
             LineSpacing::Multiple(2.0) => LinePreset::Double,
@@ -410,9 +415,11 @@ impl LinePreset {
 
     /// The spacing choosing this entry gives when `current` was set.
     fn choose(self, current: Option<LineSpacing>) -> LineSpacing {
-        let at = current.map(at_value);
+        // An Auto current has no amount, so the fallbacks apply.
+        let at = current.and_then(at_value);
         let distance = at.filter(|x| *x > MULTIPLE_LIMIT).unwrap_or(DEFAULT_DISTANCE);
         match self {
+            LinePreset::Auto => LineSpacing::Auto,
             LinePreset::Single => LineSpacing::Multiple(1.0),
             LinePreset::OneAndHalf => LineSpacing::Multiple(1.5),
             LinePreset::Double => LineSpacing::Multiple(2.0),
@@ -435,20 +442,25 @@ fn spacing_bounds(kind: SpacingKind) -> (f32, f32) {
 /// The bounds of At for a line spacing, in lines or points.
 fn at_bounds(spacing: LineSpacing) -> (f32, f32) {
     match spacing {
+        // Auto has no At: the bounds of no spacing.
+        LineSpacing::Auto => (0.0, MAX_POINTS),
         LineSpacing::Multiple(_) => (MIN_MULTIPLE, MAX_MULTIPLE),
         LineSpacing::Exactly(_) => (MIN_EXACT, MAX_POINTS),
         LineSpacing::AtLeast(_) => (0.0, MAX_POINTS),
     }
 }
 
-fn at_value(spacing: LineSpacing) -> f32 {
+/// The amount At shows for a line spacing; Auto has none.
+fn at_value(spacing: LineSpacing) -> Option<f32> {
     match spacing {
-        LineSpacing::Multiple(x) | LineSpacing::Exactly(x) | LineSpacing::AtLeast(x) => x,
+        LineSpacing::Auto => None,
+        LineSpacing::Multiple(x) | LineSpacing::Exactly(x) | LineSpacing::AtLeast(x) => Some(x),
     }
 }
 
 fn with_at(spacing: LineSpacing, at: f32) -> LineSpacing {
     match spacing {
+        LineSpacing::Auto => LineSpacing::Auto,
         LineSpacing::Multiple(_) => LineSpacing::Multiple(at),
         LineSpacing::Exactly(_) => LineSpacing::Exactly(at),
         LineSpacing::AtLeast(_) => LineSpacing::AtLeast(at),
@@ -515,7 +527,7 @@ impl ParagraphDialog {
     fn enabled(&self, row: Row) -> bool {
         match row {
             Row::By => matches!(self.format.special, Some(SpecialIndent::FirstLine | SpecialIndent::Hanging)),
-            Row::At => self.format.line_spacing.is_some(),
+            Row::At => matches!(self.format.line_spacing, Some(l) if at_value(l).is_some()),
             _ => true,
         }
     }
@@ -539,7 +551,7 @@ impl ParagraphDialog {
             Row::By => f.by,
             Row::SpaceBefore => f.space_before,
             Row::SpaceAfter => f.space_after,
-            Row::At => f.line_spacing.map(at_value),
+            Row::At => f.line_spacing.and_then(at_value),
         }
     }
 
@@ -558,7 +570,12 @@ impl ParagraphDialog {
                 f.space_after_kind = if value == self.opened.space_after { self.opened.space_after_kind } else { SpacingKind::Points };
             }
             // An emptied At keeps the spacing's number.
-            Row::At => f.line_spacing = f.line_spacing.map(|l| with_at(l, value.unwrap_or_else(|| at_value(l)))),
+            Row::At => {
+                f.line_spacing = f.line_spacing.map(|l| match value.or_else(|| at_value(l)) {
+                    Some(at) => with_at(l, at),
+                    None => l,
+                })
+            }
         }
     }
 
@@ -666,7 +683,7 @@ impl ParagraphDialog {
         let out = strip
             .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone())));
         for event in out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(chosen) = keys.last()
             {
                 self.tab = *chosen;
@@ -793,12 +810,17 @@ impl ParagraphDialog {
         self.field(ui, scope, Row::SpaceAfter, &words.spacing_after, valid);
 
         let current = self.format.line_spacing.map(LinePreset::of);
-        let mut entries = vec![
+        let mut entries = Vec::new();
+        // Auto is the text's own spacing: offered only to a format that opened with it, so it can be chosen back.
+        if self.opened.line_spacing == Some(LineSpacing::Auto) {
+            entries.push(Entry::new(LinePreset::Auto, words.auto.clone()));
+        }
+        entries.extend([
             Entry::new(LinePreset::Single, words.single.clone()),
             Entry::new(LinePreset::OneAndHalf, words.one_and_half.clone()),
             Entry::new(LinePreset::Double, words.double.clone()),
             Entry::new(LinePreset::Multiple, words.multiple.clone()),
-        ];
+        ]);
         if self.word || current == Some(LinePreset::AtLeast) {
             entries.push(Entry::new(LinePreset::AtLeast, words.at_least.clone()));
         }
@@ -1099,6 +1121,7 @@ fn sample_plan(format: &ParagraphFormat, width: f32, row_height: f32) -> SampleP
             SpecialIndent::Hanging => (0.0, by),
         };
         let pitch = match f.line_spacing.unwrap_or_default() {
+            LineSpacing::Auto => row_height,
             LineSpacing::Multiple(m) => row_height * m,
             LineSpacing::Exactly(e) => e,
             LineSpacing::AtLeast(a) => row_height.max(a),
