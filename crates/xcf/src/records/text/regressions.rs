@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn legacy_ordinary_character_escapes_preserve_decoded_text_and_original_fields() {
+    for (input, expected) in [("A\\}B", "A}B"), ("A\\qB", "AqB"), ("A\\nB", "A\nB"), ("A\\\\B", "A\\B")] {
+        let raw = super::tests::legacy_bytes(input, "iso8859");
+        let scan = gdyntext(&raw, 19, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        let record = &scan.records[0];
+        assert_eq!(record.text().unwrap(), Some(expected));
+        assert_eq!(record.raw, raw);
+        let Source::Gdyntext(legacy) = &record.source else { panic!("legacy") };
+        assert_eq!(legacy.fields[0], input);
+        let span = legacy.spans[0];
+        assert_eq!(&raw[span.start - 19..span.end - 19], input.as_bytes());
+    }
+    let modern = gimp(br#"(text "A\qB")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(modern.stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
+fn registered_numeric_base_directions_match_nicknames_and_keep_source_atoms() {
+    for (value, expected) in
+        [Direction::Ltr, Direction::Rtl, Direction::TtbRtl, Direction::TtbRtlUpright, Direction::TtbLtr, Direction::TtbLtrUpright]
+            .into_iter()
+            .enumerate()
+    {
+        for spelling in [value.to_string(), format!("0{value:o}"), format!("0x{value:x}"), format!("0X{value:X}")] {
+            for automatic in [false, true] {
+                let raw = format!("(text \"abc\") (base-direction {spelling}) (base-dir-auto {})", if automatic { "yes" } else { "no" });
+                let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+                assert_eq!(scan.stopped, None, "{raw}");
+                let record = &scan.records[0];
+                assert_eq!(record.base_direction, Some(expected));
+                assert_eq!(record.automatic_direction, Some(automatic));
+                assert_eq!(record.direction, if automatic { Direction::Auto } else { expected });
+                assert_eq!(record.config().unwrap().scalar("base-direction").unwrap(), Some(spelling.as_str()));
+            }
+        }
+    }
+    for atom in ["6", "999", "0x100000000", "08", "0b1", "+1", "-0", "1.0", "\"1\"", "'1'"] {
+        let raw = format!("(base-direction {atom})");
+        let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed, "{atom}");
+    }
+    let raw = format!("{}1", "0".repeat(4096));
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 2
+    };
+    assert!(matches!(integer_direction(&raw, &keep), Err(Failure::Cancelled)));
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
 fn bare_atoms_end_at_comments_but_quoted_hashes_remain_literal() {
     for raw in [b"(base-direction rtl#note\n) (text \"#literal\")".as_slice(), b"(base-direction rtl #note\n) (text '#literal')"] {
         let scan = gimp(raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();

@@ -274,6 +274,7 @@ impl<'a> Parser<'a, '_> {
                         b'f' => 12,
                         b'v' if !require_quote => 11,
                         b'\\' | b'"' => escape,
+                        _ if !require_quote => escape,
                         _ => return Err(StopReason::Malformed.into()),
                     }
                 }
@@ -344,7 +345,37 @@ impl<'a> Parser<'a, '_> {
     }
 }
 
-fn direction(config: &Config<'_>) -> ReadResult<(Direction, Option<Direction>, Option<bool>)> {
+fn integer_direction(source: &str, keep: &dyn Fn() -> bool) -> ReadResult<Direction> {
+    let (digits, radix) = if let Some(hex) = source.strip_prefix("0x").or_else(|| source.strip_prefix("0X")) {
+        (hex, 16)
+    } else if source.len() > 1 && source.starts_with('0') {
+        (source, 8)
+    } else {
+        (source, 10)
+    };
+    if digits.is_empty() {
+        return Err(StopReason::Malformed.into());
+    }
+    let mut value = 0u32;
+    for (index, byte) in digits.bytes().enumerate() {
+        if index.is_multiple_of(256) && !keep() {
+            return Err(Failure::Cancelled);
+        }
+        let digit = char::from(byte).to_digit(radix).ok_or(Failure::Stop(StopReason::Malformed))?;
+        value = value.checked_mul(radix).and_then(|value| value.checked_add(digit)).ok_or(Failure::Stop(StopReason::Malformed))?;
+    }
+    match value {
+        0 => Ok(Direction::Ltr),
+        1 => Ok(Direction::Rtl),
+        2 => Ok(Direction::TtbRtl),
+        3 => Ok(Direction::TtbRtlUpright),
+        4 => Ok(Direction::TtbLtr),
+        5 => Ok(Direction::TtbLtrUpright),
+        _ => Err(StopReason::Malformed.into()),
+    }
+}
+
+fn direction(config: &Config<'_>, keep: &dyn Fn() -> bool) -> ReadResult<(Direction, Option<Direction>, Option<bool>)> {
     let base = match config.scalar("base-direction")? {
         Some("ltr") => Some(Direction::Ltr),
         Some("rtl") => Some(Direction::Rtl),
@@ -352,6 +383,7 @@ fn direction(config: &Config<'_>) -> ReadResult<(Direction, Option<Direction>, O
         Some("ttb-rtl-upright") => Some(Direction::TtbRtlUpright),
         Some("ttb-ltr") => Some(Direction::TtbLtr),
         Some("ttb-ltr-upright") => Some(Direction::TtbLtrUpright),
+        Some(value) if matches!(config.field("base-direction")?, Some([Value::Atom { quoted: false, .. }])) => Some(integer_direction(value, keep)?),
         None => None,
         _ => return Err(StopReason::Malformed.into()),
     };
@@ -436,7 +468,7 @@ pub fn gimp<'a>(
             parser.budget.retain(&mut forms, form)?;
         }
         let config = Config { forms };
-        let (direction, base_direction, automatic_direction) = direction(&config)?;
+        let (direction, base_direction, automatic_direction) = direction(&config, keep_going)?;
         Ok(TextRecord {
             raw: bytes,
             span: parser.span(0, bytes.len())?,

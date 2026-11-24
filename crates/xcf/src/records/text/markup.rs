@@ -512,6 +512,34 @@ impl<'a> Parser<'a, '_> {
         }
         Ok(())
     }
+    fn compact_wrapper(&mut self) -> ReadResult<()> {
+        self.check()?;
+        if !self.contexts.get(1).is_some_and(|context| context.name == "markup") {
+            return Ok(());
+        }
+        for (index, context) in self.contexts.iter().enumerate().skip(2) {
+            vector_poll(index, self.keep)?;
+            if context.parent == Some(0) {
+                return Ok(());
+            }
+        }
+        for (index, run) in self.runs.iter().enumerate() {
+            vector_poll(index, self.keep)?;
+            if run.context == 0 {
+                return Ok(());
+            }
+        }
+        self.contexts.remove(0);
+        for (index, context) in self.contexts.iter_mut().enumerate() {
+            vector_poll(index, self.keep)?;
+            context.parent = context.parent.and_then(|parent| parent.checked_sub(1));
+        }
+        for (index, run) in self.runs.iter_mut().enumerate() {
+            vector_poll(index, self.keep)?;
+            run.context = run.context.checked_sub(1).ok_or(Failure::Stop(StopReason::Malformed))?;
+        }
+        self.check()
+    }
     fn parse(mut self) -> ReadResult<Markup<'a>> {
         // Pango treats the complete input as a fragment, even when its first
         // element is named markup: sibling elements and trailing text are valid.
@@ -563,18 +591,7 @@ impl<'a> Parser<'a, '_> {
         }
         // Keep the established context IDs for exactly one explicit wrapper.
         // No outside run may inherit its styles; those fragments keep the root.
-        if self.contexts.get(1).is_some_and(|context| context.name == "markup")
-            && self.contexts.iter().skip(2).all(|context| context.parent != Some(0))
-            && self.runs.iter().all(|run| run.context != 0)
-        {
-            self.contexts.remove(0);
-            for context in &mut self.contexts {
-                context.parent = context.parent.and_then(|parent| parent.checked_sub(1));
-            }
-            for run in &mut self.runs {
-                run.context = run.context.checked_sub(1).ok_or(Failure::Stop(StopReason::Malformed))?;
-            }
-        }
+        self.compact_wrapper()?;
         drop(self.stack);
         self.budget.retained_left += self.stack_charge;
         Ok(Markup {
@@ -587,6 +604,10 @@ impl<'a> Parser<'a, '_> {
             notices_truncated: self.notices_truncated,
         })
     }
+}
+
+fn vector_poll(index: usize, keep: &dyn Fn() -> bool) -> ReadResult<()> {
+    if index.is_multiple_of(64) && !keep() { Err(Failure::Cancelled) } else { Ok(()) }
 }
 
 // Required record storage is admitted by the caller before optional notices.

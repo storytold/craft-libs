@@ -1,5 +1,54 @@
 use super::*;
 
+fn wrapper_tables(contexts: usize, runs: usize) -> (Vec<Context<'static>>, Vec<Run>) {
+    let table = (0..contexts)
+        .map(|index| Context {
+            parent: match index {
+                0 => None,
+                1 => Some(0),
+                _ => Some(1),
+            },
+            name: if index < 2 { "markup" } else { "b" },
+            role: if index < 2 { Role::Markup } else { Role::Bold },
+            attributes: Vec::new(),
+            source: if index == 0 { 0..0 } else { 0..8 },
+        })
+        .collect();
+    let runs = (0..runs).map(|_| Run { context: 1, text: 0..1, source: 8..9 }).collect();
+    (table, runs)
+}
+
+#[test]
+fn wrapper_compaction_polls_each_eligibility_and_rebase_walk() {
+    // Test the private post-parse boundary directly: no earlier source or notice
+    // scan can satisfy these cancellation assertions. The table shape is the
+    // same explicit wrapper plus sibling child contexts produced by parsing.
+    for (contexts, runs, stop, removed) in [(258, 0, 2, false), (2, 256, 2, false), (258, 0, 6, true), (2, 256, 7, true)] {
+        let mut budget = Budget::default();
+        let calls = std::cell::Cell::new(0);
+        let keep = || {
+            calls.set(calls.get() + 1);
+            calls.get() < stop
+        };
+        let mut parser = parser("", &mut budget, &keep);
+        (parser.contexts, parser.runs) = wrapper_tables(contexts, runs);
+        assert!(matches!(parser.compact_wrapper(), Err(Failure::Cancelled)), "contexts={contexts} runs={runs} stop={stop}");
+        assert_eq!(calls.get(), stop);
+        assert_eq!(parser.contexts.len(), contexts - usize::from(removed));
+        if runs != 0 && removed {
+            assert_eq!(parser.runs[0].context, 1, "run rebasing must cancel before publishing a partial walk");
+        }
+    }
+    let mut budget = Budget::default();
+    let mut parser = parser("", &mut budget, &|| true);
+    (parser.contexts, parser.runs) = wrapper_tables(258, 256);
+    parser.compact_wrapper().unwrap_or_else(|_| panic!("valid wrapper"));
+    assert_eq!(parser.contexts.len(), 257);
+    assert_eq!(parser.contexts[0].parent, None);
+    assert!(parser.contexts.iter().skip(1).all(|context| context.parent == Some(0)));
+    assert!(parser.runs.iter().all(|run| run.context == 0));
+}
+
 #[test]
 fn notice_attribute_scan_polls_recognized_fields_before_filtering() {
     for raw in ["<markup font='Example' weight='bold'/>", "<markup unknown='value'/>"] {
