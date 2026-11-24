@@ -103,8 +103,19 @@ pub struct Label {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Diagnostic {
-    UnknownOperation { source_ordinal: usize },
-    UnknownProperty { source_ordinal: usize, property: usize },
+    UnknownOperation {
+        source_ordinal: usize,
+    },
+    UnknownProperty {
+        source_ordinal: usize,
+        property: usize,
+    },
+    /// A known integer field retains its literal without a guessed value when absolute
+    /// numeric syntax or destination range is unsupported by this bounded reader.
+    UnsupportedInteger {
+        source_ordinal: usize,
+        property: usize,
+    },
 }
 #[derive(Debug, PartialEq)]
 pub struct Graph<'a> {
@@ -497,6 +508,9 @@ impl<'b, 's> Decoder<'b, 's> {
                     let value = typed_value(&literal, kind, self.budget)?;
                     (literal, value)
                 };
+                if matches!(kind, Some(FieldType::Integer | FieldType::UnsignedInteger)) && matches!(value, Value::Unknown) {
+                    push(&mut self.diagnostics, Diagnostic::UnsupportedInteger { source_ordinal, property: properties.len() }, self.budget)?;
+                }
                 push(&mut properties, Property { name, literal, value }, self.budget)?;
             }
             let index = self.nodes.len();
@@ -517,6 +531,13 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
         }
         return Ok(Value::RelativeNumber(coefficient));
     }
+    // A numeric coefficient followed by malformed relative syntax is not an absolute
+    // integer fallback. Keep its existing syntax error instead of disguising it as data.
+    if matches!(kind, Some(FieldType::Integer | FieldType::UnsignedInteger))
+        && literal.find("rel").is_some_and(|at| literal.get(..at).is_some_and(|prefix| prefix.parse::<f64>().is_ok()))
+    {
+        return Err(invalid("malformed relative graph coefficient"));
+    }
     Ok(match kind {
         None => Value::Unknown,
         Some(FieldType::Number) => {
@@ -526,8 +547,8 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
             }
             Value::Number(value)
         }
-        Some(FieldType::Integer) => Value::Integer(signed_integer(literal)?),
-        Some(FieldType::UnsignedInteger) => Value::UnsignedInteger(unsigned_integer(literal)?),
+        Some(FieldType::Integer) => signed_integer(literal).map_or(Value::Unknown, Value::Integer),
+        Some(FieldType::UnsignedInteger) => unsigned_integer(literal).map_or(Value::Unknown, Value::UnsignedInteger),
         // GEGL 0.4.62's public chain API uses this explicit true set, not general
         // case folding (for example, "on" is true but "ON" is false).
         Some(FieldType::Boolean) => Value::Boolean(matches!(literal, "true" | "True" | "TRUE" | "1" | "yes" | "Yes" | "YES" | "on" | "y" | "Y")),

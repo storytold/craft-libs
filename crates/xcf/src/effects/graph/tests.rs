@@ -65,7 +65,7 @@ fn declarations_preserve_signedness_exact_literals_and_property_order() {
     assert_eq!(properties[3].value, Value::Boolean(true));
     assert_eq!(properties[4].value, Value::Choice(7));
     assert_eq!((properties[5].literal.as_str(), &properties[5].value), ("hello world", &Value::Text));
-    for invalid in ["gain n=NaN", "gain n=inf", "gain seed=-1", "gain seed=4294967296", "gain mode=missing", "gain n=1 n=2"] {
+    for invalid in ["gain n=NaN", "gain n=inf", "gain mode=missing", "gain n=1 n=2"] {
         assert!(parse(invalid, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{invalid}");
     }
 }
@@ -411,21 +411,73 @@ fn finite_integer_spellings_truncate_without_losing_exact_integer_source_precisi
         let raw = format!("gain seed={value}");
         assert_eq!(read(&raw).nodes[0].properties[0].value, Value::UnsignedInteger(value));
     }
+    assert_eq!(read("gain signed=1.5rel").nodes[0].properties[0].value, Value::RelativeNumber(1.5), "relative units remain unevaluated");
+}
+
+#[test]
+fn unsupported_absolute_integer_literals_retain_data_with_indexed_diagnostics() {
+    for field in ["signed", "seed"] {
+        for literal in ["0x10", "1junk", "junk", "unrelated", "", "NaN", "inf", "-inf", "1e999", "9223372036854775808.0", "-1e20"] {
+            let raw = format!("gain text=kept {field}='{literal}' n=1");
+            let graph = read(&raw);
+            assert_eq!(graph.nodes[0].properties[1].literal, literal);
+            assert_eq!(graph.nodes[0].properties[1].value, Value::Unknown);
+            assert_eq!(graph.nodes[0].properties[0].value, Value::Text);
+            assert_eq!(graph.nodes[0].properties[2].value, Value::Number(1.));
+            assert_eq!(graph.diagnostics, [Diagnostic::UnsupportedInteger { source_ordinal: 0, property: 1 }], "{raw}");
+        }
+    }
+    for literal in ["-1", "-1.5", "4294967296", "4294967296.0"] {
+        let raw = format!("gain seed={literal}");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Unknown);
+        assert_eq!(graph.diagnostics, [Diagnostic::UnsupportedInteger { source_ordinal: 0, property: 0 }]);
+    }
+    let graph = read("gain signed=0x10 invert-linear gain seed=4294967296");
+    assert_eq!(graph.nodes.len(), 3);
+    assert_eq!(
+        graph.diagnostics,
+        [Diagnostic::UnsupportedInteger { source_ordinal: 0, property: 0 }, Diagnostic::UnsupportedInteger { source_ordinal: 2, property: 0 }]
+    );
+    check_edges(&graph);
+    let graph = read("over aux=[gain signed=1junk]");
+    assert_eq!(graph.nodes[0].source_ordinal, 1);
+    assert_eq!(
+        graph.diagnostics,
+        [Diagnostic::UnsupportedInteger { source_ordinal: 1, property: 0 }],
+        "source order differs from dependency-first node order"
+    );
+    check_edges(&graph);
+    let graph = read("example:unknown signed=0x10");
+    assert_eq!(
+        graph.diagnostics,
+        [Diagnostic::UnknownOperation { source_ordinal: 0 }, Diagnostic::UnknownProperty { source_ordinal: 0, property: 0 }]
+    );
+}
+
+#[test]
+fn integer_fallback_does_not_hide_relative_structural_or_strict_number_errors() {
+    for field in ["n", "signed", "seed"] {
+        for literal in ["rel", "NaNrel", "infrel", "1e999rel", "1relrel", "junkrel", "1reljunk"] {
+            let raw = format!("gain {field}='{literal}'");
+            assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{raw}");
+        }
+    }
     for raw in [
-        "gain signed=NaN",
-        "gain signed=inf",
-        "gain signed=-inf",
-        "gain signed=1e999",
-        "gain signed=9223372036854775808.0",
-        "gain signed=-1e20",
-        "gain signed=junk",
-        "gain seed=NaN",
-        "gain seed=inf",
-        "gain seed=-1.5",
-        "gain seed=4294967296.0",
-        "gain seed=1e999",
+        "gain n=0x10",
+        "gain n=1junk",
+        "gain n=NaN",
+        "gain n=inf",
+        "over aux=[gain signed=0x10",
+        "gain signed=[invert-linear]",
+        "gain signed=0x10 signed=1",
     ] {
         assert!(parse(raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{raw}");
     }
-    assert_eq!(read("gain signed=1.5rel").nodes[0].properties[0].value, Value::RelativeNumber(1.5), "relative units remain unevaluated");
+    let mut budget = Budget::new(1, 1 << 20);
+    assert!(matches!(parse("gain signed=0x10", SCHEMA, &mut budget, &|| true), Err(Error::Limit(Limit::Storage))));
+    assert_eq!(budget.remaining_storage(), 1);
+    assert!(budget.remaining_work() < 1 << 20);
+    assert!(matches!(parse("gain signed=0x10", SCHEMA, &mut Budget::default(), &|| false), Err(Error::Source(crate::Error::Cancelled))));
 }
