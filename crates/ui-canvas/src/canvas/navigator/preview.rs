@@ -15,14 +15,14 @@ use crate::primitives::PaintShape;
 use crate::primitives::textures::CachedTexture;
 use crate::runtime::access::Numeric;
 use crate::runtime::commands;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx, UiTokens};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{
     AccessAction, AccessData, CancelReason, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey,
-    PressCancel, PressPhase, Sense,
+    PressCancel, PressPhase, Sense, ZoomScheme,
 };
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
@@ -354,6 +354,7 @@ impl Component for Navigator<'_> {
                 }
             }
         }
+        let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
         // The view the zoom rectangle asks for at its release.
         let mut boxed = None;
         if held.active {
@@ -382,6 +383,7 @@ impl Component for Navigator<'_> {
                         craft_behavior::kurbo::Rect::new(f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1)),
                         document,
                         ppp,
+                        &scheme,
                     ) {
                         boxed = Some(next);
                     }
@@ -417,7 +419,7 @@ impl Component for Navigator<'_> {
             let action = cx.memory::<WheelNavigation>().read(&wheel, line, os, &options);
             if let Some(action @ (WheelAction::Zoom(_) | WheelAction::SnapZoom(_))) = action {
                 let before = next;
-                WheelNavigation::apply(&mut next, action, before.rect.center(), document, ppp);
+                WheelNavigation::apply(&mut next, action, before.rect.center(), document, ppp, &scheme);
                 next.center = before.center;
                 zoomed |= next.zoom != before.zoom;
             }
@@ -425,7 +427,7 @@ impl Component for Navigator<'_> {
         for (chord, dir) in ZOOM_KEYS {
             while cx.take_claimed(chord) {
                 if !running {
-                    zoomed |= zoom::step(&mut next, dir, document, ppp);
+                    zoomed |= zoom::step(&mut next, dir, document, ppp, &scheme);
                 }
             }
             cx.claim(chord);

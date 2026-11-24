@@ -127,7 +127,7 @@ fn ribbon(ui: &mut Ui, data: &mut StoryData, strip: TabStrip<'_, usize>, open: &
         .roles(ribbon_role)
         .show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
     for event in &out.response.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(key) = keys.last()
         {
             *shown = *key;

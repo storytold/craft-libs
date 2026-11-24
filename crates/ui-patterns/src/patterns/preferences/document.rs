@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 use craft_host::Host;
 use craft_host::target::Os;
 use craft_i18n::{I18n, Lang, Words};
-use egui::{Context, Ui};
+use egui::Ui;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -39,7 +39,7 @@ pub trait CustomSettings<T> {
     }
     /// Dialogs opened from a custom row (a colour picker), drawn last in the window's viewport. A dialog's answer goes
     /// into `draft`.
-    fn nested(&mut self, _ctx: &Context, _draft: &mut SettingsDraft) {}
+    fn nested(&mut self, _ui: &mut Ui, _draft: &mut SettingsDraft) {}
     /// Whether a dialog drawn by [`Self::nested`] is open.
     fn nested_open(&self) -> bool {
         false

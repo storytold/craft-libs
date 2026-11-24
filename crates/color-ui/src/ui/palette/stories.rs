@@ -3,6 +3,7 @@
 use super::SwatchPalette;
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
+use craft_ui::choice::SwatchSpacing;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -61,14 +62,29 @@ fn no_colour(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     StoryOutput::from(shown).readout(readout)
 }
 
-#[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
-fn swatch_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+/// The palette of the twelve colours, set up by `options`, with the readout of its latest event.
+fn shown_palette(ui: &mut Ui, data: &mut StoryData, options: impl for<'a> FnOnce(SwatchPalette<'a>) -> SwatchPalette<'a>) -> StoryOutput {
     let swatches = named(PALETTE.iter().map(|(name, color)| ((*name).to_owned(), *color)));
-    let shown = SwatchPalette::new("Swatches", data.bind("color", PALETTE[8].1), &swatches).show(ui);
+    let shown = options(SwatchPalette::new("Swatches", data.bind("color", PALETTE[8].1), &swatches)).show(ui);
     let last = data.note("last", String::new());
     if let Some(event) = &shown.edit {
         *last = format!("{event:?}");
     }
     let readout = format!("Last event: {last}");
     StoryOutput::from(shown).readout(readout)
+}
+
+#[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
+fn swatch_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    shown_palette(ui, data, |palette| palette)
+}
+
+#[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
+fn swatch_palette_spaced(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    shown_palette(ui, data, |palette| palette.spacing(SwatchSpacing::Spaced))
+}
+
+#[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
+fn swatch_palette_spaced_draggable(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    shown_palette(ui, data, |palette| palette.spacing(SwatchSpacing::Spaced).drag_payload(|_| Some(String::from("swatch"))))
 }

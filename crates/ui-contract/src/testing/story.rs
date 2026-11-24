@@ -641,12 +641,16 @@ impl EditKind {
 pub enum CollectionKind {
     /// The selection changed.
     Selection,
+    /// A click picked the sole selected item again.
+    Picked,
     /// The lead moved.
     LeadMoved,
     /// The pointer rested on an item.
     Rested,
     /// Enter or a double click on an item.
     Activate,
+    /// Enter on a disabled lead.
+    Refused,
     /// A double click on the empty space.
     EmptyActivated,
     /// A secondary click on the empty space.
@@ -687,9 +691,11 @@ impl CollectionKind {
     /// The kind of `event`, `None` for an edit event of a kind the runner does not know.
     pub fn of<K, E>(event: &CollectionEvent<K, E>) -> Option<CollectionKind> {
         Some(match event {
-            CollectionEvent::Selection(_) => CollectionKind::Selection,
+            CollectionEvent::Selection { .. } => CollectionKind::Selection,
+            CollectionEvent::Picked { .. } => CollectionKind::Picked,
             CollectionEvent::LeadMoved { .. } => CollectionKind::LeadMoved,
             CollectionEvent::Activate(_) => CollectionKind::Activate,
+            CollectionEvent::Refused(_) => CollectionKind::Refused,
             CollectionEvent::Rested(_) => CollectionKind::Rested,
             CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
             CollectionEvent::EmptyContextMenu { .. } => CollectionKind::EmptyContextMenu,

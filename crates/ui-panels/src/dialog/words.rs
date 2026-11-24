@@ -1,7 +1,8 @@
 //! Built-in words of the dialog family.
 
 craft_ui::words! {
-    /// The words of the dialog family: the standard prompts, the unsaved-changes question and the recovery dialog.
+    /// The words of the dialog family: the standard prompts, the unsaved-changes question, the recovery dialog and the
+    /// job progress window.
     /// Cancel, OK and "Don't show again" are the common words. The unsaved-changes question asks Yes, No and Cancel
     /// on Windows and Linux and Save, Don't Save and Cancel on macOS.
     pub struct DialogWords {
@@ -45,6 +46,7 @@ craft_ui::words! {
         recovery_recover: "recovery.recover" = "Recover";
         recovery_discard: "recovery.discard" = "Discard";
         recovery_protected: "recovery.protected" = "Password-protected";
+        job_progress_hide: "jobProgress.hide" = "Continue in Background";
         // full-window parts
         full_window_title_zoom: template "fullWindowTitle.zoomed" = "{name} ({subject}, {zoom})";
         full_window_title_subject: template "fullWindowTitle.subject" = "{name} ({subject})";

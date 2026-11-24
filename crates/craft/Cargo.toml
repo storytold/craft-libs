@@ -207,6 +207,7 @@ craft-jsonc = { workspace = true, optional = true }
 craft-pcap = { workspace = true, optional = true }
 craft-sourcemap = { workspace = true, optional = true }
 craft-wasm = { workspace = true, optional = true }
+craft-wayland = { workspace = true, optional = true }
 craft-xfdf = { workspace = true, optional = true }
 craft-color-transform = { workspace = true, optional = true }
 craft-develop = { workspace = true, optional = true }
@@ -981,6 +982,8 @@ video-vp9-decode = ["video", "craft-video/vp9-decode"]
 video-vp9-encode = ["video", "craft-video/vp9-encode"]
 
 wasm = ["dep:craft-wasm"]
+
+wayland = ["dep:craft-wayland"]
 
 web-api = ["dep:craft-web-api"]
 

@@ -1,5 +1,5 @@
 //! Dialog shells and prompts: `Dialog`, `DialogFrame`, `BlockingOverlay`, `Prompt` with its
-//! configurations (`Alert`, `StandardPrompt`, `UnsavedChangesDialog`, `RecoveryDialog`) and the values an app routes
+//! configurations (`Alert`, `StandardPrompt`, `UnsavedChangesDialog`, `RecoveryDialog`, `JobProgress`) and the values an app routes
 //! its dialogs by (`DialogStack`, `DialogHost`). Form dialogs build on the shells.
 
 pub(crate) mod alert;
@@ -8,6 +8,7 @@ pub(crate) mod blocking;
 pub mod frame;
 mod held;
 mod host;
+pub(crate) mod job_progress;
 pub(crate) mod modal;
 pub(crate) mod prompt;
 pub(crate) mod prompts;
@@ -25,10 +26,11 @@ mod words;
 pub use alert::{Alert, AlertOutput, HostedAlert};
 pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
 pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks, close_button, set_close_button};
-pub use held::{HeldAnswer, HeldOk};
+pub use held::{HeldAnswer, HeldOk, HoldsOk};
 #[doc(hidden)]
 pub use host::dialog_probe;
 pub use host::{ChildDialog, DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};
+pub use job_progress::{JobAnswer, JobProgress, JobProgressOutput};
 pub use modal::{ButtonPlace, Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};

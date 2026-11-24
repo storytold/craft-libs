@@ -12,12 +12,14 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
 use craft_behavior::{IconId, Mixed};
-use craft_i18n::{Count, Format};
+use craft_host::Host;
+use craft_i18n::{Count, Digits, Format, Region, Words};
 use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
 use serde_json::{Value, json};
 use std::any::Any;
 use std::fmt;
+use std::sync::Arc;
 
 /// Which question a `StandardPrompt` asks.
 #[derive(Clone, Debug, PartialEq)]
@@ -366,6 +368,41 @@ impl StandardPrompt {
     /// The question this prompt asks.
     pub fn kind(&self) -> &PromptKind {
         &self.kind
+    }
+
+    /// The title the prompt shows under `host`: the text a scope under `host` shows, for code without a `Ui` (an app's
+    /// command, a test without a frame).
+    pub fn shown_title(&self, host: &Host) -> String {
+        let (words, (title, _, _)) = self.content_under(host);
+        title.resolved(&words).as_str().to_owned()
+    }
+
+    /// The message the prompt shows under `host`, as [`shown_title`](Self::shown_title).
+    pub fn shown_message(&self, host: &Host) -> String {
+        let (words, (_, message, _)) = self.content_under(host);
+        message.resolved(&words).as_str().to_owned()
+    }
+
+    /// The paragraphs the prompt shows under its message under `host`, in order, as
+    /// [`shown_title`](Self::shown_title).
+    pub fn shown_paragraphs(&self, host: &Host) -> Vec<String> {
+        let words = host.words();
+        self.paragraphs.iter().map(|paragraph| paragraph.resolved(&words).as_str().to_owned()).collect()
+    }
+
+    /// The answers the prompt has buttons for under `host`, each with its button's label, in the prompt's order (the
+    /// footer places them in the platform's order), as [`shown_title`](Self::shown_title).
+    pub fn shown_buttons(&self, host: &Host) -> Vec<(PromptChoice, String)> {
+        let (words, (_, _, answers)) = self.content_under(host);
+        answers.into_iter().map(|(choice, reply)| (choice, reply.label().resolved(&words).as_str().to_owned())).collect()
+    }
+
+    /// [`content`](Self::content) in the words and number format of `host`, with those words.
+    fn content_under(&self, host: &Host) -> (Words, Content) {
+        let words = host.words();
+        let format = host.i18n().map_or_else(|| Arc::new(Format::new(&Region::system(), Digits::Locale)), |i18n| i18n.format());
+        let content = self.content(&words.set::<DialogWords>(), &words.set::<CommonWords>(), &format);
+        (words, content)
     }
 
     /// The title, message and answers of the kind, with the app's replacements applied.

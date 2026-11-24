@@ -137,6 +137,7 @@ Grouped by gallery level, then shape, then name.
 | `GroupGrip` | Leaf | `craft_ui_panels::docking::group` | The handle a group is dragged by: an unmarked band over the empty room of the group's header |
 | `PreviewPane` | Leaf | `craft_ui_patterns::patterns::form_dialogs::preview` | A picture in a well, over a checkerboard where it is transparent |
 | `Splitter` | Leaf | `craft_ui_panels::docking::splitter` | A line between two panes, as thick across as the pointer's grab distance |
+| `TearOffBar` | Leaf | `craft_ui_panels::rails::flyout` | The bar down a flyout's end edge that tears the group off, as tall as the rows it runs beside: a press on it dragged past the press slop reports where the drag began, a click where it ended, so a press reports once |
 | `VeilCard` | Leaf | `craft_ui_widgets::popover::drop_veil` | The card of a veil: a popup surface around the label's `Text`, as wide and high as the text with its padding |
 | `Bar` | Body | `craft_ui_widgets::bars::bar` | A bar over a chrome surface whose body holds the members in reading order: a tool or options bar's at the standard control size, a status bar's at the small one |
 | `BlockingOverlay` | Body | `craft_ui_panels::dialog::blocking` | A modal layer that takes the window's input while it is shown, with the wait cursor |
@@ -185,6 +186,7 @@ Grouped by gallery level, then shape, then name.
 | `IconPicker` | Pattern | `craft_ui_widgets::pickers::icon_picker` | A searchable grid of icons in named groups |
 | `ImageSize` | Pattern | `craft_ui_patterns::patterns::form_dialogs::sizing::image` | Image Size: the width, height and resolution with a unit each, the chain that keeps the proportions, Resample with its method list and Scale Styles, over a readout of the file size and the dimensions |
 | `Inspector` | Pattern | `craft_ui_patterns::patterns::panels::inspector` | A properties panel: a `Panel` whose header names the target (icon and name, and the kind at the end), and whose body the caller fills with the target's controls, labelled as inspector rows (`LabelScheme::Inspector`) |
+| `JobProgress` | Pattern | `craft_ui_panels::dialog::job_progress` | Modal progress window for a running job: a progress bar (or an indeterminate one), counts and the percentage, the queued line, and Cancel (and Hide, when `can_hide`) |
 | `ListManager` | Pattern | `craft_ui_patterns::patterns::form_dialogs::list_manager` | A named list with a name box and a column of action buttons (after Excel's Macros dialog) |
 | `MetadataTable` | Pattern | `craft_ui_widgets::table::metadata` | A key and value table in groups: a search field over the rows keeps the fields whose name or value matches the typed text, and a check column marks the keys the app shows as columns |
 | `ModifierKeysPanel` | Pattern | `craft_ui_patterns::patterns::panels::modifier_keys` | A panel of latching modifier-key toggles: a press on one holds that modifier for the next click or key |
@@ -220,12 +222,13 @@ Grouped by gallery level, then shape, then name.
 | `ReorderableSections` | Pattern | `craft_ui_panels::sections::reorderable` | Sidebar sections the user folds, hides, pins and reorders, over the host's [`SectionLayout`] |
 | `ReportDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::report` | A report: the title, one summary line, the count of notes, the notes with their tone icons and, in the footer, Copy and OK |
 | `SaveForWebDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::save_for_web` | The Save for Web dialog: the view tabs over a row of preview panes that share one view, the zoom row, the animation row, and the settings column |
+| `SectionList` | Pattern | `craft_ui_patterns::patterns::form_dialogs::section_list` | A single-select, click-activated, content-sized list at its natural height without a header and a vertical divider at the start edge, and the body of the shown section in a filling, vertically scrolled stack beside them; the list stays put while the body scrolls |
 | `SettingsNotices` | Pattern | `craft_ui_widgets::notices::settings` | The notices a `SettingsNoticeState` calls for, newest problem first: an error notice when saving keeps failing and a warning when stored settings were reset |
 | `StandardPrompt` | Pattern | `craft_ui_panels::dialog::prompts` | A standard confirmation on the dialog host: a prompt with the platform's button order, a letter on every answer and, with `dont_show_again`, a check box under the message |
 | `StatusMessage` | Pattern | `craft_ui_widgets::bars::status` | A message for the status bar and its tone |
 | `StatusProgress` | Pattern | `craft_ui_widgets::bars::status` | A background task's progress, for a status bar's trailing group: the task's name, a progress bar that moves a segment while the extent is unknown, the percentage and an optional cancel button |
 | `StatusReadout` | Pattern | `craft_ui_widgets::bars::status_readout` | The zoom field, the chosen item's text and the menu that chooses it, shown as children of a status `Bar` |
-| `TaskBar` | Pattern | `craft_ui_canvas::canvas_controls::task_bar` | The contextual task bar: a movable modeless layer hung below the screen bounds of `anchor` while its place is unset, with a body of members and a More menu (Hide, Reset, Pin) |
+| `TaskBar` | Pattern | `craft_ui_canvas::canvas_controls::task_bar` | The contextual task bar: a movable modeless layer hung on a side of the screen bounds of `anchor`, with a body of members and a More menu (Hide, Pin, Reset, then the host's rows) |
 | `ToastStack` | Pattern | `craft_ui_widgets::notices::toasts` | The cards of a window's toast queue |
 | `ToolbarDrawer` | Pattern | `craft_ui_panels::rails::drawer` | The All Tools drawer: a popover beside the rail with one list over all groups, a heading row for each group |
 | `Tour` | Pattern | `craft_ui_patterns::patterns::panels::tour` | A guided tour of the interface: a card with the step count and a close button, the step's heading and text, Skip, Back and Next (Done on the last step), beside the part the step points at, which a pulsing ring marks |
@@ -240,6 +243,7 @@ Grouped by gallery level, then shape, then name.
 
 | Type | Shape | Module | Purpose |
 |---|---|---|---|
+| `BarGrip` | Leaf | `craft_ui_shell::shell::options_place` | The grip of an options bar: a drag on it starts a drag session that moves the bar and docks or floats it on the release |
 | `CaptionButton` | Leaf | `craft_ui_shell::shell::caption_button` | One caption button of a title bar |
 | `DocumentWindow` | Body | `craft_ui_shell::shell::document_window` | A document's window: the container of one entry of the app's window list, in its own OS window |
 | `ShellRegion` | Body | `craft_ui_shell::shell::app_shell` | A region of the window skeleton: the root window's content, the scope that carries the shell to its slots, or one pane (a bar, a rail or the body) |
@@ -273,6 +277,7 @@ Grouped by gallery level, then shape, then name.
 | `craft_behavior::frame_step` | The step of one pass of motion: a Hand glide, a held Zoom press and an autoscroll integrate over it |
 | `craft_behavior::grid` | The `Grid` cursor: columns resolved from last pass's measurements, and the cell each child takes |
 | `craft_behavior::hit` | Hit shapes, their priority and the arena's resolve rule (8.3) |
+| `craft_behavior::hold_repeat` | Steps due while a press is held, as a spinner button repeats |
 | `craft_behavior::input` | What a component takes from the user, which decides its default key use |
 | `craft_behavior::intent` | Intents: a key, an AccessKit action or typed text turned into meaning (spec 9.2) |
 | `craft_behavior::item_layout` | Item geometry: where each item of a collection sits for a scroll offset and viewport |

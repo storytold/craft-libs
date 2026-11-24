@@ -105,7 +105,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
 }
 
 /// The id of the item `key` of the collection `id`: a member's owner id in the arena, as a run item's id.
-fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
+pub(super) fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     crate::runtime::memory::sub(id, ("key", key_hash(key)))
 }
 

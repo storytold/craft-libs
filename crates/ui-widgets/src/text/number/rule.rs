@@ -10,16 +10,17 @@ use std::ops::RangeInclusive;
 
 /// The value one step from a value in a direction: the up arrow, the wheel and the Page keys of a field whose values
 /// lie on a ladder instead of a grid (`NumberField::stepper`). The direction is `1` up and `-1` down.
-pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32) -> f64 + 'a>);
+pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32, f64) -> f64 + 'a>);
 
 impl<'a> NumberStepper<'a> {
-    /// The stepper that runs `next`.
-    pub fn new(next: impl Fn(f64, i32) -> f64 + 'a) -> Self {
+    /// The stepper that runs `next(from, direction, scale)`: `scale` is 1 for a plain arrow, wheel notch or AccessKit
+    /// step, `LARGE_STEPS` with Shift or a Page key, and a tenth with Alt where the field has one.
+    pub fn new(next: impl Fn(f64, i32, f64) -> f64 + 'a) -> Self {
         NumberStepper(Box::new(next))
     }
 
-    pub(super) fn next(&self, from: f64, direction: i32) -> f64 {
-        (self.0)(from, direction)
+    pub(super) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
+        (self.0)(from, direction, scale)
     }
 }
 
