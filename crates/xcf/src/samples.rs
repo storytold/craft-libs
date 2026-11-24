@@ -108,8 +108,9 @@ pub struct SourceDrawable {
     pub indexed: bool,
     pub precision: SourcePrecision,
     pub sample_order: SampleOrder,
-    /// Ordinary saved channels and floating selections with unconfirmed target
-    /// encodings carry no per-drawable transfer marker in XCF.
+    /// Ordinary saved channels, nonlinear-U8 selections and floating selections
+    /// with unconfirmed target encodings carry no exact per-drawable transfer
+    /// marker in XCF.
     /// When true, `precision.transfer` is the reader's default assumption rather
     /// than an encoding established by the file. Stored samples are unchanged.
     pub transfer_is_assumed: bool,
@@ -380,14 +381,28 @@ impl Xcf<'_> {
         self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
         let name_bytes = name.len();
         let result = (|| {
-            let selection = props(&mut cursor)?.iter().any(|p| p.kind == 4);
+            // Only the saved-channel list can establish the image selection.
+            // A stray marker on an owner's mask does not change its role/extent.
+            let selection = {
+                let properties = props(&mut cursor)?;
+                if owner.is_none() {
+                    if properties.iter().any(|property| property.kind == 4 && !property.data.is_empty()) {
+                        return Err(invalid("selection marker payload must be empty"));
+                    }
+                    properties.iter().any(|property| property.kind == 4)
+                } else {
+                    false
+                }
+            };
             if selection && dimensions != (self.image.width, self.image.height) {
                 return Err(invalid("selection dimensions do not match the canvas"));
             }
             let hierarchy = cursor.ptr()?;
             self.channel_effects_tail(&mut cursor, keep_going, None)?;
-            // Saved channels/selections use linear coverage at high precision too;
-            // preserve the existing nonlinear U8 channel-format exception.
+            // Fresh selections default to linear coverage. Nonlinear-U8 saved
+            // selections may instead retain an ordinary channel's buffer, with
+            // no wire marker distinguishing that provenance. Preserve samples
+            // and disclose the default as assumed in that case.
             let nonlinear_u8 =
                 self.image.precision.bytes == 1 && !self.image.precision.float && self.source_precision().transfer == Transfer::Nonlinear;
             let info = self.visit_hierarchy(
@@ -397,7 +412,7 @@ impl Xcf<'_> {
                     indexed: false,
                     dimensions: Some(dimensions),
                     coverage: owner.is_some() || selection || !nonlinear_u8,
-                    transfer_is_assumed: owner.is_none() && !selection,
+                    transfer_is_assumed: owner.is_none() && (!selection || nonlinear_u8),
                     excluded_source: Some(ptr..cursor.pos),
                 },
                 options,

@@ -714,7 +714,7 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
                 .visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
                     assert_eq!(tile.data, data);
                     assert_eq!(tile.drawable.precision.transfer, transfer);
-                    assert_eq!(tile.drawable.transfer_is_assumed, !selection);
+                    assert_eq!(tile.drawable.transfer_is_assumed, !selection || code == 150);
                     assert_eq!(tile.drawable.precision.storage.linear, transfer == Transfer::Linear);
                     if code == 650 || code == 600 {
                         assert_eq!(tile.sample(0)?, SourceSample::F32(0.5));
@@ -724,7 +724,7 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
                 .unwrap();
             assert_eq!(channel.selection, selection);
             assert_eq!(info.precision.transfer, transfer);
-            assert_eq!(info.transfer_is_assumed, !selection);
+            assert_eq!(info.transfer_is_assumed, !selection || code == 150);
             assert_eq!(budget, 0);
             // A color layer keeps the image transfer, independently of channel role.
             let color_transfer = if code == 175 {
@@ -1833,3 +1833,5 @@ fn mask_role_framing_polls_cancellation_without_retaining_metadata() {
     assert!(matches!(reader.confirm_mask_record(owner, &keep), Err(Error::Cancelled)));
     assert_eq!(reader.meta_budget.get(), metadata);
 }
+
+mod selection_roles;

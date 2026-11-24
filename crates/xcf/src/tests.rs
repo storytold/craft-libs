@@ -305,6 +305,9 @@ impl TestImage {
             }
             w.end();
             let hs = w.slot();
+            if self.version >= 26 {
+                w.ptr(0); // Saved channels have the same v26 effect-list tail as masks.
+            }
             let h = hierarchy(&mut w, self.width, self.height, bytes, data, self.compression);
             w.patch(hs, h);
         }
