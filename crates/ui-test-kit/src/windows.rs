@@ -36,6 +36,8 @@ thread_local! {
     static COMMANDS: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// The AccessKit tree each viewport's last pass produced, in pass order.
     static TREES: RefCell<Vec<(ViewportId, AccessTree)>> = const { RefCell::new(Vec::new()) };
+    /// The shapes each pass of the frame painted, nested shapes flattened.
+    static SHAPES: RefCell<Vec<(ViewportId, Vec<egui::Shape>)>> = const { RefCell::new(Vec::new()) };
     /// The time every pass of the frame runs at.
     static NOW: Cell<f64> = const { Cell::new(0.0) };
     /// Each child's builder as its window has it: a later builder patches it, and what changed goes to the window as
@@ -205,6 +207,18 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
 fn keep_tree(output: &mut FullOutput, viewport: ViewportId) {
     let tree = tree_of(output);
     TREES.with(|kept| kept.borrow_mut().push((viewport, tree)));
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        flatten(&clipped.shape, &mut shapes);
+    }
+    SHAPES.with(|kept| kept.borrow_mut().push((viewport, shapes)));
+}
+
+fn flatten(shape: &egui::Shape, into: &mut Vec<egui::Shape>) {
+    match shape {
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| flatten(shape, into)),
+        shape => into.push(shape.clone()),
+    }
 }
 
 /// An OS window as macOS runs egui's window commands on it through winit, in desktop points with y down: a position
@@ -256,6 +270,8 @@ pub struct Out {
     /// The AccessKit tree each viewport's pass produced, in pass order: the children's first, as they run inside the
     /// root's pass.
     pub trees: Vec<(ViewportId, AccessTree)>,
+    /// The shapes each viewport's pass painted, nested shapes flattened, in the order of `trees`.
+    pub shapes: Vec<(ViewportId, Vec<egui::Shape>)>,
 }
 
 /// A context with the runtime installed whose child viewports are OS windows.
@@ -343,6 +359,7 @@ impl Windows {
             root_dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
         CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
+        SHAPES.with(|kept| kept.borrow_mut().clear());
         set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
@@ -373,6 +390,7 @@ impl Windows {
             commands: COMMANDS.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
             builders,
             trees: TREES.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
+            shapes: SHAPES.with(|kept| std::mem::take(&mut *kept.borrow_mut())),
         }
     }
 }

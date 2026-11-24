@@ -778,6 +778,8 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         .shown(active)
         .tear_off()
         .natural_height(true)
+        // Group, column and icon drags name what they move inside the drop region; a tab drag does the same.
+        .drag_preview(crate::contract::RowPreview::Named)
         .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
         .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
