@@ -1,6 +1,6 @@
 //! Stories of the prompts.
 
-use super::super::stories::hosted;
+use super::super::stories::{hosted, opener};
 use super::super::{
     Alert, DialogHost, HostedAlert, Prompt, PromptChoice, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
 };
@@ -56,6 +56,17 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into();
     *data.value("apply", false) = apply_to_all;
     shown
+}
+
+/// The answer that takes no input until the prompt has been shown for half a second, behind the button that opens it.
+#[story(Prompt<'static>, covers = [], drive = Drive::Never)]
+fn prompt_with_an_armed_answer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Prompt::new("Install plug-in", "Do you want to install “Sharpen Pro”?")
+        .paragraph("Plug-ins run with the same access as the app.")
+        .answers([FooterButton::new("OK", DialogRole::Other).armed_after(0.5), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .opened(Bind::bound(opener(ui, data, "Install Plug-in…")))
+        .show(ui)
+        .into()
 }
 
 #[story(Alert<'static>, covers = [], drive = Drive::Never)]

@@ -6,6 +6,20 @@ use accesskit::{Action, Node, NodeId, TreeUpdate};
 use egui::Id;
 use std::collections::{HashMap, HashSet};
 
+/// The accessible name of the node, when it has a non-empty one: its own, else the first non-empty name of the nodes
+/// that label it (`labelled_by`).
+pub fn name(tree: &AccessTree, key: NodeKey) -> Option<&str> {
+    let named = |key: NodeKey| tree.name_of(key).filter(|name| !name.trim().is_empty());
+    named(key).or_else(|| tree.labelled_by_key(key).into_iter().find_map(named))
+}
+
+/// Whether the node declares an action a user can take: focus, click or a value change.
+pub fn is_interactive(tree: &AccessTree, key: NodeKey) -> bool {
+    [Declared::Focus, Declared::Click, Declared::Increment, Declared::Decrement, Declared::SetValue, Declared::Expand, Declared::Collapse]
+        .into_iter()
+        .any(|action| tree.declares_key(key, action))
+}
+
 /// A node's number in the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeKey(u64);
@@ -119,7 +133,13 @@ impl AccessTree {
         AccessTree { update, below_hidden }
     }
 
+    /// The AccessKit update the tree reads, hidden nodes included.
+    pub fn update(&self) -> &TreeUpdate {
+        &self.update
+    }
+
     /// The tree of a frame that made none.
+    #[cfg(feature = "testing")]
     pub(crate) fn none() -> Self {
         AccessTree::new(TreeUpdate { nodes: Vec::new(), tree: None, tree_id: accesskit::TreeId::ROOT, focus: NodeId(0) })
     }
@@ -286,7 +306,13 @@ impl AccessTree {
 
     /// The text of each `TextRun` node below `id`, in order.
     pub fn run_texts(&self, id: Id) -> Vec<String> {
-        let Some(node) = self.node(id) else { return Vec::new() };
+        self.run_texts_of(NodeKey::of(id))
+    }
+
+    /// The text of each `TextRun` node below the node `key`, in order: a text node's editable text, which its value
+    /// may read with more (a number field's unit).
+    pub fn run_texts_of(&self, key: NodeKey) -> Vec<String> {
+        let Some(node) = self.lookup(NodeId(key.0)) else { return Vec::new() };
         node.children()
             .iter()
             .filter_map(|child| self.lookup(*child))
@@ -382,7 +408,7 @@ impl AccessTree {
 }
 
 impl AccessTree {
-    /// The root node, when the frame made a tree.
+    /// The root node, when the frame made a tree: where reading order starts.
     pub fn root_key(&self) -> Option<NodeKey> {
         self.update.tree.as_ref().map(|tree| NodeKey(tree.root.0))
     }

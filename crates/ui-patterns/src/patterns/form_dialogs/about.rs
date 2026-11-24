@@ -115,8 +115,8 @@ pub enum AboutTab {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AboutLayout {
-    /// The blurb and the version, then the community button and the link row centred, then the built-with line faint,
-    /// the blocks set apart by the section gap; OK closes.
+    /// The mark and the app's name centred, the blurb and the version, then the community button and the link row
+    /// centred, then the built-with line faint, the blocks set apart by the section gap; OK closes.
     #[default]
     Centred,
     /// From the start edge, one item to a line: the app's name as a heading, the version, the blurb, the community
@@ -370,7 +370,7 @@ impl Shown<'_> {
                 Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
             });
         for event in out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(picked) = keys.last()
             {
                 view.borrow_mut().tab = *picked;

@@ -1,14 +1,15 @@
 //! What the panel's parts share in one pass: the tree, the settings, the thumbnails and the words.
 
-use craft_ui::contract::Show;
-use craft_ui::list::{ListRow, ListWords};
+use craft_ui::contract::{DropAt, DropKind, DropPlace, Show};
+use craft_ui::list::{List, ListRow, ListWords};
 use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
 use egui::Id;
 
-use super::LayersPanelWords;
+use super::events::LayerPosition;
+use super::{LayerRowLook, LayersPanelWords};
 use crate::ui::options::LayersOptions;
 use crate::ui::thumbs::LayerThumb;
-use crate::ui::tree::{LayerInfo, LayerSelection, LayerTree};
+use crate::ui::tree::{LayerInfo, LayerRowKey, LayerSelection, LayerTree};
 use std::cell::RefCell;
 use std::marker::PhantomData;
 
@@ -46,6 +47,35 @@ impl<Id: Clone + 'static, C: Show, B: Fn(&Id, &LayerInfo) -> C, O: FnMut(&Id, C:
     }
 }
 
+/// Where a drop at a row or gap lands among the layers, when it lands on a place the host may take.
+pub(super) type HostPlace<'l, Id> = dyn Fn(&DropAt<LayerRowKey<Id>>) -> Option<(Id, LayerPosition)> + 'l;
+
+/// The host's payload type dragged from outside the rows (`LayersPanel::takes_drop`), with its type erased so the panel
+/// holds one.
+pub(super) trait HostDrops<Id> {
+    /// `list` taking the payload between rows and onto them where `place` names a layer place the host accepts.
+    fn kinds<'l>(&'l self, list: List<'l, LayerRowKey<Id>>, place: &'l HostPlace<'l, Id>) -> List<'l, LayerRowKey<Id>>
+    where
+        Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static;
+}
+
+/// A [`HostDrops`] of the payload type `P` and the host's `accepts`.
+pub(super) struct HostDrop<P, A> {
+    pub(super) accepts: A,
+    pub(super) payload: PhantomData<fn() -> P>,
+}
+
+impl<Id, P: Send + Sync + 'static, A: Fn(&P, &Id, LayerPosition) -> bool> HostDrops<Id> for HostDrop<P, A> {
+    fn kinds<'l>(&'l self, list: List<'l, LayerRowKey<Id>>, place: &'l HostPlace<'l, Id>) -> List<'l, LayerRowKey<Id>>
+    where
+        Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static,
+    {
+        let accepting =
+            move |payload: &P, at: &DropAt<LayerRowKey<Id>>| place(at).is_some_and(|(target, position)| (self.accepts)(payload, &target, position));
+        list.takes_drop(DropKind::new(DropPlace::Between, accepting)).takes_drop(DropKind::new(DropPlace::Onto, accepting))
+    }
+}
+
 /// The pass's shared state, lent to the row mapping, the drag rules, the footer and the menus.
 pub(super) struct PanelContext<'a, T: LayerTree> {
     /// The rows' list, which drags name.
@@ -65,4 +95,10 @@ pub(super) struct PanelContext<'a, T: LayerTree> {
     pub(super) trailing: Option<&'a (dyn TrailingCell<T::Id> + 'a)>,
     /// The modifiers held this pass: the thumbnails' load cursor follows them.
     pub(super) held: craft_keymap::Mods,
+    /// How the rows are drawn.
+    pub(super) look: LayerRowLook,
+    /// Delete and Backspace in the rows are reported.
+    pub(super) deletable: bool,
+    /// The host's payload type the rows take from outside.
+    pub(super) drops: Option<&'a (dyn HostDrops<T::Id> + 'a)>,
 }

@@ -1247,6 +1247,7 @@ pub(crate) mod guard {
         ("layout::body::HeldWidths", "held children: opened by the column's own first sweep and closed after its last"),
         ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
         ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
+        ("layout::body::WrapRows", "wrapping rows' lines: opened by each sweep of the row and closed after it; the lines go through emit_record"),
         (
             "layout::body::FlowStarts",
             "flow starts: opened by each sweep of the body and closed by its first child in flow; a child reads its body's at its own start, and its measure key holds what it read",
@@ -1292,6 +1293,10 @@ pub(crate) mod guard {
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
+        (
+            "runtime::memory::FactRecord<craft_ui_contract::runtime::commands::ShownFact>",
+            "where commands were shown: last pass's, read; registered by real runs only (a measuring run is not parted)",
+        ),
         (
             "shell::app_shell::dialogs::Hosts",
             "dialog hosts: one handle per window, made on first use; dialogs open on clicks, which only real runs sense",

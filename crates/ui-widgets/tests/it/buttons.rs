@@ -1,22 +1,27 @@
-//! Buttons: the stacked arrangement's height, the hover report of a click the pointer stays on, the compact
-//! group level, under which an inline button drops its label and keeps it as its name and tooltip, the room a button
-//! keeps for its widest text, and a picture in the leading icon's place.
+//! Buttons: the stacked arrangement's height, the hover report of a click the pointer stays on, the press a button
+//! reports as held, the compact group level, under which an inline button drops its label and keeps it as its name and
+//! tooltip, the room a button keeps for its widest text, the chord a command button shows, and a picture in the leading
+//! icon's place.
 
 use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
 use craft_theme::Variant;
-use craft_ui::buttons::{Arrangement, Button, ControlPlace, GroupLevel, SplitButton, SplitMenu, ToggleButton};
+use craft_ui::buttons::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, Hover, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::Picture;
 use craft_ui::list::ThumbAspect;
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
-use craft_ui::runtime::commands::CommandState;
+use craft_ui::primitives::IconSpec;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
 use craft_ui::runtime::env::with_env;
+use craft_ui::testing::input::key_press;
+use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pictures::sample_picture;
-use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Fixture, trial};
-use egui::{Event, Id, Pos2, Rect, Response, Ui};
+use craft_ui::testing::pointer::{moved, press, release, window_blurred};
+use craft_ui::testing::{Fixture, Frames, trial};
+use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Response, Ui, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -675,4 +680,164 @@ fn an_icons_accent_parts_on_a_panel_inside_a_brand_surface_keep_the_accent_colou
     assert!(tints.len() >= 2, "the icon paints an ink and an accent layer: {tints:?}");
     let (ink, accent) = (tints.len() - 2, tints.len() - 1);
     assert_ne!(tints[ink], tints[accent], "on a panel inside a brand stack the accent parts keep the accent colour: {tints:?}");
+}
+
+/// Runs an icon button through idle frames, then one frame per step of `steps` (given the button's centre and a point
+/// far off it), and returns `ButtonOutput::held` of each of those frames.
+fn held_per_frame(steps: impl FnOnce(Pos2, Pos2) -> Vec<Vec<Event>>) -> Vec<bool> {
+    let (held, rect) = (Cell::new(false), Cell::new(Rect::NOTHING));
+    let mut show = |ui: &mut Ui| {
+        let out = IconButton::new(IconSpec::svg(IconId::new("eyedropper"))).label("Hold").show(ui);
+        held.set(out.held);
+        rect.set(out.rect);
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    let at = rect.get().center();
+    let far = at + vec2(300.0, 300.0);
+    steps(at, far)
+        .into_iter()
+        .map(|events| {
+            frames.frame(events, &mut show);
+            held.get()
+        })
+        .collect()
+}
+
+#[trial]
+fn a_held_button_reports_its_press_until_the_release_or_a_cancel() {
+    assert_eq!(held_per_frame(|at, _| vec![vec![], vec![moved(at)]]), [false, false], "an idle button is not held");
+    assert_eq!(held_per_frame(|at, _| vec![vec![moved(at)], vec![press(at)]]), [false, true], "a press holds it");
+    assert_eq!(
+        held_per_frame(|at, far| vec![vec![moved(at)], vec![press(at)], vec![moved(far)]]),
+        [false, true, true],
+        "the pointer leaving the button does not end the press"
+    );
+    assert_eq!(
+        held_per_frame(|at, far| vec![vec![moved(at)], vec![press(at)], vec![moved(far)], vec![release(far)]]),
+        [false, true, true, false],
+        "the release ends it"
+    );
+    assert_eq!(
+        held_per_frame(|at, _| vec![vec![moved(at)], vec![press(at)], vec![key_press(Key::Escape, Modifiers::NONE)]]),
+        [false, true, false],
+        "Escape cancels it"
+    );
+    assert_eq!(
+        held_per_frame(|at, _| vec![vec![moved(at)], vec![press(at)], vec![window_blurred()]]),
+        [false, true, false],
+        "losing the window's focus cancels it"
+    );
+    let by_key = held_per_frame(|_, _| vec![vec![key_press(Key::Tab, Modifiers::NONE)], vec![key_press(Key::Space, Modifiers::NONE)], vec![]]);
+    assert_eq!(by_key, [false, false, false], "a key activation never holds the button");
+}
+
+/// The catalog of the chord trial: one command with a default chord, one without.
+fn catalog() -> AppCatalog {
+    let bound =
+        CommandDef::new(CommandRef::new("trial.bound"), "Bound", Scope::app()).with_default(Binding::parse("F7").expect("the trial's chord parses"));
+    let plain = CommandDef::new(CommandRef::new("trial.plain"), "Plain", Scope::app());
+    AppCatalog::new(vec![bound, plain], 1).expect("the trial's catalog is valid")
+}
+
+/// A command button of `command` with `chord` in a room `width` wide: the texts it painted, joined in paint order and
+/// split to (text, elided), and the button's width.
+fn command_shown(command: &str, chord: ButtonChord, width: f32) -> (Vec<(String, bool)>, f32) {
+    let button_width = Cell::new(0.0);
+    let mut show = |ui: &mut Ui| {
+        let room = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 40.0));
+        button_width.set(in_region(ui, room, |ui| Button::command(CommandRef::new(command)).chord(chord).show(ui).rect.width()));
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog()));
+    frames.idle(3, &mut show);
+    (frames.texts().iter().map(|text| (text.text.clone(), text.elided)).collect(), button_width.get())
+}
+
+#[trial]
+fn a_command_button_shows_its_chord_until_the_room_is_short() {
+    // PLAN: assumes a command button hugs its content in the room, so the width of the chordless button is a room that
+    // fits the label and not the chord.
+    let (wide, _) = command_shown("trial.bound", ButtonChord::Trailing, 400.0);
+    let all: String = wide.iter().map(|(text, _)| text.as_str()).collect();
+    let (label, chord) = (all.find("Bound"), all.find("F7"));
+    assert!(label.is_some() && chord.is_some(), "the label and the chord show in a wide room: {wide:?}");
+    assert!(label < chord, "the chord follows the label: {all:?}");
+
+    let (_, label_width) = command_shown("trial.bound", ButtonChord::Hidden, 400.0);
+    let (short, _) = command_shown("trial.bound", ButtonChord::Trailing, label_width);
+    assert!(short.iter().all(|(text, _)| !text.contains("F7")), "a short room drops the chord: {short:?}");
+    assert!(short.iter().any(|(text, elided)| text.contains("Bound") && !elided), "before it elides the label: {short:?}");
+
+    let (plain_chord, _) = command_shown("trial.plain", ButtonChord::Trailing, 400.0);
+    let (plain_hidden, _) = command_shown("trial.plain", ButtonChord::Hidden, 400.0);
+    assert_eq!(plain_chord, plain_hidden, "a command with no chord shows none");
+}
+
+/// A toggle button says whether it is pressed both ways: on is pressed and off is not pressed, bound to a value or
+/// given a shared one (a mode of several objects), where a button with no toggle has no pressed state. Guards against
+/// an off toggle reading as a plain button.
+#[trial]
+fn a_toggle_button_reports_pressed_on_and_off() {
+    use craft_behavior::Mixed;
+    use craft_ui::testing::access::NodeKey;
+    for on in [true, false] {
+        let ids = Rc::new(Cell::new((Id::NULL, Id::NULL, Id::NULL)));
+        let seen = ids.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut value = on;
+            let toggle = ToggleButton::new("Snap to grid", Bind::bound(&mut value)).show(ui).response.id;
+            let shared = ToggleButton::new("Unite", Bind::given(Mixed::Same(on))).show(ui).response.id;
+            seen.set((toggle, shared, Button::new("Save").show(ui).response.id));
+        });
+        fixture.settle();
+        let (toggle, shared, plain) = ids.get();
+        let tree = fixture.tree();
+        assert_eq!(tree.toggled_of(NodeKey::of(toggle)), Some(Mixed::Same(on)), "a toggle that is {on}");
+        assert_eq!(tree.toggled_of(NodeKey::of(shared)), Some(Mixed::Same(on)), "a toggle given {on}");
+        assert_eq!(tree.toggled_of(NodeKey::of(plain)), None, "a plain button has no pressed state");
+    }
+}
+
+/// An icon-only toggle button in a field with no label text (a dialog's custom row with an empty label), beside an egui
+/// check box in an `egui::Grid`, keeps the name its own label gives it.
+#[trial]
+fn an_icon_only_toggle_in_a_field_without_label_text_keeps_its_name() {
+    let mut fixture = Fixture::new(|ui| {
+        craft_ui::form::Field::new("").show(ui, |ui, _| {
+            egui::Grid::new("inks").num_columns(2).show(ui, |ui| {
+                let mut print = true;
+                ui.add(egui::Checkbox::without_text(&mut print));
+                let _ = ToggleButton::new("Convert Cyan to process", Bind::given(false)).icon(IconId::new("eye")).icon_only().show(ui);
+                ui.end_row();
+            });
+        });
+    });
+    fixture.settle();
+    let toggle = fixture.by_label("Convert Cyan to process").expect("the toggle keeps its name");
+    assert!(fixture.by_role(Role::BUTTON).iter().any(|button| button.node == toggle.node), "the named node is the toggle button");
+}
+
+/// A menu button given the row its menu picked reads as a combo box named by its label, with that row as its value; a
+/// menu button without one stays a button with no value.
+#[trial]
+fn a_menu_button_with_a_choice_reads_as_a_combo_box_valued_by_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let align = IconButton::new(IconId::new("align_edge_left")).label("Align To").popup(PopupKind::Menu).choice("Align to Artboard").show(ui);
+        Menu::new("Align To").opened_by(&align.response, Trigger::Press).show(ui, |ui, _| {
+            MenuItem::new("Align to Artboard").check(true).show(ui);
+        });
+        IconButton::new(IconId::new("more")).label("More").popup(PopupKind::Menu).show(ui);
+    });
+    fixture.settle();
+    let align = fixture.by_label("Align To").expect("the choice button is in the access tree");
+    let more = fixture.by_label("More").expect("the plain menu button is in the access tree");
+    let tree = fixture.tree();
+    assert_eq!(tree.role_of(align.node), Some(Role::COMBO_BOX), "a button with a choice is a combo box");
+    assert_eq!(tree.value_of(align.node), Some("Align to Artboard"), "its value is the choice");
+    assert_eq!(tree.expanded_of(align.node), Some(false), "its menu is closed");
+    assert_eq!(tree.role_of(more.node), Some(Role::BUTTON), "a menu button without a choice stays a button");
+    assert_eq!(tree.value_of(more.node), None, "and has no value");
+    fixture.click_at(align.center()).settle();
+    assert_eq!(fixture.tree().expanded_of(align.node), Some(true), "it reports its menu open");
 }

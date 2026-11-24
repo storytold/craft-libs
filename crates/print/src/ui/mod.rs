@@ -7,10 +7,10 @@ pub(crate) mod panel;
 pub(crate) mod stories;
 
 pub use dialog::{
-    HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintLayout, PrintMarks, PrintSection, PrintSheet,
-    SheetContent, SheetPage,
+    HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintLayout, PrintMarks, PrintMode, PrintPresets,
+    PrintSection, PrintSheet, SheetContent, SheetPage,
 };
-pub use panel::{Destinations, DriverControls, PrintPanel, PrintPanelOutput, PrintWords};
+pub use panel::{Destinations, DriverControls, PrintPanel, PrintPanelLayout, PrintPanelOutput, PrintWords};
 
 use craft_ui::contract::Bind;
 use craft_ui::runtime::frame::request_repaint_after;
@@ -62,6 +62,13 @@ impl Printer {
     pub fn own_dialog(mut self, note: impl Into<String>) -> Self {
         self.own_dialog = Some(note.into());
         self
+    }
+}
+
+impl From<crate::Printer> for Printer {
+    /// The dialog's printer for a discovered one: `name`, the `description` as the label, and `default`.
+    fn from(printer: crate::Printer) -> Self {
+        Printer { name: printer.name, label: printer.description, default: printer.default, own_dialog: None }
     }
 }
 
