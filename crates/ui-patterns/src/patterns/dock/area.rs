@@ -1094,6 +1094,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .movable(scene.permissions(shown).movable)
                 .menu(move || panel_menu_rows(scene, &mut **panels.borrow_mut(), words, shown).0)
                 .panel_menu_shown(*hosted || scene.config.panel_menu_always)
+                .panel_menu_icon(scene.config.panel_menu_icon.clone())
                 .command_states(states.clone());
             if look.in_window {
                 group = group.in_window();

@@ -103,6 +103,7 @@ The host handles these `DockEvent`s:
 | `close_menu_items`, `close_button` | on | Built-in Close items, and the close action on floating windows. |
 | `tab_close_buttons` | off | Close buttons on tabs (middle click closes too), for tabs that act as documents. |
 | `panel_menu_always` | off | Every group shows its panel menu button, with the dock's own rows when the shown panel has none. Off: only a panel with rows of its own (`DockPanels::panel_rows`) gets the button. |
+| `panel_menu_icon` | `more` | The panel menu button's icon; `menu` gives the three-line mark. |
 | `native_windows` | on | Floating windows open as OS windows where the window host opens them and reports their positions (not on Wayland) and `PanelSpec::allow_native` allows. |
 
 The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords` holds the words.

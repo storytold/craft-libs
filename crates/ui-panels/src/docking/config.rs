@@ -3,7 +3,7 @@
 
 use super::IconicMode;
 use super::targets::ZoneRule;
-use craft_behavior::DockSide;
+use craft_behavior::{DockSide, IconId};
 
 /// A set of the sides of the layout's outer edge or of a group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -99,6 +99,8 @@ pub struct DockConfig {
     /// Every group shows its panel menu button, whose menu holds the dock's own rows when the shown panel has none of
     /// its own (`DockPanels::panel_rows`). Off: only a group whose shown panel has rows of its own shows the button.
     pub panel_menu_always: bool,
+    /// The panel menu button's icon: `more` (the default), or `menu` for the three-line mark.
+    pub panel_menu_icon: IconId,
     /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
     /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
     pub iconic_mode: IconicMode,
@@ -124,6 +126,7 @@ impl Default for DockConfig {
             native_windows: true,
             group_order_items: false,
             panel_menu_always: false,
+            panel_menu_icon: IconId::new("more"),
             iconic_mode: IconicMode::Flyouts,
         }
     }
@@ -148,6 +151,13 @@ impl DockConfig {
     #[must_use]
     pub fn panel_menu_always(mut self, on: bool) -> Self {
         self.panel_menu_always = on;
+        self
+    }
+
+    /// The panel menu button's icon ([`panel_menu_icon`](Self::panel_menu_icon)).
+    #[must_use]
+    pub fn panel_menu_icon(mut self, icon: IconId) -> Self {
+        self.panel_menu_icon = icon;
         self
     }
 
