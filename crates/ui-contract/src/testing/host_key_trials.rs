@@ -7,7 +7,7 @@ use crate::runtime::commands::{
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
-use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
+use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, host_stop, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
@@ -405,6 +405,41 @@ fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
     assert!(focused.is_some() && focused != first && !reached, "egui focus on that widget is focus: the Tab is not egui's and moves nothing");
 }
 
+/// A window with a framework stop, two of the app's own buttons registered as host stops and the app's canvas, which
+/// keeps Tab, unfocused: Tab from nothing is the framework's move over its one order, which holds the app's buttons
+/// beside the framework's stop. The unfocused canvas does not keep the Tab; it is the last entry, and once Tab focuses
+/// it, it keeps Tab.
+#[trial]
+fn tab_from_nothing_goes_through_the_framework_order_with_the_app_s_host_stops() {
+    let (stop, first, second, canvas) = (named_id("button"), named_id("host first"), named_id("host second"), named_id("host canvas"));
+    let reached = Rc::new(Cell::new(false));
+    let seen_tab = Rc::clone(&reached);
+    let mut show = move |ui: &mut Ui| {
+        seen_tab.set(seen_tab.get() || key_reached(ui.ctx(), Key::Tab));
+        widget(ui, stop);
+        register_stop(ui.ctx(), Stop::new(stop, KeyUse::of(Input::Pointer)));
+        for (id, x) in [(first, 300.0), (second, 420.0)] {
+            fixture::host_button(ui, id, Rect::from_min_size(Pos2::new(x, 300.0), egui::vec2(80.0, 30.0)));
+            host_stop(ui.ctx(), id, KeyUse::of(Input::Pointer));
+        }
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_keep(KeepKeys::Tab));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let mut tab = |frames: &mut Frames| {
+        reached.set(false);
+        press_key(frames, &mut show, Key::Tab);
+        frames.frame(Vec::new(), &mut show);
+        (egui_focused(&frames.ctx), reached.get())
+    };
+    assert_eq!(tab(&mut frames), (Some(stop), false), "Tab from nothing goes to the first stop, not to the unfocused canvas");
+    assert_eq!(tab(&mut frames), (Some(first), false), "then to the app's first button");
+    assert_eq!(tab(&mut frames), (Some(second), false), "and its second, in the order the pass registered them");
+    assert_eq!(tab(&mut frames), (Some(canvas), false), "then to the canvas");
+    assert_eq!(tab(&mut frames), (Some(canvas), true), "the focused canvas keeps Tab and reads it from egui");
+}
+
 /// A window whose only stop is the app's own canvas, between two of the app's own buttons: a bare Tab moves egui
 /// focus through egui's order, from nothing focused and from the canvas alike, and a canvas that keeps Tab keeps it.
 #[trial]
@@ -581,8 +616,8 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
     );
     assert_eq!(
         tab_with_canvas(Some(KeyUse::CANVAS.with_keep(KeepKeys::Tab)), false),
-        (Vec::new(), true),
-        "with nothing focused, a canvas that keeps Tab gets it from egui and nothing toggles"
+        (vec![(ViewportId::ROOT, ChromeToggle::Panels)], false),
+        "a canvas keeps Tab only while focused: with nothing focused, Tab toggles the panels"
     );
 }
 

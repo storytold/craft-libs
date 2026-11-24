@@ -49,12 +49,8 @@ struct Strip<'a> {
     /// egui: its Escape stays there, as an app's own focused widget's does. Tab and the arrows follow its `KeyUse`, as
     /// the framework's navigation reads it.
     host: bool,
-    /// The keys of the window's canvas while nothing has the focus, neither a framework stop nor an app's own widget
-    /// or popup: the canvas is then the key target, as the chrome gate takes it, and reads from egui the keys its
-    /// `KeyUse` keeps (Tab with `KeepKeys::Tab`).
-    canvas: Option<KeyUse>,
     /// The edit set whose clipboard events and edit chords stay in egui's input: the focused stop's when it is the
-    /// app's own widget (`host`), else the canvas's with nothing focused (`canvas`).
+    /// app's own widget (`host`), else the window canvas's with nothing focused (`target_canvas`).
     egui_edits: EditSet,
     /// A bare Tab that the focus does not keep is egui's own move (`focus::tab_is_egui_s`): the window registered no
     /// framework stop in its last pass, only the app's own widgets' (`Stop::host`) if any, and nothing has the focus or
@@ -367,7 +363,6 @@ impl Strip<'_> {
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         let egui_edit =
             self.edit_chords.iter().any(|(command, chord)| self.egui_edits.contains(*command) && self.layout.matches(chord, input, self.os));
-        let canvas_tab = bare_tab && self.canvas.is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
         // The chrome keys are Tab's, which the bare-Tab arm and `take_nav` read.
         let window_shortcut = self
             .window_shortcuts
@@ -380,7 +375,7 @@ impl Strip<'_> {
             PressUse::Edit(*command)
         } else if key == Key::Space && self.canvas_space {
             PressUse::CanvasSpace
-        } else if (self.foreign && (bare_tab || escape || plain_enter)) || (self.host && escape && !self.press_captured) || canvas_tab || egui_edit {
+        } else if (self.foreign && (bare_tab || escape || plain_enter)) || (self.host && escape && !self.press_captured) || egui_edit {
             PressUse::Egui
         } else if bare_tab && self.egui_tab && !self.keeps_tab {
             PressUse::TabToEgui
@@ -705,7 +700,6 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
             host: record.host,
-            canvas,
             egui_edits: keys.filter(|_| record.host).or(canvas).map_or(EditSet::NONE, |keys| keys.edits),
             egui_tab,
             label_selection: record.label_selection,

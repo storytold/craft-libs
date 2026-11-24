@@ -244,13 +244,25 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// route as `keys` says (the arrows as nudges, Tab moving focus on or toggling the panels unless it keeps Tab). `keys`
 /// is `KeyUse::CANVAS`, or a variant such as `KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(..)` while Tab and the
 /// clipboard are the canvas's own. The canvas reads its keys from egui: with nothing focused it is the key target, and
-/// a bare Tab it keeps, the chords it claims (`KeyUse::with_claims`; Alt+numpad code entry leaves a claimed Alt+digit
-/// alone), and the clipboard events and edit chords of its edit set stay in egui's input for the app, and nothing
-/// toggles or fires with them; Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus.
-/// With the canvas focused, the same keys stay in egui, and Escape too, as for any focused widget of the app's own;
-/// Escape with nothing focused is the window's cancel. Call it each pass the canvas shows.
+/// the chords it claims (`KeyUse::with_claims`; Alt+numpad code entry leaves a claimed Alt+digit alone) and the
+/// clipboard events and edit chords of its edit set stay in egui's input for the app, and nothing toggles or fires with
+/// them; Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus. A bare Tab with nothing
+/// focused is never the canvas's, even when it keeps Tab: it moves focus into the window or toggles the panels, so the
+/// canvas cannot trap keyboard navigation. With the canvas focused, the same keys stay in egui, a Tab it keeps and
+/// Escape too, as for any focused widget of the app's own; Escape with nothing focused is the window's cancel. Call it
+/// each pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
+}
+
+/// Registers the app's own egui widget `id`, drawn in the running pass, as a focus stop with `keys`, in the window's one
+/// Tab order: Tab and F6 reach it among the framework's stops in the order the pass registers them, so call it where
+/// the widget is drawn, each pass it shows. The widget must take egui focus under `id`. While it has the focus it reads
+/// its keys from egui as any focused widget of the app's own does (Escape, Enter, the keys `keys` keeps, and its
+/// claims), and Tab moves on from it as `keys` says. It never marks the window as showing a document: the document
+/// canvas registers with [`host_canvas`].
+pub fn host_stop(ctx: &Context, id: Id, keys: KeyUse) {
+    register_stop(ctx, Stop::new(id, keys.with_chrome_key(false)).host());
 }
 
 /// The stop of the document canvas `viewport` registered in its last pass (`KeyUse::chrome_key`), framework or the
@@ -279,9 +291,10 @@ pub(crate) fn is_canvas_member(ctx: &Context, rec: &StopRec) -> bool {
 }
 
 /// Whether a bare Tab in `viewport` is egui's own focus move: the window registered no framework stop in its last pass,
-/// only stops of the app's own egui widgets (`Stop::host`) if any, which egui's Tab order holds with the app's other
-/// widgets; and egui held no focus at the end of that pass, or held it on one of those stops. A framework move would
-/// reach the host stops alone. Read by the input hook, before the begin hook rotates the registrations.
+/// only stops of the app's own egui widgets (`Stop::host`: `host_canvas`, `host_stop`) if any, which egui's Tab order
+/// holds with the app's other widgets; and egui held no focus at the end of that pass, or held it on one of those
+/// stops. A framework move would reach the host stops alone. With a framework stop in the window, Tab is the
+/// framework's move over its one order, which holds the host stops beside the framework's. Read by the input hook, before the begin hook rotates the registrations.
 pub(crate) fn tab_is_egui_s(ctx: &Context, viewport: ViewportId) -> bool {
     with_viewport(ctx, viewport, |state| {
         state.stops.iter().all(|rec| rec.stop.host) && state.focus_now.is_none_or(|id| state.stops.iter().any(|rec| rec.stop.root == id))
