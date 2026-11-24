@@ -80,12 +80,13 @@ pub struct DockConfig {
     /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
     /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
     pub floating_rounded_body: bool,
-    /// A docked column of a tool rail (a stepped column whose panel has a [`DockGrid::rail`](super::DockGrid::rail))
-    /// shows as a card: inset by `space.gap.stack` on its outer, top and bottom sides, where the dock's background
-    /// shows, and painted `surface.panel` with `shape.radius.surface` corners and no frame. The column is wider by the
-    /// inset, so it keeps its steps; its dividers, drop bands and edge handle stay on its outer rect. Off: the column
+    /// Every docked column, expanded or collapsed to icons, shows as a card on the dock's `surface.background`:
+    /// painted `surface.panel` with `shape.radius.surface` corners and no frame, inset by `space.gap.stack` on its top
+    /// and bottom and, for the column at the window edge, on its outer side; each further column stands
+    /// `space.gap.tight` from its outer neighbour's card. A column is wider by its inset, so it keeps its content's
+    /// width (a tool rail its steps); its dividers, drop bands and edge handle stay on its outer rect. Off: a column
     /// fills its cell.
-    pub rail_cards: bool,
+    pub column_cards: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -126,7 +127,7 @@ impl Default for DockConfig {
             close_button: true,
             floating_grip: false,
             floating_rounded_body: false,
-            rail_cards: false,
+            column_cards: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
@@ -245,10 +246,10 @@ impl DockConfig {
         self
     }
 
-    /// Docked tool rails as cards on or off ([`rail_cards`](Self::rail_cards)).
+    /// Docked columns as cards on or off ([`column_cards`](Self::column_cards)).
     #[must_use]
-    pub fn rail_cards(mut self, on: bool) -> Self {
-        self.rail_cards = on;
+    pub fn column_cards(mut self, on: bool) -> Self {
+        self.column_cards = on;
         self
     }
 

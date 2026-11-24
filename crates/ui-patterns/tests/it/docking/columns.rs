@@ -509,7 +509,7 @@ impl DockPanels<u32> for RailStage {
 }
 
 /// A start dock in `direction` of a toolbar column of two rail steps, at the window edge, and a side column beside it,
-/// with `DockConfig::rail_cards` set to `cards`: the toolbar's cell, the side column's cell and the rail's stage.
+/// with `DockConfig::column_cards` set to `cards`: the toolbar's cell, the side column's cell and the rail's stage.
 fn rail_dock(cards: bool, direction: Direction) -> (Rect, Rect, Rect) {
     let columns = vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2), Column::new(vec![Group::new(vec![2], 0)]).with_width(150.0)];
     let root = Node::split(Axis::X, SplitSize::FixedFirst(300.0), Node::dock(DockEdge::Start, columns), Node::tabs(vec![1], 0));
@@ -519,7 +519,7 @@ fn rail_dock(cards: bool, direction: Direction) -> (Rect, Rect, Rect) {
     let (held, seen, shown, specs) = (Rc::clone(&workspace), Rc::clone(&placed), Rc::clone(&stage), Tracked::new(RailTools));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
-        let config = DockConfig::default().rail_cards(cards);
+        let config = DockConfig::default().column_cards(cards);
         let out = DockArea::new("Rail dock", Bind::bound(&mut workspace), &specs, &mut RailStage(Rc::clone(&shown)), config).show(ui);
         *held.borrow_mut() = workspace;
         *seen.borrow_mut() = out.columns;
@@ -553,5 +553,104 @@ fn a_rail_card_is_inset_alike_on_three_sides_and_keeps_its_steps() {
             (cell.width() - plain_cell.width() - outer).abs() <= 0.5,
             "{direction:?}: the column {cell:?} grows by the inset from {plain_cell:?}"
         );
+    }
+}
+
+/// The panel of the card dock's expanded column, and of its column collapsed to icons.
+const SIDE: u32 = 2;
+const ICONS: u32 = 4;
+
+/// Panels named for the card dock: an expanded column's panel, and a collapsed column's, whose icon the trial finds by
+/// its name.
+#[derive(PlainData)]
+struct CardPanels;
+
+impl PanelSpecs<u32> for CardPanels {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(if *panel == ICONS { "Icons" } else { "Side" })
+    }
+}
+
+/// Panels that record the rect the expanded column's group gets.
+struct CardStage(Rc<Cell<Option<Rect>>>);
+
+impl DockPanels<u32> for CardStage {
+    fn body(&mut self, panel: &u32, _: &mut Ui, body: &mut BodyCx<'_>) {
+        if *panel == SIDE {
+            self.0.set(Some(body.rect));
+        }
+    }
+}
+
+/// What a card dock trial reads: the cells of the expanded column and of the column of icons, the body of the expanded
+/// column's panel and the icon's cell.
+struct CardDock {
+    side: Rect,
+    icons: Rect,
+    body: Rect,
+    icon: Rect,
+}
+
+/// An end dock in `direction` beside the canvas: an expanded column at the window edge and, inward of it, a column
+/// collapsed to icons, with `DockConfig::column_cards` set to `cards`.
+fn card_dock(cards: bool, direction: Direction) -> CardDock {
+    let mut iconic = Column::new(vec![Group::new(vec![ICONS], 0)]);
+    iconic.iconic = true;
+    let columns = vec![Column::new(vec![Group::new(vec![SIDE], 0)]).with_width(220.0), iconic];
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let placed: Rc<RefCell<Vec<(u32, Rect)>>> = Rc::default();
+    let body: Rc<Cell<Option<Rect>>> = Rc::default();
+    let (held, seen, shown, specs) = (Rc::clone(&workspace), Rc::clone(&placed), Rc::clone(&body), Tracked::new(CardPanels));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = held.borrow().clone();
+        let config = DockConfig::default().column_cards(cards);
+        let out = DockArea::new("Card dock", Bind::bound(&mut workspace), &specs, &mut CardStage(Rc::clone(&shown)), config).show(ui);
+        *held.borrow_mut() = workspace;
+        *seen.borrow_mut() = out.columns;
+    });
+    fixture.direction(direction).room(Vec2::new(900.0, 500.0)).settle();
+    let cell = |panel: u32| placed.borrow().iter().find(|(at, _)| *at == panel).map(|(_, rect)| *rect).expect("the column shows");
+    let icon = fixture.by_label("Icons").expect("the icon shows").rect;
+    CardDock { side: cell(SIDE), icons: cell(ICONS), body: body.get().expect("the side panel shows"), icon }
+}
+
+/// The insets of `inner` in `cell` on the outer side, the window edge's (the right in left to right), and on the inner
+/// side.
+fn sides(cell: Rect, inner: Rect, rtl: bool) -> (f32, f32) {
+    if rtl { (inner.left() - cell.left(), cell.right() - inner.right()) } else { (cell.right() - inner.right(), inner.left() - cell.left()) }
+}
+
+/// Every docked column shows as a card: the column at the window edge is inset alike on its outer side and its foot,
+/// the column of icons inward of it stands a gutter from its card, narrower than the edge's inset, and both cards keep
+/// to their inner edges. The columns do not overlap, and each is wider than without cards by its inset, so its
+/// content keeps its width. Right to left mirrors the outer sides.
+#[trial]
+fn every_docked_column_is_a_card_with_gutters_between_them() {
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let rtl = direction == Direction::Rtl;
+        let plain = card_dock(false, direction);
+        let cards = card_dock(true, direction);
+        // Each inset is measured against the same column without cards, so a panel's own padding cancels out.
+        let inset = |cell: Rect, inner: Rect, plain_cell: Rect, plain_inner: Rect| {
+            let ((outer, inward), (plain_outer, plain_inward)) = (sides(cell, inner, rtl), sides(plain_cell, plain_inner, rtl));
+            (outer - plain_outer, inward - plain_inward)
+        };
+        let (edge, side_inner) = inset(cards.side, cards.body, plain.side, plain.body);
+        let foot = (cards.side.bottom() - cards.body.bottom()) - (plain.side.bottom() - plain.body.bottom());
+        assert!(edge > 0.5, "{direction:?}: the edge column's card is inset from the window edge: {:?} in {:?}", cards.body, cards.side);
+        assert!((foot - edge).abs() <= 0.5, "{direction:?}: the edge column's card is inset {edge} at the edge and {foot} at its foot");
+        assert!(side_inner.abs() <= 0.5, "{direction:?}: the edge column's card keeps to its inner edge");
+        let (gutter, icons_inner) = inset(cards.icons, cards.icon, plain.icons, plain.icon);
+        assert!(
+            gutter > 0.5 && gutter < edge,
+            "{direction:?}: the icons' card stands a gutter {gutter} from its neighbour's, under the edge's {edge}"
+        );
+        assert!(icons_inner.abs() <= 0.5, "{direction:?}: the icons' card keeps to its inner edge");
+        let apart = if rtl { cards.icons.left() >= cards.side.right() - 0.5 } else { cards.icons.right() <= cards.side.left() + 0.5 };
+        assert!(apart, "{direction:?}: the icons' column {:?} overlaps the edge column {:?}", cards.icons, cards.side);
+        assert!((cards.body.width() - plain.body.width()).abs() <= 0.5, "{direction:?}: the panel keeps its width in its card");
+        assert!((cards.side.width() - plain.side.width() - edge).abs() <= 0.5, "{direction:?}: the edge column grows by its inset");
+        assert!((cards.icons.width() - plain.icons.width() - gutter).abs() <= 0.5, "{direction:?}: the icons' column grows by its gutter");
     }
 }
