@@ -159,11 +159,16 @@ impl FontsPanel {
         let any = tl!("Any script");
         let selected = self.query.script.as_deref().and_then(|id| script_name(&index, id)).unwrap_or(any).to_owned();
         let query = &mut self.query;
+        let counts = &self.script_counts;
         widgets::select(ui, "craft-fonts.script", tl!("Script"), &selected, width, |ui| {
-            ui.selectable_value(&mut query.script, None, any);
+            widgets::menu_option(ui, s, &mut query.script, &Cell { value: None, label: any, count: counts.first().copied() });
             for &i in c.search.scripts() {
-                if let Some(script) = index.scripts().get(i) {
-                    ui.selectable_value(&mut query.script, Some(script.id.clone()), &script.name);
+                let Some(script) = index.scripts().get(i) else { continue };
+                let count = counts.get(i + 1).copied().unwrap_or(0);
+                let value = Some(script.id.clone());
+                // Scripts no family has for the other filters are left out, but the chosen one stays.
+                if count > 0 || query.script == value {
+                    widgets::menu_option(ui, s, &mut query.script, &Cell { value, label: &script.name, count: Some(count) });
                 }
             }
         });
