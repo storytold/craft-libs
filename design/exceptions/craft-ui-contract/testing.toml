@@ -15,3 +15,11 @@ rule = "probe/exempt/text-size"
 path = "crates/ui-contract/src/testing/face_runs.rs"
 reason = "The 4,000-point run is drawn at the font atlas's cap, which is in device pixels: at twice the scale the cap, and the card, are half as many points."
 count = 1
+
+[[exception]]
+name = "host-key-trial-host-caret"
+kind = "marker"
+rule = "contract/egui-widget"
+path = "crates/ui-contract/src/testing/host_key_trials.rs"
+reason = "The trial is about the app's own egui text field, a host widget, and reads its caret to see which keys reached it."
+count = 1
