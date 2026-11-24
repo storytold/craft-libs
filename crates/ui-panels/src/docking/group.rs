@@ -45,7 +45,8 @@ pub struct GroupGripStyle {
 /// references' 0.83 of the panel was almost invisible on our darker panels). Its shape is the theme's `shape.grip`
 /// (photocraft#16426): ticks, dots or one level bar, how many, how large and how far apart; by default eleven upright ticks, a thin
 /// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
-/// under its column bar and the grip above each icon group of a collapsed column paint the same marks.
+/// under its column bar and the grip above each icon group of a collapsed column paint the same marks, unless the app
+/// separates icon groups by a rule (`IconGroupSeparator::Rule`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GripMarks {
     ink: StyleColor,
