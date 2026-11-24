@@ -102,7 +102,7 @@ fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
     if craft_svg::sniff::is_svg(&data) || craft_svg::sniff::is_svgz(&data) {
         return svg::picture(&data, options, alt);
     }
-    let natural = model::image_px(&data).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75));
+    let natural = model::image_px(&data).filter(|&(w, h)| w > 0 && h > 0).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75));
     let (w, h) = box_size(options, natural);
     model::make_img(data, w, h, alt)
 }
@@ -125,7 +125,7 @@ fn box_size(options: &str, natural: Option<(f32, f32)>) -> (Option<f32>, Option<
     }
     if let (Some(bw), Some(bh), true, Some((nw, nh))) = (w, h, keep, natural) {
         // Fit inside the box, keeping the shape.
-        let k = (bw / nw.max(1.0)).min(bh / nh.max(1.0));
+        let k = (bw / nw).min(bh / nh);
         (w, h) = (Some(nw * k), Some(nh * k));
     }
     if let (None, None, Some(s), Some((nw, nh))) = (w, h, scale, natural) {
