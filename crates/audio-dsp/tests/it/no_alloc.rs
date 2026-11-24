@@ -135,3 +135,48 @@ fn noise_suppression_does_not_allocate_while_processing() {
     assert_eq!(info.count_total, 0, "{info:?}");
     assert!(l.iter().chain(&r).all(|v| v.is_finite()));
 }
+
+/// The ring modulator runs a voiced tone through 10,000 blocks of 480 frames, with its effect,
+/// modulation source, frequency and depth changed between blocks, blocks that leave the second
+/// channel out, a NaN sample and a reset, without one heap allocation.
+#[test]
+fn ring_mod_does_not_allocate_while_processing() {
+    let Some(mut fx) = create_effect("ring_mod", 48_000.0, 2) else { panic!("ring_mod is not registered") };
+    let tone: Vec<f32> = (0..480).map(|i| (0.4 * (std::f64::consts::TAU * 150.0 * i as f64 / 48_000.0).sin()) as f32).collect();
+    let (mut l, mut r) = (tone.clone(), tone.clone());
+    let info = allocation_counter::measure(|| {
+        for block in 0..10_000u32 {
+            match block % 500 {
+                0 => {
+                    fx.set_param("effect", (block / 500 % 4) as f32);
+                }
+                100 => {
+                    fx.set_param("mod_source", (block / 500 % 3) as f32);
+                }
+                250 => {
+                    fx.set_param("frequency", 30.0 + (block / 500 % 5) as f32 * 400.0);
+                    fx.set_param("mod_depth", 60.0);
+                }
+                499 => {
+                    fx.set_param("mod_depth", 0.0);
+                }
+                _ => {}
+            }
+            if block == 7_777 {
+                fx.reset();
+            }
+            l.copy_from_slice(&tone);
+            r.copy_from_slice(&tone);
+            if block == 5_000 {
+                l[100] = f32::NAN;
+            }
+            if (6_000..6_020).contains(&block) {
+                fx.process(&mut [&mut l]);
+            } else {
+                fx.process(&mut [&mut l, &mut r]);
+            }
+        }
+    });
+    assert_eq!(info.count_total, 0, "{info:?}");
+    assert!(l.iter().chain(&r).all(|v| v.is_finite()));
+}
