@@ -55,11 +55,17 @@ impl GreyRasterizer {
         limits.max_buffer_size.min(limits.max_storage_buffer_binding_size)
     }
 
+    /// Charge a storage buffer, which must also fit one storage binding, against the resident budget.
     pub(crate) fn reserve(&self, bytes: u64) -> Option<Arc<ResidentBytes>> {
-        let storage = self.resident_storage_limit();
-        if bytes > storage {
+        if bytes > self.resident_storage_limit() {
             return None;
         }
+        self.reserve_texture(bytes)
+    }
+
+    /// Charge a texture against the resident budget. The caller checks the texture dimension limits.
+    pub(crate) fn reserve_texture(&self, bytes: u64) -> Option<Arc<ResidentBytes>> {
+        let storage = self.resident_storage_limit();
         let buffers = if self.device.adapter_info().device_type == wgpu::DeviceType::DiscreteGpu { 6 } else { 3 };
         let cap = ((self.memory_budget_bytes)() / 8).min(storage.saturating_mul(buffers));
         self.resident_bytes.try_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(bytes).filter(|&used| used <= cap)).ok()?;
@@ -537,6 +543,19 @@ mod tests {
                 self.0.fetch_add(1, Relaxed);
             }
         }
+    }
+
+    #[test]
+    fn a_texture_larger_than_one_storage_binding_fits_the_resident_budget() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        let rasterizer = super::GreyRasterizer::new(&gpu.device, &gpu.queue, || 4 << 30).unwrap();
+        let float_8k_bytes = 8192 * 8192 * 4;
+        assert!(rasterizer.resident_storage_limit() < float_8k_bytes, "the default device limits bind at most 128 MiB");
+
+        let texture = rasterizer.reserve_texture(float_8k_bytes);
+
+        assert!(texture.is_some(), "an 8192 square R32Float texture is not a storage binding");
+        assert!(rasterizer.reserve(float_8k_bytes).is_none());
     }
 
     #[test]

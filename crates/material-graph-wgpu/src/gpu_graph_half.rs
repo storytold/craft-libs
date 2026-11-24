@@ -130,7 +130,7 @@ impl HalfRasterizer {
             if cancel.is_cancelled() {
                 return Ok(None);
             }
-            let Some(reservation) = gray.reserve((width as u64) * (width as u64) * 4) else { return Ok(None) };
+            let Some(reservation) = gray.reserve_texture((width as u64) * (width as u64) * 4) else { return Ok(None) };
             let texture = crate::validation::scoped(&self.device, "graph half-float texture", || {
                 self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("resident graph grayscale float"),

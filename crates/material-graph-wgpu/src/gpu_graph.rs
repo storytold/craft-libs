@@ -412,7 +412,7 @@ impl GraphAccelerator {
                             ImgRef::Grey(_) => 4,
                             ImgRef::Rgba(_) => 16,
                         };
-                        let Some(reservation) = rasterizer.reserve((image.w() as u64) * (image.h() as u64) * bytes_per_pixel) else { return false };
+                        let Some(reservation) = rasterizer.reserve_texture((image.w() as u64) * (image.h() as u64) * bytes_per_pixel) else { return false };
                         views.push(upload(&self.device, &self.queue, *image));
                         uploaded.push(reservation);
                     }
