@@ -136,6 +136,21 @@ pub enum LinkLabelInk {
     Neutral,
 }
 
+/// The ink of a side label's name, other than a link's ([`LinkLabelInk`]) and the text after a check box or a radio,
+/// which reads at full ink. An app sets it once at its root (`RootEnv::values`); the default is the muted ink of a
+/// caption that reads as secondary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum CaptionInk {
+    /// `text.muted`.
+    #[default]
+    Muted,
+    /// `text.normal`, the ink of the values beside it: VectorCraft's field labels ("X:", "Angle:", "Opacity"), as
+    /// production drew them.
+    Normal,
+}
+
 /// Whether the beside captions of a [`LabelScheme::Inline`] form share one column. Off (the default), each caption is
 /// as wide as its own text and its control follows it at once. On, the captions keep to the row start in one column as
 /// wide as the widest, so the controls after them line up (production's Rotate Pages dialog: Direction:, Pages: and
