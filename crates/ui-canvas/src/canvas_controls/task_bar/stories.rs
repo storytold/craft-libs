@@ -207,10 +207,15 @@ fn hover_grip(fixture: &mut Fixture) {
     }
 }
 
+/// How far the grip is dragged, in drag thresholds: left and down, far enough that the bar visibly moves.
+const GRIP_DRAG_THRESHOLDS: [f32; 2] = [-8.0, 6.0];
+
 /// Drags the bar by its grip and holds it there, the button down.
 fn drag_grip(fixture: &mut Fixture) {
     if let Some(grip) = fixture.by_label("Move bar") {
-        fixture.drag_hold_at(grip.center(), egui::vec2(-40.0, 30.0));
+        let threshold = crate::testing::input::slop(fixture.ctx());
+        let [x, y] = GRIP_DRAG_THRESHOLDS;
+        fixture.drag_hold_at(grip.center(), egui::vec2(x * threshold, y * threshold));
     }
 }
 

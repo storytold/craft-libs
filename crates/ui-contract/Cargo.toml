@@ -19,7 +19,7 @@ default = []
 # `craft_ui::testing`: the fixture and helpers used by application tests.
 # The suite runner, stories, registrations and snapshots are opt-in.
 testing = ["craft-platform/testing"]
-suite = ["testing", "dep:libtest-mimic", "snapshot"]
+suite = ["testing", "dep:libtest-mimic", "dep:craft-testkit", "snapshot"]
 # `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
 snapshot = ["dep:egui_kittest", "dep:image"]
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
@@ -46,6 +46,8 @@ craft-settings = { workspace = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 egui = { workspace = true }
 libtest-mimic = { version = "0.8", optional = true }
+# The gate's sweep fraction (`hostile::divisor`), which the suite's repeat sampling follows.
+craft-testkit = { workspace = true, optional = true }
 craft-host = { workspace = true }
 # `WindowSystem` and `restore::Store`, which viewport mounts place windows through.
 # `ui`: the window crate's egui side builds once, the same for the runtime, the shell's `app` and the apps.

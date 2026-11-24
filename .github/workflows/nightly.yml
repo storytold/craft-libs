@@ -31,4 +31,32 @@ jobs:
       cache-paths: .test-inputs/photocraft/corpus
       cache-key: photocraft-corpus
       cache-key-files: scripts/ci-test-inputs.sh
-      command: cargo nextest run --workspace --all-features --locked --profile ci
+      # The gate's build (the same targets and profile overrides), with every test at its full count.
+      command: bash scripts/ci-workspace-tests.sh full
+
+  # The scheduled run is main's; this starts the full tests above on next too, where the gate
+  # runs the same fractions. It also starts one Workspace run on next a day that nothing cancels
+  # (pull requests run the Linux legs only, and pushes to next cancel each other's runs): next's
+  # macOS and Windows legs then run in full at least once a day, and its Linux leg builds from
+  # source and saves next's own workspace-crates cache entry, which pull requests into next
+  # restore. Main gets the same from workspace.yml's own scheduled runs. The only job here with
+  # `actions: write`; it checks out and runs nothing from the repository.
+  workspace-next:
+    name: Workspace on next
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - name: Start the Workspace workflow and these full tests on next
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh workflow run workspace.yml --repo "$REPO" --ref next
+          gh workflow run nightly.yml --repo "$REPO" --ref next

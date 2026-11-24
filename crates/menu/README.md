@@ -163,9 +163,11 @@ egui::Panel::top("menu-bar").show(ui, |ui| {
   and leaves Alt alone; F10 still reaches the in-window bar of a browser. `.keyboard(false)`
   turns the bar's keys off (a modal dialog or the shortcut recorder has them); on `Target::Mac`
   they are off unless set. `.mnemonics(&[("View", 'W'), ("file.open", 'P')])` names preferred
-  letters by title as shown or by command id. A label without an ASCII letter or digit shows its
-  English label's letter after it, "文件(F)", before a trailing ellipsis ("開く(O)…"), when
-  the item, submenu or menu carries that English label (`Item::english`, `Node::english`, `Menu::english`).
+  letters by title as shown or by command id. A label without an ASCII letter or digit takes its
+  English label's letter when the item, submenu or menu carries that English label
+  (`Item::english`, `Node::english`, `Menu::english`). In a CJK interface language the letter
+  shows after the label, "文件(F)", before a trailing ellipsis ("開く(O)…"); in any other script
+  it is hidden ("Файл" stays as written) and still opens or runs the entry.
 - **Items:** a command the runtime's gate forbids, or whose state is disabled, is greyed and never
   fires. A submenu whose items are all disabled is greyed. The shortcut column shows the command's
   chord, else the item's own shortcut, in the shell's names (⌘ glyphs on a Mac). `.target(..)`

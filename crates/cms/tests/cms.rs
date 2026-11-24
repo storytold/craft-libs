@@ -115,7 +115,9 @@ fn white_is_exact_on_every_path() {
     let none = [0.0f32; 4];
     for cmyk in [Builtin::CoatedCmyk, Builtin::CoatedFogra39] {
         for intent in [Intent::Perceptual, Intent::RelativeColorimetric, Intent::Saturation] {
-            for bpc in [false, true] {
+            // The gate runs black point compensation on; nightly both.
+            let bpcs: &[bool] = if craft_testkit::hostile::divisor() > 1 { &[true] } else { &[false, true] };
+            for &bpc in bpcs {
                 for precise_float in [false, true] {
                     let opts = TransformOptions { intent, bpc, precise_float };
                     let at = format!("{cmyk:?} {opts:?}");

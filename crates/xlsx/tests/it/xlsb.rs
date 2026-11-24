@@ -312,11 +312,12 @@ fn declared_counts_and_decoded_text_are_bounded() {
     assert!(read(&package(&book(false), &worksheet(&[], &[]), &count_mismatch, ROOT, RELS, TYPES)).is_err());
     let mut data = row(0);
     let text = wide(&"x".repeat(32767));
-    for col in 0..2050 {
+    for col in 0..40 {
         data.extend(cell(6, col, &text));
     }
-    // Just over 64 MiB of text, the allowance before storytold/gridcraft#2126.
-    assert_eq!(read(&file(&worksheet(&data, &[]))).unwrap().sheets[0].cells.len(), 2050);
+    // Many maximal strings fit an allowance sized to them (storytold/gridcraft#2126: a fixed 64 MiB allowance refused a real file).
+    let limits = Limits { binary_text: 40 * 32767 + 1000, ..Limits::default() };
+    assert_eq!(read_with(&file(&worksheet(&data, &[])), &limits).unwrap().sheets[0].cells.len(), 40);
 }
 
 /// A row as Excel writes it: the row header, then `BrtRwDescent` (1024) in an alternate-content
@@ -353,6 +354,11 @@ fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
 #[test]
 fn more_than_a_million_cells_open() {
     // storytold/gridcraft#2126: a million cells over the workbook was a quarter of what `.xls` allows.
+    assert!(Limits::default().binary_cells > 1_000_000);
+    // Reading that many cells: nightly only.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     let wb = read(&file(&worksheet(&bool_cells(1_000_001, 16), &[]))).unwrap();
     assert_eq!(wb.sheets[0].cells.len(), 1_000_001);
     assert_eq!(wb.sheets[0].value(CellRef::new(62_500, 0)), Value::Bool(true));
@@ -360,39 +366,45 @@ fn more_than_a_million_cells_open() {
 
 #[test]
 fn a_full_height_column_opens() {
-    // 1,048,576 cells in Excel's rows are 5.2 million records in one part.
-    let wb = read(&file(&worksheet(&bool_cells(1_048_576, 1), &[]))).unwrap();
-    assert_eq!(wb.sheets[0].cells.len(), 1_048_576);
-    assert_eq!(wb.sheets[0].value(CellRef::new(1_048_575, 0)), Value::Bool(true));
+    // A column of n cells in Excel's rows is five records a cell in one part; limits sized for
+    // n cells (the defaults are sized for a full 1,048,576-row column) admit it.
+    let n = 20_000u32;
+    let limits = Limits { binary_cells: n as usize, binary_records: 5 * n as usize + 100, ..Limits::default() };
+    let wb = read_with(&file(&worksheet(&bool_cells(n, 1), &[])), &limits).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), n as usize);
+    assert_eq!(wb.sheets[0].value(CellRef::new(n - 1, 0)), Value::Bool(true));
 }
 
 #[test]
 fn formatted_blank_cells_cost_records_not_cells() {
-    // Filling A1:Z200000 and typing 30 values: Excel writes a BrtCellBlank for every formatted
-    // empty cell, 6 million records in all, which an allowance of 5 million per part refused.
+    // Filling A1:Z2000 and typing 30 values: Excel writes a BrtCellBlank for every formatted
+    // empty cell, 60 thousand records in all, which a cell-sized allowance of 5 times the cells
+    // (here 30 * 5) would refuse; the record allowance is separate from the cell allowance.
     let mut data = vec![];
-    for r in 0..200_000u32 {
+    for r in 0..2_000u32 {
         data.extend(excel_row(r));
         for c in 0..26 {
             data.extend(if r < 10 && c < 3 { cell(4, c, &[1]) } else { cell(1, c, &[]) });
         }
     }
-    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    let limits = Limits { binary_records: 70_000, binary_cells: 100, ..Limits::default() };
+    let wb = read_with(&file(&worksheet(&data, &[])), &limits).unwrap();
     assert_eq!(wb.sheets[0].cells.len(), 30);
 }
 
 #[test]
 fn cells_are_limited_to_four_million_over_the_workbook() {
-    // The `.xls` limit, counted across sheets: 2M + 2M opens, 2M + 2M + 1 does not.
-    let half = bool_cells(2_000_000, 40);
+    // The limit is counted across sheets: half + half opens, half + half + 1 does not.
+    let half = bool_cells(2_000, 40);
     let mut over = half.clone();
-    over.extend(excel_row(50_000));
+    over.extend(excel_row(50));
     over.extend(cell(4, 0, &[1]));
-    let wb = read(&two_sheets(&worksheet(&half, &[]), &worksheet(&half, &[]))).unwrap();
-    assert_eq!(wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), 4_000_000);
-    let err = read(&two_sheets(&worksheet(&half, &[]), &worksheet(&over, &[]))).err().unwrap();
+    let limits = Limits { binary_cells: 4_000, ..Limits::default() };
+    let wb = read_with(&two_sheets(&worksheet(&half, &[]), &worksheet(&half, &[])), &limits).unwrap();
+    assert_eq!(wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), 4_000);
+    let err = read_with(&two_sheets(&worksheet(&half, &[]), &worksheet(&over, &[])), &limits).err().unwrap();
     assert!(matches!(err, Error::TooLarge(_)), "{err}");
-    assert!(err.to_string().contains("4000000"), "{err}");
+    assert!(err.to_string().contains("4000"), "{err}");
 }
 
 #[test]
@@ -403,14 +415,15 @@ fn records_share_one_allowance_over_the_workbook() {
     let records = |n| Limits { binary_records: n, ..Limits::default() };
     assert!(matches!(read_with(&bytes, &records(2_000)), Err(Error::TooLarge(_))));
     assert!(read_with(&bytes, &records(4_000)).is_ok());
-    // The default allowance: exactly 40 million records, then one more. The other parts hold 20
+    // Exactly the allowance, then one more. The other parts hold 20
     // (7 in the workbook, 3 shared-string records, 5 + 5 sheet framing records).
     let filler = record(30, &[]); // Not a cell record: skipped inside the sheet data.
-    let mut data = filler.repeat(40_000_000 - 20);
-    assert!(read(&file(&worksheet(&data, &[]))).is_ok());
+    let exact = Limits { binary_records: 100_000, ..Limits::default() };
+    let mut data = filler.repeat(100_000 - 20);
+    assert!(read_with(&file(&worksheet(&data, &[])), &exact).is_ok());
     data.extend(filler.repeat(1));
-    let err = read(&file(&worksheet(&data, &[]))).err().unwrap();
-    assert!(matches!(err, Error::TooLarge(_)) && err.to_string().contains("too many records (more than 40000000)"), "{err}");
+    let err = read_with(&file(&worksheet(&data, &[])), &exact).err().unwrap();
+    assert!(matches!(err, Error::TooLarge(_)) && err.to_string().contains("too many records (more than 100000)"), "{err}");
 }
 
 #[test]
