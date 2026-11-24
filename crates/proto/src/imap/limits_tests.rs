@@ -116,6 +116,7 @@ fn only_uids_that_were_asked_for_and_exist_are_kept() {
 
 #[test]
 fn more_distinct_uids_than_the_mailbox_can_hold_fail_the_command() {
+    let full = craft_testkit::hostile::divisor() == 1;
     // 3 messages: room for 2 * 3 + FETCH_SLACK distinct UIDs, and not one more.
     let room = 2 * 3 + FETCH_SLACK;
     let many = |n: usize| flood(n, |i| format!("* {i} FETCH (UID {} FLAGS ())\r\n", i + 1)) + "A0001 OK done\r\n";
