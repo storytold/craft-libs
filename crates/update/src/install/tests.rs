@@ -828,7 +828,7 @@ pub(crate) mod macos_checks {
         let dir = tempfile::tempdir().unwrap();
         let app = bundle(dir.path(), "0.6.0");
         let unsigned = signature(&app, TEAM_ID, crate::process::run_detailed);
-        assert!(matches!(&unsigned, Signature::Failed(reason) if reason.contains("not signed")), "an unsigned bundle: {unsigned:?}");
+        assert!(matches!(&unsigned, Signature::Failed(reason) if reason.to_string().contains("not signed")), "an unsigned bundle: {unsigned:?}");
         let ok = std::process::Command::new("codesign").args(["--force", "--sign", "-"]).arg(&app).status().unwrap().success();
         assert!(ok, "codesign failed");
         assert_eq!(signature(&app, TEAM_ID, crate::process::run_detailed), Signature::Wrong, "an ad-hoc signature");
@@ -1133,4 +1133,20 @@ pub(crate) mod macos_checks {
         assert_eq!(super::macos::unmounted_attachments(&info, &both), ["/dev/disk5", "/dev/disk8"]);
         assert!(super::macos::unmounted_attachments("hdiutil: info failed", &paths).is_empty());
     }
+}
+
+#[trial]
+fn install_reasons_keep_authored_context_and_external_data() {
+    fn localize(text: &str, args: &[(&str, &str)]) -> String {
+        format!("translated[{}]", crate::translate::fill(text, args))
+    }
+    let raw = "拒否 {reason} {app}";
+    let inner = Reason::new("helper could not inspect {path}", &[("path", raw)]);
+    let reason = not_running(&crate::suite::LAUNCHER, Err(inner)).unwrap_err();
+    let rendered = reason.translated(localize);
+    assert!(rendered.contains("translated[helper could not inspect 拒否 {reason} {app}]"));
+    assert!(rendered.starts_with("translated[couldn't check whether "));
+    assert_eq!(not_running(&crate::suite::LAUNCHER, Ok(false)), Ok(()));
+    assert!(not_running(&crate::suite::LAUNCHER, Ok(true)).unwrap_err().translated(localize).contains("is running. Quit it"));
+    assert_eq!(Reason::data(raw).translated(localize), raw);
 }

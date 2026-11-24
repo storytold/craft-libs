@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use crate::Reason;
 use crate::protocol::{CANCELLED, PAUSED};
 use std::time::Duration;
 
@@ -179,6 +180,11 @@ impl Http {
 
     /// GET a GitHub API resource, revalidating with `etag` when given.
     pub fn get_api(&self, url: &str, etag: Option<&str>) -> Result<Fetched, String> {
+        self.get_api_reason(url, etag).map_err(|why| why.to_string())
+    }
+
+    /// Like [`Self::get_api`], retaining authored wording for translation.
+    pub fn get_api_reason(&self, url: &str, etag: Option<&str>) -> Result<Fetched, Reason> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
         let mut req = agent.get(url).header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(tag) = etag {
@@ -189,13 +195,13 @@ impl Http {
         {
             req = req.header("Authorization", &format!("Bearer {token}"));
         }
-        let mut resp = req.call().map_err(|e| format!("couldn't reach GitHub ({})", call_failed(&e)))?;
+        let mut resp = req.call().map_err(|e| call_failed(&e).context("couldn't reach GitHub ({reason})", &[]))?;
         let header = |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
         let status = resp.status().as_u16();
         match status {
             200 => {
                 let etag = header("etag");
-                let text = read_text_capped(&mut resp, MAX_API).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
+                let text = read_text_capped_reason(&mut resp, MAX_API).map_err(|e| e.context("unreadable answer from GitHub ({reason})", &[]))?;
                 Ok(Fetched::Body { text, etag })
             }
             304 => Ok(Fetched::NotModified),
@@ -206,10 +212,10 @@ impl Http {
                 let retry_after = header("retry-after").and_then(|r| r.trim().parse::<i64>().ok());
                 match refused_until(status, remaining.as_deref(), reset, retry_after, crate::now()) {
                     Some(reset) => Ok(Fetched::RateLimited { reset }),
-                    None => Err(format!("GitHub refused the request (HTTP {status})")),
+                    None => Err(Reason::new("GitHub refused the request (HTTP {status})", &[("status", &status.to_string())])),
                 }
             }
-            s => Err(format!("GitHub answered HTTP {s}")),
+            s => Err(Reason::new("GitHub answered HTTP {status}", &[("status", &s.to_string())])),
         }
     }
 
@@ -232,12 +238,17 @@ impl Http {
 
     /// GET a small text file (following redirects).
     pub fn get_text(&self, url: &str) -> Result<Option<String>, String> {
+        self.get_text_reason(url).map_err(|why| why.to_string())
+    }
+
+    /// Like [`Self::get_text`], retaining authored wording for translation.
+    pub fn get_text_reason(&self, url: &str) -> Result<Option<String>, Reason> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
-        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
+        let mut resp = agent.get(url).call().map_err(|e| call_failed(&e).context("couldn't reach {host} ({reason})", &[("host", host(url))]))?;
         match resp.status().as_u16() {
-            200 => read_text_capped(&mut resp, MAX_SMALL).map(Some).map_err(|e| format!("unreadable answer ({e})")),
+            200 => read_text_capped_reason(&mut resp, MAX_SMALL).map(Some).map_err(|e| e.context("unreadable answer ({reason})", &[])),
             404 => Ok(None),
-            s => Err(format!("{} answered HTTP {s}", host(url))),
+            s => Err(Reason::new("{host} answered HTTP {status}", &[("host", host(url)), ("status", &s.to_string())])),
         }
     }
 
@@ -245,32 +256,44 @@ impl Http {
     /// `max` bytes is refused: by its announced length before a byte is read, and by a hard limit
     /// on the body when the length wasn't announced or was wrong.
     pub fn get_bytes(&self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
+        self.get_bytes_reason(url, max).map_err(|why| why.to_string())
+    }
+
+    /// Like [`Self::get_bytes`], retaining authored wording for translation.
+    pub fn get_bytes_reason(&self, url: &str, max: usize) -> Result<Option<Vec<u8>>, Reason> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
-        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
+        let mut resp = agent.get(url).call().map_err(|e| call_failed(&e).context("couldn't reach {host} ({reason})", &[("host", host(url))]))?;
         match resp.status().as_u16() {
             200 => {
                 let announced = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
-                let too_big = || format!("{} sent more than {max} bytes", host(url));
+                let too_big = || Reason::new("{host} sent more than {max} bytes", &[("host", host(url)), ("max", &max.to_string())]);
                 if announced.is_some_and(|n| n > max as u64) {
                     return Err(too_big());
                 }
-                let body = read_bytes_capped(&mut resp, max)
-                    .map_err(|e| if e.contains("larger than") { too_big() } else { format!("unreadable answer ({e})") })?;
+                let body = read_bytes_capped(&mut resp, max).map_err(|e| match e {
+                    BodyReadError::TooLarge => too_big(),
+                    BodyReadError::Io(e) => Reason::data(e.to_string()).context("unreadable answer ({reason})", &[]),
+                })?;
                 Ok(Some(body))
             }
             404 => Ok(None),
-            s => Err(format!("{} answered HTTP {s}", host(url))),
+            s => Err(Reason::new("{host} answered HTTP {status}", &[("host", host(url)), ("status", &s.to_string())])),
         }
     }
 
     /// Where `url` redirects to, without following it.
     pub fn redirect_target(&self, url: &str) -> Result<Option<String>, String> {
+        self.redirect_target_reason(url).map_err(|why| why.to_string())
+    }
+
+    /// Like [`Self::redirect_target`], retaining authored wording for translation.
+    pub fn redirect_target_reason(&self, url: &str) -> Result<Option<String>, Reason> {
         let agent = if is_loopback(url) { &self.direct_no_redirect } else { &self.no_redirect };
-        let resp = agent.head(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
+        let resp = agent.head(url).call().map_err(|e| call_failed(&e).context("couldn't reach {host} ({reason})", &[("host", host(url))]))?;
         match resp.status().as_u16() {
             300..=399 => Ok(resp.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string)),
             404 => Ok(None),
-            s => Err(format!("{} answered HTTP {s}", host(url))),
+            s => Err(Reason::new("{host} answered HTTP {status}", &[("host", host(url)), ("status", &s.to_string())])),
         }
     }
 
@@ -283,11 +306,25 @@ impl Http {
     /// giving up. When the connection stays down, the download ends paused (`PAUSED`), never
     /// losing what it has. `stop` pauses or cancels it between reads.
     pub fn download(&self, url: &str, dest: &Path, size: u64, sha256: &str, stop: &Stop, progress: &mut dyn FnMut(Transfer)) -> Result<(), String> {
+        self.download_reason(url, dest, size, sha256, stop, progress).map_err(|why| why.to_string())
+    }
+
+    /// Like [`Self::download`], retaining authored wording for translation.
+    pub fn download_reason(
+        &self,
+        url: &str,
+        dest: &Path,
+        size: u64,
+        sha256: &str,
+        stop: &Stop,
+        progress: &mut dyn FnMut(Transfer),
+    ) -> Result<(), Reason> {
         if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("the release publishes no valid checksum for this file, so it wasn't downloaded".into());
+            return Err(Reason::new("the release publishes no valid checksum for this file, so it wasn't downloaded", &[]));
         }
         if let Some(dir) = dest.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {} ({e})", dir.display()))?;
+            std::fs::create_dir_all(dir)
+                .map_err(|e| Reason::data(e.to_string()).context("couldn't create {path} ({reason})", &[("path", &dir.display().to_string())]))?;
         }
         // A finished copy from an earlier attempt that never got installed. Marking it as just
         // used, before checking it, keeps `clean_downloads` away from it while it's installed.
@@ -301,16 +338,16 @@ impl Http {
         let mut fresh_start_used = false;
         loop {
             if let Err(e) = self.fetch_resuming(url, &part, size, stop, progress) {
-                if e == CANCELLED {
+                if e.to_string() == CANCELLED {
                     let _ = std::fs::remove_file(&part);
-                } else if e != PAUSED {
+                } else if e.to_string() != PAUSED {
                     log::warn!("download of {url} failed: {e}");
                 }
                 return Err(e);
             }
             if matches_published(&part, sha256) {
                 if let Err(e) = rename_retrying(&part, dest, stop) {
-                    if e == CANCELLED {
+                    if e.to_string() == CANCELLED {
                         let _ = std::fs::remove_file(&part);
                     }
                     return Err(e);
@@ -319,7 +356,7 @@ impl Http {
             }
             let _ = std::fs::remove_file(&part);
             if fresh_start_used {
-                return Err("the download doesn't match its published checksum, so it wasn't installed".into());
+                return Err(Reason::new("the download doesn't match its published checksum, so it wasn't installed", &[]));
             }
             // A resumed file can be spliced wrongly by a misbehaving proxy: try once from zero.
             log::warn!("checksum mismatch for {url}; downloading again from the start");
@@ -330,7 +367,7 @@ impl Http {
     /// Fetches `url` into `part`, resuming from whatever `part` already holds. Retries while the
     /// transfer keeps making progress; after several attempts in a row get nowhere, it stops and
     /// reports `PAUSED` so the user can resume later.
-    fn fetch_resuming(&self, url: &str, part: &Path, size: u64, stop: &Stop, progress: &mut dyn FnMut(Transfer)) -> Result<(), String> {
+    fn fetch_resuming(&self, url: &str, part: &Path, size: u64, stop: &Stop, progress: &mut dyn FnMut(Transfer)) -> Result<(), Reason> {
         let mut fruitless = 0u32;
         loop {
             stop.check()?;
@@ -353,12 +390,12 @@ impl Http {
                 return Ok(());
             }
             if size > 0 && have > size {
-                std::fs::remove_file(part).map_err(|e| format!("couldn't save the download ({e})"))?;
+                std::fs::remove_file(part).map_err(|e| Reason::data(e.to_string()).context("couldn't save the download ({reason})", &[]))?;
                 continue;
             }
             match self.attempt(url, part, have, size, stop, progress) {
                 Ok(()) => return Ok(()),
-                Err(AttemptError::Stopped(e)) => return Err(e),
+                Err(AttemptError::Stopped(e)) => return Err(Reason::data(e)),
                 Err(AttemptError::Fatal(e)) => return Err(e),
                 Err(AttemptError::Retry { error, progressed }) => {
                     log::info!("{url}: {error}; retrying");
@@ -381,7 +418,10 @@ impl Http {
             Ok(r) => r,
             // Asking again gets the same answer.
             Err(ureq::Error::RequireHttpsOnly(to)) => {
-                return Err(AttemptError::Fatal(format!("the download led to plain HTTP at {}, so it wasn't fetched", host(&to))));
+                return Err(AttemptError::Fatal(Reason::new(
+                    "the download led to plain HTTP at {host}, so it wasn't fetched",
+                    &[("host", host(&to))],
+                )));
             }
             Err(e) => return Err(retry(format!("couldn't connect: {e}"), false)),
         };
@@ -397,29 +437,35 @@ impl Http {
             // The range is past the end: the part file is already complete (or wrong; the
             // checksum decides).
             416 if have > 0 => return Ok(()),
-            404 | 410 => return Err(AttemptError::Fatal("the file is no longer on the release page".into())),
+            404 | 410 => return Err(AttemptError::Fatal(Reason::new("the file is no longer on the release page", &[]))),
             401 | 403 => return Err(retry(format!("the server refused the download (HTTP {status})"), false)),
             s => return Err(retry(format!("HTTP {s}"), false)),
         };
         if size > 0 && total != size {
-            return Err(AttemptError::Fatal(format!("the server offered {total} bytes, but the release lists {size}")));
+            return Err(AttemptError::Fatal(Reason::new(
+                "the server offered {total} bytes, but the release lists {size}",
+                &[("total", &total.to_string()), ("size", &size.to_string())],
+            )));
         }
         if let Some(enc) = header("content-encoding")
             && !enc.eq_ignore_ascii_case("identity")
         {
-            return Err(AttemptError::Fatal(format!("unexpected Content-Encoding '{enc}' on binary artifact download")));
+            return Err(AttemptError::Fatal(Reason::new("unexpected Content-Encoding '{enc}' on binary artifact download", &[("enc", &enc)])));
         }
         let limit = if total > 0 { total } else { MAX_DOWNLOAD };
         let appends = status == 206 && start == have;
         if appends && have > limit {
-            return Err(AttemptError::Fatal(format!("the download exceeds the permitted size of {limit} bytes")));
+            return Err(AttemptError::Fatal(Reason::new(
+                "the download exceeds the permitted size of {limit} bytes",
+                &[("limit", &limit.to_string())],
+            )));
         }
         // Open the part file at the right place: a 200 restarts it, a 206 continues it.
         let mut file = match (status, start) {
             (206, s) if s == have => std::fs::OpenOptions::new().append(true).open(part),
             _ => std::fs::File::create(part),
         }
-        .map_err(|e| AttemptError::Fatal(format!("couldn't save the download ({e})")))?;
+        .map_err(|e| AttemptError::Fatal(Reason::data(e.to_string()).context("couldn't save the download ({reason})", &[])))?;
         let mut done = if status == 206 && start == have { have } else { 0 };
         // We check the length and checksum ourselves; the reader's limit is only a backstop
         // against an endless body. (ureq errors once the limit is *reached*, so leave headroom.)
@@ -442,14 +488,19 @@ impl Http {
             }
             let next_done = done.saturating_add(n as u64);
             if next_done > limit {
-                return Err(AttemptError::Fatal(format!("the server sent more than the permitted size of {limit} bytes")));
+                return Err(AttemptError::Fatal(Reason::new(
+                    "the server sent more than the permitted size of {limit} bytes",
+                    &[("limit", &limit.to_string())],
+                )));
             }
-            let chunk = buf.get(..n).ok_or_else(|| AttemptError::Fatal("read past the buffer".into()))?;
-            file.write_all(chunk).map_err(|e| AttemptError::Fatal(format!("couldn't save the download ({e}). Is the disk full?")))?;
+            let chunk = buf.get(..n).ok_or_else(|| AttemptError::Fatal(Reason::new("read past the buffer", &[])))?;
+            file.write_all(chunk).map_err(|e| {
+                AttemptError::Fatal(Reason::data(e.to_string()).context("couldn't save the download ({reason}). Is the disk full?", &[]))
+            })?;
             done = next_done;
             progress(Transfer::Bytes { done, total });
         }
-        file.sync_all().map_err(|e| AttemptError::Fatal(format!("couldn't save the download ({e})")))?;
+        file.sync_all().map_err(|e| AttemptError::Fatal(Reason::data(e.to_string()).context("couldn't save the download ({reason})", &[])))?;
         if total > 0 && done < total {
             return Err(retry(format!("the connection closed early ({done} of {total} bytes)"), done > at_start));
         }
@@ -526,7 +577,7 @@ pub fn partial_bytes(dest: &Path, size: u64) -> Option<u64> {
 /// antivirus scanner often holds a just-written installer open, and the rename then fails with
 /// "Access denied" (os error 5) or a sharing violation (os error 32). `stop` pauses or cancels
 /// it between tries.
-fn rename_retrying(from: &Path, to: &Path, stop: &Stop) -> Result<(), String> {
+fn rename_retrying(from: &Path, to: &Path, stop: &Stop) -> Result<(), Reason> {
     let mut wait = Duration::from_millis(100);
     loop {
         stop.check()?;
@@ -536,7 +587,7 @@ fn rename_retrying(from: &Path, to: &Path, stop: &Stop) -> Result<(), String> {
                 std::thread::sleep(wait);
                 wait = wait.saturating_mul(2);
             }
-            result => return result.map_err(|e| format!("couldn't save the download ({e})")),
+            result => return result.map_err(|e| Reason::data(e.to_string()).context("couldn't save the download ({reason})", &[])),
         }
     }
 }
@@ -594,7 +645,7 @@ enum AttemptError {
     /// Paused or cancelled.
     Stopped(String),
     /// Won't get better by trying again.
-    Fatal(String),
+    Fatal(Reason),
     Retry {
         error: String,
         progressed: bool,
@@ -629,9 +680,15 @@ pub fn hex(bytes: &[u8]) -> String {
 
 /// SHA-256 of a file on disk.
 pub fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = std::fs::File::open(path).map_err(|e| format!("couldn't read {} ({e})", path.display()))?;
+    sha256_file_reason(path).map_err(|why| why.to_string())
+}
+
+/// Like [`sha256_file`], retaining authored wording for translation.
+pub fn sha256_file_reason(path: &Path) -> Result<String, Reason> {
+    let failed = |e: std::io::Error| Reason::data(e.to_string()).context("couldn't read {path} ({reason})", &[("path", &path.display().to_string())]);
+    let mut file = std::fs::File::open(path).map_err(failed)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("couldn't read {} ({e})", path.display()))?;
+    std::io::copy(&mut file, &mut hasher).map_err(failed)?;
     Ok(hex(&hasher.finalize()))
 }
 
@@ -664,10 +721,10 @@ fn host(url: &str) -> &str {
 
 /// Why a request failed, for a message. A hop refused for plain HTTP names only its host:
 /// ureq's own message holds the whole link, and a redirect's link can carry a signed query.
-fn call_failed(e: &ureq::Error) -> String {
+fn call_failed(e: &ureq::Error) -> Reason {
     match e {
-        ureq::Error::RequireHttpsOnly(to) => format!("refused plain HTTP to {}", host(to)),
-        e => e.to_string(),
+        ureq::Error::RequireHttpsOnly(to) => Reason::new("refused plain HTTP to {host}", &[("host", host(to))]),
+        e => Reason::data(e.to_string()),
     }
 }
 
@@ -679,22 +736,31 @@ fn call_failed(e: &ureq::Error) -> String {
 /// before it is parsed — instead of truncating it into something that merely fails to parse
 /// (CWE-409). Invalid UTF-8 stays an error, as before.
 fn read_text_capped(resp: &mut ureq::http::Response<ureq::Body>, max: u64) -> Result<String, String> {
+    read_text_capped_reason(resp, max).map_err(|why| why.to_string())
+}
+
+fn read_text_capped_reason(resp: &mut ureq::http::Response<ureq::Body>, max: u64) -> Result<String, Reason> {
     let mut reader = resp.body_mut().with_config().reader().take(max.saturating_add(1));
     let mut text = String::new();
-    reader.read_to_string(&mut text).map_err(|e| e.to_string())?;
+    reader.read_to_string(&mut text).map_err(|e| Reason::data(e.to_string()))?;
     if text.len() as u64 > max {
-        return Err(format!("the answer is larger than {max} bytes"));
+        return Err(Reason::new("the answer is larger than {max} bytes", &[("max", &max.to_string())]));
     }
     Ok(text)
 }
 
 /// Reads a binary body, rejecting one whose decoded size exceeds `max` (CWE-409).
-fn read_bytes_capped(resp: &mut ureq::http::Response<ureq::Body>, max: usize) -> Result<Vec<u8>, String> {
+enum BodyReadError {
+    Io(std::io::Error),
+    TooLarge,
+}
+
+fn read_bytes_capped(resp: &mut ureq::http::Response<ureq::Body>, max: usize) -> Result<Vec<u8>, BodyReadError> {
     let mut reader = resp.body_mut().with_config().reader().take((max as u64).saturating_add(1));
     let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    reader.read_to_end(&mut bytes).map_err(BodyReadError::Io)?;
     if bytes.len() > max {
-        return Err(format!("the answer is larger than {max} bytes"));
+        return Err(BodyReadError::TooLarge);
     }
     Ok(bytes)
 }

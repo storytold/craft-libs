@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::Reason;
 use crate::version::{self, Version};
 
 /// One downloadable file of a release.
@@ -206,15 +207,27 @@ fn tag_version(tag: &str, repo: &str) -> Option<version::Version> {
 
 /// Reads `GET /repos/<repo>/releases/latest` (or one element of `/releases`).
 pub fn parse_github_release(json: &str, repo: &str) -> Result<Release, String> {
-    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
+    parse_github_release_reason(json, repo).map_err(|why| why.to_string())
+}
+
+/// Like [`parse_github_release`], retaining authored wording for translation.
+pub fn parse_github_release_reason(json: &str, repo: &str) -> Result<Release, Reason> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| Reason::data(e.to_string()).context("unreadable answer from GitHub ({reason})", &[]))?;
     release_from_value(&v, repo)
 }
 
 /// Reads `GET /repos/<repo>/releases` and returns the newest stable (or any, with
 /// `allow_prerelease`) published release.
 pub fn parse_github_release_list(json: &str, repo: &str, allow_prerelease: bool) -> Result<Option<Release>, String> {
-    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
-    let list = v.as_array().ok_or("unexpected answer from GitHub")?;
+    parse_github_release_list_reason(json, repo, allow_prerelease).map_err(|why| why.to_string())
+}
+
+/// Like [`parse_github_release_list`], retaining authored wording for translation.
+pub fn parse_github_release_list_reason(json: &str, repo: &str, allow_prerelease: bool) -> Result<Option<Release>, Reason> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| Reason::data(e.to_string()).context("unreadable answer from GitHub ({reason})", &[]))?;
+    let list = v.as_array().ok_or_else(|| Reason::new("unexpected answer from GitHub", &[]))?;
     let mut best: Option<Release> = None;
     for item in list {
         if item["draft"].as_bool().unwrap_or(false) {
@@ -236,11 +249,15 @@ pub fn parse_github_release_list(json: &str, repo: &str, allow_prerelease: bool)
 /// One release object of the GitHub API, with every text capped and only the assets whose name is
 /// a plain file name and whose link is exactly [`expected_download_url`]. An API error object
 /// (`message`) becomes its text.
-fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, String> {
+fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Reason> {
     if let Some(msg) = v["message"].as_str() {
-        return Err(if msg == "Not Found" { "no releases yet".into() } else { format!("GitHub says: {}", truncate(msg, 200)) });
+        return Err(if msg == "Not Found" {
+            Reason::new("no releases yet", &[])
+        } else {
+            Reason::data(truncate(msg, 200)).context("GitHub says: {reason}", &[])
+        });
     }
-    let tag = v["tag_name"].as_str().filter(|t| valid_tag(t)).ok_or("no release found")?.to_string();
+    let tag = v["tag_name"].as_str().filter(|t| valid_tag(t)).ok_or_else(|| Reason::new("no release found", &[]))?.to_string();
     let releases = format!("https://github.com/{repo}/releases");
     let html_url = v["html_url"].as_str().and_then(|u| safe_release_html_url(repo, u)).unwrap_or_else(|| releases.clone());
     let assets = v["assets"]
@@ -370,6 +387,21 @@ pub(crate) mod tests {
     use craft_ui::testing::trial;
 
     const REPO: &str = "storytold/photocraft";
+
+    #[trial]
+    fn github_error_data_survives_translation_of_its_authored_context() {
+        let raw = "拒否 {reason} {app}";
+        let json = serde_json::json!({ "message": raw }).to_string();
+        let failure = parse_github_release_reason(&json, REPO).unwrap_err();
+        fn translated(text: &str, args: &[(&str, &str)]) -> String {
+            assert_eq!(text, "GitHub says: {reason}");
+            crate::translate::fill("GitHub: {reason}", args)
+        }
+        let localized = failure.translated(translated);
+        assert!(localized.contains(raw));
+        assert_ne!(localized, failure.to_string());
+        assert_eq!(parse_github_release(&json, REPO).unwrap_err(), failure.to_string());
+    }
 
     #[trial]
     fn repository_prefixed_tags_are_ordered_without_changing_download_links() {

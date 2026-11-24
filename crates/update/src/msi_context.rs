@@ -7,6 +7,8 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use crate::Reason;
+
 /// The Windows Installer context a copy is installed in. A per-machine copy elevates and writes
 /// HKLM registrations; a per-user one must not silently become a second, per-machine copy (or the
 /// other way round).
@@ -53,17 +55,27 @@ pub fn update_scope(
     probe: impl FnOnce(&str) -> Result<MsiScope, ProbeError>,
     record_scope: impl FnOnce(&str) -> Option<MsiScope>,
 ) -> Result<Option<MsiScope>, String> {
+    update_scope_reason(is_msi, product_code, probe, record_scope).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+pub(crate) fn update_scope_reason(
+    is_msi: bool,
+    product_code: Option<&str>,
+    probe: impl FnOnce(&str) -> Result<MsiScope, ProbeError>,
+    record_scope: impl FnOnce(&str) -> Option<MsiScope>,
+) -> Result<Option<MsiScope>, Reason> {
     if !is_msi {
         return Ok(None);
     }
-    let code = product_code.filter(|code| valid_product_code(code)).ok_or(UNKNOWN_CONTEXT)?;
+    let code = product_code.filter(|code| valid_product_code(code)).ok_or_else(|| Reason::new(UNKNOWN_CONTEXT, &[]))?;
     match probe(code) {
         Ok(scope) => Ok(Some(scope)),
-        Err(ProbeError::Conflicting) => Err(CONFLICTING_CONTEXT.into()),
-        Err(ProbeError::Unknown) => Err(UNKNOWN_CONTEXT.into()),
+        Err(ProbeError::Conflicting) => Err(Reason::new(CONFLICTING_CONTEXT, &[])),
+        Err(ProbeError::Unknown) => Err(Reason::new(UNKNOWN_CONTEXT, &[])),
         Err(ProbeError::Unavailable(reason)) => {
             log::warn!("Windows Installer context lookup for {code} could not run: {reason}");
-            let scope = record_scope(code).ok_or(UNKNOWN_CONTEXT)?;
+            let scope = record_scope(code).ok_or_else(|| Reason::new(UNKNOWN_CONTEXT, &[]))?;
             log::info!("{code}: keeping the {scope:?} context of its uninstall record");
             Ok(Some(scope))
         }

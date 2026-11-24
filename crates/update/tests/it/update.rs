@@ -133,7 +133,7 @@ fn a_panicking_check_is_an_error_not_a_hang() {
     let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(|| std::panic::panic_any("boom"))).with_pins_path(no_pins());
     u.check_now();
     u.settle_for_tests(&ctx);
-    assert!(matches!(u.status(), Status::Failed(_)));
+    assert!(matches!(u.status(), Status::CheckFailed(_)));
 }
 
 #[trial]
@@ -279,4 +279,48 @@ fn a_second_click_during_the_save_leaves_the_prompt_open() {
     assert!(!prompt_dialog(&dialogs, UpdatePromptDialog::take_update_request), "no second request");
     assert!(dialogs.borrow_mut().take::<UpdatePromptDialog>().is_none(), "the prompt stays open");
     assert!(dialogs.borrow().is_open::<UpdatePromptDialog>());
+}
+
+fn translated_reason(text: &str, args: &[(&str, &str)]) -> String {
+    let key = match text {
+        "download {item}" => "télécharger {item}",
+        _ => text,
+    };
+    craft_update::translate::english(key, args)
+}
+
+fn translated_check_shows(status: Status, text: &str) -> bool {
+    let mut dialog = UpdateCheckDialog::new("0.1.0").with_translator(translated_reason);
+    dialog.set_status(status);
+    let mut dialogs = DialogHost::new();
+    dialogs.open(dialog);
+    let (fixture, _) = rig(dialogs);
+    fixture.texts().iter().any(|t| t.text.contains(text)) || fixture.by_label(text).is_some()
+}
+
+#[trial]
+fn translatable_update_errors_are_rendered_by_the_check_dialog() {
+    let reason = craft_update::Reason::new("download {item}", &[("item", "Ω {reason}")]);
+    assert!(check_dialog_shows(Status::CheckFailed(reason.clone()), "download Ω {reason}"));
+    assert!(translated_check_shows(Status::CheckFailed(reason.clone()), "télécharger Ω {reason}"));
+    assert!(translated_check_shows(Status::InstallFailed(reason), "The update could not be installed: télécharger Ω {reason}"));
+    assert!(translated_check_shows(Status::Failed("download {item} Ω".into()), "download {item} Ω"));
+    assert!(!translated_check_shows(Status::Failed("download {item} Ω".into()), "télécharger"));
+}
+
+#[trial]
+fn translatable_update_legacy_restart_data_survives_the_public_exit_and_readback() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = craft_update::Paths::under(dir.path());
+    let mut ready = Updater::ready_for_tests(&PHOTOCRAFT, "0.1.0", newer(), || Err("download {item} Ω".into()))
+        .with_paths(paths.clone())
+        .with_pins_path(no_pins());
+    ready.start_pending_update();
+    let mut next = Updater::new(&PHOTOCRAFT, "0.1.0").with_paths(paths.clone()).with_pins_path(no_pins());
+    next.read_last_update();
+    let Status::InstallFailed(reason) = next.status() else { panic!("the public restart callback's error is reported") };
+    assert_eq!(reason.translated(translated_reason), "download {item} Ω", "caller text stays data after persistence");
+    let mut later = Updater::new(&PHOTOCRAFT, "0.1.0").with_paths(paths).with_pins_path(no_pins());
+    later.read_last_update();
+    assert_eq!(later.status(), &Status::Idle, "only one next start consumes the failure");
 }

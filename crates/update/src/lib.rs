@@ -42,10 +42,11 @@ pub use http::{Http, Stop};
 pub use paths::Paths;
 pub use platform::{Arch, Os, PackageKind, Platform, pick_asset};
 pub use protocol::{InstallLocations, JobPhase, LatestRelease, Source};
-pub use release::{Asset, Release, parse_github_release, parse_github_release_list};
+pub use release::{Asset, Release, parse_github_release, parse_github_release_list, parse_github_release_list_reason, parse_github_release_reason};
 pub use status::{InstallSource, Installed};
 pub use suite::SUITE;
 pub use time::parse_rfc3339;
+pub use translate::Reason;
 pub use version::{Version, is_newer, parse as parse_version};
 
 #[cfg(feature = "screen-testing")]
@@ -58,13 +59,16 @@ pub mod testing {
 
 /// Why a check for an update failed. [`RateLimited`](Self::RateLimited) is a typed reason, so the app
 /// words it in the interface language ([`stack_dialogs::UpdateWords`] has the crate's wording); the text
-/// of [`Failed`](Self::Failed) is data (GitHub's, the network's, or the crate's English) and stays as it came.
+/// of [`Failed`](Self::Failed) is caller-supplied data and stays as it came.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CheckError {
     /// GitHub refused the request because its quota is used up.
     RateLimited,
-    /// Any other failure, with its English reason.
+    /// An opaque caller-supplied failure, kept as supplied.
     Failed(String),
+    /// A crate-authored reason, translated when displayed.
+    Message(Reason),
 }
 
 impl std::fmt::Display for CheckError {
@@ -72,6 +76,23 @@ impl std::fmt::Display for CheckError {
         match self {
             Self::RateLimited => f.write_str("GitHub's request limit was reached"),
             Self::Failed(why) => f.write_str(why),
+            Self::Message(why) => std::fmt::Display::fmt(why, f),
+        }
+    }
+}
+
+impl From<Reason> for CheckError {
+    fn from(why: Reason) -> Self {
+        Self::Message(why)
+    }
+}
+
+impl From<CheckError> for Reason {
+    fn from(why: CheckError) -> Self {
+        match why {
+            CheckError::RateLimited => Self::new("GitHub's request limit was reached", &[]),
+            CheckError::Failed(why) => Self::data(why),
+            CheckError::Message(why) => why,
         }
     }
 }
@@ -97,7 +118,7 @@ pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result
 fn check_releases_at(url: &str, app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
     let version = self_update::current_version(app, current_version).map(|v| v.to_string());
     let current_version = version.as_deref().unwrap_or(current_version);
-    match http.get_api(url, None)? {
+    match http.get_api_reason(url, None)? {
         crate::http::Fetched::Body { text, .. } => Ok(offered_release(&text, app.repo, current_version)?),
         crate::http::Fetched::RateLimited { .. } => Err(CheckError::RateLimited),
         crate::http::Fetched::NotModified | crate::http::Fetched::NotFound => Ok(None),
@@ -111,8 +132,8 @@ pub fn now() -> i64 {
 
 /// The release in GitHub's release list `json` to offer a copy running `current_version`, if any:
 /// the latest published release, when [`version::offers_update`] says so.
-fn offered_release(json: &str, repo: &str, current_version: &str) -> Result<Option<Release>, String> {
-    let latest = crate::release::parse_github_release_list(json, repo, false)?;
+fn offered_release(json: &str, repo: &str, current_version: &str) -> Result<Option<Release>, Reason> {
+    let latest = crate::release::parse_github_release_list_reason(json, repo, false)?;
     Ok(latest.filter(|release| {
         let running = crate::version::parse(current_version);
         release.version.as_ref().zip(running.as_ref()).is_some_and(|(rel_v, cur_v)| crate::version::offers_update(rel_v, cur_v))

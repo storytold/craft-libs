@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::Reason;
 use crate::app::App;
 
 /// An installer's folders.
@@ -17,15 +18,25 @@ pub struct Paths {
 impl Paths {
     /// Discovers paths for an app, respecting portable mode if `portable.txt` is next to current exe.
     pub fn for_app(app: &App) -> Result<Self, String> {
+        Self::for_app_reason(app).map_err(|reason| reason.to_string())
+    }
+
+    /// Structured internal counterpart of [`Self::for_app`].
+    pub(crate) fn for_app_reason(app: &App) -> Result<Self, Reason> {
         if let Ok(exe) = std::env::current_exe() {
-            return Self::for_exe(app, &exe);
+            return Self::for_exe_reason(app, &exe);
         }
         let dir = if cfg!(any(target_os = "macos", target_os = "windows")) { app.name } else { app.id };
-        Self::per_user(dir)
+        Self::per_user_reason(dir)
     }
 
     /// Discovers paths for an app from a specific executable path.
     pub fn for_exe(app: &App, exe: &Path) -> Result<Self, String> {
+        Self::for_exe_reason(app, exe).map_err(|reason| reason.to_string())
+    }
+
+    /// Structured internal counterpart of [`Self::for_exe`].
+    pub(crate) fn for_exe_reason(app: &App, exe: &Path) -> Result<Self, Reason> {
         if let Some(parent) = exe.parent()
             && parent.join("portable.txt").is_file()
         {
@@ -33,14 +44,19 @@ impl Paths {
             return Ok(Self::under(&parent.join(data_dir_name)));
         }
         let dir = if cfg!(any(target_os = "macos", target_os = "windows")) { app.name } else { app.id };
-        Self::per_user(dir)
+        Self::per_user_reason(dir)
     }
 
     /// The per-user folders named `dir` (`ArtCraft Launcher` on macOS and Windows,
     /// `artcraft-launcher` elsewhere, by convention).
     pub fn per_user(dir: &str) -> Result<Self, String> {
-        let data = crate::folders::data_local_dir().ok_or("no per-user data folder on this system")?.join(dir);
-        let cache = crate::folders::cache_dir().ok_or("no per-user cache folder on this system")?.join(dir);
+        Self::per_user_reason(dir).map_err(|reason| reason.to_string())
+    }
+
+    /// Structured internal counterpart of [`Self::per_user`].
+    pub(crate) fn per_user_reason(dir: &str) -> Result<Self, Reason> {
+        let data = crate::folders::data_local_dir().ok_or_else(|| Reason::new("no per-user data folder on this system", &[]))?.join(dir);
+        let cache = crate::folders::cache_dir().ok_or_else(|| Reason::new("no per-user cache folder on this system", &[]))?.join(dir);
         Ok(Self { data, cache })
     }
 
@@ -76,12 +92,24 @@ impl Paths {
 
 /// Writes `bytes` to `path` via a temporary file and a rename, so a crash never leaves half a file.
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    let dir = path.parent().ok_or("no parent folder")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {} ({e})", dir.display()))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| format!("couldn't create a temporary file in {} ({e})", dir.display()))?;
-    tmp.write_all(bytes).map_err(|e| format!("couldn't write {} ({e})", tmp.path().display()))?;
-    tmp.as_file().sync_all().map_err(|e| format!("couldn't sync {} ({e})", tmp.path().display()))?;
-    tmp.persist(path).map_err(|e| format!("couldn't replace {} ({e})", path.display()))?;
+    write_atomic_reason(path, bytes).map_err(|reason| reason.to_string())
+}
+
+/// Structured internal atomic-write failure.
+pub(crate) fn write_atomic_reason(path: &std::path::Path, bytes: &[u8]) -> Result<(), Reason> {
+    let dir = path.parent().ok_or_else(|| Reason::new("no parent folder", &[]))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Reason::data(e.to_string()).context("couldn't create {path} ({reason})", &[("path", &dir.display().to_string())]))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| {
+        Reason::data(e.to_string()).context("couldn't create a temporary file in {path} ({reason})", &[("path", &dir.display().to_string())])
+    })?;
+    tmp.write_all(bytes)
+        .map_err(|e| Reason::data(e.to_string()).context("couldn't write {path} ({reason})", &[("path", &tmp.path().display().to_string())]))?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| Reason::data(e.to_string()).context("couldn't sync {path} ({reason})", &[("path", &tmp.path().display().to_string())]))?;
+    tmp.persist(path)
+        .map_err(|e| Reason::data(e.to_string()).context("couldn't replace {path} ({reason})", &[("path", &path.display().to_string())]))?;
     Ok(())
 }
 

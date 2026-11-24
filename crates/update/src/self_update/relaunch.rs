@@ -6,25 +6,36 @@ use super::detect::clear_pretend_version;
 #[cfg(target_os = "linux")]
 use super::detect::pretend_var;
 use super::{App, Restart, process};
+use crate::Reason;
 
 /// A [`Restart`] that starts `sh`, which waits for `pid` to exit and then runs `command`.
 /// Detached, so it outlives us. Nothing starts before the app's exit is certain: a close the user
 /// cancels leaves no helper counting down its wait.
 #[cfg(unix)]
 pub(super) fn relaunch_after_exit(app: &App, pid: u32, command: &[&std::ffi::OsStr]) -> Restart {
-    relaunch_with(app, pid, command, process::spawn_detached)
+    relaunch_with_reason(app, pid, command, process::spawn_detached_reason)
 }
 
 /// [`relaunch_after_exit`], with `spawn` starting the helper.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 pub(super) fn relaunch_with(
     app: &App,
     pid: u32,
     command: &[&std::ffi::OsStr],
     spawn: impl FnOnce(std::process::Command) -> Result<(), String> + Send + 'static,
 ) -> Restart {
+    relaunch_with_reason(app, pid, command, move |cmd| spawn(cmd).map_err(Reason::data))
+}
+
+#[cfg(unix)]
+fn relaunch_with_reason(
+    app: &App,
+    pid: u32,
+    command: &[&std::ffi::OsStr],
+    spawn: impl FnOnce(std::process::Command) -> Result<(), Reason> + Send + 'static,
+) -> Restart {
     let cmd = helper_command(app, pid, command);
-    Restart::later(move || spawn(cmd).map_err(|e| format!("couldn't schedule the restart ({e})")))
+    Restart::later_reason(move || spawn(cmd).map_err(|reason| reason.context("couldn't schedule the restart ({reason})", &[])))
 }
 
 #[cfg(unix)]
@@ -81,7 +92,7 @@ pub(super) fn flatpak_host_pid() -> Option<u32> {
 /// A [`Restart`] that starts a host helper, which waits for this Flatpak instance to exit, then
 /// relaunches it via Flatpak on the host. Nothing starts before the app's exit is certain.
 #[cfg(target_os = "linux")]
-pub(super) fn relaunch_flatpak_after_exit(app: &App) -> Result<Restart, String> {
+pub(super) fn relaunch_flatpak_after_exit(app: &App) -> Result<Restart, Reason> {
     let host_pid = flatpak_host_pid();
     let instance_id = flatpak_instance_id();
     // Each wait clause polls until the old process is gone, then execs the relaunch command.
@@ -97,11 +108,13 @@ pub(super) fn relaunch_flatpak_after_exit(app: &App) -> Result<Restart, String> 
             id,
         ),
         // Without either, starting it again could only meet the old copy still running.
-        (None, None) => return Err(format!("{} is updated; quit and reopen it to start the new version", app.name)),
+        (None, None) => return Err(Reason::new("{app} is updated; quit and reopen it to start the new version", &[("app", app.name)])),
     };
     let script = format!("({wait_clause}) &");
     let cmd = flatpak_restart_command(app, &script, &target_arg);
-    Ok(Restart::later(move || process::spawn_detached(cmd).map_err(|e| format!("couldn't schedule the Flatpak restart ({e})"))))
+    Ok(Restart::later_reason(move || {
+        process::spawn_detached_reason(cmd).map_err(|reason| reason.context("couldn't schedule the Flatpak restart ({reason})", &[]))
+    }))
 }
 
 #[cfg(target_os = "linux")]

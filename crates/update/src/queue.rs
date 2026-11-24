@@ -9,9 +9,11 @@ use std::ffi::OsString;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use crate::Reason;
 use crate::protocol::CANCELLED;
 
 type Outcome = Result<(), String>;
+type TypedOutcome = Result<(), Reason>;
 
 struct Waiting {
     id: u64,
@@ -25,7 +27,7 @@ struct State {
     waiting: Vec<Waiting>,
     /// The jobs of the call in progress.
     running: Vec<u64>,
-    finished: Vec<(u64, Outcome)>,
+    finished: Vec<(u64, TypedOutcome)>,
 }
 
 /// Runs system installs one at a time. Share one queue between all install jobs of a process.
@@ -39,7 +41,7 @@ pub struct Queue {
 struct Turn<'a> {
     queue: &'a Queue,
     others: Vec<u64>,
-    outcome: Outcome,
+    outcome: TypedOutcome,
 }
 
 impl Drop for Turn<'_> {
@@ -121,6 +123,19 @@ impl Queue {
         turn: &mut dyn FnMut(bool),
         exec: &dyn Fn(&[OsString], &[OsString]) -> Outcome,
     ) -> Outcome {
+        self.batched_reason(command, target, cancelled, turn, &|command, targets| exec(command, targets).map_err(Reason::data))
+            .map_err(|why| why.to_string())
+    }
+
+    /// Like [`Self::batched`], preserving translatable reasons for every job sharing a call.
+    pub fn batched_reason(
+        &self,
+        command: Vec<OsString>,
+        target: OsString,
+        cancelled: &dyn Fn() -> bool,
+        turn: &mut dyn FnMut(bool),
+        exec: &dyn Fn(&[OsString], &[OsString]) -> TypedOutcome,
+    ) -> TypedOutcome {
         let mut state = self.lock();
         let id = state.next_id;
         state.next_id = state.next_id.wrapping_add(1);
@@ -160,7 +175,7 @@ impl Queue {
         }
         let others = batch.iter().map(|w| w.id).filter(|other| *other != id).collect();
         let targets: Vec<OsString> = batch.into_iter().map(|w| w.target).collect();
-        let mut call = Turn { queue: self, others, outcome: Err("the system installer was interrupted".into()) };
+        let mut call = Turn { queue: self, others, outcome: Err(Reason::new("the system installer was interrupted", &[])) };
         let outcome = exec(&command, &targets);
         call.outcome.clone_from(&outcome);
         outcome

@@ -1238,7 +1238,7 @@ fn an_unreadable_folder_in_the_release_stops_the_update_before_anything_changes(
         b.append_data(&mut h, "pdfcraft-9.9.9-linux-x86_64/share/pdfcraft/models/", &[][..]).unwrap();
     });
     let paths = Paths::under(&dir.path().join("data"));
-    let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err();
+    let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err().to_string();
     assert!(
         error.starts_with("couldn't read ") && error.contains("pdfcraft-9.9.9-linux-x86_64/share/pdfcraft/models ("),
         "the error names the folder: {error}"
@@ -1287,7 +1287,7 @@ fn a_release_with_a_link_for_its_shared_files_stops_the_update() {
     let outside = dir.path().join("outside");
     release_tarball_with(&tarball, &[("bin/pdfcraft", b"new app")], |b| append_release_link(b, "share", &outside));
     let paths = Paths::under(&dir.path().join("data"));
-    let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err();
+    let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err().to_string();
     assert!(error.ends_with("pdfcraft-9.9.9-linux-x86_64/share isn't a folder"), "{error}");
     assert_eq!(std::fs::read(&exe).unwrap(), b"old app");
     assert!(!prefix.join("share/pdfcraft/a.txt").exists(), "nothing is copied in through the link");
@@ -1309,7 +1309,7 @@ fn a_release_with_a_link_for_its_programs_stops_the_update() {
     let tarball = dir.path().join("new.tar.gz");
     release_tarball_with(&tarball, &[("share/pdfcraft/a.txt", b"new data")], |b| append_release_link(b, "bin", &outside));
     let paths = Paths::under(&dir.path().join("data"));
-    let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err();
+    let error = replace_standalone(&crate::suite::PDFCRAFT, &paths, &tarball, &exe).unwrap_err().to_string();
     assert!(error.ends_with("pdfcraft-9.9.9-linux-x86_64/bin isn't a folder"), "{error}");
     assert_eq!(std::fs::read(&exe).unwrap(), b"old app");
     assert_eq!(std::fs::read(prefix.join("bin/pdfcraft-cli")).unwrap(), b"old cli");
@@ -1379,4 +1379,17 @@ fn nextest_archive_binaries_do_not_update_themselves() {
         std::os::unix::fs::symlink(external, &metadata).unwrap();
         assert!(!is_development_build(&exe, false), "symlink inventory is not evidence");
     }
+}
+
+#[trial]
+fn restart_reasons_remain_structured_until_start() {
+    fn localize(text: &str, args: &[(&str, &str)]) -> String {
+        format!("translated[{}]", crate::translate::fill(text, args))
+    }
+    let raw = "失敗 {reason}";
+    let typed = Restart::later_reason(move || Err(Reason::data(raw).context("couldn't start helper ({reason})", &[])));
+    assert_eq!(typed.start_reason().unwrap_err().translated(localize), "translated[couldn't start helper (失敗 {reason})]");
+    let legacy = Restart::later(move || Err(raw.to_owned()));
+    assert_eq!(legacy.start_reason().unwrap_err().translated(localize), raw);
+    assert_eq!(Restart::scheduled().start_reason(), Ok(()));
 }

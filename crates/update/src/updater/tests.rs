@@ -21,6 +21,12 @@ fn newer() -> Release {
     Release { tag: "v9.0.0".into(), version: crate::version::parse("9.0.0"), ..Release::default() }
 }
 
+/// The migrated payload retains provenance; its English compatibility view stays the same.
+fn assert_install_failed(status: &Status, expected: &str) {
+    let Status::InstallFailed(reason) = status else { panic!("expected install failure, got {status:?}") };
+    assert_eq!(reason.to_string(), expected);
+}
+
 /// Every offer's prompt, as the passes after the offers' threads answered would open it.
 fn settle_offer(updater: &mut Updater) {
     updater.settle_offers(&egui::Context::default());
@@ -244,7 +250,7 @@ fn a_helper_that_cannot_start_at_the_exit_is_reported_at_the_next_start() {
 
     let mut next = reading(&paths, "0.1.0");
     start_answered(&mut next, &ctx, Ok(None));
-    assert_eq!(next.status(), &Status::InstallFailed("couldn't schedule the update (denied)".into()));
+    assert_install_failed(next.status(), "couldn't schedule the update (denied)");
     let mut later = reading(&paths, "0.1.0");
     start_answered(&mut later, &ctx, Ok(None));
     assert_eq!(later.status(), &Status::Idle, "a failure is reported once");
@@ -259,7 +265,7 @@ fn a_recorded_failure_is_shown_once_at_the_next_start() {
     self_update::record_failure(&paths, "the Windows Installer stopped with error 1603");
     crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.1.0").unwrap();
     start_answered(&mut u, &ctx, Ok(None));
-    assert_eq!(u.status(), &Status::InstallFailed("the Windows Installer stopped with error 1603".into()));
+    assert_install_failed(u.status(), "the Windows Installer stopped with error 1603");
     u.dismiss_status();
     assert_eq!(u.status(), &Status::Idle);
 
@@ -276,7 +282,7 @@ fn check_again_after_a_failed_update_says_why_it_failed() {
     let (_dir, paths, mut u) = with_records("0.1.0");
     self_update::record_failure(&paths, "disk full");
     start_answered(&mut u, &ctx, Ok(None));
-    assert_eq!(u.status(), &Status::InstallFailed("disk full".into()));
+    assert_install_failed(u.status(), "disk full");
     u.dismiss_status();
     u.check_now();
     assert_eq!(u.status(), &Status::Checking);
@@ -386,7 +392,7 @@ fn a_requested_check_finds_a_helper_failure_while_the_app_still_runs() {
     assert!(u.prompt.as_ref().is_some_and(|p| p.ready), "the prompt offers Restart to Update");
     self_update::record_failure(&paths, "ArtCraft Launcher is still running");
     u.check_now();
-    assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
+    assert_install_failed(u.status(), "ArtCraft Launcher is still running");
     assert!(!u.installed, "the update is on offer again");
     let prompt = u.prompt.as_ref().map(|p| (u.install.is_some(), p.ready, p.message()));
     let reason = "The update could not be installed: ArtCraft Launcher is still running".to_owned();
@@ -420,7 +426,7 @@ fn a_retry_after_a_helper_failure_while_the_app_runs_waits_for_the_exit() {
     u.start_pending_update();
     self_update::record_failure(&paths, "ArtCraft Launcher is still running");
     u.check_now();
-    assert_eq!(u.status(), &Status::InstallFailed("ArtCraft Launcher is still running".into()));
+    assert_install_failed(u.status(), "ArtCraft Launcher is still running");
 
     // The retry's worker, as `start_install` starts it.
     let exiting = handoff(&mut u.exiting);
@@ -507,7 +513,7 @@ fn an_install_failing_after_the_updater_is_dropped_is_reported_at_the_next_start
         deliver(&PHOTOCRAFT, &tx, &exiting, Some(&paths), outcome);
         let mut next = reading(&paths, "0.1.0");
         start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
+        assert_install_failed(next.status(), want);
     }
 }
 
@@ -523,7 +529,7 @@ fn a_failed_install_picked_up_at_exit_is_reported_at_the_next_start() {
         drop(u);
         let mut next = reading(&paths, "0.1.0");
         start_answered(&mut next, &ctx, Ok(None));
-        assert_eq!(next.status(), &Status::InstallFailed(want.into()), "{want}");
+        assert_install_failed(next.status(), want);
     }
     // A worker that ended without sending anything.
     let (_dir, paths, mut u) = with_records("0.1.0");
@@ -533,7 +539,7 @@ fn a_failed_install_picked_up_at_exit_is_reported_at_the_next_start() {
     drop(u);
     let mut next = reading(&paths, "0.1.0");
     start_answered(&mut next, &ctx, Ok(None));
-    assert_eq!(next.status(), &Status::InstallFailed("The update stopped unexpectedly.".into()));
+    assert_install_failed(next.status(), "The update stopped unexpectedly.");
 }
 
 /// Whether the copy installs a found release itself is decided on the check's thread: a pass
@@ -1040,4 +1046,46 @@ fn later_on_a_finished_install_does_not_close_the_app_after_a_save() {
     assert!(u.restart.is_some(), "the update still waits for the exit");
     u.restart_to_update();
     assert_eq!(screen.pass(&mut u, true, false), Action::Close);
+}
+
+fn translate_update_reason(text: &str, args: &[(&str, &str)]) -> String {
+    let key = match text {
+        "download {item}" => "télécharger {item}",
+        "The update could not be installed: {reason}" => "Échec: {reason}",
+        _ => text,
+    };
+    english(key, args)
+}
+
+#[trial]
+fn translatable_update_check_keeps_owned_and_raw_reasons_distinct() {
+    let reason = Reason::new("download {item}", &[("item", "Ω {reason}")]);
+    let ctx = egui::Context::default();
+    let mut owned = updater(Err(CheckError::Message(reason.clone())));
+    owned.check_now();
+    owned.settle_for_tests(&ctx);
+    let Status::CheckFailed(read) = owned.status() else { panic!("authored check reason") };
+    assert_eq!(read.translated(translate_update_reason), "télécharger Ω {reason}");
+    assert_eq!(read.to_string(), "download Ω {reason}");
+    let mut raw = updater(Err("download {item} Ω".into()));
+    raw.check_now();
+    raw.settle_for_tests(&ctx);
+    assert_eq!(raw.status(), &Status::Failed("download {item} Ω".into()));
+}
+
+#[trial]
+fn translatable_update_persisted_reason_reaches_the_prompt_in_the_current_language() {
+    let (_dir, paths, mut u) = with_records("0.1.0");
+    self_update::record_failure_reason(&paths, &Reason::new("download {item}", &[("item", "Ω {reason}")]));
+    u.read_last_update();
+    assert_install_failed(u.status(), "download Ω {reason}");
+    u = u.with_translator(translate_update_reason);
+    u.open_offer(newer(), false);
+    assert_eq!(u.status_message().as_deref(), Some("Échec: télécharger Ω {reason}"));
+    u = u.with_translator(english);
+    assert_eq!(u.status_message().as_deref(), Some("The update could not be installed: download Ω {reason}"));
+    assert!(!paths.logs().join("self-update-error.reason-v1.json").exists(), "read once, not once per language");
+    self_update::record_failure(&paths, " \n");
+    u.restart = None;
+    assert_install_failed(&u.pending_status(), "");
 }

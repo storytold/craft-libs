@@ -1,5 +1,7 @@
 //! Starting programs: the Craft Apps themselves, the file manager, and helper tools.
 
+use crate::Reason;
+
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -53,9 +55,7 @@ pub fn capture(program: &str, args: &[&str], timeout: Duration) -> Option<String
 /// Runs a helper and returns its standard output when it succeeds within `timeout`; otherwise
 /// the reason, in the helper's own words (its standard error) where it gave one.
 pub fn run(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut cmd = command(program);
-    cmd.args(args);
-    run_command(cmd, program, timeout)
+    run_reason(program, args, timeout).map_err(|reason| reason.to_string())
 }
 
 /// How a helper failed: for a check, whether the helper reached an answer at all.
@@ -83,21 +83,71 @@ impl HelperFailure {
     }
 }
 
+/// Internal helper outcome: exit classification and authored provenance stay together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HelperFailureReason {
+    Exited { code: i32, reason: Reason },
+    Unfinished(Reason),
+}
+
+impl From<HelperFailure> for HelperFailureReason {
+    fn from(failure: HelperFailure) -> Self {
+        match failure {
+            HelperFailure::Exited { code, reason } => Self::Exited { code, reason: Reason::data(reason) },
+            HelperFailure::Unfinished(reason) => Self::Unfinished(Reason::data(reason)),
+        }
+    }
+}
+
+impl HelperFailureReason {
+    pub(crate) fn into_reason(self) -> Reason {
+        match self {
+            Self::Exited { reason, .. } | Self::Unfinished(reason) => reason,
+        }
+    }
+
+    fn into_legacy(self) -> HelperFailure {
+        match self {
+            Self::Exited { code, reason } => HelperFailure::Exited { code, reason: reason.to_string() },
+            Self::Unfinished(reason) => HelperFailure::Unfinished(reason.to_string()),
+        }
+    }
+}
+
 /// [`run`], for a caller that needs to tell a helper's answer from a helper that gave none.
 pub fn run_detailed(program: &str, args: &[&str], timeout: Duration) -> Result<String, HelperFailure> {
+    run_detailed_reason(program, args, timeout).map_err(HelperFailureReason::into_legacy)
+}
+
+pub(crate) fn run_detailed_reason(program: &str, args: &[&str], timeout: Duration) -> Result<String, HelperFailureReason> {
     let mut cmd = command(program);
     cmd.args(args);
-    run_command_detailed(cmd, program, timeout)
+    run_command_detailed_reason(cmd, program, timeout)
+}
+
+pub(crate) fn run_reason(program: &str, args: &[&str], timeout: Duration) -> Result<String, Reason> {
+    let mut cmd = command(program);
+    cmd.args(args);
+    run_command_reason(cmd, program, timeout)
+}
+
+pub(crate) fn run_command_reason(cmd: Command, program: &str, timeout: Duration) -> Result<String, Reason> {
+    run_command_detailed_reason(cmd, program, timeout).map_err(HelperFailureReason::into_reason)
 }
 
 /// Runs a configured helper with bounded output and a timeout.
 pub fn run_command(cmd: Command, program: &str, timeout: Duration) -> Result<String, String> {
-    run_command_detailed(cmd, program, timeout).map_err(HelperFailure::into_reason)
+    run_command_reason(cmd, program, timeout).map_err(|reason| reason.to_string())
 }
 
+#[cfg(test)]
 fn run_command_detailed(cmd: Command, program: &str, timeout: Duration) -> Result<String, HelperFailure> {
+    run_command_detailed_reason(cmd, program, timeout).map_err(HelperFailureReason::into_legacy)
+}
+
+fn run_command_detailed_reason(cmd: Command, program: &str, timeout: Duration) -> Result<String, HelperFailureReason> {
     let mut start = None;
-    run_command_until(cmd, program, timeout, move |_| {
+    run_command_until_reason(cmd, program, timeout, move |_| {
         let start = *start.get_or_insert_with(Instant::now);
         let more = within(start, Instant::now(), timeout);
         if more {
@@ -121,21 +171,26 @@ enum Pending {
     Output,
 }
 
-/// [`run_command_detailed`], asking `keep_waiting` each time the run finds the helper or its
+/// Bounded helper execution, asking `keep_waiting` each time the run finds the helper or its
 /// output unfinished. `keep_waiting` returns `false` when the time limit has passed; `timeout` is
 /// the limit the error message names.
-fn run_command_until(
+#[cfg(test)]
+fn run_command_until(cmd: Command, program: &str, timeout: Duration, keep_waiting: impl FnMut(Pending) -> bool) -> Result<String, HelperFailure> {
+    run_command_until_reason(cmd, program, timeout, keep_waiting).map_err(HelperFailureReason::into_legacy)
+}
+
+fn run_command_until_reason(
     mut cmd: Command,
     program: &str,
     timeout: Duration,
     mut keep_waiting: impl FnMut(Pending) -> bool,
-) -> Result<String, HelperFailure> {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| HelperFailure::Unfinished(format!("couldn't start {program} ({e})")))?;
+) -> Result<String, HelperFailureReason> {
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| {
+        HelperFailureReason::Unfinished(Reason::new(
+            "couldn't start {program} ({e})",
+            &[("program", &(program).to_string()), ("e", &(e).to_string())],
+        ))
+    })?;
     // Read both pipes while it runs, so a chatty helper can't block on a full one.
     let readers = read_all(child.stdout.take()).and_then(|stdout| Ok((stdout, read_all(child.stderr.take())?)));
     let (stdout, stderr) = match readers {
@@ -143,10 +198,18 @@ fn run_command_until(
         Err(e) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(HelperFailure::Unfinished(format!("couldn't read the output of {program} ({e})")));
+            return Err(HelperFailureReason::Unfinished(Reason::new(
+                "couldn't read the output of {program} ({e})",
+                &[("program", &(program).to_string()), ("e", &(e).to_string())],
+            )));
         }
     };
-    let timed_out = || HelperFailure::Unfinished(format!("{program} didn't finish within {} seconds", timeout.as_secs()));
+    let timed_out = || {
+        HelperFailureReason::Unfinished(Reason::new(
+            "{program} didn't finish within {arg0} seconds",
+            &[("program", &(program).to_string()), ("arg0", &(timeout.as_secs()).to_string())],
+        ))
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -171,10 +234,14 @@ fn run_command_until(
         return Ok(out);
     }
     let reason = err.trim();
-    let reason = if reason.is_empty() { format!("{program} failed ({status})") } else { reason.to_string() };
+    let reason = if reason.is_empty() {
+        Reason::new("{program} failed ({status})", &[("program", &(program).to_string()), ("status", &(status).to_string())])
+    } else {
+        Reason::data(reason)
+    };
     Err(match status.code() {
-        Some(code) => HelperFailure::Exited { code, reason },
-        None => HelperFailure::Unfinished(reason),
+        Some(code) => HelperFailureReason::Exited { code, reason },
+        None => HelperFailureReason::Unfinished(reason),
     })
 }
 
@@ -198,12 +265,17 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Resu
 /// first and starts the process itself. When no thread can be started, the call returns an error
 /// and does not start the process. On Windows the process starts on the calling thread, and no
 /// thread waits for it.
-pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
+pub fn spawn_detached(cmd: Command) -> Result<(), String> {
+    spawn_detached_reason(cmd).map_err(|reason| reason.to_string())
+}
+
+/// Starts a detached child with a structured launch failure.
+pub(crate) fn spawn_detached_reason(mut cmd: Command) -> Result<(), Reason> {
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     if cfg!(windows) {
-        return cmd.spawn().map(drop).map_err(|e| format!("couldn't start it ({e})"));
+        return cmd.spawn().map(drop).map_err(|e| Reason::data(e.to_string()).context("couldn't start it ({reason})", &[]));
     }
-    spawn_detached_with(
+    spawn_detached_with_reason(
         move || cmd.spawn(),
         |wait| {
             std::thread::Builder::new()
@@ -219,17 +291,26 @@ pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
 /// The thread that [`spawn_detached`] starts on Unix: `start_thread` starts a thread that runs
 /// the closure it is given, and that closure calls `spawn` and then waits for the process.
 /// `spawn` is called on that thread only, so when `start_thread` fails nothing is started.
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg(test)]
 fn spawn_detached_with(
     spawn: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
     start_thread: impl FnOnce(Box<dyn FnOnce() -> Option<ExitStatus> + Send>) -> std::io::Result<()>,
 ) -> Result<(), String> {
+    spawn_detached_with_reason(spawn, start_thread).map_err(|reason| reason.to_string())
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn spawn_detached_with_reason(
+    spawn: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
+    start_thread: impl FnOnce(Box<dyn FnOnce() -> Option<ExitStatus> + Send>) -> std::io::Result<()>,
+) -> Result<(), Reason> {
     let (started, start_result) = mpsc::channel();
-    start_thread(Box::new(move || start_and_wait(spawn, &started))).map_err(|e| format!("couldn't start a thread to wait for it ({e})"))?;
+    start_thread(Box::new(move || start_and_wait(spawn, &started)))
+        .map_err(|e| Reason::data(e.to_string()).context("couldn't start a thread to wait for it ({reason})", &[]))?;
     match start_result.recv() {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("couldn't start it ({e})")),
-        Err(_) => Err("couldn't start it (its thread ended before starting it)".into()),
+        Ok(Err(e)) => Err(Reason::data(e.to_string()).context("couldn't start it ({reason})", &[])),
+        Err(_) => Err(Reason::new("couldn't start it (its thread ended before starting it)", &[])),
     }
 }
 
@@ -468,9 +549,14 @@ pub fn is_running(path: &Path) -> bool {
 /// On macOS, `Err` gives the reason the check got no answer. On other systems a check that gets
 /// no answer counts as "not running", since `pgrep` isn't installed on every Linux system.
 pub fn running(path: &Path) -> Result<bool, String> {
+    running_reason(path).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+pub(crate) fn running_reason(path: &Path) -> Result<bool, Reason> {
     if cfg!(target_os = "macos") {
-        let p = path.to_str().ok_or("unusual characters in the app's path")?;
-        return pgrep_answer(run_detailed("/usr/bin/pgrep", &["-f", "--", &pgrep_pattern(p)], Duration::from_secs(30)));
+        let p = path.to_str().ok_or_else(|| Reason::new("unusual characters in the app's path", &[]))?;
+        return pgrep_answer_reason(run_detailed_reason("/usr/bin/pgrep", &["-f", "--", &pgrep_pattern(p)], Duration::from_secs(30)));
     }
     if cfg!(windows) {
         let Some(name) = path.file_name().and_then(OsStr::to_str) else { return Ok(false) };
@@ -491,11 +577,11 @@ pub fn running(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// What a `pgrep` run says: exit 0 is a match and exit 1 is no match. Anything else gave no answer.
-fn pgrep_answer(output: Result<String, HelperFailure>) -> Result<bool, String> {
+/// A completed pgrep exit 1 means no match; other failures retain their provenance.
+fn pgrep_answer_reason(output: Result<String, HelperFailureReason>) -> Result<bool, Reason> {
     match output {
         Ok(_) => Ok(true),
-        Err(HelperFailure::Exited { code: 1, .. }) => Ok(false),
+        Err(HelperFailureReason::Exited { code: 1, .. }) => Ok(false),
         Err(failure) => Err(failure.into_reason()),
     }
 }
@@ -727,23 +813,33 @@ pub(crate) mod inherited_pipe_tests {
 
 /// Runs a helper while polling cancellation and draining its bounded output.
 #[cfg(target_os = "linux")]
-pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, String> {
+pub(crate) fn cancellable_output(cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, String> {
+    cancellable_output_reason(cmd, check).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+#[cfg(target_os = "linux")]
+pub(crate) fn cancellable_output_reason(mut cmd: Command, check: impl Fn() -> Result<(), String>) -> Result<std::process::Output, Reason> {
     check()?;
-    let mut child =
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run flatpak ({e})"))?;
-    let stdout = read_all(child.stdout.take()).map_err(|e| format!("couldn't read flatpak output ({e})"))?;
-    let stderr = read_all(child.stderr.take()).map_err(|e| format!("couldn't read flatpak output ({e})"))?;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Reason::new("couldn't run flatpak ({e})", &[("e", &(e).to_string())]))?;
+    let stdout = read_all(child.stdout.take()).map_err(|e| Reason::new("couldn't read flatpak output ({e})", &[("e", &(e).to_string())]))?;
+    let stderr = read_all(child.stderr.take()).map_err(|e| Reason::new("couldn't read flatpak output ({e})", &[("e", &(e).to_string())]))?;
     let started = Instant::now();
     let status = loop {
         if started.elapsed() >= Duration::from_secs(60 * 60) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("Flatpak did not finish within one hour".into());
+            return Err(Reason::new("Flatpak did not finish within one hour", &[]));
         }
         if let Err(e) = check() {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(e);
+            return Err(Reason::data(e));
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -751,7 +847,7 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("couldn't wait for flatpak ({e})"));
+                return Err(Reason::new("couldn't wait for flatpak ({e})", &[("e", &(e).to_string())]));
             }
         }
     };
@@ -759,7 +855,7 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
     while !stdout.is_finished() || !stderr.is_finished() {
         check()?;
         if deadline.elapsed() > Duration::from_secs(5) {
-            return Err("Flatpak output did not close after completion".into());
+            return Err(Reason::new("Flatpak output did not close after completion", &[]));
         }
         std::thread::sleep(Duration::from_millis(25));
     }

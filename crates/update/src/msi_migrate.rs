@@ -18,6 +18,8 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use crate::Reason;
+
 use std::path::{Path, PathBuf};
 
 use crate::msi_context::{MsiScope, scope_arguments};
@@ -89,25 +91,27 @@ fn is_within(path: &Path, root: &Path) -> bool {
 /// Moves a copy in the only safe order: `remove` the per-user copy (stop if that fails, nothing has
 /// changed), install `to_everyone`, and only if that fails `keep_log` of it and install
 /// `back_to_account`. The error says where the app is now.
-pub(crate) fn run_move(
-    remove: impl FnOnce() -> Result<(), String>,
-    to_everyone: impl FnOnce() -> Result<(), String>,
+
+pub(crate) fn run_move_reason(
+    remove: impl FnOnce() -> Result<(), Reason>,
+    to_everyone: impl FnOnce() -> Result<(), Reason>,
     keep_log: impl FnOnce(),
-    back_to_account: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
+    back_to_account: impl FnOnce() -> Result<(), Reason>,
+) -> Result<(), Reason> {
     remove()?;
     let Err(installed) = to_everyone() else { return Ok(()) };
     keep_log();
-    Err(move_failure(&installed, back_to_account()))
+    Err(move_failure_reason(installed, back_to_account()))
 }
 
 /// The error a failed move reports, saying where the app now is.
-pub(crate) fn move_failure(installed: &str, rollback: Result<(), String>) -> String {
+
+fn move_failure_reason(installed: Reason, rollback: Result<(), Reason>) -> Reason {
     match rollback {
-        Ok(()) => format!("couldn't move the app to an install for everyone ({installed}); it was updated for your account instead"),
-        Err(again) => format!(
-            "couldn't move the app to an install for everyone ({installed}), and reinstalling it for your account failed too ({again}). Run its installer to get it back; your settings and documents are untouched"
-        ),
+        Ok(()) => installed.context("couldn't move the app to an install for everyone ({reason}); it was updated for your account instead", &[]),
+        Err(again) => installed
+            .context("couldn't move the app to an install for everyone ({reason}), and reinstalling it for your account failed too", &[])
+            .joined(again.context("({reason}). Run its installer to get it back; your settings and documents are untouched", &[])),
     }
 }
 
@@ -115,9 +119,10 @@ pub(crate) fn move_failure(installed: &str, rollback: Result<(), String>) -> Str
 pub(crate) mod windows {
     use std::path::{Path, PathBuf};
 
-    use super::{Profile, Step, plan, run_move};
+    use super::{Profile, Step, plan, run_move_reason};
+    use crate::Reason;
     use crate::app::App;
-    use crate::install::windows::{reinstall, remove_product};
+    use crate::install::windows::{reinstall_reason, remove_product_reason};
     use crate::msi_context::{MsiScope, scope_arguments};
 
     fn env_path(name: &str) -> Option<PathBuf> {
@@ -125,9 +130,11 @@ pub(crate) mod windows {
     }
 
     /// The step for `exe`'s update, asking Windows Installer for its context.
-    pub(crate) fn step(app: &App, exe: &Path) -> Result<Step, String> {
-        let resolved = crate::msi_copy::windows::resolve(app, exe)?;
-        let dir = exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;
+
+    /// Structured counterpart retaining authored failure context.
+    pub(crate) fn step_reason(app: &App, exe: &Path) -> Result<Step, Reason> {
+        let resolved = crate::msi_copy::windows::resolve_reason(app, exe)?;
+        let dir = exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", &(app.name).to_string())]))?;
         let dir = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         // Resolved like `dir`, whole path at a time, so a profile or a default folder reached
         // through a junction or a `subst` drive still matches.
@@ -144,25 +151,29 @@ pub(crate) mod windows {
     }
 
     /// Quiet is limited to in-place per-user updates; migrations retain their permission UI.
-    pub(crate) fn run_with_ui(msi: &Path, step: &Step, quiet: bool) -> Result<(), String> {
+
+    /// Structured counterpart retaining authored failure context.
+    pub(crate) fn run_with_ui_reason(msi: &Path, step: &Step, quiet: bool) -> Result<(), Reason> {
         if let Step::Update(context) = step {
-            return crate::install::windows::reinstall_with_ui(msi, context, None, quiet);
+            return crate::install::windows::reinstall_with_ui_reason(msi, context, None, quiet);
         }
-        run(msi, step)
+        run_reason(msi, step)
     }
 
     /// Runs `step` with the downloaded package `msi`.
-    pub(crate) fn run(msi: &Path, step: &Step) -> Result<(), String> {
+
+    /// Structured counterpart retaining authored failure context.
+    pub(crate) fn run_reason(msi: &Path, step: &Step) -> Result<(), Reason> {
         match step {
-            Step::Update(context) => reinstall(msi, context, None),
-            Step::Move { product_code, folder, old_folder } => run_move(
-                || remove_product(product_code, &msi.with_extension("remove.log")),
-                || reinstall(msi, scope_arguments(MsiScope::PerMachine), Some(folder)),
+            Step::Update(context) => reinstall_reason(msi, context, None),
+            Step::Move { product_code, folder, old_folder } => run_move_reason(
+                || remove_product_reason(product_code, &msi.with_extension("remove.log")),
+                || reinstall_reason(msi, scope_arguments(MsiScope::PerMachine), Some(folder)),
                 // The fallback writes a fresh log; keep the failed install's beside it.
                 || {
                     let _ = std::fs::rename(crate::install::msi_log(msi), msi.with_extension("everyone.log"));
                 },
-                || reinstall(msi, scope_arguments(MsiScope::PerUser), Some(old_folder)),
+                || reinstall_reason(msi, scope_arguments(MsiScope::PerUser), Some(old_folder)),
             ),
         }
     }

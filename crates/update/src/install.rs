@@ -19,11 +19,13 @@
 //! Every download is checked against its published SHA-256 before anything is unpacked, a
 //! running app is never replaced, and a new copy is fully in place before the old one goes.
 
+use crate::Reason;
+
 use std::path::{Path, PathBuf};
 
 use crate::protocol::{CANCELLED, INSTALL_CANCELLED, InstallLocations, JobPhase};
 use crate::release::{self, Asset, Release};
-use crate::{App, InstallSource, Installed, PackageKind, version};
+use crate::{App, InstallSource, Installed, PackageKind, Reason, version};
 
 use crate::http::{Http, Stop, Transfer};
 use crate::manifest::Record;
@@ -58,17 +60,30 @@ pub fn install(
     previous: Option<&Record>,
     job: &mut Job<'_>,
 ) -> Result<Option<Record>, String> {
-    install_at(app, release, asset, kind, existing, previous, job, None)
+    install_reason(app, release, asset, kind, existing, previous, job).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+pub fn install_reason(
+    app: &App,
+    release: &Release,
+    asset: &Asset,
+    kind: PackageKind,
+    existing: Option<&Installed>,
+    previous: Option<&Record>,
+    job: &mut Job<'_>,
+) -> Result<Option<Record>, Reason> {
+    install_at_reason(app, release, asset, kind, existing, previous, job, None)
 }
 
 type RecordCommit<'a> = Option<&'a mut dyn FnMut(&Record) -> Result<(), String>>;
 
 /// Refuses to change an app that is running, or one whose state couldn't be checked.
-fn not_running(app: &App, answer: Result<bool, String>) -> Result<(), String> {
+fn not_running(app: &App, answer: Result<bool, Reason>) -> Result<(), Reason> {
     match answer {
         Ok(false) => Ok(()),
-        Ok(true) => Err(format!("{} is running. Quit it, then try again.", app.name)),
-        Err(reason) => Err(format!("couldn't check whether {} is running ({reason}), so nothing was changed", app.name)),
+        Ok(true) => Err(Reason::new("{arg0} is running. Quit it, then try again.", &[("arg0", &(app.name).to_string())])),
+        Err(reason) => Err(reason.context("couldn't check whether {app} is running ({reason}), so nothing was changed", &[("app", app.name)])),
     }
 }
 
@@ -88,6 +103,21 @@ pub fn install_at(
     job: &mut Job<'_>,
     commit: RecordCommit<'_>,
 ) -> Result<Option<Record>, String> {
+    install_at_reason(app, release, asset, kind, existing, previous, job, commit).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+#[allow(clippy::too_many_arguments)]
+pub fn install_at_reason(
+    app: &App,
+    release: &Release,
+    asset: &Asset,
+    kind: PackageKind,
+    existing: Option<&Installed>,
+    previous: Option<&Record>,
+    job: &mut Job<'_>,
+    commit: RecordCommit<'_>,
+) -> Result<Option<Record>, Reason> {
     #[cfg(windows)]
     let mut commit = commit;
     #[cfg(not(windows))]
@@ -97,12 +127,14 @@ pub fn install_at(
     if let Some(inst) = existing
         && inst.source.launcher_can_update()
     {
-        not_running(app, process::running(Path::new(&inst.location)))?;
+        not_running(app, process::running_reason(Path::new(&inst.location)))?;
     }
     if kind == PackageKind::Flatpak
         && let Some(installed) = existing.filter(|installed| installed.source == InstallSource::Flatpak && installed.externally_managed)
     {
-        return Err(managed_elsewhere(app, installed, false).unwrap_or_else(|| "Update this app through its Flatpak repository".into()));
+        return Err(
+            managed_elsewhere_reason(app, installed, false).unwrap_or_else(|| Reason::new("Update this app through its Flatpak repository", &[]))
+        );
     }
     bind_artifact_version(app, release, asset)?;
     if !job.replace
@@ -110,9 +142,12 @@ pub fn install_at(
         && let (Some(rel_v), Some(inst_v)) = (release.version.as_ref(), inst.version.as_ref())
         && version::is_newer(inst_v, rel_v)
     {
-        return Err(format!("Cannot update {} to {}: installed version {} is newer", app.name, release.version_label(), inst_v));
+        return Err(Reason::new(
+            "Cannot update {arg0} to {arg1}: installed version {arg2} is newer",
+            &[("arg0", &(app.name).to_string()), ("arg1", &(release.version_label()).to_string()), ("arg2", &(inst_v).to_string())],
+        ));
     }
-    check_download_link(app, release, asset)?;
+    check_download_link_reason(app, release, asset)?;
     log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
     #[cfg(all(target_os = "linux", feature = "oci_migration"))]
     if kind == PackageKind::Flatpak
@@ -120,7 +155,7 @@ pub fn install_at(
         && !release.prerelease
         && let Some(installed) = existing
         && let Some(expected) = release.version.as_ref()
-        && linux::migrate_bundle_to_oci(app, installed, expected, job.stop)?
+        && linux::migrate_bundle_to_oci_reason(app, installed, expected, job.stop)?
     {
         return Ok(None);
     }
@@ -134,19 +169,19 @@ pub fn install_at(
         #[cfg(target_os = "macos")]
         PackageKind::Dmg => {
             let wait = macos::CheckTurn { stop: job.stop, phase: &mut *job.phase };
-            macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release), wait)
+            macos::install_dmg_reason(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release), wait)
                 .map(|path| Some(record(&version, kind, path, Vec::new(), false)))
         }
         #[cfg(windows)]
-        PackageKind::Msi => windows::run_msi(&file, destination.as_deref(), job.stop, &mut *job.phase).map(|_| None),
+        PackageKind::Msi => windows::run_msi_reason(&file, destination.as_deref(), job.stop, &mut *job.phase).map(|_| None),
         #[cfg(windows)]
         PackageKind::PortableZip => {
-            crate::portable::install(app, &file, &version, previous, job.paths, destination.as_deref(), job.replace, &mut |record| {
+            crate::portable::install_reason(app, &file, &version, previous, job.paths, destination.as_deref(), job.replace, &mut |record| {
                 if release.version.is_some() && crate::detect::windows::executable_version(&record.path).as_ref() != release.version.as_ref() {
-                    return Err("The portable executable does not match the selected version. The installation was rolled back.".into());
+                    return Err(Reason::new("The portable executable does not match the selected version. The installation was rolled back.", &[]));
                 }
                 match commit.as_deref_mut() {
-                    Some(commit) => commit(record),
+                    Some(commit) => commit(record).map_err(Reason::data),
                     None => Ok(()),
                 }
             })
@@ -155,24 +190,26 @@ pub fn install_at(
         #[cfg(target_os = "linux")]
         PackageKind::Deb | PackageKind::Rpm | PackageKind::ArchPkg | PackageKind::Flatpak => {
             let id = app.bundle_id();
-            linux::install_package(kind, &file, Some(&id), job.stop, &mut *job.phase).map(|_| None)
+            linux::install_package_reason(kind, &file, Some(&id), job.stop, &mut *job.phase).map(|_| None)
         }
         #[cfg(target_os = "linux")]
         PackageKind::AppImage => {
-            linux::install_appimage(&file, &asset.name, destination.as_deref(), previous, job.replace).map(|(path, replaced)| {
+            linux::install_appimage_reason(&file, &asset.name, destination.as_deref(), previous, job.replace).map(|(path, replaced)| {
                 let files = linux::integrate(app, &path, &replaced, previous);
                 Some(record(&version, kind, path, files, false))
             })
         }
         #[cfg(target_os = "freebsd")]
-        PackageKind::TarGz => freebsd::install_tree(app, &file, job.paths).map(|(bin, files, root)| Some(record(&version, kind, bin, files, root))),
+        PackageKind::TarGz => {
+            freebsd::install_tree_reason(app, &file, job.paths).map(|(bin, files, root)| Some(record(&version, kind, bin, files, root)))
+        }
         #[cfg(target_os = "linux")]
-        PackageKind::TarGz => linux::install_tree(app, &file, job.paths).map(|path| Some(record(&version, kind, path, Vec::new(), false))),
-        other => Err(format!("{} isn't supported on this system", other.label())),
+        PackageKind::TarGz => linux::install_tree_reason(app, &file, job.paths).map(|path| Some(record(&version, kind, path, Vec::new(), false))),
+        other => Err(Reason::new("{arg0} isn't supported on this system", &[("arg0", &(other.label()).to_string())])),
     };
     match &result {
         Ok(_) => log::info!("{}: successfully installed/updated to {}", app.name, release.version_label()),
-        Err(e) if e == CANCELLED => log::info!("{}: installation cancelled", app.name),
+        Err(e) if e.to_string() == CANCELLED => log::info!("{}: installation cancelled", app.name),
         Err(e) => log::error!("{}: installation failed: {e}", app.name),
     }
     // A failed install keeps the download: the next try checks it against its published checksum
@@ -181,7 +218,7 @@ pub fn install_at(
         let _ = std::fs::remove_file(&file);
     }
     // The system's own prompt was dismissed: the download itself wasn't cancelled.
-    result.map_err(|e| if e == CANCELLED { INSTALL_CANCELLED.to_string() } else { e })
+    result.map_err(|e| if e.to_string() == CANCELLED { Reason::data(INSTALL_CANCELLED) } else { e })
 }
 
 /// Rejects an artifact whose own identity disagrees with the release that authorized it.
@@ -192,8 +229,13 @@ pub fn install_at(
 /// bypassing the guard and recording a false installed version (finding: version not bound to the
 /// release). We require the version encoded in the asset filename and the release tag embedded in
 /// the download URL to agree with the release version before any bytes are fetched.
-pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
-    let mismatch = || format!("{}'s download does not match the advertised version {}.", app.name, release.version_label());
+pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset) -> Result<(), Reason> {
+    let mismatch = || {
+        Reason::new(
+            "{arg0}'s download does not match the advertised version {arg1}.",
+            &[("arg0", &(app.name).to_string()), ("arg1", &(release.version_label()).to_string())],
+        )
+    };
     let release_version = release.version.as_ref();
 
     // The version in the asset filename (`<stem>-<version>-<os>-<arch>.<ext>`), when it carries one.
@@ -219,7 +261,10 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
             return Err(mismatch());
         }
         if !url_filename.is_empty() && url_filename != asset.name {
-            return Err(format!("{}'s download URL filename does not match selected asset {}.", app.name, asset.name));
+            return Err(Reason::new(
+                "{arg0}'s download URL filename does not match selected asset {arg1}.",
+                &[("arg0", &(app.name).to_string()), ("arg1", &(asset.name).to_string())],
+            ));
         }
     }
     Ok(())
@@ -235,6 +280,11 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
 /// This crate's tests accept a loopback link as well, as their downloads come from a server on
 /// 127.0.0.1.
 pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
+    check_download_link_reason(app, release, asset).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+pub fn check_download_link_reason(app: &App, release: &Release, asset: &Asset) -> Result<(), Reason> {
     let repo = if release.repo.is_empty() { app.repo } else { release.repo.as_str() };
     let own = |a: &Asset| {
         (cfg!(test) && crate::http::is_loopback(&a.url))
@@ -243,7 +293,10 @@ pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Resul
     if own(asset) && release.sums_asset().is_none_or(own) {
         return Ok(());
     }
-    Err(format!("{}'s download link isn't the one its release publishes ({}), so it wasn't downloaded.", app.name, asset.name))
+    Err(Reason::new(
+        "{arg0}'s download link isn't the one its release publishes ({arg1}), so it wasn't downloaded.",
+        &[("arg0", &(app.name).to_string()), ("arg1", &(asset.name).to_string())],
+    ))
 }
 
 /// What a new install would write over: something already at its destination that the launcher
@@ -257,6 +310,19 @@ pub fn occupied(
     locations: &InstallLocations,
     paths: &Paths,
 ) -> Result<Option<PathBuf>, String> {
+    occupied_reason(app, asset, kind, existing, previous, locations, paths).map_err(|reason| reason.to_string())
+}
+
+/// Structured counterpart retaining authored failure context.
+pub fn occupied_reason(
+    app: &App,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] asset: &Asset,
+    kind: PackageKind,
+    existing: Option<&Installed>,
+    previous: Option<&Record>,
+    locations: &InstallLocations,
+    paths: &Paths,
+) -> Result<Option<PathBuf>, Reason> {
     if existing.is_some() || previous.is_some() {
         return Ok(None);
     }
@@ -280,7 +346,7 @@ fn destination(
     existing: Option<&Installed>,
     previous: Option<&Record>,
     locations: &InstallLocations,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<PathBuf>, Reason> {
     if kind == PackageKind::PortableZip && previous.is_some_and(|record| record.kind == PackageKind::PortableZip) {
         return Ok(None);
     }
@@ -294,29 +360,29 @@ fn destination(
     }
     let Some(folder) = locations.folder(app.id) else { return Ok(None) };
     if !matches!(kind, PackageKind::Dmg | PackageKind::AppImage | PackageKind::Msi | PackageKind::PortableZip) || process::in_sandbox() {
-        return Err("custom install folders aren't supported on this system".into());
+        return Err(Reason::new("custom install folders aren't supported on this system", &[]));
     }
     let parent = selected_folder(folder, kind != PackageKind::Msi)?;
     Ok(Some(if kind == PackageKind::Msi { parent.join(app.name) } else { parent }))
 }
 
-fn selected_folder(folder: &str, writable: bool) -> Result<PathBuf, String> {
+fn selected_folder(folder: &str, writable: bool) -> Result<PathBuf, Reason> {
     let path = if folder == "~" {
-        crate::folders::home_dir().ok_or("no home folder")?
+        crate::folders::home_dir().ok_or_else(|| Reason::new("no home folder", &[]))?
     } else if let Some(relative) = folder.strip_prefix("~/") {
-        crate::folders::home_dir().ok_or("no home folder")?.join(relative)
+        crate::folders::home_dir().ok_or_else(|| Reason::new("no home folder", &[]))?.join(relative)
     } else {
         PathBuf::from(folder)
     };
-    let invalid = |reason: &str| format!("couldn't use install folder {}: {reason}", path.display());
+    let invalid = |reason: Reason| reason.context("couldn't use install folder {path}: {reason}", &[("path", &path.display().to_string())]);
     if folder.chars().any(|c| c.is_control() || (cfg!(windows) && c == '"')) {
-        return Err(invalid("the path contains invalid characters"));
+        return Err(invalid(Reason::new("the path contains invalid characters", &[])));
     }
     if !path.is_absolute() {
-        return Err(invalid("choose an absolute path"));
+        return Err(invalid(Reason::new("choose an absolute path", &[])));
     }
     if !path.is_dir() {
-        return Err(invalid("the folder is unavailable. Create it or reconnect its drive first"));
+        return Err(invalid(Reason::new("the folder is unavailable. Create it or reconnect its drive first", &[])));
     }
     if writable {
         let probe = path.join(format!(
@@ -324,18 +390,18 @@ fn selected_folder(folder: &str, writable: bool) -> Result<PathBuf, String> {
             std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())
         ));
-        let output = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).map_err(|e| invalid(&e.to_string()))?;
+        let output = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).map_err(|e| invalid(Reason::data(e.to_string())))?;
         drop(output);
-        std::fs::remove_file(&probe).map_err(|e| invalid(&e.to_string()))?;
+        std::fs::remove_file(&probe).map_err(|e| invalid(Reason::data(e.to_string())))?;
     }
     Ok(path)
 }
 
 #[cfg(windows)]
-fn msi_folder_argument(path: &Path) -> Result<String, String> {
-    let value = path.to_str().ok_or("unusual characters in a path")?;
+fn msi_folder_argument(path: &Path) -> Result<String, Reason> {
+    let value = path.to_str().ok_or_else(|| Reason::new("unusual characters in a path", &[]))?;
     if value.chars().any(|c| c == '"' || c.is_control()) {
-        return Err(format!("couldn't use install folder {value}: the path contains invalid characters"));
+        return Err(Reason::new("couldn't use install folder {value}: the path contains invalid characters", &[("value", &(value).to_string())]));
     }
     Ok(format!("INSTALLFOLDER=\"{value}\""))
 }
@@ -434,23 +500,23 @@ pub fn available_kinds() -> Vec<PackageKind> {
 /// Fetches `asset` into the download folder, checked against its published SHA-256: the feed's
 /// or GitHub's per-file digest, else the release's `SHA256SUMS.txt`. A release with neither is
 /// refused before anything is fetched: a file nothing vouches for is never installed (#90).
-pub(crate) fn download(release: &Release, asset: &Asset, job: &mut Job<'_>) -> Result<PathBuf, String> {
+pub(crate) fn download(release: &Release, asset: &Asset, job: &mut Job<'_>) -> Result<PathBuf, Reason> {
     if !release::valid_file_name(&asset.name) {
-        return Err("the release has an unexpected file name".into());
+        return Err(Reason::new("the release has an unexpected file name", &[]));
     }
     let sha = match &asset.sha256 {
         Some(s) => Some(s.clone()),
         None => published_checksum(release, asset, job.http)?,
     };
     let Some(sha) = sha else {
-        return Err(format!(
-            "the release publishes no checksum for {}, so it can't be verified and wasn't installed. Try again later, or report it on GitHub.",
-            asset.name
+        return Err(Reason::new(
+            "the release publishes no checksum for {arg0}, so it can't be verified and wasn't installed. Try again later, or report it on GitHub.",
+            &[("arg0", &(asset.name).to_string())],
         ));
     };
     let dest = download_path(job.paths, asset);
     let phase = &mut *job.phase;
-    job.http.download(&asset.url, &dest, asset.size, &sha, job.stop, &mut |t| match t {
+    job.http.download_reason(&asset.url, &dest, asset.size, &sha, job.stop, &mut |t| match t {
         Transfer::Bytes { done, total } => phase(JobPhase::Downloading { done, total }),
         Transfer::Reconnecting { done, total } => phase(JobPhase::Reconnecting { done, total }),
     })?;
@@ -461,9 +527,11 @@ pub(crate) fn download(release: &Release, asset: &Asset, job: &mut Job<'_>) -> R
 /// The file's line in the release's `SHA256SUMS.txt`. `Ok(None)` only when the release really
 /// publishes no checksum for it; a list that exists but can't be fetched is an error, so a
 /// network hiccup never downgrades the check.
-fn published_checksum(release: &Release, asset: &Asset, http: &Http) -> Result<Option<String>, String> {
+fn published_checksum(release: &Release, asset: &Asset, http: &Http) -> Result<Option<String>, Reason> {
     let Some(sums) = release.sums_asset() else { return Ok(None) };
-    let Some(text) = http.get_text(&sums.url).map_err(|e| format!("couldn't fetch the release's checksums ({e}). Try again"))? else {
+    let Some(text) =
+        http.get_text_reason(&sums.url).map_err(|reason| reason.context("couldn't fetch the release's checksums ({reason}). Try again", &[]))?
+    else {
         return Ok(None);
     };
     Ok(release::parse_sha256sums(&text).into_iter().find(|(_, n)| *n == asset.name).map(|(h, _)| h))
@@ -475,14 +543,24 @@ fn published_checksum(release: &Release, asset: &Asset, http: &Http) -> Result<O
 /// update for a repository package (Omarchy's, Chaotic-AUR, ...), the user's AUR helper (which
 /// builds as the user and can't run behind the password prompt) for anything else.
 pub fn managed_elsewhere(app: &App, installed: &Installed, uninstall: bool) -> Option<String> {
-    managed_elsewhere_with(app, installed, uninstall, pacman_repo)
+    managed_elsewhere_reason(app, installed, uninstall).map(|reason| reason.to_string())
 }
 
+/// Why this copy is managed elsewhere, retaining translatable text.
+pub fn managed_elsewhere_reason(app: &App, installed: &Installed, uninstall: bool) -> Option<Reason> {
+    managed_elsewhere_with_reason(app, installed, uninstall, pacman_repo)
+}
+
+#[cfg(test)]
 fn managed_elsewhere_with(app: &App, installed: &Installed, uninstall: bool, repo_fn: impl Fn(&str) -> Option<String>) -> Option<String> {
+    managed_elsewhere_with_reason(app, installed, uninstall, repo_fn).map(|reason| reason.to_string())
+}
+
+fn managed_elsewhere_with_reason(app: &App, installed: &Installed, uninstall: bool, repo_fn: impl Fn(&str) -> Option<String>) -> Option<Reason> {
     match installed.source {
         InstallSource::Pacman if !uninstall && !is_release_arch_package(app, installed) => {
             let pkg = installed.package.clone().unwrap_or_else(|| app.id.to_string());
-            Some(pacman_update_hint(app, &pkg, repo_fn(&pkg).as_deref()))
+            Some(pacman_update_hint_reason(app, &pkg, repo_fn(&pkg).as_deref()))
         }
         InstallSource::Flatpak if !uninstall && installed.externally_managed => {
             let default_pkg = app.bundle_id();
@@ -492,25 +570,39 @@ fn managed_elsewhere_with(app: &App, installed: &Installed, uninstall: bool, rep
                 Some("system") | None => "--system".to_string(),
                 Some(name) => format!("--installation={name}"),
             };
-            Some(format!("{} was installed from a Flatpak repository. Update it with flatpak update {scope} {pkg}", app.name))
+            Some(Reason::new(
+                "{arg0} was installed from a Flatpak repository. Update it with flatpak update {scope} {pkg}",
+                &[("arg0", &(app.name).to_string()), ("scope", &(scope).to_string()), ("pkg", &(pkg).to_string())],
+            ))
         }
-        InstallSource::Binary => Some(format!("{} was installed outside the launcher. Update or remove it the way it was installed.", app.name)),
+        InstallSource::Binary => Some(Reason::new(
+            "{arg0} was installed outside the launcher. Update or remove it the way it was installed.",
+            &[("arg0", &(app.name).to_string())],
+        )),
         _ => None,
     }
 }
 
 /// How to update an Arch package the launcher doesn't own: `repo` is the sync repository it
 /// comes from, or `None` for a foreign (AUR) package.
+#[cfg(test)]
 fn pacman_update_hint(app: &App, pkg: &str, repo: Option<&str>) -> String {
+    pacman_update_hint_reason(app, pkg, repo).to_string()
+}
+
+fn pacman_update_hint_reason(app: &App, pkg: &str, repo: Option<&str>) -> Reason {
     let helper = ["paru", "yay"].into_iter().find(|h| which(h).is_some());
     let cmd = match helper {
-        Some(h) => format!("{h} -S {pkg}"),
-        None => format!("your AUR helper (for example: yay -S {pkg})"),
+        Some(h) => Reason::data(format!("{h} -S {pkg}")),
+        None => Reason::new("your AUR helper (for example: yay -S {pkg})", &[("pkg", pkg)]),
     };
     if let Some(repo) = repo {
-        return format!("{} was installed from the {repo} repository or the AUR ({pkg}). Update it with {cmd} or sudo pacman -Syu", app.name);
+        return cmd.context(
+            "{app} was installed from the {repo} repository or the AUR ({pkg}). Update it with {reason} or sudo pacman -Syu",
+            &[("app", app.name), ("repo", repo), ("pkg", pkg)],
+        );
     }
-    format!("{} was installed from the AUR ({pkg}). Update it with {cmd}", app.name)
+    cmd.context("{app} was installed from the AUR ({pkg}). Update it with {reason}", &[("app", app.name), ("pkg", pkg)])
 }
 
 /// The sync repository (`extra`, `omarchy`, ...) that carries the installed package `pkg`, or
@@ -556,7 +648,7 @@ pub fn uninstall(
         return Err(msg);
     }
     if matches!(installed.source, InstallSource::MacApp | InstallSource::Msi | InstallSource::AppImage | InstallSource::Launcher) {
-        not_running(app, process::running(&path))?;
+        not_running(app, process::running_reason(&path)).map_err(|reason| reason.to_string())?;
     }
     match installed.source {
         #[cfg(windows)]
@@ -692,30 +784,27 @@ const STAGING: &str = ".artcraft-launcher-";
 /// A new folder of our own inside `dir`, removed when dropped: a predictable name there may be
 /// the user's.
 #[cfg(target_os = "linux")]
-fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
-    tempfile::Builder::new()
-        .prefix(STAGING)
-        .rand_bytes(6)
-        .tempdir_in(dir)
-        .map_err(|e| format!("couldn't create a staging folder in {} ({e})", dir.display()))
+fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, Reason> {
+    tempfile::Builder::new().prefix(STAGING).rand_bytes(6).tempdir_in(dir).map_err(|e| {
+        Reason::new("couldn't create a staging folder in {arg0} ({e})", &[("arg0", &(dir.display()).to_string()), ("e", &(e).to_string())])
+    })
 }
 
 /// Moves `staged` into place at `dest`, keeping the old copy until the new one is there.
 #[allow(dead_code)]
-fn swap_into_place(staged: &Path, dest: &Path) -> Result<(), String> {
+fn swap_into_place(staged: &Path, dest: &Path) -> Result<(), Reason> {
     swap_into_place_via(staged, dest, |from, to| std::fs::rename(from, to))
 }
 
-fn swap_into_place_via(staged: &Path, dest: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> Result<(), String> {
+fn swap_into_place_via(staged: &Path, dest: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> Result<(), Reason> {
     // Reserve a directory of our own beside the destination. A predictable sibling such as
     // `app.old` may be a user's backup, and must never be removed or overwritten.
     let backup = if dest.exists() {
-        let parent = dest.parent().ok_or("the installed app has no parent folder")?;
-        let backup = tempfile::Builder::new()
-            .prefix(".artcraft-launcher-backup-")
-            .tempdir_in(parent)
-            .map_err(|e| format!("couldn't create a backup folder in {} ({e})", parent.display()))?;
-        rename(dest, &backup.path().join("old")).map_err(|e| format!("couldn't move the old copy aside ({e})"))?;
+        let parent = dest.parent().ok_or_else(|| Reason::new("the installed app has no parent folder", &[]))?;
+        let backup = tempfile::Builder::new().prefix(".artcraft-launcher-backup-").tempdir_in(parent).map_err(|e| {
+            Reason::new("couldn't create a backup folder in {arg0} ({e})", &[("arg0", &(parent.display()).to_string()), ("e", &(e).to_string())])
+        })?;
+        rename(dest, &backup.path().join("old")).map_err(|e| Reason::new("couldn't move the old copy aside ({e})", &[("e", &(e).to_string())]))?;
         Some(backup)
     } else {
         None
@@ -726,20 +815,20 @@ fn swap_into_place_via(staged: &Path, dest: &Path, rename: impl Fn(&Path, &Path)
         {
             // A failed rollback must not let TempDir's cleanup delete the only old copy.
             let saved = backup.keep().join("old");
-            return Err(format!(
-                "couldn't put the new copy in place ({e}); couldn't restore the old copy ({restore}); it was kept at {}",
-                saved.display()
+            return Err(Reason::new(
+                "couldn't put the new copy in place ({e}); couldn't restore the old copy ({restore}); it was kept at {arg0}",
+                &[("e", &(e).to_string()), ("restore", &(restore).to_string()), ("arg0", &(saved.display()).to_string())],
             ));
         }
-        return Err(format!("couldn't put the new copy in place ({e})"));
+        return Err(Reason::new("couldn't put the new copy in place ({e})", &[("e", &(e).to_string())]));
     }
     Ok(())
 }
 
 /// After unpacking an archive into `dir`: its single top-level folder, if it has one.
 #[allow(dead_code)]
-fn single_top_folder(dir: &Path) -> Result<PathBuf, String> {
-    let entries: Vec<_> = std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten().collect();
+fn single_top_folder(dir: &Path) -> Result<PathBuf, Reason> {
+    let entries: Vec<_> = std::fs::read_dir(dir).map_err(|e| Reason::data(e.to_string()))?.flatten().collect();
     match entries.as_slice() {
         [only] if only.file_type().is_ok_and(|ft| ft.is_dir() && !ft.is_symlink()) => Ok(only.path()),
         _ => Ok(dir.to_path_buf()),
@@ -776,15 +865,15 @@ fn find_in(dirs: &[impl AsRef<Path>], name: &std::ffi::OsStr) -> Option<PathBuf>
 
 /// `args` with its program as an absolute path: a bare name is looked up in `dirs`.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn with_absolute_program(dirs: &[impl AsRef<Path>], args: &[&std::ffi::OsStr]) -> Result<Vec<std::ffi::OsString>, String> {
-    let (program, rest) = args.split_first().ok_or("there is no command to run")?;
+fn with_absolute_program(dirs: &[impl AsRef<Path>], args: &[&std::ffi::OsStr]) -> Result<Vec<std::ffi::OsString>, Reason> {
+    let (program, rest) = args.split_first().ok_or_else(|| Reason::new("there is no command to run", &[]))?;
     let path = Path::new(program);
     let program = if path.is_absolute() {
         path.to_path_buf()
     } else if path.file_name() == Some(*program) {
-        find_in(dirs, program).ok_or_else(|| format!("{} isn't installed", path.display()))?
+        find_in(dirs, program).ok_or_else(|| Reason::new("{arg0} isn't installed", &[("arg0", &(path.display()).to_string())]))?
     } else {
-        return Err(format!("{} isn't a program name", path.display()));
+        return Err(Reason::new("{arg0} isn't a program name", &[("arg0", &(path.display()).to_string())]));
     };
     Ok(std::iter::once(program.into_os_string()).chain(rest.iter().map(|a| a.to_os_string())).collect())
 }
@@ -797,22 +886,23 @@ fn pkexec() -> Option<PathBuf> {
 
 /// Runs a command as root through polkit (`pkexec`), which shows the desktop's password prompt.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn run_as_root(args: &[&std::ffi::OsStr]) -> Result<(), String> {
+fn run_as_root_reason(args: &[&std::ffi::OsStr]) -> Result<(), Reason> {
     let args = with_absolute_program(&SYSTEM_BIN_DIRS, args)?;
-    let pkexec = pkexec().ok_or("installing system-wide needs polkit (pkexec), which isn't installed")?;
-    let status = process::command(pkexec).args(&args).status().map_err(|e| format!("couldn't ask for permission ({e})"))?;
+    let pkexec = pkexec().ok_or_else(|| Reason::new("installing system-wide needs polkit (pkexec), which isn't installed", &[]))?;
+    let status =
+        process::command(pkexec).args(&args).status().map_err(|e| Reason::new("couldn't ask for permission ({e})", &[("e", &(e).to_string())]))?;
     root_outcome(status.code())
 }
 
 /// What `pkexec`'s exit code says about the command it ran.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn root_outcome(code: Option<i32>) -> Result<(), String> {
+fn root_outcome(code: Option<i32>) -> Result<(), Reason> {
     match code {
         Some(0) => Ok(()),
         // pkexec: 126 = the password prompt was dismissed, 127 = not authorized.
-        Some(126 | 127) => Err("cancelled".into()),
-        Some(c) => Err(format!("the system installer stopped with error {c}")),
-        None => Err("the system installer was interrupted".into()),
+        Some(126 | 127) => Err(Reason::data("cancelled")),
+        Some(c) => Err(Reason::new("the system installer stopped with error {c}", &[("c", &(c).to_string())])),
+        None => Err(Reason::new("the system installer was interrupted", &[])),
     }
 }
 
@@ -868,14 +958,14 @@ mod freebsd;
 /// Builds the Windows Installer command separately so its package argument can be checked
 /// without starting an installer.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn msi_command(program: &Path, msi: &Path) -> Result<std::process::Command, String> {
+fn msi_command(program: &Path, msi: &Path) -> Result<std::process::Command, Reason> {
     msi_command_ui(program, msi, false)
 }
 
 /// [`msi_command`] with the installer's progress window hidden when `quiet`.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn msi_command_ui(program: &Path, msi: &Path, quiet: bool) -> Result<std::process::Command, String> {
-    let msi = msi_path(msi)?;
+fn msi_command_ui(program: &Path, msi: &Path, quiet: bool) -> Result<std::process::Command, Reason> {
+    let msi = msi_path_reason(msi)?;
     let mut command = process::command(program);
     // A verbose log beside the package: Windows Installer's own errors (1603 above all) say
     // nothing without it.
@@ -887,7 +977,7 @@ fn msi_command_ui(program: &Path, msi: &Path, quiet: bool) -> Result<std::proces
 /// Windows Installer context (`msi_copy::update_arguments`). `quiet` hides the installer's progress
 /// window of a per-user install.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn reinstall_command_ui(program: &Path, msi: &Path, context: &[&str], quiet: bool) -> Result<std::process::Command, String> {
+fn reinstall_command_ui(program: &Path, msi: &Path, context: &[&str], quiet: bool) -> Result<std::process::Command, Reason> {
     // A per-machine /qn install cannot request elevation. Keep its existing visible route.
     let mut command = msi_command_ui(program, msi, quiet && !context.contains(&"ALLUSERS=1"))?;
     command.args(context);
@@ -904,12 +994,14 @@ pub(crate) fn msi_log(msi: &Path) -> PathBuf {
 /// Keep ordinary drive/UNC syntax when possible: Windows canonicalization alone introduces
 /// a `\\?\` prefix that older APIs also cannot handle.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn msi_path(msi: &Path) -> Result<PathBuf, String> {
+pub(crate) fn msi_path_reason(msi: &Path) -> Result<PathBuf, Reason> {
     #[cfg(windows)]
     let resolved = dunce::canonicalize(msi);
     #[cfg(not(windows))]
     let resolved = std::fs::canonicalize(msi);
-    resolved.map_err(|e| format!("couldn't resolve the Windows Installer package {} ({e})", msi.display()))
+    resolved.map_err(|e| {
+        Reason::new("couldn't resolve the Windows Installer package {arg0} ({e})", &[("arg0", &(msi.display()).to_string()), ("e", &(e).to_string())])
+    })
 }
 
 #[cfg(windows)]

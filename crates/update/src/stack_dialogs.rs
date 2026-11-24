@@ -384,6 +384,7 @@ pub struct UpdateCheckDialog {
     icon: IconCell,
     /// The words the app passed; the scope's [`UpdateWords`] when none.
     words: Option<Arc<UpdateWords>>,
+    translate: crate::translate::Translate,
 }
 
 impl UpdateCheckDialog {
@@ -402,6 +403,7 @@ impl UpdateCheckDialog {
             open: true,
             icon: IconCell::new(),
             words: None,
+            translate: crate::translate::english,
         }
     }
 
@@ -409,6 +411,13 @@ impl UpdateCheckDialog {
     #[must_use]
     pub fn words(mut self, words: UpdateWords) -> Self {
         self.words = Some(Arc::new(words));
+        self
+    }
+
+    /// Translates crate-authored failure reasons when the dialog is drawn. Raw data stays unchanged.
+    #[must_use]
+    pub fn with_translator(mut self, translate: crate::translate::Translate) -> Self {
+        self.translate = translate;
         self
     }
 
@@ -464,7 +473,7 @@ impl UpdateCheckDialog {
             Status::Idle => vec![(CheckChoice::CheckNow, DialogRole::Accept)],
             Status::Checking | Status::Installing | Status::Updated(_) => vec![(CheckChoice::Close, DialogRole::Accept)],
             Status::Ready => vec![(CheckChoice::Close, DialogRole::Accept), (CheckChoice::RestartToUpdate, DialogRole::Other)],
-            Status::UpToDate | Status::Managed | Status::Failed(_) | Status::RateLimited | Status::InstallFailed(_) => {
+            Status::UpToDate | Status::Managed | Status::Failed(_) | Status::CheckFailed(_) | Status::RateLimited | Status::InstallFailed(_) => {
                 vec![(CheckChoice::Close, DialogRole::Accept), (CheckChoice::CheckAgain, DialogRole::Other)]
             }
         }
@@ -507,6 +516,7 @@ impl UpdateCheckDialog {
         let initial = if enter { Initial::Default } else { Initial::Keep };
         let notes = self.notes_url().map(str::to_owned);
         let version = self.available.as_ref().map(Release::version_label);
+        let translate = self.translate;
         let (status, running, message, installing, icon) = (&self.status, &self.running_version, &self.message, self.installing, &self.icon);
         let installing_label = words.installing.clone();
         // What the last update came to is a notice that leaves the app usable behind it.
@@ -540,9 +550,10 @@ impl UpdateCheckDialog {
                     Status::UpToDate => {
                         Text::new(words.up_to_date.fill(&[("app", subject.name), ("running", running)])).show(ui);
                     }
-                    Status::Failed(_) | Status::RateLimited => {
+                    Status::Failed(_) | Status::CheckFailed(_) | Status::RateLimited => {
                         let notice = match status {
                             Status::Failed(error) => Notice::new(Tone::Bad, error.clone()),
+                            Status::CheckFailed(reason) => Notice::new(Tone::Bad, reason.translated(translate)),
                             _ => Notice::new(Tone::Bad, words.rate_limited.clone()),
                         };
                         notice.title(words.failed.clone()).show(ui);
@@ -569,7 +580,7 @@ impl UpdateCheckDialog {
                         Text::new(words.updated.fill(&[("app", subject.name), ("version", version)])).show(ui);
                     }
                     Status::InstallFailed(reason) => {
-                        Notice::new(Tone::Bad, words.install_failed.fill(&[("reason", reason)])).show(ui);
+                        Notice::new(Tone::Bad, words.install_failed.fill(&[("reason", &reason.translated(translate))])).show(ui);
                     }
                 }
             });
