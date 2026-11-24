@@ -16,6 +16,7 @@ fn f32_source_tile(data: &[u8], order: SampleOrder) -> SourceTile<'_> {
             indexed: false,
             precision: SourcePrecision { storage: Precision { bytes: 4, float: true, linear: true }, transfer: Transfer::Linear },
             sample_order: order,
+            transfer_is_assumed: false,
         },
         data,
     }
@@ -628,7 +629,7 @@ fn source_tiles_before_the_level_table_cannot_consume_its_dimensions() {
         let xcf = Xcf::parse(&file.out).unwrap();
         let mut visited = Vec::new();
         let result = xcf.visit_hierarchy(
-            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false },
+            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false, transfer_is_assumed: false },
             SampleOptions::default(),
             &mut 2,
             &|| true,
@@ -705,6 +706,7 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
                 .visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
                     assert_eq!(tile.data, data);
                     assert_eq!(tile.drawable.precision.transfer, transfer);
+                    assert_eq!(tile.drawable.transfer_is_assumed, !selection);
                     assert_eq!(tile.drawable.precision.storage.linear, transfer == Transfer::Linear);
                     if code == 650 || code == 600 {
                         assert_eq!(tile.sample(0)?, SourceSample::F32(0.5));
@@ -714,6 +716,7 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
                 .unwrap();
             assert_eq!(channel.selection, selection);
             assert_eq!(info.precision.transfer, transfer);
+            assert_eq!(info.transfer_is_assumed, !selection);
             assert_eq!(budget, 0);
             // A color layer keeps the image transfer, independently of channel role.
             let color_transfer = if code == 175 {
@@ -733,6 +736,7 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
                 .unwrap()
                 .unwrap();
             assert_eq!(layer.precision.transfer, color_transfer);
+            assert!(!layer.transfer_is_assumed);
             assert_eq!(color_budget, 0);
         }
     }
@@ -868,7 +872,14 @@ fn hierarchy_headers_are_never_tile_payload_for_either_pixel_api() {
             let legacy = reader.hierarchy(hierarchy, 1, false, &mut 8, GO);
             let mut seen = Vec::new();
             let raw = reader.visit_hierarchy(
-                VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false },
+                VisitTarget {
+                    pointer: hierarchy,
+                    channels: 1,
+                    indexed: false,
+                    dimensions: Some((2, 1)),
+                    coverage: false,
+                    transfer_is_assumed: false,
+                },
                 SampleOptions::default(),
                 &mut 2,
                 GO,
@@ -966,7 +977,14 @@ fn complete_hierarchy_pointer_lists_are_framing_not_pixel_payload() {
                 let legacy = reader.hierarchy(hierarchy, 1, false, &mut 8, GO);
                 let mut seen = Vec::new();
                 let source = reader.visit_hierarchy(
-                    VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false },
+                    VisitTarget {
+                        pointer: hierarchy,
+                        channels: 1,
+                        indexed: false,
+                        dimensions: Some((2, 1)),
+                        coverage: false,
+                        transfer_is_assumed: false,
+                    },
                     SampleOptions::default(),
                     &mut 2,
                     GO,
@@ -1012,7 +1030,14 @@ fn unterminated_or_excessive_hierarchy_lists_stop_before_pixel_admission() {
             assert!(
                 reader
                     .visit_hierarchy(
-                        VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((1, 1)), coverage: false },
+                        VisitTarget {
+                            pointer: hierarchy,
+                            channels: 1,
+                            indexed: false,
+                            dimensions: Some((1, 1)),
+                            coverage: false,
+                            transfer_is_assumed: false
+                        },
                         SampleOptions::default(),
                         &mut budget,
                         GO,
@@ -1021,6 +1046,125 @@ fn unterminated_or_excessive_hierarchy_lists_stop_before_pixel_admission() {
                     .is_err()
             );
             assert_eq!(budget, 1);
+        }
+    }
+}
+
+#[test]
+fn corroborated_dummy_level_headers_bound_tile_payloads() {
+    for version in [10, 11] {
+        for complete in [false, true] {
+            let mut source = Source::gray(150, 1, vec![0]);
+            source.version = version;
+            let mut file = W { out: source.write(), wide: version >= 11 };
+            let hierarchy = file.out.len();
+            for value in [2, 2, 1] {
+                file.u32(value);
+            }
+            let level_slot = file.slot();
+            let dummy_slot = file.slot();
+            file.ptr(0);
+            let level = file.out.len();
+            file.patch(level_slot, level);
+            file.u32(2);
+            file.u32(2);
+            let tile_slot = file.slot();
+            file.ptr(0);
+            let tile = file.out.len();
+            file.patch(tile_slot, tile);
+            file.out.extend([11, 22, 33]);
+            if complete {
+                file.out.push(44);
+            }
+            let dummy = file.out.len();
+            file.patch(dummy_slot, dummy);
+            file.u32(1);
+            file.u32(1);
+            file.ptr(0); // Corroborated empty 1x1 mip header.
+            let reader = Xcf::parse(&file.out).unwrap();
+            let legacy = reader.hierarchy(hierarchy, 1, false, &mut 16, GO);
+            let mut seen = Vec::new();
+            let raw = reader.visit_hierarchy(
+                VisitTarget {
+                    pointer: hierarchy,
+                    channels: 1,
+                    indexed: false,
+                    dimensions: Some((2, 2)),
+                    coverage: false,
+                    transfer_is_assumed: false,
+                },
+                SampleOptions::default(),
+                &mut 4,
+                GO,
+                |tile| {
+                    seen.extend_from_slice(tile.data);
+                    Ok(())
+                },
+            );
+            if complete {
+                assert_eq!(legacy.unwrap().data, [11u8, 22, 33, 44].map(|v| f32::from(v) / 255.0));
+                raw.unwrap();
+                assert_eq!(seen, [11, 22, 33, 44]);
+            } else {
+                assert!(legacy.is_err());
+                assert!(raw.is_err());
+                assert!(seen.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn full_first_level_tables_must_not_overlap_the_hierarchy() {
+    for version in [10, 11] {
+        for overlap in [0, 1] {
+            let mut source = Source::gray(150, 1, vec![0]);
+            source.version = version;
+            let mut file = W { out: source.write(), wide: version >= 11 };
+            let level = file.out.len();
+            file.u32(2);
+            file.u32(1);
+            let tile_slot = file.slot();
+            file.ptr(0);
+            file.out.truncate(file.out.len() - overlap);
+            let hierarchy = file.out.len();
+            for value in [2, 1, 1] {
+                file.u32(value);
+            }
+            file.ptr(level);
+            file.ptr(0);
+            let tile = file.out.len();
+            file.patch(tile_slot, tile);
+            file.out.extend([22, 44]);
+            let reader = Xcf::parse(&file.out).unwrap();
+            let legacy = reader.hierarchy(hierarchy, 1, false, &mut 8, GO);
+            let mut seen = Vec::new();
+            let raw = reader.visit_hierarchy(
+                VisitTarget {
+                    pointer: hierarchy,
+                    channels: 1,
+                    indexed: false,
+                    dimensions: Some((2, 1)),
+                    coverage: false,
+                    transfer_is_assumed: false,
+                },
+                SampleOptions::default(),
+                &mut 2,
+                GO,
+                |tile| {
+                    seen.extend_from_slice(tile.data);
+                    Ok(())
+                },
+            );
+            if overlap == 0 {
+                assert_eq!(legacy.unwrap().data, [22u8, 44].map(|v| f32::from(v) / 255.0));
+                raw.unwrap();
+                assert_eq!(seen, [22, 44]);
+            } else {
+                assert!(legacy.is_err());
+                assert!(raw.is_err());
+                assert!(seen.is_empty());
+            }
         }
     }
 }

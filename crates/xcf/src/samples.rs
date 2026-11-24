@@ -83,6 +83,10 @@ pub struct SourceDrawable {
     pub indexed: bool,
     pub precision: SourcePrecision,
     pub sample_order: SampleOrder,
+    /// Ordinary saved channels carry no per-channel transfer marker in XCF.
+    /// When true, `precision.transfer` is the reader's default assumption rather
+    /// than an encoding established by the file. Stored samples are unchanged.
+    pub transfer_is_assumed: bool,
 }
 
 /// Borrowed interleaved source bytes, valid only during this tile's callback.
@@ -156,6 +160,7 @@ struct VisitTarget {
     indexed: bool,
     dimensions: Option<(u32, u32)>,
     coverage: bool,
+    transfer_is_assumed: bool,
 }
 
 pub(super) struct HierarchyHead {
@@ -164,6 +169,7 @@ pub(super) struct HierarchyHead {
     pub bpp: usize,
     pub(super) level: usize,
     header: std::ops::Range<usize>,
+    dummy_headers: [Option<(usize, usize)>; 31],
 }
 
 impl Xcf<'_> {
@@ -218,7 +224,14 @@ impl Xcf<'_> {
         }
         let (channels, indexed) = layer.source_layout(self.image.base_type)?;
         self.visit_hierarchy(
-            VisitTarget { pointer: layer.hierarchy, channels, indexed, dimensions: Some((layer.width, layer.height)), coverage: false },
+            VisitTarget {
+                pointer: layer.hierarchy,
+                channels,
+                indexed,
+                dimensions: Some((layer.width, layer.height)),
+                coverage: false,
+                transfer_is_assumed: false,
+            },
             options,
             budget,
             keep_going,
@@ -297,6 +310,7 @@ impl Xcf<'_> {
                     indexed: false,
                     dimensions: Some(dimensions),
                     coverage: owner.is_some() || selection || !nonlinear_u8,
+                    transfer_is_assumed: owner.is_none() && !selection,
                 },
                 options,
                 budget,
@@ -330,11 +344,42 @@ impl Xcf<'_> {
         // The fixed fields are followed by unused mip-level pointers and a
         // mandatory zero. Protect those words as framing too. A u32-sized
         // dimension can halve at most 32 times, so never scan an input-sized list.
-        // Unused offsets are deliberately not followed or narrowed to usize.
+        // Unused offsets need not fit the host or address the file. Only bounded,
+        // corroborated in-file dummy headers are inspected below.
         let pointer_bytes = if cursor.wide { 8 } else { 4 };
-        for _ in 0..u32::BITS {
-            if cursor.take(pointer_bytes)?.iter().all(|byte| *byte == 0) {
-                return Ok(HierarchyHead { width, height, bpp, level, header: pointer..cursor.pos });
+        let mut dummy_offsets = [0u64; 31];
+        for index in 0..u32::BITS as usize {
+            let word = cursor.take(pointer_bytes)?;
+            if word.iter().all(|byte| *byte == 0) {
+                let header = pointer..cursor.pos;
+                let mut dummy_headers = [None; 31];
+                let (mut mip_width, mut mip_height) = (width, height);
+                for (slot, offset) in dummy_headers.iter_mut().zip(dummy_offsets.iter().take(index)) {
+                    mip_width = (mip_width / 2).max(1);
+                    mip_height = (mip_height / 2).max(1);
+                    let Ok(at) = usize::try_from(*offset) else { continue };
+                    let Some(end) = at.checked_add(8 + pointer_bytes) else { continue };
+                    if at < header.end && end > header.start {
+                        continue;
+                    }
+                    let Some(bytes) = self.c.b.get(at..end) else { continue };
+                    // Only corroborated empty mip headers define a boundary;
+                    // arbitrary/unusable unused offsets remain ignored.
+                    if bytes.get(..4) == Some(mip_width.to_be_bytes().as_slice())
+                        && bytes.get(4..8) == Some(mip_height.to_be_bytes().as_slice())
+                        && bytes.get(8..).is_some_and(|word| word.iter().all(|byte| *byte == 0))
+                    {
+                        *slot = Some((at, end));
+                    }
+                }
+                return Ok(HierarchyHead { width, height, bpp, level, header, dummy_headers });
+            }
+            if let Some(slot) = dummy_offsets.get_mut(index) {
+                *slot = if cursor.wide {
+                    u64::from_be_bytes(word.try_into().map_err(|_| invalid("invalid hierarchy pointer width"))?)
+                } else {
+                    u64::from(u32::from_be_bytes(word.try_into().map_err(|_| invalid("invalid hierarchy pointer width"))?))
+                };
             }
         }
         Err(invalid("hierarchy level list exceeds 32 levels or has no zero terminator"))
@@ -369,6 +414,14 @@ impl Xcf<'_> {
         if start < head.level {
             end = end.min(head.level);
         }
+        for &(begin, stop) in head.dummy_headers.iter().flatten() {
+            if (begin..stop).contains(&start) {
+                return Err(invalid("a tile pointer is inside a dummy-level header"));
+            }
+            if start < begin {
+                end = end.min(begin);
+            }
+        }
         self.c.b.get(start..end).ok_or_else(|| invalid("a tile pointer is outside the file"))
     }
 
@@ -386,7 +439,11 @@ impl Xcf<'_> {
         }
         let count =
             (head.width.div_ceil(TILE) as usize).checked_mul(head.height.div_ceil(TILE) as usize).ok_or_else(|| invalid("tile count overflow"))?;
-        crate::tile_offsets(&mut level, head.level, count, keep_going)
+        let offsets = crate::tile_offsets(&mut level, head.level, count, keep_going)?;
+        if head.level < head.header.end && level.pos > head.header.start {
+            return Err(invalid("a level table overlaps its hierarchy header"));
+        }
+        Ok(offsets)
     }
 
     fn visit_hierarchy(
@@ -400,7 +457,7 @@ impl Xcf<'_> {
         if !keep_going() {
             return Err(Error::Cancelled);
         }
-        let VisitTarget { pointer, channels, indexed, dimensions, coverage } = target;
+        let VisitTarget { pointer, channels, indexed, dimensions, coverage, transfer_is_assumed } = target;
         let order = self.source_order(options)?;
         let head = self.hierarchy_head(pointer, channels)?;
         if dimensions.is_some_and(|size| size != (head.width, head.height)) {
@@ -424,7 +481,8 @@ impl Xcf<'_> {
             precision.transfer = Transfer::Linear;
             precision.storage.linear = true;
         }
-        let drawable = SourceDrawable { width: head.width, height: head.height, channels, indexed, precision, sample_order: order };
+        let drawable =
+            SourceDrawable { width: head.width, height: head.height, channels, indexed, precision, sample_order: order, transfer_is_assumed };
         let across = head.width.div_ceil(TILE) as usize;
         let count = across.checked_mul(head.height.div_ceil(TILE) as usize).ok_or_else(|| invalid("tile count overflow"))?;
         for index in 0..count {
