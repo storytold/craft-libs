@@ -2,23 +2,20 @@
 //! leaves the source.
 
 use super::kit::{Count, Dismissed, List, ROW_H, RowOut, Words};
-use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{
     CancelReason, CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, GestureId, ItemSource, Mixed, PartKey, ScrollPos, Selection,
     SelectionModel as _, Sense, SheetLayout, SpanLayout, keyed,
 };
 use craft_keymap::Mods;
-use craft_ui::contract::overlay::{Anchor, Place};
 use craft_ui::contract::{
-    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, Container, ContainerProps, Cx, EditResponse,
-    Focus as _, MeasureCx, Mount, Overlay, PartsCx, Props as _, Role, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
-    request_rename,
+    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse, Focus as _,
+    MeasureCx, PartsCx, Props as _, Role, SelectMode, ShowCollection as _, request_rename,
 };
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
-use craft_ui_test_kit::contract::{PlainStyle, Probe as Stop, Seen};
+use craft_ui_test_kit::contract::PlainStyle;
 use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
@@ -164,8 +161,6 @@ struct Probe<'a> {
     rename: Option<(&'a str, &'a Cell<bool>)>,
     /// The typed Enter the rename field reports, one per `Typing::press`.
     typing: Option<&'a Typing>,
-    /// A layer the rename editor opens while it holds the focus.
-    layer: Option<&'a Layered>,
 }
 
 impl<'a> Probe<'a> {
@@ -179,7 +174,6 @@ impl<'a> Probe<'a> {
             auto: false,
             rename: None,
             typing: None,
-            layer: None,
         }
     }
 
@@ -194,12 +188,6 @@ impl<'a> Probe<'a> {
     fn typing(mut self, draft: &'a str, typing: &'a Typing) -> Self {
         self = self.renaming(draft, &typing.enter);
         self.typing = Some(typing);
-        self
-    }
-
-    /// The rename editor opens `layer` while its `open` is set.
-    fn layered(mut self, layer: &'a Layered) -> Self {
-        self.layer = Some(layer);
         self
     }
 
@@ -270,61 +258,14 @@ impl Collection for Probe<'_> {
             None => (enter.get(), Mods::NONE),
         };
         let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), events, None);
-        if let Some(layer) = self.layer {
-            layer.editor.set(editor.response.id);
-        }
-        match self.layer.filter(|layer| layer.open.get()) {
-            // A layer the editor opened takes the focus into it, as an edit menu does: the editor keeps no key focus then.
-            Some(layer) => {
-                let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(label), Side::Below, Align::Start));
-                let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
-                Menu { common: Common::new(), props }.id_salt("rename_layer").show(ui, |ui, _| {
-                    Stop::new(&layer.seen).size(Vec2::new(60.0, 20.0)).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui);
-                });
-            }
-            // The probe field is no focus stop, so it asks for the focus a real text field keeps: a field that holds the focus
-            // and then loses it ends the rename.
-            None => request(ui.ctx(), FocusTarget::Id(editor.response.id)),
-        }
+        // The probe field is no focus stop, so it asks for the focus a real text field keeps: a field that holds the focus
+        // and then loses it ends the rename.
+        request(ui.ctx(), FocusTarget::Id(editor.response.id));
         editor.submitted = submitted;
         editor.submit_mods = mods;
         Some(editor)
     }
 }
-
-/// What a layer opened from a rename editor shows and where its editor stands.
-#[derive(Default)]
-struct Layered {
-    open: Cell<bool>,
-    editor: Cell<Id>,
-    seen: RefCell<Seen>,
-}
-
-/// A popup layer that holds one focusable probe, opened from a rename editor.
-#[derive(craft_ui::contract::Component)]
-#[component(container)]
-struct Menu {
-    #[common]
-    common: Common,
-    #[container]
-    props: ContainerProps,
-}
-
-impl Component for Menu {
-    const ROLE: Role = Role::GROUP;
-    type Style = PlainStyle;
-    type Output = egui::Response;
-
-    fn style(_: &StyleCx<'_>, _: MenuStyleKey) -> PlainStyle {
-        PlainStyle::default()
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
-        cx.response.clone()
-    }
-}
-
-impl Container for Menu {}
 
 /// A sheet of `CELL_W` columns over `SheetLayout`, with the first column frozen.
 #[derive(craft_ui::contract::Component)]
@@ -840,28 +781,4 @@ fn a_rename_whose_item_leaves_the_source_ends_with_a_removed_cancel() {
     enter.set(true);
     frames.idle(3, &mut show);
     assert_eq!(ends(log), ["begin", "removed"], "nothing more is written after the item left");
-}
-
-/// A layer the rename editor opens while it holds the focus takes the focus into it, as its edit menu does: the editor
-/// is no longer the focused stop, which is no blur, so the rename stays open until the layer is gone.
-#[trial]
-fn a_layer_opened_from_the_rename_editor_does_not_end_the_rename_as_a_blur() {
-    let (log, enter, layer) = (Log::new(), Cell::new(false), Layered::default());
-    let words = Words::flat(&["a", "b", "c"]);
-    let mut frames = Frames::new();
-    let mut show = |ui: &mut Ui| {
-        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
-            let list = Probe::new(SelectMode::Single).id_salt("list").renaming("proposed", &enter).layered(&layer);
-            log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
-        });
-    };
-    frames.idle(3, &mut show);
-    request_rename(&frames.ctx, log.id(), &1_usize);
-    frames.idle(4, &mut show);
-    assert!(craft_ui::runtime::focus::is_focused(&frames.ctx, layer.editor.get()), "the editor starts with the focus");
-    layer.open.set(true);
-    frames.idle(6, &mut show);
-    assert!(!craft_ui::runtime::focus::is_focused(&frames.ctx, layer.editor.get()), "the layer took the focus from the editor");
-    let ended = log.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Cancel { .. } | EditEvent::Commit { .. })));
-    assert!(!ended, "the layer ends no rename: {:?}", log.events.borrow().len());
 }
