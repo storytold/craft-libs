@@ -93,7 +93,8 @@ pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
 pub use label::{
-    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, Scrub, SideLabel,
+    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, LinkLabelInk,
+    Scrub, SideLabel,
 };
 pub use lazy::Lazy;
 #[doc(hidden)]
