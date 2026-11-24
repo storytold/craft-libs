@@ -18,7 +18,7 @@ impl DecodeWork {
     pub(super) fn remaining(&self) -> usize {
         self.remaining
     }
-    fn charge(&mut self, bytes: usize) -> Result<()> {
+    pub(super) fn charge(&mut self, bytes: usize) -> Result<()> {
         match self.remaining.checked_sub(bytes) {
             Some(left) => {
                 self.remaining = left;
