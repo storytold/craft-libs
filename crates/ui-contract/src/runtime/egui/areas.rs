@@ -419,6 +419,11 @@ pub(crate) fn set_layer_order(ctx: &Context, order: &[LayerId]) {
     ctx.set_layer_order(order);
 }
 
+/// Brings `layer` to the top of egui's own area order at the end of the running pass, as a press on it does.
+pub(crate) fn move_to_top(ctx: &Context, layer: LayerId) {
+    ctx.move_to_top(layer);
+}
+
 /// Makes `layer` the modal layer of the running pass: layers below it take no input.
 pub(crate) fn set_modal_layer(ctx: &Context, layer: LayerId) {
     ctx.memory_mut(|memory| memory.set_modal_layer(layer));

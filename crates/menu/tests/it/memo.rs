@@ -136,7 +136,7 @@ fn a_model_edit_builds_the_labels_once() {
 fn a_locale_change_builds_the_labels_once() {
     let bar = Rc::new(RefCell::new(model("File")));
     let mut fixture = fixture(&bar);
-    fixture.host(crate::mnemonic::turkish());
+    fixture.host(crate::mnemonic::host_in("tr"));
     fixture.frame(vec![]);
     assert_eq!(label_builds(&fixture), 1, "a language change builds the labels once");
     fixture.frame(vec![]);

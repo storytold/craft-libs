@@ -204,8 +204,8 @@ fn with_browser_caps(shell: ShellInfo) -> ShellInfo {
     shell
 }
 
-/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, quit goes
-/// through the close guard, and the wheel's modifiers are the spec's. A second call on the same context is an error,
+/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: the interface scale is the app's
+/// (`RootEnv::scale`), quit is a command that goes through the close guard, and the wheel's modifiers are the spec's. A second call on the same context is an error,
 /// checked first so an app that installs again (a language change) gets that answer; a call inside a pass is one too.
 pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     if plugin::is_registered(ctx) {
