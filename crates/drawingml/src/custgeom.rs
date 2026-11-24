@@ -479,6 +479,21 @@ pub fn parse_path(d: &str) -> Vec<(char, Vec<f64>)> {
 /// in EMU: its sites keep their fractions through a round trip.
 pub const INHERITED_EXTENT_EMU: f64 = 21600.0;
 
+/// The edges of a custom shape's `a:rect` in shape-space EMUs (ISO/IEC 29500-1 §20.1.9.22).
+/// The shape extent, independent of each path's coordinate space, defines the guide values.
+pub fn read_cust_text_rect(cg: &El, w_emu: f64, h_emu: f64) -> Option<[f64; 4]> {
+    let rect = cg.child(Local("rect"))?;
+    let mut guides = Guides::new(w_emu, h_emu);
+    guides.eval_list(cg.child(Local("avLst")));
+    guides.eval_list(cg.child(Local("gdLst")));
+    let edge = |name| {
+        let value = rect.attr(name)?.trim();
+        guides.vars.get(value).copied().or_else(|| value.parse::<f64>().ok()).filter(|edge| edge.is_finite()).map(finite)
+    };
+    let (l, t, r, b) = (edge("l")?, edge("t")?, edge("r")?, edge("b")?);
+    (r > l && b > t).then_some([l, t, r, b])
+}
+
 /// `a:cxnLst`: the connection sites as fractions of the shape's box, in file order (connectors
 /// refer to them by index, so a `cxn` without a `pos` keeps its place as the box's corner).
 /// Positions are in the shape's own coordinate space, `w_emu` × `h_emu` (the extent, where the
