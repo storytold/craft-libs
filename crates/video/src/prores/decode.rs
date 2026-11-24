@@ -475,14 +475,16 @@ fn decode_component(data: &[u8], log2_blocks: u32, scan: &[u8; 64], q: &[f32; 64
     Ok(())
 }
 
-/// The alpha stream ended before `out` was full: complete when it holds every `required` value,
-/// with the last value repeated into the rest (lines below the picture that are never shown).
-fn alpha_ended(out: &mut [u16], idx: usize, required: usize) -> std::result::Result<(), ()> {
-    if idx == 0 || idx < required || idx == out.len() {
+/// The alpha stream ended before `out` was full: complete when its first `done` values (each
+/// with its continuation bit or run) include every `required` value. The last value repeats into
+/// the rest (lines below the picture that are never shown). A stream that decoded into the last
+/// slot (`filled == out.len()`) but lacks its final run is still corrupt.
+fn alpha_ended(out: &mut [u16], done: usize, filled: usize, required: usize) -> std::result::Result<(), ()> {
+    if done == 0 || done < required || filled == out.len() {
         return Err(());
     }
-    let last = out[idx - 1];
-    out[idx..].fill(last);
+    let last = out[done - 1];
+    out[done..].fill(last);
     Ok(())
 }
 
@@ -504,12 +506,12 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) ->
         // padding can decode as a value but never as a terminated one, so it never counts.
         let done = idx;
         if r.bits_left() < 1 {
-            return alpha_ended(out, done, required);
+            return alpha_ended(out, done, idx, required);
         }
         let full = r.read_bit();
         let delta_bits = if full { bits } else { short_bits };
         if r.bits_left() < delta_bits as isize {
-            return alpha_ended(out, done, required);
+            return alpha_ended(out, done, idx, required);
         }
         let d = if full {
             r.read(bits)
@@ -523,7 +525,7 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) ->
         idx += 1;
 
         if r.bits_left() < 1 {
-            return alpha_ended(out, done, required);
+            return alpha_ended(out, done, idx, required);
         }
         if r.read_bit() {
             if idx == n {
@@ -532,12 +534,12 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) ->
             continue;
         }
         if r.bits_left() < 4 {
-            return alpha_ended(out, done, required);
+            return alpha_ended(out, done, idx, required);
         }
         let short_run = r.read(4) as usize;
         let run = if short_run == 0 {
             if r.bits_left() < 11 {
-                return alpha_ended(out, done, required);
+                return alpha_ended(out, done, idx, required);
             }
             let long_run = r.read(11) as usize;
             if long_run < 16 {
@@ -668,6 +670,18 @@ mod alpha_decode_tests {
         encode_alpha(&mut valid, &[u16::MAX as u32], 16);
         assert!(decode_alpha(&valid.finish(), AlphaType::Bits16, &mut out, 1).is_ok());
         assert_eq!(out, [u16::MAX]);
+
+        // A partial row whose stream fills every slot but drops the last run is still corrupt.
+        let mut full_no_run = Writer::new();
+        for _ in 0..255 {
+            full_no_run.put(0, 1);
+            full_no_run.put(0, 7);
+            full_no_run.put(1, 1);
+        }
+        full_no_run.put(0, 1);
+        full_no_run.put(0, 7);
+        let mut full = [0u16; 256];
+        assert!(decode_alpha(&full_no_run.finish(), AlphaType::Bits16, &mut full, 128).is_err());
     }
 
     /// The bottom macroblock row of a 1080-line frame has 8 visible lines. Apple's encoder
