@@ -839,6 +839,7 @@ fn guide_and_sample_evidence_identifies_each_wire_record_not_its_property() {
     let raw = properties(&bytes);
     let output = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
     assert!(output.complete());
+    assert_eq!(output.guides.len(), 2, "both valid guide records must reach the offset assertions");
     for (record, index) in output.guides.iter().zip([1, 2]) {
         assert_eq!(record.offset, raw.records[1].offset + 8 + index * 5);
         assert_eq!(&bytes[record.offset..record.offset + 4], &record.value.position.to_be_bytes());
