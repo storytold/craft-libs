@@ -185,7 +185,9 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     }
     let over: Vec<bool> = batch.presses.iter().map(held_press).collect();
     let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts, &over);
-    withdraw_taken(ctx, target.is_some(), &batch, &held, &withdrawn_texts);
+    // The app's own widget, focused or the window's canvas, reads its keys from egui.
+    let host = target.as_ref().or(canvas.as_ref()).is_some_and(|rec| rec.stop.host);
+    withdraw_taken(ctx, host, &batch, &held, &withdrawn_texts);
     let pasted = batch.paste.clone().zip(focused).map(|(content, id)| (id, content));
     // PLAN: a repeat Tab of a held-over key is not gated; `take_nav` reads `batch.tabs` before this hook runs (owner: focus).
     // One Escape press cancels once: its repeats cancel nothing more, in the layer it closed or in what that uncovered.

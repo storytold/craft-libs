@@ -258,7 +258,8 @@ fn an_unfocused_press_the_window_canvas_takes_reaches_no_app_shortcut() {
     take_output(&frames.ctx);
     let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
         frames.frame(vec![key_press(Key::PageDown, Modifiers::NONE), key_press(Key::ArrowRight, Modifiers::NONE)], &mut *show);
-        frames.frame(Vec::new(), &mut *show);
+        // Released, so the next round's presses are fresh presses, not repeats of held keys.
+        frames.frame(vec![key_release(Key::PageDown, Modifiers::NONE), key_release(Key::ArrowRight, Modifiers::NONE)], &mut *show);
         take_output(&frames.ctx).fired.len()
     };
     assert_eq!(fired(&mut frames, &mut show), 0, "neither press reaches the app's commands");
