@@ -47,8 +47,9 @@ fn a_panel_menu_command_reaches_the_group_whose_button_opened_it() {
         *held.borrow_mut() = shown;
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle();
-    let first = fixture.by_label("Panel 0").expect("the first group's tab");
-    fixture.click(&first).idle(1);
+    // Tab from nothing focuses the first group's tabs; a click on a tab leaves focus where it is.
+    fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+    assert!(fixture.focused_stop().is_some(), "Tab focused the first group's tabs");
     let buttons: Vec<_> =
         fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
     assert_eq!(buttons.len(), 2, "each group shows its panel menu button");
@@ -71,8 +72,9 @@ fn tab_reaches_the_tabs_then_the_drag_band_then_the_panel_menu_button() {
         DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(800.0, 600.0)).settle();
-    let tab = fixture.by_label("Panel 0").expect("the group's tab");
-    fixture.click(&tab).idle(1);
+    // Tab from nothing reaches the tabs first.
+    fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+    assert!(fixture.focused_stop().is_some(), "Tab focused the tabs");
     let mut parts = Vec::new();
     for _ in 0..2 {
         fixture.key(Key::Tab, Modifiers::NONE).idle(1);

@@ -521,17 +521,22 @@ fn a_pasted_image_runs_the_paste_a_pasted_text_runs() {
 
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
-    let (host, mut show) = host_window();
+    let (host, show) = host_window();
+    f6_in(&host, show, overrides)
+}
+
+/// What an F6 press did under `overrides` in the window `show` draws, whose host records what reached egui in `host`.
+fn f6_in(host: &RefCell<Host>, mut show: impl FnMut(&mut Ui), overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let mut frames = Frames::new();
     if let Some(overrides) = overrides {
         frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
     }
     frames.frame(Vec::new(), &mut show);
     take_output(&frames.ctx);
-    seen(&host);
+    seen(host);
     press_key(&mut frames, &mut show, Key::F6);
     let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
-    (seen(&host).0.contains(&Key::F6), fired)
+    (seen(host).0.contains(&Key::F6), fired)
 }
 
 #[trial]
@@ -543,6 +548,30 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     let mut unbound = craft_keymap::Overrides::default();
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
+}
+
+/// The Alt+digit chords the hosted canvas of `an_unbound_f6_reaches_a_host_canvas_with_claims` claims.
+const CANVAS_CLAIMS: [craft_keymap::Chord; 2] = [
+    craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num1),
+    craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num2),
+];
+
+/// A hosted app whose own egui canvas is the window's key target, with Tab, the edit chords and Alt+digit claims kept
+/// (SoundCraft's session view), and whose shortcut table uses F6: with both pane moves unbound, F6 reaches egui.
+#[trial]
+fn an_unbound_f6_reaches_a_host_canvas_with_claims() {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL).with_claims(&CANVAS_CLAIMS);
+    let canvas = named_id("host canvas");
+    let (host, mut base) = host_window();
+    let show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KEYS);
+    };
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(NavCommand::NextPane.id(), Vec::new());
+    unbound.insert(NavCommand::PreviousPane.id(), Vec::new());
+    assert_eq!(f6_in(&host, show, Some(unbound)), (true, Vec::new()), "the canvas's app reads F6 from egui");
 }
 
 /// The panes the pane trials show, in order: the scope's name, its stop and its label.

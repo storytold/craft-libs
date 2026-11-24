@@ -810,8 +810,8 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
-/// The end hook: raises the families that appeared or were pressed, hands egui the whole order, and records the
-/// open-modal fact.
+/// The end hook: raises the families that appeared or were pressed, hands egui the order of every layer above the
+/// floating windows (which keep egui's own area order), and records the open-modal fact.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (current, last_ids) = with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>()));
@@ -849,7 +849,11 @@ pub(crate) fn end_pass(ctx: &Context) {
         persist.stack.clear();
         for members in &families {
             for member in members {
-                if !member.window {
+                // A floating window or panel (`Rank::Window`) is left to egui's own area order, which raises a layer
+                // when it first shows and when it is pressed: the app's own egui windows stack with it in that one
+                // order, so a dialog the app opens later shows above it. Listed layers would go above every unlisted
+                // layer of their egui order. An OS window has no egui layer here.
+                if !member.window && member.rank != Rank::Window {
                     order.extend(member.cover);
                     order.push(member.layer);
                 }

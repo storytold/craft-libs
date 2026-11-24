@@ -81,4 +81,10 @@ impl HostStyle {
     pub fn apply(&self, ui: &mut Ui) {
         ui.set_style(Arc::clone(&self.0));
     }
+
+    /// Fills `rect` on `ui` with the kept style's panel fill (`Visuals::panel_fill`), as an egui panel of the app paints
+    /// its background: the app's own code shown in a framework region keeps the background it has outside it.
+    pub fn paint_panel(&self, ui: &Ui, rect: egui::Rect) {
+        ui.painter().rect_filled(rect, 0.0, self.0.visuals.panel_fill);
+    }
 }

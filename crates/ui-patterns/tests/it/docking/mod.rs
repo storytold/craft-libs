@@ -15,6 +15,7 @@ pub(crate) mod drop;
 pub(crate) mod drop_preview;
 pub(crate) mod drop_session;
 
+pub(crate) mod float_order;
 pub(crate) mod floating;
 pub(crate) mod floating_area;
 pub(crate) mod floating_rail;
@@ -24,6 +25,8 @@ pub(crate) mod columns;
 pub(crate) mod dock_back;
 pub(crate) mod group_view;
 pub(crate) mod host_body;
+pub(crate) mod host_keys;
+pub(crate) mod tab_focus;
 pub(crate) mod workspace_dialogs;
 
 pub(crate) mod native;

@@ -1096,8 +1096,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let spec = scene.spec(&members[at]);
             if minimized {
                 group = group.minimized();
-            } else if !document(&spec) {
+            } else if !document(&spec) && !spec.host_body {
+                // The app's own egui body lays out in the whole body, as it did outside the dock.
                 group = group.pad(Pad::Regular);
+            }
+            if spec.host_body {
+                group = group.host_body();
             }
             if spec.footer {
                 group = group.footer(move |ui, body| scene.hosted(&members[at], ui, |ui| panels.borrow_mut().footer(&members[at], ui, body)));
@@ -1736,6 +1740,11 @@ fn panel_body<'p, P: Clone + Eq + Hash>(
     ui: &mut Ui,
     body: &mut BodyCx<'_>,
 ) {
+    // The app's own egui body keeps its background: the host's panel fill over the group's surface, as it showed
+    // outside the dock. A measuring run paints nothing.
+    if scene.spec(panel).host_body && !crate::runtime::measure::active(ui.ctx()) {
+        scene.host_style.paint_panel(ui, ui.max_rect());
+    }
     scene.hosted(panel, ui, |ui| panels.borrow_mut().body(panel, ui, body));
 }
 
