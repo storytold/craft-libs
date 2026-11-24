@@ -454,6 +454,20 @@ impl WindowHost {
         }
     }
 
+    /// The room the macOS traffic lights take over the running viewport's content: `leading` wide at the end they sit
+    /// at, twice their centre's distance from the top high. `None` for any other frame and in full screen, where the
+    /// lights are not over the content.
+    pub fn lights_room(&self) -> Option<Rect> {
+        let Frame::Inset(inset) = self.frame() else { return None };
+        if shell_of(&self.ctx, pass::current_viewport(&self.ctx)).window.state == WindowState::Fullscreen {
+            return None;
+        }
+        let window = self.ctx.viewport_rect();
+        let size = Vec2::new(inset.leading.min(window.width()), (2.0 * inset.centre_from_top).min(window.height()));
+        let min = if inset.lights_right { Pos2::new(window.right() - size.x, window.top()) } else { window.min };
+        Some(Rect::from_min_size(min, size))
+    }
+
     /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app
     /// installed no decision (an embedded shell, a trial). The caption buttons take the desktop's icon theme from it.
     pub fn desktop(&self) -> Option<Desktop> {
