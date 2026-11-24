@@ -612,7 +612,7 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
             None => from,
         };
         while let Some(clip) = clips.next_if(|clip| clip.at <= place) {
-            leave_clip(clip, &took, &mut down, &mut left);
+            leave_clip(clip, took, &mut down, &mut left);
         }
         match leftover(&event) {
             Leftover::Key { pressed, repeat } => {
@@ -640,7 +640,7 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
         }
     }
     for clip in clips {
-        leave_clip(clip, &took, &mut down, &mut left);
+        leave_clip(clip, took, &mut down, &mut left);
     }
     left
 }
