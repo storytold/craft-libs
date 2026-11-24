@@ -1,7 +1,9 @@
 //! Trials of the keys and presses a host's own egui widgets keep while the runtime is installed on the whole window.
 
 use crate::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
-use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope, TypingRule};
+use crate::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, QuitCommand, Scope, TypingRule,
+};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
@@ -548,6 +550,38 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     let mut unbound = craft_keymap::Overrides::default();
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
+}
+
+/// What a ⌘Q (Ctrl+Q off the Mac) did in the host window under `overrides`: how many frames sent a close command, the
+/// app taking each frame's output before the next as `embed::before_input` does, and the ids of the commands it fired.
+fn quit_under(overrides: Option<craft_keymap::Overrides>) -> (usize, Vec<String>) {
+    let (_, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    let mut closes = usize::from(frames.frame_closing(vec![key_press(Key::Q, Modifiers::COMMAND)], &mut show));
+    let mut fired = Vec::new();
+    for _ in 0..3 {
+        fired.extend(take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id));
+        closes += usize::from(frames.frame_closing(Vec::new(), &mut show));
+    }
+    (closes, fired)
+}
+
+/// egui's own quit shortcut is cleared at install; the runtime's Quit command takes its place, through the root window's
+/// close path, and an app's own binding of the chord replaces it.
+#[trial]
+fn quit_asks_the_root_window_to_close_once_and_an_app_binding_replaces_it() {
+    assert_eq!(quit_under(None), (1, vec![QuitCommand::Quit.id().to_owned()]), "the quit chord asks the root window to close once");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Cmd+Q".to_owned()]);
+    assert_eq!(quit_under(Some(bound)), (0, vec![EditCommands::Delete.id().to_owned()]), "a command bound to the chord takes it");
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(QuitCommand::Quit.id(), Vec::new());
+    assert_eq!(quit_under(Some(unbound)), (0, Vec::new()), "with Quit unbound, nothing closes the window");
 }
 
 /// The Alt+digit chords the hosted canvas of `an_unbound_f6_reaches_a_host_canvas_with_claims` claims.

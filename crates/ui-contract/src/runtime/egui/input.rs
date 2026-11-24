@@ -126,7 +126,8 @@ pub(crate) fn request_repaint_of(ctx: &Context, viewport: ViewportId) {
     ctx.request_repaint_of(viewport);
 }
 
-/// The options the runtime owns at install: interface scale and quit are commands, so egui's own shortcuts go.
+/// The options the runtime owns at install: the interface scale is the app's `RootEnv::scale` and quit is a command
+/// (`QuitCommand`), so egui's own keyboard zoom and quit shortcuts go.
 pub(crate) fn clear_shortcuts(ctx: &Context) {
     ctx.options_mut(|options| {
         options.zoom_with_keyboard = false;

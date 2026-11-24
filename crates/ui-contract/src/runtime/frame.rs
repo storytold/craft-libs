@@ -468,9 +468,12 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
-    // already acted in the key stage.
+    // already acted in the key stage. Quit, from any source, asks the root window to close through its close path.
     let focused = crate::runtime::egui::viewports::reported(ctx).into_iter().find(|(_, facts)| facts.focused).map(|(viewport, _)| viewport);
     for fired in &output.fired {
+        if fired.phase == commands::FirePhase::Press && commands::QuitCommand::from_ref(&fired.command).is_some() {
+            windows::act(ctx, ViewportId::ROOT, windows::WindowAction::Close);
+        }
         if fired.source == commands::FireSource::Key {
             continue;
         }

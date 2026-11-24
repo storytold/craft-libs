@@ -3,7 +3,7 @@
 
 use super::{
     AppCatalog, CommandChain, CommandGate, CommandInput, CommandScope, CommandSet, CommandState, EditCommands, FirePhase, FireSource, Fired,
-    ResolvedCommand, WindowShortcut, registry,
+    ResolvedCommand, WindowShortcut, registry, yields_default,
 };
 use crate::contract::Revision;
 use crate::runtime::egui::sizing::{Rerun, request_discard};
@@ -922,8 +922,9 @@ pub fn keymap_builds() -> u64 {
 /// definition, and the catalog's default bindings join the registry's after them (an app's alternate keys, such as
 /// F2/F3/F4 for Cut/Copy/Paste).
 ///
-/// A window shortcut's default chord that another command also binds is that command's: the window shortcut loses it, so the
-/// app's binding beats the framework's default. A window shortcut the overrides name keeps what they give it.
+/// A yielding library command's default chord (a window shortcut's, Quit's: `yields_default`) that another command also
+/// binds is that command's: the library command loses it, so the app's binding beats the framework's default. One the
+/// overrides name keeps what they give it.
 fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
     #[cfg(feature = "testing")]
     KEYMAP_BUILDS.with(|builds| builds.set(builds.get() + 1));
@@ -964,9 +965,9 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs
         .iter()
-        .filter(|def| WindowShortcut::of(&def.command).is_some() && !overridden(def))
+        .filter(|def| yields_default(&def.command) && !overridden(def))
         .flat_map(|def| keymap.conflicts_with(&def.command))
-        .filter(|conflict| WindowShortcut::of(&conflict.b.0).is_none())
+        .filter(|conflict| !yields_default(&conflict.b.0))
         .map(|conflict| (conflict.a.0, conflict.chord))
         .collect();
     if !yielded.is_empty() {
