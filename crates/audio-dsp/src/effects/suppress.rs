@@ -10,10 +10,11 @@
 //! reduction of 0 every gain is 1 and the effect is a plain delay.
 //!
 //! A frame enters the noise estimate only after the next four frames have arrived. A frame of
-//! digital silence (a mute or a gate) drops the frames still waiting, and the three frames after
+//! digital silence (a mute or a gate) drops the frames still waiting, and the four frames after
 //! it do not enter either, so no frame that shares a sample with the silence lowers the estimate
-//! and lets the noise pass when the sound resumes. Nor does a frame more than 15 dB below the
-//! estimate, until such frames have lasted a whole search window (the floor has really fallen).
+//! and lets the noise pass when the sound resumes, wherever between two hops the silence ends.
+//! Nor does a frame more than 15 dB below the estimate, until such frames have lasted a whole
+//! search window without digital silence between them (the floor has really fallen).
 //! The noise power the gains are computed from falls at once and rises by at most 10 dB a
 //! second, so a vowel or a note held for longer than the search window keeps its level for a few
 //! seconds more, and a noise floor that rises by 12 dB is suppressed again within 3 s.
@@ -101,9 +102,10 @@ struct Bins {
     started: bool,
     /// Frames that entered the estimate since the last reset, up to a search window.
     heard: usize,
-    /// Frames with sound since the last frame of digital silence, up to `OVERLAP`.
+    /// Frames with sound since the last frame of digital silence, up to `OVERLAP + 1`. It starts
+    /// at 1: the zeros the STFT starts with end on a hop boundary, so `OVERLAP` frames clear them.
     since_zero: usize,
-    /// Quiet frames in a row, up to a search window.
+    /// Quiet frames in a row since the last frame of digital silence, up to a search window.
     quiet_run: usize,
 }
 
@@ -126,7 +128,7 @@ impl Bins {
             queued: 0,
             started: false,
             heard: 0,
-            since_zero: 0,
+            since_zero: 1,
             quiet_run: 0,
         }
     }
@@ -145,7 +147,7 @@ impl Bins {
         self.queued = 0;
         self.started = false;
         self.heard = 0;
-        self.since_zero = 0;
+        self.since_zero = 1;
         self.quiet_run = 0;
     }
 
@@ -204,11 +206,13 @@ impl Bins {
             let total = (0..bins).map(|k| re[k] * re[k] + im[k] * im[k]).sum::<f32>();
             if total == 0.0 {
                 // Digital silence: the frames still waiting share a sample with it, and so do the
-                // next `OVERLAP - 1` frames.
+                // next `OVERLAP - 1` frames, or the next `OVERLAP` when the silence ends between
+                // two hops. A quiet run ends here too.
                 self.queued = 0;
                 self.since_zero = 0;
+                self.quiet_run = 0;
             } else {
-                self.since_zero = (self.since_zero + 1).min(OVERLAP);
+                self.since_zero = (self.since_zero + 1).min(OVERLAP + 1);
                 if self.queued == OVERLAP {
                     self.commit(c);
                 }
@@ -217,7 +221,7 @@ impl Bins {
                     self.queue[at * bins + k] = re[k] * re[k] + im[k] * im[k];
                 }
                 self.queue_total[at] = total;
-                self.queue_ok[at] = self.since_zero == OVERLAP;
+                self.queue_ok[at] = self.since_zero > OVERLAP;
                 self.queued += 1;
             }
             // The floor moves from 1 to `c.floor` (in dB) over the first search window of sound.
@@ -565,7 +569,8 @@ mod tests {
 
     /// No frame that shares a sample with digital silence enters the noise estimate: not the
     /// frames that run into a mute, nor those that run out of it, whether or not the mute starts
-    /// on a frame boundary. At most one waiting frame per mute is dropped with them.
+    /// or ends on a frame boundary. At most two frames per mute that hold no silence are dropped
+    /// with them.
     #[test]
     fn frames_that_touch_a_mute_stay_out_of_the_estimate() {
         let s = suppressor(24.0);
@@ -584,20 +589,65 @@ mod tests {
             }
             assert!(x.iter().enumerate().all(|(i, v)| *v != 0.0 || mutes.iter().any(|&(a, b)| (a..b).contains(&i))));
             let mut frames = 0usize;
+            // A frame enters the estimate when the frame `OVERLAP` after it arrives, which is when
+            // `heard` grows.
+            let mut entered = Vec::new();
             for &v in &x {
                 lane.tick(v, hop, &mut |input, _| {
                     spec.analyze(input);
+                    let heard = bins.heard;
                     bins.frame(&spec.re[..half], &spec.im[..half], &coefs, &mut gains);
                     frames += 1;
+                    if bins.heard > heard {
+                        entered.push(frames - OVERLAP);
+                    }
                 });
             }
             // Frame `j` (from 1) holds samples `j * hop - n .. j * hop`; samples before 0 are
             // the zeros the STFT starts with.
-            let clean = (1..=frames).filter(|&j| j * hop >= n && x[j * hop - n..j * hop].iter().all(|v| *v != 0.0)).count();
+            let holds_no_silence = |j: usize| j * hop >= n && x[j * hop - n..j * hop].iter().all(|v| *v != 0.0);
+            let clean = (1..=frames).filter(|&j| holds_no_silence(j)).count();
             assert!(frames < coefs.window, "the test needs `heard` below its cap");
-            assert!(bins.heard <= clean, "offset {offset}: {} frames entered the estimate, {clean} hold no silence", bins.heard);
-            assert!(bins.heard + mutes.len() + OVERLAP >= clean, "offset {offset}: {} of {clean} frames entered", bins.heard);
+            assert_eq!(entered.len(), bins.heard);
+            for &j in &entered {
+                assert!(holds_no_silence(j), "offset {offset}: frame {j} holds silence and entered the estimate");
+            }
+            assert!(bins.heard + 2 * mutes.len() + OVERLAP >= clean, "offset {offset}: {} of {clean} frames entered", bins.heard);
         }
+    }
+
+    /// Quiet stretches that a mute separates do not add up to a search window: the estimate stays
+    /// at the noise before them, and falls only after a whole search window of quiet in a row.
+    #[test]
+    fn a_mute_ends_a_quiet_run() {
+        let s = suppressor(24.0);
+        let (n, hop, coefs) = (s.n, s.hop, s.coefs);
+        let half = n / 2 + 1;
+        let mut spec = Spectral::new(n, true);
+        let mut bins = Bins::new(half);
+        let mut gains = vec![1.0f32; half];
+        let mut lane = StftChannel::new(n);
+        let window = coefs.window * hop;
+        let amp = 0.05f32;
+        let (loud, quiet, mute) = (SR as usize * 2, window * 6 / 10, SR as usize / 5);
+        let mut x = white(47, loud + 2 * quiet + mute + window + quiet, amp);
+        x[loud..].iter_mut().for_each(|v| *v *= 0.01);
+        x[loud + quiet..loud + quiet + mute].fill(0.0);
+        let want = amp * amp / 3.0 * n as f32 / 2.0;
+        let mut feed = |part: &[f32]| -> f64 {
+            for &v in part {
+                lane.tick(v, hop, &mut |input, _| {
+                    spec.analyze(input);
+                    bins.frame(&spec.re[..half], &spec.im[..half], &coefs, &mut gains);
+                });
+            }
+            (1..half - 1).map(|k| db((bins.est[k] as f64 * BIAS as f64 / want as f64).sqrt())).sum::<f64>() / (half - 2) as f64
+        };
+        let split = loud + 2 * quiet + mute;
+        let kept = feed(&x[..split]);
+        assert!(kept > -6.0, "after two quiet stretches split by a mute the estimate fell by {:.1} dB", -kept);
+        let fell = feed(&x[split..]);
+        assert!(fell < -20.0, "after a search window of quiet the estimate fell by only {:.1} dB", -fell);
     }
 
     /// A voice that starts with the stream keeps its level within 3 dB over its first 0.25 s and
