@@ -431,29 +431,55 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
 
 /// Gives the held primary press to the part `part` of the root `owner`, as a drag from `origin`: the move band of a
 /// window floated from a torn-off group carries on the press that tore it off (`Overlay::continue_move`). The arena
-/// that holds the press lets it go with no phase; the owner's next lifecycle run reports `DragStart`, and the runs
-/// after it the press's own `Drag`, `Release` or `Cancel` from their pass's input, so the handover turns no held
-/// button into an event. Nothing happens when no arena of the running viewport holds an open primary press other than
-/// `owner`'s, and so a rerun of the pass that asks again takes nothing. Call it before the owner's step 8 (in its parts
-/// step) for the press to show in the same pass.
+/// that holds the press lets it go with no phase; when no arena holds a press, a plain egui widget holds the primary
+/// button (an app's own popup title), and the owner takes the press from egui's pointer state. The owner's next
+/// lifecycle run reports `DragStart`, and the runs after it the press's own `Drag`, `Release` or `Cancel` from their
+/// pass's input, so the handover turns no held button into an event. Nothing happens when the primary button is up,
+/// when another arena holds a press it cannot hand over, or when `owner` holds the press already, and so a rerun of
+/// the pass that asks again takes nothing. Call it before the owner's step 8 (in its parts step) for the press to show in
+/// the same pass.
 pub(crate) fn hand_over_press(ctx: &Context, owner: Id, part: PartRef, origin: Pos2) {
     let read = PassRead::of(ctx);
-    let start = PerViewport::<Arenas>::with(ctx, read.viewport, |arenas| {
-        let (_, state) = arenas
+    let held = PerViewport::<Arenas>::with(ctx, read.viewport, |arenas| {
+        if !arenas.by_root.iter().any(|(root, state)| *root != owner && state.machine.button().is_some()) {
+            return Held::ByNoArena;
+        }
+        let Some((_, state)) = arenas
             .by_root
             .iter_mut()
-            .find(|(root, state)| **root != owner && state.machine.button() == Some(PointerButton::Primary) && !state.machine.release_held())?;
-        let start = state.machine.start()?;
+            .find(|(root, state)| **root != owner && state.machine.button() == Some(PointerButton::Primary) && !state.machine.release_held())
+        else {
+            return Held::Elsewhere;
+        };
+        let Some(start) = state.machine.start() else { return Held::Elsewhere };
         state.machine = PressMachine::default();
         state.host_cancel = false;
-        Some(start)
+        Held::Taken(start.time)
     });
-    let Some(start) = start else { return };
+    let time = match held {
+        Held::Taken(time) => time,
+        // An egui widget holds the press, or no button is down.
+        Held::ByNoArena => match ctx.input(|input| input.pointer.primary_down().then(|| input.pointer.press_start_time()).flatten()) {
+            Some(time) => time,
+            None => return,
+        },
+        Held::Elsewhere => return,
+    };
     let target = Hit { owner, part: Some(part), sense: Sense::DRAG, local: false };
     with_arena_in(ctx, read.viewport, ArenaId::new(owner), read.pass_nr, |state| {
-        state.machine.take_over(target, Sense::DRAG, PressStart::new(origin, PointerButton::Primary, start.time, 1));
+        state.machine.take_over(target, Sense::DRAG, PressStart::new(origin, PointerButton::Primary, time, 1));
         state.handed = Some((part, read.pass_nr));
     });
+}
+
+/// Where `hand_over_press` found the held press.
+enum Held {
+    /// An arena held the primary press and let it go; the press began at this time.
+    Taken(f64),
+    /// No arena but the owner's holds a press.
+    ByNoArena,
+    /// Another arena holds a press it cannot hand over: of another button, or released and waiting for its pass.
+    Elsewhere,
 }
 
 /// Records the transformed body's egui layer.
