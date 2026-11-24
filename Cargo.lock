@@ -4103,6 +4103,7 @@ dependencies = [
 name = "craft-suite-account"
 version = "0.1.0"
 dependencies = [
+ "craft-platform",
  "dirs",
  "keyring",
  "keyring-core",
