@@ -100,8 +100,13 @@ fn source() -> Arc<dyn LiquifySource> {
 
 /// `workspace` over a solid picture, settled.
 fn open_workspace(workspace: LiquifyWorkspace) -> (Fixture, Rc<RefCell<App>>) {
+    host_workspace(HostedWorkspace::new(workspace, source()))
+}
+
+/// `hosted` on a dialog host, settled.
+fn host_workspace(hosted: HostedWorkspace<LiquifyWorkspace>) -> (Fixture, Rc<RefCell<App>>) {
     let mut host = DialogHost::new();
-    host.open(HostedWorkspace::new(workspace, source()));
+    host.open(hosted);
     let app = Rc::new(RefCell::new(App { host, events: Vec::new() }));
     let shown = Rc::clone(&app);
     let mut fixture = Fixture::new(move |ui| {
@@ -260,5 +265,29 @@ fn liquify_view_options_label_their_choices() {
     fixture.room(by(320.0, 2000.0)).settle();
     for label in ["Mesh Size", "Use", "Mode"] {
         assert!(fixture.texts().iter().any(|text| text.text.trim_end_matches(':') == label), "{label} is drawn beside its select");
+    }
+}
+
+// With the app holding OK (photocraft#16664), Enter and the OK button each hand the strokes to the app and keep the
+// workspace open until the app answers; the app's answer closes it.
+#[trial]
+fn a_held_ok_by_enter_or_button_files_the_strokes_until_the_app_answers() {
+    for by_enter in [true, false] {
+        let workspace = LiquifyWorkspace::new(LiquifyOpen::new(DOCUMENT, "Photo"));
+        let (mut fixture, app) = host_workspace(HostedWorkspace::new(workspace, source()).held_ok());
+        let at = canvas_point(&fixture, by(-40.0, 0.0));
+        drag(&mut fixture, primary, at, at + by(80.0, 0.0));
+        if by_enter {
+            fixture.key(Key::Enter, Modifiers::NONE);
+        } else {
+            let ok = fixture.by_label("OK").expect("OK");
+            fixture.click(&ok);
+        }
+        fixture.settle();
+        let held = app.borrow_mut().host.get_mut::<HostedWorkspace<LiquifyWorkspace>>().expect("OK keeps the workspace open").take_ok();
+        assert_eq!(held.map(|done| done.steps.len()), Some(1), "OK files the stroke for the app (Enter: {by_enter})");
+        app.borrow_mut().host.get_mut::<HostedWorkspace<LiquifyWorkspace>>().expect("open").answer_ok(Ok(()));
+        fixture.settle();
+        assert!(app.borrow().host.get::<HostedWorkspace<LiquifyWorkspace>>().is_none(), "the app's answer closes the workspace");
     }
 }

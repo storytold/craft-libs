@@ -74,8 +74,8 @@ use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Pattern, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
-    FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, FullWindowWorkspace, RasterOverlay,
-    WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+    DialogResult, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, FullWindowWorkspace,
+    RasterOverlay, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
@@ -91,6 +91,9 @@ use canvas::MaskAtTexel;
 use panel::backdrop_id;
 
 use crate::ui::warp::MeshLines;
+
+/// OK's index among the footer buttons.
+const PICK_OK: usize = 0;
 
 /// Photoshop's default Mask Color for Liquify's freeze mask: red at half opacity. The mask source is white with the
 /// frozen amount as alpha, so the tint carries the colour. It is data the user's Mask Color setting replaces, not a
@@ -430,8 +433,10 @@ impl LiquifyWorkspace {
     /// Undo and redo report [`LiquifyEvent::Replay`] in the same pass.
     ///
     /// The events of the methods that ran between passes come first. A second pass of a frame reports only what its
-    /// own input did, since the first pass took the frame's steps and commands.
-    fn pass(&mut self, ui: &mut Ui, source: &dyn LiquifySource, open: Bind<'_, bool>) -> WorkspacePass<LiquifyEvent, LiquifyDone> {
+    /// own input did, since the first pass took the frame's steps and commands. OK is the host's held OK when the app
+    /// asks for one (`hold_ok`): the pass reports the result as `held` and the app answers it.
+    fn pass(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, dyn LiquifySource>) -> WorkspacePass<LiquifyEvent, LiquifyDone> {
+        let WorkspaceCx { source, open, hold_ok, ok_waits, .. } = cx;
         // pc: crates/ui-egui/src/dialogs/liquify_ui.rs:950 `show` (title, strip, panel, footer,
         // preview, brush circle); :730 `history_keys`; :740 `keys`.
         if !std::mem::replace(&mut self.recalled, true)
@@ -461,7 +466,10 @@ impl LiquifyWorkspace {
         let mut shown = FullWindowDialog::new(title)
             .command_scope(LiquifyCommands::SCOPE)
             .opened(open)
-            .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
+            .buttons([
+                FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(hold_ok).enabled(!ok_waits),
+                FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
+            ])
             .footer(|ui, _| {
                 let _ = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
                     let mut guard = this.borrow_mut();
@@ -615,9 +623,14 @@ impl LiquifyWorkspace {
                 set_saved_value(ui.ctx(), key, Some(this.reported.clone()));
             }
         }
-        let result = shown.output.result(|| this.done());
+        // A held OK files the result and keeps the workspace open; Esc and Cancel close it either way.
+        let (result, held) = if hold_ok {
+            (shown.output.closed.map(|_| DialogResult::Cancel), (shown.output.picked == Some(PICK_OK)).then(|| this.done()))
+        } else {
+            (shown.output.result(|| this.done()), None)
+        };
         let events = std::mem::take(&mut this.edit.events);
-        WorkspacePass::new(shown.output.response, events).result(result).canvas(this.view.canvas_id)
+        WorkspacePass::new(shown.output.response, events).held(held).result(result).canvas(this.view.canvas_id)
     }
 
     /// What OK applies.
@@ -735,8 +748,8 @@ impl Edit {
 /// The name the history gives its steps.
 const HISTORY_NAME: &str = "Liquify";
 
-/// The workspace on the app's dialog host. OK answers at once (no held OK): the steps and settings are the whole
-/// answer. The key `filter.liquify` is the command the workspace answers for.
+/// The workspace on the app's dialog host. OK answers at once, or, when the app holds it, waits for the app to apply
+/// the steps (a failed apply keeps the workspace open). The key `filter.liquify` is the command the workspace answers for.
 impl FullWindowWorkspace for LiquifyWorkspace {
     type Source = dyn LiquifySource;
     type Event = LiquifyEvent;
@@ -745,8 +758,7 @@ impl FullWindowWorkspace for LiquifyWorkspace {
     const KEY: &'static str = "filter.liquify";
 
     fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<Self::Event, Self::Result> {
-        let WorkspaceCx { source, open, .. } = cx;
-        self.pass(ui, source, open)
+        self.pass(ui, cx)
     }
 
     /// The settings (the brush keys at the top level) and `preview`.
