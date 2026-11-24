@@ -613,7 +613,7 @@ fn source_tiles_before_the_level_table_cannot_consume_its_dimensions() {
         let xcf = Xcf::parse(&file.out).unwrap();
         let mut visited = Vec::new();
         let result = xcf.visit_hierarchy(
-            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)) },
+            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false },
             SampleOptions::default(),
             &mut 2,
             &|| true,
