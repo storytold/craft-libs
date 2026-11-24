@@ -118,7 +118,7 @@ window back what the desktop's frame did:
 | Item | What it does |
 | --- | --- |
 | `buttons(ui, &[Button], &Look, &Labels)` | Minimize, maximize/restore and close in Adwaita's style: round, with symbolic glyphs drawn in code (no icon files). Each sends its command to the window it is drawn in; Close sends `ViewportCommand::Close`, so the app's unsaved-changes check runs as for the desktop's close. Hidden in full screen. |
-| `width(&[Button])` | The width one end of the header bar needs for its buttons, including the gap to the rest of the bar. |
+| `width(ctx, &[Button])` | The width one end of the header bar needs for its buttons, including the gap to the rest of the bar. |
 | `resize_edges(ctx, &Look)` | Resize zones along the edges, with L-shaped corners, above the rest of the UI (so a press there resizes instead of reaching a scrollbar), and a hairline outline. Only while the window is neither maximized nor full screen. |
 | `Look::from_visuals` | The buttons' and outline's colours from the app's `egui::Visuals`; an app may fill `Look` from its own theme instead. |
 | `Labels` | The buttons' tooltips and screen-reader labels. English by default; the app passes its translations. |
