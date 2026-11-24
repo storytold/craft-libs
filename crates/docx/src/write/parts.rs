@@ -445,7 +445,7 @@ fn write_comments(
             }
             w.open("w:comment", &a);
             let blocks: Blocks = doc.parts.get(&c.part).map(|p| p.blocks.clone()).unwrap_or_default();
-            wr.blocks(&mut w, &blocks, &mut prels, false, 0);
+            wr.comment_blocks(&mut w, &blocks, &mut prels);
             w.close("w:comment");
         }
         w.close("w:comments");

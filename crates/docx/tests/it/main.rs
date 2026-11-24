@@ -7,6 +7,7 @@ mod border_lines;
 mod cell_margin_inheritance;
 mod char_units;
 mod citations;
+mod comment_annotation_ref;
 mod comment_save_cost;
 mod complex_script_inheritance;
 mod content_control_save_cost;
