@@ -436,3 +436,141 @@ fn a_draft_the_host_ended_is_not_carried_on() {
     pen.click_doc(100.0, 200.0);
     assert_eq!(pen.draft().knots.len(), 1, "a new draft");
 }
+
+// ---- a Shift-click: where the new anchor goes ----
+
+/// The document point the canvas shows at its centre for the numbers measured in #12893: the room of a trial is 400
+/// by 300 points, so at zoom 1 this shows the document from (50, 250) to (450, 550) and every measured point of the
+/// issue lands on the canvas.
+const MEASURED_MIDDLE: Point = Point::new(250.0, 400.0);
+
+fn measured_view(room: Rect) -> CanvasView {
+    CanvasView::new(room, MEASURED_MIDDLE, 1.0)
+}
+
+fn measured_pen() -> Pen {
+    pen_with(PenTool::new(), measured_view)
+}
+
+/// A click at the document point `(x, y)` with ⇧ held.
+fn shift_click(pen: &mut Pen, x: f64, y: f64) {
+    let at = pen.at(x, y);
+    pen.click(at, Modifiers::SHIFT);
+}
+
+/// A point within `within` document units of `want`.
+fn assert_near(at: Point, want: Point, within: f64, what: &str) {
+    assert!(at.distance(want) < within, "{what}: got ({}, {}), expected about ({}, {})", at.x, at.y, want.x, want.y);
+}
+
+// The three 45 degree rows measured in #12893. The rule before this change turned the click about the previous
+// anchor onto the nearest 45° ray and kept its distance, which gave (421.7, 421.7), (182.5, 382.5) and (275.0, 475.0):
+// the anchor left the click's shorter axis.
+#[trial]
+fn a_shift_click_on_a_diagonal_takes_the_shorter_offset_on_both_axes() {
+    let mut pen = measured_pen();
+    pen.click_doc(300.0, 300.0);
+    shift_click(&mut pen, 400.0, 440.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(400.0, 400.0), "from (300, 300), a click at (400, 440)");
+
+    let mut pen = measured_pen();
+    pen.click_doc(100.0, 300.0);
+    shift_click(&mut pen, 200.0, 360.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(160.0, 360.0), "from (100, 300), a click at (200, 360)");
+    shift_click(&mut pen, 240.0, 500.0);
+    assert_eq!(pen.draft().knots[2].anchor, doc(240.0, 440.0), "from (160, 360), a click at (240, 500)");
+    assert_eq!(pen.draft().knots[0].anchor, doc(100.0, 300.0), "the anchors already placed stay put");
+}
+
+// The 0 degree row measured in #12893: the anchor goes onto the axis through the previous one and keeps the click's
+// offset along it. Turning onto the ray kept the whole distance and gave (304.0, 300.0).
+#[trial]
+fn a_shift_click_nearest_an_axis_moves_the_anchor_onto_that_axis() {
+    let mut pen = measured_pen();
+    pen.click_doc(100.0, 300.0);
+    shift_click(&mut pen, 300.0, 340.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(300.0, 300.0), "from (100, 300), a click at (300, 340)");
+    assert_eq!(pen.draft().knots[0].anchor, doc(100.0, 300.0), "the first anchor stays put");
+}
+
+// Which ray is nearest decides the rule, at half a step (22.5 degrees): a 30 degree click takes the diagonal, and so
+// does one just past the half way line, where an axis band of 30 degrees would still have flattened it.
+#[trial]
+fn a_shift_click_past_the_half_way_line_between_axis_and_diagonal_takes_the_diagonal() {
+    let mut pen = measured_pen();
+    pen.click_doc(100.0, 300.0);
+    shift_click(&mut pen, 220.0, 369.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(169.0, 369.0), "a 30 degree click: the shorter offset (69) on both axes");
+
+    let mut pen = measured_pen();
+    pen.click_doc(100.0, 300.0);
+    shift_click(&mut pen, 220.0, 351.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(151.0, 351.0), "a 23 degree click is nearer the diagonal than the axis");
+}
+
+// The signs of the pointer's offset are kept in all four quadrants.
+#[trial]
+fn a_shift_click_keeps_the_signs_of_the_pointer_in_every_quadrant() {
+    for (sx, sy) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        let mut pen = measured_pen();
+        pen.click_doc(250.0, 400.0);
+        shift_click(&mut pen, 250.0 + 60.0 * sx, 400.0 + 90.0 * sy);
+        assert_eq!(pen.draft().knots[1].anchor, doc(250.0 + 60.0 * sx, 400.0 + 60.0 * sy), "pointer offset ({} 60, {} 90)", sx, sy);
+    }
+}
+
+// Guard tests, passing before and after this change: a click already on a ray keeps its whole offset, and the first
+// anchor of a run has no previous anchor to snap from.
+#[trial]
+fn a_shift_click_exactly_on_a_ray_or_with_no_previous_anchor_places_the_pointer() {
+    let mut pen = measured_pen();
+    pen.click_doc(100.0, 300.0);
+    shift_click(&mut pen, 160.0, 360.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(160.0, 360.0), "exactly 45 degrees");
+
+    let mut pen = measured_pen();
+    pen.click_doc(100.0, 300.0);
+    shift_click(&mut pen, 200.0, 300.0);
+    assert_eq!(pen.draft().knots[1].anchor, doc(200.0, 300.0), "exactly on the horizontal");
+
+    let mut pen = measured_pen();
+    shift_click(&mut pen, 200.0, 360.0);
+    assert_eq!(pen.draft().knots[0].anchor, doc(200.0, 360.0), "no previous anchor: the click places itself");
+}
+
+// Guard test: ⇧ in a drag still turns the pulled handle onto the nearest 45 degree ray, keeping the pointer's
+// distance. #12893 lists the handle drag as not measured, so it keeps the rotation.
+#[trial]
+fn shift_in_a_drag_still_turns_the_handle_onto_the_nearest_45_degree_ray() {
+    let mut pen = measured_pen();
+    pen.click_doc(200.0, 300.0);
+    let start = pen.at(300.0, 300.0);
+    pen.press(start, Modifiers::NONE);
+    let to = pen.at(360.0, 380.0);
+    pen.move_to(to, Modifiers::SHIFT);
+    let knot = pen.draft().knots[1];
+    assert_eq!(knot.anchor, doc(300.0, 300.0), "the anchor was placed without ⇧");
+    // The pointer's offset (60, 80) has length 100: turned to the 45 degree ray it reaches (370.7, 370.7), further
+    // out than the shorter offset (60, 60) a Shift-click now takes.
+    let turned = doc(300.0 + 100.0 * 45.0f64.to_radians().cos(), 300.0 + 100.0 * 45.0f64.to_radians().sin());
+    assert_near(knot.out_ctrl, turned, 0.01, "the out handle keeps the pointer's distance");
+    assert_near(knot.in_ctrl, doc(600.0 - turned.x, 600.0 - turned.y), 0.01, "the in handle stays opposite it");
+    pen.release(to, Modifiers::SHIFT);
+    assert_eq!(pen.draft().knots.len(), 2, "releasing after a shift move adds no anchor");
+}
+
+// Guard test: the ⇧ snap applies only to the anchor a press adds. A Shift press on the first anchor of a draft of
+// two or more still closes the path and adds nothing.
+#[trial]
+fn a_shift_press_on_the_first_anchor_still_closes_the_path() {
+    let mut pen = measured_pen();
+    for (x, y) in [(100.0, 300.0), (220.0, 300.0), (220.0, 420.0)] {
+        pen.click_doc(x, y);
+    }
+    let first = pen.at(100.0, 300.0);
+    pen.click(first, Modifiers::SHIFT);
+    let done = pen.filed().expect("the close commits");
+    assert!(done.closed, "⇧ on the first anchor closes");
+    assert_eq!(done.knots.len(), 3, "no snapped anchor is added: {:?}", done.knots);
+    assert_eq!(done.knots[0].anchor, doc(100.0, 300.0), "the first anchor keeps its place");
+}

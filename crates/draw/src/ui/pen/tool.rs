@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::auto::AutoEdit;
 use super::bezier::{EditSubpath, HandleSide, Knot, KnotRef};
 use super::{PathOptionsSettings, PenMode, PenWords};
-use craft_behavior::geometry::turn_to_45;
+use craft_behavior::geometry::{Directions, round_to_direction, turn_to_45};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{CancelReason, CanvasView, Cursor, CursorBadge, EditEvent, GestureId, Mixed, PaintedCursor, PointerButton};
 use craft_keymap::{Key, Mods};
@@ -497,7 +497,7 @@ impl PenTool {
             Kind::Pull => {
                 let mut p = at;
                 if mods.shift && n > 0 {
-                    p = turn_to_45(draft.knots[n - 1].anchor, p);
+                    p = shift_clicked_anchor(draft.knots[n - 1].anchor, p);
                 }
                 draft.knots.push(Knot::corner(p));
                 p
@@ -571,6 +571,25 @@ impl PenTool {
 /// How far from an anchor, a handle or an end point a press still takes it, in screen points.
 pub(super) fn reach(cx: &ToolContext<'_>) -> f32 {
     cx.slop
+}
+
+/// Where ⇧ puts the anchor a press adds at `at`, following the last anchor `from` (#12893): on the nearest of the
+/// 45° rays from `from`, but without leaving the click's shorter axis. On an axis ray `at` moves onto the axis
+/// through `from` and keeps its offset along it; on a diagonal ray both offsets become the shorter of the click's
+/// two, with the pointer's signs. `at` itself for a zero or non-finite offset.
+fn shift_clicked_anchor(from: Point, at: Point) -> Point {
+    let delta = at - from;
+    if !delta.x.is_finite() || !delta.y.is_finite() || (delta.x == 0.0 && delta.y == 0.0) {
+        return at;
+    }
+    // The nearest ray is the one `turn_to_45` turns a handle drag to; only the distance along it differs here.
+    let (sin, cos) = round_to_direction(delta.atan2(), Directions::Eight).sin_cos();
+    let (x, y) = (cos.round(), sin.round());
+    if x == 0.0 || y == 0.0 {
+        return if x == 0.0 { Point::new(from.x, at.y) } else { Point::new(at.x, from.y) };
+    }
+    let shorter = delta.x.abs().min(delta.y.abs());
+    Point::new(from.x + shorter.copysign(delta.x), from.y + shorter.copysign(delta.y))
 }
 
 /// A pulled knot: its handles follow `to`. A pull and a close drag put the out handle there and the in handle
