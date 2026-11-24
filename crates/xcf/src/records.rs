@@ -265,19 +265,19 @@ fn properties_version<'a>(
             }
             // These helpers only inspect a fixed number of bounded length fields;
             // they do not scan/copy the payload before its source-work admission.
+            let mut measured = 0;
             let length = match kind {
                 1 => {
-                    let n = cursor.at(cursor.pos).u32().map_err(|_| StopReason::Malformed)? as usize;
+                    let n = measured_word(&mut cursor.at(cursor.pos), budget, &mut measured)? as usize;
                     n.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or(StopReason::Malformed)?
                 }
-                24 => measured_length(&cursor, kind, version, limits.string_bytes)?,
-                48 => measured_length(&cursor, kind, version, limits.string_bytes)?,
+                24 | 48 => measured_length(&cursor, kind, version, limits.string_bytes, budget, &mut measured)?,
                 _ => usize::try_from(declared_length).map_err(|_| StopReason::Malformed)?,
             };
             if length > limits.payload_bytes {
                 return Err(StopReason::PayloadLimit);
             }
-            budget.work(length)?;
+            budget.work(length.checked_sub(measured).ok_or(StopReason::Malformed)?)?;
             let payload = cursor.take(length).map_err(|_| StopReason::Malformed)?;
             let raw = bytes.get(start..cursor.pos).ok_or(StopReason::Malformed)?;
             Ok(Some(Property { offset: start, kind, declared_length, payload, raw }))
@@ -296,30 +296,62 @@ fn properties_version<'a>(
 
 // Measure the legacy incorrect length words without ignoring the caller's
 // string cap. Only fixed-count fields are inspected before payload work admission.
-fn measured_length(cursor: &Cursor<'_>, kind: u32, version: Option<u32>, string_limit: usize) -> std::result::Result<usize, StopReason> {
+fn measured_length(
+    cursor: &Cursor<'_>,
+    kind: u32,
+    version: Option<u32>,
+    string_limit: usize,
+    budget: &mut Budget,
+    measured: &mut usize,
+) -> std::result::Result<usize, StopReason> {
     let mut p = cursor.at(cursor.pos);
-    let string = |p: &mut Cursor<'_>| {
-        let length = p.u32().map_err(|_| StopReason::Malformed)? as usize;
-        if length > string_limit.min(MAX_STRING) {
-            return Err(StopReason::StringLimit);
-        }
-        p.skip(length).map_err(|_| StopReason::Malformed)
-    };
     p.skip(if kind == 48 { 4 } else { 8 }).map_err(|_| StopReason::Malformed)?;
     if kind == 48 {
-        string(&mut p)?;
+        measured_string(&mut p, string_limit, budget, measured)?;
         p.skip(8).map_err(|_| StopReason::Malformed)?;
     } else {
         for _ in 0..3 {
-            string(&mut p)?;
+            measured_string(&mut p, string_limit, budget, measured)?;
         }
-        let five = version.map(|version| version < 21).unwrap_or_else(|| !p.at(p.pos).u32().map(|kind| kind <= 64).unwrap_or(false));
-        if five {
-            string(&mut p)?;
-            string(&mut p)?;
+        if let Some(version) = version {
+            if version < 21 {
+                measured_string(&mut p, string_limit, budget, measured)?;
+                measured_string(&mut p, string_limit, budget, measured)?;
+            }
+        } else {
+            let mut peek = p.at(p.pos);
+            let length = measured_word(&mut peek, budget, measured)? as usize;
+            if length <= 64 {
+                // This probe belongs to the next property, not this payload. Keep its work
+                // charged, but do not subtract it from the payload admission below.
+                *measured -= 4;
+            } else {
+                p = peek;
+                measured_string_payload(&mut p, length, string_limit)?;
+                measured_string(&mut p, string_limit, budget, measured)?;
+            }
         }
     }
     Ok(p.pos - cursor.pos)
+}
+
+fn measured_word(cursor: &mut Cursor<'_>, budget: &mut Budget, measured: &mut usize) -> std::result::Result<u32, StopReason> {
+    // Even a truncated measurement is attempted source work; admit it before reading.
+    budget.work(4)?;
+    *measured += 4;
+    cursor.u32().map_err(|_| StopReason::Malformed)
+}
+
+fn measured_string(cursor: &mut Cursor<'_>, string_limit: usize, budget: &mut Budget, measured: &mut usize) -> std::result::Result<(), StopReason> {
+    let length = measured_word(cursor, budget, measured)? as usize;
+    measured_string_payload(cursor, length, string_limit)
+}
+
+fn measured_string_payload(cursor: &mut Cursor<'_>, length: usize, string_limit: usize) -> std::result::Result<(), StopReason> {
+    if length > string_limit.min(MAX_STRING) {
+        return Err(StopReason::StringLimit);
+    }
+    cursor.skip(length).map_err(|_| StopReason::Malformed)
 }
 
 /// Read every parasite from one property payload without deduplicating names.
@@ -602,5 +634,38 @@ mod tests {
         let scan = properties(&bytes, 0, limits, &mut Budget::default(), &|| true).unwrap();
         assert_eq!(scan.records.len(), 1);
         assert!(scan.stopped.is_none());
+    }
+    #[test]
+    fn measurement_work_is_admitted_before_even_a_truncated_length_read() {
+        for (kind, prefix) in [(1, vec![]), (24, vec![0; 8]), (48, vec![0; 4])] {
+            let bytes = property(kind, &prefix);
+            let mut denied = Budget::new(8, usize::MAX);
+            let scan = properties_with_version(&bytes, 0, 26, Limits::default(), &mut denied, &|| true).unwrap();
+            assert_eq!(scan.stopped.unwrap().reason, StopReason::WorkLimit, "kind {kind}");
+            assert!(scan.records.is_empty());
+            assert_eq!(denied.work_remaining(), 0);
+            let mut admitted = Budget::new(12, usize::MAX);
+            let scan = properties_with_version(&bytes, 0, 26, Limits::default(), &mut admitted, &|| true).unwrap();
+            assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed, "kind {kind}");
+            assert_eq!(admitted.work_remaining(), 0);
+        }
+    }
+
+    #[test]
+    fn successful_measurements_do_not_charge_payload_length_words_twice() {
+        let colormap = [1u32.to_be_bytes().as_slice(), &[1, 2, 3]].concat();
+        let mut unit = vec![0; 8];
+        for _ in 0..3 {
+            unit.extend([1u32.to_be_bytes().as_slice(), &[0]].concat());
+        }
+        let link = [0u32.to_be_bytes().as_slice(), &1u32.to_be_bytes(), &[0], &[0; 8]].concat();
+        for (kind, payload) in [(1, colormap), (24, unit), (48, link)] {
+            let bytes = [property(kind, &payload), property(0, &[])].concat();
+            let mut budget = Budget::new(bytes.len(), usize::MAX);
+            let scan = properties_with_version(&bytes, 0, 26, Limits::default(), &mut budget, &|| true).unwrap();
+            assert!(scan.stopped.is_none(), "kind {kind}: {:?}", scan.stopped);
+            assert_eq!(scan.records[0].payload, payload);
+            assert_eq!(budget.work_remaining(), 0);
+        }
     }
 }

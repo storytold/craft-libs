@@ -969,7 +969,9 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         2..=5 => false,
         k => return Err(invalid(format!("unknown layer type {k} on '{name}'"))),
     };
-    if type_rgb != (image.base_type != BaseType::Gray) && image.base_type != BaseType::Indexed {
+    // A floating selection attached to a channel/mask stores GrayAlpha even on RGB.
+    let gray_floating = layer_type == 3 && lprops.iter().any(|property| property.kind == 5);
+    if type_rgb != (image.base_type != BaseType::Gray) && image.base_type != BaseType::Indexed && !gray_floating {
         return Err(invalid(format!("layer '{name}' does not match the image's colour model")));
     }
     let mut l = Layer {

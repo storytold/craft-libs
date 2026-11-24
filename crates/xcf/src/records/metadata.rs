@@ -312,6 +312,10 @@ impl Reader<'_> {
 /// Decode supported image metadata without changing legacy `Image` fields.
 /// Raw source scans remain the authority for unknown fields and original bytes.
 pub fn image<'a>(properties: &Scan<Property<'a>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<ImageMetadata<'a>> {
+    budget.cancel_safe(|budget| image_read(properties, limits, budget, keep_going))
+}
+
+fn image_read<'a>(properties: &Scan<Property<'a>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<ImageMetadata<'a>> {
     let mut reader = Reader { limits, budget, keep_going };
     reader.check().map_err(|_| Error::Cancelled)?;
     let mut output = ImageMetadata { source_stopped: properties.stopped, ..Default::default() };
@@ -344,6 +348,10 @@ pub fn image<'a>(properties: &Scan<Property<'a>>, limits: Limits, budget: &mut B
 /// Decode source layer-selection/mask markers. No native IDs or active-target
 /// arbitration are inferred; all complete empty selection markers are evidence.
 pub fn layer(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<LayerMetadata> {
+    budget.cancel_safe(|budget| layer_read(properties, limits, budget, keep_going))
+}
+
+fn layer_read(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<LayerMetadata> {
     let mut reader = Reader { limits, budget, keep_going };
     reader.check().map_err(|_| Error::Cancelled)?;
     let mut output = LayerMetadata { source_stopped: properties.stopped, ..Default::default() };

@@ -13,8 +13,29 @@ fn explicit_vertical_directions_remain_distinct_from_automatic_direction() {
             let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
             assert_eq!(scan.stopped, None);
             assert_eq!(scan.records[0].direction, if suffix.ends_with("yes)") { Direction::Auto } else { expected });
+            assert_eq!(scan.records[0].base_direction, Some(expected));
+            assert_eq!(scan.records[0].automatic_direction, if suffix.is_empty() { None } else { Some(suffix.ends_with("yes)")) });
         }
     }
+}
+
+#[test]
+fn source_direction_absence_is_distinct_from_an_explicit_paragraph_policy() {
+    for (source, direction, base, automatic) in [
+        ("", Direction::Auto, None, None),
+        ("(base-dir-auto no)", Direction::Ltr, None, Some(false)),
+        ("(base-dir-auto yes)", Direction::Auto, None, Some(true)),
+        ("(base-direction rtl) (base-dir-auto yes)", Direction::Auto, Some(Direction::Rtl), Some(true)),
+    ] {
+        let scan = gimp(source.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        let record = &scan.records[0];
+        assert_eq!((record.direction, record.base_direction, record.automatic_direction), (direction, base, automatic));
+    }
+    let raw = super::tests::legacy_bytes("horizontal legacy", "iso8859");
+    let scan = gdyntext(&raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    let record = &scan.records[0];
+    assert_eq!((record.direction, record.base_direction, record.automatic_direction), (Direction::Auto, None, None));
 }
 
 #[test]

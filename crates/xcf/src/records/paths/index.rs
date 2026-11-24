@@ -113,10 +113,12 @@ pub(crate) fn decode<'a>(
     )?;
     end_offset = end_offset.max(table.end_offset);
     let mut points_left = limits.points;
+    let mut strokes_left = limits.strokes;
     for (source_index, offset) in table.records.into_iter().enumerate() {
         check(keep_going)?;
-        let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), points: points_left, ..limits };
+        let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), points: points_left, strokes: strokes_left, ..limits };
         let scan = super::standalone_with_points(cursor.b, offset, source_index, remaining, budget, keep_going, &mut points_left)?;
+        strokes_left = strokes_left.saturating_sub(scan.records.first().map_or(0, |path| path.strokes.len()));
         let (end, stopped) = merge(&mut output, scan, budget, keep_going)?;
         end_offset = end_offset.max(end);
         if let Some(diagnostic) = stopped {

@@ -220,7 +220,7 @@ impl Xcf<'_> {
             (BaseType::Rgb, 1) => 4,
             (BaseType::Gray, 2) | (BaseType::Indexed, 4) => 1,
             (BaseType::Gray, 3) | (BaseType::Indexed, 5) => 2,
-            (BaseType::Indexed, 3) if layer.floating_selection => 2,
+            (BaseType::Rgb | BaseType::Indexed, 3) if layer.floating_selection => 2,
             _ => return Err(invalid("layer type does not match the image color model")),
         };
         self.visit_hierarchy(
@@ -296,8 +296,11 @@ impl Xcf<'_> {
             return Err(invalid("selection dimensions do not match the canvas"));
         }
         let hierarchy = cursor.ptr()?;
+        // Saved channels/selections use linear coverage at high precision too;
+        // preserve the existing nonlinear U8 channel-format exception.
+        let nonlinear_u8 = self.image.precision.bytes == 1 && !self.image.precision.float && !self.image.precision.linear;
         let info = self.visit_hierarchy(
-            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some(dimensions), coverage: owner.is_some() },
+            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some(dimensions), coverage: owner.is_some() || !nonlinear_u8 },
             options,
             budget,
             keep_going,

@@ -302,3 +302,70 @@ fn temporary_parasite_records_do_not_starve_later_retained_metadata() {
     assert_eq!(output.packets.len(), 1);
     assert_eq!(budget.retained_remaining(), 4096 - 2 * std::mem::size_of::<Evidence<Packet<'_>>>());
 }
+
+#[test]
+fn cancelled_image_metadata_refunds_dropped_guides_but_keeps_attempted_work() {
+    let bytes = [property(18, &[0, 0, 0, 7, 1]), property(0, &[])].concat();
+    let raw = properties(&bytes);
+    let calls = std::cell::Cell::new(0);
+    let count = || {
+        calls.set(calls.get() + 1);
+        true
+    };
+    let probe = image(&raw, Limits::default(), &mut Budget::default(), &count).unwrap();
+    assert_eq!(probe.guides.len(), 1);
+    let final_check = calls.get();
+    let retained = 2 * std::mem::size_of::<Evidence<Guide>>();
+    let mut budget = Budget::new(1024, retained);
+    calls.set(0);
+    let cancel_at_finish = || {
+        calls.set(calls.get() + 1);
+        calls.get() < final_check
+    };
+    assert!(matches!(image(&raw, Limits::default(), &mut budget, &cancel_at_finish), Err(Error::Cancelled)));
+    assert_eq!(budget.retained_remaining(), retained);
+    let work_after_cancel = budget.work_remaining();
+    assert!(work_after_cancel < 1024);
+    let retry = image(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(retry.complete());
+    assert_eq!(retry.guides.len(), 1);
+    assert_eq!(retry.guides[0].value.position, 7);
+    assert_eq!(budget.retained_remaining(), 0);
+    assert!(budget.work_remaining() < work_after_cancel);
+    let another = image(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(another.guides.is_empty());
+    assert_eq!(another.stopped.unwrap().reason, StopReason::RetainedLimit);
+}
+
+#[test]
+fn cancelled_layer_metadata_refunds_dropped_issues_but_not_returned_prefixes() {
+    let bytes = [property(2, &[1]), property(0, &[])].concat();
+    let raw = properties(&bytes);
+    let calls = std::cell::Cell::new(0);
+    let count = || {
+        calls.set(calls.get() + 1);
+        true
+    };
+    assert_eq!(layer(&raw, Limits::default(), &mut Budget::default(), &count).unwrap().issues.len(), 1);
+    let final_check = calls.get();
+    let retained = 2 * std::mem::size_of::<Issue>();
+    let mut budget = Budget::new(1024, retained);
+    calls.set(0);
+    let cancel_at_finish = || {
+        calls.set(calls.get() + 1);
+        calls.get() < final_check
+    };
+    assert!(matches!(layer(&raw, Limits::default(), &mut budget, &cancel_at_finish), Err(Error::Cancelled)));
+    assert_eq!(budget.retained_remaining(), retained);
+    let work_after_cancel = budget.work_remaining();
+    assert!(work_after_cancel < 1024);
+    let retry = layer(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(retry.complete());
+    assert_eq!(retry.issues.len(), 1);
+    assert_eq!(retry.issues[0].kind, IssueKind::InvalidValue);
+    assert_eq!(budget.retained_remaining(), 0);
+    assert!(budget.work_remaining() < work_after_cancel);
+    let another = layer(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(another.issues.is_empty());
+    assert_eq!(another.stopped.unwrap().reason, StopReason::RetainedLimit);
+}

@@ -74,13 +74,25 @@ pub struct SourcePath<'a> {
     pub legacy_state: Option<u8>,
     pub legacy_version: Option<u32>,
     pub properties: Vec<Property<'a>>,
-    /// Framed parasite bytes, not resolved resources or executable instructions.
+    /// Historical vector-path framed parasite bytes. Standalone path parasite
+    /// properties stay ordered in `properties`; use `parasite_payloads` for both.
     pub parasites: &'a [u8],
     pub strokes: Vec<Stroke<'a>>,
     pub raw: &'a [u8],
 }
 
 impl SourcePath<'_> {
+    /// Borrow the framed parasite payloads in source order, for decoding with
+    /// [`super::parasites`]. Historical vectors supply one nonempty span;
+    /// standalone paths supply every PROP_PARASITES payload, including empty or
+    /// duplicate properties. This accessor does not scan or copy their contents.
+    pub fn parasite_payloads(&self) -> impl Iterator<Item = &[u8]> {
+        (!self.parasites.is_empty())
+            .then_some(self.parasites)
+            .into_iter()
+            .chain(self.properties.iter().filter(|property| property.kind == 21).map(|property| property.payload))
+    }
+
     pub fn geometry_complete(&self) -> bool {
         self.strokes.iter().all(|stroke| stroke.kind == 1)
     }
@@ -376,6 +388,7 @@ fn read_list<'a>(
         }
         Err(Failure::Stop(reason)) => return Ok(Scan::stopped(records, source_offset, reason)),
     };
+    let mut strokes_left = limits.strokes;
     for index in 0..count {
         if !keep_going() {
             reader.budget.retained_left = initial_retained;
@@ -389,8 +402,14 @@ fn read_list<'a>(
             return Ok(Scan::stopped(records, offset, StopReason::RecordLimit));
         }
         let retained = reader.budget.retained_left;
+        reader.limits.strokes = strokes_left;
         let path = if modern { reader.vector(index, active) } else { reader.legacy(index, active) };
-        let result = path.and_then(|path| reader.budget.retain(&mut records, path).map_err(Failure::from));
+        let result = path.and_then(|path| {
+            // Both supported and unknown framed strokes consume the per-list
+            // allowance. A rejected path stops this list without losing its prefix.
+            strokes_left = strokes_left.saturating_sub(path.strokes.len());
+            reader.budget.retain(&mut records, path).map_err(Failure::from)
+        });
         match result {
             Ok(()) => {}
             Err(Failure::Cancelled) => {
@@ -816,5 +835,61 @@ mod tests {
             }
             assert!(charged_cancellations > 3);
         }
+    }
+    #[test]
+    fn stroke_limit_is_shared_across_each_historical_source_list() {
+        let mut legacy_two = legacy_bytes(3, true);
+        legacy_two[4..8].copy_from_slice(&2u32.to_be_bytes());
+        legacy_two.extend_from_slice(&legacy_bytes(3, true)[8..]);
+        let mut unknown_first = Vec::new();
+        for value in [1, 0, 2] {
+            word(&mut unknown_first, value);
+        }
+        vector_path(&mut unknown_first, "unknown", 1, 99);
+        vector_path(&mut unknown_first, "known", 2, 1);
+        for (modern, bytes) in [(false, legacy_two), (true, vectors_bytes()), (true, unknown_first)] {
+            for strokes in [0, 1, 2] {
+                let scan = read_list(&bytes, 40, modern, Limits { strokes, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+                assert_eq!(scan.records.len(), strokes);
+                assert_eq!(scan.stopped.map(|diagnostic| diagnostic.reason), (strokes < 2).then_some(StopReason::RecordLimit));
+                if strokes == 1 {
+                    assert_eq!(scan.records[0].strokes.len(), 1);
+                    assert_eq!(scan.stopped.unwrap().ordinal, 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vector_parasites_accessor_borrows_the_original_ordered_framed_span() {
+        let mut bytes = Vec::new();
+        for value in [1, 0, 1] {
+            word(&mut bytes, value);
+        }
+        name(&mut bytes, "vector");
+        for value in [1, 1, 0, 2, 0] {
+            word(&mut bytes, value);
+        }
+        let start = bytes.len();
+        for (flag, value) in [(1, b"first".as_slice()), (2, b"last".as_slice())] {
+            name(&mut bytes, "same");
+            word(&mut bytes, flag);
+            word(&mut bytes, value.len() as u32);
+            bytes.extend(value);
+        }
+        let scan = vectors(&bytes, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(scan.stopped.is_none());
+        let payloads = scan.records[0].parasite_payloads().collect::<Vec<_>>();
+        assert_eq!(payloads, [&bytes[start..]]);
+        assert_eq!(payloads[0].as_ptr(), bytes[start..].as_ptr());
+        let records = super::super::parasites(payloads[0], start, Default::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(records.stopped.is_none());
+        assert_eq!(
+            records.records.iter().map(|record| (record.name, record.flags, record.payload)).collect::<Vec<_>>(),
+            [(b"same".as_slice(), 1, b"first".as_slice()), (b"same".as_slice(), 2, b"last".as_slice())]
+        );
+        let empty = legacy_bytes(3, true);
+        let legacy = legacy(&empty, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(legacy.records[0].parasite_payloads().count(), 0);
     }
 }

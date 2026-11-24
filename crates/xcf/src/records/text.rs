@@ -146,7 +146,13 @@ pub enum Source<'a> {
 pub struct TextRecord<'a> {
     pub raw: &'a [u8],
     pub span: Span,
+    /// Effective paragraph policy, retaining the original compatibility behavior.
     pub direction: Direction,
+    /// Saved writing/gravity direction, independent of paragraph autodetection.
+    /// `None` means the source did not supply `base-direction`.
+    pub base_direction: Option<Direction>,
+    /// Explicit `base-dir-auto` setting; absence remains distinct from `no`.
+    pub automatic_direction: Option<bool>,
     pub source: Source<'a>,
 }
 
@@ -321,23 +327,29 @@ impl<'a> Parser<'a, '_> {
     }
 }
 
-fn direction(config: &Config<'_>) -> ReadResult<Direction> {
+fn direction(config: &Config<'_>) -> ReadResult<(Direction, Option<Direction>, Option<bool>)> {
     let base = match config.scalar("base-direction")? {
-        Some("ltr") => Direction::Ltr,
-        Some("rtl") => Direction::Rtl,
-        Some("ttb-rtl") => Direction::TtbRtl,
-        Some("ttb-rtl-upright") => Direction::TtbRtlUpright,
-        Some("ttb-ltr") => Direction::TtbLtr,
-        Some("ttb-ltr-upright") => Direction::TtbLtrUpright,
-        None => Direction::Auto,
+        Some("ltr") => Some(Direction::Ltr),
+        Some("rtl") => Some(Direction::Rtl),
+        Some("ttb-rtl") => Some(Direction::TtbRtl),
+        Some("ttb-rtl-upright") => Some(Direction::TtbRtlUpright),
+        Some("ttb-ltr") => Some(Direction::TtbLtr),
+        Some("ttb-ltr-upright") => Some(Direction::TtbLtrUpright),
+        None => None,
         _ => return Err(StopReason::Malformed.into()),
     };
-    match config.scalar("base-dir-auto")? {
-        Some("yes") => Ok(Direction::Auto),
-        Some("no") if config.scalar("base-direction")?.is_none() => Ok(Direction::Ltr),
-        None | Some("no") => Ok(base),
-        _ => Err(StopReason::Malformed.into()),
-    }
+    let automatic = match config.scalar("base-dir-auto")? {
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        None => None,
+        _ => return Err(StopReason::Malformed.into()),
+    };
+    let direction = match automatic {
+        Some(true) => Direction::Auto,
+        Some(false) => base.unwrap_or(Direction::Ltr),
+        None => base.unwrap_or(Direction::Auto),
+    };
+    Ok((direction, base, automatic))
 }
 
 fn admit(bytes: &[u8], limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> ReadResult<()> {
@@ -399,8 +411,15 @@ pub fn gimp<'a>(
             parser.budget.retain(&mut forms, form)?;
         }
         let config = Config { forms };
-        let direction = direction(&config)?;
-        Ok(TextRecord { raw: bytes, span: parser.span(0, bytes.len())?, direction, source: Source::Gimp(config) })
+        let (direction, base_direction, automatic_direction) = direction(&config)?;
+        Ok(TextRecord {
+            raw: bytes,
+            span: parser.span(0, bytes.len())?,
+            direction,
+            base_direction,
+            automatic_direction,
+            source: Source::Gimp(config),
+        })
     })();
     finish(result, source_offset, retained, budget)
 }
@@ -522,6 +541,8 @@ pub fn gdyntext<'a>(
             raw: bytes,
             span: Span { start: source_offset, end },
             direction: Direction::Auto,
+            base_direction: None,
+            automatic_direction: None,
             source: Source::Gdyntext(Legacy { fields: stored_fields, spans: stored_spans, font_fields: stored_font_fields, text, encoding }),
         })
     })();

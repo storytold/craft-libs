@@ -315,7 +315,10 @@ impl<'a> Parser<'a, '_> {
             let character = if entities && character == '&' {
                 let start = at;
                 while raw.as_bytes().get(at).is_some_and(|byte| *byte != b';') {
-                    if at - start >= 32 {
+                    if (at - start).is_multiple_of(256) {
+                        self.check()?;
+                    }
+                    if at - start >= 32 && raw.as_bytes().get(start) != Some(&b'#') {
                         return Err(StopReason::Unsupported.into());
                     }
                     at += 1;
@@ -329,19 +332,20 @@ impl<'a> Parser<'a, '_> {
                     "apos" => '\'',
                     "quot" => '"',
                     _ if name.starts_with('#') => {
-                        let value = if let Some(hex) = name.strip_prefix("#x") {
-                            if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                                return Err(StopReason::Malformed.into());
+                        let (digits, radix) = name.strip_prefix("#x").map_or_else(|| (name.get(1..).unwrap_or_default(), 10), |hex| (hex, 16));
+                        if digits.is_empty() {
+                            return Err(StopReason::Malformed.into());
+                        }
+                        let mut value = 0u32;
+                        for (index, byte) in digits.bytes().enumerate() {
+                            if index.is_multiple_of(256) {
+                                self.check()?;
                             }
-                            u32::from_str_radix(hex, 16).ok()
-                        } else {
-                            let digits = name.get(1..).ok_or(Failure::Stop(StopReason::Malformed))?;
-                            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-                                return Err(StopReason::Malformed.into());
-                            }
-                            digits.parse::<u32>().ok()
-                        };
-                        value.and_then(char::from_u32).filter(|character| xml_char(*character)).ok_or(Failure::Stop(StopReason::Malformed))?
+                            let digit = char::from(byte).to_digit(radix).ok_or(Failure::Stop(StopReason::Malformed))?;
+                            value =
+                                value.checked_mul(radix).and_then(|value| value.checked_add(digit)).ok_or(Failure::Stop(StopReason::Malformed))?;
+                        }
+                        char::from_u32(value).filter(|character| xml_char(*character)).ok_or(Failure::Stop(StopReason::Malformed))?
                     }
                     _ => {
                         if !name.chars().next().is_some_and(name_start) || !name.chars().all(name_char) {
@@ -365,6 +369,20 @@ impl<'a> Parser<'a, '_> {
             self.emit(&mut output, character)?;
         }
         Ok(Cow::Owned(String::from_utf8(output).map_err(|_| Failure::Stop(StopReason::Malformed))?))
+    }
+    fn unique_attribute(&mut self, attributes: &[Attribute<'_>], key: &str) -> ReadResult<()> {
+        for (index, previous) in attributes.iter().enumerate() {
+            // The cursor does not move while comparing names. Byte-distance
+            // polling cannot bound cancellation latency in this charged work.
+            if index.is_multiple_of(64) {
+                self.check()?;
+            }
+            self.budget.work(previous.name.len().saturating_add(key.len()).saturating_add(1))?;
+            if previous.name == key {
+                return Err(StopReason::Malformed.into());
+            }
+        }
+        Ok(())
     }
     fn opening(&mut self) -> ReadResult<()> {
         let start = self.at;
@@ -402,14 +420,7 @@ impl<'a> Parser<'a, '_> {
             if self.attributes > self.limits.attributes {
                 return Err(StopReason::RecordLimit.into());
             }
-            for previous in &attributes {
-                // Explicitly account comparisons before using a simple borrowed
-                // duplicate check: many distinct attributes cannot hide quadratic work.
-                self.budget.work(previous.name.len().saturating_add(key.len()).saturating_add(1))?;
-                if previous.name == key {
-                    return Err(StopReason::Malformed.into());
-                }
-            }
+            self.unique_attribute(&attributes, key)?;
             self.space()?;
             if !self.starts("=") {
                 return Err(StopReason::Malformed.into());

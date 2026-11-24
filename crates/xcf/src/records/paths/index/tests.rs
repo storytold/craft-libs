@@ -268,3 +268,63 @@ fn standalone_visibility_preserves_both_saved_states() {
         assert_eq!(scan.records[0].strokes[0].axes, 2);
     }
 }
+
+#[test]
+fn standalone_table_has_one_stroke_allowance_including_unknown_frames() {
+    for unknown in [false, true] {
+        let (mut bytes, _, _) = file(26, &[], 2);
+        if unknown {
+            let kind = bytes.len() - 36 - 16;
+            bytes[kind..kind + 4].copy_from_slice(&99u32.to_be_bytes());
+        }
+        let xcf = Xcf::parse(&bytes).unwrap();
+        for strokes in [0, 1, 2] {
+            let scan = xcf.paths(Limits { strokes, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(scan.records.len(), strokes);
+            assert_eq!(scan.stopped.map(|diagnostic| diagnostic.reason), (strokes < 2).then_some(StopReason::RecordLimit));
+            if strokes == 1 {
+                assert_eq!(scan.records[0].strokes.len(), 1);
+                assert_eq!(scan.stopped.unwrap().ordinal, 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn standalone_parasite_accessor_keeps_duplicate_and_empty_property_payloads() {
+    let mut parasite = W { out: Vec::new(), wide: false };
+    parasite.string("same");
+    parasite.u32(1);
+    parasite.u32(5);
+    parasite.out.extend(b"first");
+    let first = parasite.out.clone();
+    let last = parasite.out.len() - 5;
+    parasite.out[last..].copy_from_slice(b"final");
+    let mut payload = W { out: Vec::new(), wide: false };
+    payload.prop(21, &first);
+    payload.prop_u32(8, 1);
+    payload.prop(21, &parasite.out);
+    payload.prop(21, &[]);
+    payload.end();
+    payload.u32(1);
+    payload.u32(0);
+    let mut source = W { out: Vec::new(), wide: false };
+    source.string("path");
+    source.u32(payload.out.len() as u32);
+    source.out.extend(payload.out);
+    let scan = super::super::standalone(&source.out, 0, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(scan.stopped.is_none());
+    let path = &scan.records[0];
+    let payloads = path.parasite_payloads().collect::<Vec<_>>();
+    assert_eq!(payloads, [first.as_slice(), parasite.out.as_slice(), &[]]);
+    assert!(path.parasites.is_empty(), "the legacy public field remains compatible");
+    let original = path.properties.iter().filter(|property| property.kind == 21).collect::<Vec<_>>();
+    for (bytes, property) in payloads.iter().zip(original) {
+        assert_eq!(bytes.as_ptr(), property.payload.as_ptr());
+        let decoded = super::super::super::parasites(bytes, property.offset + 8, Default::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(decoded.stopped.is_none());
+        if !bytes.is_empty() {
+            assert_eq!(decoded.records[0].name, b"same");
+        }
+    }
+}

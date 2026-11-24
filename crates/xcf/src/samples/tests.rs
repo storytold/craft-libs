@@ -80,6 +80,7 @@ struct Source {
     floating: bool,
     mask: Option<Vec<u8>>,
     channel: Option<Vec<u8>>,
+    channel_selection: bool,
 }
 impl Source {
     fn gray(code: u32, bytes: usize, data: Vec<u8>) -> Self {
@@ -97,6 +98,7 @@ impl Source {
             floating: false,
             mask: None,
             channel: None,
+            channel_selection: true,
         }
     }
     fn write(&self) -> Vec<u8> {
@@ -127,9 +129,11 @@ impl Source {
             w.u32(word);
         }
         w.string("Source");
-        if self.floating {
-            w.prop(5, &[0; 8]);
-        }
+        let floating_target = self.floating.then(|| {
+            w.u32(5);
+            w.u32(if w.wide { 8 } else { 4 });
+            w.slot()
+        });
         w.end();
         let pixels = w.slot();
         let mask = w.slot();
@@ -143,10 +147,15 @@ impl Source {
             .as_ref()
             .map(|data| (mask, "Mask", data, false))
             .into_iter()
-            .chain(channel.zip(self.channel.as_ref()).map(|(slot, data)| (slot, "Selection", data, true)))
+            .chain(channel.zip(self.channel.as_ref()).map(|(slot, data)| (slot, "Selection", data, self.channel_selection)))
         {
             let at = w.out.len();
             w.patch(slot, at);
+            if Some(slot) == channel {
+                if let Some(target) = floating_target {
+                    w.patch(target, at);
+                }
+            }
             w.u32(self.width);
             w.u32(self.height);
             w.string(name);
@@ -396,6 +405,11 @@ fn edge_tiles_have_bounded_scratch_and_budget_refusal_precedes_callbacks() {
         reader
             .visit_layer_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
                 seen.push((tile.x, tile.y, tile.width, tile.height, tile.data.len()));
+                if tile.x == 64 {
+                    assert_eq!(tile.data, [64, 129], "{compression:?}: right-edge samples");
+                } else {
+                    assert!(tile.data.iter().eq(source.data[..64].iter().chain(&source.data[65..129])), "{compression:?}: both full rows");
+                }
                 assert!(tile.data.len() <= 64 * 64);
                 Ok(())
             })
@@ -628,6 +642,89 @@ fn source_tiles_before_the_level_table_cannot_consume_its_dimensions() {
         } else {
             assert!(result.is_err());
             assert!(visited.is_empty());
+        }
+    }
+}
+
+#[test]
+fn rgb_floating_gray_alpha_attached_to_a_channel_keeps_two_raw_components() {
+    for floating in [false, true] {
+        let mut source = Source::gray(650, 4, [0.25f32, 0.75].into_iter().flat_map(f32::to_be_bytes).collect());
+        source.base = 0;
+        source.kind = 3;
+        source.channels = 2;
+        source.floating = floating;
+        source.channel = Some(0.5f32.to_be_bytes().to_vec());
+        let bytes = source.write();
+        if !floating {
+            assert!(Xcf::parse(&bytes).is_err(), "ordinary GrayAlpha is still invalid on RGB");
+            continue;
+        }
+        let xcf = Xcf::parse(&bytes).unwrap();
+        assert!(xcf.image.layers[0].floating_selection);
+        let mut visited = 0;
+        let mut budget = 8;
+        let info = xcf
+            .visit_layer_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
+                assert_eq!(tile.drawable.channels, 2);
+                assert!(!tile.drawable.indexed);
+                assert_eq!(tile.data, source.data);
+                assert_eq!(tile.sample(0)?, SourceSample::F32(0.25));
+                assert_eq!(tile.sample(1)?, SourceSample::F32(0.75));
+                visited += 1;
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.channels, 2);
+        assert_eq!(visited, 1);
+        assert_eq!(budget, 0);
+    }
+}
+
+#[test]
+fn saved_channels_and_selections_report_linear_high_precision_without_converting_samples() {
+    for selection in [false, true] {
+        for (code, width, data, transfer) in [
+            (650, 4, 0.5f32.to_be_bytes().to_vec(), Transfer::Linear),
+            (600, 4, 0.5f32.to_be_bytes().to_vec(), Transfer::Linear),
+            (250, 2, 0x8000u16.to_be_bytes().to_vec(), Transfer::Linear),
+            (150, 1, vec![128], Transfer::Nonlinear),
+            (100, 1, vec![128], Transfer::Linear),
+        ] {
+            let mut source = Source::gray(code, width, data.clone());
+            source.channel = Some(data.clone());
+            source.channel_selection = selection;
+            let bytes = source.write();
+            let xcf = Xcf::parse(&bytes).unwrap();
+            let mut budget = width;
+            let (channel, info) = xcf
+                .visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
+                    assert_eq!(tile.data, data);
+                    assert_eq!(tile.drawable.precision.transfer, transfer);
+                    assert_eq!(tile.drawable.precision.storage.linear, transfer == Transfer::Linear);
+                    if code == 650 || code == 600 {
+                        assert_eq!(tile.sample(0)?, SourceSample::F32(0.5));
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(channel.selection, selection);
+            assert_eq!(info.precision.transfer, transfer);
+            assert_eq!(budget, 0);
+            // A color layer keeps the image transfer, independently of channel role.
+            let color_transfer = if code == 600 || code == 100 { Transfer::Linear } else { Transfer::Nonlinear };
+            let mut color_budget = width;
+            let layer = xcf
+                .visit_layer_tiles(0, SampleOptions::default(), &mut color_budget, GO, |tile| {
+                    assert_eq!(tile.data, data);
+                    assert_eq!(tile.drawable.precision.transfer, color_transfer);
+                    Ok(())
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(layer.precision.transfer, color_transfer);
+            assert_eq!(color_budget, 0);
         }
     }
 }
