@@ -63,8 +63,8 @@ pub enum MenuTitlePad {
     Control,
 }
 
-/// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the accent fill
-/// and `text.on_accent` under the pointer and while its menu is open or the keyboard is on it.
+/// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the command
+/// highlight (`CommandHighlight`) under the pointer and while its menu is open or the keyboard is on it.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct TitleFaceStyle {
