@@ -41,7 +41,12 @@ impl Headless {
     /// Exercise the native policy and also the Metal fallback on hosts with another backend.
     pub(crate) fn spatial_sampling_modes(&self) -> impl Iterator<Item = (GraphAccelerator, bool)> {
         let metal = self.device.adapter_info().backend == wgpu::Backend::Metal;
-        std::iter::once((self.accelerator(), metal)).chain((!metal).then(|| (self.accelerator().without_gpu_spatial_sampling(), true)))
+        std::iter::once((self.accelerator(), metal)).chain((!metal).then(|| (self.accelerator().with_spatial_sampling_on_gpu(false), true)))
+    }
+
+    /// An accelerator that samples transforms and warps on the GPU even on Metal, to check the shaders there.
+    pub(crate) fn gpu_spatial_sampling(&self) -> GraphAccelerator {
+        self.accelerator().with_spatial_sampling_on_gpu(true)
     }
 
     /// Run the `main` entry of `source` once per workgroup for `invocations` workgroups. It reads `input` at binding 0 and writes

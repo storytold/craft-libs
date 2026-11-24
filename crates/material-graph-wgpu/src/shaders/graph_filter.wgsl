@@ -5,6 +5,7 @@ struct Params {
     control: vec4<u32>, // filter, major axis, wrap x, wrap y
     values: vec4<f32>,
     direction: vec4<f32>,
+    rounding_barrier: vec4<u32>, // always zero, see rounded
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -38,28 +39,32 @@ fn map_at(p: vec2<i32>, wraps: vec2<bool>) -> f32 {
     return decode_grey(unpack_grey(auxiliary[i / 2u], i), params.map.z);
 }
 
-fn lerp(lo: f32, hi: f32, weight: f32) -> f32 {
-    return lo + (hi - lo) * weight;
+// A result the reference rounds on its own. XOR with a uniform zero hides it from the shader compiler,
+// so fast math (Metal's default) can neither fuse it into an fma nor reorder the sums around it
+fn rounded(value: f32) -> f32 {
+    return bitcast<f32>(bitcast<u32>(value) ^ params.rounding_barrier.x);
 }
 
-fn affine_lerp(lo: f32, hi: f32, weight: f32) -> f32 {
-    // Keep the reference's separate product rounding at the 16-bit read boundaries.
-    let product = bitcast<u32>((hi - lo) * weight);
-    return lo + bitcast<f32>(select(product, 0u, product == 0x80000000u));
+fn rounded2(value: vec2<f32>) -> vec2<f32> {
+    return bitcast<vec2<f32>>(bitcast<vec2<u32>>(value) ^ params.rounding_barrier.xy);
+}
+
+fn lerp(lo: f32, hi: f32, weight: f32) -> f32 {
+    return rounded(lo + rounded((hi - lo) * weight));
 }
 
 fn affine_uv(uv: vec2<f32>) -> vec2<f32> {
-    let center = uv - 0.5;
-    // Retain the reference arithmetic's intermediate rounding at nearest and bilinear sampling boundaries.
-    let horizontal = bitcast<vec2<u32>>(params.direction.xy * center.x);
-    let vertical = bitcast<vec2<u32>>(params.direction.zw * center.y);
-    let shifted = bitcast<vec2<f32>>(select(horizontal, vec2<u32>(0u), horizontal == vec2<u32>(0x80000000u)))
-        + bitcast<vec2<f32>>(select(vertical, vec2<u32>(0u), vertical == vec2<u32>(0x80000000u)));
-    return shifted + 0.5 + params.values.xy;
+    // Round each step in the reference order ((m00 x + m10 y) + 0.5) + offset: fused or reordered, a coordinate near a
+    // texel or weight boundary picks another texel
+    let center = rounded2(uv - 0.5);
+    let horizontal = rounded2(params.direction.xy * center.x);
+    let vertical = rounded2(params.direction.zw * center.y);
+    let shifted = rounded2(rounded2(horizontal + vertical) + 0.5);
+    return rounded2(shifted + params.values.xy);
 }
 
 fn luminance(v: f32) -> f32 {
-    return (v * 0.2126 + v * 0.7152) + v * 0.0722;
+    return rounded(rounded(rounded(v * 0.2126) + rounded(v * 0.7152)) + rounded(v * 0.0722));
 }
 
 fn map_luminance(uv: vec2<f32>) -> f32 {
@@ -85,7 +90,7 @@ fn map_slope(p: vec2<i32>) -> vec2<f32> {
 }
 
 fn lerp_slope(lo: vec2<f32>, hi: vec2<f32>, weight: f32) -> vec2<f32> {
-    return lo + (hi - lo) * weight;
+    return rounded2(lo + rounded2((hi - lo) * weight));
 }
 
 fn sampled_slope(uv: vec2<f32>) -> vec2<f32> {
@@ -110,9 +115,6 @@ fn stepped_front(uv: vec2<f32>) -> f32 {
     let b = front_at(base + vec2<i32>(1, 0));
     let c = front_at(base + vec2<i32>(0, 1));
     let d = front_at(base + vec2<i32>(1, 1));
-    if params.control.x == 6u {
-        return affine_lerp(affine_lerp(a, b, weights.x), affine_lerp(c, d, weights.x), weights.y);
-    }
     return lerp(lerp(a, b, weights.x), lerp(c, d, weights.x), weights.y);
 }
 
@@ -123,9 +125,9 @@ fn affine_front(uv: vec2<f32>) -> f32 {
         if all(wraps) {
             return value;
         }
-        let fade = clamp(min(uv, 1.0 - uv) * params.values.zw + 0.5, vec2f(0.0), vec2f(1.0));
+        let fade = clamp(rounded2(min(uv, 1.0 - uv) * params.values.zw) + 0.5, vec2f(0.0), vec2f(1.0));
         let coverage = select(fade, vec2f(1.0), wraps);
-        return value * (coverage.x * coverage.y);
+        return value * rounded(coverage.x * coverage.y);
     }
     let p = vec2i(floor(uv * vec2f(params.source.xy)));
     let outside = (p < vec2i(0)) | (p >= vec2i(params.source.xy));
@@ -295,17 +297,21 @@ fn sharpen(p: vec2<i32>) -> f32 {
 }
 
 fn value_at(p: vec2<i32>) -> f32 {
-    let uv = (vec2<f32>(p) + 0.5) / vec2<f32>(params.output.xy);
     switch params.control.x {
         case 0u: {
-            let distance = params.values.x * (map_luminance(uv) - params.values.y);
-            return stepped_front(uv + (distance * params.direction.xy) * params.values.zw);
+            let uv = texel_centers(vec2<u32>(p), params.output.xy);
+            let distance = rounded(params.values.x * rounded(map_luminance(uv) - params.values.y));
+            let shift = rounded2(rounded2(distance * params.direction.xy) * params.values.zw);
+            return stepped_front(rounded2(uv + shift));
         }
-        case 1u: { return stepped_front(uv + params.values.xy * sampled_slope(uv)); }
+        case 1u: {
+            let uv = texel_centers(vec2<u32>(p), params.output.xy);
+            return stepped_front(rounded2(uv + rounded2(params.values.xy * sampled_slope(uv))));
+        }
         case 2u: { return box_blur(p); }
         case 3u: { return short_line(p); }
         case 5u: { return sheared_line(p); }
-        case 6u: { return affine_front(affine_uv(uv)); }
+        case 6u: { return affine_front(affine_uv(texel_centers(vec2<u32>(p), params.output.xy))); }
         default: { return sharpen(p); }
     }
 }

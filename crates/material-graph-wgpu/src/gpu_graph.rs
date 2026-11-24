@@ -117,8 +117,8 @@ impl GraphAccelerator {
     }
 
     #[cfg(test)]
-    pub(crate) fn without_gpu_spatial_sampling(mut self) -> Self {
-        self.spatial_sampling_on_gpu = false;
+    pub(crate) fn with_spatial_sampling_on_gpu(mut self, on_gpu: bool) -> Self {
+        self.spatial_sampling_on_gpu = on_gpu;
         self
     }
 
@@ -535,7 +535,7 @@ impl GraphAccelerator {
 
 impl Accelerator for GraphAccelerator {
     fn cache_tag(&self) -> &str {
-        if self.spatial_sampling_on_gpu { "wgpu-graph-v10" } else { "wgpu-graph-v10-metal" }
+        if self.spatial_sampling_on_gpu { "wgpu-graph-v11" } else { "wgpu-graph-v11-metal" }
     }
 
     fn pixel(&self, request: PixelRequest<'_>) -> Result<Option<PixelOutput>, String> {

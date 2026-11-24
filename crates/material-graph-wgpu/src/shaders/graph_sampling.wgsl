@@ -38,3 +38,33 @@ fn stepped_taps(uv: vec2f, extent: vec2u, wraps: vec2<bool>) -> BilinearTaps {
     let weights = (rounded + select(vec2<f32>(-128.0), vec2<f32>(128.0), previous)) / 256.0;
     return BilinearTaps(base, weights);
 }
+
+// The reference's (p + 0.5) / n, rounded to nearest even with integer steps: fast-math division need not round exactly
+fn texel_center(p: u32, n: u32) -> f32 {
+    let denominator = 2u * n;
+    var remainder = 2u * p + 1u;
+    // Scale the quotient into [1, 2) and count the halvings that undo it
+    var halvings = firstLeadingBit(denominator) - firstLeadingBit(remainder);
+    remainder <<= halvings;
+    if remainder < denominator {
+        remainder <<= 1u;
+        halvings += 1u;
+    }
+
+    var quotient = 0u;
+    for (var bit = 0u; bit < 24u; bit++) {
+        let fits = remainder >= denominator;
+        quotient = (quotient << 1u) | select(0u, 1u, fits);
+        remainder = select(remainder, remainder - denominator, fits);
+        remainder <<= 1u;
+    }
+    // The remainder is now twice what is left over, so comparing it with the denominator decides a tie
+    let up = remainder > denominator || (remainder == denominator && (quotient & 1u) == 1u);
+    quotient += select(0u, 1u, up);
+    let carry = quotient >> 24u;
+    return bitcast<f32>(((127u - halvings + carry) << 23u) | ((quotient >> carry) & 0x7fffffu));
+}
+
+fn texel_centers(p: vec2<u32>, size: vec2<u32>) -> vec2<f32> {
+    return vec2<f32>(texel_center(p.x, size.x), texel_center(p.y, size.y));
+}

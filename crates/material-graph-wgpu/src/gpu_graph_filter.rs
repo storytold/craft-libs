@@ -66,6 +66,7 @@ impl FilterRasterizer {
             control: [0, 0, wrap_x, wrap_y],
             values: [0.0; 4],
             direction: [0.0; 4],
+            rounding_barrier: [0; 4],
         };
         let mut passes = Vec::with_capacity(2);
         let mut shifts = None;
@@ -249,6 +250,8 @@ struct Params {
     control: [u32; 4],
     values: [f32; 4],
     direction: [f32; 4],
+    /// Always zero: the shader XORs it into each result the reference rounds on its own.
+    rounding_barrier: [u32; 4],
 }
 
 #[cfg(test)]
@@ -413,6 +416,29 @@ mod tests {
     }
 
     #[test]
+    fn texel_centers_round_like_the_reference_division() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        let source = format!(
+            "{}\n@group(0) @binding(0) var<storage, read> pixels: array<vec2u>;\n\
+             @group(0) @binding(1) var<storage, read_write> centers: array<f32>;\n\
+             @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3u) {{\n\
+                 if id.x < arrayLength(&pixels) {{ centers[id.x] = texel_center(pixels[id.x].x, pixels[id.x].y); }}\n\
+             }}",
+            include_str!("shaders/graph_sampling.wgsl")
+        );
+        // Every pixel of small sides and of large sides with and without a power of two, up to the largest resident side
+        let sides = (1..=130).chain([1000, 1022, 1023, 1366, 2046, 2047, 2048, 3000, 4094, 4095, 4096, 6000, 8190, 8191, 8192]);
+        let pixels = sides.flat_map(|side: u32| (0..side).map(move |p| [p, side])).collect::<Vec<_>>();
+
+        let bytes = gpu.run_compute(&source, bytemuck::cast_slice(&pixels), (pixels.len() * 4) as u64, pixels.len().div_ceil(64) as u32);
+
+        let centers = bytemuck::cast_slice::<u8, f32>(&bytes);
+        for (&[p, side], &center) in pixels.iter().zip(centers) {
+            assert_eq!(center.to_bits(), ((p as f32 + 0.5) / side as f32).to_bits(), "pixel {p} of {side}");
+        }
+    }
+
+    #[test]
     fn imported_levels_and_gradient_keep_a_smaller_warp_resident() {
         let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
@@ -444,6 +470,20 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "checks the GPU sampling that Metal leaves to the reference evaluator"]
+    fn affine_transform_keeps_packed_grey_and_alpha_with_gpu_sampling() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        check_packed_grey_affine_transform(gpu.gpu_spatial_sampling(), false);
+    }
+
+    #[test]
+    #[ignore = "checks the GPU sampling that Metal leaves to the reference evaluator"]
+    fn imported_grayscale_filters_match_the_cpu_with_gpu_sampling() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        check_imported_grayscale_filters(gpu.gpu_spatial_sampling(), false);
+    }
+
     fn check_packed_grey_affine_transform(accelerator: GraphAccelerator, cpu_sampling: bool) {
         let nodes = Arc::new(Nodes::default());
         let context = EvalContext { accelerator: Some(Arc::new(accelerator)), profiler: Some(nodes.clone()), ..Default::default() };
@@ -455,6 +495,9 @@ mod tests {
             (8, "m00=4 m11=4"),
             (8, "m00=0 m11=0 m01=-1 m10=1"),
             (8, "m00=1.4 m11=0.85 m01=0.23 m10=-0.3 offset_x=0.34 filter=0 mip=0"),
+            // A shear where a fused or reordered coordinate sum picks another texel or 1/256 weight
+            (11, "m00=1.4 m11=0.85 m01=0.23 m10=-0.3 offset_x=0.34 filter=0 mip=0"),
+            (11, "m00=1.4 m11=0.85 m01=0.23 m10=-0.3 offset_x=0.34 mip=0"),
         ] {
             nodes.resident.store(0, Relaxed);
             nodes.readbacks.store(0, Relaxed);

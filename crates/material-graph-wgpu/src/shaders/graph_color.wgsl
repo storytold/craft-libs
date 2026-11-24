@@ -5,6 +5,7 @@ struct Params {
     weights: vec4f, // grayscale weights, warp intensity/offset/aspect, or affine offset
     control: vec4u, // blend alpha mode or warp map dimensions and wrapping axes
     direction: vec4f, // warp direction or affine matrix
+    rounding_barrier: vec4u, // always zero, see rounded
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -94,6 +95,24 @@ fn write_color(i: u32, p: vec4f) {
     output[i * 2u + 1u] = packed(compiled_16bit(p.zw));
 }
 
+// A result the reference rounds on its own. XOR with a uniform zero hides it from the shader compiler,
+// so fast math (Metal's default) can neither fuse it into an fma nor reorder the sums around it
+fn rounded(value: f32) -> f32 {
+    return bitcast<f32>(bitcast<u32>(value) ^ params.rounding_barrier.x);
+}
+
+fn rounded2(value: vec2f) -> vec2f {
+    return bitcast<vec2f>(bitcast<vec2u>(value) ^ params.rounding_barrier.xy);
+}
+
+fn rounded4(value: vec4f) -> vec4f {
+    return bitcast<vec4f>(bitcast<vec4u>(value) ^ params.rounding_barrier);
+}
+
+fn spatial_lerp(lo: f32, hi: f32, weight: f32) -> f32 {
+    return rounded(lo + rounded((hi - lo) * weight));
+}
+
 fn map_at(p: vec2i) -> f32 {
     return pixel(1u, address(p, params.control.xy, vec2<bool>(true))).r;
 }
@@ -112,16 +131,15 @@ fn warp_map(uv: vec2f, i: u32) -> f32 {
         let b = map_at(base + vec2i(1, 0));
         let c = map_at(base + vec2i(0, 1));
         let d = map_at(base + vec2i(1, 1));
-        let top = a + mul(b - a, weight.x);
-        let bottom = c + mul(d - c, weight.x);
-        value = top + mul(bottom - top, weight.y);
+        let top = spatial_lerp(a, b, weight.x);
+        let bottom = spatial_lerp(c, d, weight.x);
+        value = spatial_lerp(top, bottom, weight.y);
     }
-    return weighted(vec4f(vec3f(value), 0.0), vec4f(0.2126, 0.7152, 0.0722, 0.0));
+    return rounded(rounded(rounded(value * 0.2126) + rounded(value * 0.7152)) + rounded(value * 0.0722));
 }
 
 fn lerp_color(lo: vec4f, hi: vec4f, weight: f32) -> vec4f {
-    let scaled = vec4f(individual_product(hi.xy - lo.xy, vec2f(weight)), individual_product(hi.zw - lo.zw, vec2f(weight)));
-    return lo + scaled;
+    return rounded4(lo + rounded4((hi - lo) * weight));
 }
 
 fn stepped_color(uv: vec2f, size: vec2u, wraps: vec2<bool>) -> vec4f {
@@ -136,20 +154,21 @@ fn stepped_color(uv: vec2f, size: vec2u, wraps: vec2<bool>) -> vec4f {
 fn warp_at(p: vec2u) -> vec4f {
     let size = params.extent.xy;
     let wraps = params.control.zw != vec2u(0u);
-    let uv = (vec2f(p) + 0.5) / vec2f(size);
-    let distance = mul(params.weights.x, warp_map(uv, p.y * size.x + p.x) - params.weights.y);
-    let direction = individual_product(vec2f(distance), params.direction.xy);
-    let warped = uv + individual_product(direction, params.weights.zw);
-    return stepped_color(warped, size, wraps);
+    let uv = texel_centers(p, size);
+    // Round each step in the reference order uv + (distance * direction) * aspect
+    let distance = rounded(params.weights.x * rounded(warp_map(uv, p.y * size.x + p.x) - params.weights.y));
+    let shift = rounded2(rounded2(distance * params.direction.xy) * params.weights.zw);
+    return stepped_color(rounded2(uv + shift), size, wraps);
 }
 
 fn affine_at(p: vec2u) -> vec4f {
     let size = params.extent.xy;
-    let center = (vec2f(p) + 0.5) / vec2f(size) - 0.5;
-    let horizontal = individual_product(params.direction.xy, vec2f(center.x));
-    let vertical = individual_product(params.direction.zw, vec2f(center.y));
-    let uv = horizontal + vertical + 0.5 + params.weights.xy;
-    return stepped_color(uv, size, vec2<bool>(true));
+    // Round each step in the reference order ((m00 x + m10 y) + 0.5) + offset
+    let center = rounded2(texel_centers(p, size) - 0.5);
+    let horizontal = rounded2(params.direction.xy * center.x);
+    let vertical = rounded2(params.direction.zw * center.y);
+    let shifted = rounded2(rounded2(horizontal + vertical) + 0.5);
+    return stepped_color(rounded2(shifted + params.weights.xy), size, vec2<bool>(true));
 }
 
 fn write_spatial(i: u32, p: vec4f) {

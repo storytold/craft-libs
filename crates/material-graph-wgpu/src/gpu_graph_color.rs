@@ -31,6 +31,8 @@ struct Params {
     weights: [f32; 4],
     control: [u32; 4],
     direction: [f32; 4],
+    /// Always zero: the shader XORs it into each result the reference rounds on its own.
+    rounding_barrier: [u32; 4],
 }
 
 pub(crate) struct ColorRasterizer {
@@ -314,6 +316,13 @@ mod tests {
         }
     }
 
+    #[test]
+    #[ignore = "checks the GPU sampling that Metal leaves to the reference evaluator"]
+    fn compiled_color_warps_match_the_cpu_through_blends_with_gpu_sampling() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        check_color_warps_through_blends(gpu.gpu_spatial_sampling(), false);
+    }
+
     fn check_color_warps_through_blends(accelerator: GraphAccelerator, cpu_sampling: bool) {
         let nodes = Arc::new(Nodes::default());
         let ctx = EvalContext { accelerator: Some(Arc::new(accelerator)), profiler: Some(nodes.clone()), ..Default::default() };
@@ -355,6 +364,13 @@ mod tests {
         for (accelerator, cpu_sampling) in gpu.spatial_sampling_modes() {
             check_wrapped_color_transform(accelerator, cpu_sampling);
         }
+    }
+
+    #[test]
+    #[ignore = "checks the GPU sampling that Metal leaves to the reference evaluator"]
+    fn wrapped_color_transforms_keep_the_compiled_sample_and_alpha_with_gpu_sampling() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        check_wrapped_color_transform(gpu.gpu_spatial_sampling(), false);
     }
 
     fn check_wrapped_color_transform(accelerator: GraphAccelerator, cpu_sampling: bool) {
