@@ -1,20 +1,34 @@
 //! The panes of Save for Web: the view tabs, the animation row, the zoom row and the preview panes with their captions.
 
 use super::{
-    Animation, Live, MODEM_KBPS, SaveForWebOptions, SaveForWebWords, WebFormat, WebPictures, WebSlice, WebVariant, WebView, ZOOM_RANGE,
+    Animation, Live, SaveForWebOptions, SaveForWebWords, WEB_SPEEDS, WebFormat, WebPictures, WebSlice, WebVariant, WebView, ZOOM_RANGE,
     download_seconds, four_up_variants,
 };
 use crate::buttons::Button;
 use crate::choice::Segmented;
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, TooltipSpec, clicked};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::patterns::form_dialogs::{PreviewPane, PreviewState, PreviewView, PreviewZoom};
+use crate::pickers::Select;
 use crate::primitives::{ContentPainterCx, StrokeWidth, TextRun};
 use crate::runtime::env::{Label, Units};
 use crate::style::TypeRole;
 use craft_behavior::{CanvasTransform, PixelSize};
 use egui::{Pos2, Rect, Ui, Vec2};
+
+/// Whether the zoom row has Preview in Browser.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum BrowserPreview {
+    /// No button.
+    #[default]
+    Hidden,
+    /// The button works.
+    Available,
+    /// The button is disabled and the label is its reason.
+    Unavailable(Label),
+}
 
 /// A pane of the dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +54,10 @@ pub(super) struct Panes<'p> {
     pub(super) slices: &'p [WebSlice],
     /// The numbers of the selected slices.
     pub(super) chosen: &'p [u32],
+    /// Whether the zoom row has Preview in Browser.
+    pub(super) browser: &'p BrowserPreview,
+    /// The Download speed of the captions, in Kbps.
+    pub(super) speed: f64,
 }
 
 /// A click on a slice: its number and whether Shift was held (add to or remove from the selection).
@@ -58,8 +76,9 @@ struct Reported {
     slice: Option<SliceClick>,
 }
 
-/// The view tabs, the play and zoom rows and the panes; a click on a slice goes to `slice`.
-pub(super) fn show(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, slice: &mut Option<SliceClick>) {
+/// The view tabs, the play and zoom rows and the panes; a click on a slice goes to `slice` and a press of Preview in
+/// Browser sets `browser`.
+pub(super) fn show(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, slice: &mut Option<SliceClick>, browser: &mut bool) {
     let words = panes.words;
     let tabs = [
         Entry::new(WebView::Original, words.original.clone()),
@@ -71,7 +90,7 @@ pub(super) fn show(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, slice: &mut 
         live.view = view;
     }
     play_row(ui, panes, live);
-    zoom_row(ui, words, panes.hint, live);
+    zoom_row(ui, panes, live, browser);
     pane_grid(ui, panes, live, slice);
 }
 
@@ -89,9 +108,16 @@ fn play_row(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live) {
     });
 }
 
-/// Fit, the zoom steps, 100% and the hint, over the one view the panes share.
-fn zoom_row(ui: &mut Ui, words: &SaveForWebWords, hint: &Label, live: &mut Live) {
-    Row::new().id_salt("zoom").show(ui, |ui, _| {
+/// The word of the download speed `kbps`: megabits from 1024 Kbps up.
+fn speed_label(words: &SaveForWebWords, units: &Units, kbps: f64) -> String {
+    let (word, n) = if kbps >= 1024.0 { (&words.speed_mbps, kbps / 1024.0) } else { (&words.speed_kbps, kbps) };
+    word.fill(&[("n", units.number(n, 0..=1).as_str())])
+}
+
+/// Fit, the zoom steps, 100%, the Download speed, the hint and Preview in Browser, over the one view the panes share.
+fn zoom_row(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, pressed: &mut bool) {
+    let words = panes.words;
+    Row::new().wrap(true).id_salt("zoom").show(ui, |ui, _| {
         if clicked(&Button::new(words.fit.clone()).id_salt("fit").show(ui)) {
             live.shared = PreviewView::fitting().zoom_range(ZOOM_RANGE);
         }
@@ -101,7 +127,24 @@ fn zoom_row(ui: &mut Ui, words: &SaveForWebWords, hint: &Label, live: &mut Live)
         if clicked(&Button::new(words.actual.clone()).id_salt("actual").show(ui)) {
             live.shared = PreviewView::new(CanvasTransform::new(1.0, Vec2::ZERO)).zoom_range(ZOOM_RANGE);
         }
-        Text::new(hint.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        let speeds: Vec<Entry<usize>> =
+            WEB_SPEEDS.iter().enumerate().map(|(at, kbps)| Entry::new(at, Label::from(speed_label(words, panes.units, *kbps)))).collect();
+        let current = WEB_SPEEDS.iter().position(|kbps| *kbps == live.speed).unwrap_or(0);
+        if let Some(at) = Select::new(words.download_speed.clone(), Bind::given(current), &speeds).id_salt("speed").show(ui).value().copied()
+            && let Some(kbps) = WEB_SPEEDS.get(at)
+        {
+            live.speed = *kbps;
+        }
+        Text::new(panes.hint.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        if !matches!(panes.browser, BrowserPreview::Hidden) {
+            let mut button = Button::new(words.preview_browser.clone()).id_salt("browser");
+            if let BrowserPreview::Unavailable(reason) = panes.browser {
+                button = button.enabled(false).tooltip(TooltipSpec::new(words.preview_browser.clone()).disabled_text(reason.clone()));
+            }
+            if clicked(&button.show(ui)) {
+                *pressed = true;
+            }
+        }
     });
 }
 
@@ -235,7 +278,10 @@ fn captions(panes: &Panes<'_>, pane: WebPane) -> (String, String) {
             if variant.proxy {
                 first.push_str(words.proxy.as_str());
             }
-            let mut second = words.download.fill(&[("seconds", download_seconds(variant.bytes, MODEM_KBPS).to_string().as_str())]);
+            let mut second = words.download.fill(&[
+                ("seconds", download_seconds(variant.bytes, panes.speed).to_string().as_str()),
+                ("speed", speed_label(words, panes.units, panes.speed).as_str()),
+            ]);
             if let (Some(colors), true) = (variant.colors, format.indexed()) {
                 second.push_str(&words.color_count.fill(&[("count", colors.to_string().as_str())]));
             }

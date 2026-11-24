@@ -20,8 +20,27 @@ pub struct DividerStyle {
     slot: f32,
     /// The least length of a line, vertical or horizontal: one control height.
     length: f32,
-    /// Above and below a horizontal line in a menu: `space.gap.inline`.
-    separator_pad: f32,
+    /// A horizontal line in a menu, with its room.
+    separator: SeparatorRule,
+}
+
+/// A line between groups of items, in a menu (a horizontal [`Divider`]) or a list (`ListRow::separator`): the divider
+/// rule with `space.gap.inline` of room above and below it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SeparatorRule {
+    width: RuleWidth,
+    pad: f32,
+}
+
+impl SeparatorRule {
+    pub(crate) fn of(cx: &StyleCx<'_>) -> Self {
+        SeparatorRule { width: cx.rule(RuleKind::Divider).width, pad: cx.tokens.space.gap.inline }
+    }
+
+    /// The height of the line and its room on a display of `pixels_per_point`.
+    pub(crate) fn height(self, pixels_per_point: f32) -> f32 {
+        self.width.points(pixels_per_point) + 2.0 * self.pad
+    }
 }
 
 /// Which way the line runs.
@@ -70,7 +89,7 @@ impl Component for Divider {
             width: cx.rule(RuleKind::Divider).width,
             slot: cx.tokens.space.gap.item,
             length: cx.control().height,
-            separator_pad: cx.tokens.space.gap.inline,
+            separator: SeparatorRule::of(cx),
         }
     }
 
@@ -78,7 +97,7 @@ impl Component for Divider {
         let width = cx.style.width.points(cx.ui.ctx().pixels_per_point());
         let length = cx.style.length;
         match self.axis {
-            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(length, width + 2.0 * cx.style.separator_pad),
+            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(length, cx.style.separator.height(cx.ui.ctx().pixels_per_point())),
             Axis::Horizontal => Vec2::new(length, width),
             Axis::Vertical if cx.env.get::<InBar>().0 => Vec2::new(cx.style.slot.max(width), length),
             Axis::Vertical => Vec2::new(width, length),

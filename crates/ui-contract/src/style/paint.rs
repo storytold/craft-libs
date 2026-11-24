@@ -1,4 +1,5 @@
-//! What the small painters (rules, handles, colour markers, scroll bars, the reset mark) draw, read from tokens.
+//! What the small painters (rules, handles, colour markers, scroll bars, the reset mark, the auto-scroll mark) draw,
+//! read from tokens.
 
 use super::tokens::UiTokens;
 use craft_theme::{Rgba, Stateful};
@@ -229,7 +230,10 @@ pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> Scro
         )),
     };
     let hover = style_color(c.state.hover);
-    let (thickness, thin) = (tokens.size.handle.sm, tokens.stroke.thick);
+    let (thickness, thin) = match kind {
+        ScrollBarKind::Floating => (tokens.size.handle.sm, tokens.stroke.thick),
+        ScrollBarKind::Docked => (tokens.size.icon.md, tokens.size.icon.md),
+    };
     let (track, rest) = match kind {
         ScrollBarKind::Floating => (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), thin),
         ScrollBarKind::Docked => {
@@ -260,6 +264,22 @@ pub struct ResetMarkLook {
     pub diameter: f32,
 }
 
+/// The auto-scroll mark's colours and sizes: a ring on the panel fill, a dot and two arrowheads in text ink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AutoScrollMarkLook {
+    /// The ring colour.
+    pub ring: StyleColor,
+    /// The fill inside the ring.
+    pub fill: StyleColor,
+    /// The ink of the dot and the arrowheads.
+    pub ink: StyleColor,
+    /// The ring's line width.
+    pub ring_width: f32,
+    /// The mark's diameter.
+    pub diameter: f32,
+}
+
 /// The state layer: the theme's hover and press fills, clear at rest and while disabled. An opaque state fill takes
 /// the place of the rest fill of a part without a surface of its own.
 pub(crate) fn state_layer_look(tokens: &UiTokens) -> Stateful<StyleColor> {
@@ -273,6 +293,17 @@ pub(crate) fn reset_mark_look(tokens: &UiTokens) -> ResetMarkLook {
         ring: style_color(tokens.color.text.disabled),
         ring_width: tokens.stroke.thin,
         diameter: tokens.size.handle.sm / 2.0,
+    }
+}
+
+pub(crate) fn auto_scroll_mark_look(tokens: &UiTokens) -> AutoScrollMarkLook {
+    let c = &tokens.color;
+    AutoScrollMarkLook {
+        ring: style_color(c.text.normal),
+        fill: style_color(c.surface.panel),
+        ink: style_color(c.text.normal),
+        ring_width: tokens.stroke.thin,
+        diameter: tokens.size.icon.lg,
     }
 }
 

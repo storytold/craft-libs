@@ -201,8 +201,8 @@ fn derived_values(unpinned: &ColorTokens, before_pass: &ColorTokens, pinned: &BT
             }
             Source::Same(other) | Source::SolidFrom(other) => unpinned.get(other),
             Source::Faded(other, a) => unpinned.get(other).with_alpha(a),
-            Source::ShiftedFrom { base, from, to, away_from } => {
-                shifted(unpinned.get(base), unpinned.get(from), unpinned.get(to), unpinned.get(away_from))
+            Source::ShiftedFrom { base, from, to, away_from, min } => {
+                shifted(unpinned.get(base), unpinned.get(from), unpinned.get(to), unpinned.get(away_from), min)
             }
             // Lit like the anchored greys: from the panel's own value, pinned or not.
             Source::Lighting(amount) => lighting(before_pass.surface.panel, amount),
@@ -411,8 +411,8 @@ fn follow(c: &mut ColorTokens, ramp: &ColorTokens, pinned: &BTreeSet<ColorToken>
             Source::Faded(other, a) => c.set(t, c.get(other).with_alpha(a)),
             Source::Lighting(amount) => c.set(t, lighting(c.surface.panel, amount)),
             Source::SolidFrom(other) if on_solid => c.set(t, c.get(other)),
-            Source::ShiftedFrom { base, from, to, away_from } if on_solid => {
-                c.set(t, shifted(c.get(base), ramp.get(from), ramp.get(to), c.get(away_from)))
+            Source::ShiftedFrom { base, from, to, away_from, min } if on_solid => {
+                c.set(t, shifted(c.get(base), ramp.get(from), ramp.get(to), c.get(away_from), min))
             }
             Source::OnSolid(solids) if on_solid => c.set(t, best_extreme(c, solids)),
             _ => {}
@@ -435,11 +435,15 @@ fn lighting(panel: Rgba, amount: f64) -> Rgba {
 }
 
 /// `base` with its OKLCH lightness moved by the distance between `from` and `to`, away from
-/// `text`: darker under lighter text, lighter under darker. Clamped to 0..=1, hue and chroma kept.
-fn shifted(base: Rgba, from: Rgba, to: Rgba, text: Rgba) -> Rgba {
+/// `text`: darker under lighter text, lighter under darker, by at least `min`. Toward `text` instead when there is no room. Clamped to 0..=1, hue and chroma kept.
+fn shifted(base: Rgba, from: Rgba, to: Rgba, text: Rgba, min: f64) -> Rgba {
     let o = base.to_oklch();
-    let step = (to.to_oklch().l - from.to_oklch().l).abs();
-    let sign = if relative_luminance(text) >= relative_luminance(base) { -1.0 } else { 1.0 };
+    let step = (to.to_oklch().l - from.to_oklch().l).abs().max(min);
+    let mut sign = if relative_luminance(text) >= relative_luminance(base) { -1.0 } else { 1.0 };
+    // A base too close to white or black to move that far away from the text moves toward it.
+    if !(0.0..=1.0).contains(&(o.l + sign * step)) {
+        sign = -sign;
+    }
     Oklch { l: (o.l + sign * step).clamp(0.0, 1.0), ..o }.to_rgba().with_alpha(base.a())
 }
 
@@ -512,8 +516,8 @@ fn fix_rule(c: &mut ColorTokens, pass: &Pass, rule: &PairRule, done: &[PairRule]
         {
             match values::source(t, pass.mode) {
                 Source::SolidFrom(other) => c.set(t, c.get(other)),
-                Source::ShiftedFrom { base, from, to, away_from } => {
-                    c.set(t, shifted(c.get(base), pass.ramp.get(from), pass.ramp.get(to), c.get(away_from)));
+                Source::ShiftedFrom { base, from, to, away_from, min } => {
+                    c.set(t, shifted(c.get(base), pass.ramp.get(from), pass.ramp.get(to), c.get(away_from), min));
                 }
                 _ => {}
             }

@@ -9,23 +9,26 @@ use super::{PanelDrag, PanelKey, PanelTitle, Titles};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
-    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion,
-    ListDrag, MeasureCx, MemoProps, MemoView, Name, Outbox, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _,
-    Role, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, FooterRegion, HeaderEdge, HeaderParts,
+    HeaderRegion, ListDrag, MeasureCx, MemoProps, MemoView, Name, Outbox, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
+    PopupKind, Props as _, Role, Show as _, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
+use crate::display::{Shade, Text};
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
-use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
+use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::sub;
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
+use crate::sections::FooterBar;
+use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
-use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
-use craft_theme::{ControlSize, Tokens};
+use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
+use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 /// The style of a group grip: its size comes from the tokens.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -33,10 +36,65 @@ use std::hash::Hash;
 pub struct GroupGripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The marks a grip with [`ticks`](GroupGrip::ticks) shows.
+    marks: GripMarks,
 }
 
-/// What a group grip reports: its response, the second press of a double click and whether it started a group
-/// drag this pass.
+/// The row of marks a dock grip shows, centred on the grip, in the theme's `line.grip` (photocraft#16406: the
+/// references' 0.83 of the panel was almost invisible on our darker panels). Its shape is the theme's `shape.grip`
+/// (photocraft#16426): ticks or dots, how many, how large and how far apart; by default eleven upright ticks, a thin
+/// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
+/// under its column bar and the grip above each icon group of a collapsed column paint the same marks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GripMarks {
+    ink: StyleColor,
+    shape: GripShape,
+}
+
+impl GripMarks {
+    /// The marks in the tokens of `cx`.
+    pub(super) fn style(cx: &StyleCx<'_>) -> Self {
+        GripMarks { ink: cx.color(cx.tokens.color.line.grip), shape: cx.tokens.shape.grip }
+    }
+
+    /// How tall the row is, in points: a tick's length, or a dot's side.
+    pub(super) fn height(&self) -> f32 {
+        let GripShape { mark, length, width, .. } = self.shape;
+        match mark {
+            GripMark::Ticks => length,
+            GripMark::Dots => width,
+        }
+    }
+
+    /// Paints the row in the grip strip `strip`: centred across it, and [`GRIP_ABOVE`] below its middle, so the strip
+    /// keeps that much more room above the marks than below them.
+    pub(super) fn paint_in(&self, ui: &PaintUi<'_>, strip: Rect) {
+        self.paint(ui, strip.center() + Vec2::new(0.0, GRIP_ABOVE / 2.0));
+    }
+
+    /// Paints the row centred on `centre`.
+    fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
+        let GripShape { count, width, gap, .. } = self.shape;
+        let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(width) };
+        ui.draw().grip_ticks(&look, centre, count.max(1), gap, self.height());
+    }
+}
+
+/// The room a grip strip keeps above its marks beyond `space.gap.tight`, in points, in every theme: the marks stand a
+/// little below the strip's middle, clear of the column bar or icon group above (photocraft#16426).
+pub(super) const GRIP_ABOVE: f32 = 2.0;
+
+/// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
+/// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
+/// they never touch the strip's edge (photocraft#16426).
+pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
+    let GripShape { mark, length, width, .. } = tokens.shape.grip;
+    let marks = if mark == GripMark::Ticks { length } else { width };
+    tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
+}
+
+/// What a group grip reports: its response, the second press of a double click and where the press of a group drag
+/// it started this pass went down.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct GroupGripOutput {
@@ -46,6 +104,8 @@ pub struct GroupGripOutput {
     pub double_pressed: bool,
     /// A drag of the whole group started on the grip this pass.
     pub drag_started: bool,
+    /// Where the press that started that drag went down, in the grip's layer space; `None` without a drag start.
+    pub drag_origin: Option<Pos2>,
 }
 
 impl Outcome for GroupGripOutput {
@@ -73,14 +133,17 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     /// A drag on the grip drags the unit.
     #[prop]
     movable: bool,
+    /// The grip shows the dock's row of grip marks in its middle; else it is an unmarked band.
+    #[prop]
+    ticks: bool,
     double: bool,
-    started: bool,
+    started: Option<Pos2>,
 }
 
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: None }
     }
 }
 
@@ -92,8 +155,8 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     type Style = GroupGripStyle;
     type Output = GroupGripOutput;
 
-    fn style(_: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
-        GroupGripStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
+        GroupGripStyle { metrics: Metrics::new(), marks: GripMarks::style(cx) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -106,14 +169,37 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
-        if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
+        let phase = cx.press().phase;
+        if self.movable
+            && let PressPhase::DragStart { start, .. } = phase
+        {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
-            self.started = true;
+            self.started = Some(start.origin);
+        }
+        // A marked grip is a handle: the grab cursor over it and grabbing while it is held or dragged, as the grips of
+        // a collapsed column declare (photocraft#16467). A drop target's cursor during the drag still wins.
+        if self.ticks && self.movable {
+            if phase.button_down() {
+                cx.cursor(CursorIcon::Grabbing, CursorPriority::Part);
+            } else if cx.hit() {
+                cx.cursor(CursorIcon::Grab, CursorPriority::Part);
+            }
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.ticks {
+            cx.style.marks.paint_in(ui, cx.rect);
         }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> GroupGripOutput {
-        GroupGripOutput { response: cx.response.clone(), double_pressed: self.double, drag_started: self.started }
+        GroupGripOutput {
+            response: cx.response.clone(),
+            double_pressed: self.double,
+            drag_started: self.started.is_some(),
+            drag_origin: self.started,
+        }
     }
 }
 
@@ -261,6 +347,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
+    /// single titled panel does: the panels are shown from a rail, not by tabs.
+    #[prop(flag)]
+    titled: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -278,12 +368,17 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// Whether the panel menu button shows beside the tabs; a context request on a tab opens the menu either way.
     #[prop]
     panel_menu_shown: bool,
+    /// The panel menu button's icon: `more` unless the dock gives another (`DockConfig::panel_menu_icon`).
+    #[prop]
+    panel_menu_icon: IconId,
     /// The state of each panel command for the shown panel, published in the group's scope every pass.
     #[prop]
     command_states: Vec<(DockCommands, CommandState)>,
     /// The host's items before the tab strip.
     #[prop(func = "FnMut(&mut egui::Ui, &mut BodyCx<'_>)")]
     extra: Option<HeaderHook<'a>>,
+    /// The shown panel's footer, pinned under the body: [`footer`](DockGroup::footer).
+    footer: Option<HeaderHookFn<'a>>,
     /// The size of the group this pass, where its drag starts.
     size: Vec2,
     reported: Reported,
@@ -307,17 +402,29 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            titled: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
             menu: None,
             panel_menu_shown: true,
+            panel_menu_icon: IconId::new("more"),
             command_states: Vec::new(),
             extra: None,
+            footer: None,
             size: Vec2::ZERO,
             reported: Reported::default(),
         }
         .label(title)
+    }
+
+    /// The shown panel's footer: the closure fills a footer bar pinned under the body, across the group, that stays in
+    /// view while the body scrolls. A minimized group shows none.
+    #[must_use]
+    pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
+        self.props = self.props.footer(FooterRegion::new());
+        self.footer = Some(Box::new(content));
+        self
     }
 
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
@@ -326,8 +433,8 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     }
 
     /// The panel menu button's face.
-    fn menu_face(name: Label) -> IconButton<'static> {
-        IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
+    fn menu_face(&self, name: Label) -> IconButton<'static> {
+        IconButton::new(self.panel_menu_icon.clone()).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
     /// Starts a drag of the whole group: its drop region shows the group's name.
@@ -420,7 +527,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     /// tabs meet it.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if cx.part_if_declared(MENU).is_some() {
-            ui.face(MENU, Self::menu_face(cx.words::<DockWords>().panel_menu.clone()));
+            ui.face(MENU, self.menu_face(cx.words::<DockWords>().panel_menu.clone()));
         }
         ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
     }
@@ -485,15 +592,23 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let band = grip_width(cx.tokens);
         let button = if self.shows_menu_button() {
-            cx.tokens.space.gap.item + cx.face(Self::menu_face(cx.words::<DockWords>().panel_menu.clone())).x
+            cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x
         } else {
             0.0
         };
         HeaderParts::NONE.end(band + button)
     }
 
-    /// The host's items, then the tab row, on one line. The tab row is a memoized view (`tab_row`): it runs when its
-    /// tabs, its room or the input on it change, else it replays, and what the user did on it comes out of its outbox.
+    fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if let Some(content) = self.footer.as_mut() {
+            FooterBar::body().show(ui, |ui, bar| content(ui, bar));
+        }
+    }
+
+    /// The host's items, then the tab row, on one line; then the shown panel's caption. The tab row is a memoized view
+    /// (`tab_row`): it runs when its tabs, its room or the input on it change, else it replays, and what the user did
+    /// on it comes out of its outbox. A titled group shows the shown panel's title, count and close button in place of
+    /// the tab row.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         for (command, state) in self.command_states.drain(..) {
             cx.publish(command, state);
@@ -508,17 +623,46 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         let (line, gap) = (env.tokens.size.panel_header, env.tokens.space.gap.item);
         ui.set_min_height(line);
         let surface_pressed = cx.surface_pressed();
-        let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+        // A raw egui layout: the host's items and the tab row sit side by side, and the header column's flow facts are
+        // not theirs. The tab row takes the rest of the line, so the strip's empty room is its own, and nothing but the
+        // memoized tab row runs in it, so a settled header replays.
+        let titled = self.titled;
+        let cross = if titled { egui::Align::Center } else { egui::Align::Min };
+        let layout = if rtl { egui::Layout::right_to_left(cross) } else { egui::Layout::left_to_right(cross) };
         let mut sent = Vec::new();
         let strip = ui
             .with_layout(layout, |ui| {
                 ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
+                let shown = self.panels.as_slice().iter().find(|panel| panel.key == self.active);
+                if titled && let Some(panel) = shown {
+                    Text::new(panel.title.clone()).role(TypeRole::Title).show(ui);
+                    if let Some(count) = panel.count {
+                        let count = env.format().integer(u64::try_from(count).unwrap_or(u64::MAX));
+                        Text::new(count).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                    }
+                }
                 if let Some(hook) = extra.as_mut() {
                     hook.run(ui, cx);
                 }
+                if titled {
+                    let close_name = cx.words::<DockWords>().close_panel.clone();
+                    if let Some(panel) = shown.filter(|panel| self.closable && panel.closable) {
+                        let name = Label::from(close_name.fill(&[("name", panel.title.as_str())]));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if crate::contract::clicked(&IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(name).show(ui)) {
+                                sent.push(TabEvent::Closed(panel.key));
+                            }
+                        });
+                    }
+                    return None;
+                }
+                // The panels' toggle commands resolve here, outside the memoized row, so the marks are part of its key
+                // and a mark that comes or goes repaints the row.
+                let marks = tab_marks(ui.ctx(), self.panels.as_slice());
                 let row = TabRow {
                     anchor: self.anchor.clone(),
                     panels: self.panels.clone(),
+                    marks,
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
@@ -557,6 +701,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                 }
             }
         }
+        if let Some(caption) = self.panels.as_slice().iter().find(|panel| panel.key == self.active).and_then(|panel| panel.caption.clone()) {
+            Text::new(caption).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        }
     }
 }
 
@@ -587,11 +734,25 @@ struct TabRow<'a, P> {
     anchor: P,
     #[memo_props(hash = "its Hash is the content key taken when the titles were made")]
     panels: Titles,
+    /// The marked tabs, each with the hint that says why: resolved outside the row, so the row's key follows them.
+    #[memo_props(hash = "panel keys and hint texts are plain values")]
+    marks: Vec<(PanelKey, Option<Arc<str>>)>,
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
+}
+
+/// The tabs of `panels` whose toggle command marks them, as it marks the panel's rail button, with the command's hint.
+fn tab_marks(ctx: &egui::Context, panels: &[PanelTitle]) -> Vec<(PanelKey, Option<Arc<str>>)> {
+    panels
+        .iter()
+        .filter_map(|panel| {
+            let resolved = commands::resolve(ctx, panel.command.clone()?);
+            IconButton::shows_marker(&resolved).then(|| (panel.key, resolved.hint.clone()))
+        })
+        .collect()
 }
 
 /// A group's tab strip with its tab insertion spots. Returns the strip's id.
@@ -610,17 +771,28 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         .shown(active)
         .tear_off()
         .natural_height(true)
+        .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
         .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
         strip = strip.wheel_selects();
     }
+    let marks = &row.marks;
     let strip = strip.show_items(ui, &source, &mut |key, _| {
         let panel = panels.iter().find(|panel| &panel.key == key);
         let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
-        Tab::new(title).closable(panel.is_some_and(closes))
+        // The panel's toggle command marks its tab as it marks the panel's rail button, with the hint to say why.
+        let mark = marks.iter().find(|(marked, _)| marked == key);
+        let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(mark.is_some());
+        if let Some(count) = panel.and_then(|panel| panel.count) {
+            tab = tab.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+        }
+        match mark.and_then(|(_, hint)| hint.clone()) {
+            Some(hint) => tab.tooltip(hint),
+            None => tab,
+        }
     });
     for event in strip.response.events {
-        if let crate::contract::CollectionEvent::Selection(craft_behavior::SelectionChange::Set(keys)) = event
+        if let crate::contract::CollectionEvent::Selection { change: craft_behavior::SelectionChange::Set(keys), .. } = event
             && let Some(key) = keys.last()
         {
             row.sent.send(TabEvent::Picked(*key));

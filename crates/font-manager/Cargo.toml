@@ -11,6 +11,8 @@ repository.workspace = true
 reads = [
     "crates/ui-contract/fonts/inter/Inter-Regular.ttf",
     "crates/ui-contract/fonts/inter/Inter-SemiBold.ttf",
+    "crates/font-subset/tests/data/sarabun/Sarabun-Regular.ttf",
+    "crates/ui-contract/tests/fonts/NotoSansCJKsc-test.otf",
 ]
 
 [lib]
@@ -45,6 +47,10 @@ serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
 # Variation axes and named instances of a face (`axes`), on every feature set.
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
+
+[build-dependencies]
+# The Arabic sample story's face, from the craft fonts set when `CRAFT_FONTS_DIR` names one.
+craft-fonts-build = { workspace = true }
 
 [dev-dependencies]
 craft-font-manager = { path = ".", features = ["suite"] }

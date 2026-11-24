@@ -99,9 +99,17 @@ impl PageTexts for Lines {
     }
 }
 
-/// Shows `marks` and `selection` over one page placed at the canvas's top left.
-fn on_page(ui: &mut Ui, marks: &[TextMark], selection: Option<TextSelection>) -> StoryOutput {
-    let pages = demo_placed(1, Pos2::new(24.0, 24.0));
+/// How far below the first page's place the last page starts when a story shows several, so the crossing onto it
+/// shows.
+const LAST_PAGE_TOP: f32 = 96.0;
+
+/// Shows `marks` and `selection` over `count` pages from the canvas's top left; with more than one, the pages rise
+/// until the last starts [`LAST_PAGE_TOP`] lower, so the end of the page before it and its start both show.
+fn on_page(ui: &mut Ui, count: usize, marks: &[TextMark], selection: Option<TextSelection>) -> StoryOutput {
+    let origin = Pos2::new(24.0, 24.0);
+    let last_top = demo_placed(count, origin).last().map_or(origin.y, |last| last.rect.min.y);
+    let rise = (last_top - origin.y - LAST_PAGE_TOP).max(0.0);
+    let pages = demo_placed(count, Pos2::new(origin.x, origin.y - rise));
     let lines = Lines;
     let mut control = Some(TextMarks::new(&pages, &lines, marks));
     let stage = craft_ui::testing::stage(ui);
@@ -117,12 +125,18 @@ fn on_page(ui: &mut Ui, marks: &[TextMark], selection: Option<TextSelection>) ->
 #[story(TextMarks<'static>, covers = [Default])]
 fn find_marks(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let marks = [TextMark::new(0, 4..9, false), TextMark::new(0, 38..42, true), TextMark::new(0, 60..63, false)];
-    on_page(ui, &marks, None)
+    on_page(ui, 1, &marks, None)
 }
 
 #[story(TextMarks<'static>, covers = [Default])]
 fn run_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    on_page(ui, &[], Some(TextSelection::new(0, TextSpan::run(4, 26))))
+    on_page(ui, 1, &[], Some(TextSelection::new(0, TextSpan::run(4, 0, 26))))
+}
+
+/// A run from the last line of the first page onto the first line of the second.
+#[story(TextMarks<'static>, covers = [Default])]
+fn across_two_pages(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    on_page(ui, 2, &[], Some(TextSelection::new(0, TextSpan::run(40, 1, 12))))
 }
 
 #[story(TextMarks<'static>, covers = [], drive = Drive::Never)]
@@ -143,5 +157,5 @@ fn areas_of_each_kind(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(TextMarks<'static>, covers = [Default])]
 fn column_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let (from, to) = (Point::new(15.0, 2.0), Point::new(65.0, 40.0));
-    on_page(ui, &[], Some(TextSelection::new(0, TextSpan::column(from, to))))
+    on_page(ui, 1, &[], Some(TextSelection::new(0, TextSpan::column(from, to))))
 }

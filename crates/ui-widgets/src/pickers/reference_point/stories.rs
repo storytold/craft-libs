@@ -1,6 +1,6 @@
 //! Stories of `ReferencePoint`.
 
-use super::{ReferencePoint, ReferencePointKind};
+use super::{ReferencePoint, ReferencePointKind, ReferencePointLook};
 use crate::contract::{Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -49,6 +49,21 @@ fn reference_point_alignment(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_alignment_unset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Alignment", data.bind("alignment_unset", None::<Anchor9>)).kind(ReferencePointKind::Alignment).show(ui).into()
+}
+
+/// The squares look: eight squares joined by a line round the box, the centre one alone, the pick filled.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_squares(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Reference point", data.bind("squares", Some(Anchor9::TopRight))).look(ReferencePointLook::Squares).show(ui).into()
+}
+
+/// The squares look with a mixed value: no square is filled.
+#[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
+fn reference_point_squares_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ReferencePoint::new("Reference point", data.bind_mixed("squares_mixed", Mixed::<Option<Anchor9>>::Mixed))
+        .look(ReferencePointLook::Squares)
+        .show(ui)
+        .into()
 }
 
 /// The options bar's size: the grid is an icon square and every point is a dot.

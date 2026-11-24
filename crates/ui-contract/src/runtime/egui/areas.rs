@@ -98,6 +98,12 @@ pub(crate) fn layer_at_without(ctx: &Context, point: Pos2, skipped: LayerId) -> 
     ctx.memory(|memory| if memory.is_above_modal_layer(found) { Some(found) } else { memory.top_modal_layer() })
 }
 
+/// The topmost layer under a screen position whether or not a modal layer holds the input, without the modal's
+/// scrim `scrim`: where a target that takes OS files under a modal lies.
+pub(crate) fn layer_at_under_modal(ctx: &Context, point: Pos2, scrim: Option<LayerId>) -> Option<LayerId> {
+    crate::runtime::sampler::layer_at(ctx, point).or_else(|| layers_under(ctx, point, scrim).first().copied())
+}
+
 /// The shown, interactable layers with their screen rects, bottom first, without `skipped`.
 fn interactive_layers(ctx: &Context, skipped: Option<LayerId>) -> Vec<(LayerId, Rect)> {
     let stack: Vec<LayerId> =

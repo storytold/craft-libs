@@ -274,6 +274,84 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }
 
+/// An Alt+letter the keymap binds to an enabled command runs that command and opens no menu, as a shortcut comes before
+/// a mnemonic; without the binding the same chord opens the menu.
+#[trial]
+fn a_bound_alt_letter_runs_its_command_instead_of_the_mnemonic() {
+    use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
+    use craft_ui::runtime::frame::take_output;
+    const RULERS: &str = "barTrial.rulers";
+    let mut rig = rig(Direction::Ltr);
+    let binding = Binding::parse("Alt+F").expect("the trial's chord parses");
+    let catalog = AppCatalog::new(vec![CommandDef::new(RULERS, "Rulers", Scope::app()).with_default(binding)], 1).expect("the trial's catalog");
+    rig.fixture.commands(CommandInput::new().catalog(catalog)).settle();
+    take_output(rig.fixture.ctx());
+    rig.fixture.key(Key::F, Modifiers::ALT);
+    rig.fixture.settle();
+    let fired: Vec<String> = take_output(rig.fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+    assert_eq!(fired, [RULERS], "the bound Alt+F runs its command once");
+    assert!(!rig.open("New"), "and does not also open File");
+
+    rig.fixture.commands(CommandInput::new()).settle();
+    rig.fixture.key(Key::F, Modifiers::ALT);
+    rig.fixture.settle();
+    assert!(rig.open("New"), "unbound, Alt+F opens File");
+}
+
+/// `MenuBarOutput::opened` is true in the one pass where a menu opened while none was open: a held menu, a switch from
+/// one title to another and the passes a frame reruns report false.
+#[trial]
+fn a_bar_menu_opening_is_reported_once() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let passes: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let seen = passes.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![
+            MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            }),
+            MenuTitle::new("&Edit", |ui| {
+                MenuItem::new("&Undo").show(ui);
+            }),
+        ];
+        let out = MenuBar::new("Main menu", titles).show(ui);
+        seen.borrow_mut().push(out.opened);
+    });
+    fixture.os(Os::Linux);
+    let reports = || {
+        let count = passes.borrow().iter().filter(|opened| **opened).count();
+        passes.borrow_mut().clear();
+        count
+    };
+    fixture.settle();
+    assert_eq!(reports(), 0, "a closed bar reports no opening");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "File is open");
+    assert_eq!(reports(), 1, "the click that opened File reports once across every pass it ran");
+
+    fixture.settle().idle(2);
+    assert_eq!(reports(), 0, "a menu held open reports nothing");
+
+    fixture.key(Key::E, Modifiers::ALT);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_some() && fixture.by_label("New").is_none(), "Alt+E switches to Edit");
+    assert_eq!(reports(), 0, "a switch from one open title to another reports nothing");
+
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_none(), "Edit is closed");
+    assert_eq!(reports(), 0, "closing reports nothing");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert_eq!(reports(), 1, "opening again reports once more");
+}
+
 /// A view beside the menu bar that reads nothing the menu changes.
 #[derive(craft_ui::contract::MemoProps)]
 struct Status {}
@@ -374,4 +452,152 @@ fn holding_alt_runs_the_memoized_view_of_a_menu_bar() {
     assert_eq!(frame(&mut fixture), 0, "with Alt held the view replays again");
     fixture.hold(Modifiers::NONE);
     assert!(frame(&mut fixture) > 0, "Alt coming up runs the view, which drops the underlines");
+}
+
+/// What a window's own Space does: the canvas's momentary Hand, say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
+#[command(prefix = "trialHand", scope = "trial.hand")]
+#[non_exhaustive]
+pub enum HandCommand {
+    #[command(label = "Hand", default = "Space")]
+    Hand,
+}
+
+/// Space on the menu bar that F10 or a lone Alt focused opens no menu: the press goes on to the window's own Space
+/// command (a canvas's Hand), as in the reference application, where Space is always the Hand, and the shortcut gives
+/// the keyboard back to the stop the bar took it from. Enter and Down still open the focused title's menu.
+#[trial]
+fn space_on_the_focused_bar_opens_no_menu_and_reaches_the_window() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::layout_components::Stack;
+    use craft_ui::runtime::commands::Commands as _;
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let (hands, clicks, button) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+    let (seen_hands, seen_clicks, seen_button) = (Rc::clone(&hands), Rc::clone(&clicks), Rc::clone(&button));
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            MenuItem::new("&New").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        Stack::new().command_scope(<HandCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<HandCommand>().is_some() {
+                seen_hands.set(seen_hands.get() + 1);
+            }
+            let shown = Button::new("Layer").show(ui);
+            if shown.clicked() {
+                seen_clicks.set(seen_clicks.get() + 1);
+            }
+            seen_button.set(Some(shown.response.id));
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let layer = button.get().expect("the button ran");
+    for (enter, alt) in [(None, false), (None, true), (Some(Key::Enter), false), (Some(Key::ArrowDown), false)] {
+        request(fixture.ctx(), FocusTarget::Id(layer));
+        fixture.settle();
+        let before = (hands.get(), clicks.get());
+        if alt {
+            fixture.hold(Modifiers::ALT).settle();
+            fixture.hold(Modifiers::NONE).settle();
+        } else {
+            fixture.key(Key::F10, Modifiers::NONE);
+            fixture.settle();
+        }
+        assert!(fixture.focused_stop().is_some_and(|(id, _)| id != layer), "the bar takes the keyboard (alt {alt})");
+        if let Some(key) = enter {
+            fixture.key(key, Modifiers::NONE);
+            fixture.settle();
+            assert!(fixture.by_label("New").is_some(), "{key:?} opens the focused title's menu");
+            assert_eq!((hands.get(), clicks.get()), before, "{key:?} reaches neither the window nor the button");
+            fixture.key(Key::Escape, Modifiers::NONE);
+            fixture.key(Key::Escape, Modifiers::NONE);
+            fixture.settle();
+            continue;
+        }
+        fixture.key(Key::Space, Modifiers::NONE);
+        fixture.settle();
+        assert!(fixture.by_label("New").is_none(), "Space opens no menu (alt {alt})");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(layer), "Space takes the keyboard off the bar, back to the button (alt {alt})");
+        assert_eq!(hands.get(), before.0 + 1, "the press reaches the window's Space command (alt {alt})");
+        assert_eq!(clicks.get(), before.1, "and activates nothing else (alt {alt})");
+    }
+}
+
+/// With nothing focused the window's document canvas is the key target: a bar that F10 or a lone Alt focused then
+/// gives the keyboard back to the canvas, so Space, the canvas's Hand, matches there and leaves the bar in one press.
+#[trial]
+fn space_on_a_bar_focused_from_nothing_goes_to_the_document_canvas() {
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::layout_components::Stack;
+    use craft_ui::runtime::commands::Commands as _;
+    use craft_ui::runtime::focus::{KeyUse, host_canvas};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let canvas = egui::Id::unique("document canvas");
+    let hands = Rc::new(Cell::new(0));
+    let seen_hands = Rc::clone(&hands);
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            MenuItem::new("&New").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        Stack::new().command_scope(<HandCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<HandCommand>().is_some() {
+                seen_hands.set(seen_hands.get() + 1);
+            }
+            let rect = ui.available_rect_before_wrap();
+            ui.interact(rect, canvas, egui::Sense::click());
+            host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    for alt in [false, true] {
+        assert!(fixture.focused_stop().is_none_or(|(id, _)| id == canvas), "nothing but the canvas holds the keyboard (alt {alt})");
+        if alt {
+            fixture.hold(Modifiers::ALT).settle();
+            fixture.hold(Modifiers::NONE).settle();
+        } else {
+            fixture.key(Key::F10, Modifiers::NONE);
+            fixture.settle();
+        }
+        assert!(fixture.focused_stop().is_some_and(|(id, _)| id != canvas), "the bar takes the keyboard (alt {alt})");
+        let before = hands.get();
+        fixture.key(Key::Space, Modifiers::NONE);
+        fixture.settle();
+        assert!(fixture.by_label("New").is_none(), "Space opens no menu (alt {alt})");
+        assert_eq!(hands.get(), before + 1, "Space reaches the canvas's command (alt {alt})");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(canvas), "and the keyboard goes to the canvas (alt {alt})");
+    }
+}
+
+/// Tc-9 (3): the selection of a focused field holds while a menu the window's menu bar opened has the keyboard, which
+/// goes back to the field: the bar's Edit menu shows Copy enabled for it. The field kept its selection only for its own
+/// edit menu, so Copy was disabled there.
+#[trial]
+fn a_fields_selection_holds_while_the_menu_bar_has_the_keyboard() {
+    use craft_ui::contract::{Bind, Props as _};
+    use craft_ui::text::TextField;
+    use std::cell::RefCell;
+    let text = RefCell::new("hello".to_owned());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&Edit", |ui| {
+            MenuItem::command(EditCommands::Copy).show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).id_salt("name").show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let field = fixture.by_label("Name").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::CTRL).settle();
+    let edit = fixture.by_label("Edit").expect("the Edit title");
+    fixture.click(&edit).settle();
+    let copy = fixture.by_label("Copy").expect("the Edit menu is open");
+    assert!(!fixture.tree().is_disabled_key(copy.node), "Copy applies to the field's selection");
 }

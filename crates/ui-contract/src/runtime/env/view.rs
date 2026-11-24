@@ -48,6 +48,10 @@ impl<'a> EnvView<'a> {
         self.scoped.scroll_owner.map(|owner| owner.id)
     }
 
+    pub(crate) fn fallback_collection(&self) -> Option<Id> {
+        self.scoped.fallback_collection
+    }
+
     /// The view of the innermost scroll area around the scope.
     pub(crate) fn lazy_view(&self) -> Option<crate::runtime::lazy::View> {
         self.scoped.lazy

@@ -14,6 +14,13 @@ test = false
 [lints]
 workspace = true
 
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/ui-contract/tests/fonts/NotoSansArabic-test.ttf",
+]
+
 [features]
 suite = ["testing", "craft-ui-contract/suite"]
 default = []
@@ -31,6 +38,10 @@ craft-host = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 smallvec = { workspace = true }
 serde = { workspace = true }
+# Picture rasterising: the bounded usvg/resvg stack every Craft app shares, without text or raster images.
+craft-svg = { workspace = true, features = ["draw"] }
+# A picture whose SVG is refused says why once, as the icon set does.
+log = { workspace = true }
 
 [dev-dependencies]
 craft-ui-widgets = { path = ".", features = ["suite"] }

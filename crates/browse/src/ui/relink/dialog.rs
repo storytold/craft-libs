@@ -634,7 +634,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
                 let ctx = ctx.clone();
                 Wake::new(move || ctx.request_repaint())
             };
-            let checks = JobQueue::new(Arc::clone(&jobs), wake.clone(), QueueOptions { lanes: 1, name: "relink-check" });
+            let checks = JobQueue::new(Arc::clone(&jobs), wake.clone(), QueueOptions { lanes: 1, name: "relink-check", ..QueueOptions::default() });
             self.runtime = Some(Runtime { jobs, wake, checks });
         }
         self.poll_pick();
