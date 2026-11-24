@@ -74,7 +74,7 @@ pub enum DropMark {
     },
 }
 
-crate::stays!(Arc<crate::style::UiTokens>, DropOperation);
+crate::stays!(Arc<crate::style::UiTokens>, DropOperation, TargetReach);
 
 impl crate::runtime::Shift for DropMark {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
@@ -301,10 +301,16 @@ struct Registration {
     op: DropOperation,
     /// The tokens of the target's region.
     tokens: Arc<UiTokens>,
+    reach: TargetReach,
+}
+
+/// Where a drop target takes drops beyond its own mark.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TargetReach {
     /// The target covers the whole window: any target over a component beats it.
-    window: bool,
+    pub(crate) window: bool,
     /// The target takes OS files under a modal layer (`DropTarget::under_modal`).
-    under_modal: bool,
+    pub(crate) under_modal: bool,
 }
 
 /// A viewport's registrations: this pass's, and the target that won last pass.
@@ -635,24 +641,12 @@ pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
 }
 
 /// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer a drop doing `op`, with its mark in
-/// layer space and the tokens of the target's region. A `window` target covers the whole window; an `under_modal` one
-/// takes OS files under a modal layer.
-pub(crate) fn register(
-    ctx: &Context,
-    owner: Id,
-    layer: Layer,
-    mark: DropMark,
-    op: DropOperation,
-    tokens: Arc<UiTokens>,
-    window: bool,
-    under_modal: bool,
-) {
+/// layer space, the tokens of the target's region and its `reach`.
+pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, op: DropOperation, tokens: Arc<UiTokens>, reach: TargetReach) {
     crate::runtime::replay::journal(
         ctx,
-        || (owner, layer, mark, op, tokens.clone(), (window, under_modal)),
-        |ctx, (owner, layer, mark, op, tokens, (window, under_modal))| {
-            register(ctx, *owner, *layer, *mark, *op, tokens.clone(), *window, *under_modal)
-        },
+        || (owner, layer, mark, op, tokens.clone(), reach),
+        |ctx, (owner, layer, mark, op, tokens, reach)| register(ctx, *owner, *layer, *mark, *op, tokens.clone(), *reach),
     );
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
@@ -661,7 +655,7 @@ pub(crate) fn register(
     let scope = overlay::drawing_parent(ctx);
     PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
         let ordinal = targets.this.iter().filter(|registration| registration.owner == owner).count() as u32;
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, tokens, window, under_modal });
+        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, tokens, reach });
     });
 }
 
@@ -747,7 +741,7 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     let op = current_operation(ctx, target.copy_keys());
     let drop = target.accept(&*payload, at, op)?;
     let ordinal = next_ordinal(ctx, owner);
-    register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, false, target.under_modal());
+    register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, TargetReach { window: false, under_modal: target.under_modal() });
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
 }
 
@@ -811,7 +805,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     // that takes them there.
     let os = carries_os_files(ctx);
     let scopes: Vec<(Option<Id>, bool)> = PerViewport::<Targets>::with(ctx, viewport, |targets| {
-        targets.this.iter().map(|registration| (registration.scope, os && registration.under_modal)).collect()
+        targets.this.iter().map(|registration| (registration.scope, os && registration.reach.under_modal)).collect()
     });
     let open: Vec<bool> =
         scopes.iter().map(|(scope, through)| *through || overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
@@ -823,10 +817,10 @@ pub(crate) fn end_pass(ctx: &Context) {
             .iter()
             .enumerate()
             .filter(|(at, _)| open[*at])
-            .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
+            .max_by_key(|(at, registration)| (!registration.reach.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
-        targets.component = best.is_some_and(|registration| !registration.window);
-        targets.winner_window = best.is_some_and(|registration| registration.window);
+        targets.component = best.is_some_and(|registration| !registration.reach.window);
+        targets.winner_window = best.is_some_and(|registration| registration.reach.window);
         targets.pointer = position;
         let best =
             best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op, registration.tokens.clone())));
@@ -909,7 +903,7 @@ pub(crate) fn held_elsewhere(ctx: &Context) -> bool {
     let viewport = pass::current_viewport(ctx);
     pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).any(|other| {
         PerViewport::<Targets>::with(ctx, other, |targets| {
-            (targets.winner.is_some() && targets.component) || targets.this.iter().any(|registration| !registration.window)
+            (targets.winner.is_some() && targets.component) || targets.this.iter().any(|registration| !registration.reach.window)
         })
     })
 }

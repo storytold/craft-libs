@@ -8,8 +8,7 @@ use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, 
 use super::{request, rows};
 use crate::contract::ValueOf;
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnLayout, ContextMenuRequest, DropAt, Gestures, HoverLead, ItemsOut, OpenChange, PendingDrop, Rename,
-    RowState, ShownRow,
+    CollectionEvent, CollectionProps, ColumnLayout, DropAt, Gestures, HoverLead, ItemsOut, PendingDrop, Rename, RowState, ShownRow,
 };
 use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
@@ -644,16 +643,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 if let Some(row) = shown_rows.last_mut() {
                     row.openers = self.item_openers(&row_ui, &ctx, id, cx.core.resolved.enabled, openers);
                 }
-                if let Some(ask) = out.open_request() {
-                    self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
-                }
-                if let Some(rect) = out.menu_request() {
-                    crate::runtime::keys::request_context(&ctx, id, rect, None);
-                    self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
-                }
-                if let Some(event) = out.into_event() {
-                    self.events.push(CollectionEvent::Item(key.clone(), event));
-                }
+                self.report_item_output(&ctx, id, &key, out);
                 if state.renaming {
                     self.rename_row(comp, &mut row_ui, (&ctx, id, rtl), (at, &key), label);
                 }
