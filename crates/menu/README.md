@@ -33,8 +33,13 @@ parameter carries it in the `CommandRef`:
 `CommandRef::with_params("file.open_recent", json!({"index": 3}))`. Items built directly use
 `Item::new(command, label)` with `.shortcut(chord)`, `.enabled(..)`, `.check(..)` or
 `.radio(..)` (the item's `ItemKind`), `.role(..)`, `.platforms(..)`, `.tint(colour)` and
-`.tooltip(text)` (both for the in-window bar only; the native macOS menu ignores them); submenus use
-`Node::submenu(label, children)`, with `.role(..)` for a tagged one. A shortcut is a
+`.tooltip(text)` and `.sample(aspect, face)` (a `craft_ui::primitives::FacePaint` painted in a
+column of its own between the label and the shortcut, `aspect` times as wide as the row's text
+line is high: a font menu's samples) (all three for the in-window bar only; the native macOS menu
+ignores them); submenus use `Node::submenu(label, children)`, with `.role(..)` for a tagged one.
+`Node::heading(label)` (`Node::Heading`) is a caption over the rows after it and never a command:
+it takes no mnemonic letter and no help-search entry, the native menu shows it as a disabled
+item, and `tidy` drops one with no item after it before the next separator. A shortcut is a
 `craft_keymap::Chord`: `cmd` is ⌘ and `ctrl` the Control key. macOS shows radio items as check
 items. The app's open documents go in `MenuBar::documents` (`Document::new(command, name)`,
 `.active(..)` for the one in front, `hidden` for one kept open but not listed), and the layouts
@@ -219,7 +224,14 @@ sets it back to the app's state, so the app's state always wins.
 While a menu is open, a click or Escape in the window closes it and does not reach egui (no
 canvas gesture, no tool action); pointer moves pass through. Only one click is kept this way
 until the menu reports closed, so a menu wrongly reported open costs one click. Menu updates wait
-until the menu closes. A rebuild that fails keeps the menus as they were.
+until the menu closes; the end of tracking wakes egui, and that frame applies them. A rebuild that
+fails keeps the menus as they were.
+
+AppKit's `NSMenuDidBeginTracking` and `NSMenuDidEndTracking` notifications say whether a menu is
+open (`craft_window::native_menu::menu_tracking()`, safe from any thread). Each begin comes back
+once as `Event::Opened`, and `NativeMenu::take_opened` reports it once, for an app that refreshes
+what a menu lists (a scripts folder) as it opens. It changes nothing the menus show, so it does
+not re-sync them.
 
 ## Per frame
 

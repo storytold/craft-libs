@@ -92,10 +92,12 @@ pass_state! {
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,
         bar_rules: crate::contract::BarRules,
+        surface_frames: crate::primitives::SurfaceFrames,
         fill_counts: crate::layout::body::FillCounts,
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
+        wrap_rows: crate::layout::body::WrapRows,
         flow_starts: crate::layout::body::FlowStarts,
         brackets: crate::layout::body::Brackets,
         cursors: crate::layout::body::Cursors,
@@ -150,6 +152,7 @@ pass_state! {
         pass_pointer: Arc<crate::runtime::pointer::PassPointer>,
         overlay_pass: crate::runtime::overlay::Pass,
         shown_ids: IdSet,
+        edge_step_taken: crate::contract::reorder::EdgeStepTaken,
     }
 }
 

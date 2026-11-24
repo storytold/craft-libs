@@ -1,6 +1,6 @@
 //! Stories of `ZoomField`.
 
-use super::ZoomField;
+use super::{ZoomField, ZoomScale};
 use crate::contract::{GlyphLabel, LabelKind, Props as _, ShowContainer as _, SideLabel, Sizing};
 use crate::form::Field;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -30,6 +30,12 @@ fn shown(ui: &mut Ui, data: &mut StoryData, field: impl FnOnce(CanvasView) -> Zo
 #[story(ZoomField, covers = [Default], drive = Drive::Type("200"))]
 fn zoom_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     shown(ui, data, |view| ZoomField::new("Zoom", Some(view), DOCUMENT))
+}
+
+/// The zoom on the document-point scale: 100 % is the document's actual size at any screen scale.
+#[story(ZoomField, covers = [], drive = Drive::Type("100"))]
+fn zoom_field_points(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    shown(ui, data, |view| ZoomField::new("Zoom", Some(view), DOCUMENT).scale(ZoomScale::Points))
 }
 
 #[story(ZoomField, covers = [], drive = Drive::Step)]

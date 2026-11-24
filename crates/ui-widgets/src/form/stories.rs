@@ -3,11 +3,11 @@
 use super::Help;
 use super::{Field, FieldGroup};
 use crate::choice::Swatch;
-use crate::contract::{FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::contract::{FieldLayout, GlyphColon, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
 use crate::layout_components::Row;
-use crate::runtime::env::Message;
+use crate::runtime::env::{Message, with_env};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use crate::text::NumberField;
+use crate::text::{HexField, NumberField};
 use craft_behavior::IconId;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
@@ -35,6 +35,18 @@ fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .help(Help::Text("A help text much longer than the room under the control, so it wraps onto more than one line".into()))
         .show(ui, |ui, _| NumberField::new("Size", data.bind("long", Some(SIZE))).show(ui))
         .into()
+}
+
+/// A number field whose side label is a link: a click reports to the host and leaves focus alone, a drag scrubs.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_link_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = Field::new("Opacity")
+        .side(SideLabel::new().link().scrub(true))
+        .show(ui, |ui, _| NumberField::new("Opacity", data.bind("link", Some(100.0))).scrub_by_label().show(ui));
+    // The field the label names reports the link click; the story is its host.
+    let link = shown.inner.as_ref().is_some_and(|field| field.link);
+    let facts = StoryOutput::from(shown);
+    StoryOutput { clicked: facts.clicked || link, ..facts }
 }
 
 /// A glyph label: the icon shows, the text only names the control.
@@ -88,6 +100,32 @@ fn field_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             }
         })
         .into()
+}
+
+/// A form under `GlyphColon::Form`: the glyph captions X, Y, W and H end with a colon as the word label does, and the
+/// "#" before the hex value, a mark of its own, stays bare.
+#[story(FieldGroup, covers = [], drive = Drive::Never)]
+fn field_glyph_captions_with_colons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const BLUE: craft_theme::Rgba = craft_theme::Rgba([0x33, 0x66, 0x99, 0xff]);
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(GlyphColon::Form);
+        },
+        |ui| {
+            FieldGroup::new("Transform").labels(LabelScheme::Form).show(ui, |ui, _| {
+                for (glyph, name, key, value) in
+                    [("X", "X position", "x", 24.0), ("Y", "Y position", "y", 36.0), ("W", "Width", "w", 640.0), ("H", "Height", "h", 480.0)]
+                {
+                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph))).scrub(true);
+                    Field::new(name).side(side).show(ui, |ui, _| NumberField::new(name, data.bind(key, Some(value))).show(ui));
+                }
+                Field::new("Opacity").show(ui, |ui, _| NumberField::new("Opacity", data.bind("opacity", Some(100.0))).show(ui));
+                Field::new("Hex color").side(HexField::hash_label()).show(ui, |ui, _| HexField::hex("Hex color", data.bind("hex", BLUE)).show(ui));
+            })
+        },
+    )
+    .into()
 }
 
 /// The rows of an inspector: glyph labels W and H sharing a row, word labels at the row's start without a colon, and

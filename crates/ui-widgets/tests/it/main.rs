@@ -12,6 +12,7 @@ pub(crate) mod commands;
 pub(crate) mod contract;
 pub(crate) mod disabled_fade;
 pub(crate) mod field_text_centred;
+pub(crate) mod focus_ring;
 pub(crate) mod keys;
 pub(crate) mod label;
 pub(crate) mod layer;
@@ -21,7 +22,6 @@ pub(crate) mod list;
 pub(crate) mod menu;
 pub(crate) mod notices;
 pub(crate) mod overlay;
-
 pub(crate) mod pickers;
 pub(crate) mod picture;
 pub(crate) mod popover;

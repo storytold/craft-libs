@@ -51,6 +51,17 @@ impl HexCodec {
     fn channels(&self) -> usize {
         if self.alpha { 4 } else { 3 }
     }
+
+    /// The digits of `text`: trimmed and less one `#`.
+    fn digits_of(text: &str) -> &str {
+        let text = text.trim();
+        text.strip_prefix('#').unwrap_or(text)
+    }
+
+    /// Whether `digits` are the shorthand of a two-digit codec: one digit a channel, each read doubled.
+    fn is_shorthand(&self, digits: &str) -> bool {
+        self.digits == 2 && digits.len() == self.channels()
+    }
 }
 
 impl Codec for HexCodec {
@@ -65,11 +76,17 @@ impl Codec for HexCodec {
     }
 
     fn parse(&self, text: &str, start: &Rgba) -> Result<Rgba, NotAValue> {
-        let digits = text.trim();
-        let digits = digits.strip_prefix('#').unwrap_or(digits);
+        let digits = Self::digits_of(text);
         if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(NotAValue);
         }
+        let doubled: String;
+        let digits = if self.is_shorthand(digits) {
+            doubled = digits.chars().flat_map(|digit| [digit, digit]).collect();
+            doubled.as_str()
+        } else {
+            digits
+        };
         let width = self.digits;
         let channel = |at: usize| {
             let value = u8::from_str_radix(digits.get(at * width..(at + 1) * width)?, 16).ok()?;
@@ -87,8 +104,9 @@ impl Codec for HexCodec {
         }
     }
 
-    fn applies_as_typed(&self, _text: &str) -> bool {
-        true
+    /// A shorthand's digits are the start of a full colour (`336` of `336699`): they apply on commit only.
+    fn applies_as_typed(&self, text: &str) -> bool {
+        !self.is_shorthand(Self::digits_of(text))
     }
 
     fn filter(&self, c: char) -> bool {
@@ -101,6 +119,10 @@ impl Codec for HexCodec {
 
     fn sample(&self, _current: &Rgba) -> Cow<'_, str> {
         Cow::Owned("0".repeat(self.digits * self.channels()))
+    }
+
+    fn whole_paste(&self, pasted: &str) -> bool {
+        self.parse(pasted, &Rgba([0, 0, 0, 255])).is_ok()
     }
 }
 

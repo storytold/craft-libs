@@ -33,6 +33,8 @@ pub(crate) struct Edit<'a> {
     pub rtl: bool,
     /// The text sits in the middle of the rect.
     pub centred: bool,
+    /// The text sits at the end edge of the rect (unless `centred`).
+    pub end_aligned: bool,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -46,6 +48,10 @@ pub(crate) struct Edit<'a> {
     /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
     /// (`text_adapter`), and a single line or a laid-out galley ignores it.
     pub scroll: f32,
+    /// The modifiers of the Enter chord that breaks the line of a multi-line text. egui inserts the line break itself
+    /// before the adapter sees the Enter, so the adapter passes the chord its submit key leaves free: Shift under a plain
+    /// Enter submit, none under Cmd or Ctrl+Enter.
+    pub line_break: egui::Modifiers,
 }
 
 /// What the widget did in one pass.
@@ -86,11 +92,13 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         preedit,
         rtl,
         centred,
+        end_aligned,
         caret_visible,
         underline,
         galley,
         baseline,
         scroll,
+        line_break,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
     let tokens = &env.tokens;
@@ -196,14 +204,16 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
                     .desired_rows(1)
                     .password(password)
                     .event_filter(filter)
-                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
+                    .return_key(if multiline { Some(egui::KeyboardShortcut::new(line_break, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
                     // A laid-out galley sits at the rect's corner, as a painted run does.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, true) => egui::Align2::RIGHT_CENTER,
-                        (false, false) => egui::Align2::LEFT_CENTER,
+                        (false, rtl) => match (end_aligned, rtl) {
+                            (true, false) | (false, true) => egui::Align2::RIGHT_CENTER,
+                            (true, true) | (false, false) => egui::Align2::LEFT_CENTER,
+                        },
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);

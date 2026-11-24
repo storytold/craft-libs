@@ -48,9 +48,10 @@ impl<'e, 'l, T> EntryRows<'e, 'l, T> {
             }
             None => row,
         };
-        let row = match entry.why_disabled() {
-            Some(reason) => row.description(reason.as_str()).tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone())),
-            None => row,
+        let row = match (entry.why_disabled(), entry.description_text()) {
+            (Some(reason), _) => row.description(reason.as_str()).tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone())),
+            (None, Some(text)) if entry.is_enabled() => row.description(text.as_str()).tooltip(TooltipSpec::new(text.clone())),
+            _ => row,
         };
         match dress {
             Some(dress) => dress.apply(value, row),
