@@ -307,6 +307,20 @@ pub enum HeaderEdge {
     End,
 }
 
+/// The room around the rule above a header ([`HeaderRegion::rule_above`]), as a `Section` has. An app sets it once at its
+/// root (`RootEnv::values`); the default is `Tight`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum SectionRhythm {
+    /// The rule takes the gap its flow leaves before the container, and the header follows it at once.
+    #[default]
+    Tight,
+    /// The rule stands `space.gap.section` below what precedes it in its `Stack`, in place of the stack's gap (no room
+    /// at its flow's start), and the header `space.gap.row` below it: production VectorCraft's panel sections.
+    Spaced,
+}
+
 /// A header region, filled by `Container::header`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
