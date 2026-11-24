@@ -108,6 +108,13 @@ fn indexed_paths_keep_coexisting_encodings_geometry_and_original_identity() {
             assert_eq!(paths.records[2].offset, source);
             assert_eq!(paths.records[2].tattoo, Some(11));
             assert!(paths.records[2].geometry_complete());
+            let strokes = &paths.records[2].strokes;
+            assert_eq!(strokes.len(), 1);
+            assert_eq!(strokes[0].knots.len(), 1);
+            let knot = strokes[0].knots[0];
+            assert_eq!(knot.incoming.position, [-2., 3.]);
+            assert_eq!(knot.anchor.position, [4., 5.]);
+            assert_eq!(knot.outgoing.position, [6., 7.]);
         }
     }
 }
@@ -181,4 +188,83 @@ fn optional_path_cancellation_wins_at_entry_and_during_a_source_list() {
     let completed = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
     assert!(completed.stopped.is_none());
     assert_eq!(completed.records.len(), 3);
+}
+
+#[test]
+fn standalone_pointer_targets_must_be_inside_the_source() {
+    for version in [18, 26] {
+        let (mut bytes, table, source) = file(version, &[], 2);
+        let invalid = bytes.len();
+        bytes[table + 8..table + 16].copy_from_slice(&(invalid as u64).to_be_bytes());
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let scan = xcf.path_offsets(super::super::super::Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.records, [source]);
+        assert_eq!(scan.stopped.unwrap(), Diagnostic { offset: table + 8, ordinal: 1, reason: StopReason::Malformed });
+    }
+}
+
+#[test]
+fn standalone_table_shares_declared_point_limits_including_unknown_strokes() {
+    for unknown in [false, true] {
+        let (mut bytes, _, source) = file(26, &[], 2);
+        if unknown {
+            // Last part of the frame is stroke header + three 12-byte points.
+            let kind = bytes.len() - 36 - 16;
+            bytes[kind..kind + 4].copy_from_slice(&99u32.to_be_bytes());
+        }
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let scan = xcf.paths(Limits { points: 3, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(scan.records[0].offset, source);
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::RecordLimit);
+        let exact = xcf.paths(Limits { points: 6, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+        assert!(exact.stopped.is_none());
+        assert_eq!(exact.records.len(), 2);
+        assert_eq!(exact.records[0].geometry_complete(), !unknown);
+    }
+}
+
+#[test]
+fn cancelled_path_scans_restore_dropped_prefix_and_staging_but_not_work() {
+    let (bytes, _, _) = file(26, &[(25, historical(25, "Vectors"))], 2);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let mut cancelled = 0;
+    for stop in 2..90 {
+        let calls = std::cell::Cell::new(0);
+        let keep = || {
+            calls.set(calls.get() + 1);
+            calls.get() < stop
+        };
+        let mut budget = Budget::new(1 << 20, 1 << 20);
+        if matches!(xcf.paths(Limits::default(), &mut budget, &keep), Err(Error::Cancelled)) {
+            cancelled += 1;
+            assert_eq!(budget.retained_remaining(), 1 << 20, "cancellation at checkpoint {stop}");
+            assert!(budget.work_remaining() < 1 << 20);
+            let retry = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+            assert!(retry.stopped.is_none());
+            assert_eq!(retry.records.len(), 3);
+        }
+    }
+    assert!(cancelled > 10);
+}
+
+#[test]
+fn standalone_visibility_preserves_both_saved_states() {
+    for visible in [0, 1] {
+        let mut payload = W { out: Vec::new(), wide: false };
+        payload.prop_u32(8, visible);
+        payload.end();
+        payload.u32(1);
+        payload.u32(1);
+        cubic(&mut payload);
+        let mut source = W { out: Vec::new(), wide: false };
+        source.string("path");
+        source.u32(payload.out.len() as u32);
+        source.out.extend(payload.out);
+        let scan = super::super::standalone(&source.out, 0, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(scan.stopped.is_none());
+        assert_eq!(scan.records[0].visible, visible);
+        assert_eq!(scan.records[0].properties[0].payload, visible.to_be_bytes());
+        assert_eq!(scan.records[0].strokes[0].axes, 2);
+    }
 }

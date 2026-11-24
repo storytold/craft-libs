@@ -713,12 +713,16 @@ impl<'a> Xcf<'a> {
         budget: &mut records::Budget,
         keep_going: &dyn Fn() -> bool,
     ) -> Result<records::Scan<records::paths::SourcePath<'a>>> {
-        let properties = self.image_properties(
-            records::Limits { records: limits.properties, string_bytes: limits.name_bytes, payload_bytes: limits.payload_bytes },
-            budget,
-            keep_going,
-        )?;
-        records::paths::index::decode(self.c.at(0), self.path_sources, properties, limits, budget, keep_going)
+        // Cancellation returns no paths, including the outer property staging
+        // vector. Restore its storage allowance while retaining attempted work.
+        budget.cancel_safe(|budget| {
+            let properties = self.image_properties(
+                records::Limits { records: limits.properties, string_bytes: limits.name_bytes, payload_bytes: limits.payload_bytes },
+                budget,
+                keep_going,
+            )?;
+            records::paths::index::decode(self.c.at(0), self.path_sources, properties, limits, budget, keep_going)
+        })
     }
 
     /// Borrow the properties of one layer, preserving duplicate records and offsets.

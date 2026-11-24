@@ -235,9 +235,7 @@ impl Reader<'_> {
                 if modern && (data.is_empty() || data.len() >= stride) {
                     output.has_modern_sample_points = true;
                 }
-                if !records.remainder().is_empty() {
-                    self.issue(&mut output.issues, property, IssueKind::PartialRecord)?;
-                }
+                let partial_tail = !records.remainder().is_empty();
                 for record in records {
                     self.check()?;
                     let words = record.as_chunks::<4>().0;
@@ -261,36 +259,49 @@ impl Reader<'_> {
                     let target = if modern { &mut output.sample_points } else { &mut output.legacy_sample_points };
                     self.retain(target, value, self.limits.sample_points)?;
                 }
+                if partial_tail {
+                    self.issue(&mut output.issues, property, IssueKind::PartialRecord)?;
+                }
             }
             21 => {
                 let offset = property.offset.checked_add(8).ok_or(StopReason::Malformed)?;
+                let retained = self.budget.retained_left;
                 let scan = super::parasites(data, offset, self.limits.records, self.budget, self.keep_going).map_err(|error| match error {
                     Error::Cancelled => Failure::Cancelled,
                     Error::Invalid(_) => Failure::Stop(StopReason::Malformed),
                 })?;
-                for record in scan.records {
-                    self.check()?;
-                    if record.name == b"icc-profile" {
-                        if record.payload.is_empty() {
-                            self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
-                        } else {
-                            output.profile = Some(Evidence { offset: record.offset, value: record.payload });
+                let scan_charge = retained - self.budget.retained_left;
+                let result: ReadResult<()> = (|| {
+                    for record in &scan.records {
+                        self.check()?;
+                        if record.name == b"icc-profile" {
+                            if record.payload.is_empty() {
+                                self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
+                            } else {
+                                output.profile = Some(Evidence { offset: record.offset, value: record.payload });
+                            }
+                            continue;
                         }
-                        continue;
+                        let kind = match record.name {
+                            b"gimp-comment" => PacketKind::Comment,
+                            b"exif-data" => PacketKind::Exif,
+                            b"gimp-image-metadata" => PacketKind::ImageMetadata,
+                            b"gimp-metadata" => PacketKind::Metadata,
+                            _ => continue,
+                        };
+                        let value = Evidence { offset: record.offset, value: Packet { kind, flags: record.flags, bytes: record.payload } };
+                        self.retain(&mut output.packets, value, self.limits.packets)?;
                     }
-                    let kind = match record.name {
-                        b"gimp-comment" => PacketKind::Comment,
-                        b"exif-data" => PacketKind::Exif,
-                        b"gimp-image-metadata" => PacketKind::ImageMetadata,
-                        b"gimp-metadata" => PacketKind::Metadata,
-                        _ => continue,
-                    };
-                    let value = Evidence { offset: record.offset, value: Packet { kind, flags: record.flags, bytes: record.payload } };
-                    self.retain(&mut output.packets, value, self.limits.packets)?;
-                }
-                if let Some(stopped) = scan.stopped {
-                    return Err(stopped.reason.into());
-                }
+                    if let Some(stopped) = scan.stopped {
+                        return Err(stopped.reason.into());
+                    }
+                    Ok(())
+                })();
+                // Only the temporary borrowed-record vector is dropped here;
+                // packets/issues already returned remain charged, as does all work.
+                drop(scan);
+                self.budget.retained_left += scan_charge;
+                result?;
             }
             _ => {}
         }

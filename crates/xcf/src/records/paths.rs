@@ -35,6 +35,9 @@ impl Default for Limits {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Point {
     pub position: [f64; 2],
+    /// Pressure, x tilt, y tilt and wheel, valid only for indices below
+    /// `Stroke::axes - 2`. Unstored axes are zero placeholders, not defaults:
+    /// their source defaults are pressure 1.0, tilt 0.0 and wheel 0.5.
     pub auxiliary: [f32; 4],
 }
 
@@ -50,6 +53,8 @@ pub struct Knot {
 pub struct Stroke<'a> {
     pub kind: u32,
     pub closed: bool,
+    /// Number of stored axes, including x/y. Consult this before reading a
+    /// point's auxiliary axes; explicit stored zero values remain zero.
     pub axes: u32,
     pub knots: Vec<Knot>,
     pub raw: &'a [u8],
@@ -349,6 +354,7 @@ fn read_list<'a>(
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<SourcePath<'a>>> {
+    let initial_retained = budget.retained_left;
     let mut reader =
         Reader { cursor: Cursor { b: bytes, pos: 0, wide: false }, source_offset, limits, points_left: limits.points, budget, keep_going };
     let mut records = Vec::new();
@@ -364,11 +370,15 @@ fn read_list<'a>(
     })();
     let (active, count) = match header {
         Ok(header) => header,
-        Err(Failure::Cancelled) => return Err(Error::Cancelled),
+        Err(Failure::Cancelled) => {
+            reader.budget.retained_left = initial_retained;
+            return Err(Error::Cancelled);
+        }
         Err(Failure::Stop(reason)) => return Ok(Scan::stopped(records, source_offset, reason)),
     };
     for index in 0..count {
         if !keep_going() {
+            reader.budget.retained_left = initial_retained;
             return Err(Error::Cancelled);
         }
         let offset = match reader.offset() {
@@ -383,7 +393,10 @@ fn read_list<'a>(
         let result = path.and_then(|path| reader.budget.retain(&mut records, path).map_err(Failure::from));
         match result {
             Ok(()) => {}
-            Err(Failure::Cancelled) => return Err(Error::Cancelled),
+            Err(Failure::Cancelled) => {
+                reader.budget.retained_left = initial_retained;
+                return Err(Error::Cancelled);
+            }
             Err(Failure::Stop(reason)) => {
                 // Refund only the rejected path's dropped storage. Earlier paths
                 // remain charged, and source work is never refunded.
@@ -430,6 +443,19 @@ pub fn standalone<'a>(
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<SourcePath<'a>>> {
+    let mut points_left = limits.points;
+    standalone_with_points(bytes, offset, source_index, limits, budget, keep_going, &mut points_left)
+}
+
+fn standalone_with_points<'a>(
+    bytes: &'a [u8],
+    offset: usize,
+    source_index: usize,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+    points_left: &mut usize,
+) -> Result<Scan<SourcePath<'a>>> {
     let retained = budget.retained_left;
     let mut reader =
         Reader { cursor: Cursor { b: bytes, pos: offset, wide: false }, source_offset: 0, limits, points_left: limits.points, budget, keep_going };
@@ -458,12 +484,15 @@ pub fn standalone<'a>(
         }
         let mut properties = scan.records;
         let mut tattoo = None;
+        let mut visible = 0;
         let mut selected = false;
         let mut invalid_selection_marker = false;
         for property in &mut properties {
             reader.check()?;
             property.offset = property.offset.checked_add(payload_start).ok_or(Failure::Stop(StopReason::Malformed))?;
             match property.kind {
+                8 if property.payload.len() == 4 => visible = crate::be_u32(property.payload).unwrap_or(0),
+                8 => return Err(StopReason::Malformed.into()),
                 20 if property.payload.len() == 4 => tattoo = crate::be_u32(property.payload).filter(|value| *value != 0),
                 20 => return Err(StopReason::Malformed.into()),
                 43 if property.payload.is_empty() => selected = true,
@@ -499,7 +528,7 @@ pub fn standalone<'a>(
                 tattoo,
                 selected,
                 invalid_selection_marker,
-                visible: 0,
+                visible,
                 linked: 0,
                 legacy_state: None,
                 legacy_version: None,
@@ -509,11 +538,15 @@ pub fn standalone<'a>(
                 raw,
             },
         )?;
+        *points_left = inner.points_left;
         Ok(Scan::complete(records, end))
     })();
     match path {
         Ok(scan) => Ok(scan),
-        Err(Failure::Cancelled) => Err(Error::Cancelled),
+        Err(Failure::Cancelled) => {
+            reader.budget.retained_left = retained;
+            Err(Error::Cancelled)
+        }
         Err(Failure::Stop(reason)) => {
             reader.budget.retained_left = retained;
             Ok(Scan { records: Vec::new(), stopped: Some(Diagnostic { offset, ordinal: source_index, reason }), end_offset: offset })
@@ -747,5 +780,41 @@ mod tests {
         let scan = standalone(&[], usize::MAX, 0, Limits::default(), &mut super::super::Budget::default(), &|| true).unwrap();
         assert!(scan.records.is_empty());
         assert_eq!(scan.stopped.unwrap().reason, super::super::StopReason::Malformed);
+    }
+    #[test]
+    fn cancelled_direct_path_readers_release_partial_geometry_and_allow_retry() {
+        let mut payload = Vec::new();
+        for value in [20, 4, 31, 0, 0, 1, 1] {
+            word(&mut payload, value);
+        }
+        cubic(&mut payload, 1, false);
+        let mut standalone_bytes = Vec::new();
+        name(&mut standalone_bytes, "path");
+        word(&mut standalone_bytes, payload.len() as u32);
+        standalone_bytes.extend(payload);
+        for (kind, bytes) in [(0, legacy_bytes(3, true)), (1, vectors_bytes()), (2, standalone_bytes)] {
+            let read = |budget: &mut Budget, keep: &dyn Fn() -> bool| match kind {
+                0 => legacy(&bytes, 0, Limits::default(), budget, keep),
+                1 => vectors(&bytes, 0, Limits::default(), budget, keep),
+                _ => standalone(&bytes, 0, 0, Limits::default(), budget, keep),
+            };
+            let mut charged_cancellations = 0;
+            for stop in 2..100 {
+                let calls = std::cell::Cell::new(0);
+                let keep = || {
+                    calls.set(calls.get() + 1);
+                    calls.get() < stop
+                };
+                let mut budget = Budget::new(1 << 20, 1 << 20);
+                if matches!(read(&mut budget, &keep), Err(Error::Cancelled)) {
+                    assert_eq!(budget.retained_remaining(), 1 << 20, "kind {kind}, checkpoint {stop}");
+                    if budget.work_remaining() < 1 << 20 {
+                        charged_cancellations += 1;
+                    }
+                    assert!(read(&mut budget, &|| true).unwrap().stopped.is_none());
+                }
+            }
+            assert!(charged_cancellations > 3);
+        }
     }
 }

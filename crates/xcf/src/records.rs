@@ -55,6 +55,15 @@ impl Budget {
         self.retained_left
     }
 
+    pub(crate) fn cancel_safe<T>(&mut self, read: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let retained = self.retained_left;
+        let result = read(self);
+        if matches!(result, Err(Error::Cancelled)) {
+            self.retained_left = retained;
+        }
+        result
+    }
+
     fn work(&mut self, bytes: usize) -> std::result::Result<(), StopReason> {
         self.work_left = self.work_left.checked_sub(bytes).ok_or(StopReason::WorkLimit)?;
         Ok(())
@@ -236,16 +245,20 @@ fn properties_version<'a>(
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<Property<'a>>> {
     let mut cursor = Cursor { b: bytes, pos: offset, wide: false };
+    let retained = budget.retained_left;
     let mut records = Vec::new();
     loop {
-        check(keep_going)?;
+        if let Err(error) = check(keep_going) {
+            budget.retained_left = retained;
+            return Err(error);
+        }
         let start = cursor.pos;
         let record = (|| {
             budget.work(8)?;
             let kind = cursor.u32().map_err(|_| StopReason::Malformed)?;
             let declared_length = cursor.u32().map_err(|_| StopReason::Malformed)?;
             if kind == 0 {
-                return Ok(None);
+                return if declared_length == 0 { Ok(None) } else { Err(StopReason::Malformed) };
             }
             if records.len() >= limits.records {
                 return Err(StopReason::RecordLimit);
@@ -257,8 +270,8 @@ fn properties_version<'a>(
                     let n = cursor.at(cursor.pos).u32().map_err(|_| StopReason::Malformed)? as usize;
                     n.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or(StopReason::Malformed)?
                 }
-                24 => crate::user_unit_len(&cursor, version).map_err(|_| StopReason::Malformed)?,
-                48 => crate::link_layer_len(&cursor).map_err(|_| StopReason::Malformed)?,
+                24 => measured_length(&cursor, kind, version, limits.string_bytes)?,
+                48 => measured_length(&cursor, kind, version, limits.string_bytes)?,
                 _ => usize::try_from(declared_length).map_err(|_| StopReason::Malformed)?,
             };
             if length > limits.payload_bytes {
@@ -281,6 +294,34 @@ fn properties_version<'a>(
     }
 }
 
+// Measure the legacy incorrect length words without ignoring the caller's
+// string cap. Only fixed-count fields are inspected before payload work admission.
+fn measured_length(cursor: &Cursor<'_>, kind: u32, version: Option<u32>, string_limit: usize) -> std::result::Result<usize, StopReason> {
+    let mut p = cursor.at(cursor.pos);
+    let string = |p: &mut Cursor<'_>| {
+        let length = p.u32().map_err(|_| StopReason::Malformed)? as usize;
+        if length > string_limit.min(MAX_STRING) {
+            return Err(StopReason::StringLimit);
+        }
+        p.skip(length).map_err(|_| StopReason::Malformed)
+    };
+    p.skip(if kind == 48 { 4 } else { 8 }).map_err(|_| StopReason::Malformed)?;
+    if kind == 48 {
+        string(&mut p)?;
+        p.skip(8).map_err(|_| StopReason::Malformed)?;
+    } else {
+        for _ in 0..3 {
+            string(&mut p)?;
+        }
+        let five = version.map(|version| version < 21).unwrap_or_else(|| !p.at(p.pos).u32().map(|kind| kind <= 64).unwrap_or(false));
+        if five {
+            string(&mut p)?;
+            string(&mut p)?;
+        }
+    }
+    Ok(p.pos - cursor.pos)
+}
+
 /// Read every parasite from one property payload without deduplicating names.
 /// `source_offset` is the payload's absolute position in the inflated XCF.
 pub fn parasites<'a>(
@@ -291,9 +332,13 @@ pub fn parasites<'a>(
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<Parasite<'a>>> {
     let mut cursor = Cursor { b: bytes, pos: 0, wide: false };
+    let retained = budget.retained_left;
     let mut records = Vec::new();
     loop {
-        check(keep_going)?;
+        if let Err(error) = check(keep_going) {
+            budget.retained_left = retained;
+            return Err(error);
+        }
         let start = cursor.pos;
         let absolute = source_offset.checked_add(start).ok_or_else(|| crate::invalid("parasite source offset overflow"))?;
         if start == bytes.len() {
@@ -486,5 +531,76 @@ mod tests {
             assert_eq!(pixels.data.len(), 4);
             assert!((pixels.data[0] - 20.0 / 255.0).abs() < 1e-6);
         }
+    }
+    #[test]
+    fn cancelled_raw_scans_refund_only_dropped_storage_and_allow_retry() {
+        let property_bytes = [property(100, b"a"), property(0, b"")].concat();
+        let parasite_bytes = parasite(b"a", 0, b"");
+        for is_property in [true, false] {
+            let mut budget = Budget::new(4096, 2 * std::mem::size_of::<Parasite<'_>>());
+            let entry = budget.retained_remaining();
+            let calls = std::cell::Cell::new(0);
+            let keep = || {
+                calls.set(calls.get() + 1);
+                calls.get() < 2
+            };
+            let result = if is_property {
+                properties(&property_bytes, 0, Limits::default(), &mut budget, &keep).map(|_| ())
+            } else {
+                parasites(&parasite_bytes, 0, Limits::default(), &mut budget, &keep).map(|_| ())
+            };
+            assert!(matches!(result, Err(Error::Cancelled)));
+            assert_eq!(budget.retained_remaining(), entry);
+            assert!(budget.work_remaining() < 4096);
+            let retry_count = if is_property {
+                properties(&property_bytes, 0, Limits::default(), &mut budget, &|| true).unwrap().records.len()
+            } else {
+                parasites(&parasite_bytes, 0, Limits::default(), &mut budget, &|| true).unwrap().records.len()
+            };
+            assert_eq!(retry_count, 1);
+            assert!(budget.retained_remaining() < entry);
+        }
+    }
+
+    #[test]
+    fn measured_strings_obey_custom_limits_without_trusting_declared_lengths() {
+        for (kind, version, count) in [(24, 20, 5), (24, 21, 3), (48, 26, 1)] {
+            let mut payload = vec![0; if kind == 48 { 4 } else { 8 }];
+            for _ in 0..count {
+                payload.extend(3u32.to_be_bytes());
+                payload.extend(b"ab\0");
+            }
+            if kind == 48 {
+                payload.extend([0; 8]);
+            }
+            let mut bytes = property(kind, &payload);
+            bytes[4..8].copy_from_slice(&0u32.to_be_bytes());
+            bytes.extend(property(0, b""));
+            let limited =
+                properties_with_version(&bytes, 0, version, Limits { string_bytes: 2, ..Default::default() }, &mut Budget::default(), &|| true)
+                    .unwrap();
+            assert!(limited.records.is_empty());
+            assert_eq!(limited.stopped.unwrap().reason, StopReason::StringLimit);
+            let exact =
+                properties_with_version(&bytes, 0, version, Limits { string_bytes: 3, ..Default::default() }, &mut Budget::default(), &|| true)
+                    .unwrap();
+            assert!(exact.stopped.is_none());
+            assert_eq!(exact.records[0].payload, payload);
+        }
+    }
+    #[test]
+    fn malformed_end_length_keeps_prefix_but_zero_end_is_allowed_at_record_limit() {
+        let mut bytes = property(100, b"kept");
+        let end = bytes.len();
+        bytes.extend(property(0, b"not a terminator"));
+        let limits = Limits { records: 1, ..Default::default() };
+        let scan = properties(&bytes, 0, limits, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(scan.stopped, Some(Diagnostic { offset: end, ordinal: 1, reason: StopReason::Malformed }));
+        bytes.truncate(end);
+        bytes.extend(property(0, b""));
+        let scan = properties(&bytes, 0, limits, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.records.len(), 1);
+        assert!(scan.stopped.is_none());
     }
 }

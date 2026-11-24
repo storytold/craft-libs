@@ -268,3 +268,37 @@ fn truncated_versioned_units_disclose_a_stopped_raw_scan_and_still_prioritize_ca
         Err(Error::Cancelled)
     ));
 }
+
+#[test]
+fn complete_sample_points_survive_a_tail_when_issues_cannot_be_retained() {
+    for (kind, stride) in [(27, 8), (39, 20)] {
+        let mut payload = vec![0; stride];
+        payload.push(1);
+        let bytes = [property(kind, &payload), property(0, &[])].concat();
+        let output = image(&properties(&bytes), Limits { issues: 0, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+        let points = if kind == 39 { &output.sample_points } else { &output.legacy_sample_points };
+        assert_eq!(points.len(), 1);
+        assert_eq!(output.stopped.unwrap().reason, StopReason::RecordLimit);
+        assert_eq!(output.has_modern_sample_points, kind == 39);
+    }
+}
+
+#[test]
+fn temporary_parasite_records_do_not_starve_later_retained_metadata() {
+    let bytes = [property(21, &parasite(b"icc-profile", b"source profile")), property(18, &[0, 0, 0, 7, 1]), property(0, &[])].concat();
+    let raw = properties(&bytes);
+    let allowance = 2 * std::mem::size_of::<super::super::Parasite<'_>>();
+    let mut budget = Budget::new(4096, allowance);
+    let output = image(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(output.complete());
+    assert_eq!(output.profile.unwrap().value, b"source profile");
+    assert_eq!(output.guides.len(), 1);
+    assert_eq!(budget.retained_remaining(), allowance - 2 * std::mem::size_of::<Evidence<Guide>>());
+    assert!(budget.work_remaining() < 4096);
+    // Returned packets stay charged even though the temporary vector is freed.
+    let bytes = [property(21, &parasite(b"gimp-comment", b"comment")), property(0, &[])].concat();
+    let mut budget = Budget::new(4096, 4096);
+    let output = image(&properties(&bytes), Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(output.packets.len(), 1);
+    assert_eq!(budget.retained_remaining(), 4096 - 2 * std::mem::size_of::<Evidence<Packet<'_>>>());
+}

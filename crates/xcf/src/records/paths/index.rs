@@ -16,15 +16,22 @@ pub(crate) fn offsets(
     check(keep_going)?;
     let Some(start) = start else { return Ok(Scan::complete(Vec::new(), 0)) };
     cursor.pos = start;
+    let retained = budget.retained_left;
     let mut records = Vec::new();
     loop {
-        check(keep_going)?;
+        if let Err(error) = check(keep_going) {
+            budget.retained_left = retained;
+            return Err(error);
+        }
         let offset = cursor.pos;
         let result = (|| {
             budget.work(if cursor.wide { 8 } else { 4 })?;
             let pointer = cursor.ptr().map_err(|_| StopReason::Malformed)?;
             if pointer == 0 {
                 return Ok(None);
+            }
+            if pointer >= cursor.b.len() {
+                return Err(StopReason::Malformed);
             }
             // Keep optional traversal within the legacy reader's structural cap.
             if records.len() >= limits.records.min(crate::MAX_CHANNELS) {
@@ -105,10 +112,11 @@ pub(crate) fn decode<'a>(
         keep_going,
     )?;
     end_offset = end_offset.max(table.end_offset);
+    let mut points_left = limits.points;
     for (source_index, offset) in table.records.into_iter().enumerate() {
         check(keep_going)?;
-        let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), ..limits };
-        let scan = super::standalone(cursor.b, offset, source_index, remaining, budget, keep_going)?;
+        let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), points: points_left, ..limits };
+        let scan = super::standalone_with_points(cursor.b, offset, source_index, remaining, budget, keep_going, &mut points_left)?;
         let (end, stopped) = merge(&mut output, scan, budget, keep_going)?;
         end_offset = end_offset.max(end);
         if let Some(diagnostic) = stopped {
