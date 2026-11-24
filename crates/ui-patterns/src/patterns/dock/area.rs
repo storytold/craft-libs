@@ -1339,7 +1339,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .bar(bar)
                     .within(within)
                     .auto_collapse(scene.auto_collapse)
-                    .outside_closes(scene.config.flyout_outside_closes)
                     .mode(mode)
                     .show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window))
             };
