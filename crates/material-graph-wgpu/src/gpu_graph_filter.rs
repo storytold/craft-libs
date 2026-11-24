@@ -83,6 +83,10 @@ impl FilterRasterizer {
                 Some(map)
             }
             FilterOperation::Box { radius } => {
+                // A vertical line blur from another format rounds only at the end, where this pass would round between the axes
+                if radius[0] <= 0.5 && radius[1] > 0.5 && params.source[2] != params.output[2] {
+                    return Ok(None);
+                }
                 params.control[0] = BOX;
                 for (axis, radius) in radius.into_iter().enumerate() {
                     if radius <= 0.5 && params.source[2] == params.output[2] {
@@ -326,6 +330,26 @@ mod tests {
             let max_steps = if map_size != size { 16 } else { 1 };
             assert!(max <= max_steps && mean < 0.05, "{filter} {options}: errors {max} maximum, {mean} mean quantization steps");
         }
+    }
+
+    #[test]
+    fn a_vertical_line_blur_into_eight_bits_matches_the_cpu() {
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
+        let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), ..Default::default() };
+        let graph = Graph::parse(
+            "format 3\nsize 256\nmeta compiled \"1\"\nnode 1 input idx=0 gray=1 format=\"u16_compiled\"\n\
+             node 2 line_blur in=@1 intensity=1.3 angle=0.25 format=\"u8_compiled\"\noutput out 2\n",
+        )
+        .unwrap();
+        // 16-bit detail that rounding to 8 bits before the blur loses
+        let inputs = [Some(Tex::gray_fn(256, 256, |u, v| 0.5 + 0.004 * (u * 301.0).sin() + 0.003 * (v * 457.0).cos()))];
+
+        let cpu = &graph.evaluate_with_inputs(None, &inputs).unwrap()["out"];
+        let gpu = &graph.evaluate_in(&context, None, &inputs).unwrap()["out"];
+
+        assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()));
+        let mismatch = cpu.px.iter().zip(&gpu.px).position(|(a, b)| a != b);
+        assert_eq!(mismatch, None, "first mismatched pixel");
     }
 
     #[test]
