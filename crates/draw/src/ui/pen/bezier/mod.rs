@@ -37,7 +37,7 @@ use hit_test::{Shown, nearest_on_screen, other_handles, shown_handles};
 pub(crate) use mark::paint_mark;
 pub use mark::{AnchorsShown, HitMark, SegmentMark};
 use mark::{Fill, paint_handle, segment_path, stroke};
-pub use model::{AnchorDelete, EditPath, EditSubpath, HandleSide, Knot, KnotRef, PathEdit, PathSelection};
+pub use model::{AnchorDelete, EditPath, EditSubpath, HandleSide, Knot, KnotRef, PathEdit, PathSelection, SubpathAnchors};
 pub use style::BezierStyle;
 pub use words::BezierWords;
 
@@ -390,8 +390,9 @@ struct Scene {
 /// [`BezierOutput::select`].
 ///
 /// - Look: outlines in the path's colour, flattened on the screen; a selected segment in the segment width; anchors
-///   hollow squares, selected ones filled; direction handles a line and a dot, for the anchors
-///   [`handles`](Self::handles) names, never retracted ones. Above [`MAX_ANCHORS`] anchors, outlines only.
+///   hollow squares, selected ones filled, on the subpaths the selection shows ([`PathSelection::shows`] and its
+///   [`SubpathAnchors`] rule); direction handles a line and a dot, for the anchors [`handles`](Self::handles) names,
+///   never retracted ones. Above [`MAX_ANCHORS`] anchors, outlines only.
 /// - Pointer: shown handles first, then anchors, then segments; the nearest of each kind, of equal distances the path
 ///   drawn last. A press on a part stays with the overlay; one elsewhere reaches the host's tool, except under Direct
 ///   Selection, which takes it for a marquee. [`BezierTool`] says what a press does. Past the click slop a press
@@ -588,7 +589,8 @@ impl<'a> BezierOverlay<'a> {
     }
 
     /// The selection of `anchors` and `segment` of `path`. On the selection's path it keeps the subpaths shown and
-    /// adds those of the selected anchors and segment, so a selected anchor always shows.
+    /// adds those of the selected anchors and segment, so a selected anchor always shows. It carries the selection's
+    /// [`SubpathAnchors`] rule, so the rule a host asked for outlives the press.
     fn selecting(&self, path: u64, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> PathSelection {
         let shown = self.selection.shown.as_ref().filter(|_| self.selection.path == Some(path)).map(|shown| {
             let mut shown = shown.clone();
@@ -599,7 +601,7 @@ impl<'a> BezierOverlay<'a> {
             }
             shown
         });
-        PathSelection::new(Some(path), anchors, segment).shown(shown)
+        PathSelection::new(Some(path), anchors, segment).shown(shown).subpath_anchors(self.selection.subpath_anchors)
     }
 
     /// The target a press drags: for the tools that act on the press ([`BezierTool::clicks`]) an insert into a

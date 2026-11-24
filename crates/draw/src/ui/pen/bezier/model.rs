@@ -191,6 +191,20 @@ impl KnotRef {
     }
 }
 
+/// Which subpaths of a path draw their anchors, for every path the overlay draws.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SubpathAnchors {
+    /// The subpaths [`PathSelection::shown`] names (every subpath when it names none); a path other than the one being
+    /// edited draws every anchor it has.
+    #[default]
+    Shown,
+    /// Only a subpath that has a selected anchor, or that the selected segment lies on, draws its anchors; a path with
+    /// nothing selected on it draws none, a path other than the one being edited included. An anchor that does not
+    /// draw stays a part: a press and a marquee still take it ([`PathSelection::shows`]).
+    Selected,
+}
+
 /// The host's path selection: the path the overlay edits, its selected anchors, a selected
 /// segment (whose two handles show) and the subpaths whose anchors show.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -205,6 +219,9 @@ pub struct PathSelection {
     /// The subpaths of that path whose anchors and handles show; `None` shows every subpath's. A Delete Anchor
     /// click narrows it to the subpath it acts on (Photoshop's Delete Anchor Point, #12769); the outlines always show.
     pub shown: Option<Vec<usize>>,
+    /// Which subpaths draw their anchors, for every path the overlay draws ([`SubpathAnchors::Shown`] keeps the
+    /// `shown` rule above; PhotoCraft's Direct Selection asks for [`SubpathAnchors::Selected`], #13218).
+    pub subpath_anchors: SubpathAnchors,
     /// Anchors of other paths, by the host key of each path: they draw selected, with their handles under
     /// [`HandlesShown`](super::HandlesShown), and declare no part: the overlay edits only `path`'s.
     pub others: Vec<(u64, Vec<KnotRef>)>,
@@ -213,13 +230,20 @@ pub struct PathSelection {
 impl PathSelection {
     /// The selection of `anchors` of the path keyed `path`, and of a segment, with every subpath's anchors shown.
     pub fn new(path: Option<u64>, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> Self {
-        Self { path, anchors, segment, shown: None, others: Vec::new() }
+        Self { path, anchors, segment, shown: None, subpath_anchors: SubpathAnchors::default(), others: Vec::new() }
     }
 
     /// The selection with the anchors of only the `shown` subpaths drawn (`None`: every subpath's).
     #[must_use]
     pub fn shown(mut self, shown: Option<Vec<usize>>) -> Self {
         self.shown = shown;
+        self
+    }
+
+    /// The selection drawing the anchors of the subpaths `subpath_anchors` names, instead of those `shown` names.
+    #[must_use]
+    pub fn subpath_anchors(mut self, subpath_anchors: SubpathAnchors) -> Self {
+        self.subpath_anchors = subpath_anchors;
         self
     }
 
@@ -248,9 +272,26 @@ impl PathSelection {
         self.path == Some(path) && self.anchors.contains(&knot)
     }
 
-    /// Whether the anchors of `subpath` of `path` show: always for a path other than the selection's.
+    /// Whether the anchors of `subpath` of `path` show: with [`SubpathAnchors::Shown`], always for a path other than
+    /// the selection's and, on the selection's path, the subpaths `shown` names; with
+    /// [`SubpathAnchors::Selected`], only a subpath that has a selected anchor or the selected segment, on that path
+    /// and on a path whose anchors `others` names. A subpath that does not show keeps its anchors as parts, so a press
+    /// and a marquee still take them.
     pub fn shows(&self, path: u64, subpath: usize) -> bool {
-        self.path != Some(path) || self.shown.as_ref().is_none_or(|shown| shown.contains(&subpath))
+        let named = self.shown.as_ref().is_none_or(|shown| shown.contains(&subpath));
+        match self.subpath_anchors {
+            SubpathAnchors::Shown => self.path != Some(path) || named,
+            SubpathAnchors::Selected => self.has_selection_on(path, subpath) && named,
+        }
+    }
+
+    /// Whether `subpath` of `path` has a selected anchor or the selected segment: on the path being edited, one of
+    /// `anchors` or `segment`; on another path, one of the anchors `others` names for it.
+    fn has_selection_on(&self, path: u64, subpath: usize) -> bool {
+        if self.path == Some(path) {
+            return self.anchors.iter().any(|knot| knot.subpath == subpath) || self.segment.is_some_and(|segment| segment.subpath == subpath);
+        }
+        self.others.iter().any(|(key, anchors)| *key == path && anchors.iter().any(|knot| knot.subpath == subpath))
     }
 
     /// The selection after the host deleted the anchor `deleted` of a Delete Anchor click, from `path` as the delete

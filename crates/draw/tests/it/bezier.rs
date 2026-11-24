@@ -4,7 +4,7 @@ use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
-    PathEdit, PathSelection, PathTool, SegmentMark,
+    PathEdit, PathSelection, PathTool, SegmentMark, SubpathAnchors,
 };
 use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
@@ -1367,4 +1367,276 @@ fn a_cancelled_press_reports_nothing_on_release() {
     assert!(!st.seen.contains(&Seen::Commit) && !st.seen.contains(&Seen::Set), "{:?}", st.seen);
     assert_eq!(st.changes.len(), changes, "{:?}", st.changes);
     assert_eq!(st.paths, before);
+}
+
+// ---- which subpaths draw their anchors (PhotoCraft #13218) ----
+
+/// Path 1 of the measured document: four subpaths — a closed square A, an open line B, an open S-curve C and a
+/// closed circle D.
+fn path_four() -> EditPath {
+    let square = [(60.0, 60.0), (160.0, 60.0), (160.0, 160.0), (60.0, 160.0)].map(|(x, y)| Knot::corner(p(x, y)));
+    let line = [(220.0, 60.0), (300.0, 60.0)].map(|(x, y)| Knot::corner(p(x, y)));
+    let curve =
+        vec![Knot::new(p(80.0, 200.0), p(80.0, 200.0), p(120.0, 170.0), false), Knot::new(p(160.0, 200.0), p(120.0, 230.0), p(160.0, 200.0), false)];
+    let circle = vec![
+        Knot::smooth(p(220.0, 160.0), p(255.0, 160.0)),
+        Knot::smooth(p(260.0, 200.0), p(260.0, 235.0)),
+        Knot::smooth(p(220.0, 240.0), p(185.0, 240.0)),
+        Knot::smooth(p(180.0, 200.0), p(180.0, 165.0)),
+    ];
+    let subpaths = vec![
+        EditSubpath::new(square.to_vec(), true),
+        EditSubpath::new(line.to_vec(), false),
+        EditSubpath::new(curve, false),
+        EditSubpath::new(circle, true),
+    ];
+    EditPath::new(1, subpaths)
+}
+
+/// Rectangle 1: a shape layer's path of four corner anchors, which the selection does not target.
+fn rectangle_one() -> EditPath {
+    let corners = [(300.0, 190.0), (360.0, 190.0), (360.0, 260.0), (300.0, 260.0)].map(|(x, y)| Knot::corner(p(x, y)));
+    EditPath::new(2, vec![EditSubpath::new(corners.to_vec(), true)])
+}
+
+/// The measured document: Path 1 and, drawn after it, Rectangle 1.
+fn document() -> Vec<EditPath> {
+    vec![path_four(), rectangle_one()]
+}
+
+/// The selection with the per-subpath anchor rule asked for.
+fn per_subpath(selection: PathSelection) -> PathSelection {
+    selection.subpath_anchors(SubpathAnchors::Selected)
+}
+
+/// Every anchor point of `path`, in path order.
+fn every_anchor(path: &EditPath) -> Vec<Point> {
+    path.knot_refs().filter_map(|knot| path.knot(knot)).map(|knot| knot.anchor).collect()
+}
+
+/// The anchor points of subpath `subpath` of `path`.
+fn anchors_of(path: &EditPath, subpath: usize) -> Vec<Point> {
+    path.subpaths[subpath].knots.iter().map(|knot| knot.anchor).collect()
+}
+
+/// A shape the frame paints as an anchor or a handle end: a square of the handle side.
+fn is_mark(shape: &egui::Shape) -> bool {
+    let bounds = shape.visual_bounding_rect();
+    bounds.width() <= 12.0 && bounds.height() <= 12.0
+}
+
+/// The points of `want` the frame paints an anchor square at, in the order they were asked for.
+fn anchors_painted(h: &mut Harness, want: &[Point]) -> Vec<Point> {
+    let shapes = h.fixture.frame_shapes();
+    want.iter()
+        .filter(|&&at| {
+            let at = h.screen(at);
+            shapes.iter().any(|shape| is_mark(shape) && (shape.visual_bounding_rect().center() - at).length() < 1.0)
+        })
+        .copied()
+        .collect()
+}
+
+/// What the frame paints besides anchor and handle squares: the outlines, as text.
+fn outlines_painted(h: &mut Harness) -> Vec<String> {
+    h.fixture.frame_shapes().iter().filter(|shape| !is_mark(shape)).map(|shape| format!("{shape:?}")).collect()
+}
+
+// The measured first row: Path 1 targeted with nothing clicked draws no anchor at all, Rectangle 1's corners with it,
+// while the outlines of both stay.
+#[trial]
+fn a_targeted_path_nothing_is_clicked_on_draws_no_anchor_of_any_path() {
+    let (path, rect) = (path_four(), rectangle_one());
+    let all: Vec<Point> = every_anchor(&path).into_iter().chain(every_anchor(&rect)).collect();
+    let mut h = harness(document());
+    h.update(|st| st.selection = per_subpath(sel(1, &[])));
+    assert_eq!(anchors_painted(&mut h, &all), Vec::new(), "no anchor of Path 1 or Rectangle 1 draws");
+    let mut host_rule = harness(document());
+    host_rule.update(|st| st.selection = sel(1, &[]));
+    assert_eq!(outlines_painted(&mut h), outlines_painted(&mut host_rule), "the outlines of every shown path stay");
+    assert_eq!(anchors_painted(&mut host_rule, &all), all, "and a host that does not ask for the rule draws them all");
+}
+
+// The measured second row: after a click on an anchor of A, A's anchors draw and none of B, C, D or Rectangle 1; the
+// selection the press reports keeps the rule the host asked for.
+#[trial]
+fn a_selected_anchor_draws_only_the_anchors_of_its_subpath() {
+    let (path, rect) = (path_four(), rectangle_one());
+    let mut h = harness(document());
+    let hidden: Vec<Point> = (1..4).flat_map(|subpath| anchors_of(&path, subpath)).chain(every_anchor(&rect)).collect();
+    h.update(|st| st.selection = per_subpath(sel(1, &[(0, 1)])));
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&path, 0)), anchors_of(&path, 0), "A draws all its anchors");
+    assert_eq!(anchors_painted(&mut h, &hidden), Vec::new(), "B, C, D and Rectangle 1 draw none");
+    let at = h.screen(p(160.0, 160.0));
+    h.press_at(at);
+    h.release_at(at);
+    assert_eq!(h.state.borrow().selection, per_subpath(sel(1, &[(0, 2)])), "the press's selection keeps the rule");
+}
+
+// The measured third row: a click on a straight segment of A draws A's anchors with no anchor selected, and a path
+// the selection does not edit still draws none.
+#[trial]
+fn a_clicked_segment_draws_the_anchors_of_its_own_subpath() {
+    let (path, rect) = (path_four(), rectangle_one());
+    let mut h = harness(document());
+    let segment = PathSelection::new(Some(1), Vec::new(), Some(KnotRef::new(0, 1)));
+    let hidden: Vec<Point> = (1..4).flat_map(|subpath| anchors_of(&path, subpath)).chain(every_anchor(&rect)).collect();
+    h.update(|st| st.selection = per_subpath(segment.clone()));
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&path, 0)), anchors_of(&path, 0), "the clicked subpath draws");
+    assert_eq!(anchors_painted(&mut h, &hidden), Vec::new(), "and nothing else does");
+    // Driven by the pointer: a click on A's right edge selects the segment and no anchor.
+    let mut h = harness(document());
+    h.update(|st| st.selection = per_subpath(sel(1, &[])));
+    let at = h.screen(p(160.0, 100.0));
+    h.press_at(at);
+    h.release_at(at);
+    let st = h.state.borrow();
+    assert_eq!(st.selection, per_subpath(segment), "the click reports the segment, with the rule");
+    assert!(st.changes.is_empty() && st.seen.is_empty(), "a click edits nothing: {:?} {:?}", st.changes, st.seen);
+}
+
+// A hidden anchor stays a part: a press on B's first anchor, which draws nothing, grabs it and moves it, and the
+// subpath draws once the press has a selected anchor on it.
+#[trial]
+fn a_press_takes_a_hidden_anchor_and_its_subpath_draws_after_it() {
+    let mut h = harness(document());
+    h.update(|st| st.selection = per_subpath(sel(1, &[])));
+    let at = h.screen(p(220.0, 60.0));
+    assert_eq!(anchors_painted(&mut h, &[p(220.0, 60.0)]), Vec::new(), "the anchor draws nothing before the press");
+    h.drag(at, vec2(0.0, FAR));
+    {
+        let st = h.state.borrow();
+        assert!(
+            matches!(&st.changes.last(), Some(PathEdit::MoveAnchors { path: 1, anchors, by }) if *anchors == vec![KnotRef::new(1, 0)] && (by.y - 20.0).abs() < 1e-3),
+            "{:?}",
+            st.changes
+        );
+        assert_eq!(st.selection, per_subpath(sel(1, &[(1, 0)])), "the press selects the anchor it hit");
+    }
+    let moved = h.state.borrow().paths[0].clone();
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&moved, 1)), anchors_of(&moved, 1), "and its subpath draws from then on");
+}
+
+// A marquee around anchors that draw nothing selects them (measured: hit-testing keeps working on hidden subpaths),
+// and only the subpath it took draws after it.
+#[trial]
+fn a_marquee_around_hidden_anchors_selects_them() {
+    let (path, rect) = (path_four(), rectangle_one());
+    let mut h = harness(document());
+    h.update(|st| st.selection = per_subpath(sel(1, &[])));
+    let (start, end) = (h.screen(p(275.0, 265.0)), h.screen(p(170.0, 150.0)));
+    h.drag(start, end - start);
+    assert_eq!(h.state.borrow().selection, per_subpath(sel(1, &[(3, 0), (3, 1), (3, 2), (3, 3)])), "the marquee takes D's hidden anchors");
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&path, 3)), anchors_of(&path, 3), "the subpath it took now draws");
+    let hidden: Vec<Point> = (0..3).flat_map(|subpath| anchors_of(&path, subpath)).chain(every_anchor(&rect)).collect();
+    assert_eq!(anchors_painted(&mut h, &hidden), Vec::new(), "and every other subpath still draws none");
+}
+
+// The keys follow the anchors that draw, and select-all keeps its rule: End stays on A, never B, and ⌘A still takes
+// every anchor of Path 1 while Rectangle 1 draws none.
+#[trial]
+fn the_page_keys_walk_only_the_anchors_that_draw_and_cmd_a_takes_the_whole_path() {
+    let (path, rect) = (path_four(), rectangle_one());
+    let mut h = harness(document());
+    h.update(|st| st.selection = per_subpath(sel(1, &[(0, 1)])));
+    h.fixture
+        .key(egui::Key::Tab, egui::Modifiers::NONE)
+        .key(egui::Key::Tab, egui::Modifiers::NONE)
+        .key(egui::Key::End, egui::Modifiers::NONE)
+        .settle();
+    assert_eq!(h.state.borrow().selection, per_subpath(sel(1, &[(0, 3)])), "End stays on the subpath that draws");
+    h.fixture.key(egui::Key::A, egui::Modifiers::COMMAND).settle();
+    {
+        let st = h.state.borrow();
+        let all: Vec<(usize, usize)> = path.knot_refs().map(|knot| (knot.subpath, knot.knot)).collect();
+        assert_eq!(st.selection, per_subpath(sel(1, &all)), "⌘A still selects every anchor of Path 1");
+    }
+    let all = every_anchor(&path);
+    assert_eq!(anchors_painted(&mut h, &all), all, "and every anchor of Path 1 draws once each is selected");
+    assert_eq!(anchors_painted(&mut h, &every_anchor(&rect)), Vec::new(), "Rectangle 1 keeps drawing none");
+}
+
+// A host that never asks for the rule keeps every answer `shows` gave before: the edited path's subpaths unless a
+// `shown` list narrows them, and every other path's anchors all. (Guard test: it passes with and without the rule.)
+#[trial]
+fn a_host_that_does_not_ask_for_the_rule_draws_every_anchor_as_before() {
+    let (path, rect) = (path_four(), rectangle_one());
+    let mut h = harness(document());
+    h.update(|st| st.selection = sel(1, &[]));
+    let all: Vec<Point> = every_anchor(&path).into_iter().chain(every_anchor(&rect)).collect();
+    assert_eq!(anchors_painted(&mut h, &all), all, "the targeted path and the path next to it draw all their anchors");
+    h.update(|st| st.selection = PathSelection::new(Some(1), Vec::new(), None).shown(Some(vec![0])));
+    let hidden: Vec<Point> = (1..4).flat_map(|subpath| anchors_of(&path, subpath)).collect();
+    assert_eq!(anchors_painted(&mut h, &hidden), Vec::new(), "the shown list narrows the targeted path");
+    assert_eq!(anchors_painted(&mut h, &every_anchor(&rect)), every_anchor(&rect), "and never the other path");
+}
+
+// With the rule, a path the selection only lists anchors for draws those subpaths and no other: the anchors `others`
+// names for a path bring that subpath's anchors with them.
+#[trial]
+fn an_anchor_listed_for_another_path_draws_its_subpath_under_the_rule() {
+    let (path, other) = (path_four(), path_b());
+    let mut h = harness(vec![path.clone(), other.clone()]);
+    h.update(|st| st.selection = per_subpath(sel(1, &[(0, 0)])).also(2, vec![KnotRef::new(1, 0)]));
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&other, 1)), anchors_of(&other, 1), "the listed subpath of the other path draws");
+    let hidden: Vec<Point> = (1..4).flat_map(|subpath| anchors_of(&path, subpath)).chain(anchors_of(&other, 0)).collect();
+    assert_eq!(anchors_painted(&mut h, &hidden), Vec::new(), "every unlisted subpath draws none");
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&path, 0)), anchors_of(&path, 0), "the edited path's selected subpath draws");
+}
+
+// An anchor the rule hides behaves as a `shown` list hides one today: no keyboard stop and no AccessKit object, while
+// a host without the rule keeps both.
+#[trial]
+fn an_anchor_the_rule_hides_takes_no_accessibility_object() {
+    let mut h = harness(document());
+    h.update(|st| st.selection = per_subpath(sel(1, &[(0, 0)])));
+    assert!(h.fixture.by_label("Anchor 2 of 12").is_some(), "A's second anchor draws and is named");
+    assert!(h.fixture.by_label("Anchor 5 of 12").is_none(), "B's first anchor draws nothing and names nothing");
+    assert!(h.fixture.by_label("Anchor 1 of 4").is_none(), "and Rectangle 1 names nothing while it draws none");
+    h.update(|st| st.selection = sel(1, &[(0, 0)]));
+    assert!(h.fixture.by_label("Anchor 5 of 12").is_some(), "without the rule B's anchor keeps its object");
+    assert!(h.fixture.by_label("Anchor 1 of 4").is_some(), "and so does Rectangle 1's first corner");
+}
+
+// Delete Anchor under the rule: a click on an anchor that draws nothing still hits it, selects it and shows only its
+// subpath, and the selection it reports keeps the rule (#12769 with #13218).
+#[trial]
+fn a_delete_anchor_click_on_an_undrawn_anchor_shows_its_subpath_and_keeps_the_rule() {
+    let path = path_four();
+    let mut h = harness(document());
+    h.update(|st| (st.tool, st.selection) = (BezierTool::DeleteAnchor, per_subpath(sel(1, &[]))));
+    let at = h.screen(p(220.0, 60.0));
+    h.press_at(at);
+    h.release_at(at);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.deletes, [], "nothing is deleted on the first click");
+        assert_eq!(st.selection, per_subpath(sel(1, &[(1, 0)])).shown(Some(vec![1])), "the anchor is selected and only its subpath shows");
+    }
+    assert_eq!(anchors_painted(&mut h, &anchors_of(&path, 1)), anchors_of(&path, 1), "and that subpath draws");
+    h.press_at(at);
+    h.release_at(at);
+    assert_eq!(h.state.borrow().deletes, [AnchorDelete::new(1, vec![KnotRef::new(1, 0)], false)], "the next click deletes");
+}
+
+// `shows` under the rule: a selected anchor or the selected segment names the subpath on the edited path, `others`
+// names it on another path, and a `shown` list still narrows it; `has_anchor` and `selected_len` answer as before.
+#[trial]
+fn shows_names_the_subpaths_that_have_a_selection_under_the_rule() {
+    let anchored = per_subpath(sel(1, &[(0, 1)]));
+    for (path, subpath, want) in [(1, 0, true), (1, 1, false), (1, 2, false), (1, 3, false), (2, 0, false)] {
+        assert_eq!(anchored.shows(path, subpath), want, "anchor in Path 1 subpath 0: path {path} subpath {subpath}");
+    }
+    let segment = per_subpath(PathSelection::new(Some(1), Vec::new(), Some(KnotRef::new(2, 0))));
+    assert!(segment.shows(1, 2) && !segment.shows(1, 0), "the clicked segment's subpath shows, no other");
+    assert!(!segment.shows(2, 0), "and a path the selection does not edit shows none of it");
+    let listed = per_subpath(sel(1, &[(0, 0)]).also(2, vec![KnotRef::new(1, 0)]));
+    assert!(listed.shows(2, 1) && !listed.shows(2, 0), "another path shows only the subpath `others` names");
+    let narrowed = per_subpath(sel(1, &[(0, 0)])).shown(Some(vec![1]));
+    assert!(!narrowed.shows(1, 0), "a `shown` list that leaves a subpath out still hides it under the rule");
+    assert!(anchored.has_anchor(1, KnotRef::new(0, 1)) && !anchored.has_anchor(2, KnotRef::new(0, 1)), "has_anchor unchanged");
+    assert_eq!(listed.selected_len(), 2, "selected_len unchanged");
+    let host = sel(1, &[(0, 1)]);
+    assert!(host.shows(1, 0) && host.shows(1, 1) && host.shows(2, 0), "the default rule keeps today's answer");
+    assert!(!host.shown(Some(vec![0])).shows(1, 1), "and its `shown` list narrows the edited path only");
 }

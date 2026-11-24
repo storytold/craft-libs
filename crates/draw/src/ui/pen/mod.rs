@@ -17,7 +17,7 @@ mod words;
 pub use anchor_tool::AnchorTool;
 pub use bezier::{
     AnchorDelete, AnchorsShown, BezierHit, BezierOutput, BezierOverlay, BezierStyle, BezierTool, BezierWords, EditPath, EditSubpath, HandleSide,
-    HandlesShown, HitMark, Knot, KnotRef, MAX_ANCHORS, PathEdit, PathSelection, SegmentMark,
+    HandlesShown, HitMark, Knot, KnotRef, MAX_ANCHORS, PathEdit, PathSelection, SegmentMark, SubpathAnchors,
 };
 pub use mode::{PathMode, PathTool, PenMode};
 pub use options::{HandleStyle, PATH_OPTIONS_COLOR_KEY, PathOptionsOutput, PathOptionsPopover, PathOptionsSettings, PathOptionsWords};

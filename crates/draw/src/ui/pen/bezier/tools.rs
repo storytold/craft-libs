@@ -106,7 +106,8 @@ pub(super) fn anchor_click(tool: BezierTool, hit: BezierHit, mods: Mods, selecti
     let BezierHit::Anchor { path, knot } = hit else { return };
     match tool.acting(mods) {
         BezierTool::DeleteAnchor if !selection.shows(path, knot.subpath) => {
-            report.select = Some(PathSelection::new(Some(path), vec![knot], None).shown(Some(vec![knot.subpath])));
+            let select = PathSelection::new(Some(path), vec![knot], None).shown(Some(vec![knot.subpath]));
+            report.select = Some(select.subpath_anchors(selection.subpath_anchors));
         }
         BezierTool::DeleteAnchor | BezierTool::AutoAddDelete => report.delete = Some(AnchorDelete::new(path, vec![knot], false)),
         _ => {}

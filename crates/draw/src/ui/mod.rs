@@ -97,7 +97,7 @@ pub use pen::{
 };
 pub use pen::{
     BezierHit, BezierOverlay, BezierStyle, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, MAX_ANCHORS, PathEdit,
-    PathSelection, PenStyle,
+    PathSelection, PenStyle, SubpathAnchors,
 };
 pub use picture_fill::{PictureFill, PictureFillEditor, PictureFillOutput, PictureMode};
 pub use shape::{
