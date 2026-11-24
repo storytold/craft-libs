@@ -666,6 +666,12 @@ impl Board {
         self.instances.get(id).is_some_and(|i| self.live(ctx, i))
     }
 
+    /// Whether the app dispatches the keys of `command` itself ([`AppCatalog::shown_only`]): the board shows its chord
+    /// but passes over its bindings when it matches a key. Only a command the linked sets do not define.
+    fn leaves_key(&self, command: &CommandRef) -> bool {
+        self.app.as_ref().is_some_and(|app| app.is_shown_only(command)) && self.registry.get(&command.id).is_none()
+    }
+
     /// The definition of `command`: the linked sets' by id, else the frame's app catalog's.
     fn def(&self, command: &CommandRef) -> Option<&CommandDef> {
         self.registry.get(&command.id).or_else(|| self.app.as_ref()?.get(command))
@@ -1289,7 +1295,7 @@ pub(crate) fn runs_now(ctx: &Context, viewport: ViewportId, chord: &Chord) -> bo
         board.key_scopes(&chain)
     });
     let Some(keys) = keys else { return false };
-    let enabled = |command: &CommandRef| resolve_from(ctx, command, None).0.enabled;
+    let enabled = |command: &CommandRef| !with(ctx, |board| board.leaves_key(command)) && resolve_from(ctx, command, None).0.enabled;
     keys.matching(false, |active, outer| !matches!(keys.keymap.lookup_where(chord, false, active, outer, &enabled), craft_keymap::Lookup::None))
 }
 
@@ -2208,8 +2214,14 @@ pub(crate) fn begin(ctx: &Context) {
     };
     // A binding whose command is disabled where the press lands (a window command with no floating window, a canvas's
     // view command it does not offer) is passed over: the press runs the next binding of its chord, in an outer scope,
-    // or of its next chord candidate, as if the disabled one were unbound.
+    // or of its next chord candidate, as if the disabled one were unbound. So is a binding of a command whose keys the
+    // app dispatches itself (`AppCatalog::shown_only`), whatever its state.
+    let leaves_key = |command: &CommandRef| with(ctx, |board| board.leaves_key(command));
+    let board_runs = |hit: &Hit| !leaves_key(&hit.command);
     let enabled = |command: &CommandRef| {
+        if leaves_key(command) {
+            return false;
+        }
         let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
         resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
     };
@@ -2247,7 +2259,9 @@ pub(crate) fn begin(ctx: &Context) {
                 // completes no double press and settles no wait, and the key a momentary or tool command holds stays
                 // held by its press. The key of a wait or of a hold binding repeats nothing.
                 let typing = typing_at(shortcut);
-                if wait.as_ref().is_some_and(|wait| Some(wait.key) == key) || keys.hold(&shortcuts.layout, &shortcut.input, typing).is_some() {
+                if wait.as_ref().is_some_and(|wait| Some(wait.key) == key)
+                    || keys.hold(&shortcuts.layout, &shortcut.input, typing).is_some_and(|hold| board_runs(&hold))
+                {
                     continue;
                 }
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, true, &enabled)));
@@ -2260,15 +2274,16 @@ pub(crate) fn begin(ctx: &Context) {
                 let typing = typing_at(shortcut);
                 let hold = key
                     .filter(|_| !typing && !modal_at_start)
-                    .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
+                    .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).filter(board_runs).map(|hold| (key, hold)));
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, false, &enabled)));
                 match (hold, tap) {
                     (Some((key, hold)), tap) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
                     (None, Some(tap)) => fired.extend(press(tap, key, time, Some(shortcut.place))),
                     // A chord that binds only disabled commands runs nothing; the app hears of the first one, to say
-                    // why it did not run as a menu row's hint does, and may receive it as declined.
+                    // why it did not run as a menu row's hint does, and may receive it as declined. A chord the app
+                    // dispatches itself is the app's: it hears nothing of it here.
                     (None, None) => {
-                        if let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, None) {
+                        if let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, None).filter(board_runs) {
                             let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
                             let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
                             decline(ctx, hit.clone(), app, &resolved, time);

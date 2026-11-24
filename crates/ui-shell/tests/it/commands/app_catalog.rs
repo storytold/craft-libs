@@ -2,6 +2,7 @@
 //! rules every app command follows, and a frame builds a keymap only for a catalog generation it has not built.
 // The catalog is given through `Frames::commands`, which keeps it for every later frame.
 
+use craft_ui::buttons::{Button, ButtonChord};
 use craft_ui::contract::{Bind, Props as _, Show as _, Tracked};
 use craft_ui::runtime::commands::{
     AppCatalog, Binding, CommandDef, CommandInput, CommandKind, CommandRef, CommandState, CommandStates, EditCommands, FirePhase, Scope,
@@ -97,6 +98,37 @@ fn an_app_catalog_command_fires_by_its_chord_and_a_focused_text_field_keeps_a_ty
     frames.frame(vec![key_release(Key::Q, Modifiers::NONE)], &mut show);
     assert!(fired(&frames).is_empty(), "the plain chord waits while the text field has the focus");
     assert_eq!(*name.borrow(), "q", "the focused field types the letter");
+}
+
+/// A catalog command whose chord is shown only (`AppCatalog::shown_only`), as a tool whose key the app's own keymap
+/// dispatches: a button bound to it shows the chord, and a press of the chord fires nothing on the board and stays in
+/// egui's input, where the app reads it.
+#[trial]
+fn a_shown_only_chord_shows_on_its_button_and_its_press_stays_in_the_input_unfired() {
+    let key_in_input = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main())
+            .body(|ui, _, _| {
+                let _ = Button::command(CommandRef::new(BRUSH)).chord(ButtonChord::Trailing).show(ui);
+                if ui.input(|input| input.key_pressed(Key::J)) {
+                    key_in_input.set(true);
+                }
+            })
+            .show(ui, &mut ());
+    };
+    let brush = def(BRUSH, "Brush", "J").with_kind(CommandKind::Tool { group: None });
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(vec![brush], 1).expect("the trial's catalog is valid").shown_only([BRUSH])));
+    frames.idle(3, &mut show);
+    let painted: String = frames.texts().iter().map(|text| text.text.as_str()).collect();
+    let (label, chord) = (painted.find("Brush"), painted.rfind('J'));
+    assert!(label.is_some() && label < chord, "the button shows the shown-only chord after its label: {painted:?}");
+
+    let _ = fired(&frames);
+    frames.frame(vec![key_press(Key::J, Modifiers::NONE)], &mut show);
+    assert!(key_in_input.get(), "the press stays in egui's input for the app's keymap");
+    frames.frame(vec![key_release(Key::J, Modifiers::NONE)], &mut show);
+    assert!(fired(&frames).is_empty(), "the board fires nothing for a shown-only chord");
 }
 
 /// A key's press and its release fire with the input times they arrived at, whichever frame runs them: a hold is

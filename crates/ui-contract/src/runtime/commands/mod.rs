@@ -56,7 +56,7 @@ use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
 use egui::{Context, Id, ViewportId};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Commands an app defines at run time (plug-ins, its tool list), all in the app scope ([`Scope::app`]). They join
@@ -71,6 +71,8 @@ pub struct AppCatalog {
     replaced: Arc<[(String, Vec<Binding>)]>,
     /// Which chords fire while a text component has the keyboard (`typing_rule`); `None` keeps the keymap's default.
     typing: Option<TypingRule>,
+    /// The ids of the catalog's commands whose keys the app dispatches itself (`shown_only`).
+    shown_only: Arc<HashSet<String>>,
 }
 
 impl AppCatalog {
@@ -84,7 +86,7 @@ impl AppCatalog {
             }
             registry::index_id(&mut index, &def.command.key_text(), at)?;
         }
-        Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation, replaced: Arc::from([]), typing: None })
+        Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation, replaced: Arc::from([]), typing: None, shown_only: Arc::default() })
     }
 
     /// Gives the linked set's command `id` the default chords `bindings` in place of the set's own; an empty list drops
@@ -109,6 +111,26 @@ impl AppCatalog {
     pub fn typing_rule(mut self, rule: TypingRule) -> Self {
         self.typing = Some(rule);
         self
+    }
+
+    /// Makes the chords of the catalog's commands `ids` shown only: the app dispatches their keys with a keymap of its
+    /// own. Menu rows, tooltips and buttons still show each command's chord (its bindings, under the overrides, as
+    /// [`ResolvedCommand::chord`] reads them), but the board passes over the command when it matches a key, as if the
+    /// command had no binding, so the press fires nothing on the board and stays in egui's input for the app. The
+    /// command still fires from a menu row, a button, the palette or automation. Later calls add to the earlier ones.
+    /// An id the linked sets define stays theirs and is ignored here. The board reads the ids every frame, so a change
+    /// needs no new [`generation`](Self::generation).
+    #[must_use]
+    pub fn shown_only<I: Into<String>>(mut self, ids: impl IntoIterator<Item = I>) -> Self {
+        let mut shown_only = (*self.shown_only).clone();
+        shown_only.extend(ids.into_iter().map(Into::into));
+        self.shown_only = Arc::new(shown_only);
+        self
+    }
+
+    /// Whether the app dispatches the keys of `command` itself ([`shown_only`](Self::shown_only)).
+    pub(crate) fn is_shown_only(&self, command: &CommandRef) -> bool {
+        self.shown_only.contains(command.id.as_str())
     }
 
     /// The default chords the app gives the linked set's command `id`, when it replaced them.
