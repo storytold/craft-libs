@@ -1,6 +1,7 @@
 //! The tooltip of a control that paints no label: its own label shows there, inside a field or not; a control named
 //! only by its field label shows none, and the field's label stays where it was. A bound command's hint is the
-//! tooltip's second line, and makes a disabled control a focus stop that shows it.
+//! tooltip's second line, and makes a disabled control a focus stop that shows it. A label the layout cut shows its full
+//! text as its tooltip.
 
 use super::kit::PlainStyle;
 use craft_behavior::Sense;
@@ -131,6 +132,65 @@ fn a_control_that_paints_no_label_shows_its_own_label_as_tooltip() {
 
     assert_eq!(glyph_label(None), ["Leading"], "a glyph label shows its name");
     assert_eq!(glyph_label(Some("Leading (1/1000 em)")), ["Leading (1/1000 em)"], "a glyph label's tooltip replaces its name");
+}
+
+/// A label the layout cut shows its full text as the tooltip of a rest on it.
+#[trial]
+fn an_elided_label_shows_its_full_text_as_its_tooltip() {
+    let long = "Harbour at dusk, seen from the lighthouse on the northern breakwater";
+    let shown = texts_added_by_hover(move |ui| ui.allocate_ui(Vec2::new(72.0, 32.0), |ui| Button::new(long).show(ui).rect).inner);
+    assert_eq!(shown, [long], "the cut label's tooltip is its whole text, shown once");
+}
+
+const SPOT: craft_behavior::PartKey = craft_behavior::PartKey::new("spot");
+
+/// A layer of pointer-only spots over content it does not paint (comments over a page): it takes no room of its own,
+/// is shown at a rect, and each spot carries a tip.
+#[derive(craft_ui::contract::Component)]
+struct Spots {
+    #[common]
+    common: Common,
+    spot: Rect,
+    at: craft_ui::contract::TooltipAt,
+}
+
+impl Component for Spots {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SpotsStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn parts(&mut self, _: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
+        let tip = craft_ui::contract::TooltipSpec::new(craft_ui::runtime::env::Label::from("Alpha\nUnchecked comment")).at(self.at);
+        let _ =
+            cx.part(SPOT, self.spot).sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG).tooltip(tip).pointer_only("a panel reaches the spots");
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A part's tip shows when the pointer rests on the part, hung from the part or from the pointer, also on a component
+/// that takes no room of its own and is shown at a rect.
+#[trial]
+fn a_part_tip_shows_on_a_rest_on_the_part() {
+    use craft_ui::contract::TooltipAt;
+    for at in [TooltipAt::Pointer, TooltipAt::Control] {
+        let spot = Rect::from_min_size(Pos2::new(60.0, 60.0), Vec2::splat(30.0));
+        let added = texts_added_by_hover(move |ui| {
+            Spots { common: Common::new(), spot, at }.show_at(ui, Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)));
+            spot
+        });
+        assert!(added.iter().any(|text| text.contains("Alpha")), "the spot's tip shows ({at:?}): {added:?}");
+    }
 }
 
 /// The command the hint trials bind: an app command with a chord.

@@ -5,7 +5,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_automation::synthetic::{At, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
+use craft_automation::access::NO_TREE;
+use craft_automation::synthetic::{At, Click, Focus, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
 use craft_ui::runtime::windows::WindowHost;
@@ -339,7 +340,8 @@ fn queued_input_is_withdrawn_when_its_target_changes() {
 }
 
 /// An unknown field, a wrong type, an unknown name, too many clicks or a point too far out refuses the whole request
-/// before any of it is queued: no half-queued press or held key is left behind.
+/// before any of it is queued: no half-queued press or held key is left behind. A node target takes no point, repeat,
+/// hold, modifier or button but the secondary one, and names exactly one of `id` and `label`.
 #[trial]
 fn bad_input_params_are_refused_before_anything_is_queued() {
     let mut rig = Rig::new();
@@ -352,21 +354,90 @@ fn bad_input_params_are_refused_before_anything_is_queued() {
         ("ui.click", json!({"x": 10, "button": "thumb"})),
         ("ui.click", json!({"x": 10, "hold": true, "count": MAX_CLICKS + 1})),
         ("ui.click", json!({"x": far, "hold": true})),
-        ("ui.move", json!({"x": 10, "nudge": 1})),
-        ("ui.move", json!({"x": 10, "rest": "long"})),
-        ("ui.move", json!({"x": 10, "coordinates": "page"})),
-        ("ui.move", json!({"y": -far})),
+        ("ui.move", json!({"x": 10, "y": 10, "nudge": 1})),
+        ("ui.move", json!({"x": 10, "y": 10, "rest": "long"})),
+        ("ui.move", json!({"x": 10, "y": 10, "coordinates": "page"})),
+        ("ui.move", json!({"x": 10, "y": -far})),
         ("ui.key", json!({"key": "A", "hold": true, "nudge": 1})),
         ("ui.key", json!({"key": 5})),
         ("ui.key", json!({"key": "NoSuchKey", "hold": true})),
         ("ui.ime", json!({"preedit": "ab", "cursor": [1, 9]})),
+        ("ui.click", json!({"x": 10, "y": 10, "label": "Save"})),
+        ("ui.click", json!({"label": "Save", "count": 2})),
+        ("ui.click", json!({"label": "Save", "hold": true})),
+        ("ui.click", json!({"label": "Save", "shift": true})),
+        ("ui.click", json!({"label": "Save", "button": "middle"})),
+        ("ui.click", json!({"id": "12", "button": "middle"})),
+        ("ui.click", json!({"id": "twelve"})),
+        ("ui.focus", json!({"id": "12", "label": "Save"})),
+        ("ui.focus", json!({})),
+        ("ui.drop", json!({"paths": []})),
+        ("ui.drop", json!({"paths": ["a.pdf"], "alt": true})),
     ];
-    for (method, params) in refused {
-        let answer = input_method(method, &params, &host, ViewportId::ROOT, &map);
+    for (method, params) in &refused {
+        let answer = input_method(method, params, &host, ViewportId::ROOT, &map);
         assert!(matches!(answer, Some(Err(_))), "{method} {params} is refused: {answer:?}");
         assert!(host.injected_idle(), "{method} {params} left nothing waiting");
         assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "{method} {params} queued nothing");
     }
+    // This window keeps no access tree, so a node request is refused there whatever it says; its parameters alone
+    // refuse the node rows, and the secondary button, a node's context menu, is allowed.
+    for (method, params) in refused.iter().filter(|(_, params)| params.get("id").is_some() || params.get("label").is_some() || params == &json!({})) {
+        let by_params = if *method == "ui.focus" { Focus::from_params(params).is_err() } else { Click::from_params(params).is_err() };
+        assert!(by_params, "{method} {params} is refused by its parameters");
+    }
+    assert!(Click::from_params(&json!({"label": "Save", "button": "secondary"})).is_ok());
+}
+
+/// A key whose press moves the focus (Tab from one field to the next) still has its release carried out: the release
+/// is not cancelled as input whose focus changed, no key stays down, and the waiter is answered as processed. The
+/// framework takes the Tab press it acts on out of egui's input, so egui's fields never read it.
+#[trial]
+fn a_key_release_is_carried_out_after_its_press_moves_focus() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let passes: Rc<RefCell<Vec<Seen>>> = Rc::default();
+    let rects = Rc::new(Cell::new([Rect::NOTHING; 2]));
+    let (seen, shown) = (passes.clone(), rects.clone());
+    let (first, second) = (Rc::new(RefCell::new(String::new())), Rc::new(RefCell::new(String::new())));
+    let fx = Fixture::new(move |ui| {
+        let a = TextField::new("First", Bind::bound(&mut *first.borrow_mut())).show(ui).response.rect;
+        let b = TextField::new("Second", Bind::bound(&mut *second.borrow_mut())).show(ui).response.rect;
+        shown.set([a, b]);
+        seen.borrow_mut().push(ui.input(|i| Seen { any_key_down: !i.keys_down.is_empty(), events: i.events.clone(), ..Seen::default() }));
+    });
+    let mut rig = Rig { fx, passes };
+    rig.fx.settle();
+    let at = rects.get()[0].center();
+    rig.send("ui.click", json!({"x": at.x, "y": at.y}));
+    let before = rig.fx.focused();
+    assert!(before.is_some(), "the click focused the first field");
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let mut channel = ControlChannel::new(requests);
+    let host = rig.host();
+    rig.take();
+    input_method("ui.key", &json!({"key": "Tab"}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    let (req, reply) = ControlRequest::new("ui.key", json!({"key": "Tab"}));
+    channel.settle(req, Reply::AfterInput, None, 0.0);
+    let mut answer = None;
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        channel.poll_input(&host);
+        answer = reply.try_recv().ok();
+        if answer.is_some() {
+            break;
+        }
+    }
+    rig.fx.frame(Vec::new());
+
+    let answer = answer.expect("the waiter is answered");
+    assert_eq!(answer["ok"], true, "processed, not cancelled: {answer}");
+    assert!(rig.fx.focused().is_some() && rig.fx.focused() != before, "the press moved the focus");
+    let passes = rig.take();
+    let tab = |event: &Event| matches!(event, Event::Key { key: Key::Tab, pressed: true, .. });
+    assert!(!passes.iter().any(|pass| pass.events.iter().any(tab)), "the Tab press the framework took reaches no field in egui");
+    assert!(passes.last().is_some_and(|pass| !pass.any_key_down), "no key stays down");
 }
 
 /// `ui.ime` queues behind the input before it: typed text, then the composition with its converted segment, then
@@ -415,10 +486,50 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 /// A NaN or infinite point of a request is an error at the request, in either coordinate space, not a panic in the pass.
 #[trial]
 fn a_point_that_is_not_finite_is_refused() {
+    let no_controls = &|_: &_| Err(NO_TREE.to_owned());
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0), 0)] {
-            assert_eq!(at.resolve(&|_, p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
+            assert_eq!(at.resolve(&|_, p| Some(p), no_controls), Err(NOT_FINITE.to_owned()), "{at:?}");
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None), Ok(pos2(3.0, 4.0)));
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None, no_controls), Ok(pos2(3.0, 4.0)));
+}
+
+/// `ui.wheel` in lines queues whole notches in the line unit, clamped; without `unit` the turn is in points; an
+/// unknown unit is refused.
+#[trial]
+fn a_wheel_in_lines_turns_by_notches() {
+    fn turn(rig: &mut Rig, params: Value) -> (egui::MouseWheelUnit, egui::Vec2) {
+        rig.send("ui.wheel", params);
+        rig.take()
+            .into_iter()
+            .flat_map(|pass| pass.events)
+            .find_map(|event| match event {
+                Event::MouseWheel { unit, delta, .. } => Some((unit, delta)),
+                _ => None,
+            })
+            .expect("a pass saw the turn")
+    }
+    let mut rig = Rig::new();
+    assert_eq!(turn(&mut rig, json!({"x": 30, "y": 20, "dy": 2.4, "unit": "lines"})), (egui::MouseWheelUnit::Line, egui::vec2(0.0, 2.0)));
+    assert_eq!(turn(&mut rig, json!({"dy": 500, "unit": "lines"})).1, egui::vec2(0.0, 100.0), "notches are clamped");
+    assert_eq!(turn(&mut rig, json!({"dy": 2.4})), (egui::MouseWheelUnit::Point, egui::vec2(0.0, 2.4)));
+    let refused = input_method("ui.wheel", &json!({"dy": 1, "unit": "pages"}), &rig.host(), ViewportId::ROOT, &map);
+    assert!(matches!(refused, Some(Err(_))), "{refused:?}");
+    assert!(rig.host().injected_idle(), "the refused turn queued nothing");
+}
+
+/// `ui.move` requires both `x` and `y`: omitting either coordinate refuses the request before anything is queued
+/// instead of silently moving to 0 on the missing axis.
+#[trial]
+fn ui_move_refuses_a_missing_coordinate() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
+    for params in [json!({"x": 1}), json!({"y": 1}), json!({})] {
+        let answer = input_method("ui.move", &params, &host, ViewportId::ROOT, &map);
+        assert!(matches!(answer, Some(Err(_))), "ui.move {params} is refused: {answer:?}");
+        assert!(host.injected_idle(), "ui.move {params} left nothing waiting");
+        assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "ui.move {params} queued nothing");
+    }
 }

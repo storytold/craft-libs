@@ -20,6 +20,6 @@ pub use bezier::{
     HandlesShown, HitMark, Knot, KnotRef, MAX_ANCHORS, PathEdit, PathSelection, SegmentMark,
 };
 pub use mode::{PathMode, PathTool, PenMode};
-pub use options::{PATH_OPTIONS_COLOR_KEY, PathOptionsOutput, PathOptionsPopover, PathOptionsSettings, PathOptionsWords};
+pub use options::{HandleStyle, PATH_OPTIONS_COLOR_KEY, PathOptionsOutput, PathOptionsPopover, PathOptionsSettings, PathOptionsWords};
 pub use tool::{PenDraft, PenEnd, PenEvent, PenStyle, PenTool};
 pub use words::PenWords;

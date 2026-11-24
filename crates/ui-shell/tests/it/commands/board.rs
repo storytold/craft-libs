@@ -1,9 +1,13 @@
 use super::kit::{AppCommand, Dock, DockCommand, PaneCommand, Silent, Tap};
-use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
-use craft_ui::runtime::commands::{CommandState, Commands as _, EditCommands, FireSource, Fired, chord_text_builds, fire, resolve};
+use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Tracked};
+use craft_ui::runtime::commands::{
+    CommandGate, CommandInput, CommandRef, CommandState, CommandStates, Commands as _, EditCommands, FirePhase, FireSource, Fired, chord_text_builds,
+    fire, resolve,
+};
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::measure::chord_texts;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Frames, trial};
@@ -73,11 +77,50 @@ fn an_enclosing_scopes_shortcut_beats_the_applications() {
     let mut frames = Frames::new();
     frames.idle(3, &mut show);
     focus_on(&mut frames, tap.get().unwrap(), &mut show);
-    frames.frame(vec![key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT)], &mut show);
+    // Each press is released: a second press with no release between is a repeat.
+    let chord = || vec![key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT), key_release(Key::J, Modifiers::COMMAND | Modifiers::ALT)];
+    frames.frame(chord(), &mut show);
     assert_eq!((closed.get(), take_output(&frames.ctx).fired.len()), (1, 0), "the dock takes it");
     focus_on(&mut frames, outside.get().unwrap(), &mut show);
-    frames.frame(vec![key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT)], &mut show);
+    frames.frame(chord(), &mut show);
     assert_eq!((closed.get(), ids(&take_output(&frames.ctx).fired)), (1, vec!["trial.jump"]), "outside the dock the application's command fires");
+}
+
+/// 11.3: a key whose app-scope command only the app's own state disables is declined, in order, once, though a discard
+/// pass reruns its frame; one the gate also refuses is not, and none of them fires.
+#[trial]
+fn a_disabled_commands_key_is_declined_and_a_gated_one_is_not() {
+    let mut frames = Frames::new();
+    let mut states = Tracked::new(CommandStates::new());
+    for command in [AppCommand::Play, AppCommand::Save, AppCommand::Jump] {
+        states.set(command, CommandState::new().enabled(false));
+    }
+    frames.commands(
+        CommandInput::new().states(&states).gate(CommandGate::new((), |_: &(), command: &CommandRef| *command != CommandRef::from(AppCommand::Jump))),
+    );
+    let mut show = |ui: &mut Ui| {
+        Tap::new().id_salt("go").command(AppCommand::Go).show(ui);
+    };
+    frames.idle(2, &mut show);
+    let keys = vec![
+        key_press(Key::F8, Modifiers::NONE),
+        key_press(Key::J, Modifiers::COMMAND | Modifiers::ALT),
+        key_press(Key::K, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT),
+    ];
+    let mut first = true;
+    frames.frame(keys, |ui| {
+        show(ui);
+        if std::mem::take(&mut first) {
+            ui.ctx().request_discard("declined trial");
+        }
+    });
+    frames.idle(1, &mut show);
+    let output = take_output(&frames.ctx);
+    assert_eq!(ids(&output.declined), ["trial.play", "trial.save"], "the state-disabled keys, in order, and not the gated one");
+    assert!(output.declined.iter().all(|declined| declined.source == FireSource::Key && declined.phase == FirePhase::Press));
+    assert!(output.fired.is_empty(), "a declined key fires nothing");
+    frames.idle(2, &mut show);
+    assert!(take_output(&frames.ctx).declined.is_empty(), "nothing is declined again in later frames");
 }
 
 /// 11.3: a scoped entry waits for its instance and is dropped when the instance stops being live.

@@ -33,6 +33,11 @@ fn ease(p: &mut dyn ErasedPass<'_>, targets: [bool; 3]) -> StateMix {
     StateMix::new(hover, press, on)
 }
 
+/// The component's shown value when it is a `bool`: a two-state value, on or off.
+pub(crate) fn shown_bool<C: Component>(cx: &Cx<'_, C>) -> Option<bool> {
+    cx.shown.as_deref().and_then(|value| (value as &dyn std::any::Any).downcast_ref::<bool>()).copied()
+}
+
 /// The flags of step 12 that the component's own inputs give, for a run, a face and a collection member alike: its
 /// own `flags`, READ_ONLY and SELECTED from its props, CHECKED from a shown `bool`, MIXED from a mixed binding and the
 /// binding's validity.
@@ -44,7 +49,7 @@ pub(crate) fn value_flags<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Flags {
     if cx.core.resolved.selected == Some(true) {
         flags |= Flags::SELECTED;
     }
-    if cx.shown.as_deref().and_then(|value| (value as &dyn std::any::Any).downcast_ref::<bool>()) == Some(&true) {
+    if shown_bool(cx) == Some(true) {
         flags |= Flags::CHECKED;
     }
     if cx.mixed {

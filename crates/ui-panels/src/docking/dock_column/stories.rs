@@ -1,12 +1,19 @@
 //! Stories of `DockColumn`.
 
-use crate::contract::ShowContainer as _;
-use crate::docking::{ColumnBar, DockColumn, PanelSpec};
+use crate::contract::{ShowContainer as _, Tracked};
+use crate::docking::{ColumnBar, DockColumn, DockGrid, DockSizes, PanelSpec};
+use crate::rails::tool::stories::{BRUSH, tools};
+use crate::rails::{LastUsed, RailDensity, ToolRail, ToolSlot};
+use crate::runtime::env::Env;
 use crate::sections::Panel;
 use crate::testing::memory::global;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
+use craft_behavior::Flow;
 use craft_behavior::dock::{Column, Group};
-use egui::Ui;
+use egui::{Ui, UiBuilder};
+
+/// The height of the rail card story's column.
+const CARD_HEIGHT: f32 = 160.0;
 
 fn spec(panel: &u8) -> PanelSpec {
     PanelSpec::new(format!("Panel {panel}"))
@@ -35,4 +42,30 @@ fn in_a_floating_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             Panel::new(title).show_at(ui, rect, |_, _| ());
         })
         .into()
+}
+
+/// A docked column of a tool rail shown as a card (`DockConfig::rail_cards`), at each rail density and one or two
+/// steps: inset on its outer, top and bottom sides, where the dock's background shows, with its bar and its rail on
+/// the rounded panel card. The column is wider than its steps by the inset.
+#[story(DockColumn<'static, u8>, covers = [], drive = Drive::Never)]
+fn a_tool_rail_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let density = *data.choice("density", RailDensity::Dense, &[("Regular", RailDensity::Regular), ("Dense", RailDensity::Dense)]);
+    let steps = *data.ranged("steps", 1_u16, 1.0..=2.0);
+    let slots = Tracked::new((0..4_u8).map(|slot| ToolSlot::new(u32::from(slot), tools(&[slot]))).collect::<Vec<_>>());
+    let last = Tracked::new(LastUsed::default());
+    let cells = slots.len();
+    let spec = move |_: &u8| PanelSpec::new("Tools").grid(DockGrid::rail(cells).density(density));
+    let column = Column::new(vec![Group::new(vec![0], 0)]).with_steps(steps);
+    let sizes = DockSizes { rail_cards: true, ..DockSizes::of_scope(ui) };
+    let width = sizes.natural(std::slice::from_ref(&column), &spec).first().map_or(0.0, |(width, _)| *width);
+    let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, width);
+    let rect = room.with_max_y(room.top() + CARD_HEIGHT);
+    // The column takes the cell a dock gives it, as high as the dock, whatever its rail's height.
+    let shown =
+        DockColumn::new("Panels", global("dock column", "rail card story"), &column, &spec).card(true).show_groups_at(ui, rect, |_, rect, ui, _| {
+            let rail = ToolRail::new("Tools", &slots, &BRUSH, &last).density(density);
+            ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| rail.show_rail(ui, |_, _| {}));
+        });
+    ui.advance_cursor_after_rect(rect);
+    shown.into()
 }
