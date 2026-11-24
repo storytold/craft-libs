@@ -19,7 +19,8 @@ pub use chips::{ChipCodec, ChipField, ChipFieldOutput, ChipFieldStyle, ChipWords
 pub use hex::{HexCodec, HexField};
 pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, LinkedOutput, LinkedWords, follow_equal, follow_ratio, link_toggle};
 pub use number::{
-    NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, StepArrows, UnitPlacement,
+    NamedOr, NumberField, NumberLook, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, StepArrows,
+    UnitPlacement,
 };
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
