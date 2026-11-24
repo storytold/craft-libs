@@ -228,10 +228,7 @@ impl Reader<'_> {
                 }
             }
             24 => {
-                if let Some((value, string_bytes)) = user_unit(data) {
-                    if string_bytes > self.limits.records.string_bytes {
-                        return Err(StopReason::StringLimit.into());
-                    }
+                if let Some(value) = user_unit(data, self.limits.records.string_bytes)? {
                     output.user_unit = Some(Evidence { offset: property.offset, value });
                 } else {
                     self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
@@ -424,31 +421,41 @@ fn word(bytes: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(*bytes.as_array::<4>()?))
 }
 
-fn user_unit(bytes: &[u8]) -> Option<(UserUnit<'_>, usize)> {
-    let factor = f32::from_be_bytes(*bytes.first_chunk::<4>()?);
-    let digits = u32::from_be_bytes(*bytes.get(4..8)?.as_array::<4>()?);
+fn user_unit(bytes: &[u8], string_limit: usize) -> ReadResult<Option<UserUnit<'_>>> {
+    let Some(factor) = bytes.first_chunk::<4>().copied().map(f32::from_be_bytes) else { return Ok(None) };
+    let Some(digits) = bytes.get(4..8).and_then(word) else { return Ok(None) };
     if !factor.is_finite() || factor <= 0. {
-        return None;
+        return Ok(None);
     }
-    let mut remaining = bytes.get(8..)?;
+    let Some(mut remaining) = bytes.get(8..) else { return Ok(None) };
     let mut strings = [None; 5];
     let mut count = 0;
-    let mut string_bytes = 0;
     for slot in &mut strings {
         if remaining.is_empty() {
             break;
         }
-        let length = u32::from_be_bytes(*remaining.first_chunk::<4>()?) as usize;
-        string_bytes = string_bytes.max(length);
-        remaining = remaining.get(4..)?;
-        let (value, rest) = remaining.split_at_checked(length)?;
-        let value = if value.is_empty() { value } else { value.strip_suffix(&[0])? };
-        std::str::from_utf8(value).ok()?;
+        let Some(length) = remaining.first_chunk::<4>().copied().map(u32::from_be_bytes) else { return Ok(None) };
+        // Admit the declared field before inspecting its bytes, including malformed strings.
+        // Otherwise an oversized invalid value could masquerade as a complete typed scan.
+        if length as usize > string_limit {
+            return Err(StopReason::StringLimit.into());
+        }
+        let Some(payload) = remaining.get(4..) else { return Ok(None) };
+        let Some((value, rest)) = payload.split_at_checked(length as usize) else { return Ok(None) };
+        let value = if value.is_empty() {
+            value
+        } else {
+            let Some(value) = value.strip_suffix(&[0]) else { return Ok(None) };
+            value
+        };
+        if value.contains(&0) || std::str::from_utf8(value).is_err() {
+            return Ok(None);
+        }
         *slot = Some(value);
         remaining = rest;
         count += 1;
     }
-    (remaining.is_empty() && matches!(count, 3 | 5)).then_some((UserUnit { factor, digits, strings }, string_bytes))
+    Ok((remaining.is_empty() && matches!(count, 3 | 5)).then_some(UserUnit { factor, digits, strings }))
 }
 
 #[cfg(test)]

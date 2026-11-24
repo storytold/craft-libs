@@ -572,3 +572,94 @@ fn invalid_utf8_user_unit_fields_do_not_replace_valid_borrowed_evidence() {
         }
     }
 }
+
+#[test]
+fn interior_nuls_in_user_unit_fields_keep_prior_values_and_opaque_raw_evidence() {
+    let unit = |fields: &[&[u8]], factor: f32| {
+        let mut bytes = [factor.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for field in fields {
+            bytes.extend((field.len() as u32).to_be_bytes());
+            bytes.extend(*field);
+        }
+        bytes
+    };
+    for count in [3, 5] {
+        let fields = vec![b"cm\0".as_slice(); count];
+        let first = unit(&fields, 2.);
+        for bad in 0..count {
+            let mut later = fields.clone();
+            later[bad] = b"mm\0extra\0";
+            let invalid = unit(&later, 3.);
+            let bytes = [property(24, &first), property(24, &invalid), property(0, &[])].concat();
+            let raw = super::super::properties_with_version(
+                &bytes,
+                0,
+                if count == 5 { 20 } else { 26 },
+                RecordLimits::default(),
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            assert!(raw.stopped.is_none());
+            assert_eq!(raw.records[1].payload, invalid);
+            let result = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert!(result.complete());
+            assert_eq!(result.user_unit.unwrap().value.factor, 2.);
+            assert_eq!(result.issues, [Issue { offset: raw.records[1].offset, property_kind: 24, kind: IssueKind::InvalidValue }]);
+        }
+    }
+}
+
+#[test]
+fn a_user_unit_field_limit_precedes_utf8_and_nul_validation() {
+    let unit = |fields: &[&[u8]], factor: f32| {
+        let mut bytes = [factor.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for field in fields {
+            bytes.extend((field.len() as u32).to_be_bytes());
+            bytes.extend(*field);
+        }
+        bytes
+    };
+    let mut utf8 = vec![b'a'; 8192];
+    utf8[8190] = 0xff;
+    utf8[8191] = 0;
+    let unterminated = vec![b'a'; 8192];
+    let mut interior = vec![b'a'; 8192];
+    interior[1] = 0;
+    interior[8191] = 0;
+    for count in [3, 5] {
+        let fields = vec![b"a\0".as_slice(); count];
+        let first = unit(&fields, 2.);
+        for malformed in [&utf8, &unterminated, &interior] {
+            for index in 0..count {
+                let mut later = fields.clone();
+                later[index] = malformed;
+                let invalid = unit(&later, 3.);
+                let bytes = [property(24, &first), property(24, &invalid), property(0, &[])].concat();
+                let raw = super::super::properties_with_version(
+                    &bytes,
+                    0,
+                    if count == 5 { 20 } else { 26 },
+                    RecordLimits::default(),
+                    &mut Budget::default(),
+                    &|| true,
+                )
+                .unwrap();
+                assert!(raw.stopped.is_none());
+                assert_eq!(raw.records[1].payload, invalid);
+                let limits = Limits { records: RecordLimits { string_bytes: 4, ..Default::default() }, ..Default::default() };
+                let result = image(&raw, limits, &mut Budget::default(), &|| true).unwrap();
+                assert!(!result.complete());
+                assert_eq!(result.stopped, Some(Diagnostic { offset: raw.records[1].offset, ordinal: 1, reason: StopReason::StringLimit }));
+                assert_eq!(result.user_unit.unwrap().value.factor, 2.);
+                assert!(result.issues.is_empty());
+                // Once the same bytes fit, their malformed spelling is an InvalidValue,
+                // not a quota stop, and still cannot replace prior valid evidence.
+                let result = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+                assert!(result.complete());
+                assert_eq!(result.user_unit.unwrap().value.factor, 2.);
+                assert_eq!(result.issues[0].kind, IssueKind::InvalidValue);
+            }
+        }
+    }
+}
