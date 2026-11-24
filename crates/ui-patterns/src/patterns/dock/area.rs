@@ -93,8 +93,8 @@ pub struct DockAreaOutput<P> {
     /// window's widgets theirs. A window where a component has keyboard focus forwards nothing: its keys are that
     /// component's. A clipboard chord stands for the `Copy`, `Cut` or `Paste` (or `PasteImage`) event without its key. Floating windows
     /// that show in the app window forward nothing: their keys are the app window's own.
-    pub forwarded: Vec<egui::Event>,
-    /// The modifiers held in the window that forwarded the last of `forwarded`; `None` when it is empty.
+    pub forwarded_events: Vec<egui::Event>,
+    /// The modifiers held in the window that forwarded the last of `forwarded_events`; `None` when it is empty.
     pub forwarded_modifiers: Option<egui::Modifiers>,
     /// The area's response.
     pub response: Response,
@@ -296,7 +296,7 @@ struct Report<P> {
     files: Vec<drag::OsFile>,
     /// The keyboard events the floating windows' own OS windows left, and the modifiers held in the last window that
     /// left any.
-    forwarded: Vec<egui::Event>,
+    forwarded_events: Vec<egui::Event>,
     forwarded_modifiers: Option<egui::Modifiers>,
 }
 
@@ -421,7 +421,7 @@ struct Passed<P> {
     columns: Vec<(P, Rect)>,
     windows: Vec<(P, ViewportId)>,
     files: Vec<drag::OsFile>,
-    forwarded: Vec<egui::Event>,
+    forwarded_events: Vec<egui::Event>,
     forwarded_modifiers: Option<egui::Modifiers>,
 }
 
@@ -577,8 +577,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             passed = Some(result);
         });
         let requested = close_requests::<P>(&ctx);
-        let Passed { geometry, actions, events, focused, picked, edit, space, columns, windows, files, forwarded, forwarded_modifiers } = passed
-            .unwrap_or_else(|| Passed {
+        let Passed { geometry, actions, events, focused, picked, edit, space, columns, windows, files, forwarded_events, forwarded_modifiers } =
+            passed.unwrap_or_else(|| Passed {
                 geometry: Vec::new(),
                 actions: Vec::new(),
                 events: Vec::new(),
@@ -589,7 +589,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 columns: Vec::new(),
                 windows: Vec::new(),
                 files: Vec::new(),
-                forwarded: Vec::new(),
+                forwarded_events: Vec::new(),
                 forwarded_modifiers: None,
             });
         if shown.output.dropped.is_some() {
@@ -608,7 +608,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             columns,
             windows,
             window_files: files,
-            forwarded,
+            forwarded_events,
             forwarded_modifiers,
             response: shown.output.response,
         }
@@ -742,7 +742,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             placed: Vec::new(),
             windows: Vec::new(),
             files: Vec::new(),
-            forwarded: Vec::new(),
+            forwarded_events: Vec::new(),
             forwarded_modifiers: None,
         },
         dock: id,
@@ -845,7 +845,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         columns: report.placed,
         windows: report.windows,
         files: report.files,
-        forwarded: report.forwarded,
+        forwarded_events: report.forwarded_events,
         forwarded_modifiers: report.forwarded_modifiers,
     }
 }
@@ -1616,9 +1616,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.dock = area_dock;
             let output = shown.output;
             self.report.files.extend(output.files);
-            if !output.keys.is_empty() {
-                self.report.forwarded_modifiers = output.key_modifiers;
-                self.report.forwarded.extend(output.keys);
+            if !output.forwarded_events.is_empty() {
+                self.report.forwarded_modifiers = output.forwarded_modifiers;
+                self.report.forwarded_events.extend(output.forwarded_events);
             }
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);

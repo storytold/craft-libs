@@ -1402,7 +1402,7 @@ impl DockPanels<u32> for Fielded {
     }
 }
 
-/// A key pressed in a native float's own OS window that nothing there took reaches `DockAreaOutput::forwarded`, with the
+/// A key pressed in a native float's own OS window that nothing there took reaches `DockAreaOutput::forwarded_events`, with the
 /// modifiers held in that window, so an app can run its shortcuts from its main window's input while the float has the
 /// focus; the same key is the field's own while a text field in that window has focus, and is not forwarded.
 #[trial]
@@ -1418,7 +1418,7 @@ fn a_key_nothing_took_in_a_native_float_is_forwarded_unless_a_field_in_it_has_fo
         windows.frame(vec![], child, |ui| {
             let config = DockConfig::default().native_windows(true);
             let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut panels, config).show(ui);
-            forwarded = (shown.forwarded, shown.forwarded_modifiers);
+            forwarded = (shown.forwarded_events, shown.forwarded_modifiers);
         });
         forwarded
     };
@@ -1472,7 +1472,7 @@ fn a_held_key_a_command_fired_for_in_a_native_float_forwards_none_of_its_repeats
                 let config = DockConfig::default().native_windows(true);
                 forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
                     .show(ui)
-                    .forwarded;
+                    .forwarded_events;
             });
             fired.borrow_mut().extend(take_output(&windows.ctx).fired.into_iter().map(|fired| fired.phase));
             forwarded

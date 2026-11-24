@@ -199,10 +199,10 @@ pub struct FloatingGroupOutput {
     /// theirs, and so did a command the shortcut dispatcher fired. egui hands each OS window only its own input, so
     /// the app's main window never sees these. Empty while a component of the window has keyboard focus, and for a
     /// group that shows in the app window, whose keys are the app window's.
-    pub keys: Vec<Event>,
-    /// The modifiers held in the window when `keys` is not empty. A clipboard event stands for its chord without
-    /// the key, so these tell Ctrl+C from the keyboard's own Copy key.
-    pub key_modifiers: Option<Modifiers>,
+    pub forwarded_events: Vec<Event>,
+    /// The modifiers held in the window when `forwarded_events` is not empty. A clipboard event stands for its chord
+    /// without the key, so these tell Ctrl+C from the keyboard's own Copy key.
+    pub forwarded_modifiers: Option<Modifiers>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -438,8 +438,8 @@ impl<'a> FloatingGroup<'a> {
             }
             inner
         });
-        shown.output.keys = keys;
-        shown.output.key_modifiers = shown_modifiers;
+        shown.output.forwarded_events = keys;
+        shown.output.forwarded_modifiers = shown_modifiers;
         Inner { output: shown.output, inner: shown.inner.flatten(), settle: shown.settle }
     }
 
@@ -575,8 +575,8 @@ impl Component for FloatingGroup<'_> {
             iconic,
             collapsed_width: self.collapsed_width,
             files: self.files,
-            keys: Vec::new(),
-            key_modifiers: None,
+            forwarded_events: Vec::new(),
+            forwarded_modifiers: None,
         };
         native::raise(&cx.core.ctx, &output);
         native::fade(&cx.core.ctx, &output);
