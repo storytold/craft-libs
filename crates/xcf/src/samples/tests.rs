@@ -77,6 +77,7 @@ struct Source {
     channels: usize,
     compression: Compression,
     data: Vec<u8>,
+    floating: bool,
     mask: Option<Vec<u8>>,
     channel: Option<Vec<u8>>,
 }
@@ -93,6 +94,7 @@ impl Source {
             channels: 1,
             compression: Compression::None,
             data,
+            floating: false,
             mask: None,
             channel: None,
         }
@@ -125,6 +127,9 @@ impl Source {
             w.u32(word);
         }
         w.string("Source");
+        if self.floating {
+            w.prop(5, &[0; 8]);
+        }
         w.end();
         let pixels = w.slot();
         let mask = w.slot();
@@ -487,4 +492,78 @@ fn oversized_caller_budget_cannot_lift_the_source_drawable_limit() {
     let error = reader.visit_layer_tiles(0, SampleOptions::default(), &mut budget, GO, |_| panic!("refuse before following the level")).unwrap_err();
     assert!(error.to_string().contains("source pixel limit"));
     assert_eq!(budget, usize::MAX);
+}
+
+#[test]
+fn indexed_floating_gray_alpha_samples_are_not_palette_indices() {
+    for floating in [false, true] {
+        let mut source = Source::gray(150, 1, vec![64, 192]);
+        source.base = 2;
+        source.kind = 3;
+        source.channels = 2;
+        source.floating = floating;
+        let bytes = source.write();
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let mut visited = Vec::new();
+        let mut budget = 2;
+        let result = xcf.visit_layer_tiles(0, SampleOptions::default(), &mut budget, &|| true, |tile| {
+            assert!(!tile.drawable.indexed);
+            visited.extend_from_slice(tile.data);
+            Ok(())
+        });
+        if floating {
+            let drawable = result.unwrap().unwrap();
+            assert_eq!(drawable.channels, 2);
+            assert!(!drawable.indexed);
+            assert_eq!(visited, [64, 192]);
+            assert_eq!(budget, 0);
+        } else {
+            assert!(result.is_err());
+            assert!(visited.is_empty());
+            assert_eq!(budget, 2);
+        }
+    }
+}
+
+#[test]
+fn source_tiles_before_the_level_table_cannot_consume_its_dimensions() {
+    for complete in [false, true] {
+        let source = Source::gray(150, 1, vec![0]);
+        let mut file = W { out: source.write(), wide: true };
+        let hierarchy = file.out.len();
+        for value in [2, 1, 1] {
+            file.u32(value);
+        }
+        let level_slot = file.slot();
+        let pixels_at = file.out.len();
+        file.out.push(22);
+        if complete {
+            file.out.push(44);
+        }
+        let level = file.out.len();
+        file.patch(level_slot, level);
+        file.u32(2);
+        file.u32(1);
+        file.ptr(pixels_at);
+        file.ptr(0);
+        let xcf = Xcf::parse(&file.out).unwrap();
+        let mut visited = Vec::new();
+        let result = xcf.visit_hierarchy(
+            VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)) },
+            SampleOptions::default(),
+            &mut 2,
+            &|| true,
+            |tile| {
+                visited.extend_from_slice(tile.data);
+                Ok(())
+            },
+        );
+        if complete {
+            result.unwrap();
+            assert_eq!(visited, [22, 44]);
+        } else {
+            assert!(result.is_err());
+            assert!(visited.is_empty());
+        }
+    }
 }

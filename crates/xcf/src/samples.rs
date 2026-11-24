@@ -161,7 +161,7 @@ pub(super) struct HierarchyHead {
     pub width: u32,
     pub height: u32,
     pub bpp: usize,
-    level: usize,
+    pub(super) level: usize,
 }
 
 impl Xcf<'_> {
@@ -219,13 +219,14 @@ impl Xcf<'_> {
             (BaseType::Rgb, 1) => 4,
             (BaseType::Gray, 2) | (BaseType::Indexed, 4) => 1,
             (BaseType::Gray, 3) | (BaseType::Indexed, 5) => 2,
+            (BaseType::Indexed, 3) if layer.floating_selection => 2,
             _ => return Err(invalid("layer type does not match the image color model")),
         };
         self.visit_hierarchy(
             VisitTarget {
                 pointer: layer.hierarchy,
                 channels,
-                indexed: self.image.base_type == BaseType::Indexed,
+                indexed: matches!(layer.layer_type, 4 | 5),
                 dimensions: Some((layer.width, layer.height)),
             },
             options,
@@ -371,7 +372,9 @@ impl Xcf<'_> {
             let width = (head.width - x).min(TILE);
             let height = (head.height - y).min(TILE);
             let raw = if let Some(&start) = offsets.get(index) {
-                let end = offsets.get(index + 1).copied().unwrap_or(self.c.b.len());
+                // A pre-table tile must not consume the level dimensions or pointers.
+                let boundary = if start < head.level { head.level } else { self.c.b.len() };
+                let end = offsets.get(index + 1).copied().unwrap_or(boundary).min(boundary);
                 let input = self.c.b.get(start..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
                 tiles::decode(input, self.image.compression, head.bpp, width as usize * height as usize)?
             } else {
