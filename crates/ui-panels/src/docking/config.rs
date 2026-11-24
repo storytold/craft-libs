@@ -3,6 +3,7 @@
 
 use super::IconicMode;
 use super::targets::ZoneRule;
+use crate::tabs::PanelTabLook;
 use craft_behavior::{DockSide, IconId};
 
 /// A set of the sides of the layout's outer edge or of a group.
@@ -97,6 +98,9 @@ pub struct DockConfig {
     pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
+    /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), or on a
+    /// filled rounded pill ([`PanelTabLook::Pill`]).
+    pub tab_look: PanelTabLook,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
     /// with this off, it shows in the app window.
@@ -131,6 +135,7 @@ impl Default for DockConfig {
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
+            tab_look: PanelTabLook::Plain,
             native_windows: true,
             group_order_items: false,
             panel_menu_always: false,
@@ -250,6 +255,13 @@ impl DockConfig {
     #[must_use]
     pub fn column_cards(mut self, on: bool) -> Self {
         self.column_cards = on;
+        self
+    }
+
+    /// The look of the groups' panel tabs ([`tab_look`](Self::tab_look)).
+    #[must_use]
+    pub fn tab_look(mut self, look: PanelTabLook) -> Self {
+        self.tab_look = look;
         self
     }
 
