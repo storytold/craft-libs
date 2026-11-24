@@ -1,6 +1,6 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{FieldLayout, Glyph, LabelKind, LabelScheme};
+use super::props::{FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme};
 use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
@@ -411,18 +411,20 @@ impl Component for LabelLeaf {
 }
 
 /// The colon a beside label draws after its shown text in a form (`LabelScheme::Form`), unless that text ends in one:
-/// a text label's, and in a bar a glyph text's as well ("X:"). An inspector's labels draw none. The label's node and
-/// the control keep the name as given.
+/// a text label's, in a bar a glyph text's as well ("X:"), and under `GlyphColon::Form` a glyph caption's. An
+/// inspector's labels draw none. The label's node and the control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
     if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() == LabelScheme::Inspector {
         return None;
     }
     let text = match &input.side.kind {
         LabelKind::Text | LabelKind::Short(_) => env.view().resolve(input.side.kind.shown(input.text)),
-        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 => match glyph.resolved(env.view()) {
-            Glyph::Text(text) => text,
-            Glyph::Icon(_) => return None,
-        },
+        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 || (glyph.caption && env.values.get::<GlyphColon>() == GlyphColon::Form) => {
+            match glyph.resolved(env.view()) {
+                Glyph::Text(text) => text,
+                Glyph::Icon(_) => return None,
+            }
+        }
         _ => return None,
     };
     if text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {

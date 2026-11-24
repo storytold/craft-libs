@@ -48,17 +48,26 @@ pub(super) enum Glyph {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphLabel {
     shown: Glyph,
+    /// The text stands for a word caption ([`GlyphLabel::caption`]).
+    pub(super) caption: bool,
 }
 
 impl GlyphLabel {
     /// Shows `icon`, as large as the control's icons.
     pub fn icon(icon: impl Into<IconSpec<'static>>) -> Self {
-        GlyphLabel { shown: Glyph::Icon(icon.into()) }
+        GlyphLabel { shown: Glyph::Icon(icon.into()), caption: false }
     }
 
     /// Shows `text`, resolved in the scope's language.
     pub fn text(text: impl Into<Label>) -> Self {
-        GlyphLabel { shown: Glyph::Text(text.into()) }
+        GlyphLabel { shown: Glyph::Text(text.into()), caption: false }
+    }
+
+    /// Shows `text` that stands for a word caption: X for the horizontal position, W for the width. It is a glyph text
+    /// in every way, and under [`GlyphColon::Form`] it takes a form's colon as a word label does ("X:"). A glyph that
+    /// is a mark of its own ("#" before a hex value, a colour channel's letter) is [`GlyphLabel::text`].
+    pub fn caption(text: impl Into<Label>) -> Self {
+        GlyphLabel { caption: true, ..GlyphLabel::text(text) }
     }
 
     /// What the label leaf draws: the icon, or the text resolved in `env`.
@@ -76,7 +85,8 @@ impl GlyphLabel {
 #[non_exhaustive]
 pub enum LabelScheme {
     /// A dialog or a form: a beside label sits against its control and ends with a colon; the control keeps its own
-    /// width. In a bar a glyph text takes the colon as well ("X:").
+    /// width. In a bar a glyph text takes the colon as well ("X:"), and so does a glyph caption under
+    /// [`GlyphColon::Form`].
     #[default]
     Form,
     /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
@@ -89,6 +99,25 @@ pub enum LabelScheme {
 impl crate::runtime::env::EnvValue for LabelScheme {
     fn root() -> Self {
         LabelScheme::Form
+    }
+}
+
+/// Which glyph labels take the colon of a scheme whose word labels take one. An app sets it once at its root
+/// (`RootEnv::values`); the default is [`GlyphColon::Bar`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum GlyphColon {
+    /// A glyph text takes the colon in a bar only ("X:"), and shows bare elsewhere.
+    #[default]
+    Bar,
+    /// A glyph caption ([`GlyphLabel::caption`]) takes the colon wherever a word label does, so a form's X/Y/W/H read
+    /// "X:"; every other glyph text keeps the bar's rule. VectorCraft's panels.
+    Form,
+}
+
+impl crate::runtime::env::EnvValue for GlyphColon {
+    fn root() -> Self {
+        GlyphColon::Bar
     }
 }
 
