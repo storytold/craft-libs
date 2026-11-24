@@ -177,13 +177,14 @@ fn pointer_lists_preserve_repeated_wire_entries_but_bound_attempts() {
             pointer(&mut bytes, value);
         }
         assert_eq!(Reader::new(&bytes, version).pointers(0, &mut Budget::default(), &|| true).unwrap(), [80, 32, 91]);
+        let repeated_pointer = if version < 11 { 80 } else { 0x1_0000_0050 };
         let mut repeated = Vec::new();
-        for value in [80, 32, 80, 0] {
+        for value in [repeated_pointer, 32, repeated_pointer, 0] {
             pointer(&mut repeated, value);
         }
         let mut budget = Budget::default();
         let before = budget.remaining_storage();
-        assert_eq!(Reader::new(&repeated, version).pointers(0, &mut budget, &|| true).unwrap(), [80, 32, 80]);
+        assert_eq!(Reader::new(&repeated, version).pointers(0, &mut budget, &|| true).unwrap(), [repeated_pointer, 32, repeated_pointer]);
         assert!(budget.remaining_storage() < before);
         assert!(budget.remaining_work() < Budget::default().remaining_work());
         let mut many = Vec::new();
