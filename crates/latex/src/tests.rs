@@ -761,6 +761,9 @@ fn includegraphics_sizes_follow_the_options() {
     // A square stays square when only the width is given.
     assert!((big.h - big.w).abs() < 0.5);
     let (Some(x4), Some(x8)) = (pic("scale=4"), pic("scale=8")) else { panic!("every picture loads") };
+    // A unitless length is in big points.
+    let (Some(bare), Some(bp)) = (pic("width=100"), pic("width=100bp")) else { panic!("every picture loads") };
+    assert!((bare.w - bp.w).abs() < 0.01);
     // A box with `keepaspectratio` fits a picture smaller than a point as it fits any other.
     let (Some(boxed), Some(wide)) = (pic("width=100pt,height=100pt,keepaspectratio"), pic("width=100pt")) else { panic!("every picture loads") };
     assert!((boxed.w - wide.w).abs() < 0.5 && (boxed.h - wide.h).abs() < 0.5);
@@ -772,7 +775,14 @@ fn includegraphics_falls_back_to_placeholder_text() {
     let junk = std::sync::Arc::new(b"not a picture".to_vec());
     let load_junk = |_: &str| Some(junk.clone());
     let none = |_: &str| None;
+    // A PNG signature on bytes that aren't a PNG: not a picture, so the next candidate is tried.
+    let fake = std::sync::Arc::new(b"\x89PNG\r\n\x1a\n not really".to_vec());
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load_fake = |p: &str| if p == "a.png" { Some(fake.clone()) } else { None };
+    let next = |p: &str| if p == "a.png" { Some(fake.clone()) } else { Some(png.clone()) };
+    assert_eq!(pictures(&parse_with("\\graphicspath{{f/}}\\begin{document}\\includegraphics{a.png}\\end{document}", Some(&next))).len(), 1);
     for flow in [
+        parse_with("\\begin{document}\\includegraphics{a.png}\\end{document}", Some(&load_fake)),
         parse_with("\\begin{document}\\includegraphics{fig.pdf}\\end{document}", Some(&load_junk)),
         parse_with("\\begin{document}\\includegraphics{missing}\\end{document}", Some(&none)),
     ] {
@@ -865,4 +875,28 @@ fn svg_pictures_are_drawn_sharp_at_the_size_shown() {
     let broken = std::sync::Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg' width='10'".to_vec());
     let flow = parse_with("\\begin{document}\\includegraphics{x.svg}\\end{document}", Some(&|_: &str| Some(broken.clone())));
     assert!(pictures(&flow).is_empty() && flow_text(&flow).contains("[Picture: x.svg]"));
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn svg_pictures_read_no_linked_files_and_may_be_utf16() {
+    // A linked file inside the SVG is never opened: the drawing comes out as if it weren't there.
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/testdata/pixel.png");
+    assert!(file.is_file());
+    let href =
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><image href="{}" width="20" height="20"/></svg>"#, file.display());
+    let bare = r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"></svg>"#;
+    let draw = |svg: &str| {
+        let bytes = std::sync::Arc::new(svg.as_bytes().to_vec());
+        let load = |_: &str| Some(bytes.clone());
+        pictures(&parse_with("\\begin{document}\\includegraphics{x.svg}\\end{document}", Some(&load))).into_iter().next().map(|p| p.data)
+    };
+    let (linked, empty) = (draw(&href), draw(bare));
+    assert!(linked.is_some() && linked == empty, "the linked file's pixels must not be drawn");
+    // UTF-16 SVG text, which a UTF-8 prefix check doesn't recognise, still loads.
+    let mut utf16 = vec![0xFF, 0xFE];
+    utf16.extend(r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>"#.encode_utf16().flat_map(u16::to_le_bytes));
+    let utf16 = std::sync::Arc::new(utf16);
+    let load = |_: &str| Some(utf16.clone());
+    assert_eq!(pictures(&parse_with("\\begin{document}\\includesvg{u}\\end{document}", Some(&load))).len(), 1);
 }

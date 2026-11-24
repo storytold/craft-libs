@@ -98,12 +98,16 @@ impl<'a> Images<'a> {
 /// A picture from `data` sized as graphicx's `width`, `height`, `scale` and `keepaspectratio`
 /// say; `None` when the bytes aren't a picture.
 fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
+    // Bytes that aren't a raster picture may be an SVG (UTF-8 or UTF-16, after any prologue):
+    // the bounded SVG parser decides.
     #[cfg(feature = "svg")]
-    if craft_svg::sniff::is_svg(&data) || craft_svg::sniff::is_svgz(&data) {
+    if model::sniff_image(&data).is_none() {
         return svg::picture(&data, options, alt);
     }
-    let natural = model::image_px(&data).filter(|&(w, h)| w > 0 && h > 0).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75));
-    let (w, h) = box_size(options, natural);
+    // Bytes that look like a picture but whose size can't be read aren't one: the lookup goes
+    // on, and ends in the placeholder.
+    let natural = model::image_px(&data).filter(|&(w, h)| w > 0 && h > 0).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75))?;
+    let (w, h) = box_size(options, Some(natural));
     model::make_img(data, w, h, alt)
 }
 
@@ -148,7 +152,11 @@ mod svg {
     const BUDGET: u64 = 256 << 20;
 
     pub(super) fn picture(data: &[u8], options: &str, alt: &str) -> Option<Img> {
-        let tree = tree::parse(data, &Limits::default(), &usvg::Options::default()).ok()?;
+        // Only data URLs inside the SVG are read: a linked file (`<image href="file.png">`) is
+        // never opened, so the caller's loader stays the only way to files.
+        let limits = Limits::default();
+        let options_usvg = usvg::Options { image_href_resolver: tree::image_resolver(limits), ..usvg::Options::default() };
+        let tree = tree::parse(data, &limits, &options_usvg).ok()?;
         let size = tree.size();
         let (nw, nh) = (size.width() * 0.75, size.height() * 0.75);
         if !(nw.is_finite() && nh.is_finite() && nw > 0.0 && nh > 0.0) {
@@ -177,6 +185,10 @@ mod svg {
 /// A graphicx length in points. Fractions of the text width are fractions of the column the
 /// picture is shown in, so `0.8\textwidth` keeps its share of the line.
 fn length(v: &str) -> Option<f32> {
+    // A number with no unit is in big points, as graphicx reads it.
+    if let Ok(bp) = v.parse::<f32>() {
+        return (bp.is_finite() && bp > 0.0 && bp < 10_000.0).then_some(bp);
+    }
     let pt = length_pt(v)?;
     let relative = ["\\textwidth", "\\linewidth", "\\columnwidth", "\\hsize"].iter().any(|m| v.contains(m));
     Some(if relative { pt * COLUMN / LINE_WIDTH } else { pt * 72.0 / 72.27 })
