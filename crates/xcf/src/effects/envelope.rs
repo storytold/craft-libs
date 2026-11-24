@@ -1,5 +1,5 @@
 //! File framing and ordered typed values, never operation mapping or evaluation.
-use super::config::parse_config;
+use super::config::{parse_config, reserve};
 use super::{Argument, ArgumentValue, ColorLiteral, Error, Limit, Result, SourceProperty, StoredEffect, invalid};
 use crate::{Cursor, MAX_PAYLOAD, MAX_STRING};
 
@@ -46,8 +46,8 @@ fn charge(budget: &mut usize, bytes: usize) -> Result<()> {
 }
 
 fn push_error(effect: &mut StoredEffect<'_>, message: String, budget: &mut usize) -> Result<()> {
-    charge(budget, message.capacity().saturating_add(2 * std::mem::size_of::<String>()))?;
-    effect.errors.try_reserve(1).map_err(|_| Error::Limit(Limit::Storage))?;
+    charge(budget, message.capacity())?;
+    reserve(&mut effect.errors, 1, budget).map_err(Error::from)?;
     effect.errors.push(message);
     Ok(())
 }
@@ -59,7 +59,6 @@ pub(super) fn read_pointers_with_work(
     work: &mut DecodeWork,
 ) -> Result<Vec<u64>> {
     let mut pointers = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     loop {
         check(keep_going)?;
         work.charge(if cursor.wide { 24 } else { 20 })?;
@@ -70,12 +69,7 @@ pub(super) fn read_pointers_with_work(
         if pointers.len() >= MAX_EFFECTS {
             return Err(invalid("more than 1,024 effects on one drawable"));
         }
-        charge(budget, 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>()))?;
-        seen.try_reserve(1).map_err(|_| Error::Limit(Limit::Storage))?;
-        if !seen.insert(offset) {
-            return Err(invalid("repeated stored effect pointer on one drawable"));
-        }
-        pointers.try_reserve(1).map_err(|_| Error::Limit(Limit::Storage))?;
+        reserve(&mut pointers, 1, budget).map_err(Error::from)?;
         pointers.push(offset);
     }
 }
@@ -146,7 +140,7 @@ pub(super) fn decode_with_work<'a>(
         let bytes = cursor.take(length)?;
         match kind {
             45 => {
-                charge(budget, 2 * std::mem::size_of::<Argument<'a>>())?;
+                reserve(&mut effect.arguments, 1, budget).map_err(Error::from)?;
                 let mut argument_cursor = Cursor { b: bytes, pos: 0, wide: base.wide };
                 let argument_name = string(&mut argument_cursor, work)?;
                 charge(budget, argument_name.len())?;
@@ -165,7 +159,6 @@ pub(super) fn decode_with_work<'a>(
                         ArgumentValue::Invalid { kind: value_kind, bytes: value_bytes, message }
                     }
                 };
-                effect.arguments.try_reserve(1).map_err(|_| Error::Limit(Limit::Storage))?;
                 effect.arguments.push(Argument { name: argument_name, value });
             }
             7 | 8 | 33 | 35 | 36 | 37 | 44 | 46 => {
@@ -199,8 +192,7 @@ pub(super) fn decode_with_work<'a>(
                 }
             }
             _ => {
-                charge(budget, 2 * std::mem::size_of::<SourceProperty<'a>>())?;
-                effect.unknown_properties.try_reserve(1).map_err(|_| Error::Limit(Limit::Storage))?;
+                reserve(&mut effect.unknown_properties, 1, budget).map_err(Error::from)?;
                 effect.unknown_properties.push(SourceProperty { offset: property_offset, kind, bytes });
             }
         }
@@ -259,10 +251,15 @@ fn argument<'a>(cursor: &mut Cursor<'a>, kind: u32, budget: &mut usize, work: &m
         5 => ArgumentValue::Enum(cursor.u32()? as i32),
         6 => {
             let raw = string(cursor, work)?;
+            if cursor.pos != cursor.b.len() {
+                return Err(invalid("effect argument has unconsumed trailing bytes"));
+            }
             work.charge(raw.len())?;
             ArgumentValue::Config(parse_config(raw, budget, ctl).map_err(Error::from)?)
         }
         7 => ArgumentValue::UInt(cursor.u32()?),
+        // Before 3.2 a null color has no bytes; later files use a zero word.
+        8 if cursor.pos == cursor.b.len() => ArgumentValue::Color(None),
         8 => {
             let encoding = string(cursor, work)?;
             if encoding.is_empty() {

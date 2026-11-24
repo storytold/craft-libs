@@ -88,12 +88,12 @@ fn repeated_inventory_spends_work_and_failed_retention_refunds_only_storage() {
     assert!(matches!(xcf.layer_effects(0, &mut no_storage, &|| true), Err(Error::Limit(Limit::Storage))));
     assert_eq!(no_storage.remaining_storage(), 0);
     assert!(no_storage.remaining_work() < 4096);
-    // A duplicate is invalid optional content, not a reason to refund its work.
+    // Repeated wire entries retain both applications and spend work per entry.
     let (duplicate, _, _) = fixture(26, &[8, 8]);
     let xcf = crate::Xcf::parse(&duplicate).unwrap();
     let mut budget = Budget::new(4096, 4096);
-    assert!(matches!(xcf.layer_effects(0, &mut budget, &|| true), Err(Error::Source(crate::Error::Invalid(_)))));
-    assert_eq!(budget.remaining_storage(), 4096);
+    assert_eq!(xcf.layer_effects(0, &mut budget, &|| true).unwrap().offsets, [8, 8]);
+    assert!(budget.remaining_storage() < 4096);
     assert!(budget.remaining_work() < 4096);
 }
 

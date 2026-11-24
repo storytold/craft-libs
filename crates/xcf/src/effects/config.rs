@@ -59,6 +59,37 @@ pub(super) fn parse_config<'a>(raw: &'a str, budget: &mut usize, keep_going: &dy
     Ok(Config { raw, forms })
 }
 
+/// Grow geometrically and charge retained capacity, including the allocator's
+/// actual result, before moving any elements into the replacement allocation.
+pub(super) fn reserve<T>(items: &mut Vec<T>, additional: usize, budget: &mut usize) -> std::result::Result<(), ConfigError> {
+    let needed = items.len().checked_add(additional).ok_or(ConfigError::MetadataLimit)?;
+    if needed <= items.capacity() {
+        return Ok(());
+    }
+    let planned = needed.max(items.capacity().checked_mul(2).ok_or(ConfigError::MetadataLimit)?).max(4);
+    let size = std::mem::size_of::<T>();
+    let debit = planned.checked_sub(items.capacity()).and_then(|n| n.checked_mul(size)).ok_or(ConfigError::MetadataLimit)?;
+    let before = *budget;
+    *budget = before.checked_sub(debit).ok_or(ConfigError::MetadataLimit)?;
+    let mut replacement = Vec::new();
+    if replacement.try_reserve_exact(planned).is_err() {
+        *budget = before;
+        return Err(ConfigError::MetadataLimit);
+    }
+    let Some(extra) = replacement.capacity().checked_sub(planned).and_then(|n| n.checked_mul(size)) else {
+        *budget = before;
+        return Err(ConfigError::MetadataLimit);
+    };
+    let Some(left) = budget.checked_sub(extra) else {
+        *budget = before;
+        return Err(ConfigError::MetadataLimit);
+    };
+    *budget = left;
+    replacement.append(items);
+    *items = replacement;
+    Ok(())
+}
+
 struct Reader<'a, 'b> {
     raw: &'a str,
     pos: usize,
@@ -69,12 +100,6 @@ struct Reader<'a, 'b> {
 }
 
 impl<'a> Reader<'a, '_> {
-    /// Rejects syntax storage beyond the remaining document metadata allowance before vector growth.
-    fn charge(&mut self, count: usize) -> std::result::Result<(), ConfigError> {
-        *self.budget = self.budget.checked_sub(count).ok_or(ConfigError::MetadataLimit)?;
-        Ok(())
-    }
-
     /// Reads the next Unicode scalar through a checked UTF-8 boundary without advancing input.
     fn peek(&self) -> Option<char> {
         self.raw.get(self.pos..)?.chars().next()
@@ -133,8 +158,7 @@ impl<'a> Reader<'a, '_> {
             if self.nodes > MAX_NODES {
                 return Err("effect configuration exceeds 8,192 syntax nodes".into());
             }
-            // Charge before Vec growth, including a conservative capacity allowance.
-            self.charge(std::mem::size_of::<ConfigExpr<'a>>().saturating_mul(2))?;
+            reserve(&mut items, 1, self.budget)?;
             let item = match self.peek() {
                 Some('(') => {
                     self.advance('(')?;
@@ -144,7 +168,6 @@ impl<'a> Reader<'a, '_> {
                 Some(_) => self.atom()?,
                 None => return Err("effect configuration ended unexpectedly".into()),
             };
-            items.try_reserve(1).map_err(|_| ConfigError::MetadataLimit)?;
             items.push(item);
         }
     }
@@ -210,8 +233,7 @@ impl<'a> Reader<'a, '_> {
                             }
                         }
                         let byte = u8::try_from(value).map_err(|_| "effect configuration octal escape exceeds one byte".to_string())?;
-                        self.charge(2)?;
-                        text.try_reserve(1).map_err(|_| ConfigError::MetadataLimit)?;
+                        reserve(&mut text, 1, self.budget)?;
                         text.push(byte);
                         continue;
                     }
@@ -220,10 +242,59 @@ impl<'a> Reader<'a, '_> {
             } else {
                 character
             };
-            self.charge(character.len_utf8().saturating_mul(2))?;
             let mut encoded = [0; 4];
-            text.try_reserve(character.len_utf8()).map_err(|_| ConfigError::MetadataLimit)?;
+            reserve(&mut text, character.len_utf8(), self.budget)?;
             text.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_entry_list_charges_its_retained_capacity_exactly() {
+        let mut budget = usize::MAX;
+        let parsed = parse_config("(x)", &mut budget, &|| true).unwrap();
+        let ConfigExpr::List(inner) = &parsed.forms[0] else { panic!("list") };
+        let cost = (parsed.forms.capacity() + inner.capacity()) * std::mem::size_of::<ConfigExpr<'_>>();
+        assert_eq!(usize::MAX - budget, cost);
+        let mut exact = cost;
+        assert!(parse_config("(x)", &mut exact, &|| true).is_ok());
+        assert_eq!(exact, 0);
+        assert!(matches!(parse_config("(x)", &mut (cost - 1), &|| true), Err(ConfigError::MetadataLimit)));
+    }
+
+    #[test]
+    fn one_byte_text_and_octal_charge_their_retained_capacity_exactly() {
+        for raw in [r#"(x "a")"#, r#"(x "\141")"#] {
+            let mut budget = usize::MAX;
+            let parsed = parse_config(raw, &mut budget, &|| true).unwrap();
+            let ConfigExpr::List(inner) = &parsed.forms[0] else { panic!("list") };
+            let ConfigExpr::String(text) = &inner[1] else { panic!("string") };
+            assert_eq!(text, "a");
+            let cost = (parsed.forms.capacity() + inner.capacity()) * std::mem::size_of::<ConfigExpr<'_>>() + text.capacity();
+            assert_eq!(usize::MAX - budget, cost);
+            let mut exact = cost;
+            assert!(parse_config(raw, &mut exact, &|| true).is_ok());
+            assert_eq!(exact, 0);
+            assert!(matches!(parse_config(raw, &mut (cost - 1), &|| true), Err(ConfigError::MetadataLimit)));
+        }
+    }
+
+    #[test]
+    fn repeated_forms_charge_actual_capacity_and_keep_source_order() {
+        let raw = (0..1000).map(|n| format!("(x {n}) ")).collect::<String>();
+        let mut budget = 1 << 20;
+        let before = budget;
+        let parsed = parse_config(&raw, &mut budget, &|| true).unwrap();
+        let mut slots = parsed.forms.capacity();
+        for (index, form) in parsed.forms.iter().enumerate() {
+            let ConfigExpr::List(inner) = form else { panic!("list") };
+            slots += inner.capacity();
+            assert!(matches!(inner[1], ConfigExpr::Number(n) if n == index as f64));
+        }
+        assert_eq!(before - budget, slots * std::mem::size_of::<ConfigExpr<'_>>());
     }
 }

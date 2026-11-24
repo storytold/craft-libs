@@ -163,7 +163,7 @@ fn mask_references_keep_wire_identity_without_following_auxiliary_pixels() {
 }
 
 #[test]
-fn pointer_lists_preserve_order_but_bound_repetition_and_attempts() {
+fn pointer_lists_preserve_repeated_wire_entries_but_bound_attempts() {
     for version in [10, 26] {
         let pointer = |out: &mut Vec<u8>, value: u64| {
             if version < 11 {
@@ -183,8 +183,8 @@ fn pointer_lists_preserve_order_but_bound_repetition_and_attempts() {
         }
         let mut budget = Budget::default();
         let before = budget.remaining_storage();
-        assert!(matches!(Reader::new(&repeated, version).pointers(0, &mut budget, &|| true), Err(Error::Source(crate::Error::Invalid(_)))));
-        assert_eq!(budget.remaining_storage(), before);
+        assert_eq!(Reader::new(&repeated, version).pointers(0, &mut budget, &|| true).unwrap(), [80, 32, 80]);
+        assert!(budget.remaining_storage() < before);
         assert!(budget.remaining_work() < Budget::default().remaining_work());
         let mut many = Vec::new();
         for value in 1..=1025 {
@@ -286,4 +286,73 @@ fn property_counts_and_declared_argument_sizes_are_bounded_before_payload_reads(
     let parsed = read(&bytes, 26).record;
     assert!(parsed.arguments[..3].iter().all(|argument| matches!(argument.value, ArgumentValue::Invalid { .. })));
     assert!(matches!(parsed.arguments[3].value, ArgumentValue::UInt(17)));
+}
+
+#[test]
+fn null_colors_accept_both_documented_wire_forms_but_not_partial_words() {
+    for version in [20, 26] {
+        let bytes = effect(
+            version,
+            &[
+                ("old-null", 8, Vec::new()),
+                ("new-null", 8, vec![0; 4]),
+                ("partial-one", 8, vec![0]),
+                ("partial-three", 8, vec![0; 3]),
+                ("later", 1, 7u32.to_be_bytes().to_vec()),
+            ],
+        );
+        let parsed = read(&bytes, version);
+        assert!(matches!(parsed.record.arguments[0].value, ArgumentValue::Color(None)));
+        assert!(matches!(parsed.record.arguments[1].value, ArgumentValue::Color(None)));
+        for index in [2, 3] {
+            assert!(matches!(parsed.record.arguments[index].value, ArgumentValue::Invalid { .. }));
+        }
+        assert!(matches!(parsed.record.arguments[4].value, ArgumentValue::Int(7)));
+        assert_eq!(parsed.record.raw, &bytes[8..]);
+    }
+}
+
+#[test]
+fn trailing_configuration_is_invalid_before_retention_and_keeps_later_arguments() {
+    let raw = "(x) ".repeat(100);
+    let valid = effect(26, &[("config", 6, text_value(&raw))]);
+    assert!(matches!(Reader::new(&valid, 26).read(OWNER, 8, &mut Budget::new(2048, 1 << 20), &|| true), Err(Error::Limit(Limit::Storage))));
+    let mut malformed = text_value(&raw);
+    malformed.push(9);
+    let bytes = effect(26, &[("config", 6, malformed), ("later", 1, 7u32.to_be_bytes().to_vec())]);
+    let parsed = Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::new(2048, 1 << 20), &|| true).unwrap();
+    assert!(matches!(&parsed.record.arguments[0].value, ArgumentValue::Invalid { message, .. } if message.contains("trailing")));
+    assert!(matches!(parsed.record.arguments[1].value, ArgumentValue::Int(7)));
+    assert_eq!(parsed.record.raw, &bytes[8..]);
+}
+
+#[test]
+fn repeated_decodable_pointers_keep_both_applications_and_the_later_record() {
+    for version in [20, 26] {
+        let first = effect(version, &[("sequence", 1, 1u32.to_be_bytes().to_vec())]);
+        let later = effect(version, &[("sequence", 1, 2u32.to_be_bytes().to_vec())]);
+        let first_offset = 32u64;
+        let later_offset = first_offset + first.len() as u64 - 8;
+        let mut bytes = Vec::new();
+        for offset in [first_offset, first_offset, later_offset, 0] {
+            bytes.extend_from_slice(&offset.to_be_bytes());
+        }
+        bytes.extend_from_slice(&first[8..]);
+        bytes.extend_from_slice(&later[8..]);
+        let reader = Reader::new(&bytes, version);
+        let mut budget = Budget::default();
+        let offsets = reader.pointers(0, &mut budget, &|| true).unwrap();
+        assert_eq!(offsets, [first_offset, first_offset, later_offset]);
+        let values = offsets
+            .into_iter()
+            .map(|offset| {
+                let parsed = reader.read(OWNER, offset, &mut budget, &|| true).unwrap();
+                match parsed.record.arguments[0].value {
+                    ArgumentValue::Int(value) => value,
+                    _ => panic!("integer"),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, [1, 1, 2]);
+    }
 }
