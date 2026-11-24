@@ -4,8 +4,8 @@
 //! a new folder at a drive root, `C:\Users\Public` or `C:\ProgramData` let every signed-in user
 //! read what is created in them. `restrict_to_owner` replaces the whole list with the current
 //! user and SYSTEM only, makes that user the owner, and checks the result. `create_private_dir`
-//! does the same for a new folder whose list the files created in it inherit, so a file can be
-//! private from the moment it exists. `read_with_sddl` reads a file and its security descriptor
+//! creates a folder with that owner and list from the start, which the files created in it
+//! inherit, so a file can be private from the moment it exists. `read_with_sddl` reads a file and its security descriptor
 //! through one handle. [`foreign_access`] reads the descriptor in SDDL form, which names accounts
 //! by SID and so reads the same in every Windows language, and says why another user could have
 //! written or could read the file. They run the tools Windows ships rather than calling the
@@ -23,6 +23,18 @@
 /// file over. `restrict_to_owner` never grants it, so the app's own file always passes; a file
 /// that inherited it from a user's folder is refused.
 pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
+    foreign(sddl, me, false)
+}
+
+/// [`foreign_access`] for a folder's descriptor: an inherit-only entry (`IO`) counts too, since
+/// every file and folder created in the folder gets it.
+#[cfg(any(test, windows))]
+fn foreign_folder_access(sddl: &str, me: &str) -> Option<String> {
+    foreign(sddl, me, true)
+}
+
+/// [`foreign_access`], counting inherit-only entries when `inherit_only` is set.
+fn foreign(sddl: &str, me: &str, inherit_only: bool) -> Option<String> {
     let me = me.trim();
     let owner = section(sddl, "O:");
     match owner {
@@ -43,7 +55,7 @@ pub fn foreign_access(sddl: &str, me: &str) -> Option<String> {
         let (Some(kind), Some(flags)) = (parts.first(), parts.get(1)) else { continue };
         // Deny entries take access away, and inherit-only entries apply to children, not the file.
         let allows = matches!(*kind, "A" | "OA" | "XA" | "ZA");
-        if !allows || flags.contains("IO") {
+        if !allows || (flags.contains("IO") && !inherit_only) {
             continue;
         }
         // An entry that grants access but names no account can't be shown to be the user's.
@@ -297,32 +309,87 @@ fn sid_from_whoami(text: &str) -> Option<String> {
 /// replace it, while setting the owner needs the Full control it grants (a folder may give Modify).
 #[cfg(windows)]
 pub fn restrict_to_owner(path: &std::path::Path, me: &str) -> std::io::Result<()> {
-    set_access_list(path, me, Kind::File)?;
+    set_access_list(path, me)?;
     icacls(path, &["/setowner".into(), format!("*{me}")])?;
     still_foreign(&sddl_of(path)?, me)
 }
 
-/// Create the folder `dir`, which must not exist yet, and give it an access list of user `me` (as
-/// for [`restrict_to_owner`]) and SYSTEM only, which every file created in it inherits; then make
-/// that user its owner and check the result as [`restrict_to_owner`] does. A file created in it is
-/// private from the moment it exists. Restricting a file after creating it leaves a window in which another user
-/// whom the parent folder lets read it can open a handle, and Windows checks access only when a
-/// handle is opened, so a later change of the list doesn't revoke it. A handle on the folder
-/// itself, opened during the folder's own window, gives no access to the files created in it
-/// later. The folder is removed again when it can't be restricted.
+/// Create the folder `dir`, which must not exist yet and whose parent must, with user `me` (as for
+/// [`restrict_to_owner`]) as its owner and an access list of that user and SYSTEM only, which every
+/// file created in it inherits, given to Windows in the call that creates the folder. The folder
+/// never has its parent's access list, and a file created in it is private from the moment it
+/// exists. The folder is created beside `dir` under a name of its own
+/// (`.<name>.<process id>.<count>.tmp`) and then moved to `dir`, which fails when `dir` exists.
+/// Then check its descriptor, inherit-only entries included. An existing `dir` is an error of kind
+/// [`std::io::ErrorKind::AlreadyExists`] and a missing parent one of kind
+/// [`std::io::ErrorKind::NotFound`]; the folder is removed again when the check fails.
+///
+/// PowerShell is ended when it takes longer than [`TOOL_LIMIT`], and the call fails with an error
+/// of kind [`std::io::ErrorKind::TimedOut`]; the folder under its own name is then removed once
+/// PowerShell has exited. A folder PowerShell had already moved to `dir` stays there, with the
+/// access list it was created with: this call can't tell it from a folder another process put at
+/// `dir` since, so it doesn't remove what is there.
 #[cfg(windows)]
 pub fn create_private_dir(dir: &std::path::Path, me: &str) -> std::io::Result<()> {
-    std::fs::create_dir(dir)?;
-    fn restrict(dir: &std::path::Path, me: &str) -> std::io::Result<()> {
-        set_access_list(dir, me, Kind::Folder)?;
-        icacls(dir, &["/setowner".into(), format!("*{me}")])?;
-        still_foreign(&sddl_of(dir)?, me)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    /// Numbers the staged folders of this process.
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    // No double quotes: the command line would strip them. `Directory.CreateDirectory` also creates
+    // a missing parent and returns an existing folder as it is, hence the checks before it.
+    // `Directory.Move` doesn't replace an existing folder (`std::fs::rename` does, when it is
+    // empty).
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        if (Test-Path -LiteralPath $env:CRAFT_ACL_PATH) { exit 3 }; \
+        if (-not [IO.Directory]::Exists([IO.Path]::GetDirectoryName($env:CRAFT_ACL_PATH))) { exit 4 }; \
+        if (Test-Path -LiteralPath $env:CRAFT_ACL_STAGED) { exit 5 }; \
+        $s = New-Object Security.AccessControl.DirectorySecurity; \
+        $s.SetSecurityDescriptorSddlForm('O:' + $env:CRAFT_ACL_USER + 'D:P(A;OICI;FA;;;' + $env:CRAFT_ACL_USER + ')(A;OICI;FA;;;SY)'); \
+        [void][IO.Directory]::CreateDirectory($env:CRAFT_ACL_STAGED, $s); \
+        try { [IO.Directory]::Move($env:CRAFT_ACL_STAGED, $env:CRAFT_ACL_PATH) } \
+        catch { [IO.Directory]::Delete($env:CRAFT_ACL_STAGED); if (Test-Path -LiteralPath $env:CRAFT_ACL_PATH) { exit 3 }; throw }";
+    // A relative `dir` such as `private` has no parent in its text; the script needs one.
+    let dir = &std::path::absolute(dir)?;
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = dir.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    let mut powershell = system_tool(POWERSHELL);
+    powershell
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("CRAFT_ACL_PATH", dir)
+        .env("CRAFT_ACL_STAGED", &staged)
+        .env("CRAFT_ACL_USER", me);
+    let deadline = std::time::Instant::now() + TOOL_LIMIT;
+    let close = |stdin: std::process::ChildStdin| {
+        drop(stdin);
+        Ok(())
+    };
+    let out = match run_until(powershell, close, |_| std::time::Instant::now() >= deadline)? {
+        Ran::Exited(out, _) => out,
+        Ran::Ended { exited } => {
+            if exited {
+                let _ = std::fs::remove_dir(&staged);
+            }
+            return Err(timed_out("powershell.exe"));
+        }
+    };
+    match out.status.code() {
+        Some(3) => return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "the folder already exists")),
+        Some(4) => return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "the folder's parent does not exist")),
+        _ if !out.status.success() => {
+            return Err(std::io::Error::other(format!(
+                "PowerShell could not create the folder for its owner only: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        _ => {}
     }
-    let restricted = restrict(dir, me);
-    if restricted.is_err() {
+    let checked = sddl_of(dir).and_then(|sddl| match foreign_folder_access(&sddl, me) {
+        None => Ok(()),
+        Some(problem) => Err(std::io::Error::other(format!("the folder could not be restricted to its owner: {problem}"))),
+    });
+    if checked.is_err() {
         let _ = std::fs::remove_dir(dir);
     }
-    restricted
+    checked
 }
 
 /// Create the file `path`, which must not exist yet, with user `me` (as for [`restrict_to_owner`])
@@ -338,8 +405,9 @@ pub fn create_private_dir(dir: &std::path::Path, me: &str) -> std::io::Result<()
 ///
 /// PowerShell is ended when it takes longer than [`TOOL_LIMIT`], and the call fails with an error
 /// of kind [`std::io::ErrorKind::TimedOut`]. The file under its own name is then removed. If
-/// PowerShell is not seen to exit after being ended, that file may stay; it still has the access
-/// list given when it was created.
+/// PowerShell is not seen to exit after being ended, that file may stay, and a file PowerShell had
+/// already moved to `path` stays there: this call can't tell it from a file another process put at
+/// `path` since. Either still has the access list given when it was created.
 #[cfg(windows)]
 pub fn create_private_file(path: &std::path::Path, me: &str, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
@@ -424,34 +492,17 @@ fn still_foreign(sddl: &str, me: &str) -> std::io::Result<()> {
     }
 }
 
-/// What [`set_access_list`] restricts: a file, or a folder whose entries the files and folders
-/// created in it inherit.
+/// Set file `path`'s access list to Full control for `me` and SYSTEM and nothing else, protected
+/// from inheritance. Only the list is written, not the owner. `me` and the path reach PowerShell
+/// through environment variables, never as script text.
 #[cfg(windows)]
-#[derive(Clone, Copy)]
-enum Kind {
-    File,
-    Folder,
-}
-
-/// Set `path`'s access list to Full control for `me` and SYSTEM and nothing else, protected from
-/// inheritance; on a folder, what is created in it inherits the two entries. Only the list is
-/// written, not the owner. `me` and the path reach PowerShell through environment variables, never
-/// as script text.
-#[cfg(windows)]
-fn set_access_list(path: &std::path::Path, me: &str, kind: Kind) -> std::io::Result<()> {
+fn set_access_list(path: &std::path::Path, me: &str) -> std::io::Result<()> {
     // No double quotes: the command line would strip them.
-    const FILE: &str = "$s = New-Object Security.AccessControl.FileSecurity; \
+    const SCRIPT: &str = "$s = New-Object Security.AccessControl.FileSecurity; \
         $s.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;' + $env:CRAFT_ACL_USER + ')(A;;FA;;;SY)', 'Access'); \
         [IO.File]::SetAccessControl($env:CRAFT_ACL_PATH, $s)";
-    const FOLDER: &str = "$s = New-Object Security.AccessControl.DirectorySecurity; \
-        $s.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;' + $env:CRAFT_ACL_USER + ')(A;OICI;FA;;;SY)', 'Access'); \
-        [IO.Directory]::SetAccessControl($env:CRAFT_ACL_PATH, $s)";
-    let script = match kind {
-        Kind::File => FILE,
-        Kind::Folder => FOLDER,
-    };
     let mut powershell = system_tool(POWERSHELL);
-    powershell.args(["-NoProfile", "-NonInteractive", "-Command", script]).env("CRAFT_ACL_PATH", path).env("CRAFT_ACL_USER", me);
+    powershell.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT]).env("CRAFT_ACL_PATH", path).env("CRAFT_ACL_USER", me);
     let out = run(powershell)?;
     if out.status.success() {
         Ok(())
@@ -512,12 +563,15 @@ pub fn read_with_sddl(path: &std::path::Path, max: u64) -> std::io::Result<(Stri
 
 /// The security descriptor of `path` as [`read_with_sddl`] writes it, read by name without opening
 /// the file's contents, so it works on a file that is open for writing (an app restricts its
-/// token file before writing the token through the handle it created).
+/// token file before writing the token through the handle it created). A folder is read as a
+/// folder, so its inherit-only entries are included (`IO`); a file's reading leaves them out.
 #[cfg(windows)]
 pub fn sddl_of(path: &std::path::Path) -> std::io::Result<String> {
     const SCRIPT: &str = concat!(
         // Stop: a failed read (a missing file) must end the script with an error, not print `O:`.
-        "$ErrorActionPreference = 'Stop';         $raw = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList @([IO.File]::GetAccessControl($env:CRAFT_ACL_PATH).GetSecurityDescriptorBinaryForm(), 0); ",
+        "$ErrorActionPreference = 'Stop'; $p = $env:CRAFT_ACL_PATH; \
+        if ([IO.Directory]::Exists($p)) { $sec = [IO.Directory]::GetAccessControl($p) } else { $sec = [IO.File]::GetAccessControl($p) }; \
+        $raw = New-Object Security.AccessControl.RawSecurityDescriptor -ArgumentList @($sec.GetSecurityDescriptorBinaryForm(), 0); ",
         describe_raw!(),
         "[Console]::Out.Write($sddl + [char]10)"
     );
@@ -619,6 +673,15 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         assert!(foreign_access("D:(A;;FA;;;SY)", ME).unwrap().contains("owner"));
     }
 
+    /// An inherit-only entry doesn't apply to a file, but does to what's created in a folder.
+    #[test]
+    fn an_inherit_only_entry_counts_for_a_folder_only() {
+        let sddl = format!("O:{ME}D:(A;;FA;;;{ME})(A;IO;FR;;;BU)");
+        assert_eq!(foreign_access(&sddl, ME), None, "{sddl}");
+        assert!(foreign_folder_access(&sddl, ME).is_some_and(|p| p.contains("BU")), "{sddl}");
+        assert_eq!(foreign_folder_access(&format!("O:{ME}D:(A;;FA;;;{ME})(A;IO;FA;;;SY)"), ME), None);
+    }
+
     /// A conditional entry can hold a `:` in a string; the access list doesn't end there, so the
     /// entry after it is still checked.
     #[test]
@@ -701,6 +764,52 @@ $n = [CraftProbe.Console]::GetConsoleProcessList($ids, 256)
         assert_eq!(foreign_access(&sddl, &me), None, "{sddl}");
         // The name is taken: the folder isn't reused.
         assert!(create_private_dir(&private, &user()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder's inherit-only entries are read, and the folder check counts them: every file
+    /// created in the folder would get them.
+    #[cfg(windows)]
+    #[test]
+    fn a_folders_inherit_only_entries_are_read_and_refused() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-inherit-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)(IO)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let sddl = sddl_of(&dir).unwrap();
+        assert!(sddl.contains(";IO;") && sddl.contains(";S-1-5-32-545)"), "the inherit-only entry for Users is read: {sddl}");
+        let me = current_user_sid().unwrap();
+        assert!(foreign_folder_access(&sddl, &me).is_some_and(|p| p.contains("S-1-5-32-545")), "{sddl}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `create_private_dir` gives the folder its owner and list in the call that creates it, so in
+    /// a folder that lets Users read what's created in it, no step leaves the new folder with that
+    /// entry: the folder is moved to its name only after it was created with its own list. An
+    /// existing name and a missing parent are refused.
+    #[cfg(windows)]
+    #[test]
+    fn a_private_folder_has_its_list_from_the_start() {
+        let dir = std::env::temp_dir().join(format!("craft-owner-only-private-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+        let me = current_user_sid().unwrap();
+        let private = dir.join("staging");
+        let made = create_private_dir(&private, &user());
+        assert!(made.is_ok(), "{made:?}");
+        let folder = sddl_of(&private).unwrap();
+        assert_eq!((section(&folder, "O:"), foreign_folder_access(&folder, &me)), (Some(me.as_str()), None), "{folder}");
+        assert!(!folder.contains(";S-1-5-32-545)") && !folder.contains(";BU)"), "Users must not inherit read access: {folder}");
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["staging"], "no folder is left under its own name");
+        let again = create_private_dir(&private, &user()).unwrap_err();
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists, "{again}");
+        let orphan = create_private_dir(&dir.join("missing").join("staging"), &user()).unwrap_err();
+        assert_eq!(orphan.kind(), std::io::ErrorKind::NotFound, "{orphan}");
+        assert!(!dir.join("missing").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
