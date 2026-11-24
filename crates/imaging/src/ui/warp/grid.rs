@@ -114,11 +114,14 @@ struct Press {
     began: bool,
     /// A quick split: no tool was set at the press.
     quick: bool,
+    /// The document point under the press, as the view showed it then: a view the host scrolls under the drag (past
+    /// the canvas edge) moves the pointer on in the document, and the drag follows.
+    from: Point,
 }
 
 impl Default for Press {
     fn default() -> Self {
-        Press { mesh: WarpMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() }, target: Target::Split, began: false, quick: false }
+        Press { mesh: WarpMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() }, target: Target::Split, began: false, quick: false, from: Point::ORIGIN }
     }
 }
 
@@ -237,7 +240,8 @@ impl<'a> WarpGrid<'a> {
                     slot.picked = Some(index);
                     slot.dragging = Some(index);
                 }
-                *cx.press_slot::<Press>() = target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none() });
+                let from = view.to_doc(start.origin);
+                *cx.press_slot::<Press>() = target.map(|target| Press { mesh: mesh.clone(), target, began: false, quick: self.split.is_none(), from });
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                 let Some(mut held) = cx.press_slot::<Press>().clone() else { return };
@@ -248,7 +252,7 @@ impl<'a> WarpGrid<'a> {
                     *cx.press_slot::<Press>() = None;
                     return;
                 }
-                let by = view.to_doc(pos) - view.to_doc(start.origin);
+                let by = view.to_doc(pos) - held.from;
                 let edit = match held.target {
                     // The point jumps to the pointer rather than keeping its distance from the press.
                     Target::Point(index) => match held.mesh.points.get(index) {

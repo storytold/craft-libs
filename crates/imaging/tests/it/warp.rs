@@ -555,3 +555,44 @@ fn the_borders_arms_are_drawn_at_rest() {
         assert!(arm(anchor, handle), "arm from anchor {anchor} to its border handle {handle}: {segments:?}");
     }
 }
+
+/// A view the host scrolls under a surface pull (a drag past the canvas edge) moves the pointer on in the document, and
+/// the pull follows the document point under it: the press's document point is kept from the press.
+#[trial]
+fn a_surface_pull_follows_the_document_point_under_the_pointer_when_the_view_scrolls() {
+    let scroll = Rc::new(Cell::new(0.0f64));
+    let view = Rc::new(Cell::new(None::<CanvasView>));
+    let edit = Rc::new(Cell::new(None::<WarpEdit>));
+    let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+    let shown = (Rc::clone(&scroll), Rc::clone(&view), Rc::clone(&edit), Rc::clone(&mesh));
+    let mut fixture = Fixture::new(move |ui| {
+        let (scroll, view, edit, mesh) = &shown;
+        let room = ui.available_rect_before_wrap();
+        let centre = Point::new(f64::from(room.width()) / 2.0 + scroll.get(), f64::from(room.height()) / 2.0);
+        let shown_view = CanvasView::new(room, centre, 1.0);
+        view.set(Some(shown_view));
+        let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+            let mut held = mesh.borrow_mut();
+            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+        });
+        if let Some(output) = canvas.inner
+            && output.edit.is_some()
+        {
+            edit.set(output.edit);
+        }
+    });
+    fixture.settle();
+    let at = view.get().expect("drawn").to_screen(RECT.center());
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::press(at)]);
+    fixture.frame(vec![pointer::moved(at + egui::vec2(20.0, 0.0))]);
+    // The view scrolls 30 document units to the right under the pointer, then the pointer moves on by one.
+    scroll.set(30.0);
+    fixture.frame(Vec::new());
+    fixture.frame(vec![pointer::moved(at + egui::vec2(21.0, 0.0))]);
+    match edit.get() {
+        Some(WarpEdit::Surface { by, .. }) => assert!((by.x - 51.0).abs() < 1e-6 && by.y.abs() < 1e-6, "{by:?}"),
+        other => panic!("a surface pull: {other:?}"),
+    }
+    fixture.frame(vec![pointer::release(at + egui::vec2(21.0, 0.0))]);
+}
