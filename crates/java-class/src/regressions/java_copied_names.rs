@@ -210,6 +210,10 @@ fn counted_render(pool: &[Const], idx: u16) -> String {
     RENDERS.with(|n| n.set(n.get() + 1));
     match pool.get(usize::from(idx)) {
         Some(Const::Utf8(s)) => format!("{s:?}"),
+        Some(Const::String(s)) => match pool.get(usize::from(*s)) {
+            Some(Const::Utf8(text)) => format!("{text:?}"),
+            _ => String::new(),
+        },
         _ => String::new(),
     }
 }
@@ -224,5 +228,21 @@ fn text_over_the_budget_is_rendered_once() {
     assert!(copied >= 1 && copied < kept.len(), "{copied} of {} copied", kept.len());
     assert_eq!(kept.last().map(String::as_str), Some("<const#1>"));
     // Only the copied texts are rendered; the refusals reuse the length kept from the first one.
+    assert_eq!(RENDERS.with(Cell::get), copied);
+}
+
+#[test]
+fn string_constants_over_one_utf8_are_rendered_once_past_the_budget() {
+    let entries = 2 * MAX_COPIED_TEXT / BIG;
+    let mut pool = vec![Const::Unusable, Const::Utf8("A".repeat(BIG))];
+    pool.extend((0..entries).map(|_| Const::String(1)));
+    let mut names = Names::new(&pool);
+    RENDERS.with(|n| n.set(0));
+    let kept: Vec<String> = (2..pool.len()).map(|i| names.constant(i as u16, counted_render)).collect();
+    let copied = kept.iter().filter(|t| t.len() == BIG + 2).count();
+    assert!(copied >= 1 && copied < kept.len(), "{copied} of {} copied", kept.len());
+    assert_eq!(kept.last().map(String::as_str), Some(format!("<const#{}>", pool.len() - 1).as_str()));
+    // Each `String` entry is its own pool index, but all of them quote entry 1, so the refusals
+    // reuse the length kept for entry 1 instead of building the text again.
     assert_eq!(RENDERS.with(Cell::get), copied);
 }

@@ -383,11 +383,23 @@ impl<'p> Names<'p> {
     /// The length of each rendered text is kept by kind and index, so a text over the budget is
     /// built at most once however many entries name it.
     pub(crate) fn keep(&mut self, kind: &'static str, idx: u16, render: fn(&[Const], u16) -> String) -> String {
-        if let Some(&len) = self.built.get(&(kind, idx)) {
+        self.keep_as((kind, idx), kind, idx, render)
+    }
+
+    /// Like `keep` for a loadable constant. Constants that copy the same Utf8 the same way share
+    /// one kept length, so many `String` entries over one long Utf8 build its text at most once
+    /// past the budget.
+    pub(crate) fn constant(&mut self, idx: u16, render: fn(&[Const], u16) -> String) -> String {
+        let key = const_text_key(self.pool, idx);
+        self.keep_as(key, "const", idx, render)
+    }
+
+    fn keep_as(&mut self, key: (&'static str, u16), kind: &'static str, idx: u16, render: fn(&[Const], u16) -> String) -> String {
+        if let Some(&len) = self.built.get(&key) {
             return if self.admit(len) { render(self.pool, idx) } else { format!("<{kind}#{idx}>") };
         }
         let text = render(self.pool, idx);
-        self.built.insert((kind, idx), text.len());
+        self.built.insert(key, text.len());
         if self.admit(text.len()) { text } else { format!("<{kind}#{idx}>") }
     }
 
@@ -600,7 +612,7 @@ fn parse_members(c: &mut Cursor<'_>, names: &mut Names<'_>, warnings: &mut Vec<S
                 "Code" => m.code = parse_code(a.info, names),
                 "ConstantValue" => {
                     if let Some(i) = Reader::new(a.info).u16_be(0) {
-                        m.constant_value = Some(names.keep("const", i, const_display));
+                        m.constant_value = Some(names.constant(i, const_display));
                     }
                 }
                 "Exceptions" => m.exceptions = parse_exceptions_attr(a.info, names),
@@ -753,6 +765,17 @@ fn const_display(pool: &[Const], idx: u16) -> String {
         Some(Const::MethodHandle(k, _)) => format!("MethodHandle(kind {k})"),
         Some(Const::MethodType(d)) => format!("MethodType({})", utf8_of(pool, *d)),
         _ => format!("#{idx}"),
+    }
+}
+
+/// The key under which `Names` keeps the length of `const_display(pool, idx)`: the Utf8 a
+/// `String`, `Class` or `MethodType` constant copies, otherwise the constant itself.
+fn const_text_key(pool: &[Const], idx: u16) -> (&'static str, u16) {
+    match pool.get(idx as usize) {
+        Some(Const::String(s)) => ("const-string", *s),
+        Some(Const::Class(n)) => ("const-class", *n),
+        Some(Const::MethodType(d)) => ("const-method-type", *d),
+        _ => ("const", idx),
     }
 }
 
