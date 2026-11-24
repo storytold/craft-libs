@@ -45,9 +45,6 @@ struct El {
     align: Option<TextAlign>,
     /// Effective paragraph direction for this element and its descendants.
     rtl: bool,
-    /// `dir="auto"` applies here or to an ancestor: the direction of a paragraph is that of its
-    /// first strong character.
-    auto_dir: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -107,7 +104,6 @@ struct ElementStyle {
     block_background: Option<Rgb>,
     align: Option<TextAlign>,
     rtl: bool,
-    auto_dir: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -185,9 +181,6 @@ pub(super) struct Builder<'r> {
     tables: Vec<TableB>,
     stack: Vec<El>,
     para: Option<Para>,
-    /// The open paragraph's direction is `dir="auto"`: its alignment as stated, to resolve in
-    /// `flush` once its first strong character is known.
-    para_auto: Option<Option<TextAlign>>,
     /// The current paragraph continues a list item (joins the previous paragraph).
     para_cont: bool,
     /// Pending page break from preceding elements with page-break-after or unconsumed break.
@@ -599,7 +592,6 @@ impl<'r> Builder<'r> {
             tables: Vec::new(),
             stack: Vec::new(),
             para: None,
-            para_auto: None,
             para_cont: false,
             pending_page_break: false,
             pre_lead: None,
@@ -633,7 +625,6 @@ impl<'r> Builder<'r> {
     pub(super) fn start_para(&mut self) -> &mut Para {
         if self.para.is_none() {
             let mut p = Para { rtl: self.paragraph_rtl(), ..Default::default() };
-            // The alignment as stated: `flush` resolves it once an `auto` direction is known.
             let mut align: Option<TextAlign> = None;
             let mut list_level: Option<(bool, usize)> = None;
             let mut li_at: Option<usize> = None;
@@ -724,7 +715,6 @@ impl<'r> Builder<'r> {
                 p.extra.get_or_insert_with(Default::default).shading = Some(bg);
             }
             p.align = align.map(|a| a.logical(p.rtl));
-            self.para_auto = self.paragraph_auto().then_some(align);
             self.para = Some(p);
         }
         self.para.get_or_insert_with(Para::default)
@@ -740,10 +730,6 @@ impl<'r> Builder<'r> {
 
     fn flush(&mut self) {
         let Some(mut p) = self.para.take() else { return };
-        if let Some(align) = self.para_auto.take() {
-            p.rtl = first_strong_rtl(&p.text());
-            p.align = align.map(|a| a.logical(p.rtl));
-        }
         let (pre_lead, pre_tail) = (self.pre_lead.take().unwrap_or(false), std::mem::take(&mut self.pre_tail));
         if p.kind != Kind::Code {
             // Preserved white space keeps its spaces and tabs at the edges; line breaks there
@@ -1206,13 +1192,11 @@ impl<'r> Builder<'r> {
         let mut align = None;
         // Direction inherits through inline ancestors too (`<span dir=rtl><div>`), unlike a
         // paragraph's, which is its block's.
-        let inherited = self.stack.last().map_or((false, false), |e| (e.rtl, e.auto_dir));
-        let (mut rtl, mut auto_dir) = match attr(attrs, "dir").map(str::trim) {
-            Some(dir) if dir.eq_ignore_ascii_case("rtl") => (true, false),
-            Some(dir) if dir.eq_ignore_ascii_case("ltr") => (false, false),
-            // First strong character: `flush` reads it from the text; LTR until then.
-            Some(dir) if dir.eq_ignore_ascii_case("auto") => (false, true),
-            _ => inherited,
+        let mut rtl = match attr(attrs, "dir").map(str::trim) {
+            Some(dir) if dir.eq_ignore_ascii_case("rtl") => true,
+            Some(dir) if dir.eq_ignore_ascii_case("ltr") => false,
+            // Automatic direction needs the HTML subtree to distinguish isolated descendants.
+            _ => self.stack.last().is_some_and(|e| e.rtl),
         };
         let mut preserve = self.preserve();
         let mut page_break = false;
@@ -1269,10 +1253,6 @@ impl<'r> Builder<'r> {
             .last()
             .and_then(|e| if !self.page && matches!(e.name.as_str(), "body" | "html") { None } else { e.fmt.background.or(e.block_background) });
         apply_style(css, &mut fmt, (&mut align, &mut rtl), &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
-        if auto_dir && super::css::sets_direction(css) {
-            // CSS `direction` wins over the `dir` attribute, and an inherited `auto` too.
-            auto_dir = false;
-        }
         if kind == ElKind::Pre {
             preserve = true;
         }
@@ -1289,15 +1269,11 @@ impl<'r> Builder<'r> {
             // background, so drop it too rather than painting light text on the page default.
             fmt.color = None;
         }
-        ElementStyle { fmt, block_background, align, rtl, auto_dir, preserve, page_break, page_break_after }
+        ElementStyle { fmt, block_background, align, rtl, preserve, page_break, page_break_after }
     }
 
     fn paragraph_rtl(&self) -> bool {
         self.stack.iter().rev().find(|e| e.kind != ElKind::Inline).is_some_and(|e| e.rtl)
-    }
-
-    fn paragraph_auto(&self) -> bool {
-        self.stack.iter().rev().find(|e| e.kind != ElKind::Inline).is_some_and(|e| e.auto_dir)
     }
 
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
@@ -1333,7 +1309,7 @@ impl<'r> Builder<'r> {
             self.flush();
         }
         let css = self.css_of(name, attrs);
-        let ElementStyle { mut fmt, block_background, align, rtl, auto_dir, preserve, page_break, page_break_after } =
+        let ElementStyle { mut fmt, block_background, align, rtl, preserve, page_break, page_break_after } =
             self.element_style(name, attrs, kind, &css);
         match kind {
             ElKind::Table => self.tables.push(TableB {
@@ -1436,7 +1412,6 @@ impl<'r> Builder<'r> {
             auto_margins,
             align,
             rtl,
-            auto_dir,
             preserve,
             page_break,
             page_break_after,
@@ -1492,13 +1467,4 @@ impl<'r> Builder<'r> {
         }
         Flow { blocks, meta: self.meta }
     }
-}
-
-/// Whether the first strong character of `text` (or a left-to-right or right-to-left mark) reads right to left (an `auto` direction); text
-/// without one is left to right.
-fn first_strong_rtl(text: &str) -> bool {
-    let strong = |c: &char| c.is_alphabetic() || matches!(c, '\u{200E}' | '\u{200F}');
-    text.chars().find(strong).is_some_and(|c| {
-        c == '\u{200F}' || matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
-    })
 }

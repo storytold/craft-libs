@@ -479,11 +479,6 @@ fn is_valid_bg_layer(layer: &BgLayer<'_>) -> bool {
     remaining_after.iter().all(|t| is_valid_non_slash_bg_token(t))
 }
 
-/// Whether the declarations `css` set `direction` to a value [`apply_style`] applies.
-pub(super) fn sets_direction(css: &str) -> bool {
-    decls(css).any(|(k, v)| k == "direction" && matches!(v.to_ascii_lowercase().as_str(), "ltr" | "rtl" | "initial"))
-}
-
 /// A `text-align` value as stated. `left` and `right` are physical edges in CSS and HTML, while the
 /// model's [`Align`] is logical (`Left` is the start edge); they become logical only once the
 /// paragraph's direction is known ([`TextAlign::logical`]). `start`, `end`, `center` and `justify`

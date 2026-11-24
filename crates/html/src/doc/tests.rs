@@ -2339,14 +2339,13 @@ fn rtl_alignment_round_trips_through_html() {
 }
 
 #[test]
-fn dir_auto_follows_the_first_strong_character() {
-    let rtl = |src: &str| paras(&parse(src)).iter().map(|p| p.rtl).collect::<Vec<_>>();
-    assert_eq!(rtl(r#"<div dir="rtl"><p dir="auto">abc</p></div>"#), [false]);
-    assert_eq!(rtl(r#"<p dir="auto">123 مرها abc</p>"#), [true]);
-    assert_eq!(rtl(r#"<div dir="auto"><p>مرها</p><p>abc</p></div>"#), [true, false]);
-    assert_eq!(rtl(r#"<div dir="auto"><p dir="rtl">abc</p></div>"#), [true]);
-    // The alignment is resolved with the direction found.
-    assert_eq!(dir_align(r#"<p dir="auto" style="text-align:right">مرها</p>"#), [(true, Some(Align::Left))]);
+fn deferred_auto_direction_does_not_use_isolated_text_for_physical_alignment() {
+    // Until subtree-aware automatic direction is supported, inherit paragraph direction.
+    assert_eq!(dir_align(r#"<p dir="auto" style="text-align:right"><span dir="rtl">שלום</span> hello</p>"#), [(false, Some(Align::Right))]);
+    assert_eq!(
+        dir_align(r#"<div dir="rtl"><p dir="auto" style="text-align:right"><bdi dir="ltr">hello</bdi> مرحبا</p></div>"#),
+        [(true, Some(Align::Left))]
+    );
 }
 
 #[test]
@@ -2362,31 +2361,4 @@ fn direction_passes_through_inline_ancestors() {
     assert_eq!(rtl(r#"<span dir="rtl"><div dir="ltr">a</div></span>"#), [false]);
     // An inline's own direction does not make its paragraph's.
     assert_eq!(rtl(r#"<p>a <span dir="rtl">b</span></p>"#), [false]);
-}
-
-#[test]
-fn css_direction_and_auto_interact_only_for_values_it_applies() {
-    let rtl = |src: &str| paras(&parse(src)).iter().map(|p| p.rtl).collect::<Vec<_>>();
-    // A value that is ignored leaves the inherited `auto` in force.
-    assert_eq!(rtl(r#"<div dir="auto"><p style="direction:inherit">مرها</p></div>"#), [true]);
-    assert_eq!(rtl(r#"<div dir="auto"><p style="direction:bogus">مرها</p></div>"#), [true]);
-    // ltr ends the inherited `auto`.
-    assert_eq!(rtl(r#"<div dir="auto"><p style="direction:ltr">مرها</p></div>"#), [false]);
-    assert_eq!(rtl(r#"<p dir="auto" style="direction:ltr">مرها</p>"#), [false]);
-}
-
-#[test]
-fn dir_auto_in_cells_and_list_items() {
-    let f = parse(r#"<table><tr><td dir="auto">مرها</td><td dir="auto">abc</td></tr></table>"#);
-    assert_eq!(cell_paras(&f)[0].iter().flatten().map(|p| p.rtl).collect::<Vec<_>>(), [true, false]);
-    let f = parse(r#"<ul><li dir="auto">مرها</li><li dir="auto">abc</li></ul>"#);
-    assert_eq!(paras(&f).iter().map(|p| p.rtl).collect::<Vec<_>>(), [true, false]);
-}
-
-#[test]
-fn dir_auto_reads_direction_marks() {
-    let rtl = |src: &str| paras(&parse(src)).iter().map(|p| p.rtl).collect::<Vec<_>>();
-    assert_eq!(rtl("<p dir=\"auto\">\u{200F}abc</p>"), [true]);
-    assert_eq!(rtl("<p dir=\"auto\">\u{200E}مرها</p>"), [false]);
-    assert_eq!(rtl("<p dir=\"auto\">123 \u{200F}abc</p>"), [true]);
 }
