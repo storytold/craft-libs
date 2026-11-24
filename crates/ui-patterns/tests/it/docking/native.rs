@@ -15,8 +15,9 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, FirePhase, Scope};
 use craft_ui::runtime::env::RootEnv;
+use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::{drag, keys};
 use craft_ui::testing::access::AccessTree;
 use craft_ui::testing::focus::key_release;
@@ -1448,46 +1449,61 @@ fn a_key_nothing_took_in_a_native_float_is_forwarded_unless_a_field_in_it_has_fo
 }
 
 /// A key the app's command fired for in a native float's own OS window is the command's while it is held: neither the
-/// press nor its auto-repeats in later passes nor its release are forwarded. A key no command is bound to is forwarded
-/// with its repeats.
+/// press nor its auto-repeats in later passes nor its release are forwarded, whether the repeats run the command again
+/// (`RootEnv::shortcuts_repeat` on) or not. A key no command is bound to is forwarded with its repeats.
 #[trial]
 fn a_held_key_a_command_fired_for_in_a_native_float_forwards_none_of_its_repeats() {
-    let windows = Windows::new();
-    windows.root_info(info(true, ROOT_AT));
-    windows.child_info(info(true, PALETTE_AT));
-    let binding = Binding::parse("F1").expect("the trial's chord parses");
-    let help = CommandDef::new("nativeKeysTrial.help", "Help", Scope::app()).with_default(binding);
-    let catalog = AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid");
-    windows.commands(CommandInput::new().catalog(catalog));
-    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
-    let mut frame = |child: Vec<Event>| {
-        let mut forwarded = Vec::new();
-        windows.frame(vec![], child, |ui| {
-            let config = DockConfig::default().native_windows(true);
-            forwarded =
-                DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config).show(ui).forwarded;
-        });
-        forwarded
-    };
-    for _ in 0..5 {
-        frame(vec![]);
+    for repeats in [false, true] {
+        let windows = Windows::new();
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let mut root = RootEnv::new();
+        root.shortcuts_repeat = repeats;
+        windows.root_env(root);
+        let binding = Binding::parse("F1").expect("the trial's chord parses");
+        let help = CommandDef::new("nativeKeysTrial.help", "Help", Scope::app()).with_default(binding);
+        let catalog = AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid");
+        windows.commands(CommandInput::new().catalog(catalog));
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+        let fired = std::cell::RefCell::new(Vec::new());
+        let mut frame = |child: Vec<Event>| {
+            let mut forwarded = Vec::new();
+            windows.frame(vec![], child, |ui| {
+                let config = DockConfig::default().native_windows(true);
+                forwarded = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config)
+                    .show(ui)
+                    .forwarded;
+            });
+            fired.borrow_mut().extend(take_output(&windows.ctx).fired.into_iter().map(|fired| fired.phase));
+            forwarded
+        };
+        for _ in 0..5 {
+            frame(vec![]);
+        }
+        fired.borrow_mut().clear();
+        let keys_of = |events: &[Event]| -> Vec<(Key, bool, bool)> {
+            events
+                .iter()
+                .filter_map(|event| if let Event::Key { key, pressed, repeat, .. } = event { Some((*key, *pressed, *repeat)) } else { None })
+                .collect()
+        };
+
+        let none: Vec<(Key, bool, bool)> = Vec::new();
+        assert_eq!(keys_of(&frame(vec![key_press(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: the press the command fired for is its own");
+        assert_eq!(keys_of(&frame(vec![key_repeat(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: so is its repeat in a later pass");
+        assert_eq!(keys_of(&frame(vec![key_repeat(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: and the next one");
+        assert_eq!(keys_of(&frame(vec![key_release(Key::F1, Modifiers::NONE)])), none, "repeats {repeats}: and its release");
+        let ran = if repeats { vec![FirePhase::Press, FirePhase::Repeat, FirePhase::Repeat] } else { vec![FirePhase::Press] };
+        assert_eq!(*fired.borrow(), ran, "repeats {repeats}: the command ran at the press, and again at each repeat only with repeats on");
+
+        assert_eq!(
+            keys_of(&frame(vec![key_press(Key::F4, Modifiers::NONE)])),
+            [(Key::F4, true, false)],
+            "repeats {repeats}: an unbound key is forwarded"
+        );
+        assert_eq!(keys_of(&frame(vec![key_repeat(Key::F4, Modifiers::NONE)])), [(Key::F4, true, true)], "repeats {repeats}: with its repeats");
+        assert_eq!(keys_of(&frame(vec![key_release(Key::F4, Modifiers::NONE)])), [(Key::F4, false, false)], "repeats {repeats}: and its release");
     }
-    let keys_of = |events: &[Event]| -> Vec<(Key, bool, bool)> {
-        events
-            .iter()
-            .filter_map(|event| if let Event::Key { key, pressed, repeat, .. } = event { Some((*key, *pressed, *repeat)) } else { None })
-            .collect()
-    };
-
-    let none: Vec<(Key, bool, bool)> = Vec::new();
-    assert_eq!(keys_of(&frame(vec![key_press(Key::F1, Modifiers::NONE)])), none, "the press the command fired for is its own");
-    assert_eq!(keys_of(&frame(vec![key_repeat(Key::F1, Modifiers::NONE)])), none, "so is its repeat in a later pass");
-    assert_eq!(keys_of(&frame(vec![key_repeat(Key::F1, Modifiers::NONE)])), none, "and the next one");
-    assert_eq!(keys_of(&frame(vec![key_release(Key::F1, Modifiers::NONE)])), none, "and its release");
-
-    assert_eq!(keys_of(&frame(vec![key_press(Key::F4, Modifiers::NONE)])), [(Key::F4, true, false)], "an unbound key is forwarded");
-    assert_eq!(keys_of(&frame(vec![key_repeat(Key::F4, Modifiers::NONE)])), [(Key::F4, true, true)], "with its repeats");
-    assert_eq!(keys_of(&frame(vec![key_release(Key::F4, Modifiers::NONE)])), [(Key::F4, false, false)], "and its release");
 }
 
 /// A palette whose panel holds an Opacity field, then reads the keys its OS window's pass left, as an app passes a
