@@ -341,6 +341,9 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             {
                 break;
             }
+            if ch == '{' && (!started || decoded_equal && !decoded_value) {
+                return Err(invalid("graph keyframe syntax is unsupported"));
+            }
             if matches!(ch, '\'' | '"') {
                 started = true; // Explicit empty quotes still contribute a word.
                 let quote = ch;
@@ -658,7 +661,8 @@ impl<'b, 's> Decoder<'b, 's> {
                 (String::new(), Value::Input(input))
             } else {
                 let literal = self.word()?;
-                let value = typed_value(&literal, kind, self.budget)?;
+                let value = typed_value(&literal, kind, self.budget, self.keep_going)?;
+                check(self.keep_going)?;
                 (literal, value)
             };
             if matches!(kind, Some(FieldType::Integer | FieldType::UnsignedInteger)) && matches!(value, Value::Unknown) {
@@ -675,7 +679,7 @@ impl<'b, 's> Decoder<'b, 's> {
     }
 }
 
-fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) -> Result<Value> {
+fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<Value> {
     let numeric = matches!(kind, Some(FieldType::Number | FieldType::Integer | FieldType::UnsignedInteger));
     let number = if numeric { literal.trim_ascii() } else { literal };
     if numeric && let Some(coefficient) = number.strip_suffix("rel") {
@@ -716,7 +720,10 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
             let numeric = literal.parse::<i32>().ok();
             let mut found = None;
             let mut numeric_fallback = None;
-            for (name, value) in choices {
+            for (index, (name, value)) in choices.iter().enumerate() {
+                if index % 64 == 0 {
+                    check(keep_going)?;
+                }
                 budget.work.charge(name.len().min(literal.len()).saturating_add(1))?;
                 if *name == literal {
                     found = Some(*value);

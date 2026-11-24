@@ -854,3 +854,78 @@ fn quoted_ascii_padding_changes_only_the_numeric_view() {
         assert!(parse(&raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
     }
 }
+
+#[test]
+fn unquoted_keyframe_syntax_cannot_add_properties_or_operation_nodes() {
+    for raw in [
+        "gegl:exposure exposure={ 0=0 1=1 } gegl:invert-linear",
+        "gain n= { 0=0 1=1 } invert-linear",
+        "gain n=''{ 0=0 1=1 } invert-linear",
+        "gain 'n='{\n0=0 1=1} invert-linear",
+    ] {
+        for declarations in [&[][..], SCHEMA] {
+            let error = parse(raw, declarations, &mut Budget::default(), &|| true).unwrap_err();
+            assert!(error.to_string().contains("keyframe syntax is unsupported"), "{error}: {raw}");
+        }
+    }
+    for raw in ["gain text='{ 0=0 1=1 }' invert-linear", r"gain text=\{0=0\} invert-linear"] {
+        let graph = read(raw);
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.nodes[1].input, Some(Input::Node(0)));
+        let text = &graph.nodes[0].properties[0];
+        assert_eq!(text.value, Value::Text);
+        assert!(text.literal.starts_with('{') && text.literal.ends_with('}'));
+    }
+}
+
+#[test]
+fn cancellation_after_numeric_conversion_precedes_property_publication() {
+    let literal = format!("0.{}1", "0".repeat(2000));
+    let mut budget = Budget::default();
+    let checks = Cell::new(0);
+    let keep = || {
+        checks.set(checks.get() + 1);
+        // The assignment and declaration lookup may proceed. Cancel the
+        // publication check after conversion of the last scalar.
+        checks.get() < 3
+    };
+    let mut decoder = Decoder {
+        tokens: vec![Token::Word("n".into()), Token::Equal, Token::Word(literal)],
+        cursor: 0,
+        declarations: SCHEMA,
+        budget: &mut budget,
+        keep_going: &keep,
+        nodes: Vec::new(),
+        labels: Vec::new(),
+        label_sources: Vec::new(),
+        diagnostics: Vec::new(),
+        source_nodes: 1,
+        assignments: 0,
+    };
+    let mut properties = Vec::new();
+    let result = decoder.properties(&mut properties, SCHEMA.first().copied(), 0, Some(0));
+    assert!(matches!(result, Err(Error::Source(crate::Error::Cancelled))));
+    assert!(properties.is_empty());
+}
+
+#[test]
+fn choice_lookup_polls_before_reaching_a_late_match() {
+    let mut choices = [("other", 1); 130];
+    choices[129] = ("target", 7);
+    let fields = [Field { name: "mode", kind: FieldType::Choice(&choices) }];
+    let schema = [Operation { name: "long-choices", fields: &fields }];
+    let raw = "long-choices mode=target";
+    let checks = Cell::new(0);
+    let keep = || {
+        checks.set(checks.get() + 1);
+        // Admission, tokenization, block, declaration, assignment and field
+        // matching all pass. Cancel the second in-loop choice check.
+        checks.get() < 8
+    };
+    let mut budget = Budget::default();
+    let before = budget.retained;
+    assert!(matches!(parse(raw, &schema, &mut budget, &keep), Err(Error::Source(crate::Error::Cancelled))));
+    assert!(budget.retained < before);
+    let graph = parse(raw, &schema, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Choice(7));
+}
