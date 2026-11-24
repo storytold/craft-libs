@@ -168,6 +168,8 @@ pub struct OpenEntry {
     pub(crate) scoped: bool,
     /// A press outside its family closes it and goes no further.
     pub(crate) absorbs: bool,
+    /// A command run from outside it closes it (`Dismiss::commands`).
+    pub(crate) closes_on_commands: bool,
     /// The entry is an OS window of the integration: it takes its place in the stack's order and facts, and no egui
     /// layer is shown for it.
     pub(crate) window: bool,
@@ -225,6 +227,7 @@ impl OpenEntry {
             cover: None,
             scoped: false,
             absorbs: false,
+            closes_on_commands: true,
             window: false,
             popup: false,
             region: None,
@@ -370,7 +373,8 @@ pub fn request_close(ctx: &Context, id: Id, why: CloseReason) {
     push_close(ctx, id, why, false);
 }
 
-/// Queues a close of every popup layer of the running viewport shown last frame: its menus, dropdowns and lists. The
+/// Queues a close of every popup layer of the running viewport shown last frame that a command closes
+/// (`Dismiss::commands`): its menus, dropdowns and lists, not a dock panel's flyout. The
 /// runtime's command dispatcher calls it when a key runs a command; an app whose own dispatcher runs a shortcut from the
 /// keys the runtime leaves in egui's input calls it when the shortcut runs. Either way the command closes the open
 /// popups as a menu pick does; modal layers, windows and toasts stay.
@@ -392,7 +396,11 @@ pub(crate) fn close_popups_outside(ctx: &Context, inside: &[Id]) {
                 at = pass.last.iter().find(|entry| entry.id == id).and_then(|entry| entry.parent);
             }
         }
-        pass.last.iter().filter(|entry| entry.rank == Rank::Popup && !entry.exiting && !kept.contains(&entry.id)).map(|entry| entry.id).collect()
+        pass.last
+            .iter()
+            .filter(|entry| entry.rank == Rank::Popup && entry.closes_on_commands && !entry.exiting && !kept.contains(&entry.id))
+            .map(|entry| entry.id)
+            .collect()
     });
     for id in popups {
         push_close(ctx, id, CloseReason::Requested, false);

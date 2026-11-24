@@ -153,7 +153,7 @@ fn metadata_value_copies_without_selecting_the_row() {
 fn tab_toggles_the_panels_from_read_only_text_a_press_or_drag_focused() {
     let text = Rc::new(Cell::new(Id::NULL));
     let seen = text.clone();
-    let canvas = Id::new("document canvas");
+    let canvas = Id::unique("document canvas");
     let mut fixture = Fixture::new(move |ui| {
         Button::new("Save").show(ui);
         seen.set(SelectableText::new("Path", "/projects/poster.indd").show(ui).id);

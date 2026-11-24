@@ -21,7 +21,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
-use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
+use crate::tabs::{PanelTabLook, Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
@@ -347,6 +347,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)).
+    #[prop]
+    tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
     /// single titled panel does: the panels are shown from a rail, not by tabs.
     #[prop(flag)]
@@ -368,6 +371,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// Whether the panel menu button shows beside the tabs; a context request on a tab opens the menu either way.
     #[prop]
     panel_menu_shown: bool,
+    /// The panel menu button's icon: `more` unless the dock gives another (`DockConfig::panel_menu_icon`).
+    #[prop]
+    panel_menu_icon: IconId,
     /// The state of each panel command for the shown panel, published in the group's scope every pass.
     #[prop]
     command_states: Vec<(DockCommands, CommandState)>,
@@ -399,12 +405,14 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            tab_look: PanelTabLook::Plain,
             titled: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
             menu: None,
             panel_menu_shown: true,
+            panel_menu_icon: IconId::new("more"),
             command_states: Vec::new(),
             extra: None,
             footer: None,
@@ -429,8 +437,8 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     }
 
     /// The panel menu button's face.
-    fn menu_face(name: Label) -> IconButton<'static> {
-        IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
+    fn menu_face(&self, name: Label) -> IconButton<'static> {
+        IconButton::new(self.panel_menu_icon.clone()).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
     /// Starts a drag of the whole group: its drop region shows the group's name.
@@ -523,7 +531,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     /// tabs meet it.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if cx.part_if_declared(MENU).is_some() {
-            ui.face(MENU, Self::menu_face(cx.words::<DockWords>().panel_menu.clone()));
+            ui.face(MENU, self.menu_face(cx.words::<DockWords>().panel_menu.clone()));
         }
         ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
     }
@@ -588,7 +596,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let band = grip_width(cx.tokens);
         let button = if self.shows_menu_button() {
-            cx.tokens.space.gap.item + cx.face(Self::menu_face(cx.words::<DockWords>().panel_menu.clone())).x
+            cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x
         } else {
             0.0
         };
@@ -662,6 +670,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
+                    look: self.tab_look,
                     dock: self.dock,
                     sent: Outbox::new(&mut sent),
                 };
@@ -736,6 +745,7 @@ struct TabRow<'a, P> {
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
+    look: PanelTabLook,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
 }
@@ -764,6 +774,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
     let mut strip = TabStrip::new(name)
         .kind(kind)
+        .panel_look(row.look)
         .shown(active)
         .tear_off()
         .natural_height(true)
