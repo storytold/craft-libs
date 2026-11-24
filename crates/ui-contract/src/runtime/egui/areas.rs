@@ -419,7 +419,7 @@ pub(crate) fn set_layer_order(ctx: &Context, order: &[LayerId]) {
     ctx.set_layer_order(order);
 }
 
-/// Puts `layer` at the top of egui's area order, as a press on it does.
+/// Brings `layer` to the top of egui's own area order at the end of the running pass, as a press on it does.
 pub(crate) fn move_to_top(ctx: &Context, layer: LayerId) {
     ctx.move_to_top(layer);
 }

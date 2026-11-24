@@ -11,7 +11,7 @@ use crate::contract::{
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
-use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
+use crate::docking::{Arrangement, CardInset, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
     ColumnArrow, ColumnBar, DividerKind, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels,
     DockRoot, DockScene, DockSizes, DockSource, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt,
@@ -173,10 +173,11 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     continue_move: Option<(P, Vec2)>,
     /// Moves key focus to the group that shows the panel, as a press on the group's body does, and picks its tab, as a
     /// click on the tab does (which leaves key focus where it was): the group's stop takes focus in this pass, and the
-    /// pick is one of the pass's `actions`. A request of the pass: a host that focuses a panel itself (it opened
-    /// something in it) sets it for one pass. A panel the area does not show in this
-    /// pass (hidden, pruned by a maximize, in a closed flyout, or in a group the host's `group_view` draws) takes
-    /// neither; `DockAreaOutput::focused` tells the host where focus is.
+    /// pick is one of the pass's `actions`. A floating window that holds the panel comes to the front of the windows it
+    /// overlaps (`FloatingGroup::raise`); that order is the view's, and the workspace does not keep it. A request of
+    /// the pass: a host that focuses a panel itself (it opened something in it) sets it for one pass. A panel the area
+    /// does not show in this pass (hidden, pruned by a maximize, in a closed flyout, or in a group the host's
+    /// `group_view` draws) takes neither; `DockAreaOutput::focused` tells the host where focus is.
     #[prop]
     focus: Option<P>,
     /// The floating window holding the panel comes to the front in this pass: an OS window gets
@@ -532,8 +533,8 @@ struct ColumnAt<P> {
     bar: ColumnBar,
     within: Rect,
     open: Option<P>,
-    /// The outer inset of the column's card, a docked column's in a dock that shows cards ([`DockSizes::card_inset`]).
-    card: Option<f32>,
+    /// Which outer inset the column's card takes, a docked column's in a dock that shows cards ([`DockSizes::card_place`]).
+    card: Option<CardInset>,
 }
 
 /// What a column reported.
@@ -1399,7 +1400,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
             // tall as its content.
             self.report.placed.push((first.clone(), cell));
-            let card = scene.sizes.column_cards.then(|| scene.sizes.card_inset(at));
+            let card = scene.sizes.card_place(at);
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone(), card };
             self.column(ui, body, column, at);
         }
@@ -1502,8 +1503,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // Only a docked column's icons are a rail; a floating window's open flyouts.
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
         // The width the user gives a column by its inner edge leaves out its card's inset.
-        let inset = card.unwrap_or(0.0);
-        let mut icons = |cell: Rect, open: Option<P>, card: Option<f32>| {
+        let inset = card.map_or(0.0, |place| scene.sizes.inset(place));
+        let mut icons = |cell: Rect, open: Option<P>, card: Option<CardInset>| {
             let footer = scene.rail_footer.filter(|panel| mode == IconicMode::Rail && column.panels().any(|item| item == *panel));
             let pass = RefCell::new(&mut *self);
             let draw = |ui: &mut Ui, rect: Rect, open: Option<P>| {
@@ -1515,7 +1516,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .auto_collapse(scene.auto_collapse)
                     .mode(mode);
                 let shown = match card {
-                    Some(inset) => shown.card(inset),
+                    Some(place) => shown.card(place),
                     None => shown,
                 };
                 shown.show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window))
@@ -1574,7 +1575,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .within(within)
                 .auto_collapse(scene.auto_collapse);
             let shown = match card {
-                Some(inset) => shown.card(inset),
+                Some(place) => shown.card(place),
                 None => shown,
             };
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
@@ -1746,6 +1747,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .id(group_id);
             if let Some(scale) = scale {
                 group = group.scale(scale);
+            }
+            // The host's focus request brings the window that holds its panel to the front.
+            if scene.focus.is_some_and(|focus| window.panels().any(|held| held == focus)) {
+                group = group.raise();
             }
             if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
                 group = group.continue_move(grab);
