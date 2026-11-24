@@ -1,4 +1,4 @@
-//! [`BoxConstraintsPopover`]: the Rectangle and Triangle tools' gear.
+//! [`BoxConstraintsPopover`]: the Rectangle, Triangle and Polygon tools' gear.
 
 use std::sync::Arc;
 
@@ -20,7 +20,9 @@ use egui::{Response, Ui};
 /// Unconstrained, Square, Fixed Size and Proportional, each size's W and H beside its radio and enabled only while it
 /// is chosen, and the From Center check box. The tool's [`kind`](Self::kind) words it: the Rectangle's (the default)
 /// as above, the Triangle's with Equilateral in Square's place and its Proportional fields empty while they are
-/// greyed (storytold/photocraft#13361). Fixed Size takes whole pixels (0 to 300,000), Proportional up to three
+/// greyed (storytold/photocraft#13361), the Polygon's with Symmetric in Square's place and a Freeform radio after
+/// Proportional, its Radius beside it (whole pixels, 0 to 300,000, empty to start) and enabled only while Freeform is
+/// chosen (storytold/photocraft#13306). Fixed Size takes whole pixels (0 to 300,000), Proportional up to three
 /// decimals (0 to 99,999); an emptied field is `None`, which draws as Unconstrained, and a value typed past its range
 /// is clamped and reported once in [`BoxConstraintsOutput::out_of_range`]. Escape closes it and keeps the values. Its
 /// `open` flag is read and written through the binding, so give it `Bind::bound`.
@@ -112,7 +114,14 @@ impl Body<'_> {
         // The Triangle's Proportional fields are empty while greyed out and show the ratio once it is chosen.
         let ratio_shown = self.kind != ShapeKind::Triangle || chosen == BoxConstraint::Proportional;
         let shown_ratio = |part: Option<f64>| part.filter(|_| ratio_shown);
-        let square = if self.kind == ShapeKind::Triangle { &words.equilateral } else { &words.square };
+        let square = match self.kind {
+            ShapeKind::Triangle => &words.equilateral,
+            ShapeKind::Polygon => &words.symmetric,
+            _ => &words.square,
+        };
+        let freeform = (self.kind == ShapeKind::Polygon)
+            .then(|| NumberCell::whole_pixels(units, ppi, "freeform-radius", &words.freeform_radius, value.radius, BoxConstraints::RADIUS));
+        let (mut radius_edit, mut radius_alert) = (EditEvents::new(), None);
         let fixed = [
             NumberCell::whole_pixels(units, ppi, "fixed-width", &words.fixed_width, value.fixed.0, BoxConstraints::FIXED),
             NumberCell::whole_pixels(units, ppi, "fixed-height", &words.fixed_height, value.fixed.1, BoxConstraints::FIXED),
@@ -134,6 +143,18 @@ impl Body<'_> {
                     Radio::new(BoxConstraint::Proportional).label(words.proportional.clone()).show(ui);
                     ratio_edits = pair(ui, words, &ratio, chosen == BoxConstraint::Proportional);
                 });
+                if let Some(cell) = &freeform {
+                    Row::new().show(ui, |ui, _| {
+                        Radio::new(BoxConstraint::Freeform).label(words.freeform.clone()).show(ui);
+                        let on = chosen == BoxConstraint::Freeform;
+                        let shown = Field::new(cell.caption.clone())
+                            .id_salt(cell.key)
+                            .side(glyph_side(&words.radius))
+                            .enabled(on)
+                            .show(ui, |ui, _| cell.show_optional(ui));
+                        (radius_edit, radius_alert) = shown.inner.unwrap_or_default();
+                    });
+                }
             });
         });
         self.edits.extend(group.output.events.map(|constraint| BoxConstraints { constraint, ..value }));
@@ -143,9 +164,10 @@ impl Body<'_> {
         let [width, height] = ratio_edits.edits;
         self.edits.extend(width.map(|width| BoxConstraints { ratio: (width, value.ratio.1), ..value }));
         self.edits.extend(height.map(|height| BoxConstraints { ratio: (value.ratio.0, height), ..value }));
+        self.edits.extend(radius_edit.map(|radius| BoxConstraints { radius, ..value }));
         let centre = Checkbox::new(Bind::given(value.from_center)).label(words.from_center.clone()).show(ui).events;
         self.edits.extend(centre.map(|from_center| BoxConstraints { from_center, ..value }));
-        self.out_of_range = fixed_edits.alerts.into_iter().chain(ratio_edits.alerts).flatten().last();
+        self.out_of_range = fixed_edits.alerts.into_iter().chain(ratio_edits.alerts).chain([radius_alert]).flatten().last();
     }
 }
 

@@ -12,7 +12,7 @@ use craft_ui::runtime::env::Label;
 use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
-use super::{ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
+use super::{BoxConstraint, ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
 use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, equilateral_in, line_drag};
 use crate::ui::shape::VectorMode;
 
@@ -36,7 +36,9 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 /// - The options' [`BoxConstraints`](super::BoxConstraints) (the Rectangle or Triangle tool's gear) keep a box drag
 ///   square, at a fixed size at the release, or at a ratio, and From Center draws from the press as the centre; with
 ///   Square or From Center on, ⇧ or ⌥ turns it off. A Triangle is equilateral only in a squared box: with a Fixed Size
-///   or a Proportional ratio it fills the box those give, ⇧ or not.
+///   or a Proportional ratio it fills the box those give, ⇧ or not. A Polygon under Freeform is the regular polygon
+///   about the middle of the drag (⌥ or From Center: about the press, each turning the other off) with its first
+///   corner at the pointer; ⇧ turns that corner to a multiple of 45° from the centre.
 /// - Space held moves the shape being drawn without resizing it: every move while Space is down, the first one
 ///   included, moves the press point by the pointer's motion, and the box snaps as a whole.
 /// - Esc cancels (the host calls [`cancel`](CanvasTool::cancel)); so does a tool switch: `Cancel`
@@ -152,7 +154,8 @@ impl ShapeDragTool {
     /// toggling Square and ⌥ From Center (Rectangle with four equal radii when
     /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle filling the box (in a squared box,
     /// [`BoxRule::is_square`](crate::geometry::shape::BoxRule::is_square), the equilateral triangle in the square's
-    /// circle), Polygon and Star with the options' sides and ratio, Custom a `Custom` box keeping proportions with ⇧),
+    /// circle), Polygon and Star with the options' sides and ratio (a Polygon under the gear's Freeform:
+    /// [`RadialFrame::freeform`]), Custom a `Custom` box keeping proportions with ⇧),
     /// [`line_drag`] for a Line (weight at least 1, ⇧ snapping the end by [`line_shift`]), and
     /// [`RadialFrame::drag`] in the radial frame.
     fn shape_of(&self, drag: &Drag, mods: Mods) -> Option<ShapeGeometry> {
@@ -181,8 +184,14 @@ impl ShapeDragTool {
             };
             return Some(frame.geometry(drag.sides, star_ratio));
         }
+        let c = &o.constraints;
+        // pc: #13306 (the Polygon gear's Freeform; ⌥ turns From Center on or off, ⇧ snaps the turn).
+        if o.kind == ShapeKind::Polygon && c.constraint == BoxConstraint::Freeform {
+            let frame = RadialFrame::freeform(drag.start, drag.at, mods.alt != c.from_center, mods.shift, c.radius)?;
+            return Some(frame.geometry(drag.sides, 1.0));
+        }
         // Align Edges off keeps the drag's fractions (photocraft#13470).
-        let rule = BoxRule { keep_fractions: !o.whole_pixels, ..o.constraints.rule(mods.shift, mods.alt) };
+        let rule = BoxRule { keep_fractions: !o.whole_pixels, ..c.rule(mods.shift, mods.alt) };
         let rect = box_drag(drag.start, drag.at, rule)?;
         Some(match o.kind {
             ShapeKind::Rectangle if o.corner_radius > 0.0 => ShapeGeometry::Rect { rect, radii },

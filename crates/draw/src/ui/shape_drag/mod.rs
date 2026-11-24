@@ -61,7 +61,8 @@ pub enum ShapeFrame {
     Radial,
 }
 
-/// What a Shape tool's gear (the Rectangle's and the Triangle's) keeps a box drag to ([`BoxConstraints::constraint`]).
+/// What a Shape tool's gear (the Rectangle's, the Triangle's and the Polygon's) keeps a drag to
+/// ([`BoxConstraints::constraint`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -69,17 +70,22 @@ pub enum BoxConstraint {
     /// The dragged box.
     #[default]
     Unconstrained,
-    /// A square: the Rectangle's Square, the Triangle's Equilateral (its triangle in the square's circle); ⇧ draws the
-    /// dragged box instead.
+    /// A square: the Rectangle's Square, the Triangle's Equilateral (its triangle in the square's circle), the
+    /// Polygon's Symmetric (the regular polygon in the square's circle); ⇧ draws the dragged box instead.
     Square,
     /// The gear's width and height, with the top left at the release.
     FixedSize,
     /// The largest box of the gear's width to height ratio inside the drag, from the press.
     Proportional,
+    /// The Polygon's Freeform: the regular polygon centred on the middle of the drag (on the press with From Center),
+    /// its first corner at the release ([`RadialFrame::freeform`](crate::geometry::shape::RadialFrame::freeform)), its
+    /// circumradius the gear's [`radius`](BoxConstraints::radius) when set. The other kinds draw it as Unconstrained.
+    Freeform,
 }
 
-/// A Shape tool's gear (the Rectangle's or the Triangle's, each its own value): a constraint, its sizes, and From
-/// Center. A Fixed Size or Proportional pair with an empty field (`None`) or a 0 draws as Unconstrained.
+/// A Shape tool's gear (the Rectangle's, the Triangle's or the Polygon's, each its own value): a constraint, its sizes,
+/// Freeform's radius, and From Center. A Fixed Size or Proportional pair with an empty field (`None`) or a 0 draws as
+/// Unconstrained.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -90,6 +96,9 @@ pub struct BoxConstraints {
     pub fixed: (Option<f64>, Option<f64>),
     /// Proportional's width and height, in [`RATIO`](Self::RATIO); 1 : 1 to start.
     pub ratio: (Option<f64>, Option<f64>),
+    /// Freeform's Radius in pixels, in [`RADIUS`](Self::RADIUS): the polygon's circumradius. Empty (or 0) lets the drag
+    /// set it; empty to start.
+    pub radius: Option<f64>,
     /// The press is the box's centre; ⌥ draws from the corner instead.
     pub from_center: bool,
 }
@@ -99,6 +108,8 @@ impl BoxConstraints {
     pub const FIXED: RangeInclusive<f64> = 0.0..=300_000.0;
     /// The range of a Proportional field.
     pub const RATIO: RangeInclusive<f64> = 0.0..=99_999.0;
+    /// The range of Freeform's Radius field, in whole pixels.
+    pub const RADIUS: RangeInclusive<f64> = 0.0..=300_000.0;
 
     /// The rule of a box drag under these constraints with ⇧ (`shift`) and ⌥ (`alt`) held as they are now: ⇧ turns
     /// Square on, or off when it is chosen, and ⌥ does the same to From Center; Fixed Size and Proportional take their
@@ -117,9 +128,15 @@ impl BoxConstraints {
 }
 
 impl Default for BoxConstraints {
-    /// Unconstrained, Fixed Size empty, Proportional 1 : 1, From Center off.
+    /// Unconstrained, Fixed Size empty, Proportional 1 : 1, Freeform's Radius empty, From Center off.
     fn default() -> Self {
-        BoxConstraints { constraint: BoxConstraint::Unconstrained, fixed: (None, None), ratio: (Some(1.0), Some(1.0)), from_center: false }
+        BoxConstraints {
+            constraint: BoxConstraint::Unconstrained,
+            fixed: (None, None),
+            ratio: (Some(1.0), Some(1.0)),
+            radius: None,
+            from_center: false,
+        }
     }
 }
 
@@ -183,8 +200,8 @@ impl ShapeDragOptions {
         self
     }
 
-    /// The gear's constraints for a box drag (the Rectangle's or the Triangle's gear; the app passes the selected
-    /// tool's).
+    /// The gear's constraints for a drag (the Rectangle's, the Triangle's or the Polygon's gear; the app passes the
+    /// selected tool's).
     #[must_use]
     pub fn constraints(mut self, constraints: BoxConstraints) -> Self {
         self.constraints = constraints;

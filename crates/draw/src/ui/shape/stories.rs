@@ -207,6 +207,11 @@ fn box_constraints_popover_triangle(ui: &mut Ui, data: &mut StoryData) -> StoryO
     gear(ui, data, ShapeKind::Triangle)
 }
 
+#[story(BoxConstraintsPopover<'static>, covers = [Default], drive = Drive::Never)]
+fn box_constraints_popover_polygon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    gear(ui, data, ShapeKind::Polygon)
+}
+
 /// The open gear of the `kind` tool over the story's constraints.
 fn gear(ui: &mut Ui, data: &mut StoryData, kind: ShapeKind) -> StoryOutput {
     let value = *data.value("box", BoxConstraints::default());

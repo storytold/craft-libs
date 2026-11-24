@@ -70,6 +70,12 @@ craft_ui::words! {
         square: "shape.square" = "Square";
         /// The Triangle gear's radio in Square's place: the equilateral triangle in the square's circle.
         equilateral: "shape.equilateral" = "Equilateral";
+        /// The Polygon gear's radio in Square's place: the regular polygon in the square's circle.
+        symmetric: "shape.symmetric" = "Symmetric";
+        /// The Polygon gear's radio that turns the polygon to the release.
+        freeform: "shape.freeform" = "Freeform";
+        /// The Freeform Radius field's accessible name.
+        freeform_radius: "shape.freeformRadius" = "Freeform Radius";
         /// The gear's radio that draws a box of a fixed width and height.
         fixed_size: "shape.fixedSize" = "Fixed Size";
         /// The gear's radio that draws a box of a fixed width to height ratio.

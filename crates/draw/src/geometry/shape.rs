@@ -6,7 +6,7 @@
 //! Document units throughout; y grows downwards. Corner radii run top-left, top-right,
 //! bottom-right, bottom-left (PhotoCraft's engine order).
 
-use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use std::ops::RangeInclusive;
 
 use kurbo::{BezPath, Ellipse, Point, Rect, RoundedRect, RoundedRectRadii, Shape, Vec2};
@@ -272,6 +272,29 @@ impl RadialFrame {
             return None;
         }
         let rotation = if upright { 0.0 } else { (v.atan2() + FRAC_PI_2).rem_euclid(TAU) };
+        Some(RadialFrame { center, radius, rotation })
+    }
+
+    /// The frame of a Freeform drag from `start` to `end` (the Polygon gear's Freeform, storytold/photocraft#13306):
+    /// centred on the middle of the drag, or on `start` with `from_centre`, its first point at `end`, so the polygon
+    /// turns with the drag. `snap` (⇧) turns it so that the first point lies at a multiple of 45° from the centre, at
+    /// the same distance. A `radius` above 0 sets the distance to the points: the drag then only places the centre and
+    /// turns the polygon. `None` when that distance is under [`MIN_SIDE`] or the release is on the centre.
+    pub fn freeform(start: Point, end: Point, from_centre: bool, snap: bool, radius: Option<f64>) -> Option<RadialFrame> {
+        // pc: #13306 G8 (centre 499.5,349.5 from the press 399.5,299.5 and the release 599.5,399.5, the first vertex at
+        // the release), H3 (⌥: the centre at the press), and the Freeform + ⇧ run (the first vertex straight right).
+        let center = if from_centre { start } else { start.midpoint(end) };
+        let v = end - center;
+        let reach = v.hypot();
+        if reach.is_nan() || reach <= 0.0 {
+            return None;
+        }
+        let radius = radius.filter(|r| r.is_finite() && *r > 0.0).unwrap_or(reach);
+        if radius < MIN_SIDE {
+            return None;
+        }
+        let turn = (v.atan2() + FRAC_PI_2).rem_euclid(TAU);
+        let rotation = if snap { ((turn / FRAC_PI_4).round() * FRAC_PI_4).rem_euclid(TAU) } else { turn };
         Some(RadialFrame { center, radius, rotation })
     }
 

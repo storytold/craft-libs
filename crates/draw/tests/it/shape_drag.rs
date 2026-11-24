@@ -324,6 +324,106 @@ fn a_triangle_with_a_fixed_size_or_a_ratio_is_not_made_equilateral_by_shift() {
     assert_eq!(triangle_box(&shapes), Some([13.4, -50.0, 186.6, 100.0]), "the triangle in the circle about the press");
 }
 
+/// A Polygon drag (5 sides) under its gear's `constraint` with `change` applied to the gear's values.
+fn polygon_gear(constraint: BoxConstraint, change: impl FnOnce(&mut BoxConstraints)) -> Shapes {
+    let mut constraints = BoxConstraints { constraint, ..Default::default() };
+    change(&mut constraints);
+    Shapes::new(ShapeDragOptions::new(ShapeKind::Polygon).sides(5).constraints(constraints))
+}
+
+/// The corners of the polygon the last drag committed, in path order.
+fn polygon_corners(shapes: &Shapes) -> Vec<Point> {
+    let Some(shape) = shapes.committed() else { return Vec::new() };
+    shape.to_path(0.1).elements().iter().filter_map(|el| el.end_point()).collect()
+}
+
+/// Asserts the corners the last drag committed are `want` (storytold/photocraft#13306's points moved 300 left and 250
+/// up, as [`TRIANGLE_PRESS`]), in order, to 0.01.
+fn assert_corners(shapes: &Shapes, want: &[(f64, f64)], what: &str) {
+    let got = polygon_corners(shapes);
+    let near =
+        got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g.x - (w.0 - 300.0)).abs() <= 0.01 && (g.y - (w.1 - 250.0)).abs() <= 0.01);
+    assert!(near, "{what}: {got:?} vs {want:?} (moved by -300, -250)");
+}
+
+/// The issue's drag end `(x, y)`, moved as [`TRIANGLE_PRESS`].
+fn issue(x: f64, y: f64) -> Point {
+    Point::new(x - 300.0, y - 250.0)
+}
+
+/// H2: Freeform 400,300 → 600,380, centred on 500,340 with its first corner at the release.
+const H2: [(f64, f64); 5] = [(600.0, 380.0), (492.86, 447.47), (395.59, 366.42), (442.61, 248.86), (568.94, 257.26)];
+/// H3: the same drag centred on the press (circumradius 215.41).
+const H3: [(f64, f64); 5] = [(600.0, 380.0), (385.72, 514.93), (191.17, 352.84), (285.22, 117.72), (537.89, 134.51)];
+
+/// storytold/photocraft#13306: the Polygon gear's Symmetric draws the regular polygon in the circle of the shorter
+/// side's square (G7) and ⇧ turns it off (H6); Freeform centres the polygon on the middle of the drag with its first
+/// corner at the release (G8, H2) and ⌥ centres it on the press (H3); From Center, Proportional and Fixed Size place
+/// its box (G9, G10, H5, G11).
+#[trial]
+fn the_polygon_gear_draws_the_measured_polygons() {
+    let mut shapes = polygon_gear(BoxConstraint::Square, |_| {});
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    let g7 = [(450.0, 300.0), (497.55, 334.55), (479.39, 390.45), (420.61, 390.45), (402.45, 334.55)];
+    assert_corners(&shapes, &g7, "G7");
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::SHIFT);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 50.0, 300.0, 150.0)), "H6: ⇧ turns Symmetric off");
+
+    let mut shapes = polygon_gear(BoxConstraint::Freeform, |_| {});
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    let g8 = [(600.0, 400.0), (483.35, 460.56), (389.71, 368.33), (448.49, 250.77), (578.45, 270.35)];
+    assert_corners(&shapes, &g8, "G8");
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 380.0), Modifiers::NONE);
+    assert_corners(&shapes, &H2, "H2");
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 380.0), Modifiers::ALT);
+    assert_corners(&shapes, &H3, "H3: ⌥ centres it on the press");
+
+    let mut shapes = polygon_gear(BoxConstraint::Unconstrained, |c| c.from_center = true);
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(-100.0, -50.0, 300.0, 150.0)), "G9: about the press");
+    let mut shapes = polygon_gear(BoxConstraint::Proportional, |c| c.ratio = (Some(2.0), Some(1.0)));
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 50.0, 300.0, 150.0)), "G10");
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 500.0), Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 50.0, 300.0, 150.0)), "H5");
+    let mut shapes = polygon_gear(BoxConstraint::FixedSize, |c| c.fixed = (Some(120.0), Some(60.0)));
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(300.0, 150.0, 420.0, 210.0)), "G11: the top left at the release");
+}
+
+/// Freeform with From Center draws about the press and ⌥ then turns it off; ⇧ turns the first corner to a multiple of
+/// 45° from the centre at the same distance (not measured but its 21.8° run: straight right); a Radius sets the
+/// circumradius; a kind other than the Polygon draws Freeform as Unconstrained.
+#[trial]
+fn freeform_follows_from_center_alt_shift_and_its_radius() {
+    let mut shapes = polygon_gear(BoxConstraint::Freeform, |c| c.from_center = true);
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 380.0), Modifiers::NONE);
+    assert_corners(&shapes, &H3, "From Center");
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 380.0), Modifiers::ALT);
+    assert_corners(&shapes, &H2, "⌥ turns From Center off");
+
+    let mut shapes = polygon_gear(BoxConstraint::Freeform, |_| {});
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 380.0), Modifiers::SHIFT);
+    let flat = [(607.70, 340.0), (533.28, 442.43), (412.87, 403.31), (412.87, 276.69), (533.28, 237.57)];
+    assert_corners(&shapes, &flat, "⇧ at 21.8°: straight right, radius 107.70");
+    shapes.drag(TRIANGLE_PRESS, issue(500.0, 500.0), Modifiers::SHIFT);
+    let (r, s) = (50f64.hypot(100.0), std::f64::consts::FRAC_1_SQRT_2);
+    let first = polygon_corners(&shapes).first().copied();
+    let want = Point::new(450.0 + r * s - 300.0, 400.0 + r * s - 250.0);
+    assert!(first.is_some_and(|p| (p - want).hypot() <= 0.01), "⇧ at 63.4°: the first corner at 45°, got {first:?}");
+
+    let mut shapes = polygon_gear(BoxConstraint::Freeform, |c| c.radius = Some(50.0));
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    let sized = [(544.72, 372.36), (492.55, 399.44), (450.68, 358.20), (476.96, 305.62), (535.09, 314.38)];
+    assert_corners(&shapes, &sized, "a Radius of 50 sizes it, the drag turns it");
+
+    let mut constraints = BoxConstraints { constraint: BoxConstraint::Freeform, ..Default::default() };
+    constraints.radius = Some(50.0);
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Triangle).constraints(constraints));
+    shapes.drag(TRIANGLE_PRESS, issue(600.0, 400.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([100.0, 50.0, 300.0, 150.0]), "a Triangle draws Freeform as Unconstrained");
+}
+
 /// A press moved 2 × 1 points and released: a Rectangle in Shape mode draws it, in Path mode it is a click, and an
 /// Ellipse in Shape mode keeps the press slop.
 #[trial]

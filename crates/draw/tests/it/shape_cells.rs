@@ -315,15 +315,48 @@ fn the_triangle_gear_says_equilateral_and_shows_its_ratio_once_proportional_is_c
     assert_eq!(field_value(&fixture, "Proportional W"), Some(1.0), "the Rectangle's ratio shows greyed out");
 }
 
-/// Each of the Rectangle and the Triangle draws with its own gear from the stored settings; the other kinds with none.
+/// Each of the Rectangle, the Triangle and the Polygon draws with its own gear from the stored settings; the other
+/// kinds with none.
 #[trial]
 fn the_stored_settings_give_the_rectangle_and_the_triangle_their_own_gear() {
     let mut settings = ShapeToolSettings::default();
     settings.rect_box.constraint = BoxConstraint::Square;
     settings.triangle_box.from_center = true;
+    settings.polygon_box.constraint = BoxConstraint::Freeform;
     assert_eq!(settings.drag_options(ShapeKind::Rectangle).constraints, settings.rect_box);
     assert_eq!(settings.drag_options(ShapeKind::Triangle).constraints, settings.triangle_box);
+    assert_eq!(settings.drag_options(ShapeKind::Polygon).constraints, settings.polygon_box);
     assert_eq!(settings.drag_options(ShapeKind::Ellipse).constraints, BoxConstraints::default());
+}
+
+/// storytold/photocraft#13306: the Polygon's gear says Symmetric in Square's place and adds Freeform after Proportional,
+/// its Radius empty to start and enabled only while Freeform is chosen; Proportional shows 1 : 1 greyed.
+#[trial]
+fn the_polygon_gear_says_symmetric_and_adds_freeform_with_its_radius() {
+    let (mut fixture, host) = gear_of(ShapeKind::Polygon, BoxConstraints::default());
+    assert!(fixture.by_label("Square").is_none() && fixture.by_label("Equilateral").is_none(), "the Polygon's says Symmetric");
+    let radios = ["Unconstrained", "Symmetric", "Fixed Size", "Proportional", "Freeform"];
+    let tops: Vec<f32> = radios.iter().map(|l| fixture.by_label(l).unwrap_or_else(|| panic!("the {l} radio")).rect.top()).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]), "top to bottom: {tops:?}");
+    assert!(fixture.by_label("From Center").expect("From Center").rect.top() > tops[4], "From Center comes last");
+    assert!(disabled(&fixture, "Freeform Radius"), "the Radius is off unless Freeform is chosen");
+    assert_eq!(field_value(&fixture, "Freeform Radius"), None, "the Radius starts empty");
+    assert_eq!(field_value(&fixture, "Proportional W"), Some(1.0), "the Polygon's ratio shows greyed out");
+
+    let freeform = fixture.by_label("Freeform").expect("the Freeform radio");
+    fixture.click(&freeform).settle();
+    assert_eq!(host.borrow().value.constraint, BoxConstraint::Freeform);
+    assert!(!disabled(&fixture, "Freeform Radius"), "Freeform: its Radius is on");
+    assert!(disabled(&fixture, "Proportional W"), "Freeform: the other sizes stay off");
+    type_into(&mut fixture, "Freeform Radius", "80");
+    assert_eq!(host.borrow().value.radius, Some(80.0), "a typed Radius");
+    type_into(&mut fixture, "Freeform Radius", "400000");
+    assert_eq!(host.borrow().value.radius, Some(300_000.0), "a Radius past 300,000 keeps 300,000");
+    assert_eq!(host.borrow().alerts.len(), 1, "the clamp is reported once");
+    let symmetric = fixture.by_label("Symmetric").expect("the Symmetric radio");
+    fixture.click(&symmetric).settle();
+    assert_eq!(host.borrow().value.constraint, BoxConstraint::Square, "Symmetric is the Square constraint");
+    assert_eq!(host.borrow().value.radius, Some(300_000.0), "the Radius is kept");
 }
 
 #[trial]
