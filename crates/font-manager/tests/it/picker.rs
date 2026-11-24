@@ -1046,3 +1046,35 @@ fn the_list_loads_its_sample_faces_off_the_pass_and_once() {
     fx.frame(vec![]);
     assert_eq!(jobs.waiting(), 0, "the list opened again loads no face");
 }
+
+#[trial]
+fn the_closed_field_skips_building_stops_while_idle_and_steps_on_input() {
+    let all = listed(&three_faces(), &FontFilters::default(), &[]);
+    assert_eq!(all.len(), 3);
+
+    let (mut fx, seen) = rig(three_faces(), vec![]);
+    seen.borrow_mut().family = all[0].clone();
+    fx.frame(vec![]);
+    let before = craft_font_manager::picker::stop_builds(fx.ctx());
+    for _ in 0..5 {
+        fx.frame(vec![]);
+    }
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), before, "idle closed frames do not rebuild stops");
+
+    aim_at_field(&mut fx);
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), before, "focusing and hovering without stepping do not rebuild stops");
+
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(seen.borrow().family, all[1], "ArrowDown steps to the next family");
+    let after_key = craft_font_manager::picker::stop_builds(fx.ctx());
+    assert_eq!(after_key, before + 1, "one ArrowDown builds stops once");
+
+    fx.frame(vec![wheel_lines(-1.0)]);
+    assert_eq!(seen.borrow().family, all[2], "wheel down steps to the following family");
+    let after_wheel = craft_font_manager::picker::stop_builds(fx.ctx());
+    assert_eq!(after_wheel, after_key + 1, "one wheel tick builds stops once");
+
+    fx.advance(GESTURE_GAP * 2.0).idle(3);
+    assert_eq!(seen.borrow().picks.last().map(|(f, _)| f.as_str()), Some(all[2].as_str()), "wheel end commits the stepped family");
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), after_wheel, "wheel end and idle frames do not rebuild stops");
+}
