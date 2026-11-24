@@ -702,3 +702,70 @@ fn plain_runs_stay_plain_under_a_bold_default() {
     assert_eq!(shown.first(), Some(&(false, false)), "{shown:?}");
     assert_eq!(shown.last(), Some(&(true, true)), "{shown:?}");
 }
+
+/// A table in the text flow placed left of its column (a negative offset, which HWPX writes as
+/// its unsigned 32-bit form) is indented the same way a floating table is placed: to the left.
+#[test]
+fn an_in_flow_table_keeps_a_negative_offset() {
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:tbl rowCnt="1" colCnt="1"><hp:sz width="10000" height="1000"/><hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="COLUMN" horzAlign="LEFT" horzOffset="4294966596"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="10000" height="1000"/></hp:tc></hp:tr></hp:tbl></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&sec)).unwrap();
+    let t = doc.body.iter().find_map(|b| b.as_table()).expect("no table");
+    assert!(t.props.indent.is_some_and(|i| i < 0.0), "indented to the left: {:?}", t.props.indent);
+}
+
+/// A section asking for more columns than a section's properties hold breaks its columns by the
+/// count it is written with: the column breaks of a page are one fewer than its columns.
+#[test]
+fn column_breaks_follow_the_written_column_count() {
+    // every paragraph's cached lines start again at the top: a new column, or a new page
+    let para = |k: usize| {
+        format!(
+            r#"<hp:p><hp:run><hp:t>단 {k}</hp:t></hp:run><hp:linesegarray><hp:lineseg vertpos="0"/><hp:lineseg vertpos="1000"/></hp:linesegarray></hp:p>"#
+        )
+    };
+    let first = r#"<hp:p><hp:run><hp:secPr/><hp:ctrl><hp:colPr type="NEWSPAPER" colCount="200" sameGap="0"/></hp:ctrl><hp:t>단 0</hp:t></hp:run><hp:linesegarray><hp:lineseg vertpos="0"/><hp:lineseg vertpos="1000"/></hp:linesegarray></hp:p>"#;
+    let body: String = (1..120).map(para).collect();
+    let doc = read_bytes(&hwpx(&format!(r#"<hs:sec {NS}>{first}{body}</hs:sec>"#))).unwrap();
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let breaks = |p: &&craft_wordmodel::Paragraph| p.text.starts_with(craft_wordmodel::para::COLUMN_BREAK);
+    // the breaks before the first paragraph that starts a page without one
+    let run = paras.iter().skip(1).take_while(|p| breaks(p)).count();
+    let count = paras.iter().find_map(|p| p.section.as_ref()).map(|s| s.columns.count).unwrap_or(doc.last_section.columns.count);
+    assert!(count > 1, "laid out in columns");
+    assert_eq!(run + 1, count as usize, "a page's column breaks are one fewer than its columns");
+}
+
+/// A cell whose span runs past the widest grid a table can have spans only the columns left.
+#[test]
+fn a_span_past_the_grid_ends_at_its_edge() {
+    let cell = |col: u32, span: u32| {
+        format!(
+            r#"<hp:tc><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="{col}" rowAddr="0"/><hp:cellSpan colSpan="{span}" rowSpan="1"/><hp:cellSz width="300" height="300"/></hp:tc>"#
+        )
+    };
+    let cells: String = (0..62).map(|c| cell(c, 1)).collect::<String>() + &cell(62, 5);
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:tbl rowCnt="1" colCnt="70"><hp:sz width="20000" height="300"/><hp:pos treatAsChar="1"/><hp:tr>{cells}</hp:tr></hp:tbl></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&sec)).unwrap();
+    let t = doc.body.iter().find_map(|b| b.as_table()).expect("no table");
+    for row in &t.rows {
+        let spanned: usize = row.cells.iter().map(|c| c.props.span.max(1) as usize).sum();
+        assert!(spanned <= t.grid.len(), "the row spans {spanned} of {} columns", t.grid.len());
+    }
+}
+
+/// An explicit page break starts a new page even where the cache starts its lines at the same
+/// place as the page before: a page-hiding control on that second page doesn't hide the
+/// section's first-page header.
+#[test]
+fn an_explicit_page_break_counts_where_the_cache_starts_alike() {
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:header applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>머리말</hp:t></hp:run></hp:p></hp:subList></hp:header></hp:ctrl><hp:t>첫 쪽</hp:t></hp:run><hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray></hp:p><hp:p pageBreak="1"><hp:run><hp:ctrl><hp:pageHiding hideHeader="1" hideFooter="0" hidePageNum="0"/></hp:ctrl><hp:t>둘째 쪽</hp:t></hp:run><hp:linesegarray><hp:lineseg vertpos="0"/></hp:linesegarray></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&sec)).unwrap();
+    let title = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_ref()).any(|s| s.title_page) || doc.last_section.title_page;
+    assert!(!title, "the first page keeps its header");
+}

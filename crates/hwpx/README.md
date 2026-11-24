@@ -71,8 +71,8 @@ folder fail.
 
 Each part or picture is read up to 256 MiB, the whole archive up to 1 GiB uncompressed and 65,536
 entries. XML is followed 256 elements deep and up to 8,000,000 elements per part. Tables, text in
-shapes and notes nest at most 64 deep, groups 8; a table has at most 32,767 rows and 63 columns,
-and at most 200,000 cells the file declares without writing are made in all. Page sizes and
+shapes and notes nest at most 64 deep, groups 8; a table has at most 32,767 rows and 63 columns
+(a span past them ends at the edge), a section at most 45 text columns, and at most 200,000 cells the file declares without writing are made in all. Page sizes and
 margins are capped at 14,400,000 HWPUNIT, and a tiled page background lays at most 10,000
 tiles, and all of a document's 50,000 (more: the picture stretched once, logged). The constants are in the source next to what
 they bound. Damaged or hostile input gives an error or a best-effort document, never a panic

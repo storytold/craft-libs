@@ -403,7 +403,7 @@ impl Converter<'_> {
             sp.page_num_start = u32::try_from(s.start_page).ok();
         }
         sp.columns = if cols > 1 {
-            Columns { count: u32::try_from(cols).unwrap_or(1).clamp(1, 45), space: pt(tw(gap)).max(0.0), ..Columns::default() }
+            Columns { count: u32::try_from(cols).unwrap_or(1), space: pt(tw(gap)).max(0.0), ..Columns::default() }
         } else {
             Columns { count: 1, space: 36.0, ..Columns::default() }
         };

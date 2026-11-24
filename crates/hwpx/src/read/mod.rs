@@ -332,7 +332,9 @@ impl Converter<'_> {
                             // ignores a column break on that paragraph (viewer).
                             region_col = 0;
                             set_column_break = Some("0");
-                        } else if 0 <= first && first < last_pos {
+                        } else if (0 <= first && first < last_pos) || (truthy(p.get("pageBreak")) && !blocks.is_empty()) {
+                            // (an explicit page break is a new page even where the cache starts
+                            // its lines at the same place as the page before)
                             region_col += 1;
                             let cols = self.columns.0;
                             if cols > 1 && region_col % cols != 0 && !truthy(p.get("pageBreak")) {
@@ -998,12 +1000,17 @@ fn main_height(runs_el: &[&Element], heights: &[i64], max_h: i64) -> i64 {
     max_h
 }
 
+/// Most text columns a section is laid out in: what a section's properties hold (as in DOCX).
+/// Bounded where the count is read, so column breaks, objects placed by column and the
+/// section's properties all use the same columns.
+pub(crate) const MAX_COLUMNS: i64 = 45;
+
 /// (count, gap) of a column definition placed directly in this paragraph.
 pub(crate) fn direct_col_pr(p: &Element) -> Option<(i64, i64)> {
     for r in p.findall("hp:run") {
         for ctl in r.findall("hp:ctrl") {
             if let Some(c) = ctl.find("hp:colPr") {
-                return Some((num_or(c.get("colCount"), 1).clamp(1, 255), num(c.get("sameGap"))));
+                return Some((num_or(c.get("colCount"), 1).clamp(1, MAX_COLUMNS), num(c.get("sameGap"))));
             }
         }
     }

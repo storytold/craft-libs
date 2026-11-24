@@ -87,6 +87,11 @@ impl Converter<'_> {
         }
         let rows = num(el.get("rowCnt")).max(cells.iter().map(|c| c.row + c.rs).max().unwrap_or(0)).clamp(0, MAX_ROWS);
         let cols = num(el.get("colCnt")).max(cells.iter().map(|c| c.col + c.cs).max().unwrap_or(0)).clamp(0, MAX_COLS);
+        // a span past the capped grid ends at its edge, so the cell's width, the row walk and
+        // the merges below all count the same columns
+        for c in cells.iter_mut() {
+            c.cs = c.cs.min(cols - c.col).max(1);
+        }
         let sz = el.find("hp:sz");
         let table_w = sz.map(|s| num(s.get("width"))).unwrap_or(0);
         let widths = col_widths(&cells, cols, table_w);
@@ -242,7 +247,9 @@ impl Converter<'_> {
             "RIGHT" => Some(Align::Right),
             _ => None,
         };
-        let indent = (align.is_none() && num(pos.get("horzOffset")) != 0).then(|| pt(tw(num(pos.get("horzOffset")))));
+        // a negative offset is written as its unsigned 32-bit form, as on a floating table
+        let off = super::signed32(pos.get("horzOffset"));
+        let indent = (align.is_none() && off != 0).then(|| pt(tw(off)));
         (align, indent, None)
     }
 
