@@ -273,6 +273,10 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// thumbnail side; `zoom` and `thumb_size` do not apply.
     #[prop(flag)]
     content_cells: bool,
+    /// The side of a card's picture in points at zoom 1, in place of a thumbnail size's: a grid whose cards have a size of
+    /// their own (the New Document presets). The zoom still scales it; `thumb_size` does not apply.
+    #[prop(quantity = "picture side, in points")]
+    card_size: Option<f32>,
     /// The columns of cards a grid that takes its width from its content asks for: its width holds this many cards and
     /// their gaps. 0 asks for none, so the content decides.
     #[prop]
@@ -286,7 +290,7 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Tiles are framed cards: the picture inset in a raised surface with the name and detail under it as `card_text` sets them.
     #[prop(flag)]
     card: bool,
-    /// How framed cards set their name and detail: the strong, start-aligned name of a file, or the centred regular
+    /// How framed cards set their name and detail: the strong, start-aligned name of a file, or the centred strong
     /// name of a preset.
     #[prop]
     card_text: CardText,
@@ -362,6 +366,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             action_place: TileActionPlace::Corner,
             insert_gaps: None,
             thumb_size: None,
+            card_size: None,
             content_cells: false,
             card_columns: 0,
             caption: CaptionPlace::Below,
@@ -538,7 +543,10 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     fn picture_side(&self, style: &GridSizes, item: Option<Vec2>, around: Around) -> f32 {
         match item.filter(|_| self.content_cells) {
             Some(item) => (item.x - around.size().x).max(1.0),
-            None => style.picture_side(self.factor as f32, self.thumb_size),
+            None => match self.card_size.filter(|side| side.is_finite() && *side > 0.0) {
+                Some(side) => side * (self.factor as f32).max(f32::EPSILON),
+                None => style.picture_side(self.factor as f32, self.thumb_size),
+            },
         }
     }
 
