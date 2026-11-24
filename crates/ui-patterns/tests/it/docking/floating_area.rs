@@ -64,8 +64,8 @@ struct Bed {
     chrome: Rc<Cell<f32>>,
     /// The panel whose window the next pass asks to continue the held press, with its grab point.
     hand_over: Rc<Cell<Option<(usize, Vec2)>>>,
-    /// Where an egui area above the dock shows, whose plain egui drag hands the press to the window holding `WINDOW`
-    /// with the grab point `HOST_GRAB`, as an app's own popup does when its title is dragged out.
+    /// Where an egui area above the dock shows, whose plain egui drag floats `WINDOW` at `WINDOW_AT` and hands the press
+    /// to its window with the grab point `HOST_GRAB`, as an app's own popup does when its title is dragged out.
     popup: Rc<Cell<Option<Rect>>>,
 }
 
@@ -112,6 +112,9 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
                 let (_, drag) = ui.allocate_exact_size(rect.size(), egui::Sense::drag());
                 if drag.drag_started() {
                     shown_popup.set(None);
+                    let mut floated = held.borrow().layout().clone();
+                    floated.floating.push(Floating::single(100, vec![WINDOW], 0, WINDOW_AT));
+                    *held.borrow_mut() = Arc::new(Workspace::new(floated));
                     hands_over.set(Some((WINDOW, HOST_GRAB)));
                 }
             });
@@ -307,11 +310,12 @@ fn a_window_that_took_over_a_panel_drag_docks_on_a_tab_strip_though_its_title_ro
 }
 
 /// A press a host's own egui widget holds (a popup's title, which no framework part senses) carries on as the drag of
-/// the window the host hands it to: the window follows the pointer and docks on the docked group's tab strip.
+/// the window the host floats in that pass and hands the press to: the window follows the pointer and docks on the
+/// docked group's tab strip.
 #[trial]
 fn a_window_takes_over_a_press_a_plain_egui_widget_holds() {
-    let mut bed = bed_with(with_window(Some(Node::tabs(vec![DOCKED], 0))), DockConfig::default().title_bar_docks(false));
-    let tab = bed.fixture.by_role(Role::TAB).into_iter().find(|tab| !WINDOW_AT.contains(tab.center())).expect("the docked tab shows");
+    let mut bed = bed_with(Layout::new(Some(Node::tabs(vec![DOCKED], 0)), Vec::new()), DockConfig::default().title_bar_docks(false));
+    let tab = bed.fixture.by_role(Role::TAB).into_iter().next().expect("the docked tab shows");
     let over = Pos2::new(tab.rect.right() + 20.0, tab.center().y);
     let popup = Rect::from_min_size(Pos2::new(WINDOW_AT.min.x, WINDOW_AT.max.y + 20.0), Vec2::new(160.0, 24.0));
     bed.popup.set(Some(popup));
