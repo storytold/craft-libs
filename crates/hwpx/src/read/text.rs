@@ -10,10 +10,10 @@ pub(crate) fn floor_div(a: i64, b: i64) -> i64 {
 }
 
 /// A Windows FILETIME (100 ns ticks since 1601-01-01 UTC) as ISO 8601 (`2025-01-02T03:04:05Z`);
-/// `None` for 0 or a time before 1970 or after 9999.
+/// `None` for a time before 1970 (0 among them) or after 9999.
 pub(crate) fn iso_from_filetime(ft: u64) -> Option<String> {
     let secs = i64::try_from(ft / 10_000_000).ok()?.checked_sub(11_644_473_600)?;
-    if secs <= 0 {
+    if secs < 0 {
         return None;
     }
     let t = chrono::DateTime::from_timestamp(secs, 0)?;

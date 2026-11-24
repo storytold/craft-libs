@@ -771,13 +771,27 @@ impl Converter<'_> {
                     out.extend(r);
                 }
                 "hp:fieldEnd" => {
-                    for k in [c.get("beginIDRef").unwrap_or(""), c.get("fieldid").unwrap_or("")] {
+                    let keys = [c.get("beginIDRef").unwrap_or(""), c.get("fieldid").unwrap_or("")];
+                    for k in keys {
                         if let Some(g) = self.click_fields.remove(k) {
                             self.click_close = Some(g);
                         }
-                        if let Some(cid) = self.memo_fields.remove(k) {
-                            out.push(Item::Obj(Box::new(InlineObject::CommentEnd { id: cid }), CharProps::default()));
+                    }
+                    // a memo field goes by its id and its field id: both name the one memo,
+                    // which ends once, and the alias the end doesn't give goes with it
+                    let mut ended: Vec<u32> = Vec::new();
+                    for k in keys {
+                        if let Some(cid) = self.memo_fields.remove(k)
+                            && !ended.contains(&cid)
+                        {
+                            ended.push(cid);
                         }
+                    }
+                    if !ended.is_empty() {
+                        self.memo_fields.retain(|_, cid| !ended.contains(cid));
+                    }
+                    for cid in ended {
+                        out.push(Item::Obj(Box::new(InlineObject::CommentEnd { id: cid }), CharProps::default()));
                     }
                     let a = self.fields.remove(c.get("beginIDRef").unwrap_or("")).flatten();
                     let b = a.or_else(|| self.fields.remove(c.get("fieldid").unwrap_or("")).flatten());

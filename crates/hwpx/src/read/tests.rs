@@ -474,6 +474,8 @@ fn paragraphs_starting_with_a_bookmark_remember_their_source() {
 fn memo_times_read_as_iso() {
     assert_eq!(super::text::iso_from_filetime((30_306_893u64 << 32) | 2_552_988_672).as_deref(), Some("2013-06-26T09:14:43Z"));
     assert_eq!(super::text::iso_from_filetime(0), None);
+    // the Unix epoch itself is a time, not none
+    assert_eq!(super::text::iso_from_filetime(11_644_473_600 * 10_000_000).as_deref(), Some("1970-01-01T00:00:00Z"));
 }
 
 /// A level line has no height: its shown width stays (the original size, 100 x 100, is only
@@ -606,4 +608,18 @@ fn a_section_root_cut_off_by_the_peek_still_counts() {
     ]);
     let pkg = crate::package::Package::open(&bytes).unwrap();
     assert_eq!(pkg.section_names, ["Contents/section0.xml", "Contents/section1.xml"]);
+}
+
+/// A memo field named by both its id and its field id, ended by both: the memo ends once.
+/// Before, each alias ended it, and the comment had two ends.
+#[test]
+fn a_memo_ended_by_both_its_names_ends_once() {
+    let section = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:ctrl><hp:fieldBegin id="5" fieldid="9" type="MEMO"><hp:parameters><hp:stringParam name="Command">MEMO/0/0/0/0/저자</hp:stringParam></hp:parameters><hp:subList><hp:p><hp:run><hp:t>메모</hp:t></hp:run></hp:p></hp:subList></hp:fieldBegin></hp:ctrl><hp:t>본문</hp:t><hp:ctrl><hp:fieldEnd beginIDRef="5" fieldid="9"/></hp:ctrl></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&section)).unwrap();
+    let objects: Vec<&InlineObject> = doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).collect();
+    let starts = objects.iter().filter(|o| matches!(o, InlineObject::CommentStart { .. })).count();
+    let ends = objects.iter().filter(|o| matches!(o, InlineObject::CommentEnd { .. })).count();
+    assert_eq!((starts, ends), (1, 1));
 }
