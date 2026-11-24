@@ -103,3 +103,120 @@ fn a_small_tips_image_leaves_a_clear_gap_between_the_tip_and_its_arms() {
         }
     }
 }
+
+// The brush cursor's rules for a tip too small to read (photocraft#13602): under 3 points across the tip shows inside
+// four crosshair arms that leave it clear; 3 points or more keep the outline.
+mod small_tip_rules {
+    use craft_behavior::kurbo::{Point, Rect as DocRect};
+    use craft_behavior::{CanvasView, Cursor, CursorBadge, PaintedCursor, PointerButton};
+    use craft_ui::canvas::{ToolContext, ToolPointer};
+    use craft_ui::canvas_controls::brush::{BrushCursor, BrushCursorOptions, BrushTip, BrushTipOutline, PaintingCursor, TipRings};
+    use craft_ui::testing::trial;
+    use egui::{Pos2, Rect, Vec2};
+
+    /// The pointer `cursor` gives through `BrushCursor::cursor`, with Caps Lock `caps_lock` and the pass's pointer at `at`.
+    fn paint(cursor: BrushCursor<'_>, options: &BrushCursorOptions, view: &CanvasView, caps_lock: bool, at: Option<Pos2>) -> PaintedCursor {
+        let pointer = at.map(|at| ToolPointer::new(at, PointerButton::Primary, 0.0));
+        let cx = ToolContext::new(view.rect, None).pointer(pointer).caps_lock(caps_lock);
+        match cursor.cursor(&cx, options, view) {
+            Cursor::Painted(painted) => painted,
+            other => panic!("a painted cursor, not {other:?}"),
+        }
+    }
+
+    /// A view at `zoom` points per document unit, with document (100, 100) at screen (100, 100).
+    fn view(zoom: f64) -> CanvasView {
+        CanvasView::new(Rect::from_min_size(Pos2::ZERO, Vec2::splat(200.0)), Point::new(100.0, 100.0), zoom)
+    }
+
+    fn normal() -> BrushCursorOptions {
+        BrushCursorOptions::new(PaintingCursor::NormalBrushTip)
+    }
+
+    /// The cursor of a hard round tip `diameter` units across (both outlines at its edge), at `zoom`.
+    fn round(diameter: f64, zoom: f64) -> PaintedCursor {
+        paint(BrushCursor::new(&BrushTip::round(diameter, diameter / 2.0)), &normal(), &view(zoom), false, None)
+    }
+
+    /// The farthest point of `rings` from the pointer.
+    fn reach_of(rings: &[Vec<Pos2>]) -> f32 {
+        rings.iter().flatten().fold(0.0, |far, p| far.max(p.to_vec2().length()))
+    }
+
+    #[track_caller]
+    fn small_tip(cursor: &PaintedCursor) -> (f32, f32) {
+        match cursor {
+            PaintedCursor::SmallTip { rings, extent, .. } => {
+                assert!(rings.iter().flatten().all(|p| p.x.is_finite() && p.y.is_finite()), "finite rings");
+                (*extent, reach_of(rings))
+            }
+            other => panic!("a small tip, not {other:?}"),
+        }
+    }
+
+    #[trial]
+    fn a_round_tip_under_three_points_across_shows_inside_arms_that_leave_it_clear() {
+        for (diameter, zoom, extent) in [(2.0, 1.0, 1.0), (1.0, 1.0, 0.5), (1.0, 2.0, 1.0), (4.0, 0.5, 1.0)] {
+            let (at, ring) = small_tip(&round(diameter, zoom));
+            assert!((at - extent).abs() < 0.01 && (ring - extent).abs() < 0.01, "{diameter} at {zoom}: the tip's own ring, {at} {ring}");
+        }
+        // Smaller tips, a zero one and sizes that are no number show the least dot.
+        for diameter in [0.4, 0.0, -3.0, f64::NAN, f64::INFINITY] {
+            let (at, ring) = small_tip(&round(diameter, 1.0));
+            assert!(
+                (at - PaintedCursor::SMALL_TIP_DOT).abs() < 0.01 && (ring - PaintedCursor::SMALL_TIP_DOT).abs() < 0.01,
+                "{diameter}: {at} {ring}"
+            );
+        }
+    }
+
+    #[trial]
+    fn a_tip_three_points_across_or_more_keeps_its_outline() {
+        for (diameter, zoom, radius) in [(3.0, 1.0, 1.5), (6.0, 1.0, 3.0), (2.0, 2.0, 2.0), (12.0, 1.0, 6.0)] {
+            match round(diameter, zoom) {
+                PaintedCursor::Circle { radius: r, .. } => assert!((r - radius).abs() < 0.01, "{diameter} at {zoom}: {r}"),
+                other => panic!("{diameter} at {zoom}: the circle, not {other:?}"),
+            }
+        }
+    }
+
+    #[trial]
+    fn a_small_shaped_tip_shows_inside_the_arms_and_a_large_one_keeps_its_outline() {
+        let square = TipRings::new(vec![vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]]);
+        let tip = |diameter: f64| BrushTip::new(diameter, BrushTipOutline::traced(square.clone(), square.clone()));
+        let (extent, ring) = small_tip(&paint(BrushCursor::new(&tip(2.0)), &normal(), &view(1.0), false, None));
+        assert!((extent - 2f32.sqrt()).abs() < 0.01 && (ring - extent).abs() < 0.01, "{extent} {ring}");
+        assert!(matches!(paint(BrushCursor::new(&tip(8.0)), &normal(), &view(1.0), false, None), PaintedCursor::Outline { .. }));
+    }
+
+    #[trial]
+    fn a_small_pixel_cell_shows_inside_arms_clear_of_its_farthest_corner() {
+        let cell = |side: f64| BrushTip::new(side, BrushTipOutline::pixels(DocRect::new(100.0, 100.0, 100.0 + side, 100.0 + side), false));
+        let pointer = Some(Pos2::new(100.3, 100.3));
+        let one = cell(1.0);
+        let (extent, ring) = small_tip(&paint(BrushCursor::new(&one), &normal(), &view(1.0), false, pointer));
+        let farthest = Vec2::splat(0.7).length();
+        assert!((extent - farthest).abs() < 0.01 && (ring - farthest).abs() < 0.01, "the arms clear the far corner: {extent} {ring}");
+        assert_eq!(paint(BrushCursor::new(&one), &normal(), &view(1.0), false, None), PaintedCursor::Crosshair, "no pointer this pass");
+        let eight = cell(8.0);
+        assert_eq!(
+            paint(BrushCursor::new(&eight), &normal(), &view(1.0), false, pointer),
+            PaintedCursor::Hidden,
+            "a readable cell hides the pointer"
+        );
+        assert_eq!(paint(BrushCursor::new(&eight).centre(true), &normal(), &view(1.0), false, pointer), PaintedCursor::Crosshair);
+        assert!(matches!(paint(BrushCursor::new(&cell(2.0)), &normal(), &view(2.0), false, pointer), PaintedCursor::Hidden), "4 points on screen");
+    }
+
+    #[trial]
+    fn the_precise_cursor_and_caps_lock_keep_the_crosshair_and_a_badge_rides_on_a_small_tip() {
+        let tip = BrushTip::round(1.0, 0.5);
+        assert_eq!(paint(BrushCursor::new(&tip), &normal(), &view(1.0), true, None), PaintedCursor::Crosshair);
+        assert_eq!(
+            paint(BrushCursor::new(&tip), &BrushCursorOptions::new(PaintingCursor::Precise), &view(1.0), false, None),
+            PaintedCursor::Crosshair
+        );
+        let badged = paint(BrushCursor::new(&tip).badge(Some(CursorBadge::Add)), &normal(), &view(1.0), false, None);
+        assert!(matches!(badged, PaintedCursor::SmallTip { badge: Some(CursorBadge::Add), .. }), "{badged:?}");
+    }
+}
