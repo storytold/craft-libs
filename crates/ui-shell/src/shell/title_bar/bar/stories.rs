@@ -5,6 +5,7 @@ use crate::contract::Show as _;
 use crate::display::Text;
 use crate::shell::Title;
 use crate::shell::{Caption, CaptionFamily, Captions, Frame, MacInset};
+use crate::style::SurfaceKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_window::Layout;
 use egui::Ui;
@@ -56,4 +57,12 @@ fn title_bar_action_title(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
 fn title_bar_native(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TitleBar::new().frame(Frame::Native).title_when_native().show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
+}
+
+/// A title bar on the window's background surface instead of the chrome surface (an app whose title bar is darker
+/// than its other bars).
+#[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
+fn title_bar_on_background(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let frame = captions(CaptionFamily::Windows, &[], &[Caption::Minimize, Caption::Maximize, Caption::Close]);
+    TitleBar::new().frame(frame).surface(SurfaceKind::Background).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
 }

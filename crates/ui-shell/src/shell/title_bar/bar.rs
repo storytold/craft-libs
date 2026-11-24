@@ -50,6 +50,9 @@ impl Outcome for TitleBarOutput {
 
 /// The bar of a window whose frame the app draws.
 ///
+/// The bar paints the chrome surface; `surface` names another role (`SurfaceKind::Background` for an app whose title
+/// bar is darker than its other bars).
+///
 /// The bar fills the width of its room; its height is its content's, the caption strip's `SlotSize::TitleBar`. What it shows follows the window's frame
 /// (`WindowHost::frame`):
 ///
