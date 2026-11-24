@@ -81,7 +81,14 @@ impl DelayLine {
         let i0 = self.w + len - 1 - di as usize;
         let i0 = if i0 >= len { i0 - len } else { i0 };
         let i1 = if i0 == 0 { len - 1 } else { i0 - 1 };
-        self.buf[i0] + (self.buf[i1] - self.buf[i0]) * frac
+        let (a, b) = (self.buf[i0], self.buf[i1]);
+        let y = a + (b - a) * frac;
+        if y.is_finite() {
+            y
+        } else {
+            // Two large samples of opposite sign overflow `b - a` in f32.
+            (a as f64 + (b as f64 - a as f64) * frac as f64) as f32
+        }
     }
     /// Integer read (`d` samples ago, 0 = newest).
     #[inline]

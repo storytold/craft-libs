@@ -19,7 +19,12 @@
 //! second, so a vowel or a note held for longer than the search window keeps its level for a few
 //! seconds more, and a noise floor that rises by 12 dB is suppressed again within 3 s.
 //! After a reset the floor moves from 0 dB to `reduction` over the first search window of sound,
-//! so a voice that starts at once is not taken for the noise.
+//! so a voice that starts at once is not taken for the noise. The first estimate after a reset
+//! sets each bin's noise power no higher than the median bin's, nor more than 30 dB below the
+//! bin's own estimate, and it rises from there by the same 10 dB a second. A vowel held from the
+//! first sample keeps its level for a few seconds, like one held after a stretch of noise, while
+//! steady noise of an even spectrum is suppressed as soon as the floor allows; noise whose
+//! spectrum is uneven takes up to 3 s more in the bins well above the median.
 
 use super::stft::{Pairing, Plan, Spectral, StftChannel, stream};
 use crate::{AudioEffect, ParamSpec, ParamValues, Unit, block_len, db_to_gain, flush32, param_plumbing};
@@ -40,6 +45,8 @@ const MIN_NOISE: f32 = 1.0e-30;
 const QUIET: f32 = 1.0 / 32.0;
 /// Frames that share a sample with any one frame: the hop is a quarter of the STFT size.
 const OVERLAP: usize = 4;
+/// Lowest the first noise power of a bin starts against the bin's own estimate (30 dB).
+const SEED_SPAN: f32 = 1.0e-3;
 /// Fastest rise of the noise power a bin's gain is computed from, in dB per second.
 const RISE_DB_S: f32 = 10.0;
 
@@ -107,6 +114,10 @@ struct Bins {
     since_zero: usize,
     /// Quiet frames in a row since the last frame of digital silence, up to a search window.
     quiet_run: usize,
+    /// Whether `noise` has been set from a first estimate since the last reset.
+    seeded: bool,
+    /// Room to find the median bin of the first estimate.
+    scratch: Vec<f32>,
 }
 
 impl Bins {
@@ -130,6 +141,8 @@ impl Bins {
             heard: 0,
             since_zero: 1,
             quiet_run: 0,
+            seeded: false,
+            scratch: vec![0.0; bins],
         }
     }
 
@@ -149,6 +162,7 @@ impl Bins {
         self.heard = 0;
         self.since_zero = 1;
         self.quiet_run = 0;
+        self.seeded = false;
     }
 
     /// Noise power of bin `k` for the frame last processed: the smallest smoothed power of the
@@ -223,6 +237,17 @@ impl Bins {
                 self.queue_total[at] = total;
                 self.queue_ok[at] = self.since_zero > OVERLAP;
                 self.queued += 1;
+            }
+            if self.started && !self.seeded {
+                // The first estimate: a bin well above the median bin, such as a harmonic of a
+                // vowel held from the start, starts from the median and rises from there.
+                self.seeded = true;
+                self.scratch.copy_from_slice(&self.est);
+                let median = *self.scratch.select_nth_unstable_by(bins / 2, f32::total_cmp).1 * BIAS;
+                for k in 0..bins {
+                    let own = self.est[k] * BIAS;
+                    self.noise[k] = own.min(median.max(own * SEED_SPAN));
+                }
             }
             // The floor moves from 1 to `c.floor` (in dB) over the first search window of sound.
             let floor = c.floor.powf(self.heard as f32 / c.window as f32);
@@ -691,6 +716,48 @@ mod tests {
         let last = lead + held - SR as usize..lead + held;
         let kept = db((energy(&ys[last.start + lat..last.end + lat]) / energy(&speech[last])).sqrt());
         assert!(kept.abs() < 3.0, "the held vowel's level changed by {kept:.2} dB in its last second");
+    }
+
+    /// A steady vowel held from the first sample, with no noise before it, keeps its level within
+    /// 3 dB over its first 2 s, after the floor has reached the reduction.
+    #[test]
+    fn a_vowel_held_from_the_start_keeps_its_level() {
+        let held = SR as usize * 3;
+        let mut speech = vec![0.0f32; held + SR as usize / 2];
+        for (i, v) in speech[..held].iter_mut().enumerate() {
+            let t = std::f64::consts::TAU * 160.0 * i as f64 / SR as f64;
+            *v = (1..8).map(|h| (0.15 * (h as f64 * t).sin() / h as f64) as f32).sum();
+        }
+        let noise = white(53, speech.len(), 0.02);
+        let (_, ys, _) = shadow(&speech, &noise, 24.0);
+        let lat = 256;
+        for range in [0..SR as usize * 2, SR as usize * 3 / 2..SR as usize * 2] {
+            let kept = db((energy(&ys[range.start + lat..range.end + lat]) / energy(&speech[range.clone()])).sqrt());
+            assert!(kept.abs() < 3.0, "the vowel's level changed by {kept:.2} dB over {range:?}");
+        }
+    }
+
+    /// Steady noise whose spectrum falls with frequency (white noise through a one-pole low-pass
+    /// at 500 Hz) is suppressed by at least 20 dB from 4 s on.
+    #[test]
+    fn steady_low_passed_noise_falls_by_the_reduction() {
+        let mut s = suppressor(24.0);
+        let n = SR as usize * 5;
+        let a = (-std::f32::consts::TAU * 500.0 / SR).exp();
+        let mut state = 0.0f32;
+        let x: Vec<f32> = white(59, n, 0.2)
+            .into_iter()
+            .map(|v| {
+                state = a * state + (1.0 - a) * v;
+                state
+            })
+            .collect();
+        let mut y = x.clone();
+        s.process(&mut [&mut y]);
+        let lat = s.latency();
+        let from = SR as usize * 4;
+        let got = -db(rms(&y[from + lat..n]) / rms(&x[from..n - lat]));
+        assert!(got >= 20.0, "noise fell by {got:.1} dB");
     }
 
     /// NaN, infinite and the largest finite samples give finite output, and the noise is still
