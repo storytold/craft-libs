@@ -235,7 +235,12 @@ impl<'a> Reader<'a, '_> {
         let count = self.count(self.limits.strokes)?;
         let parasite_start = self.cursor.pos;
         for _ in 0..parasites {
-            self.name()?;
+            // Parasite names are opaque bytes, unlike the UTF-8 path label.
+            let length = self.word()? as usize;
+            if length > self.limits.name_bytes {
+                return Err(StopReason::StringLimit.into());
+            }
+            self.take(length)?;
             self.word()?;
             let length = self.word()? as usize;
             if length > self.limits.payload_bytes {
@@ -371,6 +376,20 @@ fn read_list<'a>(
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<SourcePath<'a>>> {
+    read_list_into(bytes, source_offset, modern, limits, budget, keep_going, Vec::new())
+}
+
+// Appending avoids a second list container and never stages a decoded suffix
+// that output growth cannot retain. Public readers still start their own list.
+fn read_list_into<'a>(
+    bytes: &'a [u8],
+    source_offset: usize,
+    modern: bool,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+    mut records: Vec<SourcePath<'a>>,
+) -> Result<Scan<SourcePath<'a>>> {
     if !keep_going() {
         return Err(Error::Cancelled);
     }
@@ -380,7 +399,6 @@ fn read_list<'a>(
     let initial_retained = budget.retained_left;
     let mut reader =
         Reader { cursor: Cursor { b: bytes, pos: 0, wide: false }, source_offset, limits, points_left: limits.points, budget, keep_going };
-    let mut records = Vec::new();
     let header = (|| {
         reader.check()?;
         if bytes.len() > limits.payload_bytes {
@@ -970,5 +988,38 @@ mod tests {
         // The caller still owns the original bounded raw payload, including the
         // unhandled frame; the parser does not claim decoded geometry for it.
         assert!(!payload[rejected..].is_empty());
+    }
+    #[test]
+    fn opaque_vector_parasite_names_preserve_geometry_and_raw_evidence() {
+        let mut bytes = Vec::new();
+        for value in [1, 0, 1] {
+            word(&mut bytes, value);
+        }
+        name(&mut bytes, "");
+        for value in [7, 1, 0, 1, 1, 2] {
+            word(&mut bytes, value);
+        }
+        bytes.extend([0xff, 0]);
+        word(&mut bytes, 5);
+        word(&mut bytes, 3);
+        bytes.extend(b"raw");
+        cubic(&mut bytes, 1, true);
+        let scan = vectors(&bytes, 0, Limits { name_bytes: 2, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+        assert!(scan.stopped.is_none());
+        assert_eq!(scan.records[0].strokes[0].knots[0].anchor.position, [1., 3.]);
+        let payload = scan.records[0].parasite_payloads().next().unwrap();
+        let raw = super::super::parasites(payload, 0, Default::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(raw.stopped.is_none());
+        assert_eq!(raw.records[0].name, &[0xff]);
+        assert_eq!(raw.records[0].flags, 5);
+        assert_eq!(raw.records[0].payload, b"raw");
+        let limited = vectors(&bytes, 0, Limits { name_bytes: 1, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(limited.stopped.unwrap().reason, StopReason::StringLimit);
+        // A path label remains UTF-8 even when opaque parasite names are accepted.
+        let mut invalid_label = bytes;
+        invalid_label[12..16].copy_from_slice(&2u32.to_be_bytes());
+        invalid_label.insert(16, 0xff);
+        let label = vectors(&invalid_label, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(label.stopped.unwrap().reason, StopReason::Malformed);
     }
 }

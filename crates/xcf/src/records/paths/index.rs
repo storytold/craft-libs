@@ -54,24 +54,32 @@ fn pointer(cursor: &mut Cursor<'_>, limit: usize, index: usize, budget: &mut Bud
     Ok(Some(pointer))
 }
 
-fn merge<'a>(
+// standalone_with_points returns at most one path. Track its actual decode
+// debit separately from output growth rather than estimating geometry capacity.
+fn merge_standalone<'a>(
     output: &mut Vec<SourcePath<'a>>,
     scan: Scan<SourcePath<'a>>,
+    staged_charge: usize,
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<(usize, Option<Diagnostic>)> {
-    let Scan { records, stopped, end_offset } = scan;
+    let Scan { mut records, stopped, end_offset } = scan;
     if output.is_empty() {
         *output = records;
-    } else {
-        // Both containers may be live: admit geometric output growth before allocating.
-        for path in records {
-            check(keep_going)?;
-            let offset = path.offset;
-            if let Err(reason) = budget.retain(output, path) {
-                return Ok((offset, Some(Diagnostic { offset, ordinal: output.len(), reason })));
-            }
+    } else if let Some(path) = records.pop() {
+        check(keep_going)?;
+        let offset = path.offset;
+        if let Err(reason) = budget.retain(output, path) {
+            // The path (properties, strokes and knots) and its staging vector
+            // are all dropped; earlier output and attempted work stay charged.
+            drop(records);
+            budget.retained_left += staged_charge;
+            return Ok((offset, Some(Diagnostic { offset, ordinal: output.len(), reason })));
         }
+        drop(records);
+        // The private reader admitted one slot into an initially empty Vec via
+        // Budget::retain. Only that exact container debit is now discarded.
+        budget.retained_left += 2 * std::mem::size_of::<SourcePath<'_>>();
     }
     Ok((end_offset, stopped.map(|diagnostic| Diagnostic { ordinal: output.len(), ..diagnostic })))
 }
@@ -94,12 +102,9 @@ pub(crate) fn decode<'a>(
         }
         let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), ..limits };
         let Some(offset) = property.offset.checked_add(8) else { return Ok(Scan::stopped(output, property.offset, StopReason::Malformed)) };
-        let scan = if property.kind == 23 {
-            super::legacy(property.payload, offset, remaining, budget, keep_going)?
-        } else {
-            super::vectors(property.payload, offset, remaining, budget, keep_going)?
-        };
-        let (_, stopped) = merge(&mut output, scan, budget, keep_going)?;
+        let scan = super::read_list_into(property.payload, offset, property.kind == 25, remaining, budget, keep_going, output)?;
+        let stopped = scan.stopped;
+        output = scan.records;
         if let Some(diagnostic) = stopped {
             return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
         }
@@ -124,9 +129,11 @@ pub(crate) fn decode<'a>(
         // Decode the admitted target before spending work on any later slot,
         // so a tight work allowance preserves the completed source prefix.
         let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), points: points_left, strokes: strokes_left, ..limits };
+        let retained = budget.retained_left;
         let scan = super::standalone_with_points(cursor.b, offset, source_index, remaining, budget, keep_going, &mut points_left)?;
+        let staged_charge = retained - budget.retained_left;
         strokes_left = strokes_left.saturating_sub(scan.records.first().map_or(0, |path| path.strokes.len()));
-        let (end, stopped) = merge(&mut output, scan, budget, keep_going)?;
+        let (end, stopped) = merge_standalone(&mut output, scan, staged_charge, budget, keep_going)?;
         end_offset = end_offset.max(end);
         if let Some(diagnostic) = stopped {
             return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));

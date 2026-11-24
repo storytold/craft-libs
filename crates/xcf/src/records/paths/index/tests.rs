@@ -374,3 +374,94 @@ fn tight_work_retains_the_first_path_before_charging_a_later_pointer() {
     assert_eq!(scan.records.len(), 2);
     assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed, "the final terminator is still checked");
 }
+
+#[test]
+fn failed_standalone_merge_refunds_only_its_discarded_geometry() {
+    let (bytes, table, source) = file(26, &[], 2);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    // Measure the private one-path stage's actual debit, not allocator capacities.
+    let mut stage = Budget::default();
+    let initial = stage.retained_remaining();
+    let one = super::super::standalone(&bytes, source, 0, Limits::default(), &mut stage, &|| true).unwrap();
+    assert!(one.stopped.is_none());
+    let charge = initial - stage.retained_remaining();
+    let mut budget = Budget::new(1 << 20, 2 * charge);
+    let output = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(output.records.len(), 1);
+    assert_eq!(output.stopped.unwrap().reason, StopReason::RetainedLimit);
+    assert_eq!(budget.retained_remaining(), charge, "only the returned first path stays charged");
+    assert!(budget.work_remaining() < 1 << 20, "discarding geometry does not refund source work");
+    let retry = super::super::standalone(&bytes, source, 1, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(retry.stopped.is_none(), "discarded-stage allowance is reusable");
+    assert_eq!(retry.records.len(), 1);
+    // Enough room admits both aliases and keeps output growth and both geometries
+    // charged, while the dropped one-slot staging container is released exactly.
+    let container = 2 * std::mem::size_of::<SourcePath<'_>>();
+    let mut enough = Budget::new(1 << 20, 2 * charge + container);
+    let both = xcf.paths(Limits::default(), &mut enough, &|| true).unwrap();
+    assert!(both.stopped.is_none());
+    assert_eq!(both.records.len(), 2);
+    assert_eq!(enough.retained_remaining(), container);
+    assert_eq!(both.records[0].offset, both.records[1].offset);
+    assert!(table < source);
+}
+
+#[test]
+fn historical_append_discards_no_charged_suffix_when_output_growth_fails() {
+    let first = historical(25, "First");
+    let second_one = historical(25, "Second");
+    let mut second = second_one.clone();
+    second[8..12].copy_from_slice(&2u32.to_be_bytes());
+    second.extend_from_slice(&historical(25, "Unvisited")[12..]);
+    let (bytes, _, _) = file(11, &[(25, first.clone()), (25, second)], 0);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let mut stage = Budget::default();
+    let initial = stage.retained_remaining();
+    let first_scan = super::super::vectors(&first, 0, Limits::default(), &mut stage, &|| true).unwrap();
+    assert!(first_scan.stopped.is_none());
+    let one_charge = initial - stage.retained_remaining();
+    let mut raw_budget = Budget::default();
+    let initial = raw_budget.retained_remaining();
+    let raw = xcf.image_properties(Default::default(), &mut raw_budget, &|| true).unwrap();
+    assert!(raw.stopped.is_none());
+    let raw_charge = initial - raw_budget.retained_remaining();
+    let container = 2 * std::mem::size_of::<SourcePath<'_>>();
+    // Room to decode the second geometry, but not to grow the output list.
+    let allowance = raw_charge + one_charge + (one_charge - container);
+    let mut budget = Budget::new(1 << 20, allowance);
+    let output = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(output.records.len(), 1);
+    assert_eq!(output.records[0].name, "First");
+    assert_eq!(output.stopped.unwrap().reason, StopReason::RetainedLimit);
+    assert_eq!(budget.retained_remaining(), allowance - raw_charge - one_charge);
+    assert!(budget.work_remaining() < 1 << 20);
+}
+
+#[test]
+fn historical_lists_share_output_storage_instead_of_charging_merge_staging() {
+    let first = historical(25, "First");
+    let mut second = historical(25, "Second");
+    second[8..12].copy_from_slice(&2u32.to_be_bytes());
+    second.extend_from_slice(&historical(25, "Third")[12..]);
+    let (bytes, _, _) = file(11, &[(25, first.clone()), (25, second.clone())], 0);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let mut raw_budget = Budget::default();
+    let initial = raw_budget.retained_remaining();
+    xcf.image_properties(Default::default(), &mut raw_budget, &|| true).unwrap();
+    let mut allowance = initial - raw_budget.retained_remaining();
+    for payload in [&first, &second] {
+        let mut stage = Budget::default();
+        let initial = stage.retained_remaining();
+        let scan = super::super::vectors(payload, 0, Limits::default(), &mut stage, &|| true).unwrap();
+        assert!(scan.stopped.is_none());
+        allowance += initial - stage.retained_remaining();
+    }
+    // This fits both lists' actual geometry and containers. Requiring another
+    // output slot while both staging containers live used to drop the suffix.
+    let mut budget = Budget::new(1 << 20, allowance);
+    let output = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(output.stopped.is_none());
+    assert_eq!(output.records.iter().map(|path| path.name).collect::<Vec<_>>(), ["First", "Second", "Third"]);
+    assert_eq!(budget.retained_remaining(), 0);
+    assert!(budget.work_remaining() < 1 << 20);
+}
