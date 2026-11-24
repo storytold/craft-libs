@@ -833,3 +833,33 @@ fn includegraphics_follows_latex_scoping_and_braced_values() {
         folders("\\graphicspath{{real/}}\\newcommand{\\unused}{\\graphicspath{{other/}}}\\begin{document}\\includegraphics{b.png}\\end{document}");
     assert_eq!(defined, vec!["b.png".to_string(), "real/b.png".to_string()]);
 }
+
+#[cfg(feature = "svg")]
+#[test]
+fn svg_pictures_are_drawn_sharp_at_the_size_shown() {
+    let svg = std::sync::Arc::new(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#c33"/></svg>"##.to_vec(),
+    );
+    let asked = std::cell::RefCell::new(Vec::<String>::new());
+    let load = |p: &str| {
+        asked.borrow_mut().push(p.to_string());
+        (p == "figs/chart.svg").then(|| svg.clone())
+    };
+    let src = "\\graphicspath{{figs/}}\\begin{document}\\includegraphics[width=8cm]{chart}\\includesvg[width=4cm]{chart}\\end{document}";
+    let pics = pictures(&parse_with(src, Some(&load)));
+    let [big, small] = pics.as_slice() else { panic!("both pictures load: {pics:?}") };
+    // `\includesvg` asks for the `.svg` file before the name as written.
+    asked.borrow_mut().clear();
+    let _ = parse_with("\\begin{document}\\includesvg{chart}\\end{document}", Some(&load));
+    assert_eq!(asked.borrow().iter().take(2).map(String::as_str).collect::<Vec<_>>(), ["chart.svg", "chart"]);
+    assert!(big.w > small.w * 1.9 && big.w < small.w * 2.1);
+    assert!((big.w / big.h - 2.0).abs() < 0.05, "keeps the drawing's shape");
+    // Drawn as a PNG with more pixels than the points it is shown at, so it stays sharp.
+    assert_eq!(craft_flow::sniff_image(&big.data), Some("png"));
+    let (px, _) = craft_flow::image_px(&big.data).unwrap_or_default();
+    assert!(px as f32 > big.w * 3.0 && craft_flow::image_px(&small.data).is_some_and(|(p, _)| p < px));
+    // Broken SVG stays placeholder text.
+    let broken = std::sync::Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg' width='10'".to_vec());
+    let flow = parse_with("\\begin{document}\\includegraphics{x.svg}\\end{document}", Some(&|_: &str| Some(broken.clone())));
+    assert!(pictures(&flow).is_empty() && flow_text(&flow).contains("[Picture: x.svg]"));
+}

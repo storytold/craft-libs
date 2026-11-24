@@ -22,6 +22,11 @@ craft-wordmodel `Document`.
   `\textwidth` taken as the column it is shown in. Without a loader, or when a file is missing or
   isn't a picture this crate can decode (PDF and EPS figures), the picture stays the italic text
   `[Picture: file]`. Loader calls per document are bounded.
+- **SVG pictures** (the `svg` feature): `\includegraphics` and `\includesvg` also load SVG and SVGZ
+  files (`\includesvg` tries `.svg` first). Each is drawn through `craft-svg`'s bounded renderer
+  to a PNG at 4 pixels per point of the size it is shown at (longest side at most 4096 px), so it
+  stays sharp when zoomed or printed. Text in an SVG is drawn only when it is already outlines (no
+  fonts are loaded); an SVG that doesn't parse or draw within the limits stays placeholder text.
 
 ```rust
 let doc = craft_latex::import(br"\section*{Intro} Some \textbf{bold} text and $x^2$.");

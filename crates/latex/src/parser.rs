@@ -751,10 +751,10 @@ impl<'a> Parser<'a> {
                 self.with_arg(|_| {});
                 self.text(")");
             }
-            "includegraphics" => {
+            "includegraphics" | "includesvg" => {
                 let options = self.opt_arg();
                 let file = self.arg_raw();
-                match self.images.and_then(|i| i.picture(options.as_deref(), &file)) {
+                match self.images.and_then(|i| i.picture(options.as_deref(), &file, name == "includesvg")) {
                     Some(img) => self.para.inlines.push(Inline::Image(img)),
                     None => {
                         let mut f = self.fmt();
