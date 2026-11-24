@@ -233,6 +233,8 @@ struct Open {
     stack: Vec<usize>,
     /// The nodes a label scope named by its label, with the label's node.
     labels: Vec<(Id, Id)>,
+    /// The text value noted for each component, kept for its facts, which may arrive later in the pass.
+    text_values: IdMap<String>,
 }
 
 #[derive(Default)]
@@ -255,7 +257,8 @@ pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, O
     if ui.is_sizing_pass() || measure::active(&ctx) {
         return (body(ui), None);
     }
-    let open = Open { layer: ui.layer_id(), elements: Vec::new(), parts: Vec::new(), stack: Vec::new(), labels: Vec::new() };
+    let open =
+        Open { layer: ui.layer_id(), elements: Vec::new(), parts: Vec::new(), stack: Vec::new(), labels: Vec::new(), text_values: IdMap::default() };
     let noted = crate::runtime::replay::mark(&ctx);
     pass_state::with::<Log, _>(&ctx, |log| log.open.push(open));
     let out = body(ui);
@@ -503,7 +506,14 @@ fn apply(ctx: &Context, step: &Step) -> bool {
             Step::Facts { id, part, rect, facts } => {
                 let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id) else { return true };
                 match part {
-                    None => owner.0.facts = Some(facts.clone()),
+                    None => {
+                        let mut facts = facts.clone();
+                        // A text value noted before the facts arrived; a value the node states itself wins.
+                        if facts.value.is_none() {
+                            facts.value = open.text_values.get(id).cloned();
+                        }
+                        owner.0.facts = Some(facts);
+                    }
                     Some(part) => {
                         let (component, depth) = (owner.0.component, owner.0.depth + 1);
                         open.parts.retain(|element| !(element.id == *id && element.part == Some(*part)));
@@ -523,9 +533,11 @@ fn apply(ctx: &Context, step: &Step) -> bool {
             }
             Step::Label { node, label } => open.labels.push((*node, *label)),
             Step::TextValue { id, value } => {
-                let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id) else { return true };
-                // A value the node states itself wins over the text the adapter wrote.
-                if let Some(facts) = owner.0.facts.as_mut() {
+                // Kept for facts that arrive later in the pass, and written on facts that already did. A value the
+                // node states itself wins over the text the adapter wrote.
+                let value = open.text_values.entry(*id).or_insert_with(|| value.clone());
+                let owner = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id);
+                if let Some(facts) = owner.and_then(|(element, _)| element.facts.as_mut()) {
                     facts.value.get_or_insert_with(|| value.clone());
                 }
             }
@@ -586,7 +598,8 @@ pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
 }
 
 /// Notes the text value the text adapter wrote on the node of the component `id` (`report_text`), unless the node
-/// already states a value: the inspector then lists what AccessKit reads for a text field.
+/// states a value itself: the inspector then lists what AccessKit reads for a text field. The value is listed whether
+/// the node's facts ([`node_facts`]) arrive before or after it in the pass.
 pub(crate) fn note_text_value(ctx: &Context, id: Id, value: &str) {
     if recording(ctx) {
         run(ctx, Step::TextValue { id, value: value.to_owned() });
@@ -596,4 +609,79 @@ pub(crate) fn note_text_value(ctx: &Context, id: Id, value: &str) {
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.
 pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rect, facts: Facts) {
     run(ctx, Step::Facts { id, part, rect, facts });
+}
+
+/// The record's own order: a text value lists whether the node's facts arrive before or after it in the pass. No
+/// component reports its facts after its text, so these trials drive the record's calls directly.
+#[cfg(all(feature = "testing", any(test, feature = "suite")))]
+pub(crate) mod trials {
+    use super::{Facts, close_element, node_facts, note_text_value, open_element, record};
+    use crate::testing::{Fixture, trial};
+    use egui::Id;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The facts of a text input node that states `value` itself, or none.
+    fn facts(value: Option<&str>) -> Facts {
+        Facts {
+            role: "TextInput".to_owned(),
+            name: None,
+            labelled_by: Vec::new(),
+            value: value.map(str::to_owned),
+            actions: Vec::new(),
+            disabled: false,
+            interactive: true,
+        }
+    }
+
+    /// A text value noted before its node's facts arrive is listed once they do, as it is when they arrived first;
+    /// facts reported again keep it, and a value the node states itself still wins.
+    #[trial]
+    fn a_text_value_is_listed_whichever_order_the_facts_arrive_in() {
+        let key = Id::new("trial.inspect.text_value_order");
+        let (before, after, again, own) = (key.with("before"), key.with("after"), key.with("again"), key.with("own"));
+        let seen = Rc::new(RefCell::new(None));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let ctx = ui.ctx().clone();
+            let (_, recorded) = record(ui, key, |ui| {
+                let rect = ui.max_rect();
+                // The text value first, then the facts.
+                open_element(ui, before, "Field");
+                note_text_value(&ctx, before, "before");
+                node_facts(&ctx, before, None, rect, facts(None));
+                close_element(&ctx, before, rect, rect);
+                // The order the report step takes: the facts, then the text value.
+                open_element(ui, after, "Field");
+                node_facts(&ctx, after, None, rect, facts(None));
+                note_text_value(&ctx, after, "after");
+                close_element(&ctx, after, rect, rect);
+                // The facts, the text value, then the facts reported again.
+                open_element(ui, again, "Field");
+                node_facts(&ctx, again, None, rect, facts(None));
+                note_text_value(&ctx, again, "again");
+                node_facts(&ctx, again, None, rect, facts(None));
+                close_element(&ctx, again, rect, rect);
+                // The node states a value of its own, after the text value.
+                open_element(ui, own, "Field");
+                note_text_value(&ctx, own, "typed");
+                node_facts(&ctx, own, None, rect, facts(Some("own")));
+                close_element(&ctx, own, rect, rect);
+            });
+            if recorded.is_some() {
+                *out.borrow_mut() = recorded;
+            }
+        });
+        fixture.frame(Vec::new());
+        let seen = seen.borrow();
+        let recorded = seen.as_deref().expect("the region ran");
+        let value = |id: Id| {
+            let element = recorded.elements.iter().find(|element| element.id == id && element.part.is_none());
+            element.and_then(|element| element.facts.as_ref()).and_then(|facts| facts.value.clone())
+        };
+        assert_eq!(value(before).as_deref(), Some("before"), "facts arriving after the text value list it: {:?}", recorded.elements);
+        assert_eq!(value(after).as_deref(), Some("after"), "facts arriving before the text value list it");
+        assert_eq!(value(again).as_deref(), Some("again"), "facts reported again keep the text value");
+        assert_eq!(value(own).as_deref(), Some("own"), "a value the node states itself wins over the text value");
+    }
 }
