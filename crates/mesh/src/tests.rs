@@ -10,6 +10,8 @@ mod dae;
 mod fbx;
 #[cfg(feature = "gltf")]
 mod gltf;
+#[cfg(feature = "gltf")]
+mod gltf_write;
 #[cfg(feature = "obj")]
 mod obj;
 #[cfg(feature = "ply")]

@@ -41,9 +41,21 @@
 //! A triangle that names a vertex that is not there, or one whose position is not finite, is
 //! left out and counted in a warning.
 //!
-//! Written ([`write_glb`]): nodes, meshes (positions, normals, every UV set, colours),
-//! materials and images. Skins, morph targets, animations, cameras, lights, `extensions` the
-//! writer does not produce itself, and `extras` are not written.
+//! Written ([`write_glb`]): nodes, meshes (positions, normals, every UV set, colours, joints
+//! and weights), skins, morph targets (POSITION and NORMAL offsets, the mesh's and each node's
+//! weights, names in `extras.targetNames`), materials and images. A target that moves fewer
+//! than three quarters of the vertices is written as a sparse accessor. The kept `extensions`
+//! and `extras` of the file, nodes, meshes and materials are written as kept, except the
+//! extensions the reader reads into the model's own fields: those are written from the fields
+//! (the material extensions) or not at all (lights). `extensionsUsed` lists every extension the
+//! written file names. The reader does not keep `extensionsRequired`; the writer requires only
+//! `EXT_texture_webp`, which it uses for every texture of a WebP image (core glTF has no WebP). The file's textures ([`Scene::texture_variants`]) are written first and
+//! in their order, so indices into nodes, materials and skins in kept extension data still name
+//! the same things. Indices into textures, meshes and images do too, unless the reader left out
+//! a texture without an image (named in a warning) or the writer leaves out a mesh without
+//! triangles or an image without bytes or a URI: the later ones then move up. Indices into
+//! accessors, buffer views and buffers are not rewritten. Animations, cameras, lights and
+//! tangents (and so the tangent offsets of morph targets) are not written.
 
 use std::cell::Cell;
 
@@ -51,7 +63,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AlphaMode, Animation, Camera, Channel, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, Light, LightKind, Limits, Material, Mesh,
-    MorphTarget, NONE, Node, Part, Projection, Resolver, Result, Scene, Skin, TextureRef, Trs, UvTransform, Wrap, count_warning, malformed,
+    MorphTarget, NONE, Node, Part, Projection, Resolver, Result, Scene, Skin, TextureRef, Trs, Unified, UvTransform, Wrap, count_warning, malformed,
     too_large,
 };
 
@@ -711,6 +723,13 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             Some(TextureRef { image, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")], ..TextureRef::default() })
         })
         .collect();
+    // The textures after one that is left out move up, so `extensions` data that names them by
+    // index no longer matches `texture_variants`.
+    count_warning(
+        &mut scene.warnings,
+        texture_list.len() - scene.texture_variants.len(),
+        "texture(s) have no image that is read and were left out; the textures after them are numbered from one less",
+    );
     let tref = |v: Option<&Value>| -> Option<TextureRef> {
         let v = v?;
         let texture = arr(j, "textures").get(idx(v, "index")?)?;
@@ -1063,8 +1082,15 @@ impl Writer {
         self.views.len() - 1
     }
 
-    /// A float accessor of `N` components per row; with the bounds glTF wants for positions.
+    /// A float accessor of `N` components per row of vertex data; with the bounds glTF wants
+    /// for positions.
     fn floats<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool) -> usize {
+        self.floats_in(rows, kind, bounds, Some(34962))
+    }
+
+    /// [`Writer::floats`] in a buffer view with the given `target` (`None` for data that is not
+    /// per vertex).
+    fn floats_in<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool, target: Option<u32>) -> usize {
         let mut bytes = Vec::new();
         let (mut lo, mut hi, mut count) = ([f32::INFINITY; N], [f32::NEG_INFINITY; N], 0usize);
         for row in rows {
@@ -1077,7 +1103,7 @@ impl Writer {
                 }
             }
         }
-        let view = self.view(&bytes, Some(34962));
+        let view = self.view(&bytes, target);
         let mut acc = json!({ "bufferView": view, "componentType": 5126, "count": count, "type": kind });
         if let (true, Some(a)) = (bounds && count > 0, acc.as_object_mut()) {
             a.insert("min".into(), json!(lo.to_vec()));
@@ -1094,8 +1120,9 @@ impl Writer {
         self.accessors.len() - 1
     }
 
-    /// The glTF mesh of `mesh`, or `None` when it has no triangle.
-    fn mesh(&mut self, mesh: &Mesh) -> Option<Value> {
+    /// The glTF mesh of `mesh` and the highest joint its written vertices name, or `None` when
+    /// it has no triangle.
+    fn mesh(&mut self, mesh: &Mesh) -> Option<(Value, Option<u16>)> {
         let u = mesh.unified();
         if u.parts.iter().all(Vec::is_empty) {
             return None;
@@ -1114,47 +1141,249 @@ impl Writer {
         if !u.colors.is_empty() {
             attrs.insert("COLOR_0".into(), json!(self.floats(u.colors.iter().copied(), "VEC4", false)));
         }
+        let mut top = None;
+        if !mesh.joints.is_empty() && !mesh.weights.is_empty() {
+            let joints: Vec<[u16; 4]> = u.corners.iter().map(|c| mesh.joints.get(c.position as usize).copied().unwrap_or_default()).collect();
+            top = joints.iter().flatten().max().copied();
+            attrs.insert("JOINTS_0".into(), json!(self.joints(joints.into_iter())));
+            let weights = u.corners.iter().map(|c| mesh.weights.get(c.position as usize).copied().unwrap_or_default());
+            attrs.insert("WEIGHTS_0".into(), json!(self.floats(weights, "VEC4", false)));
+        }
+        let targets = self.targets(mesh, &u);
         let mut primitives = Vec::new();
         for (part, triangles) in mesh.parts.iter().zip(&u.parts).filter(|(_, t)| !t.is_empty()) {
-            let mut p = json!({ "attributes": attrs, "indices": self.indices(triangles) });
-            if let (Some(m), Some(o)) = (part.material, p.as_object_mut()) {
-                o.insert("material".into(), json!(m));
+            let mut p =
+                Map::from_iter([("attributes".to_string(), Value::Object(attrs.clone())), ("indices".into(), json!(self.indices(triangles)))]);
+            if let Some(m) = part.material {
+                p.insert("material".into(), json!(m));
             }
-            primitives.push(p);
+            // Every primitive of a mesh has the mesh's targets.
+            if !targets.is_empty() {
+                p.insert("targets".into(), Value::Array(targets.clone()));
+            }
+            primitives.push(Value::Object(p));
         }
-        let mut out = json!({ "primitives": primitives });
-        if let (false, Some(o)) = (mesh.name.is_empty(), out.as_object_mut()) {
-            o.insert("name".into(), json!(mesh.name));
+        let mut out = Map::from_iter([("primitives".to_string(), Value::Array(primitives))]);
+        if !mesh.name.is_empty() {
+            out.insert("name".into(), json!(mesh.name));
         }
-        Some(out)
+        if !targets.is_empty() && !mesh.morph_weights.is_empty() {
+            out.insert("weights".into(), json!(mesh.morph_weights));
+        }
+        if !mesh.extensions.is_empty() {
+            out.insert("extensions".into(), Value::Object(mesh.extensions.clone()));
+        }
+        if let Some(extras) = mesh_extras(mesh) {
+            out.insert("extras".into(), extras);
+        }
+        Some((Value::Object(out), top))
+    }
+
+    /// `JOINTS_0`: four joint indices per vertex, as unsigned shorts.
+    fn joints(&mut self, rows: impl Iterator<Item = [u16; 4]>) -> usize {
+        let mut bytes = Vec::new();
+        let mut count = 0usize;
+        for row in rows {
+            count += 1;
+            bytes.extend(row.iter().flat_map(|j| j.to_le_bytes()));
+        }
+        let view = self.view(&bytes, Some(34962));
+        self.accessors.push(json!({ "bufferView": view, "componentType": 5123, "count": count, "type": "VEC4" }));
+        self.accessors.len() - 1
+    }
+
+    /// The mesh's morph targets over the vertices of `u`: a POSITION for each, and a NORMAL
+    /// where the target moves normals and the normals are written. glTF wants at least one
+    /// attribute in a target, so a target that moves nothing gets a POSITION of zeros.
+    fn targets(&mut self, mesh: &Mesh, u: &Unified) -> Vec<Value> {
+        let pick = |offsets: &[[f64; 3]], i: u32| offsets.get(i as usize).map_or([0.0; 3], |o| o.map(|x| x as f32));
+        let mut out = Vec::with_capacity(mesh.morph_targets.len());
+        for t in &mesh.morph_targets {
+            let rows: Vec<[f32; 3]> = u.corners.iter().map(|c| pick(&t.positions, c.position)).collect();
+            let mut target = Map::from_iter([("POSITION".to_string(), json!(self.offsets(&rows)))]);
+            if !t.normals.is_empty() && !u.normals.is_empty() {
+                let rows: Vec<[f32; 3]> = u.corners.iter().map(|c| pick(&t.normals, c.normal)).collect();
+                target.insert("NORMAL".into(), json!(self.offsets(&rows)));
+            }
+            out.push(Value::Object(target));
+        }
+        out
+    }
+
+    /// The `VEC3` accessor of one attribute of a morph target, with the bounds glTF wants for a
+    /// target's POSITION. When fewer than three quarters of the rows move, only those are
+    /// written, as a sparse accessor over zeros (no buffer view), which takes fewer bytes.
+    fn offsets(&mut self, rows: &[[f32; 3]]) -> usize {
+        let moved: Vec<u32> = (0u32..).zip(rows).filter(|(_, r)| **r != [0.0; 3]).map(|(i, _)| i).collect();
+        // A sparse row is a 4-byte index and 12 bytes of values; a dense one, 12 bytes.
+        if moved.len().saturating_mul(4) >= rows.len().saturating_mul(3) {
+            return self.floats(rows.iter().copied(), "VEC3", true);
+        }
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for row in rows {
+            for ((l, h), x) in lo.iter_mut().zip(hi.iter_mut()).zip(row) {
+                *l = l.min(*x);
+                *h = h.max(*x);
+            }
+        }
+        let mut acc = Map::from_iter([
+            ("componentType".to_string(), json!(5126)),
+            ("count".into(), json!(rows.len())),
+            ("type".into(), json!("VEC3")),
+            ("min".into(), json!(lo)),
+            ("max".into(), json!(hi)),
+        ]);
+        if !moved.is_empty() {
+            let indices: Vec<u8> = moved.iter().flat_map(|i| i.to_le_bytes()).collect();
+            let values: Vec<u8> = moved.iter().filter_map(|i| rows.get(*i as usize)).flatten().flat_map(|x| x.to_le_bytes()).collect();
+            let (indices, values) = (self.view(&indices, None), self.view(&values, None));
+            let sparse =
+                json!({ "count": moved.len(), "indices": { "bufferView": indices, "componentType": 5125 }, "values": { "bufferView": values } });
+            acc.insert("sparse".into(), sparse);
+        }
+        self.accessors.push(Value::Object(acc));
+        self.accessors.len() - 1
+    }
+
+    /// A skin: its joints, and its inverse bind matrices when it has them (none means identity).
+    fn skin(&mut self, s: &Skin) -> Value {
+        let mut out = Map::from_iter([("joints".to_string(), json!(s.joints))]);
+        if !s.name.is_empty() {
+            out.insert("name".into(), json!(s.name));
+        }
+        if !s.inverse_bind.is_empty() {
+            let rows = s.inverse_bind.iter().map(|m| m.map(|x| x as f32));
+            out.insert("inverseBindMatrices".into(), json!(self.floats_in(rows, "MAT4", false, None)));
+        }
+        Value::Object(out)
+    }
+}
+
+/// A node as written. `mesh` is its mesh's written index and the mesh, when the mesh is
+/// written; glTF gives a node a skin and weights only with a mesh.
+fn node_json(n: &Node, mesh: Option<(usize, &Mesh)>) -> Value {
+    let mut out = Map::new();
+    if !n.name.is_empty() {
+        out.insert("name".into(), json!(n.name));
+    }
+    if n.transform != IDENTITY {
+        out.insert("matrix".into(), json!(n.transform));
+    }
+    if let Some((index, m)) = mesh {
+        out.insert("mesh".into(), json!(index));
+        if let Some(skin) = n.skin {
+            out.insert("skin".into(), json!(skin));
+        }
+        // One weight per target of the mesh: the mesh's own weights stand in for any the node
+        // leaves out.
+        if !n.morph_weights.is_empty() && !m.morph_targets.is_empty() {
+            let weight = |k: usize| n.morph_weights.get(k).or_else(|| m.morph_weights.get(k)).copied().unwrap_or(0.0);
+            out.insert("weights".into(), json!((0..m.morph_targets.len()).map(weight).collect::<Vec<_>>()));
+        }
+    }
+    if !n.children.is_empty() {
+        out.insert("children".into(), json!(n.children));
+    }
+    let extensions = kept(&n.extensions, &[LIGHTS]);
+    if !extensions.is_empty() {
+        out.insert("extensions".into(), Value::Object(extensions));
+    }
+    if let Some(extras) = &n.extras {
+        out.insert("extras".into(), extras.clone());
+    }
+    Value::Object(out)
+}
+
+/// The mesh's `extras` as written: as kept, with `targetNames` set to the names of its morph
+/// targets when one has a name. `extras` that are not an object are written as they are, and
+/// the names are then not written.
+fn mesh_extras(mesh: &Mesh) -> Option<Value> {
+    let named = mesh.morph_targets.iter().any(|t| !t.name.is_empty());
+    let names = || json!(mesh.morph_targets.iter().map(|t| t.name.as_str()).collect::<Vec<_>>());
+    match mesh.extras.clone() {
+        Some(Value::Object(mut o)) => {
+            if named {
+                o.insert("targetNames".into(), names());
+            }
+            Some(Value::Object(o))
+        }
+        None if named => Some(json!({ "targetNames": names() })),
+        other => other,
     }
 }
 
 /// The media type of encoded image bytes, for the formats glTF allows.
 fn sniff(bytes: &[u8]) -> &'static str {
-    if bytes.starts_with(&[0xFF, 0xD8]) { "image/jpeg" } else { "image/png" }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        "image/jpeg"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        "image/png"
+    }
 }
 
-/// Images, samplers and textures as written: one texture per image and wrap pair in use.
+/// `EXT_texture_webp`: core glTF has no WebP, so a texture of a WebP image names it only through
+/// the extension, which a file without another source then requires.
+const WEBP: &str = "EXT_texture_webp";
+
+/// Images, samplers and textures as written: the scene's [`Scene::texture_variants`] first, in
+/// their order, then one texture per other image and wrap pair in use.
 #[derive(Default)]
 struct Textures {
     images: Vec<Value>,
     /// The written index of each image of the scene (`None`: no bytes and no name to write).
     image_map: Vec<Option<usize>>,
     samplers: Vec<[Wrap; 2]>,
-    textures: Vec<(usize, usize)>,
+    /// The written image (`None`: a texture of the file whose image is not written) and sampler.
+    textures: Vec<(Option<usize>, usize)>,
+    /// Whether each written image is WebP.
+    webp: Vec<bool>,
 }
 
 impl Textures {
+    /// The `textures` list, and whether a texture names its image only through `EXT_texture_webp`.
+    fn json(&self) -> (Vec<Value>, bool) {
+        let mut webp_only = false;
+        let list = self
+            .textures
+            .iter()
+            .map(|(image, sampler)| match image {
+                Some(image) if self.webp.get(*image).copied().unwrap_or(false) => {
+                    webp_only = true;
+                    json!({ "sampler": sampler, "extensions": { WEBP: { "source": image } } })
+                }
+                Some(image) => json!({ "source": image, "sampler": sampler }),
+                // glTF allows a texture without a source; it keeps the index of the next ones.
+                None => json!({ "sampler": sampler }),
+            })
+            .collect();
+        (list, webp_only)
+    }
+
+    fn sampler(&mut self, wrap: [Wrap; 2]) -> usize {
+        self.samplers.iter().position(|s| *s == wrap).unwrap_or_else(|| {
+            self.samplers.push(wrap);
+            self.samplers.len() - 1
+        })
+    }
+
+    /// Keep the textures of the file at their indices, which `extensions` the writer keeps may
+    /// name.
+    fn variants(&mut self, variants: &[TextureRef]) {
+        for t in variants {
+            let image = self.image_map.get(t.image).copied().flatten();
+            let sampler = self.sampler(t.wrap);
+            self.textures.push((image, sampler));
+        }
+    }
+
     fn slot(&mut self, t: Option<TextureRef>) -> Option<Value> {
         let t = t?;
         let image = (*self.image_map.get(t.image)?)?;
-        let sampler = self.samplers.iter().position(|s| *s == t.wrap).unwrap_or_else(|| {
-            self.samplers.push(t.wrap);
-            self.samplers.len() - 1
-        });
-        let index = self.textures.iter().position(|x| *x == (image, sampler)).unwrap_or_else(|| {
-            self.textures.push((image, sampler));
+        let sampler = self.sampler(t.wrap);
+        let index = self.textures.iter().position(|x| *x == (Some(image), sampler)).unwrap_or_else(|| {
+            self.textures.push((Some(image), sampler));
             self.textures.len() - 1
         });
         let mut out = json!({ "index": index, "texCoord": t.uv_set });
@@ -1166,10 +1395,29 @@ impl Textures {
     }
 }
 
-fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'static str>) -> Value {
+/// Material extensions the reader reads into [`Material`]'s fields. The writer writes them from
+/// the fields, or not at all, and never as kept.
+const MATERIAL_FIELDS: [&str; 5] = [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_unlit",
+    "KHR_materials_clearcoat",
+    "KHR_materials_sheen",
+    "KHR_materials_pbrSpecularGlossiness",
+];
+
+/// Extensions of the file and its nodes that the reader reads into [`Scene::lights`] and
+/// [`Node::light`], which the writer does not write.
+const LIGHTS: &str = "KHR_lights_punctual";
+
+/// The kept `extensions` of an object, without `skip`.
+fn kept(extensions: &Map<String, Value>, skip: &[&str]) -> Map<String, Value> {
+    extensions.iter().filter(|(k, _)| !skip.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+fn material_json(m: &Material, textures: &mut Textures) -> Value {
     let mut pbr = json!({ "baseColorFactor": m.base_color, "metallicFactor": m.metallic, "roughnessFactor": m.roughness });
     let mut out = json!({ "name": m.name, "doubleSided": m.double_sided });
-    let mut ext = Map::new();
+    let mut ext = kept(&m.extensions, &MATERIAL_FIELDS);
     // glTF's emissive factor stops at 1; the rest is a strength.
     let peak = m.emissive.iter().copied().fold(1.0f32, f32::max);
     if peak > 1.0 {
@@ -1202,25 +1450,6 @@ fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'s
         }
         ext.insert("KHR_materials_sheen".into(), Value::Object(sheen));
     }
-    for name in ["KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_materials_clearcoat", "KHR_materials_sheen"] {
-        if ext.contains_key(name) && !extensions.contains(&name) {
-            extensions.push(name);
-        }
-    }
-    let slots = [
-        m.base_color_texture,
-        m.metallic_roughness_texture,
-        m.normal_texture,
-        m.occlusion_texture,
-        m.emissive_texture,
-        m.clearcoat_texture,
-        m.clearcoat_roughness_texture,
-        m.sheen_color_texture,
-        m.sheen_roughness_texture,
-    ];
-    if slots.iter().flatten().any(|t| t.transform.is_some()) && !extensions.contains(&TEXTURE_TRANSFORM) {
-        extensions.push(TEXTURE_TRANSFORM);
-    }
     let set = |o: &mut Value, key: &str, v: Option<Value>| {
         if let (Some(v), Some(o)) = (v, o.as_object_mut()) {
             o.insert(key.into(), v);
@@ -1250,7 +1479,32 @@ fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'s
         }
     }
     set(&mut out, "extensions", (!ext.is_empty()).then_some(Value::Object(ext)));
+    set(&mut out, "extras", m.extras.clone());
     out
+}
+
+/// The names of the extensions the document uses (its `extensionsUsed`): the keys of every
+/// `extensions` object in it, at any depth, sorted. The application's `extras` are not
+/// searched.
+fn extensions_used(root: &Map<String, Value>) -> Vec<Value> {
+    let mut used = std::collections::BTreeSet::new();
+    let mut stack: Vec<(&str, &Value)> = root.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    while let Some((key, v)) = stack.pop() {
+        match (key, v) {
+            ("extras", _) => {}
+            ("extensions", Value::Object(o)) => {
+                for (name, inner) in o {
+                    used.insert(name.as_str());
+                    stack.push((name, inner));
+                }
+            }
+            (_, Value::Object(o)) => stack.extend(o.iter().map(|(k, v)| (k.as_str(), v))),
+            // An array's items are not under any key.
+            (_, Value::Array(a)) => stack.extend(a.iter().map(|item| ("", item))),
+            _ => {}
+        }
+    }
+    used.into_iter().map(|name| json!(name)).collect()
 }
 
 /// JSON has no number for these, and a file with them is not glTF.
@@ -1279,6 +1533,62 @@ fn check_finite(scene: &Scene) -> Result<()> {
         m.base_color.iter().chain(&m.emissive).chain(&m.sheen_color).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite() && transforms
     });
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
+}
+
+/// Every joint a written vertex names is in the skin of each node that places the mesh; `top`
+/// is the highest joint of each mesh's written vertices.
+fn check_joints(scene: &Scene, top: &[Option<u16>]) -> Result<()> {
+    for n in &scene.nodes {
+        let (Some(Some(j)), Some(s)) = (n.mesh.and_then(|m| top.get(m)), n.skin.and_then(|s| scene.skins.get(s))) else { continue };
+        if usize::from(*j) >= s.joints.len() {
+            return Err(malformed(KIND, format!("node `{}` names joint {j} of skin `{}`, which has {}", n.name, s.name, s.joints.len())));
+        }
+    }
+    Ok(())
+}
+
+/// Skins as glTF has them: a skin with joints and with one inverse bind matrix per joint when it
+/// has any, and a mesh with both joints and weights or neither.
+fn check_skins(scene: &Scene) -> Result<()> {
+    if let Some(m) = scene.meshes.iter().find(|m| m.joints.is_empty() != m.weights.is_empty()) {
+        return Err(malformed(KIND, format!("mesh `{}` has joints without weights or weights without joints", m.name)));
+    }
+    for s in &scene.skins {
+        if s.joints.is_empty() {
+            return Err(malformed(KIND, format!("skin `{}` has no joints", s.name)));
+        }
+        if !s.inverse_bind.is_empty() && s.inverse_bind.len() != s.joints.len() {
+            return Err(malformed(
+                KIND,
+                format!("skin `{}` has {} inverse bind matrices for {} joints", s.name, s.inverse_bind.len(), s.joints.len()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Skins ([`check_skins`]) and morph targets as glTF has them: every value finite, and no node
+/// with more weights than its mesh has targets.
+fn check_rigging(scene: &Scene) -> Result<()> {
+    check_skins(scene)?;
+    let targets = |n: &Node| n.mesh.and_then(|m| scene.meshes.get(m)).map_or(0, |m| m.morph_targets.len());
+    if let Some(n) = scene.nodes.iter().find(|n| n.morph_weights.len() > targets(n)) {
+        return Err(malformed(KIND, format!("node `{}` has {} morph weights for {} targets", n.name, n.morph_weights.len(), targets(n))));
+    }
+    let binds = scene.skins.iter().flat_map(|s| s.inverse_bind.iter().flatten()).all(|x| (*x as f32).is_finite());
+    let offsets = scene
+        .meshes
+        .iter()
+        .flat_map(|m| &m.morph_targets)
+        .flat_map(|t| t.positions.iter().chain(&t.normals).flatten())
+        .all(|x| (*x as f32).is_finite());
+    let weights = scene.meshes.iter().flat_map(|m| m.morph_weights.iter().chain(m.weights.iter().flatten()));
+    let node_weights = scene.nodes.iter().flat_map(|n| &n.morph_weights);
+    if binds && offsets && weights.chain(node_weights).all(|x| x.is_finite()) {
+        Ok(())
+    } else {
+        Err(malformed(KIND, "a skin or morph target value is not finite"))
+    }
 }
 
 /// Texture magnification filtering for a GLB sampler.
@@ -1311,9 +1621,14 @@ pub struct GlbWriteOptions {
 }
 
 /// The scene as a binary glTF file: its nodes, meshes (each part a primitive over the mesh's
-/// [`Mesh::unified`] vertices: positions, normals, UV sets and colours) and materials, with
-/// images that have bytes embedded and the others named by their URI. The binary chunk is
-/// limited to `limits.max_data_bytes`.
+/// [`Mesh::unified`] vertices: positions, normals, UV sets, colours, joints and weights, with
+/// the mesh's morph targets), skins and materials, with images that have bytes embedded and
+/// the others named by their URI, and the kept `extensions` and `extras` (see the module
+/// documentation). The binary chunk is limited to `limits.max_data_bytes`. A value that is not
+/// finite, a skin without joints or whose inverse bind matrices do not match its joints, a mesh
+/// with joints but no weights (or weights but no joints), a joint of a written vertex outside
+/// the skin of a node that places the mesh, and a node with more morph weights than its mesh has targets are
+/// [`Error::Malformed`].
 pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
     write_glb_with_options(scene, limits, &GlbWriteOptions::default())
 }
@@ -1323,60 +1638,63 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     scene.validate()?;
     scene.instances(limits)?;
     check_finite(scene)?;
+    check_rigging(scene)?;
     let mut w = Writer::default();
     let mut meshes = Vec::new();
+    let mut top = Vec::with_capacity(scene.meshes.len());
     let mesh_map: Vec<Option<usize>> = scene
         .meshes
         .iter()
         .map(|m| {
-            w.mesh(m).map(|v| {
+            let written = w.mesh(m);
+            top.push(written.as_ref().and_then(|(_, j)| *j));
+            written.map(|(v, _)| {
                 meshes.push(v);
                 meshes.len() - 1
             })
         })
         .collect();
+    check_joints(scene, &top)?;
     let mut textures = Textures::default();
     for image in &scene.images {
         let mut out = Map::new();
         if !image.name.is_empty() {
             out.insert("name".into(), json!(image.name));
         }
-        match (&image.data, &image.uri) {
+        let mime = match (&image.data, &image.uri) {
             (Some(bytes), _) => {
+                let mime = image.mime_type.clone().unwrap_or_else(|| sniff(bytes).into());
                 out.insert("bufferView".into(), json!(w.view(bytes, None)));
-                out.insert("mimeType".into(), json!(image.mime_type.clone().unwrap_or_else(|| sniff(bytes).into())));
+                out.insert("mimeType".into(), json!(mime));
+                mime
             }
-            (None, Some(uri)) => drop(out.insert("uri".into(), json!(uri))),
+            (None, Some(uri)) => {
+                out.insert("uri".into(), json!(uri));
+                // The path's extension, without a query or fragment.
+                let path = uri.split(['?', '#']).next().unwrap_or("");
+                let webp = path.rsplit_once('.').is_some_and(|(_, e)| e.eq_ignore_ascii_case("webp"));
+                image.mime_type.clone().unwrap_or_else(|| if webp { "image/webp".into() } else { String::new() })
+            }
             (None, None) => {
                 textures.image_map.push(None);
                 continue;
             }
-        }
+        };
+        textures.webp.push(mime == "image/webp");
         textures.image_map.push(Some(textures.images.len()));
         textures.images.push(Value::Object(out));
     }
-    let mut extensions = Vec::new();
-    let materials: Vec<Value> = scene.materials.iter().map(|m| material_json(m, &mut textures, &mut extensions)).collect();
+    textures.variants(&scene.texture_variants);
+    let materials: Vec<Value> = scene.materials.iter().map(|m| material_json(m, &mut textures)).collect();
     let nodes: Vec<Value> = scene
         .nodes
         .iter()
         .map(|n| {
-            let mut out = Map::new();
-            if !n.name.is_empty() {
-                out.insert("name".into(), json!(n.name));
-            }
-            if n.transform != IDENTITY {
-                out.insert("matrix".into(), json!(n.transform));
-            }
-            if let Some(m) = n.mesh.and_then(|m| mesh_map.get(m).copied().flatten()) {
-                out.insert("mesh".into(), json!(m));
-            }
-            if !n.children.is_empty() {
-                out.insert("children".into(), json!(n.children));
-            }
-            Value::Object(out)
+            let mesh = n.mesh.and_then(|m| Some((mesh_map.get(m).copied().flatten()?, scene.meshes.get(m)?)));
+            node_json(n, mesh)
         })
         .collect();
+    let skins: Vec<Value> = scene.skins.iter().map(|s| w.skin(s)).collect();
     if w.bin.len() > limits.max_data_bytes {
         return Err(too_large("GLB", format!("more than {} bytes of data", limits.max_data_bytes)));
     }
@@ -1397,8 +1715,10 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     };
     list("nodes", nodes);
     list("meshes", meshes);
+    list("skins", skins);
     list("materials", materials);
-    list("textures", textures.textures.iter().map(|(image, sampler)| json!({ "source": image, "sampler": sampler })).collect());
+    let (texture_list, webp_only) = textures.json();
+    list("textures", texture_list);
     list(
         "samplers",
         textures
@@ -1419,7 +1739,20 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     list("images", textures.images);
     list("accessors", w.accessors);
     list("bufferViews", w.views);
-    list("extensionsUsed", extensions.iter().map(|e| json!(e)).collect());
+    let extensions = kept(&scene.extensions, &[LIGHTS]);
+    if !extensions.is_empty() {
+        root.insert("extensions".into(), Value::Object(extensions));
+    }
+    if let Some(extras) = &scene.extras {
+        root.insert("extras".into(), extras.clone());
+    }
+    let used = extensions_used(&root);
+    if !used.is_empty() {
+        root.insert("extensionsUsed".into(), Value::Array(used));
+    }
+    if webp_only {
+        root.insert("extensionsRequired".into(), json!([WEBP]));
+    }
     if !w.bin.is_empty() {
         root.insert("buffers".into(), json!([{ "byteLength": w.bin.len() }]));
     }
