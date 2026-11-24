@@ -6,16 +6,27 @@ fn check(keep_going: &dyn Fn() -> bool) -> Result<()> {
     if keep_going() { Ok(()) } else { Err(Error::Cancelled) }
 }
 
+/// An immutable framing fact already observed during the required Xcf parse.
+/// Missing end means the tolerant initial scan did not observe a terminator.
+#[derive(Clone, Copy)]
+pub(crate) struct Table {
+    pub start: usize,
+    pub end: Option<usize>,
+    /// Slots observed before the first malformed nonzero entry are always
+    /// excluded, even when no complete table terminator could be established.
+    pub minimum_end: usize,
+}
+
 pub(crate) fn offsets(
     mut cursor: Cursor<'_>,
-    start: Option<usize>,
+    source: Option<Table>,
     limits: super::super::Limits,
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<usize>> {
     check(keep_going)?;
-    let Some(start) = start else { return Ok(Scan::complete(Vec::new(), 0)) };
-    cursor.pos = start;
+    let Some(source) = source else { return Ok(Scan::complete(Vec::new(), 0)) };
+    cursor.pos = source.start;
     let retained = budget.retained_left;
     let mut records = Vec::new();
     loop {
@@ -24,7 +35,7 @@ pub(crate) fn offsets(
             return Err(error);
         }
         let offset = cursor.pos;
-        let result = pointer(&mut cursor, limits.records, records.len(), budget);
+        let result = pointer(&mut cursor, source.end.unwrap_or(source.minimum_end), limits.records, records.len(), budget);
         match result {
             Ok(None) => return Ok(Scan::complete(records, cursor.pos)),
             Ok(Some(pointer)) => {
@@ -37,15 +48,22 @@ pub(crate) fn offsets(
     }
 }
 
-// Validate only the slots reached by this optional scan. A disclosed prefix is
-// not a claim that the unread remainder of the table is well framed.
-fn pointer(cursor: &mut Cursor<'_>, limit: usize, index: usize, budget: &mut Budget) -> std::result::Result<Option<usize>, StopReason> {
+// A known terminator excludes the entire table, including its final zero.
+// Without it, admit only forward targets from slots actually reached and report
+// the eventual malformed/limited suffix; never infer an unobserved table end.
+fn pointer(
+    cursor: &mut Cursor<'_>,
+    table_end: usize,
+    limit: usize,
+    index: usize,
+    budget: &mut Budget,
+) -> std::result::Result<Option<usize>, StopReason> {
     budget.work(if cursor.wide { 8 } else { 4 })?;
     let pointer = cursor.ptr().map_err(|_| StopReason::Malformed)?;
     if pointer == 0 {
         return Ok(None);
     }
-    if pointer < cursor.pos || pointer >= cursor.b.len() {
+    if pointer < table_end.max(cursor.pos) || pointer >= cursor.b.len() {
         return Err(StopReason::Malformed);
     }
     if index >= limit.min(crate::MAX_CHANNELS) {
@@ -86,11 +104,29 @@ fn merge_standalone<'a>(
 
 pub(crate) fn decode<'a>(
     cursor: Cursor<'a>,
-    start: Option<usize>,
+    source: Option<Table>,
     properties: Scan<Property<'a>>,
     limits: Limits,
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
+    property_charge: usize,
+) -> Result<Scan<SourcePath<'a>>> {
+    let mut property_charge = property_charge;
+    let result = decode_inner(cursor, source, properties, limits, budget, keep_going, &mut property_charge);
+    // The raw image-property vector has now been dropped. Its source payloads
+    // remain borrowed, so only returned path storage stays charged.
+    budget.retained_left += property_charge;
+    result
+}
+
+fn decode_inner<'a>(
+    cursor: Cursor<'a>,
+    source: Option<Table>,
+    properties: Scan<Property<'a>>,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+    property_charge: &mut usize,
 ) -> Result<Scan<SourcePath<'a>>> {
     check(keep_going)?;
     let mut output = Vec::new();
@@ -109,11 +145,14 @@ pub(crate) fn decode<'a>(
             return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
         }
     }
+    // The consuming property iterator is gone before standalone decoding begins.
+    budget.retained_left += *property_charge;
+    *property_charge = 0;
     if let Some(diagnostic) = properties.stopped {
         return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
     }
-    let Some(start) = start else { return Ok(Scan::complete(output, end_offset)) };
-    let mut table = cursor.at(start);
+    let Some(source) = source else { return Ok(Scan::complete(output, end_offset)) };
+    let mut table = cursor.at(source.start);
     let table_limit = limits.paths.saturating_sub(output.len());
     let mut points_left = limits.points;
     let mut strokes_left = limits.strokes;
@@ -121,7 +160,7 @@ pub(crate) fn decode<'a>(
     loop {
         check(keep_going)?;
         let slot = table.pos;
-        let offset = match pointer(&mut table, table_limit, source_index, budget) {
+        let offset = match pointer(&mut table, source.end.unwrap_or(source.minimum_end), table_limit, source_index, budget) {
             Ok(Some(offset)) => offset,
             Ok(None) => return Ok(Scan::complete(output, end_offset.max(table.pos))),
             Err(reason) => return Ok(Scan::stopped(output, slot, reason)),

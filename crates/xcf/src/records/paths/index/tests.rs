@@ -433,7 +433,7 @@ fn historical_append_discards_no_charged_suffix_when_output_growth_fails() {
     assert_eq!(output.records.len(), 1);
     assert_eq!(output.records[0].name, "First");
     assert_eq!(output.stopped.unwrap().reason, StopReason::RetainedLimit);
-    assert_eq!(budget.retained_remaining(), allowance - raw_charge - one_charge);
+    assert_eq!(budget.retained_remaining(), allowance - one_charge);
     assert!(budget.work_remaining() < 1 << 20);
 }
 
@@ -448,7 +448,8 @@ fn historical_lists_share_output_storage_instead_of_charging_merge_staging() {
     let mut raw_budget = Budget::default();
     let initial = raw_budget.retained_remaining();
     xcf.image_properties(Default::default(), &mut raw_budget, &|| true).unwrap();
-    let mut allowance = initial - raw_budget.retained_remaining();
+    let raw_charge = initial - raw_budget.retained_remaining();
+    let mut allowance = raw_charge;
     for payload in [&first, &second] {
         let mut stage = Budget::default();
         let initial = stage.retained_remaining();
@@ -462,6 +463,89 @@ fn historical_lists_share_output_storage_instead_of_charging_merge_staging() {
     let output = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
     assert!(output.stopped.is_none());
     assert_eq!(output.records.iter().map(|path| path.name).collect::<Vec<_>>(), ["First", "Second", "Third"]);
-    assert_eq!(budget.retained_remaining(), 0);
+    assert_eq!(budget.retained_remaining(), raw_charge);
     assert!(budget.work_remaining() < 1 << 20);
+}
+
+#[test]
+fn standalone_local_properties_use_their_declared_lengths_for_unknown_ids() {
+    let mut payload = W { out: Vec::new(), wide: false };
+    for kind in [1, 24, 48] {
+        payload.prop(kind, &1u32.to_be_bytes());
+    }
+    payload.prop_u32(8, 1);
+    payload.end();
+    payload.u32(1);
+    payload.u32(1);
+    cubic(&mut payload);
+    let mut source = W { out: Vec::new(), wide: false };
+    source.string("path");
+    source.u32(payload.out.len() as u32);
+    source.out.extend(payload.out);
+    let scan = super::super::standalone(&source.out, 0, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(scan.stopped.is_none());
+    assert_eq!(scan.records[0].visible, 1);
+    assert_eq!(scan.records[0].strokes[0].knots[0].anchor.position, [4., 5.]);
+    let value = 1u32.to_be_bytes();
+    assert_eq!(
+        scan.records[0].properties.iter().map(|property| (property.kind, property.declared_length, property.payload)).collect::<Vec<_>>(),
+        [1, 24, 48, 8].map(|kind| (kind, 4, value.as_slice()))
+    );
+}
+
+#[test]
+fn image_property_staging_is_refunded_for_empty_and_partial_path_results() {
+    for partial in [false, true] {
+        let (bytes, _, _) = file(26, &[(100, vec![1]), (101, vec![2])], 0);
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let allowance = 4 * std::mem::size_of::<Property<'_>>();
+        let mut budget = Budget::new(1 << 20, allowance);
+        for _ in 0..2 {
+            let work = budget.work_remaining();
+            let output = xcf.paths(Limits { properties: if partial { 1 } else { 2 }, ..Default::default() }, &mut budget, &|| true).unwrap();
+            assert!(output.records.is_empty());
+            assert_eq!(output.stopped.map(|diagnostic| diagnostic.reason), partial.then_some(StopReason::RecordLimit));
+            assert_eq!(budget.retained_remaining(), allowance);
+            assert!(budget.work_remaining() < work);
+        }
+    }
+}
+
+#[test]
+fn standalone_pointers_exclude_the_full_known_table_including_its_terminator() {
+    let (bytes, table, _) = file(26, &[], 3);
+    for target in [table + 8, table + 16, table + 24, table + 31] {
+        let mut malformed = bytes.clone();
+        malformed[table..table + 8].copy_from_slice(&(target as u64).to_be_bytes());
+        let xcf = Xcf::parse(&malformed).unwrap();
+        let offsets = xcf.path_offsets(Default::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(offsets.records.is_empty());
+        assert_eq!(offsets.stopped.unwrap(), Diagnostic { offset: table, ordinal: 0, reason: StopReason::Malformed });
+        let paths = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(paths.records.is_empty());
+        assert_eq!(paths.stopped.unwrap().reason, StopReason::Malformed);
+    }
+    // A truly unfinished table has no invented end. Its forward prefix remains
+    // available with explicit truncation; no target is claimed after a zero.
+    let incomplete = bytes[..table + 12].to_vec();
+    let xcf = Xcf::parse(&incomplete).unwrap();
+    let scan = xcf.path_offsets(Default::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
+fn dropped_image_properties_free_their_allowance_before_standalone_geometry() {
+    let (bytes, _, source) = file(26, &[(100, vec![1])], 1);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let mut measured = Budget::default();
+    let initial = measured.retained_remaining();
+    let direct = super::super::standalone(&bytes, source, 0, Limits::default(), &mut measured, &|| true).unwrap();
+    assert!(direct.stopped.is_none());
+    let path_charge = initial - measured.retained_remaining();
+    let mut budget = Budget::new(1 << 20, path_charge);
+    let paths = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(paths.stopped.is_none());
+    assert_eq!(paths.records.len(), 1);
+    assert_eq!(paths.records[0].strokes[0].knots.len(), 1);
+    assert_eq!(budget.retained_remaining(), 0);
 }

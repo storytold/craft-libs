@@ -592,7 +592,7 @@ pub struct Xcf<'a> {
     // Reuse the already-bounded pointer table for opt-in source-record access.
     layer_sources: Vec<usize>,
     // Preserve the optional table location without eagerly decoding or retaining path records.
-    path_sources: Option<usize>,
+    path_sources: Option<records::paths::index::Table>,
     /// What is left of [`MAX_METADATA_BYTES`] after the layers; channel names are charged too.
     meta_budget: Cell<usize>,
 }
@@ -667,10 +667,25 @@ impl<'a> Xcf<'a> {
         };
         let layer_ptrs = pointers(&mut c, MAX_LAYERS, "layers")?;
         let channels = pointers(&mut c, MAX_CHANNELS, "channels")?;
-        let path_sources = (version >= 18).then_some(c.pos);
+        let mut path_sources = (version >= 18).then_some(records::paths::index::Table { start: c.pos, end: None, minimum_end: c.pos });
         if version >= 18 {
             let mut n = 0;
-            while c.ptr().ok().is_some_and(|p| p != 0) {
+            let mut first_target = usize::MAX;
+            let mut coherent = true;
+            while let Ok(pointer) = c.ptr() {
+                if coherent && let Some(source) = &mut path_sources {
+                    source.minimum_end = c.pos;
+                }
+                if pointer == 0 {
+                    if coherent && let Some(source) = &mut path_sources {
+                        source.end = Some(c.pos);
+                    }
+                    break;
+                }
+                first_target = first_target.min(pointer);
+                // Preserve tolerant counting, but do not mistake zeros inside
+                // target data for a table end after an invalid nonzero slot.
+                coherent &= pointer >= c.pos && c.pos <= first_target;
                 n += 1;
                 if n > MAX_CHANNELS {
                     break;
@@ -730,12 +745,14 @@ impl<'a> Xcf<'a> {
         // Cancellation returns no paths, including the outer property staging
         // vector. Restore its storage allowance while retaining attempted work.
         budget.cancel_safe(|budget| {
+            let retained = budget.retained_remaining();
             let properties = self.image_properties(
                 records::Limits { records: limits.properties, string_bytes: limits.name_bytes, payload_bytes: limits.payload_bytes },
                 budget,
                 keep_going,
             )?;
-            records::paths::index::decode(self.c.at(0), self.path_sources, properties, limits, budget, keep_going)
+            let property_charge = retained - budget.retained_remaining();
+            records::paths::index::decode(self.c.at(0), self.path_sources, properties, limits, budget, keep_going, property_charge)
         })
     }
 

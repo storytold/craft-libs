@@ -240,7 +240,10 @@ impl<'a> Reader<'a, '_> {
             if length > self.limits.name_bytes {
                 return Err(StopReason::StringLimit.into());
             }
-            self.take(length)?;
+            let name = self.take(length)?;
+            if !name.is_empty() && name.last() != Some(&0) {
+                return Err(StopReason::Malformed.into());
+            }
             self.word()?;
             let length = self.word()? as usize;
             if length > self.limits.payload_bytes {
@@ -484,6 +487,47 @@ pub fn vectors<'a>(
     read_list(bytes, source_offset, true, limits, budget, keep_going)
 }
 
+// Path-local property IDs have no image/layer-specific length corrections.
+// Unknown property payloads are opaque and framed by their declared length.
+fn local_properties<'a>(bytes: &'a [u8], limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<Scan<Property<'a>>> {
+    let mut cursor = Cursor { b: bytes, pos: 0, wide: false };
+    let mut records = Vec::new();
+    loop {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let start = cursor.pos;
+        let record = (|| {
+            budget.work(8)?;
+            let kind = cursor.u32().map_err(|_| StopReason::Malformed)?;
+            let declared_length = cursor.u32().map_err(|_| StopReason::Malformed)?;
+            if kind == 0 {
+                return if declared_length == 0 { Ok(None) } else { Err(StopReason::Malformed) };
+            }
+            if records.len() >= limits.properties {
+                return Err(StopReason::RecordLimit);
+            }
+            let length = declared_length as usize;
+            if length > limits.payload_bytes {
+                return Err(StopReason::PayloadLimit);
+            }
+            budget.work(length)?;
+            let payload = cursor.take(length).map_err(|_| StopReason::Malformed)?;
+            let raw = bytes.get(start..cursor.pos).ok_or(StopReason::Malformed)?;
+            Ok(Some(Property { offset: start, kind, declared_length, payload, raw }))
+        })();
+        match record {
+            Ok(None) => return Ok(Scan::complete(records, cursor.pos)),
+            Ok(Some(property)) => {
+                if let Err(reason) = budget.retain(&mut records, property) {
+                    return Ok(Scan::stopped(records, start, reason));
+                }
+            }
+            Err(reason) => return Ok(Scan::stopped(records, start, reason)),
+        }
+    }
+}
+
 /// Decode one length-framed version-18+ path at an absolute source offset.
 pub fn standalone<'a>(
     bytes: &'a [u8],
@@ -521,14 +565,7 @@ fn standalone_with_points<'a>(
         }
         let payload_start = reader.cursor.pos;
         let raw = reader.take(length)?;
-        let scan = super::properties(
-            raw,
-            0,
-            super::Limits { records: limits.properties, string_bytes: limits.name_bytes, payload_bytes: limits.payload_bytes },
-            reader.budget,
-            keep_going,
-        )
-        .map_err(|_| Failure::Cancelled)?;
+        let scan = local_properties(raw, limits, reader.budget, keep_going).map_err(|_| Failure::Cancelled)?;
         if let Some(diagnostic) = scan.stopped {
             return Err(diagnostic.reason.into());
         }
@@ -1021,5 +1058,35 @@ mod tests {
         invalid_label.insert(16, 0xff);
         let label = vectors(&invalid_label, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
         assert_eq!(label.stopped.unwrap().reason, StopReason::Malformed);
+    }
+    #[test]
+    fn opaque_vector_parasite_names_require_only_the_wire_terminator() {
+        for raw_name in [b"".as_slice(), &[0xff, 0][..], &[0xff, b'A'][..]] {
+            let mut bytes = Vec::new();
+            for value in [1, 0, 1] {
+                word(&mut bytes, value);
+            }
+            name(&mut bytes, "path");
+            for value in [1, 1, 0, 1, 1] {
+                word(&mut bytes, value);
+            }
+            word(&mut bytes, raw_name.len() as u32);
+            bytes.extend(raw_name);
+            for value in [7, 0] {
+                word(&mut bytes, value);
+            }
+            cubic(&mut bytes, 1, true);
+            let scan = vectors(&bytes, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            if raw_name.last().is_some_and(|byte| *byte != 0) {
+                assert!(scan.records.is_empty());
+                assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+            } else {
+                assert!(scan.stopped.is_none());
+                assert_eq!(scan.records[0].strokes[0].knots.len(), 1);
+                let payload = scan.records[0].parasite_payloads().next().unwrap();
+                let raw = super::super::parasites(payload, 0, Default::default(), &mut Budget::default(), &|| true).unwrap();
+                assert_eq!(raw.records[0].name, raw_name.strip_suffix(&[0]).unwrap_or(raw_name));
+            }
+        }
     }
 }
