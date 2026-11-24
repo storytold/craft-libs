@@ -511,6 +511,66 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// What a host canvas with GridCraft's keys saw of a copy and an Escape while it held egui focus: whether the copy
+/// reached egui's input with no command fired, the keys that reached egui and the window cancels, and egui's focus
+/// after the Escape. `app_focus` gives it egui focus by the app's own request, else by the framework's `request`.
+fn focused_host_canvas_keys(app_focus: bool) -> (bool, (Vec<Key>, usize), Option<Id>) {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL);
+    let canvas = named_id("host canvas");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let seen_events = Rc::clone(&events);
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen_events.borrow_mut().extend(ui.input(|input| input.events.clone()));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KEYS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if app_focus {
+        fixture::host_focus(&frames.ctx, canvas);
+    } else {
+        request(&frames.ctx, FocusTarget::Id(canvas));
+    }
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas), "the canvas holds egui focus");
+    take_output(&frames.ctx);
+    seen(&host);
+    events.borrow_mut().clear();
+    frames.frame(vec![Event::Copy], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let copied = events.borrow().contains(&Event::Copy) && take_output(&frames.ctx).fired.is_empty();
+    press_key(&mut frames, &mut show, Key::Escape);
+    let escape = seen(&host);
+    frames.frame(Vec::new(), &mut show);
+    (copied, escape, egui_focused(&frames.ctx))
+}
+
+/// A host canvas holding egui focus is the app's own focused widget: its clipboard events and Escape stay in egui's
+/// input, and no window cancel comes of the Escape. With nothing focused, Escape is the window's cancel.
+#[trial]
+fn a_host_canvas_with_egui_focus_reads_escape_and_the_clipboard_from_egui() {
+    let canvas = named_id("host canvas");
+    let (copied, escape, focused) = focused_host_canvas_keys(false);
+    assert!(copied, "the copy of a canvas the framework focused stays in egui and fires nothing");
+    assert_eq!(escape, (vec![Key::Escape], 0), "its Escape is egui's, and no window cancel");
+    assert_eq!(focused, Some(canvas), "egui keeps the framework's focus on the canvas over its Escape");
+    let (copied, escape, _) = focused_host_canvas_keys(true);
+    assert!(copied, "the copy of a canvas the app focused stays in egui and fires nothing");
+    assert_eq!(escape, (vec![Key::Escape], 0), "and its Escape");
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL));
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(seen(&host), (Vec::new(), 1), "with nothing focused, Escape is the window's cancel");
+}
+
 /// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
 /// `textless_paste` reads it in that pass only.
 #[trial]
