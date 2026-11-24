@@ -269,9 +269,9 @@ impl Xcf<'_> {
         .map(Some)
     }
 
-    // Parsed layer identities take precedence over a conflicting mask pointer.
-    // Corroborate only an already recorded mask target, without retaining its
-    // metadata or following effect targets/pixels to infer a transfer.
+    // Layer and saved-channel identities take precedence over a conflicting
+    // mask pointer. Corroborate only a mask target with no conflicting role,
+    // without retaining metadata or following its effect or pixel offsets.
     fn floating_gray_transfer(&self, layer: &crate::Layer, keep_going: &dyn Fn() -> bool) -> Result<(bool, bool)> {
         if !layer.floating_selection || layer.layer_type != 3 {
             return Ok((false, false));
@@ -280,17 +280,17 @@ impl Xcf<'_> {
         if let Some((_, owner)) = self.layer_sources.iter().zip(&self.image.layers).find(|(source, _)| u64::try_from(**source).ok() == Some(target)) {
             return Ok((false, owner.floating_selection)); // Ordinary layer color retains the canvas transfer.
         }
+        if self.channels.iter().any(|source| u64::try_from(*source).ok() == Some(target)) {
+            let nonlinear_u8 =
+                self.image.precision.bytes == 1 && !self.image.precision.float && self.source_precision().transfer == Transfer::Nonlinear;
+            return Ok((!nonlinear_u8, true)); // Same unconfirmed default as a saved channel.
+        }
         if let Some(owner) = self.image.layers.iter().find(|owner| owner.mask != 0 && u64::try_from(owner.mask).ok() == Some(target)) {
             match self.confirm_mask_record(owner, keep_going) {
                 Ok(()) => return Ok((true, false)),
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(_) => return Ok((false, true)),
             }
-        }
-        if self.channels.iter().any(|source| u64::try_from(*source).ok() == Some(target)) {
-            let nonlinear_u8 =
-                self.image.precision.bytes == 1 && !self.image.precision.float && self.source_precision().transfer == Transfer::Nonlinear;
-            return Ok((!nonlinear_u8, true)); // Same unconfirmed default as a saved channel.
         }
         Ok((false, true)) // Unknown targets cannot establish the stored transfer.
     }

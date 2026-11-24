@@ -1627,7 +1627,7 @@ fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_hea
                 "bad-end" => file.out[properties + 4..properties + 8].copy_from_slice(&4u32.to_be_bytes()),
                 _ => {}
             }
-            let reader = Xcf::parse(&file.out).unwrap();
+            let mut reader = Xcf::parse(&file.out).unwrap();
             if state == "valid" {
                 let mask = reader
                     .visit_layer_mask_tiles(1, SampleOptions::default(), &mut 4, GO, |tile| {
@@ -1649,6 +1649,12 @@ fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_hea
             assert_eq!(reader.meta_budget.get(), metadata_before, "role checks retain no channel metadata");
             assert_eq!(info.transfer_is_assumed, state != "valid", "v{version} {state}");
             assert_eq!(info.precision.transfer, if state == "valid" { Transfer::Linear } else { Transfer::Nonlinear });
+            if state == "valid" {
+                // A complete channel frame cannot resolve a conflicting saved-channel role.
+                reader.channels.push(mask);
+                let aliased = reader.visit_layer_tiles(0, SampleOptions::default(), &mut 8, GO, |_| Ok(())).unwrap().unwrap();
+                assert!(aliased.transfer_is_assumed, "v{version} saved channel and mask share the target");
+            }
         }
     }
 }
