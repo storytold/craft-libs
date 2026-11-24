@@ -328,3 +328,49 @@ fn standalone_parasite_accessor_keeps_duplicate_and_empty_property_payloads() {
         }
     }
 }
+
+#[test]
+fn standalone_pointers_cannot_target_previous_data_or_their_own_slot() {
+    for second in [false, true] {
+        let (original, table, source) = file(26, &[], 2);
+        let slot = table + usize::from(second) * 8;
+        for target in [1, table, slot, slot + 7] {
+            let mut bytes = original.clone();
+            bytes[slot..slot + 8].copy_from_slice(&(target as u64).to_be_bytes());
+            let xcf = Xcf::parse(&bytes).unwrap();
+            let pointers = xcf.path_offsets(super::super::super::Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(pointers.records, if second { vec![source] } else { vec![] });
+            assert_eq!(pointers.stopped, Some(Diagnostic { offset: slot, ordinal: usize::from(second), reason: StopReason::Malformed }));
+            let paths = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(paths.records.len(), usize::from(second));
+            assert_eq!(paths.stopped, Some(Diagnostic { offset: slot, ordinal: usize::from(second), reason: StopReason::Malformed }));
+        }
+    }
+}
+
+#[test]
+fn tight_work_retains_the_first_path_before_charging_a_later_pointer() {
+    let (bytes, table, source) = file(26, &[], 2);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let mut measure = Budget::default();
+    let before = measure.work_remaining();
+    let direct = super::super::standalone(&bytes, source, 0, Limits::default(), &mut measure, &|| true).unwrap();
+    assert!(direct.stopped.is_none());
+    let first_path_work = before - measure.work_remaining();
+    let allowance = 8 + 8 + first_path_work; // Image PROP_END, first pointer, target.
+    let mut budget = Budget::new(allowance, 1 << 20);
+    let scan = xcf.paths(Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(scan.records.len(), 1);
+    assert_eq!(scan.records[0].name, "Standalone");
+    assert_eq!(scan.stopped, Some(Diagnostic { offset: table + 8, ordinal: 1, reason: StopReason::WorkLimit }));
+    assert_eq!(budget.work_remaining(), 0);
+    let complete = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(complete.records.len(), 2, "forward aliases remain independently identified");
+    assert!(complete.stopped.is_none());
+    let mut broken = bytes.clone();
+    broken[table + 16..table + 24].copy_from_slice(&((table + 16) as u64).to_be_bytes());
+    let broken = Xcf::parse(&broken).unwrap();
+    let scan = broken.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records.len(), 2);
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed, "the final terminator is still checked");
+}

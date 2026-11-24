@@ -48,7 +48,9 @@ pub struct Knot {
     pub outgoing: Point,
 }
 
-/// Unknown kinds retain framed source bytes but have no decoded knots.
+/// Unknown kinds retain raw bytes only when they fit the known Bezier-shaped
+/// frame (a type word and `axes` floats per point). No other unknown-kind layout
+/// is inferred; a frame mismatch stops the optional list. Only kind 1 has knots.
 #[derive(Debug)]
 pub struct Stroke<'a> {
     pub kind: u32,
@@ -187,6 +189,9 @@ impl<'a> Reader<'a, '_> {
             }
             let points = self.count(self.points_left)?;
             self.points_left -= points;
+            // The public XCF specification defines only the kind-1 Bezier
+            // frame. Retain other kind tags within this bounded frame only;
+            // do not guess a different point layout from an unknown tag.
             let length = points.checked_mul((axes + 1) * 4).ok_or(Failure::Stop(StopReason::Malformed))?;
             let raw = self.take(length)?;
             let mut knots = Vec::new();
@@ -366,6 +371,12 @@ fn read_list<'a>(
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<SourcePath<'a>>> {
+    if !keep_going() {
+        return Err(Error::Cancelled);
+    }
+    // A caller-supplied base must address the complete source span before any
+    // geometry is retained; otherwise an eventual end overflow drops its charge.
+    source_offset.checked_add(bytes.len()).ok_or_else(|| crate::invalid("path source offset overflow"))?;
     let initial_retained = budget.retained_left;
     let mut reader =
         Reader { cursor: Cursor { b: bytes, pos: 0, wide: false }, source_offset, limits, points_left: limits.points, budget, keep_going };
@@ -442,7 +453,9 @@ pub fn legacy<'a>(
     read_list(bytes, source_offset, false, limits, budget, keep_going)
 }
 
-/// Decode PROP_VECTORS, retaining unknown stroke frames and source parasites.
+/// Decode PROP_VECTORS, retaining source parasites and unknown stroke tags only
+/// within the specified Bezier-shaped framing. Other layouts are not supported.
+/// See <https://developer.gimp.org/core/standards/xcf/#image-properties>.
 pub fn vectors<'a>(
     bytes: &'a [u8],
     source_offset: usize,
@@ -891,5 +904,71 @@ mod tests {
         let empty = legacy_bytes(3, true);
         let legacy = legacy(&empty, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
         assert_eq!(legacy.records[0].parasite_payloads().count(), 0);
+    }
+    #[test]
+    fn overflowing_source_spans_are_rejected_before_path_retention() {
+        for modern in [false, true] {
+            let bytes = if modern { vectors_bytes() } else { legacy_bytes(3, true) };
+            let mut budget = Budget::default();
+            let retained = budget.retained_remaining();
+            let work = budget.work_remaining();
+            let base = usize::MAX - if modern { 12 } else { 8 };
+            assert!(matches!(read_list(&bytes, base, modern, Limits::default(), &mut budget, &|| true), Err(Error::Invalid(_))));
+            assert_eq!(budget.retained_remaining(), retained);
+            assert_eq!(budget.work_remaining(), work, "no source parsing occurred");
+            assert!(matches!(read_list(&bytes, base, modern, Limits::default(), &mut budget, &|| false), Err(Error::Cancelled)));
+            let exact = read_list(&bytes, usize::MAX - bytes.len(), modern, Limits::default(), &mut budget, &|| true).unwrap();
+            assert!(exact.stopped.is_none());
+            assert_eq!(exact.end_offset, usize::MAX);
+            assert!(!exact.records.is_empty());
+        }
+    }
+
+    #[test]
+    fn unknown_tags_keep_only_bezier_framing_and_decline_axes_only_layouts() {
+        let mut framed = Vec::new();
+        for value in [1, 0, 1] {
+            word(&mut framed, value);
+        }
+        name(&mut framed, "unknown then Bezier");
+        for value in [1, 0, 0, 0, 2] {
+            word(&mut framed, value);
+        }
+        let unknown_start = framed.len();
+        cubic(&mut framed, 99, false);
+        let known_start = framed.len();
+        cubic(&mut framed, 1, false);
+        let complete = vectors(&framed, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(complete.stopped.is_none());
+        let strokes = &complete.records[0].strokes;
+        assert_eq!(strokes.len(), 2);
+        assert!(strokes[0].knots.is_empty());
+        assert_eq!(strokes[0].raw, &framed[unknown_start..known_start]);
+        assert_eq!(strokes[1].raw, &framed[known_start..]);
+        assert_eq!(strokes[1].knots[0].anchor.position, [1., 3.]);
+
+        let mut incompatible = Vec::new();
+        for value in [1, 0, 2] {
+            word(&mut incompatible, value);
+        }
+        vector_path(&mut incompatible, "retained prefix", 1, 1);
+        let rejected = incompatible.len();
+        name(&mut incompatible, "unframed unknown");
+        for value in [2, 0, 0, 0, 2, 99, 0, 2, 1] {
+            word(&mut incompatible, value);
+        }
+        // The public specification does not define unknown kinds. This alternative
+        // axes-only layout is intentionally outside the supported framing subset.
+        word(&mut incompatible, 2f32.to_bits());
+        word(&mut incompatible, 3f32.to_bits());
+        cubic(&mut incompatible, 1, false);
+        let payload = incompatible.as_slice();
+        let scan = vectors(payload, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.records.len(), 1);
+        assert_eq!(scan.stopped, Some(Diagnostic { offset: rejected, ordinal: 1, reason: StopReason::Malformed }));
+        assert_eq!(scan.records[0].raw, &payload[12..rejected]);
+        // The caller still owns the original bounded raw payload, including the
+        // unhandled frame; the parser does not claim decoded geometry for it.
+        assert!(!payload[rejected..].is_empty());
     }
 }

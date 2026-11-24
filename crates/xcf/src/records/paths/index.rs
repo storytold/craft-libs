@@ -24,21 +24,7 @@ pub(crate) fn offsets(
             return Err(error);
         }
         let offset = cursor.pos;
-        let result = (|| {
-            budget.work(if cursor.wide { 8 } else { 4 })?;
-            let pointer = cursor.ptr().map_err(|_| StopReason::Malformed)?;
-            if pointer == 0 {
-                return Ok(None);
-            }
-            if pointer >= cursor.b.len() {
-                return Err(StopReason::Malformed);
-            }
-            // Keep optional traversal within the legacy reader's structural cap.
-            if records.len() >= limits.records.min(crate::MAX_CHANNELS) {
-                return Err(StopReason::RecordLimit);
-            }
-            Ok(Some(pointer))
-        })();
+        let result = pointer(&mut cursor, limits.records, records.len(), budget);
         match result {
             Ok(None) => return Ok(Scan::complete(records, cursor.pos)),
             Ok(Some(pointer)) => {
@@ -49,6 +35,23 @@ pub(crate) fn offsets(
             Err(reason) => return Ok(Scan::stopped(records, offset, reason)),
         }
     }
+}
+
+// Validate only the slots reached by this optional scan. A disclosed prefix is
+// not a claim that the unread remainder of the table is well framed.
+fn pointer(cursor: &mut Cursor<'_>, limit: usize, index: usize, budget: &mut Budget) -> std::result::Result<Option<usize>, StopReason> {
+    budget.work(if cursor.wide { 8 } else { 4 })?;
+    let pointer = cursor.ptr().map_err(|_| StopReason::Malformed)?;
+    if pointer == 0 {
+        return Ok(None);
+    }
+    if pointer < cursor.pos || pointer >= cursor.b.len() {
+        return Err(StopReason::Malformed);
+    }
+    if index >= limit.min(crate::MAX_CHANNELS) {
+        return Err(StopReason::RecordLimit);
+    }
+    Ok(Some(pointer))
 }
 
 fn merge<'a>(
@@ -104,18 +107,22 @@ pub(crate) fn decode<'a>(
     if let Some(diagnostic) = properties.stopped {
         return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
     }
-    let table = offsets(
-        cursor.at(0),
-        start,
-        super::super::Limits { records: limits.paths.saturating_sub(output.len()), ..Default::default() },
-        budget,
-        keep_going,
-    )?;
-    end_offset = end_offset.max(table.end_offset);
+    let Some(start) = start else { return Ok(Scan::complete(output, end_offset)) };
+    let mut table = cursor.at(start);
+    let table_limit = limits.paths.saturating_sub(output.len());
     let mut points_left = limits.points;
     let mut strokes_left = limits.strokes;
-    for (source_index, offset) in table.records.into_iter().enumerate() {
+    let mut source_index = 0;
+    loop {
         check(keep_going)?;
+        let slot = table.pos;
+        let offset = match pointer(&mut table, table_limit, source_index, budget) {
+            Ok(Some(offset)) => offset,
+            Ok(None) => return Ok(Scan::complete(output, end_offset.max(table.pos))),
+            Err(reason) => return Ok(Scan::stopped(output, slot, reason)),
+        };
+        // Decode the admitted target before spending work on any later slot,
+        // so a tight work allowance preserves the completed source prefix.
         let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), points: points_left, strokes: strokes_left, ..limits };
         let scan = super::standalone_with_points(cursor.b, offset, source_index, remaining, budget, keep_going, &mut points_left)?;
         strokes_left = strokes_left.saturating_sub(scan.records.first().map_or(0, |path| path.strokes.len()));
@@ -124,11 +131,8 @@ pub(crate) fn decode<'a>(
         if let Some(diagnostic) = stopped {
             return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
         }
+        source_index += 1; // pointer() caps this at MAX_CHANNELS before admission.
     }
-    if let Some(diagnostic) = table.stopped {
-        return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
-    }
-    Ok(Scan::complete(output, end_offset))
 }
 
 #[cfg(test)]
