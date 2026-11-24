@@ -141,6 +141,11 @@ pub(crate) struct Cursors(IdMap<Cursor>);
 #[derive(Default)]
 pub(crate) struct FillCounts(IdMap<u32>);
 
+/// The memoized views running this pass whose content holds a direct child that fills the axis the body around the
+/// view shares (`Scoped::fill_view`), by view id, with that axis.
+#[derive(Default)]
+pub(crate) struct ViewFills(IdMap<Axis>);
+
 /// What makes a child of a content-sized `Stack` column a held child: it measures at its own width while the column
 /// settles its width from the others, and the column's second sweep gives it the settled width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -423,6 +428,9 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
     if !given {
         return measured;
     }
+    if let Some((view, along)) = env.fill_view.filter(|(_, along)| *along == axis) {
+        pass_state::with::<ViewFills, _>(ui.ctx(), |fills| fills.0.insert(view, along));
+    }
     // In a body that shares the axis and scrolls along it, a share never cuts the child's content: what is past the
     // view scrolls.
     if env.fill_body.is_some_and(|(_, along)| along == axis) && view_room(ui, axis).is_some() {
@@ -452,10 +460,34 @@ fn main_fill(ui: &Ui, id: Id, axis: Axis) -> MainFill {
         return MainFill::Share(share, layout_memory::fill_least(ui.ctx(), id, axis));
     }
     if measure::active(ui.ctx()) {
-        pass_state::with::<FillCounts, _>(ui.ctx(), |counts| *counts.0.entry(body).or_insert(0) += 1);
+        count_fill(ui.ctx(), body);
         return MainFill::Measuring;
     }
     MainFill::Room(layout_memory::fill_least(ui.ctx(), id, axis))
+}
+
+/// Counts one child that fills the main axis of the sharing body `body`, in the first sweep of its measuring run.
+fn count_fill(ctx: &egui::Context, body: Id) {
+    pass_state::with::<FillCounts, _>(ctx, |counts| *counts.0.entry(body).or_insert(0) += 1);
+}
+
+/// Counts the memoized view whose content fills the main axis of `ui`'s sharing body as one child that fills it, in the
+/// first sweep of the body's measuring run (`counting_fills`), as a child shown there directly is counted.
+pub(crate) fn count_fill_view(ui: &Ui) {
+    if let Some((body, _)) = Env::of(ui).fill_body {
+        count_fill(ui.ctx(), body);
+    }
+}
+
+/// Opens the record of whether the content of the memoized view `view` fills the axis its body shares, before its run.
+pub(crate) fn open_view_fill(ctx: &egui::Context, view: Id) {
+    pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view));
+}
+
+/// The axis the content of the memoized view `view` filled in the run that just ended, as `fill_size` noted it; closes
+/// the record.
+pub(crate) fn take_view_fill(ctx: &egui::Context, view: Id) -> Option<Axis> {
+    pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view))
 }
 
 /// The share a child of `ui`'s body that fills along `axis` takes there, once its body knows it: the room the child
