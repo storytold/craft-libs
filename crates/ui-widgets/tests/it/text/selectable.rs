@@ -2,14 +2,17 @@
 //! (`SelectableText`, a notice's title and message, a toast's text, a metadata table's values).
 
 use craft_theme::variant::Tone;
+use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, CollectionEvent, Props as _, Show as _};
 use craft_ui::notices::{Notice, NoticeAction, ToastStack};
-use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::env::{RootEnv, WindowKey};
+use craft_ui::runtime::focus::{KeyUse, host_canvas};
+use craft_ui::runtime::frame::{ChromeToggle, take_output};
 use craft_ui::runtime::toast;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::{SelectableText, TextField};
-use egui::{Event, Id, Key, Modifiers, Rect, Vec2};
+use egui::{Event, Id, Key, Modifiers, Rect, Sense, Vec2, ViewportId};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -140,4 +143,44 @@ fn metadata_value_copies_without_selecting_the_row() {
     fixture.click_at(value.center());
     assert_eq!(copy_all(&mut fixture), ["X100V"]);
     assert!(!selected.get(), "the press on the value selected no row");
+}
+
+/// In a window with a document canvas whose Tab toggles the panels, read-only text a press or a drag focused to select
+/// from is no text field: Tab toggles the panels from it, as from the button a press focused, and leaves the focus on
+/// it. Guards the press that focuses a selection part, which no framework shape wins (egui's text widget takes it), being
+/// recorded as a press.
+#[trial]
+fn tab_toggles_the_panels_from_read_only_text_a_press_or_drag_focused() {
+    let text = Rc::new(Cell::new(Id::NULL));
+    let seen = text.clone();
+    let canvas = Id::new("document canvas");
+    let mut fixture = Fixture::new(move |ui| {
+        Button::new("Save").show(ui);
+        seen.set(SelectableText::new("Path", "/projects/poster.indd").show(ui).id);
+        ui.interact(ui.available_rect_before_wrap(), canvas, Sense::click());
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+    });
+    let mut root = RootEnv::default();
+    root.tab_toggles_chrome = true;
+    fixture.root(root);
+    fixture.settle();
+    let tab = |fixture: &mut Fixture| {
+        take_output(fixture.ctx());
+        fixture.key(Key::Tab, Modifiers::NONE);
+        take_output(fixture.ctx()).chrome_toggles
+    };
+    let path = painted(&fixture, "/projects/poster.indd");
+    for dragged in [false, true] {
+        let button = fixture.by_label("Save").expect("the button has a node");
+        fixture.click(&button);
+        assert_eq!(tab(&mut fixture), [(ViewportId::ROOT, ChromeToggle::Panels)], "the pressed button (dragged {dragged})");
+        if dragged {
+            fixture.drag_at(path.left_center() + Vec2::new(1.0, 0.0), Vec2::new(path.width() / 2.0, 0.0));
+        } else {
+            fixture.click_at(path.center());
+        }
+        assert_eq!(stop(&fixture), Some(text.get()), "the gesture focused the text (dragged {dragged})");
+        assert_eq!(tab(&mut fixture), [(ViewportId::ROOT, ChromeToggle::Panels)], "the pressed text (dragged {dragged})");
+        assert_eq!(stop(&fixture), Some(text.get()), "the toggle moved no focus (dragged {dragged})");
+    }
 }
