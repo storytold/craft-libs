@@ -61,6 +61,11 @@ pub struct Element {
 }
 
 impl Element {
+    /// An element named `tag` ("hp:p"), with no attributes, text or children.
+    pub fn new(tag: &str) -> Self {
+        Element { tag: tag.to_string(), ..Default::default() }
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
@@ -175,6 +180,24 @@ fn close(stack: &mut Vec<Element>, scopes: &mut Scopes) -> Option<Element> {
         }
         None => Some(done),
     }
+}
+
+/// Number a section built as a tree the way [`parse`] numbers a section part: its paragraphs in
+/// document order (start tags), with [`ORDINAL`].
+pub(crate) fn number_paragraphs(el: &mut Element) {
+    fn walk(el: &mut Element, ordinal: &mut usize, depth: usize) {
+        if depth > 4 * MAX_DEPTH {
+            return;
+        }
+        if el.tag == "hp:p" {
+            el.set(ORDINAL, ordinal.to_string());
+            *ordinal += 1;
+        }
+        for c in &mut el.children {
+            walk(c, ordinal, depth + 1);
+        }
+    }
+    walk(el, &mut 0, 0);
 }
 
 /// Parse a part. `number_paragraphs` marks section paragraphs with [`ORDINAL`].

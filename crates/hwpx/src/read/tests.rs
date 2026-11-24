@@ -528,6 +528,45 @@ fn a_note_inside_a_hyperlink_keeps_its_own_text_unlinked() {
     assert!(!linked(&note, "각주"), "the note's text isn't linked");
 }
 
+/// A header and sections given as element trees (as `craft-hwp` rebuilds an HWP file) read as
+/// the same XML does from a package: the same paragraphs, each remembering the same source, so a
+/// writer finds them in either.
+#[test]
+fn trees_read_as_their_xml_does() {
+    let head = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#;
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:t>첫째</hp:t><hp:ctrl><hp:footNote><hp:subList><hp:p><hp:run><hp:t>각주</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl></hp:run></hp:p><hp:p><hp:run><hp:tbl rowCnt="1" colCnt="1"><hp:sz width="10000" height="1000"/><hp:pos treatAsChar="1"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="10000" height="1000"/></hp:tc></hp:tr></hp:tbl></hp:run></hp:p><hp:p><hp:run><hp:t>셋째</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let from_xml = read_bytes(&hwpx_with(head, &sec)).unwrap();
+    let trees =
+        crate::owpml::read(crate::xml::parse(head.as_bytes(), false).unwrap(), vec![crate::xml::parse(sec.as_bytes(), false).unwrap()], vec![])
+            .unwrap();
+    // every paragraph of the body, the cells and the parts, with the source it remembers
+    fn walk(blocks: &craft_wordmodel::Blocks, kept: Option<&craft_wordmodel::kept::KeptXml>, out: &mut Vec<(String, Option<String>)>) {
+        for b in blocks.iter() {
+            if let Some(p) = b.as_para() {
+                out.push((p.text.clone(), kept.and_then(|k| k.para(p)).map(|s| s.to_string())));
+            }
+            for c in b.as_table().iter().flat_map(|t| t.rows.iter()).flat_map(|r| r.cells.iter()) {
+                walk(&c.blocks, kept, out);
+            }
+        }
+    }
+    let sources = |doc: &Document| {
+        let kept = doc.kept.of(crate::KEPT_FORMAT);
+        let mut out = Vec::new();
+        walk(&doc.body, kept, &mut out);
+        for part in doc.parts.values() {
+            walk(&part.blocks, kept, &mut out);
+        }
+        out
+    };
+    let (a, b) = (sources(&from_xml), sources(&trees));
+    assert!(a.iter().filter(|(_, s)| s.is_some()).count() >= 3, "paragraphs remember their source: {a:?}");
+    assert_eq!(a, b);
+    assert!(!trees.passthrough.contains_key(crate::PACKAGE_KEY), "no HWPX file to write back into");
+}
+
 /// A tab stop past any page (a position no page holds) is kept within the longest length the
 /// model takes, as the DOCX reader keeps one, instead of millions of points.
 #[test]

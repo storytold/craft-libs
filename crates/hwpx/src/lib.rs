@@ -13,6 +13,7 @@ struct ReadmeExamples;
 
 mod error;
 mod header;
+pub mod owpml;
 mod package;
 mod read;
 #[cfg(test)]

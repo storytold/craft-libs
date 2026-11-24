@@ -47,6 +47,8 @@ pub struct Package {
     pub rootfile: Option<String>,
     pub header_name: Option<String>,
     pub section_names: Vec<String>,
+    /// Parts given as element trees instead of XML ([`Package::from_trees`]).
+    trees: HashMap<String, Element>,
 }
 
 /// A ZIP archive whose first entry is an HWPX `mimetype` (or which holds HWPX parts).
@@ -112,8 +114,38 @@ impl Package {
         self.index.get(name).and_then(|&i| self.entries.get(i)).map(|e| e.data.as_slice())
     }
 
+    /// A package of a header and sections given as element trees, and the binary items they
+    /// refer to (`crate::owpml`). Pictures are found by their item id only.
+    pub(crate) fn from_trees(header: Element, sections: Vec<Element>, binaries: Vec<crate::owpml::Binary>) -> Package {
+        let mut pkg = Package::default();
+        let mut items = Vec::new();
+        for b in binaries {
+            items.push(Item { id: b.id, href: b.name.clone() });
+            if !pkg.has(&b.name) {
+                pkg.add_entry(Entry { name: b.name, data: b.data });
+            }
+        }
+        // a picture the sections name by an id no item has stays missing, as it would in the
+        // format the trees were built from
+        pkg.bin_stem_at.clear();
+        pkg.set_items(items);
+        let header_name = "Contents/header.xml".to_string();
+        pkg.trees.insert(header_name.clone(), header);
+        pkg.header_name = Some(header_name);
+        for (k, mut sec) in sections.into_iter().enumerate() {
+            xml::number_paragraphs(&mut sec);
+            let name = format!("Contents/section{k}.xml");
+            pkg.trees.insert(name.clone(), sec);
+            pkg.section_names.push(name);
+        }
+        pkg
+    }
+
     /// A part as an element tree; section parts get their paragraphs numbered.
     pub fn xml(&self, name: &str) -> Result<Element> {
+        if let Some(tree) = self.trees.get(name) {
+            return Ok(tree.clone());
+        }
         let data = self.read(name).ok_or_else(|| Error::format(format!("missing part {name}")))?;
         xml::parse(data, self.section_names.iter().any(|s| s == name))
     }

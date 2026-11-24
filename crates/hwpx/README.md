@@ -2,7 +2,8 @@
 
 Reader and writer for HWPX, the XML format of Hancom Hangul documents (OWPML, KS X 6101: a ZIP
 package of XML parts), on the `craft-wordmodel` document model. It is WordCraft's reader and
-writer, on `craft-zip` and `craft-xml`. HWP 5.0, Hangul's binary format, is a separate crate.
+writer, on `craft-zip` and `craft-xml`. HWP 5.0, Hangul's binary format, is `craft-hwp`, which
+rebuilds its records as OWPML element trees and reads them through this crate (`owpml::read`).
 
 > 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 >
@@ -25,6 +26,9 @@ assert!(back.body.iter().filter_map(|b| b.as_para()).any(|p| p.text == "한글 �
 
 - `sniff(bytes)`, `read(bytes)`, `write(doc)`, `write_with(doc, &WriteOptions)`,
   `set_application_name(name)`.
+- `owpml::read(header, sections, binaries)`: a document another Hangul format rebuilt as OWPML
+  element trees (`owpml::Element`), read as an HWPX package's parts are. No file is kept for
+  saving back, so `write` makes a new package of it.
 
 Reading:
 
