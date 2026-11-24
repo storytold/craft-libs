@@ -211,8 +211,9 @@ impl GraphAccelerator {
         let components = if shader.grey { 1 } else { 4 };
         let row_bytes = u64::from(width) * components * 4;
         let limit = max.max_storage_buffer_binding_size.min(max.max_buffer_size).min(ROW_BUFFER_BYTES);
-        let rows = (limit / row_bytes).min(u64::from(height)) as u32;
-        if rows == 0 {
+        let max_groups = max.max_compute_workgroups_per_dimension;
+        let rows = (limit / row_bytes).min(u64::from(height)).min(u64::from(max_groups) * 8) as u32;
+        if rows == 0 || width.div_ceil(8) > max_groups {
             return Ok(None);
         }
         let byte_count = row_bytes * u64::from(rows);
@@ -712,6 +713,23 @@ mod tests {
             assert_eq!((pixels.w, pixels.h, pixels.px.len()), (expected.w, expected.h, expected.px.len()));
             assert!(expected.px.iter().zip(pixels.px).all(|(&a, b)| (a - b).abs() < 2e-6));
         }
+    }
+
+    #[test]
+    fn pixel_program_bands_stay_within_the_device_dispatch_limit() {
+        let limits = wgpu::Limits { max_compute_workgroups_per_dimension: 16, ..wgpu::Limits::default() };
+        let Some(gpu) = crate::headless::Headless::with_limits(limits).unwrap() else { return };
+        let graph = Graph::parse("size 128\nsubgraph example\nmeta kind \"function\"\nmeta float32 \"1\"\nnode 1 f_pos\nnode 2 f_swizzle a=@1 mask=\"y\"\nnode 3 f_out in=@2\nend\nnode 1 pixel_processor fn=\"example\"\noutput out 1\n").unwrap();
+        let program = compile_named(&graph.subgraphs, "example").unwrap();
+        let environment = FnEnv::new([128.0, 1024.0]);
+        let cancel = Cancel::new();
+
+        let output = gpu.accelerator().pixel(PixelRequest { program: &program, environment: &environment, size: [128, 1024], cancel: &cancel }).unwrap();
+
+        let Some(PixelOutput::Grey(pixels)) = output else { panic!("a 128 pixel wide program fits 16 workgroups per row") };
+        let expected = Grey::from_fn(128, 1024, |u, v| program.run(&environment, [f64::from(u), f64::from(v)]).unwrap().as_f32());
+        assert_eq!((pixels.w, pixels.h, pixels.px.len()), (expected.w, expected.h, expected.px.len()));
+        assert!(expected.px.iter().zip(pixels.px).all(|(&a, b)| (a - b).abs() < 2e-6));
     }
 
     #[test]
