@@ -52,6 +52,10 @@ pub(crate) fn pixel_size(data: &[u8]) -> Option<(u32, u32)> {
         let mut guard = 0;
         while i + 9 < data.len() && data.get(i) == Some(&0xFF) && guard < 10_000 {
             guard += 1;
+            // a marker may follow any number of 0xFF fill bytes (ITU-T T.81, B.1.1.2)
+            while data.get(i + 1) == Some(&0xFF) {
+                i += 1;
+            }
             let marker = *data.get(i + 1)?;
             let length = be16(i + 2)? as usize;
             if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {

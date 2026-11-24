@@ -194,11 +194,11 @@ pub(crate) fn hyperlink_url(el: &Element) -> Option<String> {
     None
 }
 
-/// A binary item's file extension ("png" when it has none).
+/// A binary item's file extension (empty when it has none: its bytes tell, see `image_ext`).
 pub(crate) fn ext_of(name: &str) -> String {
     let base = name.rsplit('/').next().unwrap_or(name);
     match base.rsplit_once('.') {
         Some((stem, e)) if !stem.is_empty() && !e.is_empty() => e.to_string(),
-        _ => "png".to_string(),
+        _ => String::new(),
     }
 }

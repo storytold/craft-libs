@@ -640,3 +640,40 @@ fn a_link_target_ends_at_a_semicolon_after_an_escaped_backslash() {
     // one backslash still escapes the semicolon
     assert!(link(r"https://example.com/a\;b;1;0;0;").expect("a link").contains("a;b"));
 }
+
+/// A JPEG whose frame marker follows fill bytes (0xFF 0xFF 0xC0) still tells its pixel size;
+/// before, the second 0xFF read as the marker and the size was lost (a tiled background then
+/// became one stretched picture).
+#[test]
+fn jpeg_sizes_are_read_past_fill_bytes() {
+    let frame = |fill: usize| {
+        let mut b = vec![0xFF, 0xD8];
+        b.extend(std::iter::repeat_n(0xFF, fill + 1));
+        // SOF0: length 17, precision 8, height 32, width 48
+        b.extend([0xC0, 0x00, 0x11, 0x08, 0x00, 0x20, 0x00, 0x30]);
+        b.extend([0u8; 16]);
+        b
+    };
+    assert_eq!(super::media::pixel_size(&frame(0)), Some((48, 32)));
+    assert_eq!(super::media::pixel_size(&frame(2)), Some((48, 32)));
+}
+
+/// A picture stored without a file extension is kept as what its bytes are (a JPEG as .jpg);
+/// before, it was always called a PNG.
+#[test]
+fn pictures_without_an_extension_are_named_by_their_bytes() {
+    let hpf = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="pic" href="BinData/photo" media-type="image/jpeg"/><opf:item id="s" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="s"/></opf:spine></opf:package>"#;
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:pic><hp:sz width="7200" height="7200"/><hp:pos treatAsChar="1"/><hc:img xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core" binaryItemIDRef="pic"/></hp:pic></hp:run></hp:p></hs:sec>"#
+    );
+    let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0];
+    let doc = read_bytes(&package(&[
+        ("Contents/content.hpf", hpf.as_bytes()),
+        ("Contents/header.xml", EMPTY_HEAD),
+        ("Contents/section0.xml", sec.as_bytes()),
+        ("BinData/photo", &jpeg),
+    ]))
+    .unwrap();
+    let keys: Vec<&String> = doc.media.keys().collect();
+    assert!(keys.len() == 1 && keys[0].ends_with(".jpg"), "{keys:?}");
+}
