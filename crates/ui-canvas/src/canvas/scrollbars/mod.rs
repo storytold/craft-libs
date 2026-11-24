@@ -477,7 +477,9 @@ impl<'a> CanvasScrollbars<'a> {
     }
 
     fn bars(&self, view: &CanvasView, rect: Rect, style: &ScrollbarsStyle, held: Option<&HeldThumb>) -> Bars {
-        Bars::of(view, self.document, self.overscroll, !self.vertical_only, rect, style, held)
+        // A horizontal thumb held keeps its bar until the press ends, so its release closes the drag.
+        let horizontal = !self.vertical_only || held.is_some_and(|held| held.on(Axis::X));
+        Bars::of(view, self.document, self.overscroll, horizontal, rect, style, held)
     }
 }
 

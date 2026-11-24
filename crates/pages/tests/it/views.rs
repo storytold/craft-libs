@@ -433,6 +433,31 @@ fn assert_centre_kept(out: &Out, before: (usize, kurbo::Point), what: &str) {
 
 /// A written zoom keeps the point at the centre; a new room (a panel opened beside the view) refits and keeps the
 /// current page's top where it was, as production did.
+/// The horizontal scroll bar the fixture shows, if any.
+fn horizontal_bar(fixture: &Fixture) -> Option<egui::Rect> {
+    fixture.by_role(Role::SCROLL_BAR).iter().map(|bar| bar.rect).find(|rect| rect.width() > rect.height())
+}
+
+#[trial]
+fn a_horizontal_thumb_held_while_the_pages_come_to_fit_keeps_its_bar_until_the_release() {
+    let (mut fixture, state, _) = layout_rig(
+        3,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = 3.0;
+        }),
+    );
+    let bar = horizontal_bar(&fixture).expect("pages wider than the view have a horizontal bar");
+    // The view starts at the left edge, so the thumb is at the start of the track.
+    let from = pos2(bar.left() + 4.0, bar.center().y);
+    fixture.drag_hold_at(from, vec2(20.0, 0.0));
+    state.borrow_mut().zoom = 0.5;
+    fixture.idle(3);
+    assert!(horizontal_bar(&fixture).is_some(), "the held thumb keeps its bar, so its release reaches it");
+    fixture.release_at(from + vec2(20.0, 0.0)).idle(2);
+    assert!(horizontal_bar(&fixture).is_none(), "after the release, pages that fit have no horizontal bar");
+}
+
 #[trial]
 fn a_changed_zoom_keeps_the_point_at_the_centre_and_a_new_room_the_current_pages_top() {
     // The app's zoom.
