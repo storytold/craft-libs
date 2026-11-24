@@ -102,11 +102,50 @@ pub struct Capture {
     saved: Vec<PaintState>,
 }
 
+/// The most Separation and DeviceN spaces written; further ones paint in their alternate.
+pub const MAX_SPOT_SPACES: usize = 256;
+
+/// The most colourants a DeviceN space written as one may have (PDF 1.5's limit).
+pub const MAX_COLORANTS: usize = 8;
+
+/// A Separation (one colourant) or DeviceN space, its tint transform sampled into `alt`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpotSpace {
+    pub names: Vec<Vec<u8>>,
+    pub alt: OutSpace,
+    /// Samples along each input; `samples` holds `size^names.len()` colours of 8-bit `alt`
+    /// components, the first input varying fastest.
+    pub size: usize,
+    pub samples: Vec<u8>,
+}
+
+/// The colour a paint lays down.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ink {
+    Device(DevColor),
+    /// Tints in spot space `n` (from [`Out::spot_space`]).
+    Spot(usize, Vec<f64>),
+}
+
+/// What a fill or stroke paints: its ink, and whether it overprints (`setoverprint`) rather
+/// than knocking out the inks it doesn't name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paint {
+    pub ink: Ink,
+    pub overprint: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct PaintState {
-    fill: Option<DevColor>,
-    stroke: Option<DevColor>,
+    fill: Option<Ink>,
+    stroke: Option<Ink>,
+    /// `OP` and `op`, as the last ExtGState set them (off is PDF's initial state).
+    overprint: bool,
 }
+
+/// The ExtGStates that turn overprint on and off.
+const OVERPRINT: &[u8] = b"OP1";
+const KNOCKOUT: &[u8] = b"OP0";
 
 pub struct StrokeParams<'a> {
     pub width: f64,
@@ -121,6 +160,9 @@ pub struct Out {
     images: Vec<Image>,
     shadings: Vec<Shading>,
     tilings: Vec<Tiling>,
+    spots: Vec<SpotSpace>,
+    /// Any paint overprinted, so the overprint ExtGStates are written.
+    overprinted: bool,
     origin: (f64, f64),
     applied: Vec<Rc<Clip>>,
     state: PaintState,
@@ -143,6 +185,8 @@ impl Out {
             images: Vec::new(),
             shadings: Vec::new(),
             tilings: Vec::new(),
+            spots: Vec::new(),
+            overprinted: false,
             origin,
             applied: Vec::new(),
             state: PaintState::default(),
@@ -212,36 +256,75 @@ impl Out {
         Ok(())
     }
 
-    fn set_fill(&mut self, color: DevColor) {
-        if self.state.fill == Some(color) {
-            return;
+    /// The spot space `s` is written as (an equal one is shared), or None past
+    /// [`MAX_SPOT_SPACES`].
+    pub fn spot_space(&mut self, s: SpotSpace) -> Option<usize> {
+        if let Some(n) = self.spots.iter().position(|t| *t == s) {
+            return Some(n);
         }
-        match color {
-            DevColor::Gray(g) => self.c.set_fill_gray(f(g)),
-            DevColor::Rgb(r, g, b) => self.c.set_fill_rgb(f(r), f(g), f(b)),
-            DevColor::Cmyk(c, m, y, k) => self.c.set_fill_cmyk(f(c), f(m), f(y), f(k)),
-        };
-        self.state.fill = Some(color);
+        if self.spots.len() >= MAX_SPOT_SPACES {
+            return None;
+        }
+        self.spots.push(s);
+        Some(self.spots.len() - 1)
     }
 
-    fn set_stroke(&mut self, color: DevColor) {
-        if self.state.stroke == Some(color) {
+    /// Overprint on or off for the paints that follow (after [`Out::sync_clip`], whose `Q`
+    /// can restore an earlier state).
+    fn set_overprint(&mut self, on: bool) {
+        if self.state.overprint == on {
             return;
         }
-        match color {
-            DevColor::Gray(g) => self.c.set_stroke_gray(f(g)),
-            DevColor::Rgb(r, g, b) => self.c.set_stroke_rgb(f(r), f(g), f(b)),
-            DevColor::Cmyk(c, m, y, k) => self.c.set_stroke_cmyk(f(c), f(m), f(y), f(k)),
-        };
-        self.state.stroke = Some(color);
+        self.c.set_parameters(Name(if on { OVERPRINT } else { KNOCKOUT }));
+        self.state.overprint = on;
+        self.overprinted = true;
     }
 
-    pub fn fill(&mut self, clip: &Option<Rc<Clip>>, path: &[Seg], eo: bool, color: DevColor) -> Result<(), String> {
+    fn set_fill(&mut self, ink: &Ink) {
+        if self.state.fill.as_ref() == Some(ink) {
+            return;
+        }
+        match ink {
+            Ink::Device(DevColor::Gray(g)) => self.c.set_fill_gray(f(*g)),
+            Ink::Device(DevColor::Rgb(r, g, b)) => self.c.set_fill_rgb(f(*r), f(*g), f(*b)),
+            Ink::Device(DevColor::Cmyk(c, m, y, k)) => self.c.set_fill_cmyk(f(*c), f(*m), f(*y), f(*k)),
+            Ink::Spot(n, tints) => {
+                if !matches!(&self.state.fill, Some(Ink::Spot(m, _)) if m == n) {
+                    let name = format!("CS{n}");
+                    self.c.set_fill_color_space(Name(name.as_bytes()));
+                }
+                self.c.set_fill_color(tints.iter().map(|t| f(*t)))
+            }
+        };
+        self.state.fill = Some(ink.clone());
+    }
+
+    fn set_stroke(&mut self, ink: &Ink) {
+        if self.state.stroke.as_ref() == Some(ink) {
+            return;
+        }
+        match ink {
+            Ink::Device(DevColor::Gray(g)) => self.c.set_stroke_gray(f(*g)),
+            Ink::Device(DevColor::Rgb(r, g, b)) => self.c.set_stroke_rgb(f(*r), f(*g), f(*b)),
+            Ink::Device(DevColor::Cmyk(c, m, y, k)) => self.c.set_stroke_cmyk(f(*c), f(*m), f(*y), f(*k)),
+            Ink::Spot(n, tints) => {
+                if !matches!(&self.state.stroke, Some(Ink::Spot(m, _)) if m == n) {
+                    let name = format!("CS{n}");
+                    self.c.set_stroke_color_space(Name(name.as_bytes()));
+                }
+                self.c.set_stroke_color(tints.iter().map(|t| f(*t)))
+            }
+        };
+        self.state.stroke = Some(ink.clone());
+    }
+
+    pub fn fill(&mut self, clip: &Option<Rc<Clip>>, path: &[Seg], eo: bool, paint: &Paint) -> Result<(), String> {
         if !path.iter().any(|s| !matches!(s, Seg::Move(..))) {
             return Ok(());
         }
         self.sync_clip(clip)?;
-        self.set_fill(color);
+        self.set_overprint(paint.overprint);
+        self.set_fill(&paint.ink);
         self.path(path)?;
         if eo {
             self.c.fill_even_odd();
@@ -253,13 +336,14 @@ impl Out {
     }
 
     /// Stroke a device-space path drawn under `ctm` (the pen is shaped in user space).
-    pub fn stroke(&mut self, clip: &Option<Rc<Clip>>, path: &[Seg], ctm: &M, p: &StrokeParams, color: DevColor) -> Result<(), String> {
+    pub fn stroke(&mut self, clip: &Option<Rc<Clip>>, path: &[Seg], ctm: &M, p: &StrokeParams, paint: &Paint) -> Result<(), String> {
         if !path.iter().any(|s| !matches!(s, Seg::Move(..))) {
             return Ok(());
         }
         let Some(inv) = ctm.inv() else { return Ok(()) };
         self.sync_clip(clip)?;
-        self.set_stroke(color);
+        self.set_overprint(paint.overprint);
+        self.set_stroke(&paint.ink);
         self.c.save_state();
         self.c.transform(ctm.0.map(f));
         let user: Vec<Seg> = path.iter().map(|s| s.map(&inv)).collect();
@@ -286,7 +370,7 @@ impl Out {
     }
 
     /// Paint an image: `cm` maps the unit square onto the page; stencil masks use `fill`.
-    pub fn image(&mut self, clip: &Option<Rc<Clip>>, cm: &M, img: Image, fill: Option<DevColor>) -> Result<(), String> {
+    pub fn image(&mut self, clip: &Option<Rc<Clip>>, cm: &M, img: Image, fill: Option<&Ink>, overprint: bool) -> Result<(), String> {
         if self.images.len() >= MAX_IMAGES {
             return Err("too many images".into());
         }
@@ -294,8 +378,9 @@ impl Out {
             return Ok(());
         }
         self.sync_clip(clip)?;
-        if let Some(color) = fill {
-            self.set_fill(color);
+        self.set_overprint(overprint);
+        if let Some(ink) = fill {
+            self.set_fill(ink);
         }
         let n = self.images.len();
         self.images.push(img);
@@ -337,11 +422,12 @@ impl Out {
     }
 
     /// Fill a device-space path with tiling pattern `n`.
-    pub fn fill_tiling(&mut self, clip: &Option<Rc<Clip>>, path: &[Seg], eo: bool, n: usize) -> Result<(), String> {
+    pub fn fill_tiling(&mut self, clip: &Option<Rc<Clip>>, path: &[Seg], eo: bool, n: usize, overprint: bool) -> Result<(), String> {
         if !path.iter().any(|s| !matches!(s, Seg::Move(..))) {
             return Ok(());
         }
         self.sync_clip(clip)?;
+        self.set_overprint(overprint);
         self.c.set_fill_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
         let name = format!("P{n}");
         self.c.set_fill_pattern(None, Name(name.as_bytes()));
@@ -357,7 +443,7 @@ impl Out {
     }
 
     /// Paint a shading in shading space `m` (inside `path` too, for a shading pattern fill).
-    pub fn shade(&mut self, clip: &Option<Rc<Clip>>, path: Option<&[Seg]>, eo: bool, m: &M, s: Shading) -> Result<(), String> {
+    pub fn shade(&mut self, clip: &Option<Rc<Clip>>, path: Option<&[Seg]>, eo: bool, m: &M, s: Shading, overprint: bool) -> Result<(), String> {
         if self.shadings.len() >= MAX_IMAGES {
             return Err("too many shadings".into());
         }
@@ -365,6 +451,7 @@ impl Out {
             return Ok(());
         }
         self.sync_clip(clip)?;
+        self.set_overprint(overprint);
         self.c.save_state();
         if let Some(p) = path {
             self.path(p)?;
@@ -410,8 +497,24 @@ impl Out {
         let image_refs: Vec<(Ref, Option<Ref>)> = self.images.iter().map(|i| (alloc(), i.smask.as_ref().map(|_| alloc()))).collect();
         let shading_refs: Vec<(Ref, Ref)> = self.shadings.iter().map(|_| (alloc(), alloc())).collect();
         let tiling_refs: Vec<Ref> = self.tilings.iter().map(|_| alloc()).collect();
+        let spot_refs: Vec<Ref> = self.spots.iter().map(|_| alloc()).collect();
+        let overprint_refs = self.overprinted.then(|| (alloc(), alloc()));
         // Every resource is listed for the page and for each pattern cell (names are global).
         let resources = |res: &mut pdf_writer::writers::Resources<'_>| {
+            if !self.spots.is_empty() {
+                let mut cs = res.color_spaces();
+                for (i, (s, r)) in self.spots.iter().zip(&spot_refs).enumerate() {
+                    let name = format!("CS{i}");
+                    write_spot_space(cs.insert(Name(name.as_bytes())).start::<pdf_writer::writers::ColorSpace>(), s, *r);
+                }
+                cs.finish();
+            }
+            if let Some((on, off)) = overprint_refs {
+                let mut gs = res.ext_g_states();
+                gs.pair(Name(OVERPRINT), on);
+                gs.pair(Name(KNOCKOUT), off);
+                gs.finish();
+            }
             let mut xo = res.x_objects();
             for (i, (r, _)) in image_refs.iter().enumerate() {
                 let name = format!("Im{i}");
@@ -510,6 +613,20 @@ impl Out {
         for (s, (r, fr)) in self.shadings.iter().zip(&shading_refs) {
             write_shading(&mut pdf, s, *r, *fr);
         }
+        for (s, r) in self.spots.iter().zip(&spot_refs) {
+            let inputs = s.names.len();
+            let size = i32::try_from(s.size).unwrap_or(2);
+            let mut func = pdf.sampled_function(*r, &s.samples);
+            func.domain((0..inputs).flat_map(|_| [0.0, 1.0]));
+            func.range((0..s.alt.comps()).flat_map(|_| [0.0, 1.0]));
+            func.size((0..inputs).map(|_| size));
+            func.bits_per_sample(8);
+        }
+        if let Some((on, off)) = overprint_refs {
+            // PostScript's overprint covers strokes and fills alike, and has no nonzero mode.
+            pdf.ext_graphics(on).overprint(true).overprint_fill(true);
+            pdf.ext_graphics(off).overprint(false).overprint_fill(false);
+        }
         for (t, r) in self.tilings.iter().zip(&tiling_refs) {
             let z = miniz_oxide::deflate::compress_to_vec_zlib(&t.content, 6);
             let mut p = pdf.tiling_pattern(*r, &z);
@@ -535,6 +652,23 @@ fn set_space(cs: pdf_writer::writers::ColorSpace<'_>, s: OutSpace) {
         OutSpace::Gray => cs.device_gray(),
         OutSpace::Rgb => cs.device_rgb(),
         OutSpace::Cmyk => cs.device_cmyk(),
+    }
+}
+
+/// `[/Separation name alt fn]`, or `[/DeviceN [names] alt fn]` for several colourants, with
+/// the sampled tint transform at `func`.
+fn write_spot_space(cs: pdf_writer::writers::ColorSpace<'_>, s: &SpotSpace, func: Ref) {
+    match s.names.as_slice() {
+        [name] => {
+            let mut sep = cs.separation(Name(name));
+            set_space(sep.alternate_color_space(), s.alt);
+            sep.tint_ref(func);
+        }
+        names => {
+            let mut dn = cs.device_n(names.iter().map(|n| Name(n)));
+            set_space(dn.alternate_color_space(), s.alt);
+            dn.tint_ref(func);
+        }
     }
 }
 

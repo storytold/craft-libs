@@ -214,7 +214,7 @@ fn paint(ip: &mut Interp, p: Params, space: Space) -> R {
     if let Some(space) = img_space {
         let img =
             Image { w: p.w as u32, h: p.h as u32, bpc: bpc as u8, space: Some(space), decode, data, dct, interpolate: p.interpolate, smask: None };
-        return ip.out.image(&ip.gs.clip, &cm, img, None).map_err(PsErr::Fatal);
+        return ip.out.image(&ip.gs.clip, &cm, img, None, ip.gs.overprint).map_err(PsErr::Fatal);
     }
     // Other spaces (Separation, DeviceN, Indexed over them, Lab): convert each pixel, through a
     // table of the 256 values when there is one component.
@@ -252,7 +252,7 @@ fn paint(ip: &mut Interp, p: Params, space: Space) -> R {
             interpolate: p.interpolate,
             smask: None,
         };
-        return ip.out.image(&ip.gs.clip, &cm, img, None).map_err(PsErr::Fatal);
+        return ip.out.image(&ip.gs.clip, &cm, img, None, ip.gs.overprint).map_err(PsErr::Fatal);
     }
     if p.w * p.h > 2_000_000 {
         ip.warnings.push("multi-component image in a special colour space too large to convert".into());
@@ -290,7 +290,7 @@ fn paint(ip: &mut Interp, p: Params, space: Space) -> R {
         interpolate: p.interpolate,
         smask: None,
     };
-    ip.out.image(&ip.gs.clip, &cm, img, None).map_err(PsErr::Fatal)
+    ip.out.image(&ip.gs.clip, &cm, img, None, ip.gs.overprint).map_err(PsErr::Fatal)
 }
 
 fn push_color(out: &mut Vec<u8>, c: DevColor, cmyk: bool) {
@@ -366,9 +366,9 @@ pub fn imagemask(ip: &mut Interp) -> R {
     if ip.gs.nulldev {
         return Ok(());
     }
-    let color = gfx::current_color(ip)?;
+    let paint = gfx::current_paint(ip)?;
     // PDF stencil masks paint 0 bits; polarity true paints the 1 bits.
     let decode = if polarity { Some(vec![1.0, 0.0]) } else { None };
     let img = Image { w: p.w as u32, h: p.h as u32, bpc: 1, space: None, decode, data, dct: false, interpolate: false, smask: None };
-    ip.out.image(&ip.gs.clip, &cm, img, Some(color)).map_err(PsErr::Fatal)
+    ip.out.image(&ip.gs.clip, &cm, img, Some(&paint.ink), paint.overprint).map_err(PsErr::Fatal)
 }

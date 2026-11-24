@@ -1,6 +1,7 @@
 //! The graphics state: transformation, current path (kept in device space, as PostScript
 //! defines it), colour, line parameters and clipping.
 
+use std::cell::OnceCell;
 use std::rc::Rc;
 
 use crate::read::obj::{Obj, PDict};
@@ -154,6 +155,10 @@ pub enum Space {
         names: Vec<Vec<u8>>,
         alt: Box<Space>,
         tint: Obj,
+        /// The PDF colour space this one is written as, set by its first paint (which samples
+        /// the tint transform); `None` inside when it paints in its alternate instead. Copies
+        /// of the space (`gsave`, `currentgstate`) share it.
+        written: Rc<OnceCell<Option<usize>>>,
     },
     Indexed {
         base: Box<Space>,

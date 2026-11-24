@@ -309,7 +309,7 @@ pub fn shfill(ip: &mut Interp) -> R {
     }
     let Some(s) = build(ip, &d)? else { return Ok(()) };
     let ctm = ip.gs.ctm;
-    ip.out.shade(&ip.gs.clip, None, false, &ctm, s).map_err(PsErr::Fatal)
+    ip.out.shade(&ip.gs.clip, None, false, &ctm, s, ip.gs.overprint).map_err(PsErr::Fatal)
 }
 
 /// Fill `path` with the current shading pattern; false when the pattern isn't a shading.
@@ -327,7 +327,7 @@ pub fn fill_pattern(ip: &mut Interp, path: &[Seg], eo: bool) -> R<bool> {
         _ => M::ID,
     };
     let Some(s) = build(ip, &sh)? else { return Ok(true) };
-    ip.out.shade(&ip.gs.clip, Some(path), eo, &m, s).map_err(PsErr::Fatal)?;
+    ip.out.shade(&ip.gs.clip, Some(path), eo, &m, s, ip.gs.overprint).map_err(PsErr::Fatal)?;
     Ok(true)
 }
 
@@ -347,7 +347,7 @@ fn tiling(ip: &mut Interp, p: &PDict, path: &[Seg], eo: bool) -> R {
             n
         }
     };
-    ip.out.fill_tiling(&ip.gs.clip, path, eo, n).map_err(PsErr::Fatal)
+    ip.out.fill_tiling(&ip.gs.clip, path, eo, n, ip.gs.overprint).map_err(PsErr::Fatal)
 }
 
 fn cell(ip: &mut Interp, p: &PDict, color: Option<Vec<f64>>) -> R<usize> {
