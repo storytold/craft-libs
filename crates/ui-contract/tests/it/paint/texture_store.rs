@@ -4,8 +4,8 @@ use craft_behavior::PixelSize;
 use craft_host::ManualJobs;
 use craft_host::queue::Cancel;
 use craft_ui::primitives::{
-    LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureBudget, TextureLoader, TextureState, TextureStore, TextureStoreOptions,
-    ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails,
+    LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureBudget, TextureLoader, TextureState, TextureStore,
+    TextureStoreOptions, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails,
 };
 use craft_ui::testing::{Frames, trial};
 use egui::{Color32, ColorImage, Context, Rect, TextureId, pos2};
@@ -413,7 +413,7 @@ fn pending_job_does_not_overwrite_installed_region_update() {
 }
 
 #[trial]
-fn put_region_rejects_update_when_baseline_mismatches() {
+fn put_region_checked_atomically_validates_baseline() {
     let mut frames = Frames::new();
     let ctx = frames.ctx.clone();
     let (loader, jobs) = loader_with(&ctx, 1, 16);
@@ -428,13 +428,117 @@ fn put_region_rejects_update_when_baseline_mismatches() {
     });
     assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(1)));
 
-    // Try put_region with mismatched baseline (expecting revision 999 instead of 1)
-    let res = loader.cache().put_region(&ctx, &1, Some(Revision::new(999)), Revision::new(2), [0, 0], square(SMALL, shade(200)));
+    // Try put_region_checked with mismatched baseline (expecting revision 999 instead of 1)
+    let res = loader.cache().put_region_checked(&ctx, &1, Some(Revision::new(999)), Revision::new(2), [0, 0], square(SMALL, shade(200)));
     assert!(res.is_none(), "mismatched baseline must be rejected");
     assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(1)), "texture revision unchanged");
 
-    // Try put_region with matching baseline (expecting revision 1)
-    let res = loader.cache().put_region(&ctx, &1, Some(Revision::new(1)), Revision::new(2), [0, 0], square(SMALL, shade(200)));
+    // Try put_region_checked with matching baseline (expecting revision 1)
+    let res = loader.cache().put_region_checked(&ctx, &1, Some(Revision::new(1)), Revision::new(2), [0, 0], square(SMALL, shade(200)));
     assert!(res.is_some(), "matching baseline is accepted");
     assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(2)), "texture revision advanced to 2");
+
+    // 5-argument put_region compatibility check
+    let res = loader.cache().put_region(&ctx, &1, Revision::new(3), [0, 0], square(SMALL, shade(150)));
+    assert!(res.is_some(), "5-arg put_region succeeds");
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(3)), "texture revision advanced to 3");
+}
+
+#[trial]
+fn cancellation_purges_already_finished_job_from_queue() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let (loader, jobs) = loader_with(&ctx, 1, 16);
+
+    // Frame 1: Submit a job for key 1 at revision 1 that fails
+    frame(&mut frames, || {
+        loader.submit(&ctx, 1, Revision::new(1), Priority::VISIBLE, |_| Err(LoadFailure::Unreadable));
+    });
+
+    // Worker thread completes the job between frames, placing result in the queue buffer
+    jobs.run_all();
+
+    // Cancel key 1 before poll / run_frame_work drains the queue
+    loader.cancel(&ctx, &1);
+
+    // Frame 2: Submit a replacement job for key 1 at revision 1 that succeeds
+    frame(&mut frames, || {
+        loader.submit(&ctx, 1, Revision::new(1), Priority::VISIBLE, |_| Ok(LoadedPicture::Image(square(LARGE, shade(100)))));
+    });
+    jobs.run_all();
+
+    // Verify replacement succeeds and the stale failure from the cancelled job was purged
+    frame(&mut frames, || {
+        let state = loader.ask(&ctx, &1, Revision::new(1), Priority::VISIBLE).expect("settled");
+        assert!(matches!(state, TextureState::Ready(_)), "replacement succeeded, got {state:?}");
+    });
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(1)));
+}
+
+struct FallbackOnRejectSource {
+    phase: Cell<usize>,
+    saw_fallback_request: Cell<bool>,
+}
+
+impl ThumbSource<u32> for FallbackOnRejectSource {
+    fn revision(&self, _key: &u32, _request: &ThumbRequest) -> Revision {
+        Revision::new(self.phase.get() as u64)
+    }
+
+    fn render(&self, _key: &u32, request: &ThumbRequest) -> ThumbRender {
+        match self.phase.get() {
+            1 => ThumbRender::Ready(square(LARGE, shade(10))),
+            2 => {
+                if request.patchable {
+                    // Try returning a rejected region patch (out of bounds)
+                    ThumbRender::Region { origin: [9999, 9999], image: square(SMALL, shade(200)) }
+                } else {
+                    self.saw_fallback_request.set(true);
+                    assert_eq!(request.resident_revision, None);
+                    ThumbRender::Ready(square(LARGE, shade(200)))
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[trial]
+fn patch_rejection_falls_back_to_full_render() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-fallback", ThumbnailOptions::new());
+    let source = FallbackOnRejectSource { phase: Cell::new(1), saw_fallback_request: Cell::new(false) };
+    let req = ThumbRequest::for_cell(LARGE as f32, 1.0);
+
+    // Frame 1: Install rev 1
+    let mut rev1 = None;
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        assert!(matches!(state, TextureState::Ready(_)));
+        rev1 = thumbs.cache().texture_revision(&ctx, &1);
+    });
+    let rev1 = rev1.expect("rev 1 installed");
+
+    // Frame 2: Revision 2 attempts region patch, which fails and immediately falls back to full render
+    source.phase.set(2);
+    frame(&mut frames, || {
+        let state = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+        assert!(matches!(state, TextureState::Ready(_)), "settles into Ready on fallback");
+    });
+    assert!(source.saw_fallback_request.get(), "producer received fallback request with patchable: false");
+    let rev2 = thumbs.cache().texture_revision(&ctx, &1).expect("rev 2 installed");
+    assert_ne!(rev1, rev2, "texture revision advanced on full render fallback");
+}
+
+#[trial]
+fn downsampled_texture_is_not_patchable() {
+    let frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    ctx.input_mut(|i| i.max_texture_side = 256);
+    let store = TextureStore::<u32>::in_context(&ctx, "test-downsample", TextureStoreOptions::thumbnails());
+    let big_image = ColorImage::filled([512, 512], shade(50));
+    store.put(&ctx, 1, Revision::new(1), big_image);
+    assert!(store.has_texture(&ctx, &1), "has texture");
+    assert!(!store.is_patchable(&ctx, &1), "downsampled texture (factor > 1) is not patchable");
 }

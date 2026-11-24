@@ -358,6 +358,8 @@ struct Entry {
     picture: Picture,
     /// The last frame `state`, `put` or a paint saw it.
     seen: u64,
+    /// Whether this texture can accept region patches (set to false if a patch was rejected).
+    patchable: bool,
 }
 
 struct Inner<K> {
@@ -476,6 +478,24 @@ impl<K: TextureKey> TextureStore<K> {
         self.with(ctx, |inner| matches!(inner.entries.get(key).map(|e| &e.picture), Some(Picture::Texture { .. })))
     }
 
+    /// Whether `key` has an unpacked GPU texture resident in the store that is not downsampled (`factor == 1`),
+    /// has not had a region patch rejected, and can accept in-place region patches.
+    pub fn is_patchable(&self, ctx: &Context, key: &K) -> bool {
+        self.with(ctx, |inner| match &inner.entries.get(key) {
+            Some(Entry { patchable: true, picture: Picture::Texture { factor, .. }, .. }) => *factor == 1,
+            _ => false,
+        })
+    }
+
+    /// Marks `key`'s texture as not accepting region patches, requiring a full render for subsequent updates.
+    pub fn mark_unpatchable(&self, ctx: &Context, key: &K) {
+        self.with(ctx, |inner| {
+            if let Some(entry) = inner.entries.get_mut(key) {
+                entry.patchable = false;
+            }
+        });
+    }
+
     /// The revision of `key`'s unpacked GPU texture resident in the store, if any.
     pub fn texture_revision(&self, ctx: &Context, key: &K) -> Option<Revision> {
         self.with(ctx, |inner| match &inner.entries.get(key) {
@@ -527,7 +547,7 @@ impl<K: TextureKey> TextureStore<K> {
             inner.roll_uploads(frame);
             inner.uploads += 1;
             inner.upload_bytes += bytes;
-            inner.store(key, Entry { revision, picture: Picture::Texture { handle, source, factor }, seen: frame });
+            inner.store(key, Entry { revision, picture: Picture::Texture { handle, source, factor }, seen: frame, patchable: true });
             inner.evict(frame);
         });
         texture
@@ -575,7 +595,7 @@ impl<K: TextureKey> TextureStore<K> {
             if let Some(shared) = inner.pages.get_mut(page) {
                 shared.seen = frame;
             }
-            inner.store(key.clone(), Entry { revision, picture: Picture::Packed { page, origin, size }, seen: frame });
+            inner.store(key.clone(), Entry { revision, picture: Picture::Packed { page, origin, size }, seen: frame, patchable: false });
             inner.evict(frame);
         });
         Ok(texture)
@@ -585,15 +605,21 @@ impl<K: TextureKey> TextureStore<K> {
     /// in the pixels of the image last put (the navigator's damage updates). The id stays. Returns `None` and
     /// changes nothing when the key has no picture, or when the region does not fit the stored image.
     ///
-    /// If `baseline` is `Some`, the update is rejected and returns `None` unless the resident texture's current
-    /// revision equals `baseline`.
-    ///
     /// An image that was reduced by the whole factor `f` on put is updated reduced the same way: the region's
     /// origin must be a multiple of `f`, and its far edges multiples of `f` or the image's own edges; it is
     /// box-averaged by `f` and written at `origin / f`. A region off that grid returns `None`, and the app puts the
     /// whole image. A picture on a packed store's page also returns `None`, as for a key with no texture, so the
     /// caller puts the whole picture: packed pictures are small.
-    pub fn put_region(
+    pub fn put_region(&self, ctx: &Context, key: &K, revision: Revision, origin: [u32; 2], image: ColorImage) -> Option<CachedTexture> {
+        self.put_region_checked(ctx, key, None, revision, origin, image)
+    }
+
+    /// Like [`put_region`](Self::put_region), but additionally checks that the resident texture's current revision
+    /// matches `baseline` (when `baseline` is `Some`). If `baseline` does not match, or the region is invalid,
+    /// returns `None` and leaves the stored texture unchanged.
+    ///
+    /// Baseline verification and region replacement are atomic: verified and updated in a single lock acquisition.
+    pub fn put_region_checked(
         &self,
         ctx: &Context,
         key: &K,
@@ -604,36 +630,34 @@ impl<K: TextureKey> TextureStore<K> {
     ) -> Option<CachedTexture> {
         let frame = pass::root_frame_nr(ctx);
         let extent = texels(image.size);
-        let (mut handle, source, factor, filter) = self.with(ctx, |inner| {
+        self.with(ctx, |inner| {
             if let Some(base) = baseline {
-                let entry = inner.entries.get(key)?;
+                let entry = inner.entries.get_mut(key)?;
                 if entry.revision != base {
+                    entry.patchable = false;
                     return None;
                 }
             }
             inner.roll_uploads(frame);
-            inner.region_target(key, origin, extent)
-        })?;
-        let sent = if factor > 1 { reduce_image(&image, factor) } else { image };
-        let uploaded = byte_size(texels(sent.size));
-        if uploaded > 0 {
-            textures::replace_region(&mut handle, [origin[0] / factor, origin[1] / factor], sent, filter);
-        }
-        let texture = cached(&handle, source, factor);
-        self.with(ctx, |inner| {
-            let entry = inner.entries.get_mut(key)?;
-            if let Some(base) = baseline
-                && entry.revision != base
-            {
+            let Some((mut handle, source, factor, filter)) = inner.region_target(key, origin, extent) else {
+                if let Some(entry) = inner.entries.get_mut(key) {
+                    entry.patchable = false;
+                }
                 return None;
+            };
+            let sent = if factor > 1 { reduce_image(&image, factor) } else { image };
+            let uploaded = byte_size(texels(sent.size));
+            if uploaded > 0 {
+                textures::replace_region(&mut handle, [origin[0] / factor, origin[1] / factor], sent, filter);
             }
+            let texture = cached(&handle, source, factor);
+            let entry = inner.entries.get_mut(key)?;
             entry.revision = revision;
             entry.seen = frame;
             inner.uploads += 1;
             inner.upload_bytes += uploaded;
-            Some(())
-        })?;
-        Some(texture)
+            Some(texture)
+        })
     }
 
     /// `key`'s picture at `revision`, calling `make` and putting its image only when the entry has another revision
@@ -674,7 +698,7 @@ impl<K: TextureKey> TextureStore<K> {
     fn put_marker(&self, ctx: &Context, key: K, revision: Revision, picture: Picture) {
         let frame = pass::root_frame_nr(ctx);
         self.with(ctx, |inner| {
-            inner.store(key, Entry { revision, picture, seen: frame });
+            inner.store(key, Entry { revision, picture, seen: frame, patchable: false });
             inner.evict(frame);
         });
     }

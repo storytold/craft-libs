@@ -301,6 +301,10 @@ impl<K: TextureKey> TextureLoader<K> {
     /// Discards any pending asked or waiting request for `key`, and cancels its running queue job.
     pub fn cancel(&self, ctx: &Context, key: &K) {
         self.with(ctx, |pool| {
+            while let Some(finished) = pool.queue.try_recv() {
+                let (revision, result) = finished.result;
+                pool.waiting.push((finished.key, revision, result));
+            }
             pool.asked.remove(key);
             pool.waiting.retain(|(k, _, _)| k != key);
             pool.queue.reprioritize(|k, priority| if k == key { None } else { Some(priority) });
@@ -368,7 +372,8 @@ impl<K: TextureKey> TextureLoader<K> {
                         repaint::request(ctx);
                         break;
                     }
-                    if self.store.put_region(ctx, &key, baseline, revision, origin, image).is_none() {
+                    if self.store.put_region_checked(ctx, &key, baseline, revision, origin, image).is_none() {
+                        self.store.mark_unpatchable(ctx, &key);
                         repaint::request(ctx);
                     }
                 }

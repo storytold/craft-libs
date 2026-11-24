@@ -361,8 +361,8 @@ impl<K: TextureKey> Thumbnails<K> {
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
         let resident_revision = self.loader.cache().texture_revision(ctx, key);
-        let patchable = resident_revision.is_some();
-        let request = ThumbRequest { side, patchable, resident_revision, ..*request };
+        let patchable = self.loader.cache().is_patchable(ctx, key);
+        let request = ThumbRequest { side, patchable, resident_revision: if patchable { resident_revision } else { None }, ..*request };
         let revision = Revision::of(&(source.revision(key, &request), side, region_bits(request.region)));
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
             return state;
@@ -392,14 +392,32 @@ impl<K: TextureKey> Thumbnails<K> {
                 TextureState::Ready(texture)
             }
             ThumbRender::Region { origin, image } => {
-                if let Some(texture) = self.loader.cache().put_region(ctx, key, resident_revision, revision, origin, image) {
+                if let Some(texture) = self.loader.cache().put_region_checked(ctx, key, resident_revision, revision, origin, image) {
                     self.loader.cancel(ctx, key);
                     let mut inner = self.lock();
                     inner.renders += 1;
                     TextureState::Ready(texture)
                 } else {
-                    repaint::request(ctx);
-                    stand_in()
+                    let full_request = ThumbRequest { patchable: false, resident_revision: None, ..request };
+                    match source.render(key, &full_request) {
+                        ThumbRender::Ready(image) => {
+                            self.loader.cancel(ctx, key);
+                            let texture = self.loader.cache().put(ctx, key.clone(), revision, image);
+                            let mut inner = self.lock();
+                            inner.renders += 1;
+                            TextureState::Ready(texture)
+                        }
+                        ThumbRender::Blank => {
+                            self.loader.cancel(ctx, key);
+                            self.loader.cache().put_empty(ctx, key.clone(), revision);
+                            TextureState::Empty
+                        }
+                        ThumbRender::Later(job) => self.loader.submit(ctx, key.clone(), revision, priority, job),
+                        ThumbRender::Region { .. } => {
+                            repaint::request(ctx);
+                            stand_in()
+                        }
+                    }
                 }
             }
             ThumbRender::Blank => {
