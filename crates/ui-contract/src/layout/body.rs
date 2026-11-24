@@ -679,6 +679,41 @@ fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> (usize, Option<f32>) {
         .map_or((0, None), |(found, _)| (found.took.y.max(0.0) as usize, Some(found.took.x).filter(|width| width.is_finite() && *width > 0.0)))
 }
 
+/// Shows `show`, the end group of the unwrapped `Row` body around it, at the row's end edge: the room the row's members
+/// leave lies between the content before the group and the group. Show it last in the row.
+///
+/// The group's children are members of the row as any other child is: they sit on its line and are units of its shrink
+/// step, so those that carry a rank (`ContainerProps::fit_rank`) leave whole, the lowest rank first, before the row's
+/// other units narrow or drop, and the room they leave goes to the free room. The group is placed from the width it
+/// took in this pass's measuring run; without one, and outside an unwrapped row, it follows the content before it.
+pub fn end_group<R>(ui: &mut Ui, show: impl FnOnce(&mut Ui) -> R) -> R {
+    let env = Env::of(ui);
+    let Some(row) = env.flow_body.filter(|_| env.row_room.is_some() && env.row_line.is_some()) else { return show(ui) };
+    let (ctx, rtl, key) = (ui.ctx().clone(), env.direction.is_rtl(), sub(row, "end_group"));
+    let sizing = measure::active(&ctx);
+    let room = ui.available_rect_before_wrap().width();
+    if let Some(took) = this_pass(&ctx, sizing, key).filter(|took| took.x > 0.0 && room.is_finite()) {
+        ui.add_space((room - took.x).max(0.0));
+    }
+    // The cursor's edge, which stays finite in a room unbounded at its end.
+    let cursor = |ui: &Ui| {
+        let rest = ui.available_rect_before_wrap();
+        if rtl { rest.max.x } else { rest.min.x }
+    };
+    let start = cursor(ui);
+    // In the row's counting sweep each member measures as in no room: one that the content before it crowds still
+    // reports its whole width, and leaves by its rank instead of narrowing.
+    let inner = if matches!(env.shrink, Some(Shrink::Count(_))) {
+        Env::run_in(ui, env.derive_local(|scoped| scoped.unbounded.0 = true), show)
+    } else {
+        show(ui)
+    };
+    // The cursor stands a gap past the group's last child.
+    let took = ((cursor(ui) - start).abs() - ui.spacing().item_spacing.x).max(0.0);
+    found(&ctx, sizing, key, Vec2::new(room, 0.0), Vec2::new(took, 0.0));
+    inner
+}
+
 /// Reports the least width of the body unit `body` of the row `row` that asks for it.
 pub(crate) fn report_least(ctx: &egui::Context, row: Id, body: Id, least: f32) {
     pass_state::with::<LeastReports, _>(ctx, |reports| {
