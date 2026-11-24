@@ -744,3 +744,72 @@ fn empty_value_quotes_do_not_hide_a_following_unquoted_auxiliary_opener() {
     assert!(parse(&exact, SCHEMA, &mut Budget::default(), &|| true).is_ok());
     assert!(parse(&format!("{exact} invert-linear"), SCHEMA, &mut Budget::default(), &|| true).is_err());
 }
+
+#[test]
+fn intervening_node_ids_keep_later_properties_and_resolved_labels_together() {
+    let fields = [Field { name: "exposure", kind: FieldType::Number }];
+    let schema = [Operation { name: "gegl:exposure", fields: &fields }];
+    for raw in [
+        "gegl:exposure id=base exposure=1.25 ref=base",
+        "gegl:exposure exposure=1.25 id=base ref=base",
+        "gegl:exposure id=base exposure=1.25 id=alias ref=base",
+    ] {
+        let graph = parse(raw, &schema, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(graph.nodes.len(), 1, "{raw}");
+        assert_eq!(graph.nodes[0].properties.len(), 1);
+        assert_eq!(graph.nodes[0].properties[0].name, "exposure");
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Number(1.25));
+        assert_eq!(graph.labels[0], Label { name: "base".into(), input: Input::Node(0) });
+        assert!(graph.labels.iter().all(|label| label.input == Input::Node(0)));
+        assert_eq!(graph.output, Input::Node(0));
+        assert!(graph.diagnostics.is_empty());
+        check_edges(&graph);
+    }
+    for raw in ["gain n=1 id=base n=2", "gain id=base n=1 id=base"] {
+        assert!(parse(raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "duplicate controls remain errors: {raw}");
+    }
+}
+
+#[test]
+fn pending_node_labels_resolve_after_auxiliary_dependencies_without_reordering_definitions() {
+    let graph = read("gain id=base n=1 over id=merged aux=[ref=base gain id=child n=2 ref=child] ref=merged");
+    assert_eq!(graph.nodes.iter().map(|node| node.operation.as_str()).collect::<Vec<_>>(), ["gain", "gain", "over"]);
+    assert_eq!(graph.nodes.iter().map(|node| node.source_ordinal).collect::<Vec<_>>(), [0, 2, 1]);
+    assert_eq!(graph.nodes[0].properties[0].value, Value::Number(1.));
+    assert_eq!(graph.nodes[1].properties[0].value, Value::Number(2.));
+    assert_eq!(graph.nodes[2].input, Some(Input::Node(0)));
+    assert_eq!(graph.nodes[2].properties[0].value, Value::Input(Input::Node(1)));
+    assert_eq!(
+        graph.labels,
+        [
+            Label { name: "base".into(), input: Input::Node(0) },
+            Label { name: "merged".into(), input: Input::Node(2) },
+            Label { name: "child".into(), input: Input::Node(1) },
+        ]
+    );
+    assert_eq!(graph.output, Input::Node(2));
+    assert!(graph.diagnostics.is_empty());
+    check_edges(&graph);
+}
+
+#[test]
+fn auxiliary_references_to_pending_nodes_reject_cycles_without_retained_debt() {
+    for raw in [
+        "over id=loop aux=[ref=loop]",
+        "over id=loop aux=[ref=loop invert-linear]",
+        "over id=parent aux=[over id=child aux=[ref=parent]]",
+        "over id=parent aux=[gain id=child n=1 ref=parent]",
+        "gain id=first over id=second aux=[ref=second]",
+    ] {
+        let mut budget = Budget::default();
+        let storage = budget.remaining_storage();
+        let work = budget.remaining_work();
+        let error = parse(raw, SCHEMA, &mut budget, &|| true).unwrap_err();
+        assert!(error.to_string().contains("cyclic"), "{raw}: {error}");
+        assert_eq!(budget.remaining_storage(), storage);
+        assert!(budget.remaining_work() < work);
+    }
+    let graph = read("gain id=base n=1 ref=base invert-linear");
+    assert_eq!(graph.nodes[1].input, Some(Input::Node(0)));
+    check_edges(&graph);
+}

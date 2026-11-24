@@ -162,6 +162,7 @@ pub fn parse<'a>(raw: &'a str, declarations: &[Operation<'_>], budget: &mut Budg
             keep_going,
             nodes: Vec::new(),
             labels: Vec::new(),
+            label_sources: Vec::new(),
             diagnostics: Vec::new(),
             source_nodes: 0,
             assignments: 0,
@@ -416,6 +417,9 @@ struct Decoder<'b, 's> {
     keep_going: &'b dyn Fn() -> bool,
     nodes: Vec<Node>,
     labels: Vec<Label>,
+    // Some(source ordinal) marks a label on a node whose auxiliary dependencies
+    // are still being parsed. Its placeholder input must never resolve a reference.
+    label_sources: Vec<Option<usize>>,
     diagnostics: Vec<Diagnostic>,
     source_nodes: usize,
     assignments: usize,
@@ -482,6 +486,41 @@ impl<'b, 's> Decoder<'b, 's> {
         }
         Ok(None)
     }
+    fn define_label(&mut self, name: String, input: Input, pending_source: Option<usize>) -> Result<()> {
+        if self.labels.len() >= MAX_NODES {
+            return Err(invalid("excessive graph labels"));
+        }
+        for label in &self.labels {
+            self.budget.work.charge(label.name.len().min(name.len()).saturating_add(1))?;
+            if label.name == name {
+                return Err(invalid("duplicate graph label"));
+            }
+        }
+        push(&mut self.labels, Label { name, input }, self.budget)?;
+        push(&mut self.label_sources, pending_source, self.budget)
+    }
+    fn reference(&mut self, name: &str) -> Result<Input> {
+        for (index, label) in self.labels.iter().enumerate() {
+            self.budget.work.charge(label.name.len().min(name.len()).saturating_add(1))?;
+            if label.name == name {
+                if self.label_sources.get(index).is_some_and(Option::is_some) {
+                    return Err(invalid("graph reference is missing, forward or cyclic"));
+                }
+                return Ok(label.input);
+            }
+        }
+        Err(invalid("graph reference is missing, forward or cyclic"))
+    }
+    fn finish_labels(&mut self, source_ordinal: usize, index: usize) -> Result<()> {
+        for (label, pending) in self.labels.iter_mut().zip(&mut self.label_sources) {
+            self.budget.work.charge(1)?;
+            if *pending == Some(source_ordinal) {
+                label.input = Input::Node(index);
+                *pending = None;
+            }
+        }
+        Ok(())
+    }
     fn block(&mut self, mut current: Option<Input>, depth: usize) -> Result<Input> {
         if depth > MAX_DEPTH {
             return Err(invalid("graph exceeds 8 auxiliary nesting levels"));
@@ -505,26 +544,9 @@ impl<'b, 's> Decoder<'b, 's> {
                 let name = self.name()?;
                 if defining {
                     let input = current.ok_or_else(|| invalid("graph label has no preceding input"))?;
-                    if self.labels.len() >= MAX_NODES {
-                        return Err(invalid("excessive graph labels"));
-                    }
-                    for label in &self.labels {
-                        self.budget.work.charge(label.name.len().min(name.len()).saturating_add(1))?;
-                        if label.name == name {
-                            return Err(invalid("duplicate graph label"));
-                        }
-                    }
-                    push(&mut self.labels, Label { name, input }, self.budget)?;
+                    self.define_label(name, input, None)?;
                 } else {
-                    let mut found = None;
-                    for label in &self.labels {
-                        self.budget.work.charge(label.name.len().min(name.len()).saturating_add(1))?;
-                        if label.name == name {
-                            found = Some(label.input);
-                            break;
-                        }
-                    }
-                    current = Some(found.ok_or_else(|| invalid("graph reference is missing, forward or cyclic"))?);
+                    current = Some(self.reference(&name)?);
                 }
                 continue;
             }
@@ -541,8 +563,17 @@ impl<'b, 's> Decoder<'b, 's> {
             let mut properties: Vec<Property> = Vec::new();
             while self.assignment() {
                 check(self.keep_going)?;
-                if matches!(self.peek(), Some(Token::Word(word)) if matches!(word.as_str(), "id" | "ref")) {
+                if matches!(self.peek(), Some(Token::Word(word)) if word == "ref") {
                     break;
+                }
+                if matches!(self.peek(), Some(Token::Word(word)) if word == "id") {
+                    self.word()?;
+                    self.equal()?;
+                    let name = self.name()?;
+                    // Keep source-order labels visible, but do not publish this node's
+                    // final dependency-first index until all of its inputs are complete.
+                    self.define_label(name, Input::Source, Some(source_ordinal))?;
+                    continue;
                 }
                 let name = self.name()?;
                 self.equal()?;
@@ -582,6 +613,7 @@ impl<'b, 's> Decoder<'b, 's> {
             }
             let index = self.nodes.len();
             push(&mut self.nodes, Node { source_ordinal, operation, input: current, properties }, self.budget)?;
+            self.finish_labels(source_ordinal, index)?;
             current = Some(Input::Node(index));
         }
         current.ok_or_else(|| invalid("graph auxiliary block has no input or operation"))
