@@ -906,16 +906,20 @@ pub(crate) fn end_pass(ctx: &Context) {
         }
         let families = families(&current, &persist.raised);
         let mut order: Vec<Layer> = Vec::new();
+        let mut listed: Vec<Id> = Vec::new();
         persist.stack.clear();
         for members in &families {
             for member in members {
                 // A floating window or panel (`Rank::Window`) is left to egui's own area order, which raises a layer
                 // when it first shows and when it is pressed: the app's own egui windows stack with it in that one
                 // order, so a dialog the app opens later shows above it. Listed layers would go above every unlisted
-                // layer of their egui order. An OS window has no egui layer here.
-                if !member.window && member.rank != Rank::Window {
+                // layer of their egui order, so a float opened from a listed layer (a panel floated from a full-window
+                // container) is listed too, above its parent. An OS window has no egui layer here.
+                let over_listed = member.parent.is_some_and(|parent| listed.contains(&parent));
+                if !member.window && (member.rank != Rank::Window || over_listed) {
                     order.extend(member.cover);
                     order.push(member.layer);
+                    listed.push(member.id);
                 }
                 persist.stack.push(member.id);
             }
