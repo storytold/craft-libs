@@ -303,10 +303,10 @@ pub fn decimal_point(text: &str) -> Cow<'_, str> {
     let mut out = String::with_capacity(text.len());
     let mut operand_start = 0;
     let mut prev = None;
-    let mut last_non_ws = None;
+    let mut after_operator = true;
 
     for (i, c) in text.char_indices() {
-        let is_leading = last_non_ws.is_none_or(|last| matches!(last, '+' | '-' | '*' | '/' | 'x' | 'X' | '×'));
+        let is_leading = after_operator;
         let is_op = matches!(c, '*' | '/') || is_times(c, prev) || (matches!(c, '+' | '-') && !is_leading);
 
         if is_op {
@@ -315,10 +315,10 @@ pub fn decimal_point(text: &str) -> Cow<'_, str> {
             operand_start = i + c.len_utf8();
         }
 
-        prev = Some(c);
         if !c.is_whitespace() {
-            last_non_ws = Some(c);
+            after_operator = matches!(c, '+' | '-' | '*' | '/') || is_times(c, prev);
         }
+        prev = Some(c);
     }
 
     normalize_operand(&text[operand_start..], &mut out);

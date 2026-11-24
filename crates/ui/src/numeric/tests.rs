@@ -264,6 +264,12 @@ fn decimal_point_linear_scan_performance_and_leading_signs() {
     // Leading signs before decimal numbers
     assert_eq!(pts.parse("-0,5 mm + +0,5 mm"), Some(0.0));
     assert_eq!(pts.parse("-1,5 pt"), Some(-1.5));
+
+    // Unit-ending 'x' (e.g. px) does not treat following minus as a leading sign
+    assert!(pts.parse("1px - 12,500mm").is_none());
+    let sub = pts.parse("1px - 0,5mm");
+    assert!(sub.is_some());
+    assert!((sub.unwrap() - (1.0 - MeasureUnit::Millimeters.to_pt(0.5))).abs() < 1e-4);
 }
 
 #[test]
