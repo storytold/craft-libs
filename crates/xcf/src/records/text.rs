@@ -250,7 +250,7 @@ impl<'a> Parser<'a, '_> {
             self.at += 1;
             let byte = match byte {
                 b'"' if require_quote => return Ok(output),
-                b'"' | 0 => return Err(StopReason::Malformed.into()),
+                0 => return Err(StopReason::Malformed.into()),
                 b'\\' => {
                     let escape = self.bytes.get(self.at).copied().ok_or(Failure::Stop(StopReason::Malformed))?;
                     self.at += 1;
@@ -416,6 +416,14 @@ pub fn gimp<'a>(
     let result = (|| {
         admit(bytes, limits, budget, keep_going)?;
         let source = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+        for (index, byte) in source.iter().enumerate() {
+            if index.is_multiple_of(256) && !keep_going() {
+                return Err(Failure::Cancelled);
+            }
+            if *byte == 0 {
+                return Err(StopReason::Malformed.into());
+            }
+        }
         let mut parser = Parser { bytes: source, source_offset, at: 0, checked_at: 0, nodes: 0, limits, budget, keep_going };
         let mut forms = Vec::new();
         loop {

@@ -140,7 +140,7 @@ impl Markup<'_> {
     /// Nearest element first, ending at the root. The defensive ceiling also
     /// prevents cycles if a caller edits the public context table after parsing.
     pub fn inherited(&self, context: usize) -> Inheritance<'_, '_> {
-        Inheritance { contexts: &self.contexts, next: Some(context), left: 64 }
+        Inheritance { contexts: &self.contexts, next: Some(context), left: 65 }
     }
 }
 
@@ -513,15 +513,14 @@ impl<'a> Parser<'a, '_> {
         Ok(())
     }
     fn parse(mut self) -> ReadResult<Markup<'a>> {
-        if !explicit_markup_root(self.raw, self.keep)? {
-            self.budget
-                .retain(&mut self.contexts, Context { parent: None, name: "markup", role: Role::Markup, attributes: Vec::new(), source: 0..0 })?;
-            let retained = self.budget.retained_left;
-            self.budget.retain(&mut self.stack, 0)?;
-            self.stack_charge = retained - self.budget.retained_left;
-            self.implicit_root = true;
-            self.root_seen = true;
-        }
+        // Pango treats the complete input as a fragment, even when its first
+        // element is named markup: sibling elements and trailing text are valid.
+        self.budget.retain(&mut self.contexts, Context { parent: None, name: "markup", role: Role::Markup, attributes: Vec::new(), source: 0..0 })?;
+        let retained = self.budget.retained_left;
+        self.budget.retain(&mut self.stack, 0)?;
+        self.stack_charge = retained - self.budget.retained_left;
+        self.implicit_root = true;
+        self.root_seen = true;
         while self.at < self.raw.len() {
             self.check()?;
             // End tags do not create another source node or retained context.
@@ -562,6 +561,20 @@ impl<'a> Parser<'a, '_> {
         if if self.implicit_root { self.stack.len() != 1 } else { !self.root_seen || !self.root_closed || !self.stack.is_empty() } {
             return Err(StopReason::Malformed.into());
         }
+        // Keep the established context IDs for exactly one explicit wrapper.
+        // No outside run may inherit its styles; those fragments keep the root.
+        if self.contexts.get(1).is_some_and(|context| context.name == "markup")
+            && self.contexts.iter().skip(2).all(|context| context.parent != Some(0))
+            && self.runs.iter().all(|run| run.context != 0)
+        {
+            self.contexts.remove(0);
+            for context in &mut self.contexts {
+                context.parent = context.parent.and_then(|parent| parent.checked_sub(1));
+            }
+            for run in &mut self.runs {
+                run.context = run.context.checked_sub(1).ok_or(Failure::Stop(StopReason::Malformed))?;
+            }
+        }
         drop(self.stack);
         self.budget.retained_left += self.stack_charge;
         Ok(Markup {
@@ -574,40 +587,6 @@ impl<'a> Parser<'a, '_> {
             notices_truncated: self.notices_truncated,
         })
     }
-}
-
-// Pango permits omitting the markup wrapper. Preserve the existing context
-// identities for an explicit wrapper, including one after comments/whitespace.
-// Only inspect the prefix; actual syntax validation remains in the parser.
-fn explicit_markup_root(raw: &str, keep: &dyn Fn() -> bool) -> ReadResult<bool> {
-    let bytes = raw.as_bytes();
-    let mut at = 0usize;
-    loop {
-        while bytes.get(at).is_some_and(|byte| whitespace(*byte)) {
-            if at.is_multiple_of(256) && !keep() {
-                return Err(Failure::Cancelled);
-            }
-            at += 1;
-        }
-        if !bytes.get(at..).is_some_and(|tail| tail.starts_with(b"<!--")) {
-            break;
-        }
-        at += 4;
-        while !bytes.get(at..).is_some_and(|tail| tail.starts_with(b"-->")) {
-            if at >= bytes.len() {
-                return Ok(false);
-            }
-            if at.is_multiple_of(256) && !keep() {
-                return Err(Failure::Cancelled);
-            }
-            at += 1;
-        }
-        at += 3;
-    }
-    Ok(raw
-        .get(at..)
-        .and_then(|tail| tail.strip_prefix("<markup"))
-        .is_some_and(|tail| tail.as_bytes().first().is_some_and(|byte| whitespace(*byte) || matches!(byte, b'>' | b'/'))))
 }
 
 /// Tokenize one decoded source markup string. No DTD, PI, custom entity or

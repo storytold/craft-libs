@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn literal_nul_declines_modern_configuration_but_escaped_nul_remains_source_data() {
+    for raw in [b"(text before\0after)".as_slice(), b"(text \"before\")\0(text \"after\")", b"(text 'before\0after')"] {
+        let scan = gimp(raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(scan.records.is_empty());
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+    }
+    let scan = gimp(b"(text \"kept\")\0", 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records[0].text().unwrap(), Some("kept"));
+    let scan = gimp(br#"(unknown "before\000after")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records[0].config().unwrap().field("unknown").unwrap().unwrap()[0].bytes().unwrap(), b"before\0after");
+}
+
+#[test]
+fn literal_and_escaped_gdyntext_quotation_marks_have_identical_decoded_text() {
+    for text in ["He said \"hello\"", "He said \\\"hello\\\""] {
+        let raw = super::tests::legacy_bytes(text, "iso8859");
+        let scan = gdyntext(&raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        assert_eq!(scan.records[0].text().unwrap(), Some("He said \"hello\""));
+        assert_eq!(scan.records[0].raw, raw);
+    }
+    let scan = gimp(br#"(text "a\"b")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records[0].text().unwrap(), Some("a\"b"));
+}
+
+#[test]
 fn single_quoted_configuration_strings_are_literal_and_keep_lexical_spans() {
     let raw = br#"(text 'hello world\n "quoted"') (font 'Example Family')"#;
     let scan = gimp(raw, 17, Limits::default(), &mut Budget::default(), &|| true).unwrap();
@@ -158,29 +184,52 @@ fn raw_latin1_text_uses_its_declared_encoding_and_keeps_original_spans() {
 
 #[test]
 fn cancelled_text_releases_discarded_storage_but_keeps_work_charged() {
-    for legacy in [false, true] {
-        let text = "x".repeat(4096);
-        let raw = if legacy { super::tests::legacy_bytes(&text, "iso8859") } else { format!("(text \"{text}\")").into_bytes() };
-        let mut budget = Budget::default();
-        let retained = budget.retained_remaining();
-        let work = budget.work_remaining();
-        let calls = std::cell::Cell::new(0);
-        let keep = || {
-            calls.set(calls.get() + 1);
-            calls.get() < if legacy { 10 } else { 4 }
+    cancelled_owned_text(false);
+}
+
+#[test]
+fn cancelled_legacy_text_refunds_real_decoded_storage_and_allows_same_budget_retry() {
+    cancelled_owned_text(true);
+}
+
+fn cancelled_owned_text(legacy: bool) {
+    let text = "x".repeat(4096);
+    let raw = if legacy { super::tests::legacy_bytes(&text, "iso8859") } else { format!("(text \"{text}\")").into_bytes() };
+    let mut budget = Budget::default();
+    let retained = budget.retained_remaining();
+    let work = budget.work_remaining();
+    admit(&raw, Limits::default(), &mut budget, &|| true).unwrap_or_else(|_| panic!("fixture admitted"));
+    let quoted = if legacy { text.clone() } else { format!("{text}\"") };
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 2
+    };
+    let result = {
+        // Enter the actual shared quoted decoder directly, after framing,
+        // so new separator/NUL checks cannot move cancellation before any
+        // allocation. Both public readers use the same finalizer below.
+        let mut parser = Parser {
+            bytes: quoted.as_bytes(),
+            source_offset: 0,
+            at: 0,
+            checked_at: 0,
+            nodes: 0,
+            limits: Limits::default(),
+            budget: &mut budget,
+            keep_going: &keep,
         };
-        let cancelled =
-            if legacy { gdyntext(&raw, 0, Limits::default(), &mut budget, &keep) } else { gimp(&raw, 0, Limits::default(), &mut budget, &keep) };
-        assert!(matches!(cancelled, Err(Error::Cancelled)));
-        assert_eq!(budget.retained_remaining(), retained);
-        assert!(budget.work_remaining() < work);
-        let retry = if legacy {
-            gdyntext(&raw, 0, Limits::default(), &mut budget, &|| true)
-        } else {
-            gimp(&raw, 0, Limits::default(), &mut budget, &|| true)
-        }
-        .unwrap();
-        assert_eq!(retry.stopped, None);
-        assert_eq!(retry.records[0].text().unwrap(), Some(text.as_str()));
-    }
+        let result = parser.quoted(!legacy);
+        assert!(parser.budget.retained_remaining() < retained, "decoded storage really was charged before cancellation");
+        result.map(|_| panic!("fixture must cancel during quoted decoding"))
+    };
+    let cancelled = finish(result, 0, retained, &mut budget);
+    assert!(matches!(cancelled, Err(Error::Cancelled)));
+    assert_eq!(budget.retained_remaining(), retained);
+    assert!(budget.work_remaining() < work);
+    let retry =
+        if legacy { gdyntext(&raw, 0, Limits::default(), &mut budget, &|| true) } else { gimp(&raw, 0, Limits::default(), &mut budget, &|| true) }
+            .unwrap();
+    assert_eq!(retry.stopped, None);
+    assert_eq!(retry.records[0].text().unwrap(), Some(text.as_str()));
 }

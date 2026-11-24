@@ -1,6 +1,65 @@
 use super::*;
 
 #[test]
+fn an_explicit_markup_element_can_have_fragment_siblings_and_trailing_text() {
+    for (raw, expected) in
+        [("<markup>A</markup><i>B</i>", "AB"), ("<markup>A</markup> tail", "A tail"), (" before <markup>A</markup> after ", " before A after ")]
+    {
+        let scan = tokenize(raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None, "{raw}");
+        let markup = &scan.records[0];
+        assert_eq!(markup.text, expected);
+        assert_eq!(markup.contexts[0].source, 0..0);
+        if raw.ends_with("</i>") {
+            let last = markup.runs.last().unwrap();
+            assert_eq!(&markup.text[last.text.clone()], "B");
+            assert_eq!(markup.inherited(last.context).map(|context| context.role).collect::<Vec<_>>(), [Role::Italic, Role::Markup]);
+        }
+    }
+    let scan = tokenize("<markup><b>A</b></markup>", Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records[0].contexts.len(), 2);
+    assert_eq!(scan.records[0].contexts[0].source, 0..8, "single explicit wrappers keep their context identities");
+}
+
+#[test]
+fn depth_64_inheritance_reaches_the_root_and_still_bounds_cycles() {
+    for wrapper in [false, true] {
+        let nested = if wrapper { 63 } else { 64 };
+        let body = format!("{}x{}", "<b>".repeat(nested), "</b>".repeat(nested));
+        let raw = if wrapper { format!("<markup>{body}</markup>") } else { body };
+        let scan = tokenize(&raw, Limits { depth: 64, ..Limits::default() }, &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        let mut markup = scan.records.into_iter().next().unwrap();
+        let deepest = markup.runs[0].context;
+        let chain = markup.inherited(deepest).collect::<Vec<_>>();
+        assert_eq!(chain.len(), if wrapper { 64 } else { 65 });
+        assert_eq!(chain.last().unwrap().role, Role::Markup);
+        assert_eq!(chain.last().unwrap().source.is_empty(), !wrapper);
+        markup.contexts[0].parent = Some(deepest);
+        assert_eq!(markup.inherited(deepest).count(), 65, "public mutable contexts cannot create an unbounded walk");
+    }
+    let raw = format!("{}x{}", "<b>".repeat(65), "</b>".repeat(65));
+    let scan = tokenize(&raw, Limits { depth: usize::MAX, ..Limits::default() }, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::RecordLimit);
+}
+
+#[test]
+fn consecutive_short_comments_poll_inside_the_actual_parser() {
+    let raw = format!("{}<markup>A</markup>", "<!---->".repeat(8192));
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 2
+    };
+    // Bypass source prevalidation so only actual comment traversal can cancel.
+    assert!(matches!(parser(&raw, &mut Budget::default(), &keep).parse(), Err(Failure::Cancelled)));
+    assert_eq!(calls.get(), 2);
+    let scan = tokenize(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped, None);
+    assert_eq!(scan.records[0].text, "A");
+}
+
+#[test]
 fn wrapperless_fragments_keep_text_inheritance_and_original_ranges() {
     for (raw, expected) in [("<b>A</b> &amp; <i>B</i>", "A & B"), ("<b>A</b><i>B</i>", "AB"), ("plain &lt;text&gt;", "plain <text>"), ("", "")] {
         let scan = tokenize(raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
@@ -21,7 +80,7 @@ fn wrapperless_fragments_keep_text_inheritance_and_original_ranges() {
             assert_eq!(markup.contexts[1].source, 0..3);
         }
     }
-    let raw = " <!-- comment --> <markup><b>A</b></markup>";
+    let raw = "<!-- comment --><markup><b>A</b></markup>";
     let scan = tokenize(raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
     assert_eq!(scan.stopped, None);
     let markup = &scan.records[0];
@@ -36,7 +95,6 @@ fn fragments_keep_structural_resource_and_xml_dialect_guards() {
         ("<b>open", StopReason::Malformed),
         ("text</markup>", StopReason::Malformed),
         ("<b>A</i>", StopReason::Malformed),
-        ("<markup>A</markup><i>B</i>", StopReason::Malformed),
         ("<!DOCTYPE b><b>A</b>", StopReason::Unsupported),
         ("<?process?><b>A</b>", StopReason::Unsupported),
         ("<x:b>A</x:b>", StopReason::Unsupported),
@@ -57,7 +115,7 @@ fn fragments_keep_structural_resource_and_xml_dialect_guards() {
         calls.set(calls.get() + 1);
         calls.get() < 2
     };
-    assert!(matches!(explicit_markup_root(&prefixed, &keep), Err(Failure::Cancelled)));
+    assert!(matches!(parser(&prefixed, &mut Budget::default(), &keep).parse(), Err(Failure::Cancelled)));
     assert_eq!(calls.get(), 2);
 }
 
