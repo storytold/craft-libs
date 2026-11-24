@@ -315,7 +315,7 @@ impl<K: TextureKey + std::fmt::Debug> LinkList<'_, K> {
                         .show_items(ui, &source, &mut |_, icx| link_row(&rows, source.shown[icx.at], icx.at));
                 for event in out.events {
                     match event {
-                        CollectionEvent::Selection(change) => events.borrow_mut().push(LinkListEvent::Selection(change)),
+                        CollectionEvent::Selection { change, .. } => events.borrow_mut().push(LinkListEvent::Selection(change)),
                         CollectionEvent::Activate(key) => events.borrow_mut().push(LinkListEvent::GoTo(key)),
                         _ => {}
                     }

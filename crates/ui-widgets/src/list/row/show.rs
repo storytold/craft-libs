@@ -20,7 +20,7 @@ use crate::primitives::{DocRun, DocText, RectSide, RuleKind, StrokeWidth, TextRu
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::{Label, WordTemplate};
 use crate::style::{DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
-use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PressPhase, Proposal, Roving, Sense};
+use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PointerButton, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::Tone;
 use craft_theme::{Rgba, Stateful, TypeRole, over};
@@ -145,6 +145,10 @@ impl Component for ListRow<'_> {
         let toggles: f32 = columns.filter_map(|key| self.cells.iter().find(|(column, _)| column == key)).map(|(_, cell)| cell.width()).sum();
         self.measure_hosted(cx);
         let widths = self.widths(sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+        if self.thumbnails_only {
+            let extent = self.thumbs_extent(sizes, &widths);
+            return Vec2::new(extent.x + toggles, extent.y + above);
+        }
         let probe = self.place_in(&[], sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(room, height)), rtl);
         let probe_min = probe.min_width + toggles;
         let band = offered.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
@@ -195,12 +199,12 @@ impl Component for ListRow<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.spacer { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
+        if self.spacer || self.rule_head { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.record_toggle_names(cx);
-        if self.spacer {
+        if self.spacer || self.rule_head {
             return;
         }
         self.adopt_facts(&cx.env, cx.resolved.id);
@@ -360,9 +364,11 @@ impl Component for ListRow<'_> {
             let target = target_at(at);
             let Some(result) = cx.part_if_declared(target.part()) else { continue };
             let phase = result.press.phase;
-            if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
+            if let (PressPhase::DragStart { start, .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target)))
+                && start.button == PointerButton::Primary
+            {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
-                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
@@ -386,10 +392,10 @@ impl Component for ListRow<'_> {
             if let Some(payload) = self.drag_at(RowDragSpot::Trailing(*part)) {
                 // A handle's click is the row's: only its drag is its own.
                 if let Some(result) = cx.part_if_declared(key)
-                    && matches!(result.press.phase, PressPhase::DragStart { .. })
+                    && matches!(result.press.phase, PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary)
                 {
                     let preview = DragPreview::frame(result.rect.size(), None);
-                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                     self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
                 }
                 continue;
@@ -455,7 +461,8 @@ impl Component for ListRow<'_> {
         if self.progress.is_some() {
             access.node(PROGRESS, Role::PROGRESS_INDICATOR).name = Name::Text(label.to_owned());
         }
-        if let Some(open) = self.group {
+        // A rule head's group is always open and has no disclosure.
+        if let Some(open) = self.group.filter(|_| !self.rule_head) {
             access.expanded(open);
             if !self.disclosure_by_host {
                 let pattern = if open { &words.collapse } else { &words.expand };
@@ -540,6 +547,11 @@ impl Component for ListRow<'_> {
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
         let rect = cx.rect;
+        if self.rule_head {
+            let y = rect.center().y;
+            ui.draw().rule(RuleKind::Divider, Pos2::new(rect.left(), y), Pos2::new(rect.right(), y));
+            return;
+        }
         let widths = self.widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
         let placed = self.place(sizes, &widths, rect, rtl);
         self.label_rect = placed.label;
@@ -559,6 +571,7 @@ impl Component for ListRow<'_> {
         let lead_painted = self.lead_paint.is_some() || self.lead_text.is_some();
         self.paint_toggles(ui, cx, &placed);
         let ink = cx.resolve(&style.text.color);
+        self.paint_marks(&ui.draw(), cx, &placed, ink);
         let (label_hue, icon_hue) = (self.hued(ui, cx, HueTarget::Label), self.hued(ui, cx, HueTarget::Icon));
         let document = self.document_run(cx.resolved.label, egui::Color32::PLACEHOLDER).map(|run| {
             let runs = [run];
@@ -596,7 +609,7 @@ impl Component for ListRow<'_> {
             }
         }
         self.paint_thumbs(ui, cx, &placed, ink);
-        let text_end = self.paint_text(&ui.draw(), cx, placed.label, label_hue, document);
+        let text_end = if self.thumbnails_only { placed.label.top() } else { self.paint_text(&ui.draw(), cx, placed.label, label_hue, document) };
         let mut from = 0.0;
         for (at, below) in self.below.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (below.item.take(), below.size) else { continue };

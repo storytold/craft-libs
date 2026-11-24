@@ -2,13 +2,17 @@
 //! Ellipse tool's centre mark, the rotate handle and the Line tool's live-line controls, with box or free ends, the
 //! corner-only and side-only handle sets, sides grabbed along an edge band, and the rotate knob.
 
-use super::{BOX, EDGE, LINE_END, LineEnd, LineEnds, LineLook, ROTATE_HANDLE, RotateZone, TransformBox, TransformBoxOutput};
+use super::{BOX, EDGE, LINE_END, LineEnd, LineEnds, LineLook, ROTATE_HANDLE, RotateZone, TransformBox, TransformBoxOutput, TransformReach};
 use craft_behavior::GesturePhase;
 use craft_behavior::geometry::quad::{BoxHandles, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
+use craft_ui::buttons::Button;
 use craft_ui::canvas::Canvas;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
-use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, paint_shapes, show_document, show_quad};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _, clicked};
+use craft_ui::dialog::Dialog;
+use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::style::DataColor;
+use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, paint_shapes, show_document, show_quad};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::{Color32, Ui, vec2};
 
@@ -131,6 +135,32 @@ fn text_frame_overflow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TransformBox<'static>, covers = [Default])]
 fn ellipse_centre_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, data, |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).centre_mark(true))
+}
+
+/// A display-only box in a layer's colour, as the Selection tool shows the layers it does not transform: it takes no
+/// press and no key.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Never)]
+fn display_only_in_a_layer_colour(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let color = DataColor::new(accent(ui, 1.0));
+    on_canvas(ui, data, move |state| free_box(state).reach(TransformReach::Shown).color(color))
+}
+
+/// Free Distort's pad: a box that only distorts, with no reference point and no inside move, in a dialog it does not
+/// close: Enter and Escape stay the dialog's. The dialog starts closed.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Never)]
+fn distort_pad(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    if clicked(&Button::new("Open Free Distort").show(ui)) {
+        open = true;
+    }
+    let mut output = StoryOutput::default();
+    Dialog::new("Free Distort").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+        output = on_canvas(ui, data, |state| {
+            free_box(state).rules(BoxRules::in_mode(TransformMode::Distort)).reference_point(false).inside_moves(false).session_commit(false)
+        });
+    });
+    *data.value("open", false) = open;
+    output
 }
 
 /// The Line tool's controls on a live line across the box: a square at each end and the round widget at its middle,

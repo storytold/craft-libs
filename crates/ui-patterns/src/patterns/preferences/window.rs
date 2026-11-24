@@ -79,7 +79,8 @@ pub struct PreferencesState {
 /// - **Live mode.** [`PreferencesMode::Live`] applies changes as they occur and shows only OK, which closes without
 ///   applying again. Closing the window does not cancel changes. A failed apply shows its message until another edit.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
-///   close; [`PreferencesModel::nested`] draws the nested dialogs inside the window's own viewport.
+///   close; [`PreferencesModel::nested`] draws the nested dialogs with the body's `Ui`, inside the window's own
+///   viewport.
 /// - **App-modal.** While the window is open the app's other windows take no input, show the blocked cursor and
 ///   refuse to close, and a press on one raises the window.
 /// - **Placement.** The window opens in its own OS window where there are any, else as a modal dialog layer

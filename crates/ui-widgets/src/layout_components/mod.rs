@@ -208,7 +208,7 @@ layout_component!(
     /// Children side by side.
     Row,
     RowStyleKey,
-    [fallback_collection]
+    [fit_rank, fallback_collection]
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.

@@ -362,7 +362,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
                 }
             });
         let form = match reset_with.as_deref() {
-            Some(target) => form.reset_with(target),
+            Some(target) => form.reset_with(|current, opened, _| target(current, opened)),
             None => form,
         };
         // A held OK files the value for the app; the form shows the app's refusal and closes with the accepted value.

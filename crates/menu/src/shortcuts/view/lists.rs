@@ -66,7 +66,7 @@ fn categories(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
         .selection(Bind::bound(&mut selection))
         .show_items(ui, &Titles(&labels), &mut |key, _| ListRow::new(labels[*key].clone()));
     for event in out.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(area) = keys.last().and_then(|key| state.areas.get(*key))
         {
             let id = area.id.clone();
@@ -99,7 +99,7 @@ fn commands(ui: &mut Ui, env: &Env<'_>, state: &mut DialogState) {
         .rows_stamp(stamp)
         .show_items(ui, &Titles(&labels), &mut |key, _| ListRow::new(labels[*key].clone()));
     for event in out.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(command) = keys.last().and_then(|key| commands.get(*key))
         {
             state.select_row(command);
@@ -131,9 +131,11 @@ fn detail(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
         .show_items(ui, &Titles(&texts), &mut |key, _| ListRow::new(texts[*key].clone()));
     for event in out.events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => state.keys_pick = keys.last().copied(),
-            CollectionEvent::Selection(SelectionChange::Toggle(key)) => state.keys_pick = (state.keys_pick != Some(key)).then_some(key),
-            CollectionEvent::Selection(SelectionChange::Clear) => state.keys_pick = None,
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => state.keys_pick = keys.last().copied(),
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => {
+                state.keys_pick = (state.keys_pick != Some(key)).then_some(key)
+            }
+            CollectionEvent::Selection { change: SelectionChange::Clear, .. } => state.keys_pick = None,
             _ => {}
         }
     }

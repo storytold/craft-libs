@@ -111,16 +111,15 @@ fn radio_group_with_icons_and_counts(ui: &mut Ui, data: &mut StoryData) -> Story
         .into()
 }
 
-/// Rows with a description under the label: the `SideLabel`'s detail joins the radio's accessible description.
+/// Rows with a description after the label (`Radio::detail`): it joins the radio's accessible description.
 #[story(RadioGroup<'static, u8>, covers = [], drive = Drive::Never)]
 fn radio_group_with_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows =
         [(1u8, "Fast", "Lower quality, smaller file"), (2, "Balanced", "The default for most photos"), (3, "Best", "Full quality, largest file")];
     RadioGroup::new("Export", data.bind("export", 2u8))
-        .show(ui, |ui, cx| {
+        .show(ui, |ui, _| {
             for (value, label, description) in rows {
-                let side = SideLabel::new().layout(FieldLayout::After).detail(description);
-                cx.labelled(ui, value, label.into(), side, Radio::new(value));
+                Radio::new(value).label(label).detail(description).show(ui);
             }
         })
         .into()

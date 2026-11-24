@@ -80,6 +80,8 @@ pub struct TextRun<'a> {
     /// The angle the run is painted at, in radians clockwise about the top-left corner of its layout. Layout and
     /// measure see the unrotated run.
     pub rotation: f32,
+    /// The colour of the link spans; `None` takes the link look's.
+    pub link_color: Option<Color32>,
 }
 
 impl<'a> TextRun<'a> {
@@ -98,12 +100,13 @@ impl<'a> TextRun<'a> {
             ltr: false,
             align: HAlign::Start,
             rotation: 0.0,
+            link_color: None,
         }
     }
 
     /// A run of `spans`.
     pub fn spans(spans: Vec<Span<'a>>) -> Self {
-        TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0 }
+        TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0, link_color: None }
     }
 
     /// `text` with its character `at` underlined, as a mnemonic shows while it is in use; all of `text` plain when
@@ -123,6 +126,12 @@ impl<'a> TextRun<'a> {
                 span.text = Cow::Owned(span.text.to_uppercase());
             }
         }
+        self
+    }
+
+    /// Sets the colour of the run's link spans.
+    pub fn link_color(mut self, color: Color32) -> Self {
+        self.link_color = Some(color);
         self
     }
 
@@ -368,6 +377,7 @@ impl LayoutQuery<'_> {
                 underline: span.underline,
                 strikethrough: span.strikethrough,
                 strong: span.strong,
+                link: span.link,
                 flag: span.flag,
             })
             .collect();
@@ -380,6 +390,7 @@ impl LayoutQuery<'_> {
                 ltr: self.run.ltr,
                 align: self.run.align,
                 rotation: self.run.rotation,
+                link_color: self.run.link_color,
             },
             tokens: self.tokens,
             token_values: self.token_values.clone(),
@@ -600,6 +611,8 @@ impl TextRun<'_> {
                 to_color(text.muted)
             } else if span.shortcut {
                 to_color(text.faint)
+            } else if span.link {
+                self.link_color.unwrap_or(base)
             } else {
                 base
             };
@@ -841,8 +854,9 @@ impl TextLayout {
         runs
     }
 
-    /// Every row as its text, its rect from the galley's origin and its bidi runs, for the AccessKit run nodes.
-    pub(crate) fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)> {
+    /// Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
+    /// the AccessKit run nodes and by a component that hits parts of a wrapped run, such as a link in a sentence.
+    pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)> {
         (0..self.galley.rows.len())
             .map(|at| {
                 let placed = &self.galley.rows[at];

@@ -5,6 +5,7 @@ use super::style::CornerStyle;
 use super::words::CornerWords;
 use super::{CornerEdit, CornerRef, CornerTarget};
 use crate::geometry::fillet::fillet;
+use crate::ui::transform::TransformReach;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{HitLevel, HitPriority, HitShape, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense};
 use craft_ui::canvas::{NUDGE, NUDGE_FAR, canvas_space, readout};
@@ -16,7 +17,7 @@ use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
-use craft_ui::style::StyleCx;
+use craft_ui::style::{DataColor, StyleCx};
 use egui::{Pos2, Rect, Response, Vec2};
 
 /// The part of one widget: `WIDGET.at(i)`, `i` counted over the shown widgets in target order, then corner order.
@@ -57,6 +58,9 @@ struct Grab {
 ///   the picked widget's corner on every target by 1 (⇧ 10; up and right grow it), ⌥ that corner only; Enter reports
 ///   `activate`.
 /// - AccessKit: one object per widget named "Corner i of n", valued "radius 12 px".
+/// - Reach: with [`reach`](Self::reach) other than the whole box (`Shown`, or `MoveOnly`, which the widgets have no
+///   move reach for) the widgets only paint, in the host's [`color`](Self::color) if it gives one: no part, no key, no
+///   AccessKit object.
 /// - Geometry is in document space and does not mirror right to left.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -70,13 +74,29 @@ pub struct CornerWidgets<'a> {
     /// The widest inner angle whose corner shows a widget.
     #[prop(quantity = "degrees")]
     hide_above: f64,
+    /// What of the widgets takes the pointer: `TransformReach::Shown` draws them and declares no part and takes no key,
+    /// so the press reaches the tool; `MoveOnly`, with no move reach in the widgets, takes no press either.
+    #[prop]
+    reach: TransformReach,
+    /// The widgets' outline and dot in the host's colour, else `overlay.line`.
+    #[prop]
+    color: Option<DataColor>,
     report: Report,
 }
 
 impl<'a> CornerWidgets<'a> {
     /// The widgets of the host's `targets`, topmost first, named `label`.
     pub fn new(label: impl Into<Label>, targets: Bind<'a, Vec<CornerTarget>>) -> Self {
-        CornerWidgets { common: Common::new(), targets, kinds: false, hide_above: Self::HIDE_ABOVE, report: Report::default() }.label(label)
+        CornerWidgets {
+            common: Common::new(),
+            targets,
+            kinds: false,
+            hide_above: Self::HIDE_ABOVE,
+            reach: TransformReach::Box,
+            color: None,
+            report: Report::default(),
+        }
+        .label(label)
     }
 
     /// The widest inner angle, in degrees, a widget shows at unless [`hide_above`](Self::hide_above) says otherwise.
@@ -108,6 +128,12 @@ impl Outcome for CornerWidgetsOutput {
 }
 
 impl CornerWidgets<'_> {
+    /// Whether the widgets take presses and keys: only with the whole reach. The widgets have no move reach, so
+    /// `MoveOnly` is a display as `Shown` is.
+    fn takes_input(&self) -> bool {
+        self.reach == TransformReach::Box
+    }
+
     /// The widgets of the targets now, on screen.
     fn shown(&self, style: &CornerStyle, targets: Option<&Vec<CornerTarget>>, view: &craft_behavior::CanvasView) -> Vec<Widget> {
         targets.map_or_else(Vec::new, |targets| geometry::widgets(targets, view, style.inset, style.min_side, self.hide_above))
@@ -225,6 +251,9 @@ impl Component for CornerWidgets<'_> {
     /// arrival and the arrows are the widget's nudge.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
+        if !self.takes_input() {
+            return;
+        }
         let widgets = self.shown(cx.style, cx.value(), &space.view);
         let reach = cx.style.reach;
         for (at, widget) in widgets.iter().enumerate() {
@@ -240,6 +269,9 @@ impl Component for CornerWidgets<'_> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
+        if !self.takes_input() {
+            return;
+        }
         let widgets = self.shown(cx.style, cx.value(), &space.view);
         self.run_pointer(cx, &widgets, &space.view);
         self.run_keys(cx, &widgets);
@@ -250,13 +282,16 @@ impl Component for CornerWidgets<'_> {
         let widgets = self.shown(cx.style, cx.value(), &space.view);
         let draw = ui.draw();
         for widget in &widgets {
-            paint_widget(&draw, widget.at, cx.style);
+            paint_widget(&draw, widget.at, cx.style, self.color);
         }
     }
 
     /// One object per widget, named "Corner i of n" and valued with its radius.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
+        if !self.takes_input() {
+            return;
+        }
         let widgets = self.shown(cx.style, cx.value(), &space.view);
         let (words, units) = (cx.words::<CornerWords>(), cx.env.units());
         let n = widgets.len().to_string();
@@ -274,11 +309,22 @@ impl Component for CornerWidgets<'_> {
     }
 }
 
-/// Paints one round widget centred at `at`: the filled ring and its dot. The one painter of the look, which the
-/// transform box's live-line midpoint shares.
-pub(crate) fn paint_widget(draw: &Draw<'_>, at: Pos2, style: &CornerStyle) {
+/// Paints one round widget centred at `at`: the filled ring and its dot, the outline and dot in the host's `color`
+/// else the style's. The one painter of the look, which the transform box's live-line midpoint shares.
+// PLAN: the sheet's `CornerStyle::with_color(StyleColor)` cannot hold a host's `DataColor` (`StyleColor` has no public
+// constructor from a colour), so the override is a parameter and `corner/style.rs` stays as it was.
+pub(crate) fn paint_widget(draw: &Draw<'_>, at: Pos2, style: &CornerStyle, color: Option<DataColor>) {
     let ring = PaintShape::Circle(at, style.widget / 2.0);
+    let dot = PaintShape::Circle(at, style.dot / 2.0);
     draw.fill(&ring, style.fill);
-    draw.stroke(&ring, StrokeWidth::Medium, style.color);
-    draw.fill(&PaintShape::Circle(at, style.dot / 2.0), style.color);
+    match color {
+        None => {
+            draw.stroke(&ring, StrokeWidth::Medium, style.color);
+            draw.fill(&dot, style.color);
+        }
+        Some(color) => {
+            draw.stroke(&ring, StrokeWidth::Medium, color);
+            draw.data_fill(&dot, color);
+        }
+    }
 }
