@@ -11,6 +11,7 @@ use craft_ui::patterns::form_dialogs::{
     NewGuideDialog, NewGuideValues, Param, ParamDialog, ParamKind,
 };
 use craft_ui::runtime::env::UnitKind;
+use craft_ui::runtime::measure;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use serde_json::{Value, json};
@@ -78,6 +79,20 @@ fn automate<D: StackDialog>(dialog: D, field: &str, value: Value) -> Option<D::R
 fn fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
     let shown = Rc::clone(host);
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture
+}
+
+/// A fixture that runs `host` in a measuring run, then in the real run, every pass, as a host inside a measured body
+/// runs: the measuring run comes first, before the real run takes the pass's input.
+pub(crate) fn measured_fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
+    let shown = Rc::clone(host);
+    let mut fixture = Fixture::new(move |ui| {
+        let ctx = ui.ctx().clone();
+        let builder = egui::UiBuilder::new().sizing_pass().invisible();
+        measure::run(&ctx, || ui.scope_builder(builder, |ui| shown.borrow_mut().run(ui)));
+        shown.borrow_mut().run(ui);
+    });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture
 }
@@ -253,6 +268,26 @@ fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     let path = PathBuf::from("/tmp/poster.png");
     if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
         dialog.answer_path(request.key.clone(), path.clone());
+    }
+    fixture.idle(6);
+    let answered = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.path);
+    assert_eq!(answered, Some(path), "the answered path finishes the dialog with it");
+}
+
+/// A path the host answers in a frame whose first run measures Export As still finishes the dialog with it. Guards
+/// against a hosted dialog that took its host's answers in the measuring run, whose form drops them.
+#[trial]
+fn export_as_takes_a_path_answer_in_the_real_run_after_a_measuring_run() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = measured_fixture(&host);
+    host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
+    fixture.idle(10);
+    let export = fixture.by_label("Export…").expect("the Export button");
+    fixture.click(&export).idle(4);
+    let request = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("Export asks for a path");
+    let path = PathBuf::from("/tmp/poster.png");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.answer_path(request.key, path.clone());
     }
     fixture.idle(6);
     let answered = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.path);

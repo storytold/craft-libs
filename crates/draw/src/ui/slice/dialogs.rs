@@ -331,7 +331,8 @@ impl StackDialog for SliceOptionsDialog {
         .map(|(value, label)| Entry::new(value, label.clone()))
         .collect();
         let background_labels = [&words.background_none, &words.background_matte, &words.background_white, &words.background_black];
-        let answers = self.requests.take_answers();
+        let measuring = craft_ui::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let shown = FormDialog::new(words.options_title.clone(), Bind::bound(&mut self.options)).answers(answers).show(ui, |ui, form, options| {
             for answer in form.take_answers() {
                 if let HostAnswer::Color { key, color, .. } = answer

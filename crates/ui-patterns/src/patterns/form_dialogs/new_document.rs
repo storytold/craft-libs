@@ -950,17 +950,19 @@ impl<S: DocumentSettings> StackDialog for HostedNewDocument<S> {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<NewDocumentResult<S>>> {
-        // The host accepted the held answer: this pass closes the dialog with it.
-        if self.held.is_accepted() {
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        // The host accepted the held answer: this pass's real run closes the dialog with it.
+        if !measuring && self.held.is_accepted() {
             return Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok));
         }
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let mut dialog = (self.build)(&mut self.options)
             .opened(Bind::bound(&mut self.open))
             .saved(Bind::bound(&mut self.saved))
             .recent(Bind::bound(&mut self.recent))
             .tab(Bind::bound(&mut self.tab))
             .memory(&mut self.memory)
-            .answers(self.requests.take_answers())
+            .answers(answers)
             .opening(self.opening.clone());
         if let Some(setup) = &self.setup {
             dialog = dialog.setup(setup.clone());
