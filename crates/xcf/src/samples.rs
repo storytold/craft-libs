@@ -10,24 +10,24 @@ mod tests;
 
 /// Preserve optional metadata policy separately from malformed source framing.
 #[derive(Debug)]
-pub(super) enum ChannelTailError {
+pub(super) enum SampleHeaderError {
     Source(Error),
     Metadata(crate::records::StopReason),
 }
 
-impl From<Error> for ChannelTailError {
+impl From<Error> for SampleHeaderError {
     fn from(error: Error) -> Self {
         Self::Source(error)
     }
 }
 
-impl From<ChannelTailError> for Error {
-    fn from(error: ChannelTailError) -> Self {
+impl From<SampleHeaderError> for Error {
+    fn from(error: SampleHeaderError) -> Self {
         match error {
-            ChannelTailError::Source(error) => error,
-            ChannelTailError::Metadata(reason) => invalid(match reason {
-                crate::records::StopReason::WorkLimit => "channel effect pointers exceed the metadata work limit",
-                _ => "channel effect pointer scan exceeds a metadata limit",
+            SampleHeaderError::Source(error) => error,
+            SampleHeaderError::Metadata(reason) => invalid(match reason {
+                crate::records::StopReason::WorkLimit => "sample header exceeds the metadata work limit",
+                _ => "sample header exceeds a metadata limit",
             }),
         }
     }
@@ -453,7 +453,7 @@ impl Xcf<'_> {
         hierarchy: usize,
         keep_going: &dyn Fn() -> bool,
         mut budget: Option<&mut crate::records::Budget>,
-    ) -> std::result::Result<(), ChannelTailError> {
+    ) -> std::result::Result<(), SampleHeaderError> {
         if self.image.version < 26 {
             // Older channels end at their hierarchy pointer. A later writer may
             // leave a zero word in the gap, but only a tile pointer can establish
@@ -470,7 +470,7 @@ impl Xcf<'_> {
                 return Err(invalid("channel effects overlap their hierarchy").into());
             }
             if let Some(budget) = budget.as_deref_mut() {
-                budget.work(width).map_err(ChannelTailError::Metadata)?;
+                budget.work(width).map_err(SampleHeaderError::Metadata)?;
             }
             if cursor.take(width)?.iter().all(|byte| *byte == 0) {
                 return Ok(());
@@ -482,28 +482,41 @@ impl Xcf<'_> {
         Err(invalid("unterminated channel effects").into())
     }
 
-    pub(super) fn hierarchy_head(&self, pointer: usize, channels: usize) -> Result<HierarchyHead> {
+    pub(super) fn hierarchy_head(
+        &self,
+        pointer: usize,
+        channels: usize,
+        mut metadata: Option<&mut crate::records::Budget>,
+    ) -> std::result::Result<HierarchyHead, SampleHeaderError> {
+        let mut admit = |length| {
+            if let Some(metadata) = metadata.as_deref_mut() {
+                metadata.work(length).map_err(SampleHeaderError::Metadata)?;
+            }
+            Ok::<_, SampleHeaderError>(())
+        };
         let mut cursor = self.c.at(pointer);
+        let pointer_bytes = if cursor.wide { 8 } else { 4 };
+        admit(12 + pointer_bytes)?;
         let (width, height, bpp) = (cursor.u32()?, cursor.u32()?, cursor.u32()? as usize);
         if width == 0 || height == 0 || width > crate::MAX_SIDE || height > crate::MAX_SIDE {
-            return Err(invalid(format!("drawable size {width}x{height} is out of range")));
+            return Err(invalid(format!("drawable size {width}x{height} is out of range")).into());
         }
         let expected = channels.checked_mul(self.image.precision.bytes).ok_or_else(|| invalid("bpp overflow"))?;
         if !(1..=4).contains(&channels) || bpp != expected {
-            return Err(invalid(format!("{bpp} bytes per pixel where {expected} were expected")));
+            return Err(invalid(format!("{bpp} bytes per pixel where {expected} were expected")).into());
         }
         let level = cursor.ptr()?;
         if level == pointer {
-            return Err(invalid("a hierarchy cannot be its own level"));
+            return Err(invalid("a hierarchy cannot be its own level").into());
         }
         // The fixed fields are followed by unused mip-level pointers and a
         // mandatory zero. Protect those words as framing too. A u32-sized
         // dimension can halve at most 32 times, so never scan an input-sized list.
         // Unused offsets need not fit the host or address the file. Only bounded,
         // corroborated in-file dummy headers are inspected below.
-        let pointer_bytes = if cursor.wide { 8 } else { 4 };
         let mut dummy_offsets = [0u64; 31];
         for index in 0..u32::BITS as usize {
+            admit(pointer_bytes)?;
             let word = cursor.take(pointer_bytes)?;
             if word.iter().all(|byte| *byte == 0) {
                 let header = pointer..cursor.pos;
@@ -519,6 +532,7 @@ impl Xcf<'_> {
                         continue;
                     }
                     let Some(bytes) = self.c.b.get(at..end) else { continue };
+                    admit(bytes.len())?;
                     // Only corroborated empty mip headers define a boundary;
                     // arbitrary/unusable unused offsets remain ignored.
                     if bytes.get(..4) == Some(mip_width.to_be_bytes().as_slice())
@@ -538,7 +552,7 @@ impl Xcf<'_> {
                 };
             }
         }
-        Err(invalid("hierarchy level list exceeds 32 levels or has no zero terminator"))
+        Err(invalid("hierarchy level list exceeds 32 levels or has no zero terminator").into())
     }
 
     /// Validate only the fixed first-level header, including the physical first
@@ -663,7 +677,7 @@ impl Xcf<'_> {
         }
         let VisitTarget { pointer, channels, indexed, dimensions, coverage, transfer_is_assumed, excluded_source } = target;
         let order = self.source_order(options)?;
-        let mut head = self.hierarchy_head(pointer, channels)?;
+        let mut head = self.hierarchy_head(pointer, channels, None)?;
         if dimensions.is_some_and(|size| size != (head.width, head.height)) {
             return Err(invalid("drawable dimensions do not match their hierarchy"));
         }

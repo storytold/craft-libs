@@ -918,26 +918,26 @@ fn fixed_first_level_validation_accepts_zero_tiles_but_rejects_short_or_overlapp
         let mut file = W { out: source.write(), wide: version >= 11 };
         let reader = Xcf::parse(&file.out).unwrap();
         let hierarchy = reader.image.layers[0].hierarchy;
-        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
         let level = head.level;
         let pointer_bytes = if version >= 11 { 8 } else { 4 };
         file.patch(level + 8, 0);
         let reader = Xcf::parse(&file.out).unwrap();
-        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
         reader.validate_first_level(&head).unwrap();
         let mut short = file.out.clone();
         short.truncate(level + 8 + pointer_bytes - 1);
         let reader = Xcf::parse(&short).unwrap();
-        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
         assert!(reader.validate_first_level(&head).is_err());
         let mut mismatch = file.out.clone();
         mismatch[level..level + 4].copy_from_slice(&2u32.to_be_bytes());
         let reader = Xcf::parse(&mismatch).unwrap();
-        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
         assert!(reader.validate_first_level(&head).is_err());
         file.patch(hierarchy + 12, hierarchy + 4);
         let reader = Xcf::parse(&file.out).unwrap();
-        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
         assert!(reader.validate_first_level(&head).is_err());
     }
 }
@@ -1166,7 +1166,7 @@ fn unused_mip_pointer_into_primary_terminator_does_not_hide_complete_tiles() {
                 dimensions: Some((1, 65)),
                 coverage: false,
                 transfer_is_assumed: false,
-                excluded_source: None,
+                excluded_source: &[],
             },
             SampleOptions::default(),
             &mut 65,
@@ -1385,7 +1385,7 @@ fn excluded_source_records_cannot_supply_tile_or_table_bytes() {
     let bytes = source.write();
     let reader = Xcf::parse(&bytes).unwrap();
     let hierarchy = reader.image.layers[0].hierarchy;
-    let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+    let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
     let mut level = reader.c.at(head.level + 8);
     let tile = level.ptr().unwrap();
     for excluded in [tile..tile + 1, tile + 1..tile + 2, hierarchy..hierarchy + 1, head.level..head.level + 1, level.pos..level.pos + 1] {
@@ -1477,7 +1477,7 @@ fn public_drawable_visitors_exclude_their_complete_source_records_and_preserve_a
                     (cursor.pos, hierarchy)
                 };
                 let record = file.out[start..end].to_vec();
-                let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+                let head = reader.hierarchy_head(hierarchy, 1, None).unwrap();
                 let level = head.level;
                 // Relocate only the source record, retaining its already validated
                 // hierarchy. This lets a real tile end exactly at its record.
@@ -1735,14 +1735,17 @@ fn channel_effect_tail_is_bounded_metered_and_cancellable_including_the_terminat
     assert_eq!(work.work_remaining(), 0);
     assert!(matches!(
         reader.channel_effects_tail(&mut cursor.at(0), 0, GO, Some(&mut work)),
-        Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+        Err(SampleHeaderError::Metadata(crate::records::StopReason::WorkLimit))
     ));
-    assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), 0, &|| false, Some(&mut work)), Err(ChannelTailError::Source(Error::Cancelled))));
+    assert!(matches!(
+        reader.channel_effects_tail(&mut cursor.at(0), 0, &|| false, Some(&mut work)),
+        Err(SampleHeaderError::Source(Error::Cancelled))
+    ));
     let mut short = crate::records::Budget::new(15, 0);
     let mut position = cursor.at(0);
     assert!(matches!(
         reader.channel_effects_tail(&mut position, 0, GO, Some(&mut short)),
-        Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+        Err(SampleHeaderError::Metadata(crate::records::StopReason::WorkLimit))
     ));
     assert_eq!(position.pos, 8, "the terminator is not read before admission");
     assert_eq!(short.work_remaining(), 7);
@@ -1764,7 +1767,7 @@ fn channel_effect_tail_count_limit_is_independent_of_eof() {
     let mut cursor = crate::Cursor { b: &too_many, pos: 0, wide: true };
     assert!(matches!(
         reader.channel_effects_tail(&mut cursor, 0, GO, None),
-        Err(ChannelTailError::Source(Error::Invalid(ref problem))) if problem == "too many channel effects"
+        Err(SampleHeaderError::Source(Error::Invalid(ref problem))) if problem == "too many channel effects"
     ));
 }
 
@@ -1988,7 +1991,7 @@ fn channel_tail_forward_boundary_is_checked_before_work_and_keeps_typed_work_ref
         if hierarchy == 16 {
             result.unwrap();
         } else {
-            assert!(matches!(result, Err(ChannelTailError::Source(_))));
+            assert!(matches!(result, Err(SampleHeaderError::Source(_))));
         }
         assert!(cursor.pos <= hierarchy);
     }
@@ -1996,7 +1999,7 @@ fn channel_tail_forward_boundary_is_checked_before_work_and_keeps_typed_work_ref
     let mut budget = crate::records::Budget::new(7, 0);
     assert!(matches!(
         reader.channel_effects_tail(&mut cursor, 16, GO, Some(&mut budget)),
-        Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+        Err(SampleHeaderError::Metadata(crate::records::StopReason::WorkLimit))
     ));
     assert_eq!(cursor.pos, 0);
 }

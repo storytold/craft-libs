@@ -294,20 +294,126 @@ fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before
 }
 
 #[test]
-fn repeated_empty_name_headers_spend_shared_work_and_stop_before_publishing() {
-    let f = fixture_named(150, &[1, 2], 1, true, b"", false);
-    let xcf = Xcf::parse(&f.bytes).unwrap();
-    let effect = record(&f);
-    // Eight dimension bytes, four name-length bytes, and eight PROP_END bytes.
-    let mut metadata = records::Budget::new(40, 0);
-    for remaining in [20, 0] {
-        let header = xcf.effect_mask_header(&effect, &mut metadata, &|| true).unwrap().unwrap();
-        assert!(header.channel().name.is_empty());
-        assert_eq!(metadata.work_remaining(), remaining);
+fn repeated_empty_name_headers_meter_the_hierarchy_and_dummy_probes_before_publication() {
+    for dummy in [false, true] {
+        let mut f = fixture_named(150, &[1, 2], 1, true, b"", false);
+        if dummy {
+            let mut file = W { out: f.bytes, wide: true };
+            let channel_hierarchy_slot = f.mask + (8 + 4 + 8);
+            let hierarchy = file.out.len();
+            file.patch(channel_hierarchy_slot, hierarchy);
+            for word in [2, 1, 1] {
+                file.u32(word);
+            }
+            let level_slot = file.slot();
+            let dummy_slot = file.slot();
+            file.ptr(0);
+            let level = file.out.len();
+            file.patch(level_slot, level);
+            file.u32(2);
+            file.u32(1);
+            file.ptr(0);
+            let dummy = file.out.len();
+            file.patch(dummy_slot, dummy);
+            for word in [1, 0, 0] {
+                file.u32(word);
+            }
+            f.bytes = file.out;
+        }
+        let xcf = Xcf::parse(&f.bytes).unwrap();
+        let effect = record(&f);
+        // Channel dimensions, name length, property terminator and hierarchy
+        // pointer; then hierarchy dimensions, BPP, level list and fixed level.
+        let channel_properties = 8 + 4 + 8;
+        let cost = channel_properties + 8 + (12 + 8 + 8) + (8 + 8) + if dummy { 8 + 12 } else { 0 };
+        for short in [channel_properties, cost - 1] {
+            let mut metadata = records::Budget::new(short, 0);
+            assert!(matches!(
+                xcf.effect_mask_header(&effect, &mut metadata, &|| true),
+                Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))
+            ));
+            assert_eq!(metadata.retained_remaining(), 0);
+        }
+        let mut metadata = records::Budget::new(2 * cost, 0);
+        for remaining in [cost, 0] {
+            let header = xcf.effect_mask_header(&effect, &mut metadata, &|| true).unwrap().unwrap();
+            assert!(header.channel().name.is_empty());
+            assert_eq!(metadata.work_remaining(), remaining);
+        }
+        assert!(matches!(xcf.effect_mask_header(&effect, &mut metadata, &|| true), Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))));
+        assert!(matches!(xcf.effect_mask_header(&effect, &mut metadata, &|| false), Err(EffectMaskError::Source(Error::Cancelled))));
+        assert_eq!(metadata.work_remaining(), 0);
     }
-    assert!(matches!(xcf.effect_mask_header(&effect, &mut metadata, &|| true), Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))));
-    assert!(matches!(xcf.effect_mask_header(&effect, &mut metadata, &|| false), Err(EffectMaskError::Source(Error::Cancelled))));
-    assert_eq!(metadata.work_remaining(), 0);
+}
+
+#[test]
+fn auxiliary_channel_must_be_disjoint_from_the_effect_and_keeps_marker_as_source_evidence() {
+    for version in [22, 26] {
+        for nested in [false, true] {
+            let mut file = W::new(version);
+            for word in [2, 1, 1, 150] {
+                file.u32(word);
+            }
+            file.prop(17, &[0]);
+            file.end();
+            for _ in 0..3 {
+                file.ptr(0);
+            }
+            let effect_offset = file.out.len();
+            for value in ["Effect", "", "gegl:exposure", "1:0"] {
+                file.string(value);
+            }
+            let mut channel = W { out: Vec::new(), wide: true };
+            channel.u32(2);
+            channel.u32(1);
+            channel.string("Aux");
+            channel.prop(4, &[]);
+            channel.end();
+            let hierarchy_slot = channel.slot();
+            if version >= 26 {
+                channel.ptr(0);
+            }
+            let nested_offset = file.out.len() + 8;
+            if nested {
+                file.prop(9000, &channel.out);
+            }
+            file.end();
+            let effect_mask_slot = file.slot();
+            let mask = if nested {
+                nested_offset
+            } else {
+                let start = file.out.len();
+                file.out.extend(channel.out);
+                start
+            };
+            file.patch(effect_mask_slot, mask);
+            let pixels = hierarchy(&mut file, 2, 1, 1, &[55, 77], Compression::None);
+            file.patch(mask + hierarchy_slot, pixels);
+            let effect = Reader::new(&file.out, version)
+                .read(Owner { kind: OwnerKind::Layer, offset: 0 }, effect_offset as u64, &mut Budget::default(), &|| true)
+                .unwrap()
+                .record;
+            let reader = Xcf::parse(&file.out).unwrap();
+            let mut metadata = records::Budget::new(4096, 4096);
+            let result = reader.effect_mask_header(&effect, &mut metadata, &|| true);
+            if nested {
+                let error = result.unwrap_err();
+                assert!(matches!(error, EffectMaskError::Source(Error::Invalid(ref message))
+                    if message == "effect mask channel overlaps its effect envelope"));
+                assert_eq!(metadata.retained_remaining(), 4096);
+            } else {
+                let header = result.unwrap().unwrap();
+                assert!(!header.channel().selection);
+                assert!(header.properties().iter().any(|property| property.kind == 4 && property.payload.is_empty()));
+                reader
+                    .visit_effect_mask_tiles(&header, SampleOptions::default(), &mut 2, &|| true, |tile| {
+                        assert_eq!(tile.data, [55, 77]);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
+    }
 }
 
 #[test]

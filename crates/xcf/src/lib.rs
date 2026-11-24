@@ -893,7 +893,7 @@ impl<'a> Xcf<'a> {
             return Err(Error::Cancelled);
         }
         let precision = self.image.precision;
-        let mut head = self.hierarchy_head(hptr, source_channels)?;
+        let mut head = self.hierarchy_head(hptr, source_channels, None)?;
         let (w, h, bpp) = (head.width, head.height, head.bpp);
         let channels = if indexed { source_channels + 2 } else { source_channels };
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;

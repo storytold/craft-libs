@@ -1,5 +1,5 @@
 //! Source-bound auxiliary masks: framing and one-component source samples only.
-use super::{SampleOptions, SourceDrawable, SourceTile, VisitTarget};
+use super::{SampleHeaderError, SampleOptions, SourceDrawable, SourceTile, VisitTarget};
 use crate::effects::StoredEffect;
 use crate::records;
 use crate::{Channel, Error, Result, Xcf, invalid};
@@ -15,6 +15,15 @@ pub enum EffectMaskError {
     Source(#[from] crate::Error),
     #[error("auxiliary mask metadata scan stopped: {0:?}")]
     Metadata(records::StopReason),
+}
+
+impl From<SampleHeaderError> for EffectMaskError {
+    fn from(error: SampleHeaderError) -> Self {
+        match error {
+            SampleHeaderError::Source(error) => Self::Source(error),
+            SampleHeaderError::Metadata(reason) => Self::Metadata(reason),
+        }
+    }
 }
 
 /// Validated channel/hierarchy header, bound to the exact backing XCF.
@@ -89,15 +98,17 @@ impl<'a> Xcf<'a> {
             let mut cursor = self.c.at(pointer);
             let dimensions = (cursor.u32()?, cursor.u32()?);
             let mut channel_end = self.c.at(properties.end_offset);
+            let pointer_bytes = if channel_end.wide { 8 } else { 4 };
+            metadata.work(pointer_bytes).map_err(EffectMaskError::Metadata)?;
             let hierarchy = channel_end.ptr()?;
             // V26 channel records also own their effect list, including its
             // terminator. Those bytes must never become mask coverage samples.
-            self.channel_effects_tail(&mut channel_end, hierarchy, keep_going, Some(metadata)).map_err(|error| match error {
-                super::ChannelTailError::Source(error) => EffectMaskError::Source(error),
-                super::ChannelTailError::Metadata(reason) => EffectMaskError::Metadata(reason),
-            })?;
+            self.channel_effects_tail(&mut channel_end, hierarchy, keep_going, Some(metadata))?;
             let channel_header = pointer..channel_end.pos;
-            let head = self.hierarchy_head(hierarchy, 1)?;
+            if channel_header.start < effect_header.end && channel_header.end > effect_header.start {
+                return Err(invalid("effect mask channel overlaps its effect envelope").into());
+            }
+            let head = self.hierarchy_head(hierarchy, 1, Some(metadata))?;
             if dimensions != (head.width, head.height) {
                 return Err(invalid("effect mask dimensions do not match their hierarchy").into());
             }
@@ -108,8 +119,10 @@ impl<'a> Xcf<'a> {
             if bytes > crate::MAX_PIXEL_BYTES {
                 return Err(invalid("effect mask exceeds the source pixel limit").into());
             }
+            let fixed_level_size = 8 + pointer_bytes;
+            metadata.work(fixed_level_size).map_err(EffectMaskError::Metadata)?;
             self.validate_first_level(&head)?;
-            let fixed_end = head.level.checked_add(if self.c.wide { 16 } else { 12 }).ok_or_else(|| invalid("level header overflow"))?;
+            let fixed_end = head.level.checked_add(fixed_level_size).ok_or_else(|| invalid("level header overflow"))?;
             // Header validation cannot publish metadata for a hierarchy/level
             // borrowed from either source record and defer failure until pixels.
             if [&channel_header, &effect_header].into_iter().any(|range| head.header.start < range.end && head.header.end > range.start) {
@@ -134,7 +147,9 @@ impl<'a> Xcf<'a> {
             }
             let name = String::from_utf8_lossy(name_bytes).into_owned();
             self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
-            let channel = Channel { name, selection: properties.records.iter().any(|p| p.kind == 4) };
+            // The effect pointer establishes the role. Preserve any selection
+            // marker as source evidence without reporting this mask as selection.
+            let channel = Channel { name, selection: false };
             Ok(Some(EffectMaskHeader {
                 source: self.c.b,
                 version: self.image.version,
