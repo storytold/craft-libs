@@ -63,8 +63,9 @@ pub enum ControlPlace {
     SideMenu,
 }
 
-/// How an icon button that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`), so the
-/// current tool can show the look an app's tools had.
+/// How an icon button or a segment that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`),
+/// so the current tool can show the look an app's tools had; an app sets it at its root (`RootEnv::values`) for its
+/// segmented pickers as well.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
