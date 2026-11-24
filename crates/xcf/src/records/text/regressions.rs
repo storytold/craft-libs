@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn registered_base_direction_names_keep_exact_source_and_automatic_policy() {
+    for (name, expected) in [
+        ("GIMP_TEXT_DIRECTION_LTR", Direction::Ltr),
+        ("GIMP_TEXT_DIRECTION_RTL", Direction::Rtl),
+        ("GIMP_TEXT_DIRECTION_TTB_RTL", Direction::TtbRtl),
+        ("GIMP_TEXT_DIRECTION_TTB_RTL_UPRIGHT", Direction::TtbRtlUpright),
+        ("GIMP_TEXT_DIRECTION_TTB_LTR", Direction::TtbLtr),
+        ("GIMP_TEXT_DIRECTION_TTB_LTR_UPRIGHT", Direction::TtbLtrUpright),
+    ] {
+        for spelling in [name.to_owned(), name.to_ascii_lowercase(), name.replacen("GIMP", "Gimp", 1)] {
+            for automatic in [false, true] {
+                let raw = format!("(text \"abc\") (base-direction {spelling}) (base-dir-auto {})", if automatic { "yes" } else { "no" });
+                let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+                assert_eq!(scan.stopped, None, "{raw}");
+                let record = &scan.records[0];
+                assert_eq!(record.base_direction, Some(expected));
+                assert_eq!(record.automatic_direction, Some(automatic));
+                assert_eq!(record.direction, if automatic { Direction::Auto } else { expected });
+                assert_eq!(record.config().unwrap().scalar("base-direction").unwrap(), Some(spelling.as_str()));
+                assert_eq!(record.raw, raw.as_bytes());
+            }
+        }
+    }
+    for atom in ["GIMP_TEXT_DIRECTION_AUTO", "GIMP_TEXT_DIRECTION_RTL_EXTRA", "GIMP_TEXT_DIRECTION_", "OTHER_DIRECTION_RTL"] {
+        let raw = format!("(base-direction {atom})");
+        let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed, "{atom}");
+    }
+}
+
+#[test]
 fn legacy_ordinary_character_escapes_preserve_decoded_text_and_original_fields() {
     for (input, expected) in [("A\\}B", "A}B"), ("A\\qB", "AqB"), ("A\\nB", "A\nB"), ("A\\\\B", "A\\B")] {
         let raw = super::tests::legacy_bytes(input, "iso8859");

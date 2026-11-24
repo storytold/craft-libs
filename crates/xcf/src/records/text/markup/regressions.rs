@@ -131,15 +131,18 @@ fn depth_64_inheritance_reaches_the_root_and_still_bounds_cycles() {
 
 #[test]
 fn consecutive_short_comments_poll_inside_the_actual_parser() {
-    let raw = format!("{}<markup>A</markup>", "<!---->".repeat(8192));
+    let raw = format!("{}</markup>", "<!---->".repeat(8192));
     let calls = std::cell::Cell::new(0);
     let keep = || {
         calls.set(calls.get() + 1);
         calls.get() < 2
     };
-    // Bypass source prevalidation so only actual comment traversal can cancel.
+    // Bypass source prevalidation. Without comment-loop polling this reaches
+    // the malformed close before any later text/compaction cancellation check.
     assert!(matches!(parser(&raw, &mut Budget::default(), &keep).parse(), Err(Failure::Cancelled)));
     assert_eq!(calls.get(), 2);
+    assert!(matches!(parser(&raw, &mut Budget::default(), &|| true).parse(), Err(Failure::Stop(StopReason::Malformed))));
+    let raw = format!("{}<markup>A</markup>", "<!---->".repeat(8192));
     let scan = tokenize(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
     assert_eq!(scan.stopped, None);
     assert_eq!(scan.records[0].text, "A");

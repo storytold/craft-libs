@@ -383,6 +383,14 @@ fn direction(config: &Config<'_>, keep: &dyn Fn() -> bool) -> ReadResult<(Direct
         Some("ttb-rtl-upright") => Some(Direction::TtbRtlUpright),
         Some("ttb-ltr") => Some(Direction::TtbLtr),
         Some("ttb-ltr-upright") => Some(Direction::TtbLtrUpright),
+        // Public GimpConfig enum deserialization also accepts registered names
+        // case-insensitively. Keep the original atom in Config for round trips.
+        Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_LTR") => Some(Direction::Ltr),
+        Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_RTL") => Some(Direction::Rtl),
+        Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_RTL") => Some(Direction::TtbRtl),
+        Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_RTL_UPRIGHT") => Some(Direction::TtbRtlUpright),
+        Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_LTR") => Some(Direction::TtbLtr),
+        Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_LTR_UPRIGHT") => Some(Direction::TtbLtrUpright),
         Some(value) if matches!(config.field("base-direction")?, Some([Value::Atom { quoted: false, .. }])) => Some(integer_direction(value, keep)?),
         None => None,
         _ => return Err(StopReason::Malformed.into()),
