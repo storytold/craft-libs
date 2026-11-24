@@ -1038,50 +1038,8 @@ impl Component for Tile<'_> {
         let Some(placed) = self.placed.take() else { return };
         let style = cx.style;
         let picture = placed.picture;
-        if let Some(action) = &self.summary_action {
-            let flow = Flow::new(picture, cx.flow.is_rtl());
-            let draw = ui.draw();
-            let icon_side = style.face.side.min(picture.width()).min(picture.height());
-            let ink = match self.hue {
-                Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(style.placeholder.egui()))),
-                None => cx.resolve(&style.face.color),
-            };
-            let centered = action.as_str().is_empty();
-            let icon = if centered {
-                Rect::from_center_size(egui::pos2(picture.center().x, picture.center().y - icon_side / 2.0), Vec2::splat(icon_side))
-            } else {
-                let cell = flow.span(0.0, icon_side);
-                Rect::from_min_size(cell.min, Vec2::splat(icon_side))
-            };
-            if let Some(face) = self.icon.take() {
-                draw.icon(icon, &face.color(ink));
-            }
-            let title = TextRun::new(cx.resolved.label).role(style.name.role).color(cx.resolve(&style.name.color)).elide();
-            let title_area = if centered {
-                Rect::from_min_max(egui::pos2(picture.left(), icon.bottom() + style.sizes.tight), picture.max)
-            } else {
-                flow.take_start(icon_side + style.sizes.tight).1.rect()
-            };
-            let title_layout = draw.layout(&title, title_area.width());
-            let title_x =
-                if centered { title_area.center().x - title_layout.size().x / 2.0 } else { Self::text_x(title_area, title_layout.size().x, cx) };
-            draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
-            if !centered {
-                if let Some(detail) = &self.detail {
-                    // The description wraps, onto the two lines the card reserves for it, as production's cards do.
-                    let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::Wrap);
-                    let mut layout = draw.layout(&run, picture.width());
-                    // More than the two reserved lines would run into the action: cut that description with an ellipsis.
-                    if layout.galley.rows.len() > 2 {
-                        layout = draw.layout(&run.elide(), picture.width());
-                    }
-                    draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
-                }
-                let run = TextRun::new(action.as_str()).role(style.detail.role).color(style.range).elide();
-                let layout = draw.layout(&run, picture.width());
-                draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
-            }
-            self.caption_rect = Some(title_area);
+        if let Some(action) = self.summary_action.take() {
+            self.paint_summary_card(ui, cx, &placed, action.as_str());
             return;
         }
         let flat = CornerRadius::ZERO;
@@ -1190,6 +1148,53 @@ impl Component for Tile<'_> {
 }
 
 impl Tile<'_> {
+    fn paint_summary_card(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed, action: &str) {
+        let style = cx.style;
+        let picture = placed.picture;
+        let flow = Flow::new(picture, cx.flow.is_rtl());
+        let draw = ui.draw();
+        let icon_side = style.face.side.min(picture.width()).min(picture.height());
+        let ink = match self.hue {
+            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(style.placeholder.egui()))),
+            None => cx.resolve(&style.face.color),
+        };
+        let centered = action.is_empty();
+        let icon = if centered {
+            Rect::from_center_size(egui::pos2(picture.center().x, picture.center().y - icon_side / 2.0), Vec2::splat(icon_side))
+        } else {
+            let cell = flow.span(0.0, icon_side);
+            Rect::from_min_size(cell.min, Vec2::splat(icon_side))
+        };
+        if let Some(face) = self.icon.take() {
+            draw.icon(icon, &face.color(ink));
+        }
+        let title = TextRun::new(cx.resolved.label).role(style.name.role).color(cx.resolve(&style.name.color)).elide();
+        let title_area = if centered {
+            Rect::from_min_max(egui::pos2(picture.left(), icon.bottom() + style.sizes.tight), picture.max)
+        } else {
+            flow.take_start(icon_side + style.sizes.tight).1.rect()
+        };
+        let title_layout = draw.layout(&title, title_area.width());
+        let title_x =
+            if centered { title_area.center().x - title_layout.size().x / 2.0 } else { Self::text_x(title_area, title_layout.size().x, cx) };
+        draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
+        if !centered {
+            if let Some(detail) = &self.detail {
+                // The description wraps, onto the two lines the card reserves for it, as production's cards do.
+                let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::Wrap);
+                let mut layout = draw.layout(&run, picture.width());
+                // More than the two reserved lines would run into the action: cut that description with an ellipsis.
+                if layout.galley.rows.len() > 2 {
+                    layout = draw.layout(&run.elide(), picture.width());
+                }
+                draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
+            }
+            let run = TextRun::new(action).role(style.detail.role).color(style.range).elide();
+            let layout = draw.layout(&run, picture.width());
+            draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
+        }
+        self.caption_rect = Some(title_area);
+    }
     fn full_name(&self, cx: &Cx<'_, Self>, words: &TileWords) -> String {
         let marks = || self.marks.iter().map(|mark| mark.tip.as_str().to_owned()).filter(|tip| !tip.is_empty());
         let joined = |name: &str, details: &[String]| {
