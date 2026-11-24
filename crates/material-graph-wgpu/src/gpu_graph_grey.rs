@@ -634,6 +634,7 @@ output twice 5
             let label = format!("{mode} alpha={alpha_mode} foreground={foreground_alpha} background={background_alpha} masked={masked}");
             assert_eq!(nodes.0.load(Relaxed), usize::from(accelerated), "{label}");
             assert_eq!(cpu.px.iter().any(|p| p[3] > 0.0 && p[3] < 1.0), !accelerated, "{label}");
+            assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()), "{label}");
             let max = cpu
                 .px
                 .iter()

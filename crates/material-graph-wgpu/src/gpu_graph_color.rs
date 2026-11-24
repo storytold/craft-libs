@@ -253,6 +253,7 @@ mod tests {
             assert_eq!(seen.get("blend"), Some(&3), "varying alpha={varying_alpha}, {seen:?}");
             assert_eq!(seen.get("grayscale_conversion"), Some(&1));
             assert_eq!(seen.get("readback"), Some(&1));
+            assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()));
             let max = cpu
                 .px
                 .iter()
@@ -289,6 +290,7 @@ mod tests {
             assert_eq!(seen.get("dir_warp"), Some(&2), "map {width}²: {seen:?}");
             assert_eq!(seen.get("blend"), Some(&1));
             assert_eq!(seen.get("readback"), Some(&1));
+            assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()));
             let max = cpu
                 .px
                 .iter()

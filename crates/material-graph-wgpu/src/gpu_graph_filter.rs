@@ -318,6 +318,7 @@ mod tests {
             let cpu = &graph.evaluate_with_inputs(None, &inputs).unwrap()["out"];
             let gpu = &graph.evaluate_in(&context, None, &inputs).unwrap()["out"];
             assert_eq!(nodes.resident.load(Relaxed), 1, "{filter} {options}");
+            assert_eq!((gpu.w, gpu.h, gpu.px.len()), (cpu.w, cpu.h, cpu.px.len()), "{filter} {options}");
             let errors = cpu.px.iter().zip(&gpu.px).map(|(a, b)| ((a[0] - b[0]).abs() * div as f32).round() as u32);
             let (max, sum) = errors.fold((0, 0), |(max, sum), error| (max.max(error), sum + error));
             let mean = f64::from(sum) / cpu.px.len() as f64;
@@ -378,7 +379,7 @@ mod tests {
             let gpu = &graph.evaluate_in(&context, None, &source).unwrap()["out"];
             assert_eq!(nodes.resident.load(Relaxed), 2, "{transform}");
             assert_eq!(nodes.readbacks.load(Relaxed), 1, "{transform}");
-            assert_eq!((gpu.w, gpu.h), (1 << log2, 1 << log2));
+            assert_eq!((gpu.w, gpu.h, gpu.px.len()), (1 << log2, 1 << log2, cpu.px.len()));
             assert!(cpu.px.iter().zip(&gpu.px).all(|(a, b)| a[3] == 0.0 && b[3] == 0.0 && (a[0] - b[0]).abs() <= 1.01 / 65535.0), "{transform}");
         }
     }

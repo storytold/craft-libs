@@ -703,6 +703,7 @@ mod tests {
                 panic!("the imported pixel program must execute on GPU");
             };
             let expected = Grey::from_fn(256, 256, |u, v| program.run(&environment, [f64::from(u), f64::from(v)]).unwrap().as_f32());
+            assert_eq!((pixels.w, pixels.h, pixels.px.len()), (expected.w, expected.h, expected.px.len()));
             assert!(expected.px.iter().zip(pixels.px).all(|(&a, b)| (a - b).abs() < 2e-6));
         }
     }

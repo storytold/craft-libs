@@ -357,6 +357,12 @@ node 2 color r=0.15 g=0.15 b=0.15 a=1 osize_log2_x=3 osize_log2_y=3
                 Graph::parse(&format!("{common}node 3 pattern_program program=\"draws\" in=@1 bg=@2 osize_mode=1 {frame}\noutput o 3\n")).unwrap();
             let expected = graph.evaluate(Some(256)).unwrap();
             let actual = graph.evaluate_in(&eval, Some(256), &[]).unwrap();
+            let (expected_image, actual_image) = (&expected["o"], &actual["o"]);
+            assert_eq!(
+                (actual_image.w, actual_image.h, actual_image.px.len()),
+                (expected_image.w, expected_image.h, expected_image.px.len()),
+                "pattern raster size differs for {frame:?}"
+            );
             assert!(
                 expected["o"].px.iter().zip(&actual["o"].px).flat_map(|(a, b)| a.iter().zip(b)).all(|(a, b)| (a - b).abs() < 2e-5),
                 "pattern raster differs for {frame:?}"
