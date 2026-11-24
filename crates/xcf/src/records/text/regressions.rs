@@ -313,6 +313,73 @@ fn cancelled_legacy_text_refunds_real_decoded_storage_and_allows_same_budget_ret
     cancelled_owned_text(true);
 }
 
+#[test]
+fn public_gimp_cancellation_refunds_decoded_storage_and_retries_the_same_budget() {
+    cancelled_public_owned_text(false);
+}
+
+#[test]
+fn public_gdyntext_cancellation_refunds_decoded_storage_and_retries_the_same_budget() {
+    cancelled_public_owned_text(true);
+}
+
+fn cancelled_public_owned_text(legacy: bool) {
+    let source = |text: &str| {
+        if legacy { super::tests::legacy_bytes(text, "iso8859") } else { format!("(text \"{text}\")").into_bytes() }
+    };
+    let read = |raw: &[u8], budget: &mut Budget, keep: &dyn Fn() -> bool| {
+        // Discard returned borrows inside the call so the same helper works
+        // with the independently allocated empty and long source fixtures.
+        let scan = if legacy { gdyntext(raw, 37, Limits::default(), budget, keep) } else { gimp(raw, 37, Limits::default(), budget, keep) }?;
+        Ok::<_, Error>((scan.stopped, scan.records.first().map(|record| record.text().unwrap().unwrap().to_owned())))
+    };
+    let mut empty_budget = Budget::default();
+    let empty_storage = empty_budget.retained_remaining();
+    assert_eq!(read(&source(""), &mut empty_budget, &|| true).unwrap(), (None, Some(String::new())));
+    let empty_storage = empty_storage - empty_budget.retained_remaining();
+    let text = "x".repeat(8192);
+    let raw = source(&text);
+
+    // Public behavioral phase oracle: enough storage for the entire empty
+    // record plus 1 KiB still fails while retaining the long decoded value.
+    // This passes every preliminary framing/NUL/separator scan. No callback
+    // count from those scans is hard-coded into the cancellation test.
+    let mut limited = Budget::new(128 << 20, empty_storage + 1024);
+    let phase_calls = std::cell::Cell::new(0);
+    let phase = read(&raw, &mut limited, &|| {
+        phase_calls.set(phase_calls.get() + 1);
+        true
+    })
+    .unwrap();
+    assert_eq!(phase.0.unwrap().reason, StopReason::RetainedLimit);
+    assert_eq!(phase.1, None);
+    // Modern single-quoted values borrow their contents: the same allowance
+    // completes the long record when decoded-byte storage is unnecessary.
+    if !legacy {
+        let borrowed = format!("(text '{text}')");
+        let mut budget = Budget::new(128 << 20, empty_storage + 1024);
+        assert_eq!(read(borrowed.as_bytes(), &mut budget, &|| true).unwrap(), (None, Some(text.clone())));
+    }
+
+    let mut budget = Budget::default();
+    let retained = budget.retained_remaining();
+    let work = budget.work_remaining();
+    let calls = std::cell::Cell::new(0);
+    let stop = phase_calls.get() + 1;
+    let cancelled = read(&raw, &mut budget, &|| {
+        calls.set(calls.get() + 1);
+        calls.get() < stop
+    });
+    assert!(matches!(cancelled, Err(Error::Cancelled)));
+    assert_eq!(calls.get(), stop, "cancel after the decoded-storage phase");
+    assert_eq!(budget.retained_remaining(), retained, "the public reader must refund discarded decoded output");
+    assert!(budget.work_remaining() < work, "attempted parsing remains charged");
+    let work_after_cancel = budget.work_remaining();
+    assert_eq!(read(&raw, &mut budget, &|| true).unwrap(), (None, Some(text)));
+    assert!(budget.retained_remaining() < retained, "successful retry owns retained output");
+    assert!(budget.work_remaining() < work_after_cancel);
+}
+
 fn cancelled_owned_text(legacy: bool) {
     let text = "x".repeat(4096);
     let raw = if legacy { super::tests::legacy_bytes(&text, "iso8859") } else { format!("(text \"{text}\")").into_bytes() };
