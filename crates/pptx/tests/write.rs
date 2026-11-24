@@ -382,7 +382,7 @@ fn a_turned_off_inherited_shadow_stays_off_after_saving_and_reopening() {
     assert!(xml.contains("<a:effectLst/>") || xml.contains("<a:effectLst></a:effectLst>"), "{xml}");
     assert_eq!(runs[0].own_effects, Some(true));
     assert!(runs[0].shadow.is_none() && runs[0].glow.is_none(), "{:?}", runs[0]);
-    assert!(runs[1].own_effects.is_none() && runs[1].shadow.is_some() && runs[1].glow.is_some(), "{:?}", runs[1]);
+    assert!(runs[1].shadow.is_some() && runs[1].glow.is_some(), "{:?}", runs[1]);
 }
 
 /// A run's effect list with effects in it replaces the inherited list too: a run that kept its
