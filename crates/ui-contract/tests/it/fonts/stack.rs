@@ -206,7 +206,8 @@ fn variable_faces_draw_at_regular_weight() {
 }
 
 /// The embedded Inter subsets keep their TrueType hinting tables so skrifa runs Inter's native bytecode
-/// interpreter (`Engine::AutoFallback`) instead of falling back to the generic autohinter.
+/// interpreter (`Engine::AutoFallback`) instead of falling back to the generic autohinter, and retain
+/// an outline on `.notdef` so missing characters show a visible tofu box.
 #[trial]
 fn the_default_inter_faces_keep_their_truetype_hinting() {
     use skrifa::MetadataProvider as _;
@@ -216,5 +217,6 @@ fn the_default_inter_faces_keep_their_truetype_hinting() {
         let data = defaults.font_data.get(name).unwrap_or_else(|| panic!("{name} is in the default fonts"));
         let face = skrifa::FontRef::from_index((*data.font).as_ref(), data.index).unwrap_or_else(|e| panic!("parse {name}: {e}"));
         assert!(face.outline_glyphs().prefer_interpreter(), "{name} should retain TrueType hinting for skrifa's interpreter");
+        assert!(face.outline_glyphs().get(skrifa::GlyphId::NOTDEF).is_some(), "{name} .notdef (glyph 0) should have an outline");
     }
 }
