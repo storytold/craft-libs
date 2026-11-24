@@ -1965,6 +1965,7 @@ fn run_stack<R>(ui: &mut Ui, env: &Env, at: &RowIn, body: impl FnMut(&mut Ui) ->
     let env = env.derive_local(|scoped| {
         scoped.shrink = Some(Shrink::Fit);
         scoped.flow_body = Some(at.id);
+        scoped.stack_gap = Some((at.id, at.gap.y));
     });
     let installed = Env::install_for(ui, env.clone());
     // A held child of a column whose own room is unbounded keeps the width it measured at.
