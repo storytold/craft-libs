@@ -1319,7 +1319,11 @@ fn intersect_cubics_rec(
         out.push(y1, order, status);
         return;
     }
+    // Craft patch (control point order): almost-horizontal pieces skip this,
+    // because their comparison also widens each curve by the tolerance in y.
     if control_point_order_enabled()
+        && cubic0.dir.is_none()
+        && cubic1.dir.is_none()
         && let Some(order) = order_from_control_points(c0, c1, ish_tolerance)
     {
         out.push(y1, order, status);
@@ -1934,22 +1938,12 @@ mod test {
                         let with = intersect_cubics(c0, c1, sure, ish)
                             .iter()
                             .collect::<Vec<_>>();
-                        if i0 == 2 || i0 == 3 {
-                            // Almost horizontal: the recursion can report Ish
-                            // near an end, and a sideways copy is now ordered
-                            // over the whole range.
-                            if dy == 0.0 {
-                                let order = if k > 0.0 { Order::Left } else { Order::Right };
-                                assert_eq!(with, vec![(0.0, 1.0, order)], "{c0:?} {c1:?}");
-                            }
-                        } else {
-                            let without = without_control_point_order(|| {
-                                intersect_cubics(c0, c1, sure, ish)
-                                    .iter()
-                                    .collect::<Vec<_>>()
-                            });
-                            assert_eq!(with, without, "{c0:?} {c1:?}");
-                        }
+                        let without = without_control_point_order(|| {
+                            intersect_cubics(c0, c1, sure, ish)
+                                .iter()
+                                .collect::<Vec<_>>()
+                        });
+                        assert_eq!(with, without, "{c0:?} {c1:?}");
                     }
                 }
             }
@@ -2053,6 +2047,31 @@ mod test {
             assert!(!with.is_empty());
             assert_eq!(with, without, "copy moved by ({kx}, {ky}) * eps");
         }
+    }
+
+    // Craft patch (control point order) test: an almost-horizontal cubic and a
+    // copy moved 16 sideways are 0.25 apart in y. The comparison of
+    // almost-horizontal pieces widens each curve by the tolerance in y, so it
+    // reports them as close, and the control points must not order them.
+    #[test]
+    fn control_point_order_skips_almost_horizontal_pieces() {
+        let c0 = CubicBez::new(
+            (0.0, 0.0),
+            (65536.0, 1024.0),
+            (131072.0, 2048.0),
+            (196608.0, 3072.0),
+        );
+        let c1 = shifted(c0, 16.0, 0.0);
+        let with = intersect_cubics(c0, c1, 1.0, 2.0)
+            .iter()
+            .collect::<Vec<_>>();
+        let without = without_control_point_order(|| {
+            intersect_cubics(c0, c1, 1.0, 2.0)
+                .iter()
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(with, without);
+        assert!(with.iter().any(|&(_, _, order)| order == Order::Ish), "{with:?}");
     }
 
     #[test]
