@@ -43,23 +43,29 @@ fn print_ticket_provider() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) fn printers() -> Vec<Printer> {
-    spooler_list(two_sided)
+    spooler_list(two_sided).unwrap_or_default()
 }
 
 /// The queues and the default without asking any driver: a networked printer asleep in power
 /// save can hold its driver's PrintCapabilities query for a long time, and the Print dialog
 /// must not wait on it to show the queue (or any other).
 pub(crate) fn printer_queues() -> Vec<Printer> {
+    spooler_list(|_| None).unwrap_or_default()
+}
+
+/// The queues as [`printer_queues`] lists them, or `None` when the spooler could not list them: a
+/// failure is not an empty list, and the print dialog tells the two apart.
+pub(crate) fn printer_queues_checked() -> Option<Vec<Printer>> {
     spooler_list(|_| None)
 }
 
 /// The spooler's queues (`EnumPrinters`, local queues and connections) with the default marked,
-/// each given the two-sided support `two_sided` reports for it; empty when the spooler can't list
+/// each given the two-sided support `two_sided` reports for it; `None` when the spooler can't list
 /// them.
-fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Vec<Printer> {
+fn spooler_list(two_sided: impl Fn(&PrinterDevice) -> Option<bool>) -> Option<Vec<Printer>> {
     match PrinterDevice::all() {
-        Ok(devices) => crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref()),
-        Err(_) => Vec::new(),
+        Ok(devices) => Some(crate::printer_list(devices.iter().map(|d| (d.name().to_string(), two_sided(d))), default_printer().as_deref())),
+        Err(_) => None,
     }
 }
 

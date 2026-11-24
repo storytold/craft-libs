@@ -101,14 +101,15 @@ impl Spool {
     }
 
     /// Asks the backend for its printers in a job and sends them through `map`; a platform that
-    /// lists none sends an empty list.
+    /// lists none sends an empty list, and a platform that could not list them sends nothing at all:
+    /// the channel closes, and the panel keeps the printer it remembered and says the listing failed.
     fn listed<T: Send + 'static>(&self, map: impl Fn(crate::Printer) -> T + Send + 'static) -> Receiver<Vec<T>> {
         let (sender, receiver) = std::sync::mpsc::channel();
         let backend = self.inner.backend.clone();
         self.inner.jobs.spawn(
             "print-discovery",
             Box::new(move || {
-                let printers = backend.printers().unwrap_or_default();
+                let Some(printers) = backend.printers() else { return };
                 let _ = sender.send(printers.into_iter().map(map).collect());
             }),
         );
@@ -172,7 +173,8 @@ impl Spool {
 
 /// The platform seam of [`Spool`].
 pub trait SpoolBackend: Send + Sync {
-    /// The printers, or `None` when the platform lists none.
+    /// The printers, or `None` when the platform could not list them: a failed listing is not an
+    /// empty list, so the print dialog tells the two apart.
     fn printers(&self) -> Option<Vec<crate::Printer>>;
 
     /// Prepares the print of `pdf` with `job`: how to cancel it and how to run it.
@@ -206,11 +208,12 @@ impl SpoolBackend for SystemBackend {
         {
             // No driver is asked: a networked printer in power save can hold a capability query
             // for a long time, and the list must not wait on it.
-            Some(crate::printer_queues())
+            crate::printer_queues_checked()
         }
         #[cfg(target_arch = "wasm32")]
         {
-            None
+            // The browser's own dialog chooses the printer, so the library lists none.
+            Some(Vec::new())
         }
     }
 

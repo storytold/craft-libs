@@ -29,25 +29,30 @@ pub(super) fn host_words(ctx: &Context, host: Option<&Arc<Host>>) -> Arc<Words> 
     })
 }
 
-/// The number format of `host`'s catalogs, else the system region's with the locale's digits, built once.
+/// The number format of `host`'s catalogs, else English, built once. The library's words are English
+/// without a host (`host_words`), so its numbers are English too: a library that wrote its numbers in
+/// the machine's region while its words stayed English would be half in one language and half in
+/// another. An app that installs a host with catalogs writes both from the catalogs.
 pub(super) fn host_format(ctx: &Context, host: Option<&Arc<Host>>) -> Arc<Format> {
     if let Some(i18n) = host.and_then(|host| host.i18n_shared()) {
         return i18n.format();
     }
     #[derive(Default)]
-    struct System(Option<Arc<Format>>);
-    Service::<System>::of(ctx)
-        .with(|system| Arc::clone(system.0.get_or_insert_with(|| Arc::new(Format::new(&craft_i18n::Region::system(), craft_i18n::Digits::Locale)))))
+    struct Default(Option<Arc<Format>>);
+    Service::<Default>::of(ctx)
+        .with(|default| Arc::clone(default.0.get_or_insert_with(|| Arc::new(Format::from_tag("en-US")))))
 }
 
-/// The date format of `host`'s catalogs, else the system region's, built once.
+/// The date format of `host`'s catalogs, else English, built once: the same reason as the numbers
+/// (`host_format`). A calendar that names its weekdays in the machine's language while every other
+/// word of the library stays English is the one the trials cannot read.
 pub(super) fn host_dates(ctx: &Context, host: Option<&Arc<Host>>) -> Arc<DateFormat> {
     if let Some(i18n) = host.and_then(|host| host.i18n_shared()) {
         return i18n.dates();
     }
     #[derive(Default)]
-    struct System(Option<Arc<DateFormat>>);
-    Service::<System>::of(ctx).with(|system| Arc::clone(system.0.get_or_insert_with(|| Arc::new(DateFormat::new(&craft_i18n::Region::system())))))
+    struct Default(Option<Arc<DateFormat>>);
+    Service::<Default>::of(ctx).with(|default| Arc::clone(default.0.get_or_insert_with(|| Arc::new(DateFormat::from_tag("en-US")))))
 }
 
 /// `words` with `rows` over them, built once per (inherited words, rows): a clone of a `Words` starts with an

@@ -826,6 +826,7 @@ fn apply_press(
 /// which is what a mouse release does. A button that pressed its widget down here would stay pressed forever when the
 /// key up came before that widget was drawn.
 mod space_held {
+    use crate::runtime::egui::memory;
     use crate::runtime::focus::{Stop, StopRec};
     use egui::{Context, Id};
 
@@ -838,21 +839,19 @@ mod space_held {
         pub(super) group: Option<Id>,
     }
 
-    /// The key of the hold in `ctx`'s temporary data: one per context, so two fixtures never share a hold.
+    /// The key of the hold in the context's memory: one per context, so two fixtures never share a hold.
     fn key(ctx: &Context) -> Id {
-        egui::Id::unique(("craft_ui.keys.space_held", ctx.viewport_id()))
+        memory::unique(("craft_ui.keys.space_held", ctx.viewport_id()))
     }
 
     /// The stop whose Space was released this pass.
     pub(super) fn held(ctx: &Context) -> Option<Held> {
-        ctx.memory(|memory| memory.data.get_temp::<Held>(key(ctx)))
+        memory::peek_clone(ctx, key(ctx))
     }
 
     /// The pass is over: the stop is no longer the one being activated.
     pub(super) fn clear(ctx: &Context) {
-        if held(ctx).is_some() {
-            ctx.memory_mut(|memory| memory.data.remove::<Held>(key(ctx)));
-        }
+        memory::take::<Held>(ctx, key(ctx));
     }
 
     impl Held {

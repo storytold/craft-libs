@@ -758,6 +758,20 @@ pub fn printer_queues() -> Vec<Printer> {
     }
 }
 
+/// The queues as [`printer_queues`] lists them, or `None` when the platform could not list them: a
+/// failed listing is not an empty list, and the print dialog keeps the remembered printer when the
+/// listing failed.
+pub(crate) fn printer_queues_checked() -> Option<Vec<Printer>> {
+    #[cfg(windows)]
+    {
+        windows::printer_queues_checked()
+    }
+    #[cfg(not(windows))]
+    {
+        Some(printers())
+    }
+}
+
 /// Whether `printer`'s driver takes two-sided settings, read for that one printer: the answer
 /// [`printers`] gives for it, without asking every other driver too. On Windows that is its
 /// PrintCapabilities; `None` when they can't be read or no queue has that name. Elsewhere `None`,

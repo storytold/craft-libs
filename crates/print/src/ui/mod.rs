@@ -267,12 +267,10 @@ impl State {
             match receiver.try_recv() {
                 Ok(printers) => {
                     self.printers = printers;
-                    // An empty list says the spooler could not be asked just now (it is busy, or the system
-                    // gave nothing back), not that the remembered printer is gone: keep it and let the panel
-                    // say there are none. Save as PDF stays whatever the spooler lists; only a printer that a
-                    // non-empty list does not name says it went away.
-                    let gone = !self.printers.is_empty()
-                        && matches!(&self.settings.destination, Destination::Printer(name) if !self.listed(name));
+                    // Save as PDF stays whatever the spooler lists; only a printer that is gone is replaced.
+                    // A listing that failed never reaches here: the discovery closes without an answer, and
+                    // the panel keeps the printer it remembered.
+                    let gone = matches!(&self.settings.destination, Destination::Printer(name) if !self.listed(name));
                     if gone {
                         let fallback = self.printers.iter().find(|p| p.default).or(self.printers.first());
                         self.settings.destination = Destination::Printer(fallback.map(|p| p.name.clone()).unwrap_or_default());
