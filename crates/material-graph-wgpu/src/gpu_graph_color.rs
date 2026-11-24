@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn compiled_color_blends_and_grayscale_stay_resident() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
         let ctx = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let graph = Graph::parse(
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn compiled_color_warps_keep_rgba_resident_through_blends() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
         let ctx = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let source = Tex::from_fn(1024, 1024, |u, v| [u, v, (u * 19.0 + v * 12.0).cos() * 0.5 + 0.5, u * v]);
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn wrapped_color_transforms_keep_the_compiled_sample_and_alpha_on_gpu() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
         let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let graph = Graph::parse(

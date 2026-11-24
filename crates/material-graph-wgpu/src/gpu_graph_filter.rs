@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn imported_grayscale_filters_match_the_cpu() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
         let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let size = 256_usize;
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn imported_levels_and_gradient_keep_a_smaller_warp_resident() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
         let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let graph = Graph::parse(
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn affine_transform_keeps_packed_grey_and_alpha_on_the_gpu() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Nodes::default());
         let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let source = [Some(Tex::gray_fn(256, 256, |u, v| 0.5 + 0.5 * (u * 39.0).sin() * (v * 53.0).cos()))];

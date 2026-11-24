@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn imported_eight_bit_levels_enlarge_as_sixteen_bit_on_the_gpu() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
 
         #[derive(Default)]
         struct Enlargements(AtomicUsize);
@@ -598,7 +598,7 @@ output twice 5
 
     #[test]
     fn imported_masked_blends_keep_binary_alpha_and_match_the_cpu() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let nodes = Arc::new(Blends::default());
         let context = EvalContext { accelerator: Some(Arc::new(gpu.accelerator())), profiler: Some(nodes.clone()), ..Default::default() };
         let cases = [

@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn imported_pixel_program_samples_on_gpu() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let graph = Graph::parse("size 256\nsubgraph example\nmeta kind \"function\"\nmeta float32 \"1\"\nnode 1 f_pos\nnode 2 f_sample_gray a=@1 slot=\"in\" filter=1\nnode 3 f_float v=0.2\nnode 4 f_add a=@2 b=@3\nnode 5 f_out in=@4\nend\nnode 1 pixel_processor fn=\"example\"\noutput out 1\n").unwrap();
         let program = compile_named(&graph.subgraphs, "example").unwrap();
         let input = Grey::from_fn(17, 19, |u, v| u * v);
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn imported_pixel_program_binds_indexed_random_initializers() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let backend = gpu.accelerator();
         let cancel = Cancel::new();
         for (site, seed_source, independent) in [("size", 1, true), ("value", 1, true), ("pixel", 1, false), ("size", 4, false)] {

@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn pattern_raster_keeps_order_for_wrapped_and_framed_images() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let observed = Arc::new(ObservedRasterizer(PatternRasterizer::new(&gpu.device, &gpu.queue).unwrap(), AtomicUsize::default()));
         let eval = EvalContext { accelerator: Some(observed.clone()), ..Default::default() };
         let common = r#"size 256
@@ -373,7 +373,7 @@ node 2 color r=0.15 g=0.15 b=0.15 a=1 osize_log2_x=3 osize_log2_y=3
 
     #[test]
     fn pattern_raster_splits_large_draw_lists_in_row_order() {
-        let Ok(gpu) = crate::headless::Headless::new() else { return };
+        let Some(gpu) = crate::headless::Headless::new().unwrap() else { return };
         let mut rasterizer = PatternRasterizer::new(&gpu.device, &gpu.queue).unwrap();
         let cancel = craft_material_graph::context::Cancel::new();
         let stamps: Vec<_> = [0, 10, 27]
