@@ -561,12 +561,294 @@ fn repeated_name_records_are_bounded_before_pairing() {
 #[test]
 fn a_read_is_capped_where_the_file_has_grown() {
     use crate::catalog::read_capped;
+    use std::io::Write as _;
     let path = std::env::temp_dir().join(format!("craft-font-catalog-cap-{}", std::process::id()));
     std::fs::write(&path, b"0123456789").unwrap();
-    assert_eq!(read_capped(&path, 10).unwrap(), b"0123456789");
+    let observed_size = std::fs::metadata(&path).unwrap().len();
+    assert_eq!(read_capped(&path, observed_size).unwrap(), b"0123456789");
     assert!(matches!(read_capped(&path, 9), Err(FontFileError::TooLarge { size: 10, max: 9 })));
+    // Model growth after the earlier size observation, without a scheduling-dependent race.
+    std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"growth past the cap").unwrap();
+    assert!(std::fs::metadata(&path).unwrap().len() > observed_size + 1);
+    assert!(matches!(read_capped(&path, observed_size), Err(FontFileError::TooLarge { size: 11, max: 10 })));
     assert!(matches!(read_capped(&path.with_extension("missing"), 9), Err(FontFileError::Io(_))));
     let _ = std::fs::remove_file(&path);
+}
+
+fn bounded_catalog() -> Catalog {
+    Catalog::new(FontEnv { os: Os::None, ..Default::default() }).with_font_service(false)
+}
+
+#[test]
+fn bounded_memory_load_enforces_policy_without_changing_default() {
+    let cat = bounded_catalog();
+    let data = font(&spec("Bounded Memory", "Regular", 400));
+    let size = data.len() as u64;
+    let face = cat.add_bytes(data, Source::Document, &Limits::default()).unwrap().remove(0);
+    let original = cat.load(&face).unwrap();
+    let allowed = cat.load_with_limit(&face, size).unwrap();
+    assert!(Arc::ptr_eq(&original.bytes, &allowed.bytes));
+    assert_eq!(allowed.index, original.index);
+    assert!(matches!(cat.load_with_limit(&face, size - 1), Err(FontFileError::TooLarge { size: actual, max }) if actual == size && max == size - 1));
+    assert!(matches!(cat.load_with_limit(&face, 0), Err(FontFileError::TooLarge { size: actual, max: 0 }) if actual == size));
+    let unchanged = cat.load(&face).unwrap();
+    assert!(Arc::ptr_eq(&original.bytes, &unchanged.bytes));
+    assert_eq!(cat.remove_added(Source::Document), 1);
+    assert!(matches!(cat.load_with_limit(&face, size), Err(FontFileError::Gone)));
+}
+
+#[test]
+fn bounded_disk_load_enforces_policy_before_read_and_from_cache() {
+    let root = temp("bounded-load-disk");
+    let path = root.join("Bounded.ttf");
+    let data = font(&spec("Bounded Disk", "Regular", 400));
+    let size = data.len() as u64;
+    write(&path, &data);
+    let cat = bounded_catalog();
+    cat.set_app_dirs(vec![root]);
+    let face = cat.styles("Bounded Disk").remove(0);
+    assert!(matches!(cat.load_with_limit(&face, size - 1), Err(FontFileError::TooLarge { size: actual, max }) if actual == size && max == size - 1));
+    assert!(matches!(cat.load_with_limit(&face, 0), Err(FontFileError::TooLarge { size: actual, max: 0 }) if actual == size));
+    // Prime the ordinary loader's shared cache, then make a fresh read impossible.
+    let original = cat.load(&face).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(matches!(cat.load_with_limit(&face, size - 1), Err(FontFileError::TooLarge { size: actual, max }) if actual == size && max == size - 1));
+    let allowed = cat.load_with_limit(&face, size).unwrap();
+    assert_eq!(&*allowed.bytes, data.as_slice());
+    assert_eq!(allowed.index, face.index);
+    assert!(Arc::ptr_eq(&original.bytes, &allowed.bytes));
+    let unchanged = cat.load(&face).unwrap();
+    assert!(Arc::ptr_eq(&original.bytes, &unchanged.bytes));
+}
+
+#[test]
+fn bounded_collection_load_preserves_nonzero_index_and_shared_bytes() {
+    let root = temp("bounded-load-collection");
+    let data = collection(&[font(&spec("Bounded Collection", "Regular", 400)), font(&spec("Bounded Collection", "Bold", 700))]);
+    let size = data.len() as u64;
+    write(&root.join("Bounded.ttc"), &data);
+    let cat = bounded_catalog();
+    cat.set_app_dirs(vec![root]);
+    let faces = cat.styles("Bounded Collection");
+    let second = faces.iter().find(|face| face.index == 1).unwrap();
+    let loaded_second = cat.load_with_limit(second, size).unwrap();
+    assert_eq!(loaded_second.index, 1);
+    assert_eq!(&*loaded_second.bytes, data.as_slice());
+    assert!(skrifa::FontRef::from_index(&loaded_second.bytes, loaded_second.index).is_ok());
+    let first = faces.iter().find(|face| face.index == 0).unwrap();
+    let loaded_first = cat.load_with_limit(first, size).unwrap();
+    assert_eq!(loaded_first.index, 0);
+    assert!(Arc::ptr_eq(&loaded_first.bytes, &loaded_second.bytes));
+    assert!(Arc::ptr_eq(&cat.load(second).unwrap().bytes, &loaded_second.bytes));
+}
+
+#[test]
+fn bounded_suitcase_load_caps_raw_fork_and_selects_only_requested_resource() {
+    use crate::suitcase::read_font_fork_capped;
+    let root = temp("bounded-load-fork");
+    let path = root.join("fork");
+    let fonts = vec![font(&spec("Bounded Fork A", "Regular", 400)), font(&spec("Bounded Fork B", "Bold", 700))];
+    let mut fork = fork_of(&fonts);
+    let size = fork.len() as u64;
+    write(&path, &fork);
+    let selected = read_font_fork_capped(&path, 1, size).unwrap();
+    assert_eq!(selected, fonts[1]);
+    assert!(skrifa::FontRef::from_index(&selected, 0).is_ok());
+    assert!(
+        matches!(read_font_fork_capped(&path, 0, size - 1), Err(FontFileError::TooLarge { size: actual, max }) if actual == size && max == size - 1)
+    );
+    assert!(matches!(read_font_fork_capped(&path, 0, 0), Err(FontFileError::TooLarge { size: 1, max: 0 })));
+    assert!(matches!(read_font_fork_capped(&path, 2, size), Err(FontFileError::NotAFont)));
+    fork.extend_from_slice(b"growth");
+    write(&path, fork);
+    assert!(matches!(read_font_fork_capped(&path, 1, size), Err(FontFileError::TooLarge { size: actual, max }) if actual == size + 1 && max == size));
+}
+
+#[test]
+fn bounded_suitcase_load_selects_from_aliased_resources() {
+    use crate::suitcase::{read_font_fork_capped, sfnt_resources};
+    let data = font(&spec("Bounded Alias", "Regular", 400));
+    let mut fork = fork_of(std::slice::from_ref(&data));
+    let map = u32::from_be_bytes(fork[4..8].try_into().unwrap()) as usize;
+    let types = map + u16::from_be_bytes(fork[map + 24..map + 26].try_into().unwrap()) as usize;
+    // fork_of puts vers first, then sfnt, whose sole reference is at the end of the map.
+    let sfnt = types + 2 + 8;
+    let refs = types + u16::from_be_bytes(fork[sfnt + 6..sfnt + 8].try_into().unwrap()) as usize;
+    let reference = fork[refs..refs + 12].to_vec();
+    let copies = 8u16;
+    fork[sfnt + 4..sfnt + 6].copy_from_slice(&(copies - 1).to_be_bytes());
+    for i in 1..copies {
+        let mut repeated = reference.clone();
+        repeated[..2].copy_from_slice(&(5000 + i as i16).to_be_bytes());
+        fork.extend(repeated);
+    }
+    let map_len = fork.len() - map;
+    fork[12..16].copy_from_slice(&(map_len as u32).to_be_bytes());
+    fork[map + 26..map + 28].copy_from_slice(&(map_len as u16).to_be_bytes());
+    let resources = sfnt_resources(&fork);
+    assert_eq!(resources.len(), copies as usize);
+    assert_eq!(resources[0].as_ptr(), resources[copies as usize - 1].as_ptr());
+    assert!(resources.iter().map(|font| font.len()).sum::<usize>() > fork.len());
+    let root = temp("bounded-load-aliased-fork");
+    let path = root.join("fork");
+    let size = fork.len() as u64;
+    write(&path, fork);
+    assert_eq!(read_font_fork_capped(&path, u32::from(copies - 1), size).unwrap(), data);
+}
+
+#[test]
+fn physical_view_keeps_duplicate_legacy_owner_without_changing_canonical_lookup() {
+    let root = temp("physical-legacy-owner");
+    let first_path = root.join("a-first.ttf");
+    let second_path = root.join("z-second.ttf");
+    let mut first_spec = spec("Duplicate Family", "Light", 300);
+    first_spec.legacy = Some(("Legacy First", "Light"));
+    let mut second_spec = first_spec.clone();
+    second_spec.legacy = Some(("Legacy Second", "Light"));
+    let first = font(&first_spec);
+    let second = font(&second_spec);
+    assert_ne!(first, second);
+    write(&first_path, &first);
+    write(&second_path, &second);
+    // The second font's names really are readable when it is the only contributor.
+    let control = bounded_catalog();
+    control.add_bytes(second.clone(), Source::Document, &Limits::default()).unwrap();
+    assert_eq!(control.resolve("Legacy Second", "Light").unwrap().0.family, "Duplicate Family");
+
+    let cat = bounded_catalog();
+    cat.set_app_dirs(vec![root.clone()]);
+    let canonical = cat.faces();
+    assert_eq!(canonical.len(), 1);
+    assert_eq!(canonical[0].path.as_ref(), Some(&first_path));
+    assert_eq!(cat.families().as_ref(), &["Duplicate Family".to_owned()]);
+    assert_eq!(cat.styles("Duplicate Family"), canonical.to_vec());
+    assert_eq!(cat.resolve("Duplicate Family", "Light").unwrap(), (canonical[0].clone(), Match::Exact));
+    assert_eq!(cat.by_postscript_name("DuplicateFamily-Light"), Some(canonical[0].clone()));
+    assert_eq!(cat.resolve("Legacy Second", "Light"), None, "canonical aliases keep the old first winner");
+
+    let physical = cat.faces_including_duplicates();
+    assert_eq!(physical.len(), 2);
+    assert_eq!(physical[0], canonical[0]);
+    assert_eq!(physical[1].path.as_ref(), Some(&second_path));
+    assert_eq!(physical[1].index, 0);
+    assert_eq!(physical[1].source, Source::App);
+    assert_eq!(physical[1].legacy_family.as_deref(), Some("Legacy Second"));
+    let selected = cat.load_with_limit(&physical[1], second.len() as u64).unwrap();
+    assert_eq!(selected.bytes.as_ref(), second.as_slice(), "an alias on first_path is not its old owner");
+    assert_ne!(selected.bytes.as_ref(), first.as_slice());
+    assert_eq!(selected.index, 0);
+    let again = cat.load_with_limit(&physical[1], second.len() as u64).unwrap();
+    assert!(Arc::ptr_eq(&selected.bytes, &again.bytes));
+    assert!(Arc::ptr_eq(&physical, &cat.faces_including_duplicates()));
+    assert!(Arc::ptr_eq(&canonical, &cat.faces()));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn physical_view_keeps_duplicate_collection_index_and_shared_bytes() {
+    let root = temp("physical-collection-owner");
+    let path = root.join("duplicates.ttc");
+    let mut first_spec = spec("Duplicate Collection", "Light", 300);
+    first_spec.legacy = Some(("Collection First", "Light"));
+    let mut second_spec = first_spec.clone();
+    second_spec.legacy = Some(("Collection Second", "Light"));
+    let bytes = collection(&[font(&first_spec), font(&second_spec)]);
+    write(&path, &bytes);
+    let cat = bounded_catalog();
+    cat.set_app_dirs(vec![root.clone()]);
+    assert_eq!(cat.faces().len(), 1);
+    assert_eq!(cat.faces()[0].index, 0);
+    let physical = cat.faces_including_duplicates();
+    assert_eq!(physical.len(), 2);
+    assert_eq!(physical[0].index, 0);
+    assert_eq!(physical[1].index, 1);
+    assert_eq!(physical[1].path.as_ref(), Some(&path));
+    assert_eq!(physical[1].legacy_family.as_deref(), Some("Collection Second"));
+    let first = cat.load_with_limit(&physical[0], bytes.len() as u64).unwrap();
+    let second = cat.load_with_limit(&physical[1], bytes.len() as u64).unwrap();
+    assert_eq!(second.index, 1);
+    assert_eq!(second.bytes.as_ref(), bytes.as_slice());
+    assert!(Arc::ptr_eq(&first.bytes, &second.bytes));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn physical_view_retains_metadata_not_removed_document_blob_payloads() {
+    let cat = bounded_catalog();
+    let mut document = spec("Duplicate Memory", "Light", 300);
+    document.legacy = Some(("Document Legacy", "Light"));
+    let mut bundled = document.clone();
+    bundled.legacy = Some(("Bundled Legacy", "Light"));
+    let document_bytes = font(&document);
+    let bundled_bytes = font(&bundled);
+    cat.add_bytes(document_bytes.clone(), Source::Document, &Limits::default()).unwrap();
+    cat.add_bytes(bundled_bytes.clone(), Source::Bundled, &Limits::default()).unwrap();
+    let canonical = cat.faces();
+    let physical = cat.faces_including_duplicates();
+    let generation = cat.generation();
+    assert_eq!(canonical.len(), 1);
+    assert_eq!(canonical[0].source, Source::Document);
+    assert_eq!(physical.len(), 2);
+    assert_eq!(physical[0].source, Source::Document);
+    assert_eq!(physical[1].source, Source::Bundled);
+    let loaded = cat.load_with_limit(&physical[0], document_bytes.len() as u64).unwrap();
+    let weak = Arc::downgrade(&loaded.bytes);
+    drop(loaded);
+    assert!(weak.upgrade().is_some(), "the live catalog owns the document bytes");
+    assert_eq!(cat.remove_added(Source::Document), 1);
+    assert!(cat.generation() > generation);
+    assert!(weak.upgrade().is_none(), "held canonical and physical metadata must not retain payloads");
+    assert_eq!(canonical[0].source, Source::Document);
+    assert_eq!(physical.len(), 2, "the retained view is one older metadata generation");
+    assert!(matches!(cat.load_with_limit(&physical[0], u64::MAX), Err(FontFileError::Gone)));
+    let current = cat.faces_including_duplicates();
+    assert!(!Arc::ptr_eq(&physical, &current));
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].source, Source::Bundled);
+    assert_eq!(cat.faces().as_ref(), current.as_ref());
+    assert!(Arc::ptr_eq(&cat.faces(), &current), "without duplicates the metadata allocation is shared");
+    assert_eq!(cat.load_with_limit(&current[0], bundled_bytes.len() as u64).unwrap().bytes.as_ref(), bundled_bytes.as_slice());
+}
+
+#[test]
+fn physical_view_refresh_preserves_scan_policy_instances_and_permissions() {
+    let root = temp("physical-refresh-policy");
+    let first_path = root.join("a-variable.ttf");
+    let second_path = root.join("z-variable.ttf");
+    let mut variable = spec("Physical Variable", "Regular", 400);
+    variable.instances = vec![("Medium", 500.0), ("Bold", 700.0)];
+    variable.fs_type = 2;
+    let bytes = font(&variable);
+    write(&first_path, &bytes);
+    let mut undrawable = spec("Not An Outline", "Regular", 400);
+    undrawable.outlines = false;
+    write(&root.join("not-drawable.ttf"), font(&undrawable));
+    let cat = bounded_catalog();
+    cat.set_app_dirs(vec![root.clone()]);
+    let canonical = cat.faces();
+    let physical = cat.faces_including_duplicates();
+    assert!(!physical.is_empty());
+    assert_eq!(physical.as_ref(), canonical.as_ref());
+    assert!(Arc::ptr_eq(&physical, &canonical));
+    assert!(physical.iter().all(|face| face.family == "Physical Variable" && face.source == Source::App && face.fs_type == 2 && face.variable));
+    assert!(physical.iter().any(|face| !face.variations.is_empty()), "existing named instances stay metadata, not new discovery");
+    let generation = cat.generation();
+    write(&second_path, &bytes);
+    cat.rescan();
+    let refreshed = cat.faces_including_duplicates();
+    assert!(cat.generation() > generation);
+    assert!(!Arc::ptr_eq(&physical, &refreshed));
+    assert_eq!(refreshed.len(), physical.len() * 2);
+    assert_eq!(cat.faces().as_ref(), canonical.as_ref());
+    assert!(refreshed.iter().all(|face| face.fs_type == 2 && face.source == Source::App));
+    assert_eq!(&refreshed[..physical.len()], physical.as_ref());
+    assert!(refreshed[physical.len()..].iter().all(|face| face.path.as_ref() == Some(&second_path)));
+    cat.set_app_dirs(vec![]);
+    cat.rescan();
+    assert!(cat.faces_including_duplicates().is_empty(), "removed app roots cannot remain visible");
+    assert!(cat.faces().is_empty());
+    assert!(!physical.is_empty(), "old metadata views do not silently switch generations");
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
