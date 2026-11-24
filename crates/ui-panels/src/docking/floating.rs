@@ -226,7 +226,8 @@ impl Outcome for FloatingGroupOutput {
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
-///   the platform has no windows. The window comes to the front when the user begins to move or resize it.
+///   the platform has no windows. The window comes to the front when the user begins to move or resize it, and in
+///   the pass [`raise`](FloatingGroup::raise) is set.
 /// - Menu: the Menu action and a context request on the title row open the `menu` rows, under the action's part.
 /// - Show it with [`show_group`](FloatingGroup::show_group): the closure fills the body, and is not called while
 ///   the group is minimized.
@@ -305,6 +306,11 @@ pub struct FloatingGroup<'a> {
     /// ([`native`](FloatingGroup::native)) moves only when pressed again.
     #[prop(quantity = "grab point")]
     continue_move: Option<Vec2>,
+    /// Brings the window to the front of the windows it overlaps in this pass: its layer above the other floating
+    /// layers, or its OS window raised and focused. A request of the pass, for the pass the host reveals a panel of the
+    /// window in.
+    #[prop(flag)]
+    raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
 }
@@ -352,6 +358,7 @@ impl<'a> FloatingGroup<'a> {
             take_drop: None,
             moving: false,
             continue_move: None,
+            raise: false,
             files: Vec::new(),
         }
         .label(title)
@@ -554,7 +561,7 @@ impl Component for FloatingGroup<'_> {
             collapsed_width: self.collapsed_width,
             files: self.files,
         };
-        native::raise(&cx.core.ctx, &output);
+        native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);
         output
     }
