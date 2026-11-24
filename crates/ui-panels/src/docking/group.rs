@@ -15,6 +15,7 @@ use crate::contract::{
 };
 use crate::display::{Shade, Text};
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
+use crate::primitives::PaintShape;
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
@@ -42,7 +43,7 @@ pub struct GroupGripStyle {
 
 /// The row of marks a dock grip shows, centred on the grip, in the theme's `line.grip` (photocraft#16406: the
 /// references' 0.83 of the panel was almost invisible on our darker panels). Its shape is the theme's `shape.grip`
-/// (photocraft#16426): ticks or dots, how many, how large and how far apart; by default eleven upright ticks, a thin
+/// (photocraft#16426): ticks, dots or one level bar, how many, how large and how far apart; by default eleven upright ticks, a thin
 /// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
 /// under its column bar and the grip above each icon group of a collapsed column paint the same marks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,13 +58,9 @@ impl GripMarks {
         GripMarks { ink: cx.color(cx.tokens.color.line.grip), shape: cx.tokens.shape.grip }
     }
 
-    /// How tall the row is, in points: a tick's length, or a dot's side.
+    /// How tall the row is, in points.
     pub(super) fn height(&self) -> f32 {
-        let GripShape { mark, length, width, .. } = self.shape;
-        match mark {
-            GripMark::Ticks => length,
-            GripMark::Dots => width,
-        }
+        marks_height(self.shape)
     }
 
     /// Paints the row in the grip strip `strip`: centred across it, and [`GRIP_ABOVE`] below its middle, so the strip
@@ -74,9 +71,22 @@ impl GripMarks {
 
     /// Paints the row centred on `centre`.
     fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
-        let GripShape { count, width, gap, .. } = self.shape;
+        let GripShape { mark, count, length, width, gap } = self.shape;
+        if mark == GripMark::Bar {
+            let bar = Rect::from_center_size(centre, Vec2::new(length, width));
+            ui.draw().fill(&PaintShape::Rect(bar, egui::CornerRadius::ZERO), self.ink);
+            return;
+        }
         let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(width) };
         ui.draw().grip_ticks(&look, centre, count.max(1), gap, self.height());
+    }
+}
+
+/// How tall a grip's row of `shape` is, in points: a tick's length, a dot's side, or the bar's thickness.
+fn marks_height(shape: GripShape) -> f32 {
+    match shape.mark {
+        GripMark::Ticks => shape.length,
+        GripMark::Dots | GripMark::Bar => shape.width,
     }
 }
 
@@ -88,8 +98,7 @@ pub(super) const GRIP_ABOVE: f32 = 2.0;
 /// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
 /// they never touch the strip's edge (photocraft#16426).
 pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
-    let GripShape { mark, length, width, .. } = tokens.shape.grip;
-    let marks = if mark == GripMark::Ticks { length } else { width };
+    let marks = marks_height(tokens.shape.grip);
     tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
 }
 
