@@ -90,7 +90,10 @@ impl<'a> Xcf<'a> {
             let hierarchy = channel_end.ptr()?;
             // V26 channel records also own their effect list, including its
             // terminator. Those bytes must never become mask coverage samples.
-            self.channel_effects_tail(&mut channel_end, keep_going, Some(metadata))?;
+            self.channel_effects_tail(&mut channel_end, keep_going, Some(metadata)).map_err(|error| match error {
+                super::ChannelTailError::Source(error) => EffectMaskError::Source(error),
+                super::ChannelTailError::Metadata(reason) => EffectMaskError::Metadata(reason),
+            })?;
             let channel_header = pointer..channel_end.pos;
             let head = self.hierarchy_head(hierarchy, 1)?;
             if dimensions != (head.width, head.height) {

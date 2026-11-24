@@ -465,7 +465,7 @@ fn auxiliary_v26_tail_has_cumulative_work_count_and_cancellation_limits() {
     assert_eq!(exact.work_remaining(), 0);
     assert!(xcf.effect_mask_header(&record(&f), &mut exact, &|| true).is_err());
     let mut short = records::Budget::new(cost - 1, 4096);
-    assert!(xcf.effect_mask_header(&record(&f), &mut short, &|| true).is_err());
+    assert!(matches!(xcf.effect_mask_header(&record(&f), &mut short, &|| true), Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))));
     assert_eq!(short.retained_remaining(), 4096);
     let polls = std::cell::Cell::new(0);
     let mut cancelled = records::Budget::new(1 << 20, 4096);
@@ -481,4 +481,29 @@ fn auxiliary_v26_tail_has_cumulative_work_count_and_cancellation_limits() {
     let f = fixture_framed(150, &[1, 2], 1, true, b"\0", false, (26, &too_many));
     let xcf = Xcf::parse(&f.bytes).unwrap();
     assert!(xcf.effect_mask_header(&record(&f), &mut records::Budget::default(), &|| true).is_err());
+}
+
+#[test]
+fn auxiliary_tail_work_refusal_retries_without_losing_name_storage_or_mislabeling_truncation() {
+    let f = fixture_framed(150, &[1, 2], 1, true, b"Coverage\0", true, (26, &[]));
+    let xcf = Xcf::parse(&f.bytes).unwrap();
+    let mut measured = records::Budget::new(4096, 4096);
+    xcf.effect_mask_header(&record(&f), &mut measured, &|| true).unwrap().unwrap();
+    let work = 4096 - measured.work_remaining();
+    xcf.meta_budget.set("Coverage".len());
+    let mut short = records::Budget::new(work - 1, 4096);
+    assert!(matches!(xcf.effect_mask_header(&record(&f), &mut short, &|| true), Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))));
+    assert_eq!(short.retained_remaining(), 4096);
+    assert!(short.work_remaining() < work - 1);
+    assert_eq!(xcf.meta_budget.get(), "Coverage".len());
+    let mut enough = records::Budget::new(work, 4096);
+    assert!(xcf.effect_mask_header(&record(&f), &mut enough, &|| true).unwrap().is_some());
+    assert_eq!(enough.work_remaining(), 0);
+    assert_eq!(xcf.meta_budget.get(), 0);
+    let mut broken = fixture_framed(150, &[1, 2], 1, true, b"Coverage\0", true, (26, &[]));
+    broken.bytes.truncate(broken.effects_slot.unwrap() + 7);
+    let xcf = Xcf::parse(&broken.bytes).unwrap();
+    let mut available = records::Budget::new(4096, 4096);
+    assert!(matches!(xcf.effect_mask_header(&record(&broken), &mut available, &|| true), Err(EffectMaskError::Source(Error::Invalid(_)))));
+    assert_eq!(available.retained_remaining(), 4096);
 }
