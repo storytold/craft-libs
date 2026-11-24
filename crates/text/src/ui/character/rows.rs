@@ -106,7 +106,7 @@ impl Lengths<'_> {
         field.inner.unwrap_or_default()
     }
 
-    /// The kerning field: a number or the name of a presets row (Metrics, Optical).
+    /// The kerning field: a number or the name of a presets row (Metrics, Optical). The field fills its grid cell.
     pub(super) fn kerning(
         &self,
         ui: &mut Ui,
@@ -118,7 +118,11 @@ impl Lengths<'_> {
     ) -> EditEvents<NamedOr<KerningName>> {
         let units = self.units;
         let shown = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let field = NumberField::named(label.clone(), Bind::given(mixed(value))).range(TRACKING_RANGE).presets(presets).scrub_by_label();
+            let field = NumberField::named(label.clone(), Bind::given(mixed(value)))
+                .range(TRACKING_RANGE)
+                .presets(presets)
+                .scrub_by_label()
+                .sizing(Sizing::FillWidth);
             let field = field.codec(NumberCodec::new(units.reader(None), 0));
             match key {
                 Some(key) => field.doc_key(key),
@@ -131,7 +135,7 @@ impl Lengths<'_> {
         shown.inner.unwrap_or_default()
     }
 
-    /// A field over a number that is not a length: its event and the preset row picked.
+    /// A field over a number that is not a length: its event and the preset row picked. The field fills its grid cell.
     pub(crate) fn plain(&self, ui: &mut Ui, spec: PlainRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
         self.plain_keyed(ui, spec, None)
     }
@@ -141,7 +145,8 @@ impl Lengths<'_> {
         let PlainRow { label, side, value, range, percent, presets, disabled } = spec;
         let units = self.units;
         let shown = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let field = NumberField::new(label.clone(), Bind::given(value)).range(range.clone()).presets(presets).scrub_by_label();
+            let field =
+                NumberField::new(label.clone(), Bind::given(value)).range(range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth);
             let field = if percent {
                 field.unit_kind(UnitKind::Percent).step(UnitKind::Percent.step())
             } else {
@@ -275,19 +280,28 @@ pub(crate) fn string_entries(pairs: impl Iterator<Item = (String, String)>) -> V
     pairs.map(|(value, text)| Entry::new(value, text)).collect()
 }
 
-/// A row with a select over `entries`; its pick as a change.
+/// A row with a select over `entries`, sized by `sizing` (`None` keeps the select's own width); its pick as a change.
 pub(crate) fn select_row<V: Value + 'static, C>(
     ui: &mut Ui,
     label: &Label,
     side: SideLabel,
     value: Mixed<V>,
     entries: &[Entry<V>],
+    sizing: Option<Sizing>,
     change: impl Fn(V) -> C,
 ) -> EditEvents<C> {
     let shown = Field::new(label.clone())
         .side(side)
-        .show(ui, |ui, _| Select::new(label.clone(), Bind::given(value.clone()), entries).placeholder("—").show(ui).events);
+        .show(ui, |ui, _| sized(Select::new(label.clone(), Bind::given(value.clone()), entries).placeholder("—"), sizing).show(ui).events);
     shown.inner.unwrap_or_default().map(&change)
+}
+
+/// `component` sized by `sizing`; `None` keeps its own sizing.
+fn sized<P: Props>(component: P, sizing: Option<Sizing>) -> P {
+    match sizing {
+        Some(sizing) => component.sizing(sizing),
+        None => component,
+    }
 }
 
 /// One toggle button of a row: its name, icon, state (`None` while the selection mixes) and the change it makes.
@@ -347,27 +361,29 @@ pub(crate) struct FamilyField {
 }
 
 /// The family field of the character controls, the style options and the type bar: the font picker in a
-/// hidden-label field when a `picker` source is given, else a select over `families`. A `disabled` reason disables the
-/// field and shows in its tooltip.
+/// hidden-label field when a `picker` source is given, else a select over `families`, sized by `sizing` (`None` keeps
+/// the control's own width). A `disabled` reason disables the field and shows in its tooltip.
 pub(crate) fn family_field(
     ui: &mut Ui,
     words: &CharacterWords,
     values: &CharacterValues,
     families: &[String],
     disabled: Option<&Label>,
+    sizing: Option<Sizing>,
     #[cfg(feature = "font-picker")] picker: Option<&mut FontPickerSource<'_>>,
 ) -> FamilyField {
     #[cfg(feature = "font-picker")]
     {
-        family_field_keyed(ui, words, values, families, None, disabled, picker)
+        family_field_keyed(ui, words, values, families, None, disabled, sizing, picker)
     }
     #[cfg(not(feature = "font-picker"))]
     {
-        family_field_keyed(ui, words, values, families, None, disabled)
+        family_field_keyed(ui, words, values, families, None, disabled, sizing)
     }
 }
 
 /// As [`family_field`], the picker carrying the document `key` a host focuses it by (the plain select has none).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn family_field_keyed(
     ui: &mut Ui,
     words: &CharacterWords,
@@ -376,6 +392,7 @@ pub(crate) fn family_field_keyed(
     #[cfg(feature = "font-picker")] key: Option<DocKey>,
     #[cfg(not(feature = "font-picker"))] _key: Option<DocKey>,
     disabled: Option<&Label>,
+    sizing: Option<Sizing>,
     #[cfg(feature = "font-picker")] picker: Option<&mut FontPickerSource<'_>>,
 ) -> FamilyField {
     let value = mixed(values.family.clone());
@@ -403,7 +420,7 @@ pub(crate) fn family_field_keyed(
             if let Some(key) = key {
                 field = field.doc_key(key);
             }
-            disabled_for(field, &words.family, disabled).show(ui)
+            disabled_for(sized(field, sizing), &words.family, disabled).show(ui)
         });
         let Some(out) = shown.inner else { return FamilyField::default() };
         let id = craft_ui::contract::Outcome::response(&out).id;
@@ -422,7 +439,7 @@ pub(crate) fn family_field_keyed(
     let entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
     let shown = Field::new(words.family.clone()).side(hidden_side()).show(ui, |ui, _| {
         let select = Select::new(words.family.clone(), Bind::given(value.clone()), &entries).placeholder("—");
-        disabled_for(select, &words.family, disabled).show(ui).events
+        disabled_for(sized(select, sizing), &words.family, disabled).show(ui).events
     });
     let edits = shown.inner.unwrap_or_default().map(CharacterChange::Family).into_iter().collect();
     FamilyField { edits, ..FamilyField::default() }

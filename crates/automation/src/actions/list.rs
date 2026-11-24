@@ -576,12 +576,13 @@ impl ActionList {
     /// actions sharing a name, the file's shortcut owner keeps the name. The stored ids come back
     /// in [`MergedFile::ids`].
     pub fn merge_file(&mut self, file: ActionsFile, replace: bool, mut calls: impl FnMut(&mut ActionStep, &[(String, String)])) -> MergedFile {
-        let ActionsFile { mut actions, sets, occurrences, .. } = file;
+        let ActionsFile { mut actions, sets, set_order, occurrences, .. } = file;
         if replace {
             let named: BTreeSet<&str> = actions
                 .iter()
                 .filter_map(|action| action.set.as_deref())
                 .chain(sets.iter().map(String::as_str))
+                .chain(set_order.iter().map(String::as_str))
                 .chain(occurrences.set_rows.iter().map(String::as_str))
                 .collect();
             self.actions.retain(|action| !action.set.as_deref().is_some_and(|set| named.contains(set)));
@@ -595,6 +596,9 @@ impl ActionList {
         let mut given = vec![String::new(); actions.len()];
         for (&i, name) in order.iter().zip(claimed) {
             given[i] = name;
+        }
+        for set in &set_order {
+            self.record_set(set);
         }
         let mut merged = MergedFile::default();
         let ids = file_ids(&occurrences.actions);
@@ -757,10 +761,20 @@ impl ActionList {
         self.touch();
     }
 
-    /// The list as a file (version [`ActionsFile::VERSION`]; the empty sets in `sets`).
+    /// The list as a file (version [`ActionsFile::VERSION`]; the empty sets in `sets`, the set order in `set_order` when it is not the natural one).
     pub fn to_file(&self) -> ActionsFile {
         let empty = self.sets().into_iter().filter(|set| !self.actions.iter().any(|action| action.set.as_deref() == Some(*set)));
-        ActionsFile::new(self.actions.clone(), empty.map(str::to_owned).collect())
+        let mut file = ActionsFile::new(self.actions.clone(), empty.map(str::to_owned).collect());
+        let mut natural: Vec<&str> = Vec::new();
+        for set in self.actions.iter().filter_map(|action| action.set.as_deref()).chain(file.sets.iter().map(String::as_str)) {
+            if !natural.contains(&set) {
+                natural.push(set);
+            }
+        }
+        if natural != self.sets() {
+            file.set_order = self.sets().into_iter().map(str::to_owned).collect();
+        }
+        file
     }
 
     /// Puts `set` at the end of the set order when the order lacks it.

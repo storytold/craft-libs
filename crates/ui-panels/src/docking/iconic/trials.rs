@@ -586,11 +586,9 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
     }
 }
 
-/// A theme's `shape.grip` reaches the grips (photocraft#16426): six dots, two points on a side and three apart, in the
-/// theme's grip ink.
-#[trial]
-fn a_themes_grip_shape_reaches_the_grips() {
-    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 };
+/// The shapes a collapsed column of one group paints under a built-in theme whose `shape.grip` is `shape`, and its
+/// group's grip strip.
+fn themed_grip(shape: craft_theme::GripShape) -> (Vec<egui::Shape>, Rect) {
     let mut def = craft_theme::builtins().first().expect("a built-in theme").clone();
     let mut seed = def.shape.unwrap_or(craft_theme::ShapeSeed {
         radius: None,
@@ -604,7 +602,7 @@ fn a_themes_grip_shape_reaches_the_grips() {
     seed.grip = Some(craft_theme::GripSeed {
         mark: Some(shape.mark),
         count: Some(shape.count),
-        length: None,
+        length: Some(shape.length),
         width: Some(shape.width),
         gap: Some(shape.gap),
     });
@@ -626,10 +624,38 @@ fn a_themes_grip_shape_reaches_the_grips() {
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
     let strip = fixture.part_rect(id, GRIP.at(0)).expect("the group has its grip");
-    let shapes = fixture.frame_shapes();
+    (fixture.frame_shapes(), strip)
+}
+
+/// A theme's `shape.grip` reaches the grips (photocraft#16426): six dots, two points on a side and three apart, in the
+/// theme's grip ink.
+#[trial]
+fn a_themes_grip_shape_reaches_the_grips() {
+    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 };
+    let (shapes, strip) = themed_grip(shape);
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
     assert!(marks.iter().all(|m| equals_token(m.width(), shape.width) && equals_token(m.height(), shape.width)), "two-point dots: {marks:?}");
     assert!(marks.windows(2).all(|w| equals_token(w[1].min.x - w[0].max.x, shape.gap)), "three points apart: {marks:?}");
     assert_ne!(ink, egui::Color32::TRANSPARENT);
+}
+
+/// A theme's bar grip (VectorCraft's) is one level bar as long and as thick as the theme says, centred across the
+/// strip, with no row of ticks.
+#[trial]
+fn a_themes_bar_grip_is_one_level_bar() {
+    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Bar, count: 11, length: 18.0, width: 3.0, gap: 1.0 };
+    let (shapes, strip) = themed_grip(shape);
+    assert!(grip_ticks(&shapes, strip).is_none(), "no row of ticks");
+    let bars: Vec<Rect> = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if strip.expand(EPS).contains_rect(rect.rect) && rect.fill != egui::Color32::TRANSPARENT => Some(rect.rect),
+            _ => None,
+        })
+        .collect();
+    let [bar] = bars.as_slice() else { panic!("one bar in the strip: {bars:?}") };
+    assert!(bar.width() > bar.height(), "the bar lies level: {bar:?}");
+    assert!(equals_token(bar.width(), shape.length) && equals_token(bar.height(), shape.width), "the theme's 18 by 3 bar: {bar:?}");
+    assert!((bar.center().x - strip.center().x).abs() <= 0.5, "centred across the strip: {bar:?} in {strip:?}");
 }

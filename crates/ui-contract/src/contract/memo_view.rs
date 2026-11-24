@@ -3,7 +3,7 @@
 
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
-use crate::runtime::env::{Env, Scoped, Shrink};
+use crate::runtime::env::{Env, Shrink};
 use crate::runtime::shift::Shift;
 use egui::Ui;
 use std::fmt;
@@ -48,9 +48,9 @@ use std::sync::Arc;
 /// Its other inputs are the framework's, and each reaches the key or the settled test:
 /// - its place: the room it is given, the clip, the layer, the layout, the scale, the scope's style inputs (tokens,
 ///   theme, density, direction, language, window active) and the flow of the body around it (whether that body is a
-///   content-sized or a given column, the axes it sizes from its content, a least measure, the axes a scroll leaves
-///   unbounded, a beside label's cell, whether its leaves fit the room), compared for every view and for each kind of
-///   run on its own;
+///   content-sized or a given column, the axes it sizes from its content, the axis it shares among the children that
+///   fill it, a least measure, the axes a scroll leaves unbounded, a beside label's cell, whether its leaves fit the
+///   room), compared for every view and for each kind of run on its own;
 /// - what the scope around it hands down beyond those (enabled, read-only, size, ink, the command chain, motion, every
 ///   app value, and the rest of `Scoped::scope_key`), in the key;
 /// - the framework inputs it reads outside its props (`runtime::inputs`: the modifiers, the pointer, the keys held, the
@@ -64,8 +64,15 @@ use std::sync::Arc;
 /// around it the view is one unit, sized by its content's measure. In a shrinking `Row` it is a unit the row narrows
 /// as it narrows a body unit: from what its content takes in no room down to what it takes with every leaf at its
 /// least. When the row narrows it, the width the row gives it is the room of its place; otherwise it shows as in no
-/// room, in the row's flow region. Its content sizes from its content along x, and its leaves fit the view's room, as
-/// they fit the room of a `Stack` the view is shown in.
+/// room, in the row's flow region. Its leaves fit the view's room, as they fit the room of a `Stack` the view is shown
+/// in.
+///
+/// In a `Stack` or `Row` body that shares its height or width among the children that fill it, a view whose content
+/// fills that axis (a direct child of the content given it to fill, as a fill-width bar in a shell slot) is one of
+/// those children, as that child shown without the view would be: the body counts it, and gives it its share as the
+/// room of its place, so a new share runs it. Which axis its content filled is kept with its measure. In a shrinking
+/// `Row` that does not share its width, its content sizes from its content along x: a child that fills there takes its
+/// measured width.
 ///
 /// What `show` returns holds layout facts only (a size, a rect, which part took the room). A replay returns the kept
 /// value again, moved with the record when the room moved (`Shift`), so an event returned through it would arrive once
@@ -120,12 +127,14 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
         let counting = matches!(Env::of(ui).shrink, Some(Shrink::Count(_)));
         let unbounded = counting.then(|| Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.unbounded.0 = true)));
         let env = Env::of(ui);
+        let id = lazy.id(ui);
         let key = Self::key(&ctx, &env, &props, show);
         let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
             // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps how
-            // that body sizes from its content and whether its leaves fit their room (`Scoped::start_view_room`), so
-            // the view takes what its content used there, as the same content shown without the view would.
-            let installed = Env::install_for(ui, env.derive_local(Scoped::start_view_room));
+            // that body sizes from its content, whether its leaves fit their room and which axis it shares among the
+            // children that fill it (`Scoped::start_view_room`), so the view takes what its content used there, as the
+            // same content shown without the view would.
+            let installed = Env::install_for(ui, env.derive_local(|scoped| scoped.start_view_room(id)));
             let out = show(&mut props, ui);
             Env::restore(&ctx, installed);
             run.output = Some(Arc::new(out.clone()));

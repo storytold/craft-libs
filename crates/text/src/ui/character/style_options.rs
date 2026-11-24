@@ -308,9 +308,9 @@ impl<'a> TextStyleOptions<'a> {
                 let found = match attribute {
                     StyleAttribute::Font => include_row(ui, &words.include, attribute, on, |ui| {
                         #[cfg(feature = "font-picker")]
-                        let family = family_field(ui, &cw, c, families, None, picker.as_mut());
+                        let family = family_field(ui, &cw, c, families, None, Some(Sizing::FillWidth), picker.as_mut());
                         #[cfg(not(feature = "font-picker"))]
-                        let family = family_field(ui, &cw, c, families, None);
+                        let family = family_field(ui, &cw, c, families, None, Some(Sizing::FillWidth));
                         let mut found = character(family.edits);
                         found.extend(character(select_row(
                             ui,
@@ -318,6 +318,7 @@ impl<'a> TextStyleOptions<'a> {
                             hidden_side(),
                             mixed(c.style.clone()),
                             &style_entries,
+                            Some(Sizing::FillWidth),
                             CharacterChange::Style,
                         )));
                         found
@@ -390,7 +391,7 @@ impl<'a> TextStyleOptions<'a> {
                         let align_of = |key: String| {
                             ParagraphChange::Align(ALIGNS.iter().find(|(_, k)| *k == key).map_or_else(TextAlign::default, |(align, _)| *align))
                         };
-                        paragraph_changes(select_row(ui, &pw.alignment, hidden_side(), mixed(key), &align_entries, align_of))
+                        paragraph_changes(select_row(ui, &pw.alignment, hidden_side(), mixed(key), &align_entries, Some(Sizing::FillWidth), align_of))
                     }),
                     StyleAttribute::FirstLineIndent => include_row(ui, &words.include, attribute, on, |ui| {
                         let row = LengthRow {

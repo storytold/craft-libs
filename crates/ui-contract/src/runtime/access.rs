@@ -19,6 +19,7 @@ use egui::Id;
 use std::ops::RangeInclusive;
 
 pub use crate::runtime::egui::access::bounds;
+pub use crate::runtime::egui::access::focused_node;
 #[doc(hidden)]
 pub use emit::SubDecl;
 #[doc(hidden)]
