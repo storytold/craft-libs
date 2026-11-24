@@ -139,7 +139,7 @@ fn separation_colours_use_their_tint_transform() {
 
 /// The plates of a converted EPS at 72 dpi (a pixel per point, row 0 at the top), and the ink
 /// at a point of the EPS's default user space.
-fn separate(body: &str) -> (craft_prepress::Plates, impl Fn(&craft_prepress::Plates, &str, f64, f64) -> u8) {
+fn separate(body: &str) -> (craft_prepress::Plates, impl Fn(&craft_prepress::Plates, &str, f64, f64) -> u8 + use<>) {
     let c = eps_to_pdf(&eps(body), Limits::default()).unwrap();
     let plates = craft_prepress::plates(&c.pdf, 0, 72.0, &craft_prepress::Options::default()).unwrap();
     let [x0, _, _, y1] = c.bbox;
@@ -176,6 +176,43 @@ fn devicen_colours_paint_each_colourant_plate() {
     let (gold, teal) = (at(&p, "Gold", 30.0, 45.0), at(&p, "Teal", 30.0, 45.0));
     assert!(gold > 0 && gold < teal && teal > 250, "Gold at half, Teal full: {gold} {teal}");
     assert!(at(&p, "Magenta", 30.0, 45.0) < 5, "the colourants aren't separated as their alternate");
+}
+
+#[test]
+fn sampling_a_tint_transform_leaves_the_callers_operands() {
+    // The transform returns three results for four: every sample would pop a caller operand.
+    let (c, _) = run("0 1 299 { } for
+         [/Separation /Gold /DeviceCMYK { pop 0 0 0 } ] setcolorspace 1 setcolor 10 20 10 10 rectfill
+         count 299 ge { 0 0 1 0 setcmykcolor 60 20 5 5 rectfill } if");
+    assert!(c.contains("0 0 1 0 k"), "only the paint itself takes an operand: {c}");
+}
+
+/// An uncoloured tiling pattern `S` whose cell is solid.
+const SOLID_PATTERN: &str = "<< /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 4 4] /XStep 4 /YStep 4
+     /PaintProc { pop 0 0 4 4 rectfill } >> matrix makepattern /S exch def";
+
+#[test]
+fn an_uncoloured_pattern_paints_in_each_spot_base_it_is_used_with() {
+    let (p, at) = separate(&format!(
+        "{SOLID_PATTERN}
+         [/Pattern [/Separation /Gold /DeviceCMYK {{ dup dup dup }}]] setcolorspace 1 S setcolor 20 30 20 30 rectfill
+         [/Pattern [/Separation /Teal /DeviceCMYK {{ dup dup dup }}]] setcolorspace 1 S setcolor 70 30 20 30 rectfill"
+    ));
+    assert!(at(&p, "Gold", 30.0, 45.0) > 250, "the first fill is Gold");
+    assert!(at(&p, "Teal", 80.0, 45.0) > 250 && at(&p, "Gold", 80.0, 45.0) < 5, "the second is Teal, not the Gold cell again");
+}
+
+#[test]
+fn a_pattern_cell_reused_under_another_overprint_state_follows_it() {
+    // A cyan page; the same Gold pattern overprinting on the left and knocking out on the right.
+    let (p, at) = separate(&format!(
+        "1 0 0 0 setcmykcolor 10 20 100 50 rectfill {SOLID_PATTERN}
+         [/Pattern [/Separation /Gold /DeviceCMYK {{ dup dup dup }}]] setcolorspace 1 S setcolor
+         true setoverprint 20 30 20 30 rectfill false setoverprint 70 30 20 30 rectfill"
+    ));
+    assert!(at(&p, "Gold", 30.0, 45.0) > 250 && at(&p, "Gold", 80.0, 45.0) > 250, "both fills are Gold");
+    assert!(at(&p, "Cyan", 30.0, 45.0) > 250, "the overprinting fill leaves the cyan under it");
+    assert!(at(&p, "Cyan", 80.0, 45.0) < 5, "the knockout fill clears it");
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! are evaluated here in the shading's colour space and sampled into device colours, which the
 //! PDF carries as a sampled function.
 
-use crate::read::gstate::{DevColor, M, Seg};
+use crate::read::gstate::{DevColor, M, Seg, Space};
 use crate::read::interp::{Interp, PsErr, R, err, matrix_of};
 use crate::read::obj::{Obj, PDict};
 use crate::read::ops::gfx;
@@ -336,7 +336,14 @@ pub fn fill_pattern(ip: &mut Interp, path: &[Seg], eo: bool) -> R<bool> {
 fn tiling(ip: &mut Interp, p: &PDict, path: &[Seg], eo: bool) -> R {
     let uncolored = p.get_name(b"PaintType").and_then(|o| o.num()) == Some(2.0);
     let color = if uncolored { Some(ip.gs.color.clone()) } else { None };
-    let key = (crate::read::obj::Obj::Dict(p.clone()).key(), color.clone().unwrap_or_default().iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+    // An uncoloured cell's spot ink comes from the base space, which `setcolorspace` can change
+    // under the same pattern and tint: cells for different spot spaces stay apart.
+    let spot_base = match ip.gs.pattern_base.as_deref() {
+        Some(Space::Tint { written, .. }) if uncolored => std::rc::Rc::as_ptr(written) as usize,
+        _ => 0,
+    };
+    let tints = color.clone().unwrap_or_default().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let key = (crate::read::obj::Obj::Dict(p.clone()).key(), tints, spot_base, ip.gs.overprint);
     let n = match ip.cells.get(&key) {
         Some(n) => *n,
         None => {

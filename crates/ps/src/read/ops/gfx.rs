@@ -1088,31 +1088,37 @@ fn written_space(ip: &mut Interp, space: &Space) -> R<Option<usize>> {
         }
         let total = size.pow(inputs as u32);
         ip.alloc(total * (4 + std::mem::size_of::<DevColor>()))?;
-        let mut colors = Vec::with_capacity(total);
+        // Sampling runs the transform where the program may never paint: whatever it does to
+        // the operand stack (a transform that returns too few results pops the caller's
+        // operands) is undone afterwards.
         let depth = ip.o.len();
-        let mut failed = false;
-        for i in 0..total {
-            let mut rest = i;
-            let comps: Vec<f64> = (0..inputs)
-                .map(|_| {
-                    let k = rest % size;
-                    rest /= size;
-                    k as f64 / (size - 1) as f64
-                })
-                .collect();
-            match to_device(ip, space, &comps, 0) {
-                Ok(c) => colors.push(c),
-                // A transform that fails where the program never paints keeps the old path:
-                // the alternate at the tints painted.
-                Err(PsErr::Ps(_)) => {
-                    ip.o.truncate(depth);
-                    failed = true;
-                    break;
+        ip.charge((depth / 8) as u64)?;
+        ip.alloc(depth.saturating_mul(crate::read::ops::basic::OBJ_BYTES))?;
+        let saved = ip.o.clone();
+        let mut colors = Vec::with_capacity(total);
+        let sampled = (|| -> R<bool> {
+            for i in 0..total {
+                let mut rest = i;
+                let comps: Vec<f64> = (0..inputs)
+                    .map(|_| {
+                        let k = rest % size;
+                        rest /= size;
+                        k as f64 / (size - 1) as f64
+                    })
+                    .collect();
+                match to_device(ip, space, &comps, 0) {
+                    // A transform that doesn't leave the stack as it found it is broken.
+                    Ok(c) if ip.o.len() == depth => colors.push(c),
+                    // One that is broken or fails where the program may never paint keeps the
+                    // old path: the alternate at the tints painted.
+                    Ok(_) | Err(PsErr::Ps(_)) => return Ok(false),
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
             }
-        }
-        if failed {
+            Ok(true)
+        })();
+        ip.o = saved;
+        if !sampled? {
             None
         } else {
             let (alt, samples) = crate::read::ops::shading::pack(&colors);
