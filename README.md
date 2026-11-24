@@ -22,7 +22,7 @@ A Cargo workspace (edition 2024, resolver 3). Each library is a crate under `cra
 
 The first coordinated release will be v0.1.0. It gives consumers a fixed baseline while
 development continues on `main`. All five crates share this version. They require Rust 1.95 or
-later; the UI integrations use egui 0.36.
+later; the UI integrations use egui 0.37.
 
 The `v0.1.0` tag does not exist yet ([#2084](https://github.com/storytold/craft-libs/issues/2084)),
 so a `tag = "v0.1.0"` pin fails with ``failed to find tag `v0.1.0` ``. Until the tag is published,
