@@ -6,6 +6,7 @@ use craft_ui::testing::style::{tokens, with_cx};
 
 pub(crate) mod render;
 
+pub(crate) mod focus;
 pub(crate) mod panel_menu;
 pub(crate) mod runs;
 
@@ -19,6 +20,7 @@ pub(crate) mod floating;
 pub(crate) mod floating_area;
 pub(crate) mod floating_rail;
 pub(crate) mod hidden;
+pub(crate) mod sources;
 
 pub(crate) mod columns;
 pub(crate) mod dock_back;

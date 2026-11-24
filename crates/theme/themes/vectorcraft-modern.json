@@ -16,7 +16,13 @@
       "warn": "#f0a330"
     }
   },
-  "shape": null,
+  "shape": {
+    "grip": {
+      "mark": "bar",
+      "length": 18,
+      "width": 3
+    }
+  },
   "light": {
     "accent.solid": "#d9472f",
     "caption.close_hover": "#c42b1c",
@@ -32,6 +38,7 @@
     "state.hover": "#e3e7ed",
     "state.pressed": "#edcbc8",
     "state.selected": "#eed2d0",
+    "state.text_selection": "#d9472f8c",
     "surface.background": "#e6e9ee",
     "surface.canvas": "#dfe3e9",
     "surface.control": "#e3e7ed",
@@ -53,6 +60,7 @@
     "state.hover": "#262b35",
     "state.pressed": "#593330",
     "state.selected": "#4c2e2e",
+    "state.text_selection": "#f06a528c",
     "surface.background": "#0b0d12",
     "surface.canvas": "#101217",
     "surface.control": "#282d37",

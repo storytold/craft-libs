@@ -15,13 +15,14 @@ use crate::contract::{
 };
 use crate::display::{Shade, Text};
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
+use crate::primitives::PaintShape;
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
-use crate::runtime::focus::{self, FocusTarget};
+use crate::runtime::focus::{self, FocusRequest, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
-use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
+use crate::tabs::{PanelTabLook, Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
@@ -42,7 +43,7 @@ pub struct GroupGripStyle {
 
 /// The row of marks a dock grip shows, centred on the grip, in the theme's `line.grip` (photocraft#16406: the
 /// references' 0.83 of the panel was almost invisible on our darker panels). Its shape is the theme's `shape.grip`
-/// (photocraft#16426): ticks or dots, how many, how large and how far apart; by default eleven upright ticks, a thin
+/// (photocraft#16426): ticks, dots or one level bar, how many, how large and how far apart; by default eleven upright ticks, a thin
 /// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
 /// under its column bar and the grip above each icon group of a collapsed column paint the same marks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,13 +58,9 @@ impl GripMarks {
         GripMarks { ink: cx.color(cx.tokens.color.line.grip), shape: cx.tokens.shape.grip }
     }
 
-    /// How tall the row is, in points: a tick's length, or a dot's side.
+    /// How tall the row is, in points.
     pub(super) fn height(&self) -> f32 {
-        let GripShape { mark, length, width, .. } = self.shape;
-        match mark {
-            GripMark::Ticks => length,
-            GripMark::Dots => width,
-        }
+        marks_height(self.shape)
     }
 
     /// Paints the row in the grip strip `strip`: centred across it, and [`GRIP_ABOVE`] below its middle, so the strip
@@ -74,9 +71,22 @@ impl GripMarks {
 
     /// Paints the row centred on `centre`.
     fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
-        let GripShape { count, width, gap, .. } = self.shape;
+        let GripShape { mark, count, length, width, gap } = self.shape;
+        if mark == GripMark::Bar {
+            let bar = Rect::from_center_size(centre, Vec2::new(length, width));
+            ui.draw().fill(&PaintShape::Rect(bar, egui::CornerRadius::ZERO), self.ink);
+            return;
+        }
         let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(width) };
         ui.draw().grip_ticks(&look, centre, count.max(1), gap, self.height());
+    }
+}
+
+/// How tall a grip's row of `shape` is, in points: a tick's length, a dot's side, or the bar's thickness.
+fn marks_height(shape: GripShape) -> f32 {
+    match shape.mark {
+        GripMark::Ticks => shape.length,
+        GripMark::Dots | GripMark::Bar => shape.width,
     }
 }
 
@@ -88,8 +98,7 @@ pub(super) const GRIP_ABOVE: f32 = 2.0;
 /// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
 /// they never touch the strip's edge (photocraft#16426).
 pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
-    let GripShape { mark, length, width, .. } = tokens.shape.grip;
-    let marks = if mark == GripMark::Ticks { length } else { width };
+    let marks = marks_height(tokens.shape.grip);
     tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
 }
 
@@ -283,6 +292,11 @@ pub struct DockGroupOutput {
     /// The host may add the size
     /// the dragged unit floats at with `drag::amend` in this pass.
     pub drag_started: bool,
+    /// The tabs the strip shows this pass, each with its rect and the id of its accessibility node; none for a
+    /// [`titled`](DockGroup::titled) group.
+    pub tabs: Vec<(PanelKey, Rect, Id)>,
+    /// The band the group is dragged by this pass, with the id of its accessibility node.
+    pub grip: Option<(Rect, Id)>,
 }
 
 impl Outcome for DockGroupOutput {
@@ -315,6 +329,7 @@ struct Reported {
     drag_started: bool,
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
     empty_drag: bool,
+    tabs: Vec<(PanelKey, Rect, Id)>,
 }
 
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
@@ -347,10 +362,15 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)).
+    #[prop]
+    tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
     /// single titled panel does: the panels are shown from a rail, not by tabs.
     #[prop(flag)]
     titled: bool,
+    /// The tab row takes key focus in this pass: [`take_focus`](DockGroup::take_focus).
+    take_focus: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -402,7 +422,9 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            tab_look: PanelTabLook::Plain,
             titled: false,
+            take_focus: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
@@ -425,6 +447,14 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         self.props = self.props.footer(FooterRegion::new());
         self.footer = Some(Box::new(content));
         self
+    }
+
+    /// The group takes key focus in this pass, as a click on its tabs gives it: its tab row's stop takes it while the
+    /// row runs, so the keys of the next pass route through the group; a titled header, which has no tab row, focuses
+    /// its drag band. A request of the pass.
+    #[must_use]
+    pub fn take_focus(self) -> Self {
+        DockGroup { take_focus: true, ..self }
     }
 
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
@@ -459,7 +489,8 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     }
 
     /// The band the group is dragged by and the panel menu button, at the end of the header: the band first. The
-    /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did.
+    /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
+    /// [`PanelTabLook::Pill`] tabs, in the strip's middle with their pills.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
@@ -471,7 +502,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             // An icon button is square: its side is the slot's room past the band and the gap.
             let side = (slot.width() - grip_width(cx.tokens) - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
-            let button = Rect::from_min_size(egui::Pos2::new(end.left(), slot.top()), Vec2::new(end.width(), side.min(slot.height())));
+            let height = side.min(slot.height());
+            let top = if self.tab_look == PanelTabLook::Pill { slot.center().y - height / 2.0 } else { slot.top() };
+            let button = Rect::from_min_size(egui::Pos2::new(end.left(), top), Vec2::new(end.width(), height));
             let _ = cx
                 .header_part(HeaderEdge::End, MENU, button)
                 .sense(Sense::CLICK | Sense::FOCUS)
@@ -543,6 +576,10 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
                 popup.open(cx);
             }
         }
+        // A titled header has no tab row: its drag band is the group's stop.
+        if self.take_focus && self.titled && cx.part_if_declared(GRIP).is_some() {
+            focus::request(&cx.core.ctx, FocusTarget::Part(cx.core.id, GRIP.into()));
+        }
         if let Some(grip) = cx.part_if_declared(GRIP).map(|grip| grip.press) {
             self.reported.toggle_minimized |= grip.double_pressed();
             if self.movable && matches!(grip.phase, PressPhase::DragStart { .. }) {
@@ -576,8 +613,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         if let Some(request) = &self.reported.menu {
             cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0 = Some(request.at);
         }
-        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, .. } = self.reported;
-        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started }
+        let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
+        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, .. } = self.reported;
+        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, grip }
     }
 }
 
@@ -666,6 +704,8 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
+                    look: self.tab_look,
+                    take_focus: self.take_focus,
                     dock: self.dock,
                     sent: Outbox::new(&mut sent),
                 };
@@ -676,8 +716,11 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             .inner;
         self.extra = extra;
         // A press on the group's empty body focuses its panel, as in Photoshop.
-        if surface_pressed && let Some(strip) = strip {
-            focus::request(ui.ctx(), FocusTarget::Id(strip));
+        if surface_pressed && let Some((strip, _)) = &strip {
+            focus::request(ui.ctx(), FocusTarget::Id(*strip));
+        }
+        if let Some((strip, tabs)) = &strip {
+            self.reported.tabs = tabs.iter().map(|(key, rect)| (*key, *rect, crate::contract::item_node(*strip, key))).collect();
         }
         let size = self.size;
         let reported = &mut self.reported;
@@ -740,6 +783,10 @@ struct TabRow<'a, P> {
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
+    look: PanelTabLook,
+    /// The strip takes key focus in this pass (`DockGroup::take_focus`): in the key, so the row runs and the strip
+    /// takes it while it runs.
+    take_focus: bool,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
 }
@@ -755,8 +802,9 @@ fn tab_marks(ctx: &egui::Context, panels: &[PanelTitle]) -> Vec<(PanelKey, Optio
         .collect()
 }
 
-/// A group's tab strip with its tab insertion spots. Returns the strip's id.
-fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> Id {
+/// A group's tab strip with its tab insertion spots. Returns the strip's id and the rect of each tab it shows, which a
+/// replay returns again, moved with the row.
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> (Id, Vec<(PanelKey, Rect)>) {
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
@@ -768,13 +816,20 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
     let mut strip = TabStrip::new(name)
         .kind(kind)
+        .panel_look(row.look)
         .shown(active)
         .tear_off()
         .natural_height(true)
+        // Group, column and icon drags name what they move inside the drop region; a tab drag does the same.
+        .drag_preview(crate::contract::RowPreview::Named)
         .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
         .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
         strip = strip.wheel_selects();
+    }
+    // The strip takes the focus while it runs, so it runs focused and the keys of the next pass route through it.
+    if row.take_focus {
+        strip = strip.request_focus(FocusRequest::Take);
     }
     let marks = &row.marks;
     let strip = strip.show_items(ui, &source, &mut |key, _| {
@@ -822,7 +877,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if strip.empty_double {
         row.sent.send(TabEvent::EmptyDouble);
     }
-    strip.response.response.id
+    (strip.response.response.id, strip.tab_rects)
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before

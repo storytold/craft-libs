@@ -1,6 +1,6 @@
 //! Stories of the pasteboard.
 
-use super::{NAME, PageBorder, PageFrame, Pasteboard, PasteboardColor};
+use super::{ArtboardEdge, NAME, PageBorder, PageFrame, Pasteboard, PasteboardColor};
 use crate::canvas::Canvas;
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, on_canvas_with, story_view};
 use crate::contract::Show as _;
@@ -51,6 +51,17 @@ fn artboards(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let border = border_of(data, PageBorder::DropShadow);
     let pages: &[PageFrame] = data.value("pages", boards());
     on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+}
+
+/// The two artboards under `ArtboardEdge::Plain`: the active one edged in black, the other in mid grey at a hairline,
+/// as a drawing app's artboards read against the paper.
+#[story(Pasteboard<'static>, covers = [], drive = Drive::Never)]
+fn artboards_with_plain_edges(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let pages: &[PageFrame] = data.value("pages", boards());
+    on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| {
+        Pasteboard::new("Pasteboard", pages).artboard_edge(ArtboardEdge::Plain).show_at(ui, at)
+    })
 }
 
 #[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]

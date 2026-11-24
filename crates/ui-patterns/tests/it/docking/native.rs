@@ -25,7 +25,9 @@ use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, HeldButtons};
 use craft_ui::text::NumberField;
 use craft_ui_test_kit::windows::{AppKitWindow, FilesOver, Out, Windows};
-use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
+use egui::{
+    Event, HoveredFile, Key, Modifiers, Pos2, Rect, Shape, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo,
+};
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -270,6 +272,8 @@ struct NativeDock {
     palette: Option<ViewportId>,
     /// The tree the palette window's pass produced in the last frame.
     palette_tree: Option<AccessTree>,
+    /// The shapes the palette window's pass painted in the last frame.
+    palette_shapes: Vec<Shape>,
     /// Whether Auto-Collapse Iconic Panels is on in the frames of a collapsed palette.
     auto_collapse: bool,
 }
@@ -293,7 +297,17 @@ impl NativeDock {
         windows.child_info(info(true, FLOAT_AT));
         let workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])));
         let specs = Tracked::new(Specs { rights: Permissions::ALL, least: false, stepped });
-        let mut dock = NativeDock { windows, workspace, stepped, specs, builder: None, palette: None, palette_tree: None, auto_collapse: false };
+        let mut dock = NativeDock {
+            windows,
+            workspace,
+            stepped,
+            specs,
+            builder: None,
+            palette: None,
+            palette_tree: None,
+            palette_shapes: Vec::new(),
+            auto_collapse: false,
+        };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -320,6 +334,7 @@ impl NativeDock {
         }
         let palette = self.palette;
         self.palette_tree = out.trees.into_iter().find(|(viewport, _)| Some(*viewport) == palette).map(|(_, tree)| tree);
+        self.palette_shapes = out.shapes.into_iter().find(|(viewport, _)| Some(*viewport) == palette).map(|(_, shapes)| shapes).unwrap_or_default();
         for (_, builder) in out.builders.into_iter().filter(|(viewport, _)| Some(*viewport) == palette) {
             match self.builder.as_mut() {
                 Some(kept) => {
@@ -382,6 +397,37 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_app_moves_windo
         docked |= docks_window(&dock.frame(events).0);
     }
     assert!(!docked, "a cancelled move docks nothing");
+}
+
+/// A palette moved by its title row over the main window's group lies over the mark the group shows: its own window
+/// paints the mark too, at the same desktop place by the windows' inner rects, so the mark shows over the palette and
+/// not only through its faded window.
+#[trial]
+fn a_native_palette_moved_over_a_drop_target_paints_the_mark_over_itself() {
+    let mut dock = NativeDock::on(Os::Linux, Arc::new(FakeSystem::new()));
+    let step = (OVER_GROUP - (FLOAT_AT.min + ROW_AT.to_vec2())) / 3.0;
+    for events in [vec![moved(ROW_AT)], vec![press(ROW_AT)]] {
+        dock.frame(events);
+    }
+    for _ in 0..3 {
+        dock.frame(vec![moved(ROW_AT + step)]);
+    }
+    dock.frame(vec![]);
+    let area = match drag::mark(&dock.windows.ctx) {
+        Some(DropMark::Region { area, .. } | DropMark::Into(area)) => area,
+        mark => panic!("the main window's group marks the region the palette takes: {mark:?}"),
+    };
+    dock.frame(vec![]);
+    let palette = dock.palette.expect("the palette has its window");
+    let inner = dock.windows.facts(palette).inner_rect.expect("the palette reports its inner rect");
+    let mapped = area.translate(MAIN_AT.min - inner.min);
+    let shows = dock.palette_shapes.iter().any(
+        |shape| matches!(shape, Shape::Rect(rect) if (rect.rect.min - mapped.min).length() < 0.5 && (rect.rect.max - mapped.max).length() < 0.5),
+    );
+    assert!(shows, "the palette's window paints the mark at {mapped:?}, where the main window's {area:?} lies under it");
+    for events in [vec![key_press(Key::Escape, Modifiers::NONE)], vec![release(ROW_AT)], vec![]] {
+        dock.frame(events);
+    }
 }
 
 /// Where the app moves windows itself and the platform tells the system pointer (Windows): the window follows the

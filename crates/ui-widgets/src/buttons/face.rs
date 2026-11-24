@@ -1,7 +1,7 @@
 //! What a push or toggle button shows: a leading icon (or spinner), a label and a trailing icon, centred in the
 //! button unless it aligns them to an edge, and the look parts the buttons share.
 
-use super::{ControlPlace, GroupLevel, RibbonLook};
+use super::{ActiveLook, ControlPlace, GroupLevel, RibbonLook};
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
@@ -396,7 +396,11 @@ pub(crate) struct IconFace {
 /// button of the old look (a capsule would round the on plate), showing the on look while on. The scope's glyph role
 /// sets the glyph's side and, in a rail, the quieter ink it rests in.
 pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
-    let (off, on) = (cx.variant_look(), on_parts(cx));
+    let on = match cx.env::<ActiveLook>() {
+        ActiveLook::Accent => on_parts(cx),
+        ActiveLook::Pressed => pressed_parts(cx),
+    };
+    let off = cx.variant_look();
     let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
     let (side, rest) = match cx.glyph_role() {
         GlyphRole::Tool => (icon.md, None),
@@ -424,6 +428,14 @@ pub(super) fn on_parts(cx: &StyleCx<'_>) -> VariantParts {
     let fill = cx.color(colors.accent.soft);
     let ink = cx.color(colors.accent.on_soft);
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), ..soft }
+}
+
+/// The on look under `ActiveLook::Pressed`: the pressed state's fill with no edge, the normal text colour.
+fn pressed_parts(cx: &StyleCx<'_>) -> VariantParts {
+    let soft = on_parts(cx);
+    let colors = &cx.tokens.color;
+    let (fill, ink) = (cx.color(colors.state.pressed), cx.color(colors.text.normal));
+    VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), edge: None, ..soft }
 }
 
 /// The focus ring of a button.

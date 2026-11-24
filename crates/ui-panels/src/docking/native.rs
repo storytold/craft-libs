@@ -8,8 +8,8 @@
 //! [`Placement`](craft_behavior::placement::Placement) app windows keep, and opens where [`place`] puts it.
 
 use super::{DockConfig, FloatingGroupOutput, PanelSpec};
-use crate::runtime::drag;
 use crate::runtime::windows::{WindowAction, WindowHost, WindowSpec};
+use crate::runtime::{drag, overlay};
 use craft_behavior::GesturePhase;
 use craft_behavior::dock::{Action, Floating};
 use craft_behavior::placement::{Defaults, monitor_of, place};
@@ -139,12 +139,22 @@ pub fn send_to(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) 
     }
 }
 
-/// Raises the window of the native group that `output` reports on when the user began moving or resizing it this
-/// pass, so a palette comes to the front of the windows it overlaps. False when nothing was raised.
-pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput) -> bool {
-    let began = output.placed.is_some_and(|change| change.phase == GesturePhase::Begin);
+/// Brings the group that `output` reports on to the front of the windows it overlaps when `asked`
+/// ([`FloatingGroup::raise`](super::FloatingGroup::raise)), and an OS window also when the user began moving or
+/// resizing it this pass (that press already brings a layer forward). An OS window is raised and focused; a layer's
+/// family comes in front of the other layers at the end of the pass.
+pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput, asked: bool) {
     let host = WindowHost::of(ctx);
-    began && host.viewport_of(output.response.id).is_some_and(|viewport| host.act(viewport, WindowAction::Focus))
+    match host.viewport_of(output.response.id) {
+        Some(viewport) => {
+            let began = output.placed.is_some_and(|change| change.phase == GesturePhase::Begin);
+            if asked || began {
+                host.act(viewport, WindowAction::Focus);
+            }
+        }
+        None if asked => overlay::raise(ctx, output.response.id),
+        None => {}
+    }
 }
 
 /// Fades the native window of the group that `output` reports on while its drag highlights a drop target, and makes
