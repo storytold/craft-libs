@@ -421,3 +421,21 @@ fn a_palette_answer_survives_a_measuring_run_of_the_body() {
     let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour");
 }
+
+/// A palette colour the host answers in a frame whose first run measures the dialog still shifts the opened entry, once.
+/// Guards against a hosted dialog that took its host's answers in the measuring run, whose form drops them.
+#[trial]
+fn a_palette_answer_in_a_measured_frame_shifts_the_entry_once() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = super::hosted::measured_fixture(&host);
+    host.borrow_mut().open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(gif(8)));
+    fixture.idle(10);
+    show_palette(&host, &mut fixture);
+    let cell = fixture.by_label("1 #00ff00").expect("the Color Table lists the palette");
+    fixture.click(&cell).key(Key::Enter, Modifiers::NONE).idle(4);
+    let (id, _) = host.borrow_mut().take_color_request().expect("opening a cell asks for its colour");
+    host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
+    fixture.idle(4);
+    let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
+    assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour once");
+}

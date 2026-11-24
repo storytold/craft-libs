@@ -514,10 +514,13 @@ impl StackDialog for HostedSaveForWeb {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<SaveForWebResult>> {
+        // A measuring run keeps the host's answers and the inputs: the real run of the pass takes them.
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let dialog = SaveForWebDialog::new(self.name.clone(), self.size, self.pictures.clone(), Bind::bound(&mut self.options))
             .presets(self.presets.clone())
             .saving(self.saving)
-            .answers(self.requests.take_answers());
+            .answers(answers);
         let dialog = SaveForWebDialog {
             animation: self.animation,
             remember: self.remember.clone(),
@@ -532,11 +535,11 @@ impl StackDialog for HostedSaveForWeb {
             marks: Some(&self.marks),
             optimize: self.optimize,
             browser_preview: self.browser.clone(),
-            optimize_start: self.optimize_start.take(),
-            optimize_answer: self.optimize_answer.take(),
-            optimize_forget: std::mem::take(&mut self.optimize_forget),
+            optimize_start: if measuring { None } else { self.optimize_start.take() },
+            optimize_answer: if measuring { None } else { self.optimize_answer.take() },
+            optimize_forget: !measuring && std::mem::take(&mut self.optimize_forget),
             ok_label: self.ok_label.clone(),
-            inputs: std::mem::take(&mut self.inputs),
+            inputs: if measuring { Vec::new() } else { std::mem::take(&mut self.inputs) },
             ..dialog
         };
         let mut shown = dialog.show(ui);
