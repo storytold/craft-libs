@@ -6,10 +6,10 @@
 //! user did; the dock decides what a drop changes.
 
 use super::divider::{self, Divider, Drag};
-use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
+use super::{DividerKind, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Props as _, Role, ShowContainer as _,
-    Sizing, WordSetCx as _,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::menu::GroupItem;
 use crate::runtime::env::Label;
@@ -139,6 +139,9 @@ pub struct DockColumnOutput<P> {
     pub resized: Vec<(P, f32)>,
     /// The width the user gave the column on its inner edge this pass.
     pub width: Option<f32>,
+    /// The dividers drawn this pass: between each two open groups and on the inner edge, each with the rect of its
+    /// handle and the id of the handle's accessibility node.
+    pub dividers: Vec<(DividerKind<P>, Rect, Id)>,
 }
 
 impl<P> Outcome for DockColumnOutput<P> {
@@ -563,7 +566,20 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> DockColumnOutput<P> {
+        let node = |part| crate::runtime::access::sub_node_id(cx.core.id, part);
+        let mut dividers = Vec::new();
+        for pair in self.laid.as_ref().map_or(&[][..], |plan| &plan.open[..]).windows(2) {
+            let part = DIVIDER.at(pair[0] as u64);
+            if let (Some(shown), Some(anchor)) = (cx.part_if_declared(part), self.anchor(pair[0])) {
+                dividers.push((DividerKind::Groups(anchor.clone()), shown.rect, node(part)));
+            }
+        }
+        let edge = EDGE.at(0);
+        if let (Some(shown), Some(first)) = (cx.part_if_declared(edge), self.anchor(0)) {
+            dividers.push((DividerKind::ColumnEdge(first.clone()), shown.rect, node(edge)));
+        }
         DockColumnOutput {
+            dividers,
             response: cx.response.clone(),
             placed: cx.rect,
             iconic: self.collapse.then_some(true),

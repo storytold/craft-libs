@@ -15,6 +15,7 @@ pub(crate) mod floating;
 mod panels;
 mod placed;
 pub(crate) mod root;
+mod sources;
 mod spec;
 pub(crate) mod splitter;
 pub mod stack;
@@ -43,6 +44,7 @@ pub use panels::{DockPanels, PanelSpecs, SpecSource, request_actions};
 pub use panels::{close_requests, open_requests};
 pub use placed::{Placing, placed_rect, with_area_rules};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
+pub use sources::{DividerKind, DockSource, SourceKind};
 pub use spec::{DockGrid, DockHeights, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};
 pub use targets::{DockSizes, DockSpot, DockTargets, GroupDrag, ZoneRule};
@@ -67,7 +69,7 @@ pub use window_menu::{WindowMenuRows, WindowMenuRowsOutput};
 
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Outcome, Pad, PaintUi,
-    PartsCx, Props as _, Role, Sizing, WordSetCx as _,
+    PartsCx, Pointer as _, Props as _, Role, Sizing, WordSetCx as _,
 };
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
@@ -101,6 +103,17 @@ impl PanelKey {
         let mut hasher = DefaultHasher::new();
         panel.hash(&mut hasher);
         PanelKey(hasher.finish())
+    }
+}
+
+/// A key names a panel: it has no place, so a replay at another place keeps it.
+impl crate::runtime::Shift for PanelKey {
+    fn shifted(&self, _: &egui::RecordShift) -> Self {
+        *self
+    }
+
+    fn snapped(&self, _: &Self, _: f32) -> Self {
+        *self
     }
 }
 
@@ -214,6 +227,9 @@ pub struct SplitAreaStyle {
 pub struct SplitAreaOutput<P> {
     /// The resize edits of the layout and the area's response.
     pub edit: EditResponse<Layout<P>>,
+    /// The dividers drawn this pass: each split's path from the root (`false` for the first child), the rect of its
+    /// handle and the id of the handle's accessibility node.
+    pub dividers: Vec<(Vec<bool>, Rect, egui::Id)>,
 }
 
 /// The first body's share of a pair's room when its layout holds none: an even split.
@@ -259,13 +275,15 @@ pub struct SplitArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// preview", "Resize timeline".
     #[prop(into)]
     divider_label: Option<Label>,
+    /// The paths of the splits whose handles `parts` declared this pass, by handle index.
+    declared: Vec<Vec<bool>>,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> SplitArea<'a, P> {
     /// A split area named `label` over `layout`, sized by `rules`. A mixed layout shows no handles.
     pub fn new(label: impl Into<Label>, layout: Bind<'a, Layout<P>>, rules: FrameRules<'a, P>) -> Self {
         let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).pad(Pad::None);
-        SplitArea { common: Common::new(), props, layout, rules, divider_label: None }.label(label)
+        SplitArea { common: Common::new(), props, layout, rules, divider_label: None, declared: Vec::new() }.label(label)
     }
 
     /// A two-body area: `bodies.0` first along `axis` and `bodies.1` after it, with one divider between them. The first
@@ -383,10 +401,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(layout) = cx.value() else { return };
         let (sizes, rtl) = (cx.style.sizes, cx.flow.is_rtl());
-        for (at, handle) in handles(layout, rect, &sizes, &self.rules, rtl).iter().enumerate() {
+        let handles = handles(layout, rect, &sizes, &self.rules, rtl);
+        for (at, handle) in handles.iter().enumerate() {
             let divider = divider_of(layout, handle, rect, &sizes, &self.rules, rtl, false);
             divider::declare(cx, rect, HANDLE, at as u64, &divider);
         }
+        self.declared = handles.into_iter().map(|handle| handle.path).collect();
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -455,7 +475,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Component for SplitAr
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitAreaOutput<P> {
-        SplitAreaOutput { edit: cx.edit_response() }
+        let dividers = self
+            .declared
+            .into_iter()
+            .enumerate()
+            .filter_map(|(at, path)| {
+                let part = HANDLE.at(at as u64);
+                let rect = cx.part_if_declared(part)?.rect;
+                Some((path, rect, crate::runtime::access::sub_node_id(cx.core.id, part)))
+            })
+            .collect();
+        SplitAreaOutput { edit: cx.edit_response(), dividers }
     }
 }
 
