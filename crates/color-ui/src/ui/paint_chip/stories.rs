@@ -3,6 +3,7 @@
 use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintLink, PaintLinkKind, PaintList, PaintListOptions, PaintRow};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
+use craft_ui::buttons::PopupMark;
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
 use craft_ui::display::{Shade, Text};
@@ -81,6 +82,22 @@ fn paint_chip_ring(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Stack::new().show(ui, |ui, _| {
         for (index, (label, paint)) in ["Stroke", "Gradient stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
             let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(true).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// Fill and Stroke chips with the menu mark: the dropdown arrow after the well, inside the chip.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_menu_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Solid(Srgba::rgb(0.1, 0.1, 0.1))]);
+    let mut first = None;
+    Stack::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Fill", "Stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(index == 1).popup_mark(PopupMark::Menu).show(ui);
             if index == 0 {
                 first = Some(StoryOutput::from(shown));
             }

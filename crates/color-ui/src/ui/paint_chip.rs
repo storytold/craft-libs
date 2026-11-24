@@ -14,12 +14,13 @@ use craft_behavior::{Axis, EditEvent, EditEvents, Metrics, PartKey};
 use craft_cms::convert::CmykConverter;
 use craft_keymap::Mods;
 use craft_theme::Srgba;
-use craft_ui::buttons::Button;
+use craft_ui::buttons::{Button, PopupMark};
 use craft_ui::choice::{ChoiceWords, RING_SHARE, Segmented, Swatch, SwatchStyle, paint_ring};
 use craft_ui::contract::{
     Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi,
     Overlays as _, Pages, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
+use craft_ui::controls::disclosure::DisclosureGlyph;
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetRowMenu, PresetState};
 use craft_ui::primitives::textures::CachedTexture;
@@ -222,6 +223,12 @@ pub struct PaintChipStyle {
     none_mark: StyleColor,
     /// The swatch look the ring is painted with.
     swatch: SwatchStyle,
+    /// The side of the dropdown arrow a chip with [`PopupMark::Menu`] shows after its well.
+    arrow: f32,
+    /// The room the arrow takes after the well: the arrow with a tight gap on each side.
+    arrow_room: f32,
+    /// The arrow's colour.
+    arrow_color: StyleColor,
 }
 
 impl PaintChipStyle {
@@ -352,7 +359,7 @@ pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl craft_ui::contra
     }
 }
 
-/// A paint chip, a control high and 1.5 times as wide.
+/// A paint chip, a control high and 1.5 times as wide, with the room of its [`popup_mark`](Self::popup_mark) after it.
 ///
 /// - Look: a solid paint fills the chip over the checkerboard (alpha shows); a gradient is a
 ///   start-to-end ramp through its stops; No Color is the field fill with a `status.bad` diagonal
@@ -400,6 +407,11 @@ pub struct PaintChip<'a> {
     /// The chip draws as a stroke ring through the one ring painter.
     #[prop]
     ring: bool,
+    /// The mark after the well that tells the chip opens more than it shows: [`PopupMark::Menu`] draws the shared
+    /// dropdown arrow, inside the chip's hit area. None by default; a chip has no tool group mark, so
+    /// [`PopupMark::ToolGroup`] draws none.
+    #[prop]
+    popup_mark: PopupMark,
     /// The request of the Color Picker… button, for this pass.
     pick_color: Option<ColorRequest>,
     /// The modifiers of this pass's click on a chip without a popover.
@@ -426,6 +438,7 @@ impl<'a> PaintChip<'a> {
             full_picker: false,
             popover: true,
             ring: false,
+            popup_mark: PopupMark::None,
             pick_color: None,
             clicked: None,
         }
@@ -485,6 +498,11 @@ impl<'a> PaintChip<'a> {
         self.gradient.as_ref().map(|(default, _)| default)
     }
 
+    /// The room after the well the mark takes: the arrow's for [`PopupMark::Menu`], none otherwise.
+    fn mark_room(&self, style: &PaintChipStyle) -> f32 {
+        if self.popup_mark == PopupMark::Menu { style.arrow_room } else { 0.0 }
+    }
+
     /// The paint a switch to `kind` sets.
     fn switched(&self, kind: FillKind, solid: Srgba) -> Paint {
         match kind {
@@ -495,6 +513,13 @@ impl<'a> PaintChip<'a> {
             FillKind::Picture => Paint::Picture(self.picture.as_ref().map(|(default, _)| default.clone()).unwrap_or_default()),
         }
     }
+}
+
+/// `rect` split into the well and the mark's room, `room` wide at its end edge.
+fn split_mark(rect: Rect, room: f32, rtl: bool) -> (Rect, Rect) {
+    let at = if rtl { rect.left() + room } else { rect.right() - room };
+    let (left, right) = (Rect::from_min_max(rect.min, pos2(at, rect.max.y)), Rect::from_min_max(pos2(at, rect.min.y), rect.max));
+    if rtl { (right, left) } else { (left, right) }
 }
 
 fn kind_label(words: &PaintWords, kind: FillKind) -> Label {
@@ -529,6 +554,7 @@ impl Component for PaintChip<'_> {
     fn style(cx: &StyleCx<'_>, _: PaintChipStyleKey) -> PaintChipStyle {
         let colors = &cx.tokens.color;
         let metrics = craft_ui::choice::SwatchMetrics::of(cx);
+        let arrow = cx.tokens.size.icon.glyph_sm;
         PaintChipStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
@@ -538,6 +564,9 @@ impl Component for PaintChip<'_> {
             none_fill: cx.color(colors.surface.sunken),
             none_mark: cx.color(colors.status.bad.solid),
             swatch: Swatch::style(cx, Swatch::new(Label::default(), Srgba::BLACK).style_key()),
+            arrow,
+            arrow_room: arrow + 2.0 * cx.tokens.space.gap.tight,
+            arrow_color: cx.color(colors.text.muted),
         }
     }
 
@@ -546,11 +575,12 @@ impl Component for PaintChip<'_> {
     }
 
     fn measure(&mut self, cx: &craft_ui::contract::MeasureCx<'_, Self>) -> egui::Vec2 {
-        vec2(cx.style.height * CHIP_WIDTH_IN_HEIGHTS, cx.style.height)
+        vec2(cx.style.height * CHIP_WIDTH_IN_HEIGHTS + self.mark_room(cx.style), cx.style.height)
     }
 
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let part = cx.part(WELL, rect);
+        let (well, _) = split_mark(rect, self.mark_room(cx.style), cx.flow.is_rtl());
+        let part = cx.part(WELL, well);
         if self.popover {
             let _ = part.toggles("picker");
         }
@@ -700,11 +730,17 @@ impl Component for PaintChip<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let (well, mark) = split_mark(cx.rect, self.mark_room(&cx.style), cx.flow.is_rtl());
+        if self.popup_mark == PopupMark::Menu {
+            let mut arrow = DisclosureGlyph::dropdown_of(cx.env.get());
+            arrow.color = Some(cx.style.arrow_color);
+            ui.draw().icon(Rect::from_center_size(mark.center(), vec2(cx.style.arrow, cx.style.arrow)), &arrow);
+        }
         let Some(paint) = cx.value().cloned() else {
             ui.face(WELL, Swatch::new(cx.resolved.label.to_owned(), Mixed::<Srgba>::Mixed));
             return;
         };
-        paint_well(ui, cx, cx.rect, &paint, &cx.style.well_look(self.ring));
+        paint_well(ui, cx, well, &paint, &cx.style.well_look(self.ring));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PaintChipOutput {
