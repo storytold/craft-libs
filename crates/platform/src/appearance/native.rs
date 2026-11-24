@@ -7,11 +7,11 @@
 
 #[cfg(any(windows, target_os = "macos"))]
 use super::Shared;
-use std::time::Duration;
 #[cfg(any(windows, target_os = "macos"))]
 use std::{
     sync::{Arc, mpsc},
     thread::JoinHandle,
+    time::Duration,
 };
 
 /// How long a read answer stands before the system is asked again.
@@ -65,27 +65,25 @@ fn reduced_motion() -> Option<bool> {
     Some(objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion())
 }
 
-/// `read`, asked at most once per `every` and answered from memory in between.
-#[cfg(any(windows, target_os = "macos", test))]
-fn remembered(read: impl Fn() -> Option<bool>, every: Duration) -> impl Fn() -> Option<bool> {
-    let last = std::cell::Cell::new(None::<(std::time::Instant, Option<bool>)>);
-    move || {
-        if let Some((at, answer)) = last.get()
-            && at.elapsed() < every
-        {
-            return answer;
-        }
-        let answer = read();
-        last.set(Some((std::time::Instant::now(), answer)));
-        answer
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::remembered;
     use std::cell::Cell;
     use std::time::Duration;
+
+    /// `read`, asked at most once per `every` and answered from memory in between.
+    fn remembered(read: impl Fn() -> Option<bool>, every: Duration) -> impl Fn() -> Option<bool> {
+        let last = Cell::new(None::<(std::time::Instant, Option<bool>)>);
+        move || {
+            if let Some((at, answer)) = last.get()
+                && at.elapsed() < every
+            {
+                return answer;
+            }
+            let answer = read();
+            last.set(Some((std::time::Instant::now(), answer)));
+            answer
+        }
+    }
 
     /// Ported from WordCraft (#7317). The UI asks every frame; the system is asked once per interval and the answer kept between.
     #[test]
