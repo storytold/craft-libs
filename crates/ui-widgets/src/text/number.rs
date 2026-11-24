@@ -342,6 +342,15 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// The whole value is selected when the field takes focus, so typing replaces it, as a value field in a photo
+    /// editor's sliders behaves. Focus by key or request selects it at once; a pointer press keeps the caret or range
+    /// it makes, and a plain click selects the whole value once it is released, as an address bar does.
+    #[must_use]
+    pub fn select_on_focus(mut self) -> Self {
+        self.options.select_on_focus = true;
+        self
+    }
+
     /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
     #[must_use]
     pub(super) fn zoom_typing(mut self) -> Self {
