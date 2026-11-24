@@ -5,7 +5,8 @@ use super::{Slider, SliderScale, SliderThumb, TrackPress};
 use crate::contract::{Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Progress;
 use crate::form::Field;
-use crate::runtime::env::Message;
+use crate::runtime::env::{Message, with_env};
+use crate::style::TrackFill;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use crate::value_drag::TrackFace;
 use craft_behavior::Mixed;
@@ -96,6 +97,18 @@ fn slider_disabled_2(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Slider<'static>, covers = [], drive = Drive::Never, group = "Disabled", title = "Disabled 3")]
 fn slider_disabled_3(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     disabled_row(ui, data, "Disabled 3", 100.0)
+}
+
+/// A slider of an app that sets `TrackFill::Accent` at its root: the filled part in the accent on an outline groove.
+#[story(Slider<'static>, covers = [], drive = Drive::Drag(Grip::new(Slider::THUMB)), group = "Values", title = "Accent fill")]
+fn slider_accent_fill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(TrackFill::Accent);
+        },
+        |ui| value_row(ui, data, "Opacity", 60.0),
+    )
 }
 
 /// With the direction set to right to left the label moves to the right; the slider keeps its geometry.

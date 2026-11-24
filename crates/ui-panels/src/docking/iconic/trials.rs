@@ -1,15 +1,20 @@
 //! Trials of `IconicColumn`: the letter of a panel without an icon, the names a wide column shows, the grips of its
-//! groups, and the resizes of its flyouts.
+//! groups, the resizes of its flyouts, and a flyout that a command leaves open.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::GRIP;
+use crate::buttons::Button;
+use crate::contract::overlay::{self, OpenFilter};
 use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
     DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
 };
+use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
 use crate::runtime::drag;
 use crate::runtime::env::Direction;
+use crate::runtime::focus::{FocusTarget, request};
+use crate::runtime::frame::take_output;
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
@@ -18,7 +23,7 @@ use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
 use craft_behavior::overlay::Side;
-use egui::{Pos2, Rect, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, UiBuilder, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -235,6 +240,53 @@ fn a_press_outside_closes_the_flyout_only_with_auto_collapse() {
         let away = d.rect().right_center() + Vec2::new(100.0, 0.0);
         d.fixture.click_at(away).settle();
         assert_eq!(d.shown.get().is_none(), auto_collapse, "auto-collapse {auto_collapse}: a press outside closes the flyout only with it on");
+    }
+}
+
+/// The app command the trials bind to a key.
+const NUDGE: &str = "flyoutTrial.nudge";
+
+/// A key that runs an app command, with a stop in the open flyout focused, leaves the flyout open and live in every
+/// pass and the stop focused, with Auto-Collapse Iconic Panels off or on: the host's binding opens and closes a flyout,
+/// and a command closes only the transient popups (menus, dropdowns, lists).
+#[trial]
+fn a_key_command_leaves_the_open_flyout_and_the_focus_in_it() {
+    for auto_collapse in [false, true] {
+        let (open, stop, faded) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+        let (seen, shown, fade) = (Rc::clone(&open), Rc::clone(&stop), Rc::clone(&faded));
+        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+        let mut fixture = Fixture::new(move |ui| {
+            let column = Column::new(vec![Group::new(vec![0, 1], 0)]);
+            let mut now = seen.get();
+            IconicColumn::new("Panels", global("iconic column", "commands"), &column, Bind::bound(&mut now), &spec)
+                .within(screen())
+                .auto_collapse(auto_collapse)
+                .show_flyouts_at(ui, place, |_, at, ui, _| {
+                    let GroupAt::Show(rect) = at else { return None };
+                    shown.set(Some(ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| Button::new("Snap").show(ui).id).inner));
+                    None
+                });
+            // Last pass the open flyout was not among the live layers that take keys: it played its exit.
+            fade.set(fade.get() || (now.is_some() && !overlay::any_open(ui.ctx(), OpenFilter::Keys)));
+            seen.set(now);
+        });
+        let binding = Binding::parse("F9").expect("the trial's chord parses");
+        let catalog = AppCatalog::new(vec![CommandDef::new(NUDGE, NUDGE, Scope::app()).with_default(binding)], 1).expect("the catalog is taken");
+        fixture.commands(CommandInput::new().catalog(catalog)).room(SCREEN).settle();
+        let icon = fixture.by_label("Swatches").expect("the Swatches icon").rect.center();
+        fixture.click_at(icon).settle();
+        let button = stop.get().expect("the flyout shows its stop");
+        request(fixture.ctx(), FocusTarget::Id(button));
+        fixture.settle();
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(button), "auto-collapse {auto_collapse}: the flyout's stop has the focus");
+        faded.set(false);
+        take_output(fixture.ctx());
+        fixture.key(Key::F9, Modifiers::NONE).settle();
+        let fired = take_output(fixture.ctx()).fired;
+        assert!(fired.iter().any(|fired| fired.command.id == NUDGE), "auto-collapse {auto_collapse}: the key runs its command");
+        assert_eq!(open.get(), Some(1), "auto-collapse {auto_collapse}: the flyout stays open");
+        assert!(!faded.get(), "auto-collapse {auto_collapse}: and never plays its exit");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(button), "auto-collapse {auto_collapse}: and its stop keeps the focus");
     }
 }
 

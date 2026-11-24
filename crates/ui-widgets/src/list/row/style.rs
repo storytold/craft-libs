@@ -74,6 +74,19 @@ impl RowForm {
     }
 }
 
+/// How the active row of a menu, a popup list's command rows and the palette, and an open menu bar title, show it. An
+/// app sets it once at its root (`RootEnv::values`); the default is the accent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum CommandHighlight {
+    /// `accent.solid` with `text.on_accent`.
+    #[default]
+    Accent,
+    /// The hover tint (`state.hover`) with the row's own ink, as a row with an open submenu shows it.
+    Hover,
+}
+
 /// What the row fill depends on.
 #[derive(Clone, Copy)]
 pub(super) struct FillKey {
@@ -109,7 +122,7 @@ pub(super) fn fill_of(cx: &StyleCx<'_>, key: FillKey) -> Stateful<StyleColor> {
     if key.form == RowForm::Option {
         fill = fill.on(States::new(c(state.selected), c(state.selected), c(state.selected), c(state.selected)));
     }
-    for rule in flag_rules(key.form) {
+    for rule in flag_rules(key.form, cx.env::<CommandHighlight>()) {
         let rgba = match rule.fill {
             RuleFill::Tinted => tinted,
             RuleFill::Selected => state.selected,
@@ -165,14 +178,19 @@ struct FlagRule {
 /// the fill under it: the lead row on a selected row paints the selected hover fill with `text.on_selected`, a
 /// selected row shows its selection whether or not it is emphasized, an emphasized row that is not selected keeps its
 /// hover-like fill and base ink, and the lead row alone keeps the hover tint. The command
-/// form of a menu paints the lead row with `accent.solid` and `text.on_accent`. The option form paints the chosen row
+/// form of a menu paints the lead row as `highlight` says: `accent.solid` with `text.on_accent`, or the hover tint with
+/// the base ink. The option form paints the chosen row
 /// with `state.selected` and `text.on_selected`, lead or not, and the lead row alone with `state.hover`.
-fn flag_rules(form: RowForm) -> Vec<FlagRule> {
+fn flag_rules(form: RowForm, highlight: CommandHighlight) -> Vec<FlagRule> {
     let emphasized = FlagRule { flags: Flags::EMPHASIZED, fill: RuleFill::Tinted, ink: RuleInk::Base };
     match form {
         RowForm::Command => {
             let emphasized = FlagRule { fill: RuleFill::Hover, ..emphasized };
-            return vec![emphasized, FlagRule { flags: Flags::LEAD, fill: RuleFill::Accent, ink: RuleInk::OnAccent }];
+            let lead = match highlight {
+                CommandHighlight::Accent => FlagRule { flags: Flags::LEAD, fill: RuleFill::Accent, ink: RuleInk::OnAccent },
+                CommandHighlight::Hover => FlagRule { flags: Flags::LEAD, ..emphasized },
+            };
+            return vec![emphasized, lead];
         }
         RowForm::Option => {
             return vec![
@@ -192,8 +210,8 @@ fn flag_rules(form: RowForm) -> Vec<FlagRule> {
 
 /// The row looks of the collection items, on a `StyleCx`: lists, menus and popup lists share them.
 pub trait RowStyleCx {
-    /// The fill of a row of a menu or popup list: the active (lead) row is a command highlight in `accent.solid`, and a
-    /// row with an open submenu (emphasized) keeps the hover tint.
+    /// The fill of a row of a menu or popup list: the active (lead) row is the command highlight ([`CommandHighlight`]),
+    /// and a row with an open submenu (emphasized) keeps the hover tint.
     fn command_row_surface(&self) -> Stateful<StyleColor>;
 
     /// The surface of a face of a menu: the command highlight on square corners, as the old menu rows and bar titles
@@ -204,8 +222,8 @@ pub trait RowStyleCx {
     /// fills, and `text.disabled` on a disabled item.
     fn row_ink(&self, base: Rgba) -> Stateful<StyleColor>;
 
-    /// The ink of a menu or popup list row: `base`, `text.on_accent` on the active row, and `text.disabled` on a
-    /// disabled row.
+    /// The ink of a menu or popup list row: `base`, the command highlight's ink on the active row, and `text.disabled` on
+    /// a disabled row.
     fn command_row_ink(&self, base: Rgba) -> Stateful<StyleColor>;
 }
 
@@ -250,7 +268,7 @@ pub(super) fn row_ink_of(cx: &StyleCx<'_>, base: StyleColor, form: RowForm) -> S
     let on_accent = cx.color(cx.tokens.color.text.on_accent);
     let disabled = cx.color(cx.tokens.color.text.disabled);
     let mut ink = Stateful::new(base).off(States::new(base, base, base, disabled)).on(States::new(on_selected, on_selected, on_selected, disabled));
-    for rule in flag_rules(form) {
+    for rule in flag_rules(form, cx.env::<CommandHighlight>()) {
         ink = ink.when(
             rule.flags,
             match rule.ink {

@@ -196,8 +196,8 @@ fn a_recent_row_names_its_full_path_and_reveals_remove_on_hover_or_focus() {
     assert!(log.borrow().contains(&StartAction::ClearRecent), "Clear reports ClearRecent: {:?}", log.borrow());
 }
 
-/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file, and the menu key and
-/// Shift+F10 open it from the focused card. The menu is told by "Clear Recent Files", which only the menu has: the
+/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file, and the menu key (off
+/// macOS, which has none) and Shift+F10 open it from the focused card. The menu is told by "Clear Recent Files", which only the menu has: the
 /// card's hover action carries "Remove from Recent" too.
 #[trial]
 fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
@@ -213,7 +213,9 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     assert!(fixture.by_label(MENU_ONLY).is_some(), "a right click on a recent file opens its menu");
     assert_eq!(fixture.by_label("Show in Folder").is_some(), craft_platform::open::CAN_REVEAL);
 
-    for (key, modifiers) in [(Key::Menu, Modifiers::NONE), (Key::F10, Modifiers::SHIFT)] {
+    let keys: &[(Key, Modifiers)] =
+        if cfg!(target_os = "macos") { &[(Key::F10, Modifiers::SHIFT)] } else { &[(Key::Menu, Modifiers::NONE), (Key::F10, Modifiers::SHIFT)] };
+    for &(key, modifiers) in keys {
         fixture.key(Key::Escape, Modifiers::NONE).idle(3);
         assert!(fixture.by_label(MENU_ONLY).is_none(), "Escape closes the menu before {key:?}");
         let card = fixture.by_label("Poster.psd").expect("the card shows");

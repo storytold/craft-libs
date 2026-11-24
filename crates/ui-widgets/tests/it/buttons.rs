@@ -6,7 +6,9 @@
 use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
 use craft_theme::Variant;
-use craft_ui::buttons::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, SplitButton, SplitMenu, ToggleButton};
+use craft_ui::buttons::{
+    Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, PushButtonLook, SplitButton, SplitMenu, ToggleButton,
+};
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, CommandSet, Entry, Hover, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::Picture;
@@ -464,6 +466,71 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     );
     assert_ne!(Some(ribbon), standard, "a ribbon toggle is not the outlined default");
     assert!(narrow < wide - 0.5, "a ribbon's flat toggle sits close: {narrow} against {wide}");
+}
+
+/// Under an app's `PushButtonLook::Filled` a push or split button that asks for no variant draws the filled tile: a fill
+/// apart from the outline's clear rest, no edge at rest and one under the pointer. A variant it asks for stays, the
+/// outline included, and a ribbon keeps its flat look.
+#[trial]
+fn an_apps_filled_look_fills_its_default_push_buttons() {
+    let filled = |ui: &mut Ui, show: &dyn Fn(&mut Ui)| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(PushButtonLook::Filled);
+            },
+            show,
+        )
+    };
+    let button = std::any::type_name::<Button<'static>>();
+    let (tile, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").show(ui);
+        })
+    });
+    let (outline, _) = seen(button, "Cancel", |ui| {
+        let _ = Button::new("Cancel").show(ui);
+    });
+    let (primary, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").variant(Variant::PRIMARY).show(ui);
+        })
+    });
+    let (plain_primary, _) = seen(button, "Cancel", |ui| {
+        let _ = Button::new("Cancel").variant(Variant::PRIMARY).show(ui);
+    });
+    let (ribbon, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            in_ribbon(ui, |ui| {
+                let _ = Button::new("Cancel").show(ui);
+            })
+        })
+    });
+    let (ghost, _) = seen(button, "Cancel", |ui| {
+        let _ = Button::new("Cancel").variant(Variant::GHOST).show(ui);
+    });
+    let (asked, _) = seen(button, "Cancel", move |ui| {
+        filled(ui, &|ui| {
+            let _ = Button::new("Cancel").variant(Variant::SECONDARY).show(ui);
+        })
+    });
+    assert_eq!(asked, outline, "a button that asks for the outline keeps it");
+    let (tile, outline) = (tile.expect("a filled button has a surface"), outline.expect("a button has a surface"));
+    assert_ne!(tile.fill.off.rest, outline.fill.off.rest, "a filled button rests on a fill of its own");
+    let edge = tile.border.as_ref().expect("a filled button is edged by state").off;
+    assert_eq!(edge.rest.egui().a(), 0, "a filled button shows no edge at rest");
+    assert!(edge.hover.egui().a() > 0 && edge.pressed.egui().a() > 0, "a filled button is edged under the pointer and the press");
+    assert_eq!(primary, plain_primary, "a variant asked for stays");
+    assert_eq!(ribbon, ghost, "a ribbon's button stays flat");
+
+    let split = std::any::type_name::<SplitButton<'static, usize>>();
+    let (split_tile, _) = seen(split, "Paste", move |ui| {
+        filled(ui, &|ui| {
+            let entries = [Entry::new(1_usize, "Keep text only")];
+            let _ = SplitButton::new("Paste", &entries).show(ui);
+        })
+    });
+    assert_eq!(split_tile.map(|look| look.fill.off.rest), Some(tile.fill.off.rest), "a split button takes the same tile");
 }
 
 /// In a ribbon a combo box is as wide as its widest option and its chevron, not a field length.
