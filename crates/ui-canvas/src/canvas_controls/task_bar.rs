@@ -10,8 +10,8 @@ use crate::buttons::IconButton;
 use crate::canvas::canvas_space;
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, MeasureCx, Mount, NoValue, Outcome, Overlay, Pad,
-    PaintUi, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Sizing, Styled as _, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, Gap, HeaderRegion, Inner, MeasureCx, Mount, NoValue, Outcome, Overlay,
+    Pad, PaintUi, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Sizing, Styled as _, Trigger,
 };
 use crate::display::{Divider, Icon};
 use crate::menu::{Menu, MenuItem, PanelMenu, PanelRow};
@@ -116,6 +116,10 @@ pub struct TaskBar<'a> {
     /// How the task bar's grip looks: the `grip` icon by default.
     #[prop]
     grip: TaskBarGrip,
+    /// The space between the bar's members, in place of the tool bar's tight gap: `Gap::Item` sets them a control gap
+    /// apart.
+    #[prop(into)]
+    member_gap: Option<Gap>,
 }
 
 /// What a bar hangs from: the screen bounds of document points, or the canvas view's top edge, aligned in reading
@@ -275,6 +279,7 @@ impl<'a> TaskBar<'a> {
             dismiss: TaskBarDismiss::Close,
             compact: false,
             grip: TaskBarGrip::Icon,
+            member_gap: None,
         }
     }
 
@@ -302,6 +307,7 @@ impl<'a> TaskBar<'a> {
             dismiss: TaskBarDismiss::Close,
             compact: false,
             grip: TaskBarGrip::Icon,
+            member_gap: None,
         }
     }
 
@@ -330,7 +336,7 @@ impl<'a> TaskBar<'a> {
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact, grip: grip_look } = self;
+        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact, grip: grip_look, member_gap } = self;
         let side = side.unwrap_or(match kind {
             TaskBarKind::Task | TaskBarKind::Fixed => Side::Below,
             TaskBarKind::Selection => Side::Above,
@@ -382,6 +388,10 @@ impl<'a> TaskBar<'a> {
             let bar = Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).wrap();
             // A compact bar takes a popup's smaller corners and lighter shadow, as production's small frame.
             let bar = if compact { bar.compact().surface(SurfaceKind::Popup) } else { bar };
+            let bar = match member_gap {
+                Some(gap) => bar.gap(gap),
+                None => bar,
+            };
             bar.show(ui, |ui, _| {
                 match (&grip, grip_look) {
                     (Some(grip), TaskBarGrip::Bar) => {

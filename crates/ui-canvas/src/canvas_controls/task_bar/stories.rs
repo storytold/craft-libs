@@ -3,7 +3,7 @@
 use super::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
-use crate::contract::{Props as _, Show as _};
+use crate::contract::{Gap, Props as _, Show as _};
 use crate::menu::PanelRow;
 use crate::runtime::commands::{CommandRef, EditCommands};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -230,4 +230,10 @@ fn bar_grip_hovered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TaskBar<'static>, covers = [], drive = Drive::Custom(drag_grip))]
 fn bar_grip_dragged(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
+}
+
+/// A bar whose members stand a control gap apart.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn control_gap(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.member_gap(Gap::Item))
 }
