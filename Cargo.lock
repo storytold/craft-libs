@@ -2021,6 +2021,7 @@ dependencies = [
 name = "craft-android-res"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -2076,6 +2077,9 @@ dependencies = [
 [[package]]
 name = "craft-audio-dsp"
 version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+]
 
 [[package]]
 name = "craft-automation"
@@ -2148,6 +2152,7 @@ version = "0.1.0"
 dependencies = [
  "craft-media",
  "craft-media-testkit",
+ "craft-testkit",
  "craft-timeline",
  "craft-xml",
  "proptest",
@@ -2170,6 +2175,7 @@ name = "craft-cfb"
 version = "0.1.0"
 dependencies = [
  "craft-media-testkit",
+ "craft-testkit",
 ]
 
 [[package]]
@@ -2207,6 +2213,7 @@ dependencies = [
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "md-5 0.10.6",
  "moxcms",
  "rayon",
@@ -2426,6 +2433,7 @@ dependencies = [
  "blake3",
  "craft-ecproj-format",
  "craft-pcraft-format",
+ "craft-testkit",
  "craft-vectorcraft-format",
  "flate2",
  "ruzstd",
@@ -2481,6 +2489,7 @@ dependencies = [
  "craft-math",
  "craft-offcrypto",
  "craft-opc",
+ "craft-testkit",
  "craft-wordmodel",
  "craft-xml",
  "image",
@@ -2620,6 +2629,7 @@ dependencies = [
 name = "craft-exr"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "exr",
  "flate2",
  "half",
@@ -2786,6 +2796,7 @@ name = "craft-font-subset"
 version = "0.1.0"
 dependencies = [
  "brotli 9.1.1",
+ "craft-testkit",
  "harfbuzz-subset-sys",
  "rustybuzz",
  "serde_json",
@@ -3187,6 +3198,7 @@ dependencies = [
  "craft-markdown",
  "craft-math",
  "craft-mime",
+ "craft-testkit",
  "craft-wordmodel",
  "proptest",
 ]
@@ -3344,6 +3356,7 @@ name = "craft-mesh"
 version = "0.1.0"
 dependencies = [
  "craft-opc",
+ "craft-testkit",
  "craft-xml",
  "craft-zip",
  "miniz_oxide 0.9.1",
@@ -3462,6 +3475,7 @@ dependencies = [
 name = "craft-openpgp"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "ed25519-dalek 2.2.0",
  "pgp",
  "proptest",
@@ -3544,6 +3558,7 @@ dependencies = [
  "chrono",
  "craft-stream-codecs",
  "craft-svg",
+ "craft-testkit",
  "flate2",
  "hayro",
  "hayro-cmap",
@@ -3758,6 +3773,7 @@ dependencies = [
  "craft-cms",
  "craft-pdf 0.1.0",
  "craft-plate-test",
+ "craft-testkit",
  "kurbo",
  "linesweeper",
  "thiserror 2.0.21",
@@ -3801,6 +3817,7 @@ dependencies = [
 name = "craft-proof"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "log",
  "miniz_oxide 0.9.1",
  "proptest",
@@ -3813,6 +3830,7 @@ name = "craft-proto"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-testkit",
  "log",
  "proptest",
  "zeroize",
@@ -3836,6 +3854,7 @@ name = "craft-psd"
 version = "0.1.0"
 dependencies = [
  "craft-psd",
+ "craft-testkit",
  "encoding_rs",
  "flate2",
  "proptest",
@@ -3849,6 +3868,7 @@ name = "craft-pst"
 version = "0.1.0"
 dependencies = [
  "craft-pst",
+ "craft-testkit",
  "proptest",
 ]
 
@@ -3882,6 +3902,7 @@ dependencies = [
  "chrono",
  "craft-crw",
  "craft-metadata",
+ "craft-testkit",
  "craft-tiff",
  "jpeg-encoder 0.7.1",
  "jxl-oxide",
@@ -3961,6 +3982,7 @@ version = "0.1.0"
 dependencies = [
  "craft-audio",
  "craft-midi",
+ "craft-testkit",
  "craft-time",
  "craft-zip",
  "proptest",
@@ -4102,6 +4124,7 @@ dependencies = [
 name = "craft-stream-codecs"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "fax",
  "hayro-ccitt",
  "hayro-jbig2",
@@ -4771,6 +4794,7 @@ dependencies = [
 name = "craft-xfl"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "craft-xml",
  "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
@@ -4796,6 +4820,7 @@ dependencies = [
  "craft-drawingml",
  "craft-opc",
  "craft-sheet",
+ "craft-testkit",
  "craft-xlsx",
  "craft-xml",
  "thiserror 2.0.21",
@@ -4805,6 +4830,7 @@ dependencies = [
 name = "craft-xml"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "quick-xml 0.41.0",
  "serde",
  "thiserror 2.0.21",
