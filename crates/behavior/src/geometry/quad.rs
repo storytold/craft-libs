@@ -544,11 +544,12 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             BoxState { quad, pivot: carry_pivot(q0, quad, c) }
         }
         BoxPart::Corner(i) if mods.cmd => {
-            // Distort: the corner moves freely, up to where the box would fold over.
+            // Distort: the corner moves freely, past the diagonal into a concave box too (the reference application
+            // lets it, 2026-11-24: its wireframe follows the pointer; the picture shows the source until the box is
+            // convex again, and Enter on a concave box commits nothing).
             let mut q = q0;
             q[usize::from(i) % 4] += d;
-            let quad = keep_convex(q0, q);
-            BoxState { quad, pivot: carry_pivot(q0, quad, c) }
+            BoxState { quad: q, pivot: carry_pivot(q0, q, c) }
         }
         BoxPart::Edge(i) if mods.cmd => {
             // Skew: the edge's two corners move together (⇧: only along the edge); ⌥: the
@@ -1352,7 +1353,7 @@ fn convex(q: &[Point; 4], sign: f64, min_turn: f64) -> bool {
     turns(q).iter().all(|t| t * sign > min_turn)
 }
 
-/// Distort and Perspective stop a corner where the box would turn concave or fold over itself:
+/// Perspective (and a corner or edge turn) stops a corner where the box would turn concave or fold over itself:
 /// the result goes from `from` towards `to` as far as the quad stays convex. A box that is not
 /// convex to begin with is left free.
 fn keep_convex(from: [Point; 4], to: [Point; 4]) -> [Point; 4] {

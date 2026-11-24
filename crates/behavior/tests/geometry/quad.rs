@@ -94,17 +94,14 @@ fn shift_snaps_the_turn_not_the_absolute_angle() {
 }
 
 #[test]
-fn a_distort_corner_stops_before_the_box_folds() {
+fn a_distort_corner_goes_where_it_is_dragged_past_the_fold_too() {
     let rules = BoxRules::default();
     let start = session();
-    // The top left far past the bottom right.
+    // The top left far past the bottom right: the box crosses over itself, as the reference application lets it
+    // (2026-11-24; it shows the source then and commits nothing).
     let q = drag(&start, &start, BoxPart::Corner(0), p(0.0, 0.0), p(300.0, 200.0), Mods::CMD, &rules).quad;
-    let sign = turns(&start.quad)[0].signum();
-    assert!(turns(&q).iter().all(|t| t * sign > 0.0), "still convex: {q:?}");
+    assert!(near(q[0], p(300.0, 200.0)), "{q:?}");
     assert_eq!(q[1..], start.quad[1..], "the other corners stay put");
-    // As far as it could along the drag: up to the diagonal from (100, 0) to (0, 50).
-    assert!((q[0].x * 2.0 - q[0].y * 3.0).abs() < 1e-6, "{q:?}");
-    assert!((q[0] - p(300.0 / 7.0, 200.0 / 7.0)).hypot() < 0.5, "{q:?}");
     // A drag that keeps the box convex is not held back.
     let q = drag(&start, &start, BoxPart::Corner(0), p(0.0, 0.0), p(2.0, 4.0), Mods::CMD, &rules).quad;
     assert!(near(q[0], p(2.0, 4.0)), "{q:?}");
@@ -1168,4 +1165,19 @@ fn scale_mode_neither_turns_from_outside_nor_distorts() {
     assert!(corner.quad.iter().zip(want).all(|(a, (x, y))| (a.x - x).abs() < 0.01 && (a.y - y).abs() < 0.01), "{:?}", corner.quad);
     let moved = drag(&start, &start, BoxPart::Inside, p(301.0, 226.0), p(331.0, 246.0), Mods::NONE, &scale);
     assert_eq!(moved.quad[0], p(180.0, 145.0));
+}
+
+/// Distort lets a corner go past the opposite diagonal into a concave box (the reference application, 2026-11-24:
+/// the top-left corner of the 302 × 202 box dragged to (331, 246) draws a dart; the picture shows the source until
+/// the box is convex again, and Enter commits nothing). Perspective still stops at the fold.
+#[test]
+fn a_distort_corner_goes_past_the_diagonal_into_a_concave_box() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let cmd = Mods { cmd: true, ..Mods::NONE };
+    let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(331.0, 246.0), cmd, &BoxRules::default());
+    assert_eq!(moved.quad[0], p(331.0, 246.0), "{:?}", moved.quad);
+    assert_eq!(&moved.quad[1..], &start.quad[1..]);
+    let distort = BoxRules::in_mode(TransformMode::Distort);
+    let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(331.0, 246.0), Mods::NONE, &distort);
+    assert_eq!(moved.quad[0], p(331.0, 246.0), "Distort mode: {:?}", moved.quad);
 }
