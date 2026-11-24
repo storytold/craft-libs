@@ -209,6 +209,41 @@ fn a_tool_icon_rides_below_right_of_its_pointer() {
     }
 }
 
+/// An arrow with a tool icon keeps ink on its hotspot (the arrow's tip), and a badge lands below right of the icon: the
+/// marks reach no farther left or up than without it, and farther right (photocraft#16671).
+#[trial]
+fn a_badged_tool_pointer_keeps_its_tip_on_the_hotspot_and_the_badge_below_right() {
+    fn reach(image: &CustomCursorImage) -> [i32; 4] {
+        let (side, [hx, hy]) = (i32::from(image.size[0]), image.hotspot.map(i32::from));
+        let mut reach = [0; 4];
+        for (i, px) in image.rgba.chunks(4).enumerate() {
+            if px[3] > 0 {
+                let (dx, dy) = (i as i32 % side - hx, i as i32 / side - hy);
+                reach = [reach[0].max(-dx), reach[1].max(-dy), reach[2].max(dx), reach[3].max(dy)];
+            }
+        }
+        reach
+    }
+    for scale in [1.0, 1.25, 2.0] {
+        let mut frames = frames(linux(), scale);
+        let plain = painted(&mut frames, PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new("lasso"))).image.unwrap();
+        let [hx, hy] = plain.hotspot.map(i32::from);
+        assert!(pixel(&plain, hx, hy)[3] > 0, "{scale}: the arrow's tip is on the hotspot");
+        for badge in [CursorBadge::Add, CursorBadge::Subtract, CursorBadge::Intersect] {
+            let badged = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), Some(badge));
+            let image = painted(&mut frames, badged).image.unwrap();
+            let [hx, hy] = image.hotspot.map(i32::from);
+            assert!(pixel(&image, hx, hy)[3] > 0, "{scale} {badge:?}: the arrow's tip is on the hotspot");
+            let (with, without) = (reach(&image), reach(&plain));
+            assert_eq!(with[..2], without[..2], "{scale} {badge:?}: nothing reaches farther left or up");
+            // A minus lies on the icon's bottom edge, so only the plus and the cross reach lower.
+            assert!(with[2] > without[2] && with[3] >= without[3], "{scale} {badge:?}: the badge lies at the icon's lower right");
+        }
+        let none = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), None);
+        assert_eq!(reach(&painted(&mut frames, none).image.unwrap()), reach(&plain), "{scale}: no badge is the plain pointer");
+    }
+}
+
 /// An unchanged pointer hands the window the same image, so the integration uploads it to the OS once; a new size or
 /// scale makes a new one; a frame whose winner is a system cursor, or that asks for nothing, clears it (egui keeps an
 /// image until it is replaced).

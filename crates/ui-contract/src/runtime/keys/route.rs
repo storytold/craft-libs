@@ -229,7 +229,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             None => {
                 // A capture's owner, else the claim's: the focused component's own, then its arena root's, then its
                 // menu level's, then the registered menu bar's (keytips hold their letters with no focus), then the
-                // document canvas's with nothing focused.
+                // document canvas's with nothing focused: a state-dependent claim it holds, else one it declares
+                // (`KeyUse::claims`).
                 let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
                 let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
                 claimed.extend(
@@ -240,6 +241,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                         .or_else(|| held(menu_bar))
                         .or_else(|| held(record.canvas))
                         .or(focused)
+                        .or_else(|| canvas.as_ref().map(|canvas| canvas.stop.id))
                         .map(|id| (id, *chord)),
                 );
             }
@@ -559,12 +561,12 @@ pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
 }
 
 /// Asks the focused component of the running viewport to take `command` as `Intent::Edit` in the next pass.
-/// `false` when it does not list the command. A paste asks the platform for the clipboard text, which arrives as
+/// `false` when it does not list the command, or is the app's own widget (`Stop::host`), whose edits are the app's. A paste asks the platform for the clipboard text, which arrives as
 /// the paste event that becomes the intent. Focus is read as it is now: a menu pick returns focus in its pass
 /// before its command fires, and the command goes where focus returned.
 pub(crate) fn queue_edit(ctx: &Context, command: EditCommand) -> bool {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
-    if !focus::focused_rec(ctx).is_some_and(|rec| rec.stop.keys.edits.contains(command)) {
+    if !focus::focused_rec(ctx).is_some_and(|rec| !rec.stop.host && rec.stop.keys.edits.contains(command)) {
         return false;
     }
     if command == EditCommand::Paste {

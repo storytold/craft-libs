@@ -18,7 +18,7 @@ use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::primitives::PaintShape;
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
-use crate::runtime::focus::{self, FocusTarget};
+use crate::runtime::focus::{self, FocusRequest, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
@@ -292,6 +292,11 @@ pub struct DockGroupOutput {
     /// The host may add the size
     /// the dragged unit floats at with `drag::amend` in this pass.
     pub drag_started: bool,
+    /// The tabs the strip shows this pass, each with its rect and the id of its accessibility node; none for a
+    /// [`titled`](DockGroup::titled) group.
+    pub tabs: Vec<(PanelKey, Rect, Id)>,
+    /// The band the group is dragged by this pass, with the id of its accessibility node.
+    pub grip: Option<(Rect, Id)>,
 }
 
 impl Outcome for DockGroupOutput {
@@ -324,6 +329,7 @@ struct Reported {
     drag_started: bool,
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
     empty_drag: bool,
+    tabs: Vec<(PanelKey, Rect, Id)>,
 }
 
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
@@ -363,6 +369,8 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// single titled panel does: the panels are shown from a rail, not by tabs.
     #[prop(flag)]
     titled: bool,
+    /// The tab row takes key focus in this pass: [`take_focus`](DockGroup::take_focus).
+    take_focus: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -373,6 +381,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// sides take no drop, and its top, bottom and middle zones reach across them.
     #[prop(flag)]
     in_window: bool,
+    /// The shown panel's body is the app's own egui code (`PanelSpec::host_body`): a press on the body is the app's,
+    /// and its widgets take egui focus themselves, so the press does not focus the group's tabs.
+    #[prop(flag)]
+    host_body: bool,
     /// The rows of the group menu, read while it is open: the panel menu button and a context request on a tab open
     /// it.
     #[prop(func = "FnMut() -> Vec<PanelRow>")]
@@ -416,9 +428,11 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             wheel_selects_tabs: false,
             tab_look: PanelTabLook::Plain,
             titled: false,
+            take_focus: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
+            host_body: false,
             menu: None,
             panel_menu_shown: true,
             panel_menu_icon: IconId::new("more"),
@@ -438,6 +452,14 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         self.props = self.props.footer(FooterRegion::new());
         self.footer = Some(Box::new(content));
         self
+    }
+
+    /// The group takes key focus in this pass, as a press on its body gives it: its tab row's stop takes it while the
+    /// row runs, so the keys of the next pass route through the group; a titled header, which has no tab row, focuses
+    /// its drag band. A request of the pass.
+    #[must_use]
+    pub fn take_focus(self) -> Self {
+        DockGroup { take_focus: true, ..self }
     }
 
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
@@ -559,6 +581,10 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
                 popup.open(cx);
             }
         }
+        // A titled header has no tab row: its drag band is the group's stop.
+        if self.take_focus && self.titled && cx.part_if_declared(GRIP).is_some() {
+            focus::request(&cx.core.ctx, FocusTarget::Part(cx.core.id, GRIP.into()));
+        }
         if let Some(grip) = cx.part_if_declared(GRIP).map(|grip| grip.press) {
             self.reported.toggle_minimized |= grip.double_pressed();
             if self.movable && matches!(grip.phase, PressPhase::DragStart { .. }) {
@@ -592,8 +618,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         if let Some(request) = &self.reported.menu {
             cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0 = Some(request.at);
         }
-        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, .. } = self.reported;
-        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started }
+        let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
+        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, .. } = self.reported;
+        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, grip }
     }
 }
 
@@ -683,6 +710,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
                     look: self.tab_look,
+                    take_focus: self.take_focus,
                     dock: self.dock,
                     sent: Outbox::new(&mut sent),
                 };
@@ -692,9 +720,15 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             })
             .inner;
         self.extra = extra;
-        // A press on the group's empty body focuses its panel, as in Photoshop.
-        if surface_pressed && let Some(strip) = strip {
-            focus::request(ui.ctx(), FocusTarget::Id(strip));
+        // A press on the group's empty body focuses its panel, as in Photoshop; an app's own egui body keeps its presses.
+        if surface_pressed
+            && !self.host_body
+            && let Some((strip, _)) = &strip
+        {
+            focus::request(ui.ctx(), FocusTarget::Id(*strip));
+        }
+        if let Some((strip, tabs)) = &strip {
+            self.reported.tabs = tabs.iter().map(|(key, rect)| (*key, *rect, crate::contract::item_node(*strip, key))).collect();
         }
         let size = self.size;
         let reported = &mut self.reported;
@@ -758,6 +792,9 @@ struct TabRow<'a, P> {
     closable: bool,
     wheel_selects: bool,
     look: PanelTabLook,
+    /// The strip takes key focus in this pass (`DockGroup::take_focus`): in the key, so the row runs and the strip
+    /// takes it while it runs.
+    take_focus: bool,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
 }
@@ -773,8 +810,9 @@ fn tab_marks(ctx: &egui::Context, panels: &[PanelTitle]) -> Vec<(PanelKey, Optio
         .collect()
 }
 
-/// A group's tab strip with its tab insertion spots. Returns the strip's id.
-fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> Id {
+/// A group's tab strip with its tab insertion spots. Returns the strip's id and the rect of each tab it shows, which a
+/// replay returns again, moved with the row.
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> (Id, Vec<(PanelKey, Rect)>) {
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
@@ -784,8 +822,10 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
     let closes = |panel: &PanelTitle| closable && panel.closable;
     let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
+    // A press on a panel tab leaves key focus where it is, as in Photoshop: the document's keys keep working.
     let mut strip = TabStrip::new(name)
         .kind(kind)
+        .keeps_focus()
         .panel_look(row.look)
         .shown(active)
         .tear_off()
@@ -796,6 +836,10 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
         strip = strip.wheel_selects();
+    }
+    // The strip takes the focus while it runs, so it runs focused and the keys of the next pass route through it.
+    if row.take_focus {
+        strip = strip.request_focus(FocusRequest::Take);
     }
     let marks = &row.marks;
     let strip = strip.show_items(ui, &source, &mut |key, _| {
@@ -843,7 +887,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if strip.empty_double {
         row.sent.send(TabEvent::EmptyDouble);
     }
-    strip.response.response.id
+    (strip.response.response.id, strip.tab_rects)
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before

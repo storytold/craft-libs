@@ -460,3 +460,32 @@ pub(crate) mod mapped_overlay {
         assert!(part[0].distance(whole[0]) < NEAR && (part[2] - whole[0]).length() < (whole[2] - whole[0]).length() * 0.51);
     }
 }
+
+/// The title row under the macOS traffic lights.
+pub(crate) mod title {
+    use craft_host::target::WindowChrome;
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::dialog::FullWindowDialog;
+    use craft_ui::testing::{Fixture, trial};
+
+    const TITLE: &str = "Liquify (Photo, 66%)";
+
+    /// Where the title's text starts, with the window drawn as `chrome`.
+    fn title_left(chrome: WindowChrome) -> f32 {
+        let mut fixture = Fixture::new(|ui| {
+            let _ = FullWindowDialog::new(TITLE).show(ui, |_, _| {});
+        });
+        fixture.chrome(chrome).settle();
+        fixture.texts().iter().find(|text| text.text == TITLE).expect("the title is painted").rect.left()
+    }
+
+    // The dialog covers the window's top, where an inset frame (macOS) has the traffic lights over the content.
+    #[trial]
+    fn a_full_window_dialog_title_starts_after_the_traffic_lights() {
+        let native = title_left(WindowChrome::Native);
+        let inset = title_left(WindowChrome::Inset);
+        let lights = craft_window::policy::MacInset::default().leading;
+        assert!(native < lights, "with a native frame the title starts at the dialog's own inset");
+        assert!(inset >= lights, "with the traffic lights over the content the title starts after them ({inset} < {lights})");
+    }
+}

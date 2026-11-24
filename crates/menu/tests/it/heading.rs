@@ -39,8 +39,8 @@ fn a_heading_is_structure_and_never_a_command() {
     let mut fixture = Fixture::new(move |ui| {
         MenuBarUi::new(&bar).show(ui);
     });
-    // A Mac bar has no letters.
-    fixture.os(Os::Linux);
+    // A Mac bar has no letters; a Chinese interface shows the English letters after the labels.
+    fixture.os(Os::Linux).host(crate::mnemonic::host_in("zh"));
     fixture.settle();
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();

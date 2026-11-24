@@ -109,6 +109,7 @@ craft-kra = { workspace = true, optional = true }
 craft-latex = { workspace = true, optional = true }
 craft-lottie = { workspace = true, optional = true }
 craft-markdown = { workspace = true, optional = true }
+craft-material-graph = { workspace = true, optional = true }
 craft-materialx = { workspace = true, optional = true }
 craft-math = { workspace = true, optional = true }
 craft-mesh = { workspace = true, optional = true }
@@ -608,6 +609,8 @@ macho = ["dep:craft-macho"]
 macho-serde = ["macho", "craft-macho/serde"]
 
 markdown = ["dep:craft-markdown"]
+
+material-graph = ["dep:craft-material-graph"]
 
 materialx = ["dep:craft-materialx"]
 

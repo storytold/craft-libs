@@ -158,7 +158,7 @@ pub use import::{
     ContextRule, DecodedCode, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportPlan, ImportReport, NoneDefined, NotRead, Start, plan,
 };
 pub use keymap::{
-    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DropReason, Holder, Keymap, Lookup,
+    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DeleteKeys, DropReason, Holder, Keymap, Lookup,
     MAX_BINDING_TEXT, MAX_BINDINGS, MAX_COMMANDS, MAX_CONFLICTS, ModalRule, Overrides, Policy, Problem, TypingRule, text_editing_chords,
 };
 pub use layout::{COMMON_SYMBOLS, KeyInput, Layout, SYMBOL_TABLE, SymbolLayout};

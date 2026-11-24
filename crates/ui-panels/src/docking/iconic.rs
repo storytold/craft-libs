@@ -6,7 +6,7 @@ use super::dock_column::{
     register_edges, show_bar,
 };
 use super::group::GripMarks;
-use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
+use super::{CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
@@ -225,11 +225,11 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// palette window, the work area.
     #[prop]
     within: Rect,
-    /// The inset on the outer side of the docked column's card, when it shows as one
-    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_inset`]): its bar and icons
+    /// Which inset the outer side of the docked column's card takes, when it shows as one
+    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_place`]): its bar and icons
     /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
     #[prop]
-    card: Option<f32>,
+    card: Option<CardInset>,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
     /// The bar's rect this pass.
@@ -365,7 +365,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
     /// a card's inset on top.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
         let (least, most) = sizes.iconic_bounds(self.column, self.spec);
-        let inset = self.card.unwrap_or(0.0);
+        let inset = self.card.map_or(0.0, |place| sizes.inset(place));
         let (least, most) = (least + inset, most + inset);
         let most = most.min((self.within.width() - sizes.least_pane).max(rect.width()));
         Divider::column_edge(rect, self.edge, (least, most), sizes.reach)
