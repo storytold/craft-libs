@@ -24,6 +24,28 @@ pub struct EncoderConfig {
     pub keyframe_distance: u32,
 }
 
+impl EncoderConfig {
+    /// The part of plane `pli` the picture covers, as `(x, y, width, height)` in samples. A
+    /// subsampled plane takes every sample that lies under a visible luma sample, so the start
+    /// rounds down and the end (exclusive) rounds up: with an odd offset the first and last chroma
+    /// samples can each be shared with a luma sample outside the picture.
+    fn active_region(&self, pli: usize) -> (usize, usize, usize, usize) {
+        let (shift_x, shift_y) = match (pli, self.pixel_format) {
+            (0, _) | (_, PixelFormat::Yuv444) => (0, 0),
+            (_, PixelFormat::Yuv422) => (1, 0),
+            (_, PixelFormat::Yuv420) => (1, 1),
+        };
+        let span = |origin: u32, size: u32, shift: u32| {
+            let start = (origin >> shift) as usize;
+            let end = (origin as usize + size as usize).div_ceil(1 << shift);
+            (start, end.saturating_sub(start))
+        };
+        let (x, w) = span(self.pic_x, self.pic_width, shift_x);
+        let (y, h) = span(self.pic_y, self.pic_height, shift_y);
+        (x, y, w, h)
+    }
+}
+
 impl Default for EncoderConfig {
     fn default() -> Self {
         Self {
@@ -268,26 +290,7 @@ impl Encoder {
                 _ => (&pic.y, pic.y_stride),
             };
 
-            let (active_w, active_h, active_x, active_y) = match pli {
-                0 => (self.config.pic_width as usize, self.config.pic_height as usize, self.config.pic_x as usize, self.config.pic_y as usize),
-                _ => match self.config.pixel_format {
-                    PixelFormat::Yuv420 => (
-                        (self.config.pic_width as usize).div_ceil(2),
-                        (self.config.pic_height as usize).div_ceil(2),
-                        (self.config.pic_x as usize) / 2,
-                        (self.config.pic_y as usize) / 2,
-                    ),
-                    PixelFormat::Yuv422 => (
-                        (self.config.pic_width as usize).div_ceil(2),
-                        self.config.pic_height as usize,
-                        (self.config.pic_x as usize) / 2,
-                        self.config.pic_y as usize,
-                    ),
-                    PixelFormat::Yuv444 => {
-                        (self.config.pic_width as usize, self.config.pic_height as usize, self.config.pic_x as usize, self.config.pic_y as usize)
-                    }
-                },
-            };
+            let (active_x, active_y, active_w, active_h) = self.config.active_region(pli);
 
             // Read 8x8 block from source picture (origin at lower-left!)
             // Note: In Theora coordinates, row 0 is at the bottom of the plane.

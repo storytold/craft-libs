@@ -633,3 +633,47 @@ fn test_theora_yuv444_chroma_motion_vector_half_pixel() {
     // (If quarter-pixel units were used erroneously, it would have averaged ref_cb[0] and ref_cb[1] giving (0 + 200)/2 = 100)
     assert_eq!(pred[0][0], 200);
 }
+
+/// With an odd picture offset the chroma samples under the visible luma are counted from the
+/// rounded-down start to the rounded-up end, so a missing edge sample is an error and a missing
+/// sample outside the visible crop is not.
+#[test]
+fn test_theora_odd_crop_checks_the_chroma_edge_samples() {
+    let cfg = EncoderConfig {
+        width: 32,
+        height: 32,
+        pic_width: 2,
+        pic_height: 2,
+        pic_x: 1,
+        pic_y: 0,
+        fps_num: 25,
+        fps_den: 1,
+        pixel_format: PixelFormat::Yuv422,
+        color_space: ColorSpace::Undefined,
+        quality: 40,
+        keyframe_distance: 64,
+    };
+    let mut enc = Encoder::new(cfg).expect("encoder");
+    let mut pic = test_picture(32, 32);
+    pic.pixel_format = PixelFormat::Yuv422;
+    pic.pic_width = 2;
+    pic.pic_height = 2;
+    pic.pic_x = 1;
+    pic.uv_stride = 16;
+    pic.u = vec![128; 16 * 32];
+    pic.v = vec![128; 16 * 32];
+    assert!(enc.encode_frame(&pic, true).is_ok());
+    // Luma x = 1 and x = 2 sit over chroma columns 0 and 1; row 1, column 1 is the last one needed.
+    let needed = 16 + 2;
+    let mut short = pic.clone();
+    short.u.truncate(needed - 1);
+    assert!(matches!(enc.encode_frame(&short, true), Err(Error::DimensionMismatch(_))));
+    let mut short = pic.clone();
+    short.v.truncate(needed - 1);
+    assert!(matches!(enc.encode_frame(&short, true), Err(Error::DimensionMismatch(_))));
+    // Everything past the crop may be missing.
+    let mut trimmed = pic.clone();
+    trimmed.u.truncate(needed);
+    trimmed.v.truncate(needed);
+    assert!(enc.encode_frame(&trimmed, true).is_ok());
+}
