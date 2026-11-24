@@ -48,14 +48,17 @@ impl Codepoints {
         text.chars().collect()
     }
 
+    /// How many characters the set holds.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Whether the set is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Whether `c` is in the set.
     pub fn contains(&self, c: char) -> bool {
         self.0.contains(&c)
     }
@@ -123,10 +126,12 @@ impl Instance {
 pub struct SampleHash(String);
 
 impl SampleHash {
+    /// The hash of `text`.
     pub fn of(text: &str) -> SampleHash {
         SampleHash(sha256_hex(text.as_bytes())[..12].to_string())
     }
 
+    /// The hash as the 12 hex digits it is written as.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -168,14 +173,17 @@ impl PreviewKey {
         Some(PreviewKey { sha256: sha256.to_ascii_lowercase(), instance, subset })
     }
 
+    /// The sha256 of the font file the preview is of.
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
 
+    /// The instance the preview shows.
     pub fn instance(&self) -> Instance {
         self.instance
     }
 
+    /// The subset the preview covers.
     pub fn subset(&self) -> &Subset {
         &self.subset
     }
@@ -230,6 +238,7 @@ impl std::error::Error for PreviewError {}
 /// A finished request.
 #[derive(Debug)]
 pub struct Preview {
+    /// The key the preview was fetched for.
     pub key: PreviewKey,
     /// The decoded font file (TrueType or OpenType), ready to register.
     pub font: Result<Vec<u8>, PreviewError>,
@@ -304,6 +313,7 @@ impl DiskCache {
         DiskCache { dir: dir.into(), limit, entries: Mutex::new(None) }
     }
 
+    /// The folder previews are cached in.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
