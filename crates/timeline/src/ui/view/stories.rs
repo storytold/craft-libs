@@ -4,7 +4,7 @@ use super::TimelineView;
 use crate::rates::FrameRate;
 use crate::time::{Tick, TimeView};
 use crate::timecode::TimeFormat;
-use craft_ui::contract::{Bind, ShowContainer as _, Validity};
+use craft_ui::contract::{ShowContainer as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
 use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, Ui, Vec2};
@@ -39,17 +39,17 @@ pub(crate) fn zoom_the_time_area(fixture: &mut Fixture) {
 
 #[story(TimelineView<'static>, covers = [Default], drive = Drive::Custom(zoom_the_time_area))]
 fn timeline_view(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let view = data.value("view", TimeView::new(Tick::ZERO, POINTS_PER_SECOND));
-    let out = TimelineView::new("Time", Bind::bound(view), format(), Tick::from_seconds_f64(END_SECONDS)).show(ui, |_, _| {});
+    let (view, view_at) = data.value_at("view", TimeView::new(Tick::ZERO, POINTS_PER_SECOND));
+    let out = TimelineView::new("Time", view_at.bind(view), format(), Tick::from_seconds_f64(END_SECONDS)).show(ui, |_, _| {});
     out.output.into()
 }
 
 #[story(TimelineView<'static>, covers = [Invalid], drive = Drive::Never)]
 fn view_closer_than_the_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let view = data.value("close", TimeView::new(Tick::ZERO, CLOSEST_ZOOM * 2.0));
+    let (view, view_at) = data.value_at("close", TimeView::new(Tick::ZERO, CLOSEST_ZOOM * 2.0));
     let not_too_close = |view: &TimeView| {
         if view.points_per_second > CLOSEST_ZOOM { Validity::Refuse(Message::new("The time area cannot zoom in that far")) } else { Validity::Ok }
     };
-    let out = TimelineView::new("Time", Bind::bound(view).check(not_too_close), format(), Tick::from_seconds_f64(END_SECONDS)).show(ui, |_, _| {});
+    let out = TimelineView::new("Time", view_at.bind(view).check(not_too_close), format(), Tick::from_seconds_f64(END_SECONDS)).show(ui, |_, _| {});
     out.output.into()
 }

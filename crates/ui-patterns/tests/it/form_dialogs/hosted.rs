@@ -2,14 +2,16 @@
 //! closing; OK answers with the dialog's own result type.
 
 use craft_behavior::PixelSize;
+use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
+    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, DialogFields, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
     GuideLayoutValues, GuideRect, GuideUnits, HostedAbout, HostedCanvasSize, HostedExportAs, HostedFormatOptions, HostedGuideLayoutDialog,
-    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog, NewGuideDialog,
-    NewGuideValues,
+    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, HostedParamDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog,
+    NewGuideDialog, NewGuideValues, Param, ParamDialog, ParamKind,
 };
 use craft_ui::runtime::env::UnitKind;
+use craft_ui::runtime::measure;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use serde_json::{Value, json};
@@ -77,6 +79,20 @@ fn automate<D: StackDialog>(dialog: D, field: &str, value: Value) -> Option<D::R
 fn fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
     let shown = Rc::clone(host);
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture
+}
+
+/// A fixture that runs `host` in a measuring run, then in the real run, every pass, as a host inside a measured body
+/// runs: the measuring run comes first, before the real run takes the pass's input.
+pub(crate) fn measured_fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
+    let shown = Rc::clone(host);
+    let mut fixture = Fixture::new(move |ui| {
+        let ctx = ui.ctx().clone();
+        let builder = egui::UiBuilder::new().sizing_pass().invisible();
+        measure::run(&ctx, || ui.scope_builder(builder, |ui| shown.borrow_mut().run(ui)));
+        shown.borrow_mut().run(ui);
+    });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture
 }
@@ -252,6 +268,26 @@ fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     let path = PathBuf::from("/tmp/poster.png");
     if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
         dialog.answer_path(request.key.clone(), path.clone());
+    }
+    fixture.idle(6);
+    let answered = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.path);
+    assert_eq!(answered, Some(path), "the answered path finishes the dialog with it");
+}
+
+/// A path the host answers in a frame whose first run measures Export As still finishes the dialog with it. Guards
+/// against a hosted dialog that took its host's answers in the measuring run, whose form drops them.
+#[trial]
+fn export_as_takes_a_path_answer_in_the_real_run_after_a_measuring_run() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = measured_fixture(&host);
+    host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
+    fixture.idle(10);
+    let export = fixture.by_label("Export…").expect("the Export button");
+    fixture.click(&export).idle(4);
+    let request = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("Export asks for a path");
+    let path = PathBuf::from("/tmp/poster.png");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.answer_path(request.key, path.clone());
     }
     fixture.idle(6);
     let answered = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.path);
@@ -463,4 +499,146 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     assert_eq!(resample(&host), Some(json!("automatic")), "Alt+5 picks nothing when Bicubic Sharper is not listed");
     alt_digit(&mut fixture, Key::Num7, "7", alt);
     assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
+}
+
+/// A dialog with one colour row whose dropper opens armed.
+fn dropper(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let tint = Param::new("tint", "Tint", ParamKind::color(Some([0.0, 0.0, 1.0]))).eyedropper().armed(true);
+    ParamDialog::new("dropper", "Dropper", vec![tint]).values(Bind::bound(fields))
+}
+
+// While a colour row samples, Escape ends the sampling and the dialog stays open with its edit; the next Escape cancels.
+#[trial]
+fn escape_ends_a_sampling_row_before_it_cancels_the_dialog() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "dropper", DialogFields::new(), dropper));
+    fixture.idle(10);
+    let ended = || host.borrow_mut().get_mut::<HostedParamDialog>().is_some_and(HostedParamDialog::take_sampling_ended);
+    assert!(!ended(), "nothing ended yet");
+
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_open::<HostedParamDialog>(), "the first Escape leaves the dialog open");
+    assert!(ended(), "and ends the sampling");
+    assert!(!ended(), "once");
+
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_empty(), "the next Escape cancels the dialog");
+}
+
+/// Opens a dialog on a host.
+type Opener = fn(&mut DialogHost);
+
+/// Image Size's and Canvas Size's Width and Height rows (a stack of fields beside the link) show as they measured, at
+/// 1x and 1.25x (#15483, #15538): each label sits beside its field, each field and unit select is as tall as a direct
+/// row's control (`reference`), and Height's label starts under Width's controls.
+#[trial]
+fn sizing_dialogs_show_width_and_height_beside_their_labels_at_full_height() {
+    for scale in [1.0, 1.25] {
+        let opens: [(Opener, &str); 2] = [
+            (
+                |host| {
+                    host.open(image_size());
+                },
+                "Resolution",
+            ),
+            (
+                |host| {
+                    host.open(canvas_size());
+                },
+                "Canvas extension color",
+            ),
+        ];
+        for (open, reference) in opens {
+            let host = Rc::new(RefCell::new(DialogHost::new()));
+            let mut fixture = fixture(&host);
+            fixture.pixels_per_point(scale);
+            open(&mut host.borrow_mut());
+            fixture.settle();
+            let rect = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).rect;
+            let label_of = |name: &str| {
+                // The field's label names the unit select's group, the number field's parent.
+                let tree = fixture.tree();
+                let mut node = fixture.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).node;
+                let label = loop {
+                    if let Some(label) = tree.labelled_by_key(node).into_iter().next() {
+                        break label;
+                    }
+                    node = tree.parent_of_key(node).unwrap_or_else(|| panic!("{name} is labelled"));
+                };
+                tree.bounds_of(label).unwrap_or_else(|| panic!("{name}'s label is shown"))
+            };
+            let full = rect(reference).height();
+            for name in ["Width", "Height"] {
+                let (label, field) = (label_of(name), rect(name));
+                for part in [field, rect(&format!("{name} unit"))] {
+                    assert!(part.height() >= full - 0.5, "{name}'s controls are a full row tall at {scale}x ({reference}): {part:?} {full}");
+                }
+                assert!(label.max.x <= field.min.x + 0.5, "{name}'s label sits before its field at {scale}x ({reference}): {label:?} {field:?}");
+                assert!(
+                    label.min.y < field.max.y && label.max.y > field.min.y,
+                    "{name}'s label is on its field's line at {scale}x: {label:?} {field:?}"
+                );
+            }
+            let (width, height) = (rect("Width").union(rect("Width unit")), label_of("Height"));
+            assert!(height.min.y >= width.max.y - 0.5, "Height's row starts under Width's at {scale}x ({reference}): {height:?} {width:?}");
+        }
+    }
+}
+
+/// The horizontal line segments one frame of `fixture` paints, as (y, from x, to x).
+fn horizontal_lines(fixture: &mut Fixture) -> Vec<(f32, f32, f32)> {
+    fixture
+        .frame_shapes()
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points: [a, b], .. } if (a.y - b.y).abs() < 0.5 => Some((a.y, a.x.min(b.x), a.x.max(b.x))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Image Size as 0.23.1 lays it out: the chain sits halfway between Width's and Height's controls with the bracket
+/// drawn from each control to it, and Resample starts in the control column with the method on its line.
+#[trial]
+fn image_size_brackets_width_and_height_and_starts_resample_in_the_control_column() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    let rect = |fixture: &Fixture, name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).rect;
+    let (width, height, link) = (rect(&fixture, "Width unit"), rect(&fixture, "Height unit"), rect(&fixture, "Maintain aspect ratio"));
+    let middle = (width.center().y + height.center().y) / 2.0;
+    assert!((link.center().y - middle).abs() <= 0.5, "the chain sits halfway between Width and Height: {link:?} {middle}");
+    let lines = horizontal_lines(&mut fixture);
+    for (name, row) in [("Width", width), ("Height", height)] {
+        assert!(
+            lines.iter().any(|(y, from, to)| (y - row.center().y).abs() <= 1.0 && *from >= row.max.x && *to >= link.center().x - 1.0),
+            "a tick runs from {name}'s control to the chain: {lines:?}"
+        );
+    }
+    let (number, check, method) = (rect(&fixture, "Width"), rect(&fixture, "Resample"), rect(&fixture, "Resample method"));
+    assert!((check.min.x - number.min.x).abs() <= 0.5, "Resample starts at the control column: {check:?} {number:?}");
+    assert!(
+        method.min.x >= check.max.x - 0.5 && method.min.y < check.max.y && method.max.y > check.min.y,
+        "the method follows Resample on its line: {method:?} {check:?}"
+    );
+}
+
+/// Canvas Size draws one rule between its title and Current Size, the title's: the first section's rule above would
+/// stand right under it. The rule between the two sections stays.
+#[trial]
+fn canvas_size_draws_one_rule_under_its_title() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(canvas_size());
+    fixture.settle();
+    let text = |fixture: &Fixture, text: &str| {
+        fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect).unwrap_or_else(|| panic!("{text} is painted"))
+    };
+    let (title, current, new) = (text(&fixture, "Canvas Size"), text(&fixture, "Current Size"), text(&fixture, "New Size"));
+    let lines = horizontal_lines(&mut fixture);
+    let across = |top: f32, bottom: f32| lines.iter().filter(|(y, from, to)| *y > top && *y < bottom && to - from > current.width()).count();
+    assert_eq!(across(title.max.y, current.min.y), 1, "one rule between the title and Current Size: {lines:?}");
+    assert_eq!(across(current.max.y, new.min.y), 1, "a rule between Current Size and New Size: {lines:?}");
 }

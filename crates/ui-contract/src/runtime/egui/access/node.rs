@@ -17,6 +17,7 @@ pub(crate) enum Toggle {
 pub(crate) enum NodeAction {
     Focus,
     Click,
+    ContextMenu,
     Increment,
     Decrement,
     SetValue,
@@ -34,6 +35,7 @@ impl NodeAction {
         match self {
             NodeAction::Focus => accesskit::Action::Focus,
             NodeAction::Click => accesskit::Action::Click,
+            NodeAction::ContextMenu => accesskit::Action::ShowContextMenu,
             NodeAction::Increment => accesskit::Action::Increment,
             NodeAction::Decrement => accesskit::Action::Decrement,
             NodeAction::SetValue => accesskit::Action::SetValue,
@@ -86,7 +88,6 @@ pub(crate) struct NodeSpec {
     pub disabled: bool,
     pub read_only: bool,
     pub required: bool,
-    pub modal: bool,
     pub actions: Vec<NodeAction>,
     pub custom_actions: Vec<(i32, String)>,
     /// The content keeps its left-to-right order under a right-to-left interface.
@@ -133,7 +134,6 @@ impl NodeSpec {
             disabled: false,
             read_only: false,
             required: false,
-            modal: false,
             actions: Vec::new(),
             custom_actions: Vec::new(),
             ltr_axis: false,
@@ -295,7 +295,6 @@ fn write_states(node: &mut accesskit::Node, spec: &NodeSpec) {
         (spec.disabled, accesskit::Node::set_disabled),
         (spec.read_only, accesskit::Node::set_read_only),
         (spec.required, accesskit::Node::set_required),
-        (spec.modal, accesskit::Node::set_modal),
     ] {
         if on {
             set(node);

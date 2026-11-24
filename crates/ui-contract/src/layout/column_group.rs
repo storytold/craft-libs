@@ -241,19 +241,27 @@ impl ColumnGroup {
         seed: Option<Columns>,
         rows: impl FnOnce(&mut Ui, &mut ColumnGroup) -> R,
     ) -> (R, Scoped) {
-        let ctx = ui.ctx().clone();
-        let id = sub(ui.scope_id(), key);
-        let depth = layout_memory::depth(&ctx);
+        let mut group = Self::open_scope(ui.ctx(), sub(ui.scope_id(), key), seed);
+        let result = rows(ui, &mut group);
+        (result, group.close_scope())
+    }
+
+    /// Opens the group `id` at its `seed` widths. Its rows run in the caller, between this and `close_scope`.
+    fn open_scope(ctx: &Context, id: Id, seed: Option<Columns>) -> ColumnGroup {
+        let depth = layout_memory::depth(ctx);
         let widest = seed.unwrap_or_default();
-        pass_state::with::<Open, _>(&ctx, |open| {
+        pass_state::with::<Open, _>(ctx, |open| {
             open.0.push(Frame::Group { id, widest, beyond: HashMap::new(), early: HashMap::new(), room: None, depth });
         });
-        let mut group = ColumnGroup { id, ctx: ctx.clone() };
-        let result = rows(ui, &mut group);
-        let frame = pass_state::with::<Open, _>(&ctx, |open| open.0.pop());
+        ColumnGroup { id, ctx: ctx.clone() }
+    }
+
+    /// Closes the group `open_scope` opened: in a measuring run, what its rows found.
+    fn close_scope(&self) -> Scoped {
+        let frame = pass_state::with::<Open, _>(&self.ctx, |open| open.0.pop());
         match frame {
-            Some(frame) if crate::runtime::measure::active(&ctx) => (result, close(&ctx, frame)),
-            _ => (result, Scoped::default()),
+            Some(frame) if crate::runtime::measure::active(&self.ctx) => close(&self.ctx, frame),
+            _ => Scoped::default(),
         }
     }
 
@@ -337,21 +345,11 @@ impl ColumnGroup {
     /// measuring run returns how far the rows reached past the columns.
     pub(crate) fn through<R>(ui: &mut Ui, id: Id, room: f32, sized: bool, rows: impl FnOnce(&mut Ui) -> R) -> (R, Option<Reached>) {
         let ctx = ui.ctx().clone();
-        if pass_state::with::<Open, _>(&ctx, |open| open.innermost(&[])).is_none() {
+        if !open_through(&ctx, id, room, sized) {
             return (Self::barrier(ui, rows), None);
         }
-        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Through { id, beyond: HashMap::new(), room, sized }));
         let result = rows(ui);
-        let Some(Frame::Through { beyond, .. }) = pass_state::with::<Open, _>(&ctx, |open| open.0.pop()) else { return (result, None) };
-        if !crate::runtime::measure::active(&ctx) || beyond.is_empty() {
-            return (result, None);
-        }
-        let reached = beyond.into_iter().filter_map(|(columns, past)| {
-            let (group, _) = pass_state::with::<Open, _>(&ctx, |open| open.innermost(&columns))?;
-            let width = columns.iter().map(|column| current_width(&ctx, group, column)).sum();
-            Some((columns, width, past))
-        });
-        (result, Some(Reached(reached.collect())))
+        (result, close_through(&ctx))
     }
 
     /// Records the width the group's container was offered. A row that sits directly in the group decides whether
@@ -453,4 +451,27 @@ fn current_width(ctx: &Context, group: Id, column: &ColumnKey) -> f32 {
 /// The widest width of `column` a measuring run of this pass recorded for `group`.
 fn column_width(ctx: &Context, group: Id, column: &ColumnKey) -> Option<f32> {
     layout_memory::measured(ctx, sub(group, column)).map(|found| found.took.x)
+}
+
+/// Opens a `Frame::Through` for the rows of container `id` inside a group; `false` outside every group.
+fn open_through(ctx: &Context, id: Id, room: f32, sized: bool) -> bool {
+    if pass_state::with::<Open, _>(ctx, |open| open.innermost(&[])).is_none() {
+        return false;
+    }
+    pass_state::with::<Open, _>(ctx, |open| open.0.push(Frame::Through { id, beyond: HashMap::new(), room, sized }));
+    true
+}
+
+/// Closes the frame `open_through` opened: in a measuring run, how far its rows reached past the columns.
+fn close_through(ctx: &Context) -> Option<Reached> {
+    let Some(Frame::Through { beyond, .. }) = pass_state::with::<Open, _>(ctx, |open| open.0.pop()) else { return None };
+    if !crate::runtime::measure::active(ctx) || beyond.is_empty() {
+        return None;
+    }
+    let reached = beyond.into_iter().filter_map(|(columns, past)| {
+        let (group, _) = pass_state::with::<Open, _>(ctx, |open| open.innermost(&columns))?;
+        let width = columns.iter().map(|column| current_width(ctx, group, column)).sum();
+        Some((columns, width, past))
+    });
+    Some(Reached(reached.collect()))
 }

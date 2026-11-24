@@ -4,6 +4,7 @@
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{Groups, LayersEvent, LayersPanel};
 use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerSelection};
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
 use std::cell::{Cell, RefCell};
@@ -49,7 +50,7 @@ fn short() -> FakeLayers {
 
 struct Rig {
     fixture: Fixture,
-    docs: Vec<Shared<FakeLayers>>,
+    docs: Vec<Shared<Tracked<FakeLayers>>>,
     /// The document shown, by its position in `docs`.
     shown: Rc<Cell<usize>>,
     reveal: Rc<Cell<Option<(u32, Groups)>>>,
@@ -59,7 +60,7 @@ struct Rig {
 /// The panel over the documents `docs`, each keyed by its position when there are several. The host applies the
 /// panel's opens in the pass that reports them, as an app does.
 fn rig(docs: Vec<FakeLayers>) -> Rig {
-    let docs: Vec<Shared<FakeLayers>> = docs.into_iter().map(|tree| Rc::new(RefCell::new(tree))).collect();
+    let docs: Vec<Shared<Tracked<FakeLayers>>> = docs.into_iter().map(|tree| Rc::new(RefCell::new(Tracked::new(tree)))).collect();
     let keyed = docs.len() > 1;
     let shown: Rc<Cell<usize>> = Rc::default();
     let reveal: Rc<Cell<Option<(u32, Groups)>>> = Rc::default();
@@ -106,14 +107,21 @@ impl Rig {
         self.fixture.by_label(name).expect("the row is drawn").rect
     }
 
-    /// One frame that reveals `id`, with what it reported; asserts that the frame ran once and measured no row twice.
+    /// One frame that reveals `id`, with what it reported; asserts that the frame ran once and measured no row twice but
+    /// the rows the lead moves between.
     fn reveal(&mut self, id: u32, groups: Groups) -> Vec<LayersEvent<u32>> {
         self.seen.borrow_mut().clear();
         self.reveal.set(Some((id, groups)));
         self.fixture.idle(1);
         assert_eq!(self.fixture.passes(), 1, "a reveal runs its frame once");
         let measures = craft_ui::runtime::measure::row_measures(self.fixture.ctx());
-        assert!(measures.iter().all(|(_, count)| *count == 1), "a reveal measures no row twice: {measures:?}");
+        // The lead moves to the revealed row: the row it leaves, measured before the move, is measured again with its
+        // new state, as is the revealed row when the pass measured it before the move.
+        let again = measures.iter().filter(|(_, count)| *count == 2).count();
+        assert!(
+            measures.iter().all(|(_, count)| *count <= 2) && again <= 2,
+            "a reveal measures again only the rows the lead moves between: {measures:?}"
+        );
         self.seen.borrow_mut().drain(..).collect()
     }
 

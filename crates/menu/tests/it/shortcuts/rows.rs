@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use craft_host::{AppInfo, Host};
 use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Platform, Policy, Scope, Scopes};
+use craft_menu::shortcuts::{HoldSetting, Outcome};
 use craft_ui::contract::Role;
 use craft_ui::testing::trial;
 
@@ -116,4 +117,55 @@ fn match_case_matches_command_names_only() {
         assert!(rows_for(&mut rig, query, "Export").is_empty(), "{query:?} is not in Export…'s name");
     }
     assert_eq!(rows_for(&mut rig, "Export", "Export").len(), 1);
+}
+
+/// With holds on, Summarize… writes a hold binding in its command's line as its trigger text; with holds off the
+/// summary leaves it out.
+#[trial]
+fn the_summary_lists_hold_bindings() {
+    let mut km = fixture::keymap(Platform::Mac);
+    km.set_holds(true);
+    km.assign(&CommandRef::from("file.save"), Binding::parse("Hold K").expect("a hold"), Policy::Keep).expect("assigns");
+    let mut rig = Rig::with_holds(km, fixture::options(), HoldSetting::new(true, 0.5, 0.2..=2.0));
+    let summarize = |rig: &mut Rig| {
+        rig.click("Summarize…");
+        rig.outcomes()
+            .into_iter()
+            .rev()
+            .find_map(|o| match o {
+                Outcome::Summary { text, html, .. } => Some((text, html)),
+                _ => None,
+            })
+            .expect("a summary")
+    };
+
+    let (text, html) = summarize(&mut rig);
+    assert!(text.lines().any(|line| line.contains("Save") && line.contains("Hold K")), "Save's line has its hold: {text}");
+    assert!(html.contains("Hold K"), "the HTML has the hold: {html}");
+
+    rig.click("Hold Shortcuts");
+    let (text, html) = summarize(&mut rig);
+    assert!(!text.contains("Hold K") && !html.contains("Hold K"), "with holds off the summary has no hold: {text}");
+}
+
+/// The summary written without a `Ui` (a command's file export) is the one Summarize… writes under the same host.
+#[trial]
+fn the_summary_without_a_ui_is_the_one_summarize_writes() {
+    let host = Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).build());
+    let km = fixture::keymap(Platform::Mac);
+    let mut rig = Rig::new(km.clone(), fixture::options(), None);
+    rig.fixture.host(host.clone());
+    rig.pass();
+    rig.click("Summarize…");
+    let text = rig
+        .outcomes()
+        .into_iter()
+        .rev()
+        .find_map(|o| match o {
+            Outcome::Summary { text, .. } => Some(text),
+            _ => None,
+        })
+        .expect("a summary");
+    let (title, _) = text.split_once('\n').expect("a title line");
+    assert_eq!(craft_menu::shortcuts::summary::text_for(&km, &host, title), text);
 }

@@ -1,14 +1,14 @@
 //! RootEnv, the app's root values each frame, and their resolved form.
 
 use super::app_values::AppValues;
-use super::values::Scale;
+use super::values::{AltCodePages, Scale, WheelSpeed};
 use crate::runtime::egui::memory::Service;
 use crate::runtime::focus::TabReach;
 use craft_behavior::MotionMode;
 use craft_i18n::CalendarDate;
 use craft_i18n::Direction;
 use craft_theme::{
-    AppSizes, Appearance, Contrast, ContrastChoice, Mode, ModeChoice, MotionChoice, Size, SystemAppearance, TextSize, ThemeDef, ThemeId,
+    AppSizes, Appearance, ComponentSet, Contrast, ContrastChoice, Mode, ModeChoice, MotionChoice, Size, SystemAppearance, TextSize, ThemeDef, ThemeId,
 };
 use egui::Context;
 use std::sync::Arc;
@@ -37,20 +37,36 @@ pub struct RootEnv {
     pub tab_all_controls: bool,
     /// Whether a bare Tab toggles the window's chrome in place of moving focus where the key stage's gate allows it.
     pub tab_toggles_chrome: bool,
+    /// Whether Escape in a focused text field also takes the focus from it, with or without typing to revert, so the
+    /// next keys go to the window. A clearing field (a search box) still clears its text first.
+    pub escape_leaves_fields: bool,
+    /// Whether a held key's repeats run the command its chord binds again (`FirePhase::Repeat`), as a held Cmd+= keeps
+    /// zooming in. A key with a hold binding, and a key held down while a modal layer opened or closed, repeat nothing.
+    pub shortcuts_repeat: bool,
     /// Which Tab stops a dialog's Tab order visits.
     pub dialog_tab: TabReach,
     /// Whether the canvas surround shows the theme's pattern.
     pub canvas_pattern: bool,
+    /// Whether painted cursor images scale with the interface zoom.
+    pub cursor_follows_zoom: bool,
+    /// Whether tooltips show.
+    pub tooltips: bool,
     /// The theme the tokens resolve from; an id no built-in theme has resolves to the suite default.
     /// Private with `theme_def`, so the two change together.
     pub(super) theme: ThemeId,
     /// The definition of `theme` when it is a library theme: no built-in has its id, so the tokens resolve from this.
     /// Set only with `theme`, by `library_theme`; `theme(id)` clears it.
     pub(super) theme_def: Option<Arc<ThemeDef>>,
+    /// The user's accent over the theme (`ThemeDef::with_accent`); `None` keeps the theme's own.
+    pub(super) accent: Option<craft_theme::Rgba>,
     /// Root app values.
     pub values: AppValues,
     /// Today's date in the host's time zone; the runtime reads no wall clock.
     pub today: Option<CalendarDate>,
+    /// This frame's wheel speed.
+    pub wheel: WheelSpeed,
+    /// The code pages that decode Alt+numpad codes.
+    pub alt_codes: AltCodePages,
 }
 
 impl Default for RootEnv {
@@ -66,12 +82,19 @@ impl Default for RootEnv {
             scale: Scale::default(),
             tab_all_controls: true,
             tab_toggles_chrome: false,
+            escape_leaves_fields: false,
+            shortcuts_repeat: false,
             dialog_tab: TabReach::Root,
             canvas_pattern: true,
+            cursor_follows_zoom: true,
+            tooltips: true,
             theme: ThemeId::suite_default(),
             theme_def: None,
+            accent: None,
             values: AppValues::default(),
             today: None,
+            wheel: WheelSpeed::default(),
+            alt_codes: AltCodePages::default(),
         }
     }
 }
@@ -141,6 +164,14 @@ impl RootEnv {
         self
     }
 
+    /// Overrides `seeds.accent` of whichever theme resolves, built-in or library, in both modes; the accent ramp derives
+    /// from the seed, and the theme's fixed accent colours give way to it ([`ThemeDef::with_accent`]). `None` keeps the
+    /// theme's own.
+    pub fn accent(mut self, seed: Option<craft_theme::Rgba>) -> Self {
+        self.accent = seed;
+        self
+    }
+
     /// What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
     /// [`system_appearance`](super::system_appearance) reads it. A value the OS reports none for resolves to light,
     /// standard contrast and full motion.
@@ -186,15 +217,51 @@ impl RootEnv {
         self
     }
 
+    /// Sets whether painted cursor images scale with the interface zoom (the Scale Cursor Proportional to UI
+    /// preference). On by default.
+    pub fn cursor_follows_zoom(mut self, on: bool) -> Self {
+        self.cursor_follows_zoom = on;
+        self
+    }
+
+    /// Sets whether tooltips show (the Show Tool Tips preference). On by default.
+    pub fn tooltips(mut self, on: bool) -> Self {
+        self.tooltips = on;
+        self
+    }
+
     /// Sets the density preset.
     pub fn density(mut self, density: Size) -> Self {
         self.density = density;
         self
     }
 
+    /// Sets the component set (`Selection::set`): a root app value, so a container can set another for its subtree.
+    pub fn set(mut self, set: ComponentSet) -> Self {
+        self.values.set(set);
+        self
+    }
+
+    /// The component set the root's values carry.
+    pub fn component_set(&self) -> ComponentSet {
+        self.values.get::<ComponentSet>()
+    }
+
     /// Sets today's date, as the host's clock and time zone give it.
     pub fn today(mut self, date: CalendarDate) -> Self {
         self.today = Some(date);
+        self
+    }
+
+    /// Sets this frame's wheel speed.
+    pub fn wheel_speed(mut self, speed: WheelSpeed) -> Self {
+        self.wheel = speed;
+        self
+    }
+
+    /// Sets the code pages that decode Alt+numpad codes.
+    pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self {
+        self.alt_codes = pages;
         self
     }
 }

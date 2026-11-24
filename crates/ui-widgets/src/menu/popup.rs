@@ -2,18 +2,21 @@
 
 use super::item::{MenuItem, MenuItemOutput};
 use super::level::{LevelMemory, MenuLevel, level_env};
-use crate::contract::overlay::{Anchor, Dismiss, Outside, Popup};
+use super::words::MenuWords;
+use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, Popup};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
-    Overlay, POPUP_PAD, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, TooltipSpec, Trigger,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InBar, InMenu, LeastWidth, Mount,
+    NoValue, Outcome, Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing,
+    TooltipSpec, Trigger,
 };
 use crate::display::Divider;
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::{Env, Label, with_env};
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
-use craft_behavior::{Arrows, Metrics, NavShape, Roving, Sense, Value};
+use craft_behavior::overlay::{Align, Side};
+use craft_behavior::{Arrows, Metrics, MotionMode, NavShape, Roving, Sense, Value};
 use craft_keymap::{Chord, Key};
 use egui::{Response, Ui};
 
@@ -88,6 +91,57 @@ impl<T: Value> Outcome for MenuPick<T> {
 pub fn layer(submenu: bool) -> Overlay {
     let base = if submenu { Overlay::submenu() } else { Overlay::menu() };
     base.dismiss(Dismiss::new().outside(Outside::Absorb).on_activate(true)).focus(FocusPolicy::MENU.initial(Initial::Default))
+}
+
+/// A row of a menu that picks a caller's value: an entry, or a submenu of rows.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum MenuRow<T> {
+    /// An entry, shown as [`entry_rows`] shows it.
+    Entry(Entry<T>),
+    /// A submenu row of the label that shows `rows`, recursively; a submenu with no enabled row is disabled.
+    Submenu(Label, Vec<MenuRow<T>>),
+}
+
+impl<T> From<Entry<T>> for MenuRow<T> {
+    fn from(entry: Entry<T>) -> Self {
+        MenuRow::Entry(entry)
+    }
+}
+
+/// Shows `rows` as `entry_rows` shows entries, a submenu as `Menu::submenu_row_enabled`, and returns the value picked at
+/// any depth.
+pub fn menu_rows<T: Clone>(ui: &mut Ui, rows: &[MenuRow<T>]) -> Option<T> {
+    let mut picked = None;
+    for row in rows {
+        match row {
+            MenuRow::Entry(entry) => {
+                if entry_rows(ui, std::slice::from_ref(entry)).is_some() {
+                    picked = entry.value().cloned();
+                }
+            }
+            MenuRow::Submenu(label, inner) => {
+                let mut chosen = None;
+                Menu::submenu_row_enabled(ui, label.clone(), has_enabled(inner), |ui, _| {
+                    if let Some(value) = menu_rows(ui, inner) {
+                        chosen = Some(value);
+                    }
+                });
+                if chosen.is_some() {
+                    picked = chosen;
+                }
+            }
+        }
+    }
+    picked
+}
+
+/// Whether any row of `rows`, at any depth, is an enabled entry.
+fn has_enabled<T>(rows: &[MenuRow<T>]) -> bool {
+    rows.iter().any(|row| match row {
+        MenuRow::Entry(entry) => entry.is_enabled() && !entry.is_separator() && !entry.is_heading(),
+        MenuRow::Submenu(_, inner) => has_enabled(inner),
+    })
 }
 
 /// Shows one row per entry, a caption for a heading, a rule for a separator, and returns the index of the entry that
@@ -168,9 +222,20 @@ pub struct Menu<'a> {
     back: bool,
     /// The Left or Right key a top-level level left unhandled.
     step: Option<MenuStep>,
+    /// The bar shown above the menu in its own modeless layer.
+    companion: Option<&'a mut dyn FnMut(&mut Ui)>,
 }
 
 impl<'a> Menu<'a> {
+    /// A modeless bar layer above the menu, in its press family; it closes with the menu, and Escape closes the top
+    /// layer first. The bar runs in the menu's end region, which the layer leaves empty in flow, so it takes no room.
+    #[must_use]
+    pub fn companion(mut self, bar: &'a mut dyn FnMut(&mut Ui)) -> Self {
+        self.companion = Some(bar);
+        self.props = self.props.end(EndRegion::new());
+        self
+    }
+
     /// A menu named `label`. Its open state is the menu's slot until [`open`](Menu::open) binds it.
     pub fn new(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new()
@@ -182,8 +247,19 @@ impl<'a> Menu<'a> {
             .label_column(true)
             .scroll(Scroll::vertical().strips())
             .mount(Mount::Layer(layer(false)));
-        Menu { common: Common::new(), props, open: None, closed: None, submenu: false, values: false, opener: None, back: false, step: None }
-            .label(label)
+        Menu {
+            common: Common::new(),
+            props,
+            open: None,
+            closed: None,
+            submenu: false,
+            values: false,
+            opener: None,
+            back: false,
+            step: None,
+            companion: None,
+        }
+        .label(label)
     }
 
     /// Marks the menu as a value menu: every row is a radio item, whether or not an entry is checked, and the checked
@@ -203,12 +279,24 @@ impl<'a> Menu<'a> {
             .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))
             .label_column(true)
             .scroll(Scroll::vertical().strips());
-        Menu { common: Common::new(), props, open: None, closed: None, submenu: false, values: false, opener: None, back: false, step: None }
-            .label(label)
+        Menu {
+            common: Common::new(),
+            props,
+            open: None,
+            closed: None,
+            submenu: false,
+            values: false,
+            opener: None,
+            back: false,
+            step: None,
+            companion: None,
+        }
+        .label(label)
     }
 
     /// A context menu named `label`, hanging from where the pointer was when it opened, with `opener` getting the
-    /// focus back when it closes by key.
+    /// focus back when it closes by key. An item's menu hangs from its collection's response and shows while the
+    /// collection reports the item's request (`CollectionResponse::menu`), whose key its rows act on.
     pub fn context(label: impl Into<Label>, opener: &Response) -> Self {
         let mut menu = Menu::new(label);
         menu.opener = Some(opener.id);
@@ -252,9 +340,14 @@ impl<'a> Menu<'a> {
         let label = label.into();
         let head = MenuItem::submenu(label.clone()).enabled(enabled).show(ui);
         let mut open = head.submenu_open;
-        let mut body = body;
-        let shown =
-            Menu::submenu(label, &head.response).anchor(Anchor::Rect(head.frame)).open(Bind::bound(&mut open)).show(ui, |ui, cx| body(ui, cx));
+        let show = |ui: &mut Ui| {
+            Menu::submenu(label, &head.response)
+                .id(head.response.id.with("submenu"))
+                .anchor(Anchor::Rect(head.frame))
+                .open(Bind::bound(&mut open))
+                .show(ui, body)
+        };
+        let shown = if head.sibling_submenu_open() { with_env(ui, |env| env.motion = Some(MotionMode::Off), show) } else { show(ui) };
         // `MenuItem::update` does not run in a measuring run, so `open` is false there and would clear the level's
         // open submenu the real run set.
         if crate::runtime::measure::effect(ui.ctx(), "menu::note_submenu") {
@@ -375,5 +468,93 @@ impl Container for Menu<'_> {
 
     fn closed(&mut self, why: CloseReason) {
         self.closed.get_or_insert(why);
+    }
+
+    /// The companion bar, shown as a child layer of the menu's: it is in the menu's press family and closes with the
+    /// menu.
+    fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
+        let Some(bar) = self.companion.as_mut() else { return };
+        if cx.is_exiting() {
+            return;
+        }
+        let label = Env::of(ui).words::<MenuWords>().bar_companion.clone();
+        let _ = CompanionLayer::new(label).show(ui, |ui, _| bar(ui));
+    }
+}
+
+/// The style of a menu's companion layer: the surface comes from the container.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+struct CompanionLayerStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// What a companion layer reports.
+#[derive(Debug)]
+struct CompanionOutput {
+    response: Response,
+}
+
+impl Outcome for CompanionOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// The modeless layer a menu's companion bar shows in, above the menu's panel. It takes no focus on open and has no
+/// opener of its own: it is open while the menu's body runs it.
+#[derive(crate::contract::Component)]
+#[component(container, unregistered)]
+struct CompanionLayer {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    open: Bind<'static, bool>,
+}
+
+impl CompanionLayer {
+    fn new(label: Label) -> Self {
+        let overlay = Overlay::floating()
+            .modeless()
+            .body_scroll(false)
+            .focus(FocusPolicy::NONE)
+            .dismiss(Dismiss::new().outside(Outside::Keep))
+            .place(Place::anchored(Anchor::Parent, Side::Above, Align::Start));
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::Control).sizing(Sizing::Content);
+        CompanionLayer { common: Common::new(), props, open: Bind::given(true) }.label(label).id_salt("menu-companion")
+    }
+}
+
+impl Component for CompanionLayer {
+    const ROLE: Role = Role::GROUP;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = CompanionLayerStyle;
+    type Output = CompanionOutput;
+
+    fn style(_: &StyleCx<'_>, _: CompanionLayerStyleKey) -> CompanionLayerStyle {
+        CompanionLayerStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn content_env(&self, _: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
+        values.set(InBar(true));
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> CompanionOutput {
+        CompanionOutput { response: cx.response.clone() }
+    }
+}
+
+impl Container for CompanionLayer {
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        Some(self.open.reborrow())
     }
 }

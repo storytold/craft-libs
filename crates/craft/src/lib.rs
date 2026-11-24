@@ -16,6 +16,8 @@ pub use craft_affinity as affinity;
 pub use craft_ai as ai;
 #[cfg(feature = "ai-core")]
 pub use craft_ai_core as ai_core;
+#[cfg(feature = "android-res")]
+pub use craft_android_res as android_res;
 #[cfg(feature = "anicraft-format")]
 pub use craft_anicraft_format as anicraft_format;
 #[cfg(feature = "assuan")]
@@ -24,6 +26,8 @@ pub use craft_assuan as assuan;
 pub use craft_atomic as atomic;
 #[cfg(feature = "audio")]
 pub use craft_audio as audio;
+#[cfg(feature = "audio-dsp")]
+pub use craft_audio_dsp as audio_dsp;
 #[cfg(feature = "automation")]
 pub use craft_automation as automation;
 pub use craft_behavior as behavior;
@@ -33,6 +37,8 @@ pub use craft_ber as ber;
 pub use craft_browse as browse;
 #[cfg(feature = "captions")]
 pub use craft_captions as captions;
+#[cfg(feature = "cdr")]
+pub use craft_cdr as cdr;
 #[cfg(feature = "cfb")]
 pub use craft_cfb as cfb;
 #[cfg(feature = "cloud")]
@@ -47,6 +53,8 @@ pub use craft_cms as cms;
 pub use craft_codepage as codepage;
 #[cfg(feature = "color")]
 pub use craft_color as color;
+#[cfg(feature = "color-transform")]
+pub use craft_color_transform as color_transform;
 #[cfg(feature = "color-ui")]
 pub use craft_color_ui as color_ui;
 #[cfg(feature = "control")]
@@ -67,6 +75,12 @@ pub use craft_dds as dds;
 pub use craft_deckcraft_format as deckcraft_format;
 #[cfg(feature = "designcraft-format")]
 pub use craft_designcraft_format as designcraft_format;
+#[cfg(feature = "develop")]
+pub use craft_develop as develop;
+#[cfg(feature = "develop-model")]
+pub use craft_develop_model as develop_model;
+#[cfg(feature = "dex")]
+pub use craft_dex as dex;
 #[cfg(feature = "dialogs")]
 pub use craft_dialogs as dialogs;
 #[cfg(feature = "doc")]
@@ -97,6 +111,10 @@ pub use craft_elf as elf;
 pub use craft_eps as eps;
 #[cfg(feature = "epub")]
 pub use craft_epub as epub;
+#[cfg(feature = "esign")]
+pub use craft_esign as esign;
+#[cfg(feature = "evm")]
+pub use craft_evm as evm;
 #[cfg(feature = "ews")]
 pub use craft_ews as ews;
 #[cfg(feature = "exr")]
@@ -133,8 +151,18 @@ pub use craft_frame as frame;
 pub use craft_gainmap as gainmap;
 #[cfg(feature = "gcode")]
 pub use craft_gcode as gcode;
+#[cfg(feature = "geom")]
+pub use craft_geom as geom;
 #[cfg(feature = "gif")]
 pub use craft_gif as gif;
+#[cfg(feature = "gpu")]
+pub use craft_gpu as gpu;
+#[cfg(feature = "gpu-null")]
+pub use craft_gpu_null as gpu_null;
+#[cfg(feature = "gpu-providers")]
+pub use craft_gpu_providers as gpu_providers;
+#[cfg(feature = "gpu-wgpu")]
+pub use craft_gpu_wgpu as gpu_wgpu;
 #[cfg(feature = "gridcraft-format")]
 pub use craft_gridcraft_format as gridcraft_format;
 #[cfg(feature = "gzip")]
@@ -163,6 +191,8 @@ pub use craft_imaging as imaging;
 pub use craft_indd as indd;
 #[cfg(feature = "ipc")]
 pub use craft_ipc as ipc;
+#[cfg(feature = "ipp")]
+pub use craft_ipp as ipp;
 #[cfg(feature = "java-class")]
 pub use craft_java_class as java_class;
 #[cfg(feature = "jmap")]
@@ -255,6 +285,10 @@ pub use craft_platform as platform;
 pub use craft_plist as plist;
 #[cfg(feature = "plotter")]
 pub use craft_plotter as plotter;
+#[cfg(feature = "png")]
+pub use craft_png as png;
+#[cfg(feature = "ppt-binary")]
+pub use craft_ppt_binary as ppt_binary;
 #[cfg(feature = "pptx")]
 pub use craft_pptx as pptx;
 #[cfg(feature = "prc")]
@@ -285,6 +319,8 @@ pub use craft_raw as raw;
 pub use craft_review as review;
 #[cfg(feature = "rtf")]
 pub use craft_rtf as rtf;
+#[cfg(feature = "sbs")]
+pub use craft_sbs as sbs;
 #[cfg(feature = "score")]
 pub use craft_score as score;
 #[cfg(feature = "scraft-format")]
@@ -307,6 +343,8 @@ pub use craft_smime as smime;
 pub use craft_sniff as sniff;
 #[cfg(feature = "sourcemap")]
 pub use craft_sourcemap as sourcemap;
+#[cfg(feature = "sqlite")]
+pub use craft_sqlite as sqlite;
 #[cfg(feature = "ssip")]
 pub use craft_ssip as ssip;
 #[cfg(feature = "stencilcraft-document")]
@@ -315,6 +353,8 @@ pub use craft_stencilcraft_document as stencilcraft_document;
 pub use craft_stencilcraft_format as stencilcraft_format;
 #[cfg(feature = "stream-codecs")]
 pub use craft_stream_codecs as stream_codecs;
+#[cfg(feature = "suite-account")]
+pub use craft_suite_account as suite_account;
 #[cfg(feature = "svg")]
 pub use craft_svg as svg;
 #[cfg(feature = "table")]
@@ -330,6 +370,8 @@ pub use craft_texture as texture;
 #[cfg(feature = "tga")]
 pub use craft_tga as tga;
 pub use craft_theme as theme;
+#[cfg(feature = "theme-editor")]
+pub use craft_theme_editor as theme_editor;
 #[cfg(feature = "theme-store")]
 pub use craft_theme_store as theme_store;
 #[cfg(feature = "tiff")]
@@ -338,6 +380,8 @@ pub use craft_tiff as tiff;
 pub use craft_time as time;
 #[cfg(feature = "timeline")]
 pub use craft_timeline as timeline;
+#[cfg(feature = "tracked")]
+pub use craft_tracked as tracked;
 #[cfg(feature = "ui")]
 pub use craft_ui as ui;
 #[cfg(feature = "update")]
@@ -354,6 +398,8 @@ pub use craft_vectordrawable as vectordrawable;
 pub use craft_video as video;
 #[cfg(feature = "wasm")]
 pub use craft_wasm as wasm;
+#[cfg(feature = "wayland")]
+pub use craft_wayland as wayland;
 #[cfg(feature = "web-api")]
 pub use craft_web_api as web_api;
 #[cfg(feature = "web-host")]
@@ -366,6 +412,8 @@ pub use craft_window as window;
 pub use craft_wordmodel as wordmodel;
 #[cfg(feature = "xcf")]
 pub use craft_xcf as xcf;
+#[cfg(feature = "xfa")]
+pub use craft_xfa as xfa;
 #[cfg(feature = "xfdf")]
 pub use craft_xfdf as xfdf;
 #[cfg(feature = "xfl")]

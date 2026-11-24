@@ -4,6 +4,7 @@ use super::BodyHooks;
 use super::inherit::own_surface;
 use super::placement::overlay_of;
 use super::regions::rect_of;
+use crate::contract::cx::CxCore;
 use crate::contract::{Container, ContainerProps, Cx, Scroll};
 use crate::primitives::{HiddenContent, ScrollBar};
 use crate::runtime::egui::pass;
@@ -29,6 +30,14 @@ pub const STRIP_FORWARD: PartKey = PartKey::new("body_scroll_strip_forward");
 
 /// Rows per second a region scrolls at while the pointer rests on one of its strips, in rows a control high.
 const STRIP_ROWS_PER_SECOND: f32 = 24.0;
+
+/// The child the scroll position of the scrolling body `body` is named by (`lazy::Anchor`), for trials.
+#[cfg(feature = "testing")]
+pub(crate) fn anchor_of(ctx: &Context, body: Id) -> Option<Id> {
+    crate::runtime::memory::with_session::<ScrollState, _>(ctx, crate::runtime::memory::sub(body, "scroll"), |state| {
+        state.anchor.map(|anchor| anchor.child)
+    })
+}
 
 /// The height of a scroll strip.
 pub(super) fn scroll_strip_height(tokens: &UiTokens) -> f32 {
@@ -94,11 +103,12 @@ pub(super) fn queue_jump(ctx: &Context, id: Id, offset: ScrollPos) {
 }
 
 /// The room the scroll bars of `scroll` take from a view of `view` over content of `extent`: `bar` across the view
-/// for each axis whose content overflows it. Scroll strips take none across the view.
+/// for each axis whose content overflows it. Scroll strips and overlay bars take none across the view.
 pub(super) fn overflow_inset(scroll: Scroll, extent: Vec2, view: Vec2, bar: f32) -> Vec2 {
+    let takes = !scroll.has_overlay();
     Vec2::new(
-        if scroll.vertical_on() && !scroll.has_strips() && f64::from(extent.y) > f64::from(view.y) + 0.5 { bar } else { 0.0 },
-        if scroll.horizontal_on() && f64::from(extent.x) > f64::from(view.x) + 0.5 { bar } else { 0.0 },
+        if takes && scroll.vertical_on() && !scroll.has_strips() && f64::from(extent.y) > f64::from(view.y) + 0.5 { bar } else { 0.0 },
+        if takes && scroll.horizontal_on() && f64::from(extent.x) > f64::from(view.x) + 0.5 { bar } else { 0.0 },
     )
 }
 
@@ -185,12 +195,16 @@ impl BodyHooks<'_> {
             let content = Vec2::new(if scroll.horizontal_on() { ex } else { view.width() }, if scroll.vertical_on() { ey } else { view.height() });
             let offset = Vec2::new(self.offset.x as f32, self.offset.y as f32);
             let background = surface_style(tokens, SurfaceKind::under(own_surface(props, cx), env.surface)).fill;
-            ui.painter().extend(ScrollBar::fades(&look, view, HiddenContent::new(content, view.size(), offset, rtl), background));
+            ui.painter().extend(ScrollBar::fades(view, HiddenContent::new(content, view.size(), offset, rtl), background));
         }
         if let Some(view) = self.view {
+            use crate::contract::Pointer as _;
+            let overlay = scroll_of(props).is_some_and(|scroll| scroll.has_overlay());
             for (bar, span) in self.scroll_geometry(props, view, rtl, tokens) {
                 let overflow = span.content.end - span.content.start > span.visible.end - span.visible.start;
-                if !overflow {
+                // An overlay bar shows while the pointer is over the container, or keeps the press that drags it.
+                let hidden = overlay && !cx.response.contains_pointer() && !cx.part_if_declared(bar.key).is_some_and(|track| track.pressed());
+                if !overflow || hidden {
                     continue;
                 }
                 let state = cx.core.scroll_bar_state(bar.key);
@@ -225,7 +239,7 @@ impl BodyHooks<'_> {
         if let Some(range) = cx.scroll_moved(SCROLL_X) {
             offset.x = range.start;
         }
-        self.access_scroll(scroll, &mut offset, cx);
+        self.access_scroll(scroll, &mut offset, cx.core);
         let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
         let offset = self.clamped(scroll, view, offset);
         if offset != self.offset {
@@ -234,11 +248,11 @@ impl BodyHooks<'_> {
     }
 
     /// AccessKit scroll actions aimed at the container's node, applied to `offset`: a page along an axis, or an offset.
-    fn access_scroll<C: Container>(&self, scroll: Scroll, offset: &mut ScrollPos, cx: &mut Cx<'_, C>) {
+    fn access_scroll(&self, scroll: Scroll, offset: &mut ScrollPos, core: &mut CxCore<'_>) {
         use craft_behavior::{AccessAction as Action, AccessData as ActionData};
-        let rtl = cx.core.env.direction().is_rtl();
+        let rtl = core.env.direction().is_rtl();
         let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
-        while let Some(request) = cx.core.intents.take_scroll_access(false) {
+        while let Some(request) = core.intents.take_scroll_access(false) {
             let (vertical, toward_end) = match request.action {
                 Action::ScrollUp => (true, false),
                 Action::ScrollDown => (true, true),
@@ -265,6 +279,33 @@ impl BodyHooks<'_> {
 }
 
 impl<'b> BodyHooks<'b> {
+    /// The offset a drag held in an edge band of the view scrolls the body to from `from`, by the frame's time. The
+    /// body takes the step only while no scroller inside it took one this pass (`reorder::edge_step_taken`), and marks
+    /// it taken so a body around it does not step too. `None` when nothing moves, a rerun pass of a frame included: it
+    /// has no elapsed time.
+    pub(super) fn edge_step_body(&self, scroll: Scroll, ctx: &Context, from: ScrollPos) -> Option<ScrollPos> {
+        use crate::contract::reorder;
+        if !crate::runtime::drag::running(ctx) || reorder::edge_step_taken(ctx) {
+            return None;
+        }
+        let pos = crate::runtime::pointer::frame(ctx).pos?;
+        let view = self.shown_view(scroll, rect_of(self.last.view?));
+        if !view.contains(pos) {
+            return None;
+        }
+        let max = self.max_offset(view.size());
+        let unit = |on: bool, at: f32, len: f32, room: f64| if on && room > 0.0 { reorder::edge_step(len, self.row, at, 1.0) } else { 0.0 };
+        let x = unit(scroll.horizontal_on(), pos.x - view.min.x, view.width(), max.x);
+        let y = unit(scroll.vertical_on(), pos.y - view.min.y, view.height(), max.y);
+        if x == 0.0 && y == 0.0 {
+            return None;
+        }
+        reorder::mark_edge_step(ctx);
+        let dt = crate::runtime::frame::facts(ctx).elapsed.clamp(0.0, 0.1);
+        let to = self.clamped(scroll, view.size(), ScrollPos { x: from.x + f64::from(x) * dt, y: from.y + f64::from(y) * dt });
+        (to != from).then_some(to)
+    }
+
     /// The scroll strips over the body rect `at`, from the content's last extent.
     pub(super) fn strips(&self, scroll: Scroll, at: Rect) -> Option<(Rect, Rect)> {
         strips_of(scroll, Vec2::new(self.last_extent.0, self.last_extent.1), at, self.strip)
@@ -280,21 +321,26 @@ impl<'b> BodyHooks<'b> {
         let thickness = scroll_bar_look(tokens).thickness;
         let (v_on, h_on) = (scroll.vertical_on(), scroll.horizontal_on());
         let (ex, ey) = self.last_extent;
+        // An overlay bar's outer edge is the container's: the padding past the view's end edge holds it.
+        let past = if scroll.has_overlay() { self.pads(props, tokens) } else { Vec2::ZERO };
         let mut bars = Vec::new();
         if v_on && !scroll.has_strips() {
             let track = if rtl {
-                Rect::from_min_max(view.min, Pos2::new(view.min.x + thickness, view.max.y))
+                let outer = view.min.x - past.x;
+                Rect::from_min_max(Pos2::new(outer, view.min.y), Pos2::new(outer + thickness, view.max.y))
             } else {
-                Rect::from_min_max(Pos2::new(view.max.x - thickness, view.min.y), view.max)
+                let outer = view.max.x + past.x;
+                Rect::from_min_max(Pos2::new(outer - thickness, view.min.y), Pos2::new(outer, view.max.y))
             };
             let content = f64::from(ey).max(f64::from(view.height()));
             let span = ScrollSpan::new(0.0..content, self.offset.y..self.offset.y + f64::from(view.height()));
             bars.push((Bar { key: SCROLL_Y, axis: Axis::Y, track }, span));
         }
         if h_on {
+            let outer = view.max.y + past.y;
             let track = Rect::from_min_max(
-                Pos2::new(view.min.x, view.max.y - thickness),
-                Pos2::new(view.max.x - if v_on { thickness } else { 0.0 }, view.max.y),
+                Pos2::new(view.min.x, outer - thickness),
+                Pos2::new(view.max.x - if v_on && !scroll.has_overlay() { thickness } else { 0.0 }, outer),
             );
             let content = f64::from(ex).max(f64::from(view.width()));
             let span = ScrollSpan::new(0.0..content, self.offset.x..self.offset.x + f64::from(view.width()));
@@ -311,7 +357,7 @@ impl<'b> BodyHooks<'b> {
         self.offset = self.clamped(scroll, view, self.offset);
     }
 
-    fn clamped(&self, scroll: Scroll, view: Vec2, offset: ScrollPos) -> ScrollPos {
+    pub(super) fn clamped(&self, scroll: Scroll, view: Vec2, offset: ScrollPos) -> ScrollPos {
         let max = self.max_offset(view);
         ScrollPos {
             x: if scroll.horizontal_on() { offset.x.clamp(0.0, max.x) } else { 0.0 },

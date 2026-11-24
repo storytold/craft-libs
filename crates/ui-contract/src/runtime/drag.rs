@@ -4,14 +4,15 @@
 
 use crate::runtime::egui::areas::{self, Layer};
 use crate::runtime::egui::{files, pass, viewports};
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, EnvView, Label};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::overlay::{self, LayerKeys};
 use crate::runtime::pass_state;
 use crate::runtime::windows::{self, WindowHost};
 use crate::runtime::{cursor, frame, pointer};
+use crate::style::UiTokens;
 use craft_behavior::keys::drop_operation;
-use craft_behavior::{Buttons, CancelReason, Cursor, CursorIcon, CursorPriority, DropOperation, PointerButton, PressCancel};
+use craft_behavior::{Buttons, CancelReason, CopyKeys, Cursor, CursorIcon, CursorPriority, DropOperation, PointerButton, PressCancel};
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 use std::any::{Any, TypeId};
@@ -28,8 +29,11 @@ pub enum DragPreview {
     None,
     /// A badge with a short text ("3 files").
     Badge(Label),
-    /// A frame-sized outline centred on the pointer, with an optional label inside its top corner: the ghost of a
-    /// panel or window being moved.
+    /// Nothing beside the pointer: the payload's name shows inside the area of a region mark, as a panel or group
+    /// being moved names the place it would take. With no mark, nothing shows.
+    Named(Label),
+    /// An outline of `size` centred on the pointer, with an optional label inside its top corner: the ghost of a part
+    /// dragged out of a row (a thumbnail).
     #[non_exhaustive]
     Frame {
         /// The size of the frame, in points.
@@ -68,6 +72,33 @@ pub enum DropMark {
         /// Where in it the payload goes in, such as the tab position of a panel joining a group.
         line: Option<[Pos2; 2]>,
     },
+}
+
+crate::stays!(Arc<crate::style::UiTokens>, DropOperation, TargetReach);
+
+impl crate::runtime::Shift for DropMark {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        self.mapped(|point| by.pos(point))
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        let pos = |value: Pos2, to: Pos2| crate::runtime::Shift::snapped(&value, &to, within);
+        let rect = |value: Rect, to: Rect| Rect::from_min_max(pos(value.min, to.min), pos(value.max, to.max));
+        match (self, to) {
+            (DropMark::Line { from, to: end }, DropMark::Line { from: to_from, to: to_end }) => {
+                DropMark::Line { from: pos(*from, *to_from), to: pos(*end, *to_end) }
+            }
+            (DropMark::Into(target), DropMark::Into(to_target)) => DropMark::Into(rect(*target, *to_target)),
+            (DropMark::Region { area, line }, DropMark::Region { area: to_area, line: to_line }) => DropMark::Region {
+                area: rect(*area, *to_area),
+                line: match (line, to_line) {
+                    (Some([a, b]), Some([to_a, to_b])) => Some([pos(*a, *to_a), pos(*b, *to_b)]),
+                    _ => *line,
+                },
+            },
+            _ => *self,
+        }
+    }
 }
 
 impl DropMark {
@@ -131,25 +162,48 @@ pub trait DropTarget<P: ?Sized> {
 
     /// Where `drop` would land, a value the ghost layer paints.
     fn mark(&self, drop: &Self::Drop) -> DropMark;
+
+    /// Whether the target takes OS file drops (`OsFiles`) while a modal layer above it holds input, as an app whose
+    /// alerts let files through (VectorCraft placed files dropped under its alert). By default a modal refuses them.
+    fn under_modal(&self) -> bool {
+        false
+    }
+
+    /// The held key that makes a drop on this target a copy: the `op` that [`accept`](Self::accept) gets, and the
+    /// pointer over the target, follow it.
+    fn copy_keys(&self) -> CopyKeys {
+        CopyKeys::Alt
+    }
 }
 
-/// What a component registers with `Pointer::window_drop_target`: a target over the whole window, which needs no
-/// pointer position.
+/// What a component registers with `Pointer::window_drop_target`: a target over the whole window, optionally waiting
+/// for a pointer position before it accepts.
 pub trait WindowDropTarget<P> {
     /// What a drop on this target carries to the component's caller.
     type Drop;
+
+    /// Whether this target waits for a pointer position before taking a drop.
+    fn requires_pointer(&self) -> bool {
+        false
+    }
 
     /// `None` rejects. `op` is the operation the held modifiers pick, which a target may refuse.
     fn accept(&self, payload: &P, op: DropOperation) -> Option<Self::Drop>;
 
     /// Where `drop` would land, a value the ghost layer paints.
     fn mark(&self, drop: &Self::Drop) -> DropMark;
+
+    /// Whether the target takes OS file drops (`OsFiles`) while a modal layer holds input, as
+    /// [`DropTarget::under_modal`] says.
+    fn under_modal(&self) -> bool {
+        false
+    }
 }
 
 /// Where a drop target lies: a rect on an egui layer, in that layer's space. A component's own target lies over its
 /// visible rect on its layer; a component that takes drops over an area it does not draw (a preset browser's canvas)
 /// names the area with [`DropZone::new`] and registers with [`zone_target`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct DropZone {
     layer: Layer,
     rect: Rect,
@@ -186,11 +240,14 @@ struct Session {
     viewport: ViewportId,
     button: PointerButton,
     payload: Arc<dyn Any + Send + Sync>,
-    /// A second payload of the same drag, which targets of its type take: a collection's row drag maps to it.
-    also: Option<Arc<dyn Any + Send + Sync>>,
+    /// More payloads of the same drag, one per type, which targets of their types take: a collection's row drag maps
+    /// to them.
+    also: Vec<Arc<dyn Any + Send + Sync>>,
     preview: DragPreview,
+    /// The env of the region the drag started in, which its preview paints with; `None` for files from the OS.
+    env: Option<Env>,
     /// The mark of the target that would take a drop now, in screen space of the viewport that registered it.
-    mark: Option<(ViewportId, DropMark)>,
+    mark: Option<ShownMark>,
     /// The root frame in which the source viewport saw the release while a target in another window held the
     /// drop: the session lives until that window's pass takes it.
     released: Option<u64>,
@@ -201,8 +258,19 @@ struct Session {
     os: bool,
     /// The root frame in which the OS dropped the files.
     dropped: Option<u64>,
+    /// A file drop has arrived but no pointer position is available yet.
+    waiting_for_pointer: bool,
     /// The root frame the session started in, the only one in which [`amend`] changes its payload.
     began: u64,
+}
+
+/// The mark of the target that would take a drop, with the viewport that registered it and the tokens of the region
+/// the target lies in, which the mark paints with.
+#[derive(Clone)]
+struct ShownMark {
+    viewport: ViewportId,
+    mark: DropMark,
+    tokens: Arc<UiTokens>,
 }
 
 /// A drop a target took: the source's `drag_ended` reads it in the next frame.
@@ -229,8 +297,20 @@ struct Registration {
     /// The overlay layer whose body registered the target; `None` for the window's own content.
     scope: Option<Id>,
     mark: DropMark,
+    /// What a drop on the target does with the keys held now; the pointer shows it while the target wins.
+    op: DropOperation,
+    /// The tokens of the target's region.
+    tokens: Arc<UiTokens>,
+    reach: TargetReach,
+}
+
+/// Where a drop target takes drops beyond its own mark.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TargetReach {
     /// The target covers the whole window: any target over a component beats it.
-    window: bool,
+    pub(crate) window: bool,
+    /// The target takes OS files under a modal layer (`DropTarget::under_modal`).
+    pub(crate) under_modal: bool,
 }
 
 /// A viewport's registrations: this pass's, and the target that won last pass.
@@ -238,17 +318,28 @@ struct Registration {
 pub(crate) struct Targets {
     this: Vec<Registration>,
     winner: Option<(Id, u32)>,
+    /// The winner is a target over a component, not the whole window.
+    component: bool,
+    winner_window: bool,
+    pointer: Option<Pos2>,
 }
 
 fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
     pass_state::with::<Board, _>(ctx, f)
 }
 
-/// Starts a session for `source` with `payload`. A running session stays: one per context. A container shown in an OS
-/// window of its own runs in its parent's pass, but the press that starts its drag is its window's: the session follows
-/// that window's pointer.
+/// Starts a session for `source` with `payload`; `env` is the source's, which the preview paints with. A running
+/// session stays: one per context. A container shown in an OS window of its own runs in its parent's pass, but the
+/// press that starts its drag is its window's: the session follows that window's pointer.
 #[doc(hidden)]
-pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, also: Option<Arc<dyn Any + Send + Sync>>, preview: DragPreview) {
+pub fn start(
+    ctx: &Context,
+    source: Id,
+    env: &EnvView<'_>,
+    payload: Arc<dyn Any + Send + Sync>,
+    also: Vec<Arc<dyn Any + Send + Sync>>,
+    preview: DragPreview,
+) {
     let viewport = WindowHost::of(ctx).viewport_of(source).unwrap_or_else(|| pass::current_viewport(ctx));
     let began = pass::root_frame_nr(ctx);
     board(ctx, |board| {
@@ -266,11 +357,13 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
                 payload,
                 also,
                 preview,
+                env: Some(env.to_env()),
                 mark: None,
                 released: None,
                 taken: false,
                 os: false,
                 dropped: None,
+                waiting_for_pointer: false,
                 began,
             });
             board.ended = None;
@@ -280,11 +373,11 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
     crate::runtime::egui::repaint::request(ctx);
 }
 
-fn operation(ctx: &Context, mods: Mods) -> DropOperation {
-    drop_operation(windows::os_of(ctx), mods)
+fn operation(ctx: &Context, mods: Mods, copy: CopyKeys) -> DropOperation {
+    drop_operation(windows::os_of(ctx), mods, copy)
 }
 
-/// Changes the running session's payload of type `P` (or its second payload of that type) with `change`, in the frame
+/// Changes the running session's payload of type `P` (or its further payload of that type) with `change`, in the frame
 /// the session started only: a host completes what a drag its component started carries with what only the host knows
 /// (a dock measures the panel a tab drag floats). Returns whether a payload changed; from the next frame on, the
 /// payload is fixed and nothing changes.
@@ -292,7 +385,7 @@ pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnc
     let frame = pass::root_frame_nr(ctx);
     board(ctx, |board| {
         let Some(session) = board.session.as_mut().filter(|session| session.began == frame) else { return false };
-        let slot = if session.payload.is::<P>() { Some(&mut session.payload) } else { session.also.as_mut().filter(|also| also.is::<P>()) };
+        let slot = if session.payload.is::<P>() { Some(&mut session.payload) } else { session.also.iter_mut().find(|also| also.is::<P>()) };
         let Some(slot) = slot else { return false };
         let Some(mut payload) = slot.downcast_ref::<P>().cloned() else { return false };
         change(&mut payload);
@@ -303,29 +396,47 @@ pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnc
 
 /// The active drag payload of type `P`, from any viewport. For code without a `Cx`.
 pub fn active<P: Send + Sync + 'static>(ctx: &Context) -> Option<Arc<P>> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     active_of(ctx, TypeId::of::<P>())?.downcast::<P>().ok()
 }
 
-/// The active drag payload whose type is `payload`: the session's own payload, else its `also`. For a target that
-/// picks the payload types it takes at run time.
+/// The active drag payload whose type is `payload`: the session's own payload, else the one of its `also`. For a
+/// target that picks the payload types it takes at run time.
 pub(crate) fn active_of(ctx: &Context, payload: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     let (own, also) = board(ctx, |board| board.session.as_ref().map(|session| (session.payload.clone(), session.also.clone())))?;
     if Any::type_id(&*own) == payload {
         return Some(own);
     }
-    also.filter(|also| Any::type_id(&**also) == payload)
+    also.into_iter().find(|also| Any::type_id(&**also) == payload)
 }
 
 /// How many sessions have started on this context.
 #[doc(hidden)]
 pub fn started(ctx: &Context) -> u64 {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     board(ctx, |board| board.started)
 }
 
-/// The mark of the target that would take a drop now.
-#[doc(hidden)]
+/// What a drag reader sees of the session, as the tracked input `Drag` compares it: the sessions started, and the
+/// payloads of the running one.
+pub(crate) fn state(ctx: &Context) -> (u64, Option<(usize, Vec<usize>)>) {
+    board(ctx, |board| {
+        let payloads = board.session.as_ref().map(|session| {
+            (Arc::as_ptr(&session.payload) as *const () as usize, session.also.iter().map(|also| Arc::as_ptr(also) as *const () as usize).collect())
+        });
+        (board.started, payloads)
+    })
+}
+
+/// The mark of the target that would take a drop now, in screen space: `None` while no target accepts the payload.
 pub fn mark(ctx: &Context) -> Option<DropMark> {
-    board(ctx, |board| board.session.as_ref().and_then(|session| session.mark.map(|(_, mark)| mark)))
+    board(ctx, |board| board.session.as_ref().and_then(|session| session.mark.as_ref().map(|shown| shown.mark)))
+}
+
+/// Whether the running session carries files from the OS.
+fn carries_os_files(ctx: &Context) -> bool {
+    board(ctx, |board| board.session.as_ref().is_some_and(|session| session.os))
 }
 
 /// Whether a session runs.
@@ -347,36 +458,64 @@ pub fn cancel(ctx: &Context, reason: CancelReason) {
     frame::note_cancelled_press(ctx);
 }
 
+/// Ends the session `source` started without a drop, for a host that ends `source`'s press
+/// (`primitives::cancel_press_of`); a session another source started runs on.
+pub(crate) fn cancel_of(ctx: &Context, source: Id) {
+    board(ctx, |board| {
+        if board.session.as_ref().is_some_and(|session| session.source == source) {
+            board.session = None;
+        }
+    });
+}
+
 /// The begin hook: the window losing focus ends the session.
 pub(crate) fn begin(ctx: &Context) {
-    if source_viewport(ctx) == Some(pass::current_viewport(ctx)) && pointer::with_pass_pointer(ctx, |pointer| pointer.focus_lost) {
+    if source_viewport(ctx) == Some(pass::current_viewport(ctx)) && pointer::with_pass_raw(ctx, |pointer| pointer.focus_lost) {
         cancel(ctx, CancelReason::Blur);
     }
     os_files(ctx);
 }
 
 /// The session of files the OS drags over the window (8.4): files held over the window start one, the dropped files
-/// replace its payload in the frame of the drop, and files that leave without a drop end it.
+/// replace its payload in the frame of the drop, and files that leave without a drop end it. The OS sends the files
+/// only to the window under the pointer, so the session runs in that window: a window the files move to takes it, and
+/// only a pass of its own window, which no longer sees them, ends it. A drop whose files are still being read
+/// (`Seen::reading`) keeps the session, and its targets, until the pass that receives the files: that pass is the
+/// drop's.
 fn os_files(ctx: &Context) {
     let seen = files::seen(ctx);
     let frame = pass::root_frame_nr(ctx);
     let viewport = pass::current_viewport(ctx);
     let hovering = !seen.hovered.is_empty();
+    // A session whose window closed has no pass left to end it.
+    let closed = source_viewport(ctx).is_some_and(|window| !pass::live_viewports(ctx).contains(&window));
+    let host = WindowHost::of(ctx);
+    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
+    let positioned = position.is_some();
+    // A window target can take the drop immediately only if the pointer has not moved since resolution.
+    let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window && targets.pointer == position);
+    let mut repaint = false;
     board(ctx, |board| match &mut board.session {
-        None if hovering => {
+        None if hovering || !seen.dropped.is_empty() => {
+            let has_drop = !seen.dropped.is_empty();
+            if has_drop {
+                repaint = true;
+            }
             board.session = Some(Session {
                 source: Id::NULL.with("craft_ui::os_files"),
                 moving: Moving::default(),
                 viewport,
                 button: PointerButton::Primary,
-                payload: Arc::new(OsFiles { files: seen.hovered }),
-                also: None,
+                payload: Arc::new(OsFiles { files: if has_drop { seen.dropped } else { seen.hovered } }),
+                also: Vec::new(),
                 preview: DragPreview::None,
+                env: None,
                 mark: None,
                 released: None,
                 taken: false,
                 os: true,
-                dropped: None,
+                dropped: (has_drop && positioned).then_some(frame.saturating_add(1)),
+                waiting_for_pointer: has_drop && !positioned,
                 began: frame,
             });
             board.ended = None;
@@ -387,8 +526,28 @@ fn os_files(ctx: &Context) {
                 let hovered = session.payload.downcast_ref::<OsFiles>();
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
-                session.dropped = Some(frame);
-            } else if !hovering && session.dropped != Some(frame) {
+                session.viewport = viewport;
+                if window_winner {
+                    session.dropped = Some(frame);
+                } else if positioned {
+                    // Resolve targets at the drop position before any previously winning window target can take it.
+                    session.dropped = Some(frame.saturating_add(1));
+                    repaint = true;
+                } else {
+                    session.waiting_for_pointer = true;
+                }
+            } else if session.waiting_for_pointer && (positioned || window_winner) {
+                // Targets register this pass and take the drop in the next, after their winner is resolved.
+                session.waiting_for_pointer = false;
+                session.dropped = Some(frame.saturating_add(1));
+                repaint = true;
+            } else if hovering {
+                session.viewport = viewport;
+            } else if (session.viewport == viewport || closed)
+                && !seen.reading
+                && !session.waiting_for_pointer
+                && session.dropped.is_none_or(|drop| drop < frame)
+            {
                 board.session = None;
             }
         }
@@ -396,7 +555,7 @@ fn os_files(ctx: &Context) {
     });
     // The OS sends the window no pointer events while it drags files over it (winit 0.30), so nothing else asks for
     // the passes that follow the pointer to the target under it.
-    if hovering {
+    if hovering || repaint {
         crate::runtime::egui::repaint::request(ctx);
     }
 }
@@ -428,16 +587,21 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
     runs_elsewhere(ctx, viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
 }
 
+/// The pointer of the running session in screen space, whatever its payload: the pointer `dragging_of` pairs with a
+/// payload, where the button went up in the pass of its release (`PointerFrame::pick_pos`). `None` without a session or
+/// a pointer.
+pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
+    let os = board(ctx, |board| board.session.as_ref().map(|session| session.os))?;
+    let host = WindowHost::of(ctx);
+    if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { pointer::frame_raw(ctx).pick_pos }
+}
+
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
 /// pointer is the platform's desktop pointer in this window when it tells one (outside this window means no
 /// pointer), else the frame's: the OS sends the window no pointer events while it drags files over it (winit 0.30).
 pub(crate) fn dragging_of(ctx: &Context, payload: TypeId) -> Option<(Arc<dyn Any + Send + Sync>, Pos2)> {
     let payload = active_of(ctx, payload)?;
-    let os = board(ctx, |board| board.session.as_ref().is_some_and(|session| session.os));
-    let frame = pointer::frame(ctx).pos;
-    let host = WindowHost::of(ctx);
-    let pointer = if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { frame };
-    Some((payload, pointer?))
+    Some((payload, session_pointer(ctx)?))
 }
 
 /// The layer the running session's source moves with the pointer, which hit tests for drop targets look through.
@@ -462,7 +626,7 @@ pub fn moves(ctx: &Context, viewport: ViewportId) -> bool {
 /// of its own. For trials.
 #[cfg(feature = "testing")]
 pub(crate) fn begin_window_drag(ctx: &Context, source: Id) {
-    start(ctx, source, Arc::new(()), None, DragPreview::None);
+    start(ctx, source, &Env::of_root(ctx).view(), Arc::new(()), Vec::new(), DragPreview::None);
 }
 
 /// Sets the mark of the target that would take a drop, as one in another window would. For trials.
@@ -470,15 +634,20 @@ pub(crate) fn begin_window_drag(ctx: &Context, source: Id) {
 pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
     board(ctx, |board| {
         if let Some(session) = &mut board.session {
-            session.mark = mark.map(|mark| (ViewportId::from_hash_of("testing.mark"), mark));
+            let tokens = Env::of_root(ctx).tokens.clone();
+            session.mark = mark.map(|mark| ShownMark { viewport: ViewportId::from_hash_of("testing.mark"), mark, tokens });
         }
     });
 }
 
-/// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer, with its mark in layer space. A
-/// `window` target covers the whole window.
-pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, window: bool) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, owner, layer, mark, window));
+/// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer a drop doing `op`, with its mark in
+/// layer space, the tokens of the target's region and its `reach`.
+pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, op: DropOperation, tokens: Arc<UiTokens>, reach: TargetReach) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (owner, layer, mark, op, tokens.clone(), reach),
+        |ctx, (owner, layer, mark, op, tokens, reach)| register(ctx, *owner, *layer, *mark, *op, tokens.clone(), *reach),
+    );
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
         None => mark,
@@ -486,7 +655,7 @@ pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, w
     let scope = overlay::drawing_parent(ctx);
     PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
         let ordinal = targets.this.iter().filter(|registration| registration.owner == owner).count() as u32;
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, window });
+        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, tokens, reach });
     });
 }
 
@@ -504,9 +673,10 @@ pub fn next_ordinal(ctx: &Context, owner: Id) -> u32 {
     })
 }
 
-/// The operation the held modifiers pick now.
-pub(crate) fn current_operation(ctx: &Context) -> DropOperation {
-    operation(ctx, pointer::frame(ctx).mods)
+/// The operation the pass's pick modifiers pick now over a target that copies with `copy`: the release's in the drop
+/// pass, so a drop's operation and its modifiers agree.
+pub(crate) fn current_operation(ctx: &Context, copy: CopyKeys) -> DropOperation {
+    operation(ctx, pointer::frame_raw(ctx).pick_mods, copy)
 }
 
 /// Whether the session's button was released in this pass.
@@ -518,7 +688,7 @@ fn released(ctx: &Context) -> bool {
     if os {
         return board(ctx, |board| board.session.as_ref().is_some_and(|session| session.dropped == Some(frame)));
     }
-    pointer::frame(ctx).release == Some(button)
+    pointer::frame_raw(ctx).release == Some(button)
         || board(ctx, |board| board.session.as_ref().is_some_and(|session| session.released.is_some() && session.viewport != viewport))
 }
 
@@ -544,35 +714,43 @@ pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperatio
 
 /// `target` of `owner` over `zone`, for the payload whose type is `payload_type`: it accepts only where the pointer
 /// lies in the zone and no layer lies over the zone's layer there (the layer a dragged container moves is not over
-/// anything), and returns the drop in the pass of the release when it won the pass before.
+/// anything), and returns the drop in the pass of the release when it won the pass before. Its mark paints with
+/// `tokens`, the target's region's.
 pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     ctx: &Context,
     owner: Id,
     zone: DropZone,
+    tokens: Arc<UiTokens>,
     payload_type: TypeId,
     target: &T,
 ) -> Option<T::Drop> {
     let (payload, screen) = dragging_of(ctx, payload_type)?;
     let at = areas::layer_map(ctx, zone.layer).map_or(screen, |map| map.to_layer(screen));
-    let top = match moving_layer(ctx) {
-        Some(moving) => areas::layer_at_without(ctx, screen, moving),
-        None => areas::layer_at(ctx, screen),
+    let top = if carries_os_files(ctx) && target.under_modal() {
+        // A target that takes OS files under a modal sees through the modal's scrim, not through its body.
+        areas::layer_at_under_modal(ctx, screen, overlay::top_modal_in(ctx, pass::current_viewport(ctx)).and_then(|modal| modal.cover))
+    } else {
+        match moving_layer(ctx) {
+            Some(moving) => areas::layer_at_without(ctx, screen, moving),
+            None => areas::layer_at(ctx, screen),
+        }
     };
     if moves_viewport(ctx) || !zone.rect.contains(at) || top != Some(zone.layer) {
         return None;
     }
-    let op = current_operation(ctx);
+    let op = current_operation(ctx, target.copy_keys());
     let drop = target.accept(&*payload, at, op)?;
     let ordinal = next_ordinal(ctx, owner);
-    register(ctx, owner, zone.layer, target.mark(&drop), false);
+    register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, TargetReach { window: false, under_modal: target.under_modal() });
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
 }
 
 /// `Pointer::drop_target` over a zone the caller names instead of its own visible rect: the drop of a payload of type
 /// `P` released over `zone`, with the same layer order, operation and mark as a component's own target. `owner` is the
-/// caller's stable id; it registers in every pass a drag may reach the zone.
-pub fn zone_target<P: Send + Sync + 'static, T: DropTarget<P>>(ctx: &Context, owner: Id, zone: DropZone, target: &T) -> Option<T::Drop> {
-    target_of(ctx, owner, zone, TypeId::of::<P>(), &Typed::new(target))
+/// caller's stable id; it registers in every pass a drag may reach the zone. The mark paints in the tokens of `ui`, the
+/// `Ui` that draws the zone.
+pub fn zone_target<P: Send + Sync + 'static, T: DropTarget<P>>(ui: &egui::Ui, owner: Id, zone: DropZone, target: &T) -> Option<T::Drop> {
+    target_of(ui.ctx(), owner, zone, Env::of(ui).tokens.clone(), TypeId::of::<P>(), &Typed::new(target))
 }
 
 /// A target of payload type `P` seen through the payload's erased type.
@@ -594,6 +772,14 @@ impl<P: 'static, T: DropTarget<P>> DropTarget<dyn Any + Send + Sync> for Typed<'
     fn mark(&self, drop: &T::Drop) -> DropMark {
         self.0.mark(drop)
     }
+
+    fn under_modal(&self) -> bool {
+        self.0.under_modal()
+    }
+
+    fn copy_keys(&self) -> CopyKeys {
+        self.0.copy_keys()
+    }
 }
 
 /// The operation of the drop of `source`'s payload of type `P` that the previous frame took.
@@ -613,10 +799,16 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
 /// window holds the drop, it waits there for one more frame so that window's pass takes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    // A modal holds input: targets on layers below it, and on the window, never accept.
-    let scopes: Vec<Option<Id>> =
-        PerViewport::<Targets>::with(ctx, viewport, |targets| targets.this.iter().map(|registration| registration.scope).collect());
-    let open: Vec<bool> = scopes.iter().map(|scope| overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
+    let host = WindowHost::of(ctx);
+    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
+    // A modal holds input: targets on layers below it, and on the window, never accept, except OS files on a target
+    // that takes them there.
+    let os = carries_os_files(ctx);
+    let scopes: Vec<(Option<Id>, bool)> = PerViewport::<Targets>::with(ctx, viewport, |targets| {
+        targets.this.iter().map(|registration| (registration.scope, os && registration.reach.under_modal)).collect()
+    });
+    let open: Vec<bool> =
+        scopes.iter().map(|(scope, through)| *through || overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
     let winner = PerViewport::<Targets>::with(ctx, viewport, |targets| {
         // The topmost layer in the order the overlay host handed egui wins, then the target registered last: a target
         // shown later lies over an enclosing one.
@@ -625,17 +817,20 @@ pub(crate) fn end_pass(ctx: &Context) {
             .iter()
             .enumerate()
             .filter(|(at, _)| open[*at])
-            .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
+            .max_by_key(|(at, registration)| (!registration.reach.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
-        let best = best.map(|registration| ((registration.owner, registration.ordinal), registration.mark));
-        targets.winner = best.map(|(key, _)| key);
+        targets.component = best.is_some_and(|registration| !registration.reach.window);
+        targets.winner_window = best.is_some_and(|registration| registration.reach.window);
+        targets.pointer = position;
+        let best =
+            best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op, registration.tokens.clone())));
+        targets.winner = best.as_ref().map(|(key, _)| *key);
         targets.this.clear();
-        best.map(|(_, mark)| mark)
+        best.map(|(_, won)| won)
     });
-    let op = current_operation(ctx);
-    let over_this_window = pointer::frame(ctx).pos.is_some();
-    let primary_down = pointer::with_pass_pointer(ctx, |pointer| pointer.primary_down);
-    let buttons = pointer::frame(ctx).buttons;
+    let over_this_window = pointer::frame_raw(ctx).pos.is_some();
+    let primary_down = pointer::with_pass_raw(ctx, |pointer| pointer.primary_down);
+    let buttons = pointer::frame_raw(ctx).buttons;
     let frame = pass::root_frame_nr(ctx);
     let held = board(ctx, |board| board.session.as_ref().map(|session| (session.os, session.button, session.dropped))).is_none_or(
         |(os, button, dropped)| match (os, button) {
@@ -647,9 +842,10 @@ pub(crate) fn end_pass(ctx: &Context) {
     let source = source_viewport(ctx);
     let is_source = source == Some(viewport);
     if is_source {
-        windows::note_source_pointer(ctx, viewport, pointer::frame(ctx).pos);
+        windows::note_source_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     }
-    let foreign_target = is_source && !held && foreign_winner(ctx, viewport);
+    let elsewhere = is_source && held_elsewhere(ctx);
+    let foreign_target = is_source && !held && (elsewhere || foreign_winner(ctx, viewport));
     let running = board(ctx, |board| {
         if let Some(session) = &mut board.session {
             let expired = session.released.is_some_and(|released| frame > released + 1);
@@ -661,9 +857,9 @@ pub(crate) fn end_pass(ctx: &Context) {
             }
         }
         if let Some(session) = &mut board.session {
-            match winner {
-                Some(mark) => session.mark = Some((viewport, mark)),
-                None if session.mark.is_some_and(|(marked, _)| marked == viewport) => session.mark = None,
+            match &winner {
+                Some((mark, _, tokens)) => session.mark = Some(ShownMark { viewport, mark: *mark, tokens: tokens.clone() }),
+                None if session.mark.as_ref().is_some_and(|shown| shown.viewport == viewport) => session.mark = None,
                 None => {}
             }
         }
@@ -679,18 +875,37 @@ pub(crate) fn end_pass(ctx: &Context) {
         }
     }
     if running && over_this_window {
-        match winner {
-            None => cursor::request(ctx, Cursor::System(CursorIcon::NotAllowed), CursorPriority::Drag),
-            Some(_) => {
-                let icon = match op {
-                    DropOperation::Copy => CursorIcon::Copy,
-                    DropOperation::Link => CursorIcon::Alias,
-                    _ => CursorIcon::Grabbing,
-                };
-                cursor::request(ctx, Cursor::System(icon), CursorPriority::DropTarget);
-            }
+        if let Some((_, op, _)) = winner {
+            let icon = match op {
+                DropOperation::Copy => CursorIcon::Copy,
+                DropOperation::Link => CursorIcon::Alias,
+                _ => CursorIcon::Grabbing,
+            };
+            cursor::request(ctx, Cursor::System(icon), CursorPriority::DropTarget);
+        } else if elsewhere {
+            let icon = match current_operation(ctx, CopyKeys::Alt) {
+                DropOperation::Copy => CursorIcon::Copy,
+                DropOperation::Link => CursorIcon::Alias,
+                _ => CursorIcon::Grabbing,
+            };
+            cursor::request(ctx, Cursor::System(icon), CursorPriority::DropTarget);
+        } else {
+            cursor::request(ctx, Cursor::System(CursorIcon::NotAllowed), CursorPriority::Drag);
         }
     }
+}
+
+/// Whether a component's target in another viewport than the running one lies under the pointer: one that won that
+/// viewport's last pass, or one its running pass registered. The main window's pass runs around the passes of its OS
+/// windows, so what it registered in this frame, at the pointer the source window saw last, comes before their end
+/// hooks: a release in an OS window right as the pointer reaches the main window's target still drops there.
+pub(crate) fn held_elsewhere(ctx: &Context) -> bool {
+    let viewport = pass::current_viewport(ctx);
+    pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).any(|other| {
+        PerViewport::<Targets>::with(ctx, other, |targets| {
+            (targets.winner.is_some() && targets.component) || targets.this.iter().any(|registration| !registration.reach.window)
+        })
+    })
 }
 
 /// Whether a viewport other than `viewport` has a target that took the pointer in its last pass.
@@ -704,7 +919,10 @@ fn foreign_winner(ctx: &Context, viewport: ViewportId) -> bool {
 /// What the ghost layer paints: the session's preview and the mark of the target that would take a drop.
 pub(crate) struct Ghost {
     pub preview: DragPreview,
-    pub mark: Option<DropMark>,
+    /// The env of the region the drag started in.
+    pub env: Option<Env>,
+    /// The mark of the target that would take a drop, and the tokens of the target's region.
+    pub mark: Option<(DropMark, Arc<UiTokens>)>,
 }
 
 /// The running session's ghost data.
@@ -713,7 +931,8 @@ pub(crate) fn ghost(ctx: &Context) -> Option<Ghost> {
     board(ctx, |board| {
         board.session.as_ref().map(|session| Ghost {
             preview: session.preview.clone(),
-            mark: session.mark.and_then(|(marked, mark)| (marked == viewport).then_some(mark)),
+            env: session.env.clone(),
+            mark: session.mark.as_ref().filter(|shown| shown.viewport == viewport).map(|shown| (shown.mark, shown.tokens.clone())),
         })
     })
 }

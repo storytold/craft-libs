@@ -32,7 +32,7 @@ pub(super) enum Source {
 /// The styles of `subject` the stories resolve, read once for the style cases: each story settled, then each of its
 /// drives run once. One entry per style key, variant and size; the cases resolve each again under the themes they
 /// measure.
-fn sources(subject: &Subject) -> Result<&[Source], String> {
+fn sources<'a>(subject: &'a Subject<'_>) -> Result<&'a [Source], String> {
     subject.style_sources.get_or_init(|| read_sources(subject)).as_deref().map_err(Clone::clone)
 }
 
@@ -68,7 +68,7 @@ fn read_sources(subject: &Subject) -> Result<Vec<Source>, String> {
 /// The context the style cases resolve looks in, one per type. A style hook that measures text needs the fonts, which
 /// egui installs in its first frame; the style cache keys each look by its key, env, variant and size, so the looks
 /// resolved before stand in for nothing else.
-fn measuring_ctx(subject: &Subject) -> &egui::Context {
+fn measuring_ctx<'a>(subject: &'a Subject<'_>) -> &'a egui::Context {
     subject.style_ctx.get_or_init(|| {
         let ctx = egui::Context::default();
         drop(crate::runtime::egui::fixture::run_frame_shapes(&ctx, 0.0, egui::vec2(800.0, 600.0), |_| {}));

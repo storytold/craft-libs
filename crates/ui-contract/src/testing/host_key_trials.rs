@@ -1,20 +1,22 @@
 //! Trials of the keys and presses a host's own egui widgets keep while the runtime is installed on the whole window.
 
-use crate::runtime::commands::{CommandInput, CommandSet as _, EditCommands, NavCommand};
+use crate::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
+use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope, TypingRule};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
-use crate::runtime::env::RootEnv;
-use crate::runtime::focus::{EditSet, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
+use crate::runtime::env::{Env, RootEnv};
+use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
-use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
+use crate::style::{ComponentStyle, StyleCx};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::sensing::{self, ProbeRoot};
 use crate::testing::{Frames, trial};
-use craft_behavior::{EditCommand, Input, Intent, Sense};
-use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Ui, ViewportId};
-use std::cell::RefCell;
+use craft_behavior::{EditCommand, Input, Intent, Metrics, Sense};
+use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Response, Ui, ViewportId};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -42,8 +44,40 @@ fn seen(host: &RefCell<Host>) -> (Vec<Key>, usize) {
     (std::mem::take(&mut host.reached), std::mem::take(&mut host.cancels))
 }
 
+/// A press of `key` and its release, in one frame: a second press with no release between is a repeat.
 fn press_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key) {
-    frames.frame(vec![key_press(key, Modifiers::NONE)], &mut *show);
+    frames.frame(vec![key_press(key, Modifiers::NONE), key_release(key, Modifiers::NONE)], &mut *show);
+}
+
+#[trial]
+fn escape_unused_by_a_focused_control_reaches_the_window() {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(seen(&host).1, 1, "the focused button leaves Escape for the window");
+}
+
+#[trial]
+fn a_canvas_cannot_take_escape_before_an_unrelated_focused_control() {
+    let (host, mut base) = host_window();
+    let stolen = Rc::new(std::cell::Cell::new(false));
+    let canvas_seen = Rc::clone(&stolen);
+    let mut show = move |ui: &mut Ui| {
+        if crate::runtime::keys::with_canvas_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
+            canvas_seen.set(true);
+        }
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert!(!stolen.get());
+    assert_eq!(seen(&host).1, 1);
 }
 
 /// A window with a framework button and the host's own egui text field, with what the host saw.
@@ -58,7 +92,7 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
         register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
         host.rect = fixture::host_field(ui, field(), &mut host.text);
         if std::mem::take(&mut host.start_drag) {
-            drag::start(ui.ctx(), named_id("button"), Arc::new(()), None, DragPreview::None);
+            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), Vec::new(), DragPreview::None);
         }
         if with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
             host.cancels += 1;
@@ -475,6 +509,40 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
+/// `textless_paste` reads it in that pass only.
+#[trial]
+fn a_paste_with_no_text_is_the_paste_chord_and_reads_as_textless() {
+    let picture = Event::PasteImage(Arc::new(crate::testing::pictures::sample_picture(1, [1, 1])));
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, picture.clone()).1.is_empty(), "the picture's paste fires the app's Paste");
+    let read = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&read);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen.set(crate::runtime::keys::textless_paste(ui.ctx()));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
+    assert!(!read.get(), "a paste with text");
+    frames.frame(vec![picture], &mut show);
+    assert!(read.get(), "a paste with no text");
+    frames.frame(Vec::new(), &mut show);
+    assert!(!read.get(), "the pass after it");
+}
+
+/// A pasted image is the same Paste as pasted text: in a window whose canvas does not take it, the app's Paste runs,
+/// and the app reads the image; a canvas that lists Paste reads it from egui, as it does text.
+#[trial]
+fn a_pasted_image_runs_the_paste_a_pasted_text_runs() {
+    // The pixels are image data the trial never reads; any grey stands for them.
+    let image = Event::PasteImage(Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::from_gray(128))));
+    assert_eq!(clipboard_with_canvas(KeyUse::CANVAS, image.clone()).1, [EditCommands::Paste.id()], "the app's Paste runs");
+    let typing = KeyUse::CANVAS.with_edits(EditSet::NONE.with(EditCommand::Paste));
+    assert_eq!(clipboard_with_canvas(typing, image), (true, Vec::new()), "the canvas's paste stays in egui and fires nothing");
+}
+
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let (host, mut show) = host_window();
@@ -499,4 +567,297 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     let mut unbound = craft_keymap::Overrides::default();
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
+}
+
+/// What a press of Escape with `mods` did with nothing focused, under `overrides`: the window cancels it raised and the
+/// ids of the commands it fired.
+fn escape_under(overrides: Option<craft_keymap::Overrides>, mods: Modifiers) -> (usize, Vec<String>) {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    seen(&host);
+    frames.frame(vec![key_press(Key::Escape, mods), key_release(Key::Escape, mods)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (seen(&host).1, fired)
+}
+
+/// Tb-8 (3): Shift+Escape bound to a command runs it, as production's keymap ran it under a loaded place cursor; the
+/// key stage read every Escape without Cmd or Ctrl as the scope's escape, so the binding never fired. Plain Escape keeps
+/// its meaning, and an unbound Shift+Escape is still an escape.
+#[trial]
+fn a_command_bound_to_shift_escape_runs_and_plain_escape_still_cancels() {
+    let delete = EditCommands::Delete.id().to_owned();
+    assert_eq!(escape_under(None, Modifiers::SHIFT), (1, Vec::new()), "an unbound Shift+Escape is the window's Cancel");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Shift+Escape".to_owned()]);
+    assert_eq!(escape_under(Some(bound.clone()), Modifiers::SHIFT), (0, vec![delete]), "the bound Shift+Escape runs its command");
+    assert_eq!(escape_under(Some(bound), Modifiers::NONE), (1, Vec::new()), "a plain Escape is still the window's Cancel");
+}
+
+/// The panes the pane trials show, in order: the scope's name, its stop and its label.
+const PANES: [(&str, &str, &str); 2] = [("left pane", "left", "Left"), ("right pane", "right", "Right")];
+
+/// Shows the two panes of `PANES`, each a pane scope holding one button stop.
+fn show_panes(ui: &mut Ui) {
+    for (pane, stop, label) in PANES {
+        push_scope(ui.ctx(), named_id(pane), FocusPolicy::PANE, Some(Arc::from(label)));
+        widget(ui, named_id(stop));
+        register_stop(ui.ctx(), Stop::new(named_id(stop), KeyUse::of(Input::Pointer)));
+        pop_scope(ui.ctx());
+    }
+}
+
+/// A press of F6 with `mods` and the frame after it: where egui focus is then, and what the move announced.
+fn pane_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), mods: Modifiers) -> (Option<Id>, Vec<String>) {
+    take_output(&frames.ctx);
+    frames.frame(vec![key_press(Key::F6, mods)], &mut *show);
+    frames.frame(Vec::new(), &mut *show);
+    (egui_focused(&frames.ctx), take_output(&frames.ctx).announcements)
+}
+
+/// Focuses the stop `id` and settles one frame.
+fn focus_stop(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), id: Id) {
+    request(&frames.ctx, FocusTarget::Id(id));
+    frames.frame(Vec::new(), &mut *show);
+}
+
+/// A dialog's focus trap (`FocusPolicy::DIALOG`, the scope a modal dialog's layer pushes) holds F6: the pane move would
+/// carry focus out of the dialog, so F6 and Shift+F6 move nothing and announce nothing while the trap is shown. The trap
+/// is the focus scope alone, with no modal layer, so only the pane move's own guard can keep the focus in it.
+#[trial]
+fn f6_inside_a_modal_dialog_keeps_the_focus_in_it() {
+    let open = Rc::new(Cell::new(false));
+    let shown = Rc::clone(&open);
+    let ok = named_id("dialog ok");
+    let mut show = move |ui: &mut Ui| {
+        show_panes(ui);
+        if shown.get() {
+            push_scope(ui.ctx(), named_id("dialog"), FocusPolicy::DIALOG, Some(Arc::from("Dialog")));
+            widget(ui, ok);
+            register_stop(ui.ctx(), Stop::new(ok, KeyUse::of(Input::Pointer)));
+            pop_scope(ui.ctx());
+        }
+    };
+    let (left, right) = (named_id("left"), named_id("right"));
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, left);
+    let (at, said) = pane_key(&mut frames, &mut show, Modifiers::NONE);
+    assert_eq!(at, Some(right), "outside a dialog F6 moves to the next pane");
+    assert!(said.iter().any(|text| text == "Right"), "and names it: {said:?}");
+
+    open.set(true);
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, ok);
+    assert_eq!(egui_focused(&frames.ctx), Some(ok), "the dialog's button has the focus");
+    assert_eq!(pane_key(&mut frames, &mut show, Modifiers::NONE), (Some(ok), Vec::new()), "F6 keeps the focus in the dialog and says nothing");
+    assert_eq!(pane_key(&mut frames, &mut show, Modifiers::SHIFT), (Some(ok), Vec::new()), "so does Shift+F6");
+
+    open.set(false);
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, left);
+    assert_eq!(pane_key(&mut frames, &mut show, Modifiers::NONE).0, Some(right), "with the dialog gone F6 moves panes again");
+}
+
+/// The app command the routing trial presses, from the app's catalog so that no other trial's keymap binds its key.
+const REPLACE: &str = "hostKeyTrial.replace";
+
+/// An app catalog binding `REPLACE` to the plain key Q. Its modal rule is the default one, `Blocked`: a modal dialog
+/// with the keys keeps it from running. `None` when the definition is refused.
+fn replace_catalog() -> Option<AppCatalog> {
+    let binding = Binding::parse("Q").ok()?;
+    AppCatalog::new(vec![CommandDef::new(REPLACE, "Replace", Scope::app()).with_default(binding)], 1).ok()
+}
+
+/// The style of a `TrialDialog`: its size comes from its content.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct TrialDialogStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// A modal dialog layer (`Overlay::dialog`), whose body the trial fills.
+#[derive(Component)]
+#[component(container, unregistered)]
+struct TrialDialog {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl Component for TrialDialog {
+    const ROLE: Role = Role::GROUP;
+    type Style = TrialDialogStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: TrialDialogStyleKey) -> TrialDialogStyle {
+        TrialDialogStyle { metrics: Metrics::new() }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for TrialDialog {}
+
+/// S-X7: a window shortcut runs while the keyboard is on a pane's title, as after F6, and runs neither from a button of
+/// an open modal dialog (the dialog owns the keys, and the command's modal rule blocks it) nor from a text field (a plain
+/// key there is typing).
+#[trial]
+fn a_window_shortcut_runs_from_a_pane_title_and_not_from_a_modal_dialog_or_a_text_field() {
+    let (title, field, button) = (named_id("pane title"), named_id("pane field"), named_id("dialog button"));
+    let open = Rc::new(Cell::new(false));
+    let shown = Rc::clone(&open);
+    let mut show = move |ui: &mut Ui| {
+        push_scope(ui.ctx(), named_id("pane"), FocusPolicy::PANE, Some(Arc::from("Pane")));
+        widget(ui, title);
+        register_stop(ui.ctx(), Stop::new(title, KeyUse::of(Input::Pointer)));
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+        pop_scope(ui.ctx());
+        if shown.get() {
+            let props = ContainerProps::new().mount(Mount::Layer(Overlay::dialog()));
+            TrialDialog { common: Common::new(), props }.id_salt("trial dialog").show(ui, |ui, _| {
+                widget(ui, button);
+                register_stop(ui.ctx(), Stop::new(button, KeyUse::of(Input::Pointer)));
+            });
+        }
+    };
+    // The ids of the commands a press of the shortcut's key fired.
+    let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| -> Vec<String> {
+        take_output(&frames.ctx);
+        frames.frame(vec![key_press(Key::Q, Modifiers::NONE), key_release(Key::Q, Modifiers::NONE)], &mut *show);
+        frames.frame(Vec::new(), &mut *show);
+        take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
+    };
+    let replace = vec![REPLACE.to_owned()];
+    let catalog = replace_catalog();
+    assert!(catalog.is_some(), "the trial's catalog is valid");
+    let mut frames = Frames::new();
+    if let Some(catalog) = catalog {
+        frames.commands(CommandInput::new().catalog(catalog));
+    }
+    frames.frame(Vec::new(), &mut show);
+
+    focus_stop(&mut frames, &mut show, title);
+    assert_eq!(egui_focused(&frames.ctx), Some(title));
+    assert_eq!(fired(&mut frames, &mut show), replace, "the pane's title leaves the shortcut to the window");
+
+    focus_stop(&mut frames, &mut show, field);
+    assert_eq!(egui_focused(&frames.ctx), Some(field));
+    assert_eq!(fired(&mut frames, &mut show), Vec::<String>::new(), "a text field keeps the plain key for its typing");
+
+    focus_stop(&mut frames, &mut show, title);
+    open.set(true);
+    frames.idle(2, &mut show);
+    focus_stop(&mut frames, &mut show, button);
+    assert_eq!(egui_focused(&frames.ctx), Some(button), "the dialog's button has the keyboard");
+    assert_eq!(fired(&mut frames, &mut show), Vec::<String>::new(), "a modal dialog keeps the window's shortcut from running");
+
+    open.set(false);
+    frames.idle(2, &mut show);
+    focus_stop(&mut frames, &mut show, title);
+    assert_eq!(fired(&mut frames, &mut show), replace, "with the dialog closed the title runs it again");
+}
+
+/// The app command the typing-rule trial presses: Alt+Q, as a word processor's search.
+const SEARCH: &str = "hostKeyTrial.search";
+
+/// The ids of the commands an Alt+`key` press, bound to `SEARCH`, fired while a text stop has the keyboard, with the
+/// text the platform sends with it, under the app catalog's typing rule `rule` (`None`: the keymap's default).
+fn alt_while_typing(key: Key, rule: Option<TypingRule>) -> Vec<String> {
+    let field = named_id("document");
+    let mut show = move |ui: &mut Ui| {
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+    };
+    let Ok(binding) = Binding::parse(&format!("Alt+{}", key.name())) else { return vec!["the trial's chord does not parse".to_owned()] };
+    let Ok(catalog) = AppCatalog::new(vec![CommandDef::new(SEARCH, "Search", Scope::app()).with_default(binding)], 1) else {
+        return vec!["the trial's catalog is refused".to_owned()];
+    };
+    let catalog = match rule {
+        Some(rule) => catalog.typing_rule(rule),
+        None => catalog,
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog));
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, field);
+    assert_eq!(egui_focused(&frames.ctx), Some(field), "the text stop has the keyboard");
+    take_output(&frames.ctx);
+    frames.frame(vec![key_press(key, Modifiers::ALT), Event::Text("x".into())], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
+}
+
+/// An app sets the typing rule through its catalog: by default an Alt+letter chord waits while a text component has
+/// the keyboard (Option types characters on the Mac), and under `PlainKeysWait` it fires from there, as Word's Alt+Q
+/// opens search from the page, though the platform sends the key's text with it.
+#[trial]
+fn the_app_catalog_s_typing_rule_lets_an_alt_chord_fire_while_typing() {
+    assert_eq!(alt_while_typing(Key::Q, None), Vec::<String>::new(), "by default the Alt chord stays with the text");
+    assert_eq!(alt_while_typing(Key::Q, Some(TypingRule::CommandKeysOnly)), Vec::<String>::new(), "so it does under the default rule named");
+    assert_eq!(alt_while_typing(Key::Q, Some(TypingRule::PlainKeysWait)), vec![SEARCH.to_owned()], "under PlainKeysWait it fires");
+}
+
+/// The text a platform sends with a bound Alt chord is withdrawn and is not the text field's typing, so the field does
+/// not hold the press: an Alt+function-key chord, which fires while typing under every rule but `AllWait`, runs its
+/// command from a text field (Word's Alt+F7, next misspelling, from the page).
+#[trial]
+fn a_bound_alt_chord_s_text_leaves_the_press_to_its_command() {
+    assert_eq!(alt_while_typing(Key::F7, None), vec![SEARCH.to_owned()], "Alt+F7 fires from the text field");
+}
+
+/// The app command on Alt+Shift+- in the disabled-chord trial: a word processor's Collapse, which works in Outline
+/// view only.
+const COLLAPSE: &str = "hostKeyTrial.collapse";
+
+/// What Alt+Shift+- does from a text stop, with the em dash the platform types for it in the same frame, while the
+/// command bound to it is `enabled`: the commands it fired and the text the stop was given.
+fn alt_shift_minus(enabled: bool) -> (Vec<String>, String) {
+    let field = named_id("document");
+    let typed = RefCell::new(String::new());
+    let mut show = |ui: &mut Ui| {
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+        let mut intents = crate::testing::focus::intents_of(ui.ctx(), Some(field), false);
+        while let Some(text) = intents.take_text() {
+            typed.borrow_mut().push_str(&text);
+        }
+    };
+    let Ok(binding) = Binding::parse("Alt+Shift+-") else { return (vec!["the trial's chord does not parse".to_owned()], String::new()) };
+    let Ok(catalog) = AppCatalog::new(vec![CommandDef::new(COLLAPSE, "Collapse", Scope::app()).with_default(binding)], 1) else {
+        return (vec!["the trial's catalog is refused".to_owned()], String::new());
+    };
+    let state = crate::runtime::commands::CommandState::new().enabled(enabled);
+    let mut frames = Frames::new();
+    let mut states = crate::runtime::commands::CommandStates::new();
+    states.set(COLLAPSE, state);
+    frames.commands(CommandInput::new().catalog(catalog.typing_rule(TypingRule::PlainKeysWait)).states(&crate::contract::Tracked::new(states)));
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, field);
+    take_output(&frames.ctx);
+    typed.borrow_mut().clear();
+    let alt_shift = Modifiers { alt: true, shift: true, ..Modifiers::NONE };
+    frames.frame(vec![key_press(Key::Minus, alt_shift), Event::Text("\u{2014}".into())], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (fired, typed.take())
+}
+
+/// fwstub-1 (4): the text of a bound Alt chord is withheld only when its command runs (S-L177, as production's
+/// `shortcuts.rs` returned unhandled for a disabled Alt command): with the command disabled the shortcut does nothing
+/// and the character is typed, as Word types Option+Shift+-'s em dash outside Outline view; enabled, the command runs
+/// and nothing is typed.
+#[trial]
+fn a_disabled_alt_chord_leaves_its_text_typed() {
+    assert_eq!(alt_shift_minus(false), (Vec::new(), "\u{2014}".to_owned()), "disabled: the em dash is typed");
+    assert_eq!(alt_shift_minus(true), (vec![COLLAPSE.to_owned()], String::new()), "enabled: the command runs and types nothing");
 }

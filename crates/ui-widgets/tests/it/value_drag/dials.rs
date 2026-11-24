@@ -3,21 +3,21 @@
 //! its edges.
 
 use craft_behavior::Mixed;
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::{EditKind, Fixture, Story, StoryData, StoryOutput, trial};
 use craft_ui::value_drag::{AngleDial, PointPicker};
 use egui::{Key, Modifiers, Ui, Vec2};
 
 fn at_turn_end(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AngleDial::new(Bind::bound(data.value("angle", 180.0))).label("Angle").show(ui).into()
+    AngleDial::new(data.bind("angle", 180.0)).label("Angle").show(ui).into()
 }
 
 fn quarter_end(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AngleDial::new(Bind::bound(data.value("angle", 90.0))).range(0.0..=90.0).label("Angle").show(ui).into()
+    AngleDial::new(data.bind("angle", 90.0)).range(0.0..=90.0).label("Angle").show(ui).into()
 }
 
 fn quarter_end_wrapping(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AngleDial::new(Bind::bound(data.value("angle", 90.0))).range(0.0..=90.0).wrap(true).label("Angle").show(ui).into()
+    AngleDial::new(data.bind("angle", 90.0)).range(0.0..=90.0).wrap(true).label("Angle").show(ui).into()
 }
 
 fn shown(show: fn(&mut Ui, &mut StoryData) -> StoryOutput) -> Fixture {
@@ -58,7 +58,7 @@ fn a_dial_wraps_round_a_turn_and_stops_at_the_ends_of_a_narrower_range() {
 
 fn point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = [Mixed::Same(50.0), Mixed::Same(50.0)];
-    PointPicker::new(Bind::bound(data.value("point", start)), 0.0..=100.0, 0.0..=100.0).step(1.0).label("Point").show(ui).into()
+    PointPicker::new(data.bind("point", start), 0.0..=100.0, 0.0..=100.0).step(1.0).label("Point").show(ui).into()
 }
 
 fn edits(fixture: &mut Fixture) -> Vec<EditKind> {

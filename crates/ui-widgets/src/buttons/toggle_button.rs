@@ -1,6 +1,6 @@
 //! `ToggleButton`: a button that stays pressed while on.
 
-use super::face::{self, FaceLook, FaceSpec};
+use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, PaintUi, Pointer as _, Props, Role,
 };
@@ -69,6 +69,10 @@ pub struct ToggleButton<'a> {
     /// The name a screen reader hears when it differs from the face (a modifier key's symbol face).
     #[prop]
     spoken: Option<Label>,
+    /// How the icon and label are laid out: beside each other, or the icon over the label.
+    #[style_key]
+    #[prop]
+    arrangement: Arrangement,
 }
 
 impl<'a> ToggleButton<'a> {
@@ -84,6 +88,7 @@ impl<'a> ToggleButton<'a> {
             icon_only: false,
             escape_disarms: false,
             spoken: None,
+            arrangement: Arrangement::default(),
         }
         .label(label)
     }
@@ -100,6 +105,7 @@ impl<'a> ToggleButton<'a> {
             icon_only: false,
             escape_disarms: false,
             spoken: None,
+            arrangement: Arrangement::default(),
         };
         <ToggleButton as Props>::command(button, command)
     }
@@ -107,13 +113,17 @@ impl<'a> ToggleButton<'a> {
     fn spec<'s>(&'s self, label: &'s str, on: bool) -> FaceSpec<'s> {
         let lead = if on { self.on_icon.as_ref().or(self.icon.as_ref()) } else { self.icon.as_ref() };
         FaceSpec {
+            arrangement: self.arrangement,
             label: if self.icon_only { "" } else { label },
             role: self.role,
             lead,
+            picture: None,
             trail: self.trailing_icon.as_ref(),
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
+            chord: None,
+            detail: None,
         }
     }
 }
@@ -130,14 +140,10 @@ impl Component for ToggleButton<'_> {
     }
 
     fn style(cx: &StyleCx<'_>, key: ToggleButtonStyleKey) -> ToggleButtonStyle {
-        // An icon-only toggle draws as an icon button: the ghost square, with the on plate while on.
-        let ghost;
-        let cx = if key.icon_only {
-            ghost = cx.with_variant(Variant::GHOST);
-            &ghost
-        } else {
-            cx
-        };
+        // An icon-only toggle draws as an icon button: the ghost square, with the on plate while on. A labelled one in a
+        // ribbon is flat at rest as the ribbon's push buttons are (`placed`): no edge until the pointer is over it, and
+        // the on plate while on.
+        let cx = &if key.icon_only { cx.with_variant(Variant::GHOST) } else { super::placed(cx) };
         let (off, on) = (cx.variant_look(), face::on_parts(cx));
         let (mut text, mut icon) = face::ink(cx);
         let (mut surface, metrics) = if key.icon_only {
@@ -146,7 +152,7 @@ impl Component for ToggleButton<'_> {
             (face.surface, face.metrics)
         } else {
             icon.color = icon.color.on(on.text.off);
-            (face::on_surface(cx, &off, &on), face::metrics(cx, &off))
+            (face::on_surface(cx, &off, &on), face::metrics_of(cx, &off, key.arrangement))
         };
         // A mixed value shows the off look, as Photoshop's style toggles do; the access state tells it from off.
         surface.fill = surface.fill.when(Flags::MIXED, off.fill.off.rest);

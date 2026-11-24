@@ -11,7 +11,7 @@ pub(crate) mod live;
 pub(crate) mod scope;
 pub(crate) mod text;
 
-use crate::runtime::egui::access::{self as adapter, NodeRole, RunLink};
+use crate::runtime::egui::access::{self as adapter, NodeRole};
 use crate::runtime::env::Label;
 use craft_behavior::PartRef;
 use craft_theme::{Flags, Srgba, variant::Tone};
@@ -22,10 +22,12 @@ pub use crate::runtime::egui::access::bounds;
 #[doc(hidden)]
 pub use emit::SubDecl;
 #[doc(hidden)]
+pub use emit::layer_root;
+#[doc(hidden)]
 pub use emit::report_sub;
 #[doc(hidden)]
 pub use emit::sub_node_id;
-pub(crate) use emit::{FaceFacts, Own, PopupShown, report, report_layer};
+pub(crate) use emit::{FaceFacts, Own, PopupShown, hide_exiting_content, report, report_layer, report_modal};
 pub use live::announce;
 pub(crate) use live::{begin_pass as begin_live_pass, end_pass as end_live_pass};
 pub use scope::{FieldLabel, FieldLabelRole};
@@ -52,6 +54,17 @@ pub(crate) fn hide(ctx: &egui::Context, id: Id) {
     adapter::hide(ctx, id);
 }
 
+/// Writes `position` into the node of `id`, which reported itself in this pass: the place its roving group's owner
+/// gives it among the group's members of the pass.
+pub(crate) fn write_set_position(ctx: &egui::Context, id: Id, position: SetPosition) {
+    adapter::write_set_position(ctx, id, position.index, position.size);
+}
+
+/// Takes the node of `id` out of what assistive technology reports and keeps its children in their place: a
+/// component whose type has a node and that reports none this pass (`Access::role`), with children that have theirs.
+pub(crate) fn pass_through(ctx: &egui::Context, id: Id) {
+    adapter::pass_through(ctx, id);
+}
 /// Reports `id` as the focused node of this pass.
 pub(crate) fn set_focus(ctx: &egui::Context, id: Id) {
     adapter::set_focus(ctx, id);
@@ -276,6 +289,7 @@ pub struct Access {
     pub(crate) description: Option<String>,
     pub(crate) placeholder: Option<String>,
     pub(crate) value: Option<String>,
+    pub(crate) unit: Option<String>,
     pub(crate) color: Option<Srgba>,
     pub(crate) numeric: Option<Numeric>,
     pub(crate) expanded: Option<bool>,
@@ -286,6 +300,8 @@ pub struct Access {
     pub(crate) required: bool,
     pub(crate) url: Option<String>,
     pub(crate) shortcut: Option<String>,
+    /// The node lists no shortcut, not even the bound command's.
+    pub(crate) no_shortcut: bool,
     pub(crate) access_key: Option<char>,
     pub(crate) relations: Relations,
     pub(crate) custom_actions: Vec<(i32, Label)>,
@@ -324,6 +340,13 @@ impl Access {
     /// The text value of a text component.
     pub fn value(&mut self, text: impl Into<String>) -> &mut Self {
         self.value = Some(text.into());
+        self
+    }
+
+    /// The unit a text component draws after its text: the node's value reads it after the text ("160 pt"), while
+    /// the text runs stay the editable text.
+    pub fn unit(&mut self, unit: impl Into<String>) -> &mut Self {
+        self.unit = Some(unit.into());
         self
     }
 
@@ -384,6 +407,14 @@ impl Access {
     /// The keyboard shortcut, over the bound command's.
     pub fn shortcut(&mut self, text: impl Into<String>) -> &mut Self {
         self.shortcut = Some(text.into());
+        self.no_shortcut = false;
+        self
+    }
+
+    /// The node lists no keyboard shortcut, though a command bound to the component has a chord.
+    pub fn no_shortcut(&mut self) -> &mut Self {
+        self.shortcut = None;
+        self.no_shortcut = true;
         self
     }
 
@@ -508,6 +539,7 @@ pub struct SubNode {
     pub(crate) column: Option<craft_behavior::ColumnKey>,
     pub(crate) access_key: Option<char>,
     pub(crate) shortcut: Option<String>,
+    pub(crate) url: Option<String>,
     pub(crate) has_popup: Option<PopupKind>,
     pub(crate) current: bool,
     pub(crate) part: PartRef,
@@ -519,7 +551,6 @@ pub struct SubNode {
     pub(crate) steps: bool,
     pub(crate) bounds: Option<egui::Rect>,
     pub(crate) run: Option<RunFacts>,
-    pub(crate) run_links: Vec<RunLink>,
 }
 
 impl SubNode {
@@ -540,6 +571,7 @@ impl SubNode {
             column: None,
             access_key: None,
             shortcut: None,
+            url: None,
             has_popup: None,
             current: false,
             part,
@@ -550,7 +582,6 @@ impl SubNode {
             steps: false,
             bounds: None,
             run: None,
-            run_links: Vec::new(),
         }
     }
 
@@ -567,14 +598,6 @@ impl SubNode {
     /// a valid end of [`Access::text_selection`].
     pub fn text_run(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, rtl: bool) -> &mut Self {
         self.run = Some(RunFacts { text: text.into(), positions, widths, rtl });
-        self
-    }
-
-    /// Marks characters `chars` of a [text run](Self::text_run) as a link to `target`: the run node gets a `Link`
-    /// child named by those characters, bounded by their extent on the line. Indices count characters, as
-    /// `positions` and `widths` do. A link on a node that is not a run is not emitted.
-    pub fn run_link(&mut self, chars: std::ops::Range<usize>, target: impl Into<String>) -> &mut Self {
-        self.run_links.push(RunLink { chars, target: target.into() });
         self
     }
 
@@ -616,6 +639,13 @@ impl SubNode {
     /// component's key use, which delivers it to the focused part.
     pub fn shortcut(&mut self, text: impl Into<String>) -> &mut Self {
         self.shortcut = Some(text.into());
+        self
+    }
+
+    /// The address a link sub-node goes to (`Access::url` for the component's own node): a hyperlink a content
+    /// painter describes.
+    pub fn url(&mut self, url: impl Into<String>) -> &mut Self {
+        self.url = Some(url.into());
         self
     }
 

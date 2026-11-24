@@ -2,14 +2,15 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
-use craft_ui::contract::{Bind, BodyCx, Role, Show as _, SizeLimits};
+use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, PanelSpec, group_heights};
+use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights};
 use craft_ui::patterns::dock::DockArea;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 const STRIP: f32 = 20.0;
 const MIN: f32 = 60.0;
@@ -82,9 +83,9 @@ fn a_dock_sides_total_width_scales_its_columns_within_their_bounds() {
     let sizes = super::sizes(4.0, 100.0, STRIP);
     let spec: &dyn Fn(&u32) -> PanelSpec = &spec;
     let mut live = Workspace::new(end_dock_layout());
-    let widths = |live: &Workspace<u32>| end_columns(&live.layout).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
+    let widths = |live: &Workspace<u32>| end_columns(live.layout()).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
     let within = |live: &Workspace<u32>| {
-        end_columns(&live.layout).iter().zip(widths(live)).all(|(column, width)| {
+        end_columns(live.layout()).iter().zip(widths(live)).all(|(column, width)| {
             let (lo, hi) = sizes.shown_bounds(column, spec);
             (lo - 0.01..=hi + 0.01).contains(&width)
         })
@@ -92,20 +93,20 @@ fn a_dock_sides_total_width_scales_its_columns_within_their_bounds() {
     let start = widths(&live);
 
     for total in [sum(&start) + 120.0, sum(&start) - 60.0] {
-        let actions = sizes.resize_side(&live.layout, DockEdge::End, spec, total);
+        let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, total);
         live.apply_all(actions, true, |_| Permissions::ALL).expect("resizing works while the workspace is locked");
         assert!((sum(&widths(&live)) - total).abs() < 0.5, "the columns add up to {total}: {:?}", widths(&live));
         assert!(within(&live), "every column stays within its bounds: {:?}", widths(&live));
     }
 
-    let actions = sizes.resize_side(&live.layout, DockEdge::End, spec, 10.0);
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, 10.0);
     live.apply_all(actions, false, |_| Permissions::ALL).unwrap();
-    let least: f32 = end_columns(&live.layout).iter().map(|column| sizes.shown_bounds(column, spec).0).sum();
+    let least: f32 = end_columns(live.layout()).iter().map(|column| sizes.shown_bounds(column, spec).0).sum();
     assert!((sum(&widths(&live)) - least).abs() < 0.5, "a total below the bounds stops at their sum");
-    let iconic = &end_columns(&live.layout)[2];
+    let iconic = &end_columns(live.layout())[2];
     assert_eq!(iconic.width, Some(300.0), "an iconic column keeps the width it expands to");
-    assert!(sizes.resize_side(&live.layout, DockEdge::End, spec, least).is_empty(), "the width it has asks for nothing");
-    assert!(sizes.resize_side(&live.layout, DockEdge::Start, spec, 500.0).is_empty(), "a side without a dock asks for nothing");
+    assert!(sizes.resize_side(live.layout(), DockEdge::End, spec, least).is_empty(), "the width it has asks for nothing");
+    assert!(sizes.resize_side(live.layout(), DockEdge::Start, spec, 500.0).is_empty(), "a side without a dock asks for nothing");
 }
 
 /// The panel that lays its content in a grid, as a toolbar does.
@@ -125,10 +126,10 @@ fn a_stepped_column_keeps_its_width_while_the_others_scale() {
     let columns = vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2)];
     let root = Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
     let mut live = Workspace::new(Layout::new(Some(root), Vec::new()));
-    let widths = |live: &Workspace<u32>| end_columns(&live.layout).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
+    let widths = |live: &Workspace<u32>| end_columns(live.layout()).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
     let before = widths(&live);
     assert_eq!(before[1], grid().width(2), "a stepped column is as wide as its steps");
-    let actions = sizes.resize_side(&live.layout, DockEdge::End, spec, sum(&before) + 80.0);
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, sum(&before) + 80.0);
     let touches_tools = |action: &Action<u32>| matches!(action, Action::ResizeColumn { panel: TOOLS, .. } | Action::SetColumnSteps { .. });
     assert!(!actions.iter().any(touches_tools), "the side's width leaves the stepped column alone: {actions:?}");
     live.apply_all(actions, false, |_| Permissions::ALL).expect("the side resizes");
@@ -143,10 +144,28 @@ fn a_stepped_column_keeps_its_width_while_the_others_scale() {
     assert_eq!(grid.steps_within(f32::MAX), grid.most, "no more steps than the grid has columns");
 }
 
+/// A tool rail's grid is sized by the dock's own style: a column of two rail steps is a rail button and its padding
+/// plus one more button and gap wide, and the side's width leaves it alone.
+#[trial]
+fn a_rail_column_steps_in_the_docks_rail_cells() {
+    let sizes = super::sizes(4.0, 100.0, STRIP);
+    let with_rail = |panel: &u32| if *panel == TOOLS { PanelSpec::new("Tools").grid(DockGrid::rail(6)) } else { spec(panel) };
+    let spec: &dyn Fn(&u32) -> PanelSpec = &with_rail;
+    let columns = vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2)];
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
+    let live = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let rail = end_columns(live.layout())[1].clone();
+    assert_eq!(sizes.width(&rail, spec), sizes.rail_first + sizes.rail_step, "two rail steps in the dock's sizes");
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, sum(&[250.0, sizes.rail_first + sizes.rail_step]) + 80.0);
+    let touches_tools = |action: &Action<u32>| matches!(action, Action::ResizeColumn { panel: TOOLS, .. } | Action::SetColumnSteps { .. });
+    assert!(!actions.is_empty() && !actions.iter().any(touches_tools), "the side's width leaves the rail column alone: {actions:?}");
+}
+
 /// A toolbar: a panel whose two lines of content lay out in a grid and never collapse.
+#[derive(PlainData)]
 struct Tools;
 
-impl DockPanels<u32> for Tools {
+impl PanelSpecs<u32> for Tools {
     fn spec(&self, panel: &u32) -> PanelSpec {
         if *panel == TOOLS { PanelSpec::new("Tools").grid(grid()) } else { PanelSpec::new("Canvas") }
     }
@@ -154,7 +173,9 @@ impl DockPanels<u32> for Tools {
     fn permissions(&self, panel: &u32) -> Permissions {
         if *panel == TOOLS { Permissions::ALL.collapses(false) } else { Permissions::ALL }
     }
+}
 
+impl DockPanels<u32> for Tools {
     fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         if *panel == TOOLS {
             Text::new("One").show(ui);
@@ -163,18 +184,23 @@ impl DockPanels<u32> for Tools {
     }
 }
 
-/// A docked stepped column is only as tall as its content, not the dock's height; the double arrow of a column that
-/// does not collapse switches it between one and two steps, and is named for the steps it switches to.
+/// A docked stepped column takes the dock's height, as the references' docked toolbar keeps its surface down to the
+/// dock's foot (photocraft#16461), and the dock's divider beside it is the tight gap, as thin as the references'; the
+/// double arrow of a column that does not collapse switches it between one and two steps, and is named for the steps
+/// it switches to.
 #[trial]
-fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_and_two_steps() {
+fn a_docked_stepped_column_takes_the_docks_height_and_its_double_arrow_switches_one_and_two_steps() {
     let dock = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1)]);
     let root = Node::split(Axis::X, SplitSize::FixedFirst(120.0), dock, Node::tabs(vec![1], 0));
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
     let placed: Rc<RefCell<Vec<(u32, Rect)>>> = Rc::default();
-    let (held, seen) = (Rc::clone(&workspace), Rc::clone(&placed));
+    let gaps: Rc<RefCell<Option<(f32, f32)>>> = Rc::default();
+    let (held, seen, specs, gaps_seen) = (Rc::clone(&workspace), Rc::clone(&placed), Tracked::new(Tools), Rc::clone(&gaps));
     let mut fixture = Fixture::new(move |ui| {
+        let tight = craft_ui::runtime::env::Env::of(ui).tokens.space.gap.tight;
+        *gaps_seen.borrow_mut() = Some((DockSizes::of_scope(ui).gap, tight));
         let mut workspace = held.borrow().clone();
-        let out = DockArea::new("Stepped dock", Bind::bound(&mut workspace), &mut Tools, DockConfig::default()).show(ui);
+        let out = DockArea::new("Stepped dock", Bind::bound(&mut workspace), &specs, &mut Tools, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
         *seen.borrow_mut() = out.columns;
     });
@@ -182,9 +208,14 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
     let tools = placed.borrow().iter().find(|(panel, _)| *panel == TOOLS).map(|(_, rect)| *rect).expect("the stepped column shows");
     let canvas =
         fixture.by_role(Role::TAB_PANEL).into_iter().map(|group| group.rect).find(|rect| !tools.contains_rect(*rect)).expect("the canvas shows");
-    assert!(tools.bottom() < canvas.bottom() - 10.0, "the column ends below its content, above the dock's foot: {tools:?}, canvas {canvas:?}");
+    assert!(
+        (tools.bottom() - canvas.bottom()).abs() <= 1.0,
+        "the column reaches the dock's foot, as the canvas beside it: {tools:?}, canvas {canvas:?}"
+    );
+    let (gap, tight) = gaps.borrow().expect("the dock showed");
+    assert_eq!(gap, tight, "the dock's dividers are the tight gap");
 
-    let steps = |workspace: &Workspace<u32>| match &workspace.layout.root {
+    let steps = |workspace: &Workspace<u32>| match &workspace.layout().root {
         Some(Node::Split { first, .. }) => match first.as_ref() {
             Node::Dock { columns, .. } => columns[0].steps,
             other => panic!("{other:?}"),
@@ -204,13 +235,13 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
 }
 
 /// A dock area showing only a floating window at `at` with the toolbar in a column of one step.
-fn floating_tools(at: Rect) -> (Fixture, Rc<RefCell<Workspace<u32>>>) {
-    let window = Floating::new(Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1), at);
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(None, vec![window]))));
-    let held = Rc::clone(&workspace);
+fn floating_tools(at: Rect) -> (Fixture, Rc<RefCell<Arc<Workspace<u32>>>>) {
+    let window = Floating::new(100, Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1), at);
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(None, vec![window])))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Tools));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
-        DockArea::new("Floating tools", Bind::bound(&mut workspace), &mut Tools, DockConfig::default()).show(ui);
+        DockArea::new("Floating tools", Bind::bound(&mut workspace), &specs, &mut Tools, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
     });
     fixture.settle();
@@ -230,9 +261,9 @@ fn a_floating_stepped_windows_left_and_top_edge_drags_keep_the_opposite_edge() {
     let (mut fixture, workspace) = floating_tools(at);
     let before = shown_tools(&fixture);
     // The left grip straddles the window's left edge, which is its rect's.
-    fixture.drag_at(Pos2::new(at.left(), before.center().y), Vec2::new(-1.5 * grid().step, 0.0)).settle();
+    fixture.drag_at(Pos2::new(at.left(), before.center().y), Vec2::new(-1.5 * (grid().width(2) - grid().width(1)), 0.0)).settle();
     let after = shown_tools(&fixture);
-    let steps = workspace.borrow().layout.floating[0].column.steps;
+    let steps = workspace.borrow().layout().floating[0].column.steps;
     assert!(steps.is_some_and(|steps| steps > 1), "the drag widened the window by whole steps: {steps:?}");
     assert!((after.right() - before.right()).abs() <= 1.5, "the right edge stays: {before:?}, then {after:?}");
     assert!(after.left() < before.left(), "the window grew to the left: {before:?}, then {after:?}");
@@ -243,4 +274,199 @@ fn a_floating_stepped_windows_left_and_top_edge_drags_keep_the_opposite_edge() {
     fixture.drag_at(Pos2::new(before.center().x, at.top()), Vec2::new(0.0, -30.0)).settle();
     let after = shown_tools(&fixture);
     assert!((after.bottom() - before.bottom()).abs() <= 1.5, "the bottom edge stays: {before:?}, then {after:?}");
+}
+
+/// Two side panels in one group, named and with a line of content each.
+#[derive(PlainData)]
+struct Sides;
+
+impl PanelSpecs<u32> for Sides {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(match panel {
+            10 => "Alpha",
+            11 => "Beta",
+            _ => "Canvas",
+        })
+    }
+}
+
+impl DockPanels<u32> for Sides {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        match panel {
+            10 => Text::new("Alpha body").show(ui),
+            11 => Text::new("Beta body").show(ui),
+            _ => return,
+        };
+    }
+}
+
+#[derive(PlainData)]
+struct RailWithFooter;
+
+impl PanelSpecs<u32> for RailWithFooter {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+}
+
+impl DockPanels<u32> for RailWithFooter {
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn rail_footer(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        Text::new("Rail controls").show(ui);
+        Text::new("More controls").show(ui);
+    }
+}
+
+/// A rail's host controls stay below its overflowing icons and travel with the dock side.
+#[trial]
+fn rail_footer_stays_clear_of_icons_on_either_dock_side() {
+    for edge in [DockEdge::Start, DockEdge::End] {
+        let side = Column::new(vec![Group::new((10..30).collect(), 0)]).with_iconic(true);
+        let dock = Node::dock(edge, vec![side]);
+        let root = if edge == DockEdge::Start {
+            Node::split(Axis::X, SplitSize::Ratio(0.4), dock, Node::tabs(vec![1], 0))
+        } else {
+            Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), dock)
+        };
+        let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+        let (held, specs) = (Rc::clone(&workspace), Tracked::new(RailWithFooter));
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&actions);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut workspace = Arc::clone(&held.borrow());
+            let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+            let out = DockArea::new("Rail dock", Bind::given(Arc::clone(&workspace)), &specs, &mut RailWithFooter, config).rail_footer(10).show(ui);
+            for action in out.actions {
+                drop(Arc::make_mut(&mut workspace).apply(action.clone(), false, |_| Permissions::ALL));
+                seen.borrow_mut().push(action);
+            }
+            *held.borrow_mut() = workspace;
+        });
+        fixture.room(Vec2::new(900.0, 300.0)).settle();
+        let footer = fixture.by_label("Rail controls").expect("the rail shows its host controls").rect;
+        let more = fixture.by_label("More controls").expect("the rail shows the remaining controls").rect;
+        let first = fixture.by_label("Panel 10").expect("the first rail icon shows").rect;
+        assert!(first.bottom() <= footer.top(), "icons stay above the fixed controls");
+        assert!(footer.bottom() <= more.top(), "the host controls form a column");
+        assert!((first.center().x - footer.center().x).abs() < footer.width(), "controls share the rail's side");
+        assert!(footer.bottom() <= 300.0, "the controls stay inside the window");
+        fixture.frame(vec![pointer::moved(first.center())]);
+        for _ in 0..12 {
+            fixture.frame(vec![pointer::wheel(-200.0)]);
+        }
+        fixture.settle();
+        let after = fixture.by_label("Rail controls").expect("the controls remain visible").rect;
+        let last = fixture.by_label("Panel 29").expect("the last rail icon shows").rect;
+        assert!((after.top() - footer.top()).abs() < 1.0, "the controls stay fixed while the icons scroll");
+        assert!(last.bottom() <= after.top() && last.top() >= 0.0, "scrolling brings the last icon above the controls: {last:?}, {after:?}");
+        let last = fixture.by_label("Panel 29").expect("the last icon can be clicked");
+        fixture.click(&last).settle();
+        assert!(
+            actions.borrow().iter().any(|action| matches!(action, Action::Activate { panel: 29, .. })),
+            "the scrolled icon still activates its panel"
+        );
+        let expanded = fixture.by_label("Rail controls").expect("the controls remain on the expanded rail").rect;
+        assert!((expanded.center().x - footer.center().x).abs() < footer.width(), "the controls stay at the same dock edge when expanded");
+    }
+}
+
+/// With the rail mode, a click on an icon expands its column with that panel in front, and the icons stay beside
+/// it, between the panel and the window edge; a click on another icon switches the panel, and a click on the icon of
+/// the panel in front collapses the column again.
+#[trial]
+fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses_it() {
+    let side = Column::new(vec![Group::new(vec![10, 11], 0)]).with_iconic(true);
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, vec![side]));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Sides));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = Arc::clone(&held.borrow());
+        let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+        let out = DockArea::new("Rail dock", Bind::given(Arc::clone(&workspace)), &specs, &mut Sides, config).show(ui);
+        for action in out.actions {
+            drop(Arc::make_mut(&mut workspace).apply(action, false, |_: &u32| Permissions::ALL));
+        }
+        *held.borrow_mut() = workspace;
+    });
+    fixture.room(Vec2::new(900.0, 500.0)).settle();
+    let icon = |fixture: &Fixture, name: &str| {
+        let tree = fixture.tree();
+        fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .find(|button| craft_ui::testing::access::name(tree, button.node) == Some(name))
+            .unwrap_or_else(|| panic!("the rail shows the {name} icon"))
+    };
+    let iconic = || end_columns(workspace.borrow().layout())[0].iconic;
+    let shown = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text);
+
+    let beta = icon(&fixture, "Beta");
+    fixture.click(&beta).settle();
+    assert!(!iconic(), "a click on an icon expands the column");
+    assert!(shown(&fixture, "Beta body") && !shown(&fixture, "Alpha body"), "the clicked panel is in front");
+    let (beta, body) = (icon(&fixture, "Beta"), fixture.by_label("Beta body").expect("the panel's content").rect);
+    assert!(body.right() <= beta.rect.left(), "the icons stay beside the panel, at the window edge: {body:?}, icon {:?}", beta.rect);
+
+    let alpha = icon(&fixture, "Alpha");
+    fixture.click(&alpha).settle();
+    assert!(!iconic() && shown(&fixture, "Alpha body") && !shown(&fixture, "Beta body"), "another icon switches the panel in front");
+
+    let alpha = icon(&fixture, "Alpha");
+    fixture.click(&alpha).settle();
+    assert!(iconic(), "the icon of the panel in front collapses the column");
+    assert!(!shown(&fixture, "Alpha body"), "and its panel no longer shows");
+}
+
+#[derive(PlainData)]
+struct RailWithMenu;
+
+impl PanelSpecs<u32> for RailWithMenu {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+}
+
+impl DockPanels<u32> for RailWithMenu {
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn rail_footer(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        use craft_ui::buttons::IconButton;
+        use craft_ui::contract::{PopupKind, Props as _, ShowContainer as _, Trigger};
+        use craft_ui::menu::{Menu, MenuItem};
+        let opener = IconButton::new(craft_behavior::IconId::new("settings")).label("Rail menu").popup(PopupKind::Menu).show(ui);
+        Menu::new("Rail options").opened_by(&opener.response, Trigger::Press).show(ui, |ui, _| {
+            MenuItem::new("Rail option").show(ui);
+        });
+    }
+}
+
+/// A popup opened from the fixed rail footer remains interactive at the edge of the window.
+#[trial]
+fn a_menu_opens_from_the_rail_footer() {
+    let side = Column::new(vec![Group::new(vec![10, 11], 0)]).with_iconic(true);
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, vec![side]));
+    let workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let specs = Tracked::new(RailWithMenu);
+    let mut fixture = Fixture::new(move |ui| {
+        let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+        DockArea::new("Rail dock", Bind::given(Arc::clone(&workspace)), &specs, &mut RailWithMenu, config).rail_footer(10).show(ui);
+    });
+    fixture.room(Vec2::new(900.0, 500.0)).settle();
+    let opener = fixture.by_label("Rail menu").expect("the rail menu button");
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Click, &opener).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "the footer button opens its menu through accessibility");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Rail option").is_none(), "Escape closes the menu");
+    fixture.click(&opener).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "a pointer press still opens it");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &opener).settle();
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "Enter opens the focused menu");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    let at = opener.center();
+    fixture.frame(vec![pointer::moved(egui::pos2(100.0, 100.0))]);
+    fixture.frame(vec![pointer::moved(at), pointer::press(at), pointer::release(at)]).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "a same-frame click opens the menu");
 }

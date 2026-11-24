@@ -1,6 +1,6 @@
 //! `WindowMenuRows`: the Window menu's check row for every panel of an app.
 
-use super::DockPanels;
+use super::SpecSource;
 use crate::contract::Show as _;
 use crate::menu::MenuItem;
 use craft_behavior::dock::{Action, Layout, PanelState};
@@ -8,7 +8,7 @@ use egui::Ui;
 use std::hash::Hash;
 
 /// One check row per panel in the order the app gives, for a Window menu. A row is checked while its panel is in the
-/// layout (closed panels are not), and its label and icon come from [`DockPanels::spec`]. A pick returns the action
+/// layout (closed panels are not), and its label and icon come from the panels' specs ([`PanelSpecs::spec`](super::PanelSpecs::spec)). A pick returns the action
 /// that shows the panel (open a closed one, bring a panel behind another tab to the front) or closes it (a panel
 /// showing); the app applies it through the same path as the actions of a `DockArea`. A Hidden pick's `Action::open`
 /// restores the panel's last place through `Workspace::apply_all`.
@@ -20,7 +20,7 @@ use std::hash::Hash;
 #[pattern(probe(WindowMenuRows<'static, u32>))]
 pub struct WindowMenuRows<'a, P> {
     layout: &'a Layout<P>,
-    panels: &'a dyn DockPanels<P>,
+    specs: &'a dyn SpecSource<P>,
     order: &'a [P],
     flyout: Option<&'a P>,
 }
@@ -37,9 +37,10 @@ pub struct WindowMenuRowsOutput<P> {
 }
 
 impl<'a, P: Clone + Eq + Hash> WindowMenuRows<'a, P> {
-    /// Rows for `order` (every panel the app has, open or not), checked from `layout`, labelled by `panels`.
-    pub fn new(layout: &'a Layout<P>, panels: &'a dyn DockPanels<P>, order: &'a [P]) -> Self {
-        WindowMenuRows { layout, panels, order, flyout: None }
+    /// Rows for `order` (every panel the app has, open or not), checked from `layout`, labelled by `specs`, the
+    /// host's spec model the dock shows ([`DockArea::new`](crate::docking)).
+    pub fn new(layout: &'a Layout<P>, specs: &'a dyn SpecSource<P>, order: &'a [P]) -> Self {
+        WindowMenuRows { layout, specs, order, flyout: None }
     }
 
     /// The panel whose flyout is open: the value of the binding the app gives `DockArea::flyout`.
@@ -53,7 +54,7 @@ impl<'a, P: Clone + Eq + Hash> WindowMenuRows<'a, P> {
     pub fn show(self, ui: &mut Ui) -> WindowMenuRowsOutput<P> {
         let (mut action, mut flyout) = (None, None);
         for panel in self.order {
-            let spec = self.panels.spec(panel);
+            let spec = self.specs.spec(panel);
             let state = self.layout.panel_state(panel);
             let in_flyout = self.layout.opens_in_flyout(panel);
             let open = self.flyout == Some(panel);

@@ -29,6 +29,7 @@ mod color_model;
 pub mod contrast;
 mod derive;
 pub mod dump;
+pub mod edit;
 mod explain;
 pub mod format;
 mod id;
@@ -52,6 +53,8 @@ mod app_sizes_tests;
 #[cfg(test)]
 mod color_model_tests;
 #[cfg(test)]
+mod edit_tests;
+#[cfg(test)]
 mod explain_tests;
 #[cfg(test)]
 mod format_tests;
@@ -73,7 +76,7 @@ pub use color_model::{
 pub use contrast::{contrast_ratio, ensure_contrast, relative_luminance, text_contrast_min};
 pub use derive::{Anchoring, ContrastCheck, PassMove, Ramps, over};
 pub use explain::{ColorOrigin, Explained, PairReport, SizeLayer, SizeOrigin, explain, explain_sized};
-pub use id::{APP_DEFAULT, AppId, IdError, RESERVED_PREFIX, SUITE_DEFAULT, ThemeId};
+pub use id::{APP_DEFAULT, AppId, IconPackId, IdError, RESERVED_PREFIX, SUITE_DEFAULT, ThemeId};
 pub use identify::{Identify, identifiable_outline, visible_hover};
 pub use parts::{
     BadgeColors, BadgeStyle, BadgeTone, BorderColors, ButtonColors, ButtonVariant, BySize, CheckOffColors, CheckOnColors, CheckSwitchColors,
@@ -83,21 +86,21 @@ pub use ramp::{Mode, Ramp, RampKind};
 pub use resolve::{Resolved, resolve, resolve_sized};
 pub use scale::{Duration, Easing, Elevation, Opacity, Radius, Space, Stroke};
 pub use selection::{
-    AppChoice, AppDefaults, ContrastChoice, Fallback, ModeChoice, MotionChoice, Selection, Shown, SuiteChoice, SystemAppearance, ThemePair,
-    resolve_selection,
+    AppChoice, AppDefaults, ComponentSet, ContrastChoice, Fallback, ModeChoice, MotionChoice, Selection, Shown, SuiteChoice, SystemAppearance,
+    ThemePair, resolve_selection,
 };
 pub use stateful::{FlagMask, Flags, Mix, Resolve, StateMix, Stateful};
 pub use theme::{
-    AppOverrides, Appearance, Contrast, ContrastIntent, EdgeSeed, InterfaceFont, ModePins, ModeSeeds, PinLayer, Pins, RadiusOffset, SeedOverrides,
-    Seeds, ShapeSeed, Size, TextSize, TextSizeSteps, ThemeDef, Variants,
+    AppOverrides, Appearance, Contrast, ContrastIntent, EdgeSeed, GripSeed, InterfaceFont, ModePins, ModeSeeds, PinLayer, Pins, RadiusOffset,
+    SeedOverrides, Seeds, ShapeSeed, Size, TextSize, TextSizeSteps, ThemeDef, Variants,
 };
 pub use token_group::{GroupValues, TokenGroup};
 pub use tokens::{
     AccentColors, BarSizes, CaptionColors, ColorToken, ColorTokens, ControlSizes, DataColors, DialogSizes, DockColumnSizes, Edge, EdgeColors,
-    ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LineColors, Motion, MotionTokens,
-    NoticeSizes, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes, RulerSizes, RulerTickSizes, ShapeTokens,
-    SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StorySizes, StrokeTokens, SurfaceColors, TextColors, ThumbSamples,
-    ThumbSizes, Tokens, TypeRole, TypeStyle, TypeTokens, WellShape, WindowSizes,
+    ElevationTokens, FloatSizes, FontSlot, Gaps, GripMark, GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LetterCase,
+    LineColors, Motion, MotionTokens, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes, ShapeTokens, SizeTokens,
+    SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors, ThumbSamples, ThumbSizes, Tokens, TypeRole,
+    TypeStyle, TypeTokens, WellShape, WindowSizes,
 };
 pub use values::ColorSource;
 pub use variant::{CustomVariant, Emphasis, RadiusStep, Variant, VariantLook};

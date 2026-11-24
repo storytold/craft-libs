@@ -3,7 +3,10 @@
 //! Drive a running Craft app from tests, agents and the CLI, and record and play actions.
 //!
 //! [`actions`] and [`ui::actions`] build on every target: the recorded-action list, its player
-//! and the Actions panel; so do the agent settings in [`agents`]. The rest is desktop only.
+//! and the Actions panel; so do the agent settings in [`agents`] and, with `ui`, the control
+//! channel, its screenshots, synthetic input and the access-tree lookups (a web page feeds
+//! [`control::ControlChannel`] from its own request queue). The server, client, token files,
+//! profiler and trace are desktop only.
 //!
 //! A transport thread ([`server`], or a channel in tests) turns each JSON line into a
 //! [`control::ControlRequest`]; the UI thread drains them between frames through
@@ -21,35 +24,41 @@ pub mod agents;
 #[cfg(feature = "ui")]
 pub mod ui;
 
+#[cfg(feature = "ui")]
+pub mod access;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod args;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod control;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod dialogs;
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+pub mod dock;
+#[cfg(feature = "ui")]
+pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod protocol;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod security;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod synthetic;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace;
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+pub mod window;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod client;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod server;
 
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub use control::{ControlChannel, ControlRequest, ControlResponse, Dispatch, Reply};
-#[cfg(not(target_arch = "wasm32"))]
 pub use protocol::REPLY_DEADLINE;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub use screenshot::Captures;
 #[cfg(not(target_arch = "wasm32"))]
 pub use security::AutomationError;
@@ -57,16 +66,19 @@ pub use security::AutomationError;
 /// The trials this crate registers, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(all(test, feature = "screen-testing"))]
 extern crate self as craft_automation;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

@@ -9,7 +9,7 @@ use crate::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, ShowCo
 use crate::runtime::commands::Commands as _;
 use crate::runtime::requests::HostAnswer;
 
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{ButtonPlace, Dialog, DialogOutput, HeldAnswer};
 
 use crate::runtime::env::{Env, Label};
 
@@ -30,14 +30,30 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words a form dialog adds beside the common OK and Cancel.
     pub struct FormDialogWords {
         preview: "formDialog.preview" = "Preview";
+        /// The one closing button of a form without OK ([`FormButtons::Close`]).
+        close: "formDialog.close" = "Close";
     }
+}
+
+/// The buttons a form dialog's footer starts with, before its [extra buttons](FormDialog::extra_buttons).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FormButtons {
+    /// OK and Cancel (Reset while Alt is held).
+    #[default]
+    OkCancel,
+    /// No OK: one button with `DialogRole::Cancel`, labelled by [`cancel_label`](FormDialog::cancel_label) or Close.
+    /// The work is in the extra buttons, whose [`FormOutput::picked`] indexes still start at 2. Enter picks the one
+    /// enabled extra button with `DialogRole::Accept` when there is one, and does nothing otherwise. Nothing is filed
+    /// as a held OK, and [`FormCx::accept`] does nothing.
+    Close,
 }
 
 /// The dialog's own undo history of its value while it is open: made on the opening pass, stepped by Undo and Redo.
@@ -85,6 +101,7 @@ pub struct FormCx<'a, 'b> {
     first: bool,
     answers: Vec<HostAnswer>,
     requests: &'a mut HostRequests,
+    accept: bool,
 }
 
 impl FormCx<'_, '_> {
@@ -101,6 +118,16 @@ impl FormCx<'_, '_> {
     /// The requests this pass's body files for the host (colour, path, eyedropper).
     pub fn requests(&mut self) -> &mut HostRequests {
         self.requests
+    }
+
+    /// The body's activation is the OK press: a double click or Enter on a grid cell, say. After the body, the dialog
+    /// takes it as a press of OK while the values can be accepted. Under [`held`](FormDialog::held) it files the values
+    /// and stays open for the app's answer (nothing while an answer is out); with
+    /// [`accept_stays_open`](FormDialog::accept_stays_open) it reports the pick and stays open; otherwise it closes as
+    /// `CloseReason::Activated` with the value. A measuring run and a form without OK ([`FormButtons::Close`]) take
+    /// none.
+    pub fn accept(&mut self) {
+        self.accept = true;
     }
 }
 
@@ -127,7 +154,8 @@ pub struct FormOutput<V> {
     /// How the dialog closed in this pass; `None` while it stays open.
     pub closed: Option<CloseReason>,
     /// The index of the footer button picked in this pass, in the order `ResetFooter::buttons` gives them, then the
-    /// [`extra_buttons`](FormDialog::extra_buttons) from 2 on.
+    /// [`extra_buttons`](FormDialog::extra_buttons) from 2 on. A [`FormCx::accept`] that leaves the dialog open is
+    /// OK's pick, 0. Without OK ([`FormButtons::Close`]) Close is 1 and the extras keep their indexes.
     pub picked: Option<usize>,
     /// The value, the pass the dialog closed as OK while it could be accepted.
     pub accepted: Option<V>,
@@ -147,7 +175,7 @@ type FooterExtraFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 type OnResetFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>) + 'a>;
 
-type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
+type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V, &mut BodyCx<'_>) -> V + 'a>;
 
 /// A dialog over one value `V`.
 ///
@@ -155,11 +183,14 @@ type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
 ///   `V::default()` each time the dialog opens.
 /// - Keys: Enter is OK unless the body owns it or [`enter_confirms`](FormDialog::enter_confirms) is off, Escape cancels. Holding Alt turns Cancel into Reset, which restores
 ///   the value from when the dialog opened (and runs [`on_reset`](FormDialog::on_reset) for what the body keeps).
-/// - The body returns whether the value can be accepted; OK is enabled while it can and `ok_enabled` is true.
+/// - The body returns whether the value can be accepted; OK is enabled while it can and `ok_enabled` is true. The
+///   body's own activation (a double click on a cell) is OK through [`FormCx::accept`].
+/// - [`buttons`](FormDialog::buttons) with [`FormButtons::Close`] leaves out OK, for a form whose work is in its extra
+///   buttons.
 /// - With [`history`](FormDialog::history), Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own value; a drag or a
 ///   typing run is one step.
 /// - The footer goes across the foot, the Preview check box and the footer controls at its start edge; with
-///   [`side_buttons`](FormDialog::side_buttons) the buttons stand in a column beside the body, with the Preview check
+///   [`button_place`](FormDialog::button_place) `ButtonPlace::Side` the buttons stand in a column beside the body, with the Preview check
 ///   box and the footer controls under them.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern)]
@@ -171,6 +202,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     open: Option<Bind<'a, bool>>,
     ok_label: Option<Label>,
     cancel_label: Option<Label>,
+    buttons: FormButtons,
     ok_enabled: bool,
     ok_reason: Option<Label>,
     alt_resets: bool,
@@ -178,9 +210,10 @@ pub struct FormDialog<'a, V: Value + Default> {
     history: bool,
     collection_body: bool,
     closable: bool,
+    close_unchanged: bool,
     accept_stays_open: bool,
     enter_confirms: bool,
-    side_buttons: bool,
+    button_place: ButtonPlace,
     footer_extra: Option<FooterExtraFn<'a>>,
     /// The Preview check box when shown, over its owner's bind or (`None`) the footer's memory.
     preview: Option<Option<Bind<'a, bool>>>,
@@ -191,6 +224,8 @@ pub struct FormDialog<'a, V: Value + Default> {
     on_reset: Option<OnResetFn<'a>>,
     /// The host's opening values: each pass given them keeps them as the values Reset restores.
     opening: Option<V>,
+    /// Where OK files the values instead of closing; a refusal shows until the values change.
+    held: Option<&'a mut HeldAnswer<V>>,
 }
 
 impl<'a, V: Value + Default> FormDialog<'a, V> {
@@ -203,6 +238,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             open: None,
             ok_label: None,
             cancel_label: None,
+            buttons: FormButtons::OkCancel,
             ok_enabled: true,
             ok_reason: None,
             alt_resets: true,
@@ -210,9 +246,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             history: false,
             collection_body: false,
             closable: true,
+            close_unchanged: false,
             accept_stays_open: false,
             enter_confirms: true,
-            side_buttons: false,
+            button_place: ButtonPlace::Foot,
             footer_extra: None,
             preview: None,
             extra_buttons: Vec::new(),
@@ -221,7 +258,15 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             reset_with: None,
             opening: None,
             on_reset: None,
+            held: None,
         }
+    }
+
+    /// OK files the values in `held` and the dialog stays open; a refusal shows through `Dialog::refusal` until the
+    /// values change, and an accepted answer closes it.
+    pub fn held(mut self, held: &'a mut HeldAnswer<V>) -> Self {
+        self.held = Some(held);
+        self
     }
 
     /// A dialog that keeps its value in its own memory while it is open.
@@ -241,9 +286,15 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// The second button's label when it is not Cancel.
+    /// The second button's label when it is not Cancel (Close under [`FormButtons::Close`]).
     pub fn cancel_label(mut self, label: impl Into<Label>) -> Self {
         self.cancel_label = Some(label.into());
+        self
+    }
+
+    /// The buttons the footer starts with; [`FormButtons::OkCancel`] by default.
+    pub fn buttons(mut self, buttons: FormButtons) -> Self {
+        self.buttons = buttons;
         self
     }
 
@@ -291,6 +342,13 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
+    /// While no value differs from the one the dialog opened with, a Close button stands in place of OK and Cancel (as
+    /// a Properties dialog does); the first edit brings them back.
+    pub fn close_unchanged(mut self, on: bool) -> Self {
+        self.close_unchanged = on;
+        self
+    }
+
     /// Whether OK keeps the dialog open when it is picked, until the host answers with a close (an export asks for a
     /// path first, say). The body closes it with `FormCx::request_close_as`; the Reset footer is unchanged.
     pub fn accept_stays_open(mut self, on: bool) -> Self {
@@ -319,10 +377,11 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// Whether the buttons stand in a column beside the body, with the Preview check box and the footer controls under
-    /// them (`Dialog::side_buttons`), instead of across the foot: Photoshop's button-column dialogs.
-    pub fn side_buttons(mut self, on: bool) -> Self {
-        self.side_buttons = on;
+    /// Where the buttons stand (`Dialog::button_place`): across the foot by default; `ButtonPlace::Side` puts them in a
+    /// column beside the body, with the Preview check box and the footer controls under them, as Photoshop's
+    /// button-column dialogs.
+    pub fn button_place(mut self, place: ButtonPlace) -> Self {
+        self.button_place = place;
         self
     }
 
@@ -345,9 +404,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// The value Reset sets, given the current value and the one from when the dialog opened; without it Reset sets
-    /// the opening value.
-    pub fn reset_with(mut self, target: impl Fn(&V, &V) -> V + 'a) -> Self {
+    /// The value Reset sets, given the current value, the one from when the dialog opened and the body's context (the
+    /// dialog's own memory); without it Reset sets the opening value.
+    pub fn reset_with(mut self, target: impl Fn(&V, &V, &mut BodyCx<'_>) -> V + 'a) -> Self {
         self.reset_with = Some(Box::new(target));
         self
     }
@@ -375,6 +434,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             open,
             ok_label,
             cancel_label,
+            buttons,
             ok_enabled,
             ok_reason,
             alt_resets,
@@ -382,9 +442,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             history,
             collection_body,
             closable,
+            close_unchanged,
             accept_stays_open,
             enter_confirms,
-            side_buttons,
+            button_place,
             footer_extra,
             preview,
             extra_buttons,
@@ -393,15 +454,38 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             reset_with,
             on_reset,
             opening,
+            held: hold,
         } = self;
+        // A measuring run files and closes nothing: the real run that follows does.
+        let measuring_run = crate::runtime::measure::active(ui.ctx());
+        // The app accepted the held OK: this pass finishes it. A second pass of the frame finds the answer already taken.
+        let finish = !measuring_run && hold.as_deref().is_some_and(|held| held.is_accepted());
+        // The refusal and the values it refused are read before the body, which may edit the values; the notice is decided
+        // after the body, in the same pass, against the values the body left. A blocking (host) refusal shows whatever the
+        // values are.
+        let refusal =
+            hold.as_deref().and_then(|held| held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone(), held.refusal_blocks())));
+        let reason_cell = Rc::new(Cell::new(None::<Label>));
+        let waiting = hold.as_deref().is_some_and(|held| held.is_waiting());
+        let ok_enabled = ok_enabled && !waiting;
+        // A held OK files its values and leaves the dialog open until the app answers.
+        let accept_stays_open_button = accept_stays_open || hold.is_some();
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let name: Arc<str> = title.as_str().into();
         let bind = Rc::new(RefCell::new(bind));
 
+        // A form without OK has its one closing button and the extras; Enter goes to the enabled Accept-role extra.
+        let no_ok = buttons == FormButtons::Close;
+        let enter_extra = extra_buttons.iter().any(|button| button.role() == DialogRole::Accept && button.is_enabled());
+        let close = no_ok.then(|| {
+            let label = cancel_label.clone().unwrap_or_else(|| env.words::<FormDialogWords>().close.clone());
+            std::iter::once(FooterButton::new(label, DialogRole::Cancel)).chain(extra_buttons.iter().cloned()).collect::<Vec<_>>()
+        });
         let reset = ResetFooter::new(ui, cancel_label, alt_resets).extra(extra_buttons);
-        let mut accept =
-            FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept).enabled(ok_enabled).stays_open(accept_stays_open);
+        let mut accept = FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept)
+            .enabled(ok_enabled)
+            .stays_open(accept_stays_open_button);
         if let (false, Some(reason)) = (ok_enabled, &ok_reason) {
             accept = accept.disabled_reason(reason.clone());
         }
@@ -416,7 +500,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                     Some(Mixed::Same(held)) => held,
                     _ => opened.clone(),
                 };
-                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened));
+                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened, cx));
                 let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(current), target, name.clone(), None));
                 if let Some(restore) = on_reset.as_mut() {
                     restore(cx);
@@ -425,10 +509,14 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         };
         let mut dialog = Dialog::new(title)
             .closable(closable)
-            .close_on_enter(ok_enabled && enter_confirms)
+            .close_unchanged(close_unchanged)
+            .close_on_enter(enter_confirms && if no_ok { enter_extra } else { ok_enabled })
             .outer_gesture(outer_gesture)
-            .side_buttons(side_buttons);
-        dialog = reset.install(dialog, accept, restore);
+            .button_place(button_place);
+        dialog = match close {
+            Some(close) => dialog.buttons(close),
+            None => reset.install(dialog, accept, restore),
+        };
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -470,13 +558,19 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         if let Some(shape) = shaped {
             dialog = shape(dialog);
         }
+        if hold.is_some() {
+            let reason = Rc::clone(&reason_cell);
+            dialog = dialog.refusal(move || reason.take());
+        }
 
         let work = RefCell::new(None::<V>);
         let requests = RefCell::new(HostRequests::new());
         let accepts = Cell::new(ok_enabled);
+        let body_pick = Cell::new(false);
         let shown = dialog.show(ui, |ui, cx| {
-            // A measuring run sees no answers and no opening pass: the real run that follows still has both.
-            let measuring = crate::runtime::measure::active(ui.ctx());
+            // A measuring run sees no answers and no opening pass: the real run that follows still has both. The dialog
+            // measures its body in a run of its own too (a re-layout under a child dialog), inside a real run of the form.
+            let measuring = measuring_run || crate::runtime::measure::active(ui.ctx());
             let first = cx.appeared() && !measuring;
             let mut held = bind.borrow_mut();
             let before = match held.reborrow().read(cx) {
@@ -494,16 +588,18 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                     }
                 }
             }
-            let (ok, running) = {
+            let (ok, running, activated) = {
                 let mut requests = requests.borrow_mut();
                 let mut form = FormCx {
                     cx: &mut *cx,
                     first,
                     answers: if measuring { Vec::new() } else { std::mem::take(&mut answers) },
                     requests: &mut requests,
+                    accept: false,
                 };
                 let ctx = ui.ctx().clone();
-                crate::runtime::edit::watch_gestures(&ctx, || body(ui, &mut form, &mut values))
+                let (ok, running) = crate::runtime::edit::watch_gestures(&ctx, || body(ui, &mut form, &mut values));
+                (ok, running, form.accept && !measuring && !no_ok)
             };
             match &opening {
                 Some(opening) if !measuring => cx.memory::<Opened<V>>().0 = Some(opening.clone()),
@@ -512,28 +608,67 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             }
             if history && !measuring {
                 let mut steps = steps.unwrap_or_else(|| EditHistory::new(&values));
-                // A change becomes a step once the gesture that makes it has ended.
+                // Use the history's settled value: `before` can be an intermediate drag value
+                // because a change becomes a step only after its gesture has ended.
                 if !running {
-                    steps.record(&EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
+                    steps.record(&EditEvent::set(Mixed::Mixed, values.clone(), name.clone(), None));
                 }
                 cx.memory::<History<V>>().0 = Some(steps);
             }
             let can_accept = ok && ok_enabled;
             accepts.set(can_accept);
+            // The body's activation presses OK: a press that stays open is reported as the button's pick (and filed when
+            // held, below); otherwise it closes with the value.
+            if activated && can_accept {
+                if accept_stays_open_button {
+                    body_pick.set(true);
+                } else {
+                    cx.request_close_as(CloseReason::Activated);
+                }
+            }
             let edited = cx.memory::<Opened<V>>().0.as_ref().is_some_and(|opened| *opened != values);
             ResetFooter::report(cx, edited, can_accept);
             if values != before || first {
                 let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
                 *changed.borrow_mut() = Some(values.clone());
             }
+            if let Some((reason, refused, blocks)) = &refusal
+                && (*blocks || *refused == values)
+            {
+                reason_cell.set(Some(reason.clone()));
+            }
+            if finish && !accept_stays_open {
+                cx.request_close_as(CloseReason::Activated);
+            }
             *work.borrow_mut() = Some(values);
         });
 
         let DialogOutput { response, closed, picked } = shown.output;
-        let accepted = match closed {
-            Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() => work.into_inner(),
+        // Without OK the dialog's buttons start at Close, which keeps index 1, and the extras keep theirs from 2.
+        let picked = if no_ok { picked.map(|at| at + 1) } else { picked.or(body_pick.get().then_some(0)) };
+        let mut accepted = match closed {
+            Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() && hold.is_none() && !no_ok => work.borrow().clone(),
             _ => None,
         };
+        if let Some(held) = hold {
+            let values = work.into_inner();
+            // A blocking refusal ends only when the host withdraws it.
+            if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref())
+                && refused != values
+                && !held.refusal_blocks()
+            {
+                held.clear_refusal();
+            }
+            // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
+            if let (false, true, Some(0), Some(values)) = (measuring_run, accepts.get(), picked, values.as_ref())
+                && !held.is_waiting()
+            {
+                held.file(values.clone());
+            }
+            if finish && (accept_stays_open || closed == Some(CloseReason::Activated)) {
+                accepted = held.finish();
+            }
+        }
         FormOutput {
             response,
             closed,

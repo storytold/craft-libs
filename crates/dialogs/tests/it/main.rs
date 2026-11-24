@@ -2,4 +2,4 @@
 // Expecting on failure is fine here, unlike in shipped code.
 #![allow(clippy::expect_used)]
 
-mod files;
+pub(crate) mod files;

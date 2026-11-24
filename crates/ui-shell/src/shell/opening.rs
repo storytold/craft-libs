@@ -10,8 +10,8 @@ use crate::runtime::env::{Env, Label};
 use crate::style::{SurfaceKind, TypeRole};
 use egui::{Layout, Response, Ui, UiBuilder};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A centred card: "Opening {name}…" elided on one line with the full text on hover, the muted message, a progress bar
 /// (indeterminate without a fraction), the percentage at the start and Cancel at the end of the last row. Job UI

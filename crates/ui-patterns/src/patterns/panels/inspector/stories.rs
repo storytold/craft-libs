@@ -3,7 +3,7 @@
 use super::Inspector;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::primitives::IconSpec;
-use crate::sections::{Section, SectionStack};
+use crate::sections::{HeaderStrength, Section, SectionStack};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use crate::value_drag::Slider;
 use craft_behavior::IconId;
@@ -26,7 +26,7 @@ fn inspector(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let shown = stack
             .show(ui, |ui, _| {
                 rows.each(ui, |ui, key, slot| {
-                    let open = Bind::bound(data.value(TITLES[usize::from(*key)], true));
+                    let open = data.bind(TITLES[usize::from(*key)], true);
                     Section::new(TITLES[usize::from(*key)])
                         .open(open)
                         .in_stack(slot)
@@ -48,6 +48,19 @@ fn inspector(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
     });
     output.into()
+}
+
+/// A quiet title: the target's kind as a muted line over its sections.
+#[story(Inspector<'static>, covers = [], drive = Drive::Never)]
+fn inspector_quiet_title(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let inspector = Inspector::new("Properties").target("ellipse").header("Ellipse").title_strength(HeaderStrength::Quiet);
+    inspector
+        .show(ui, |ui, _| {
+            Section::fixed("Transform").show(ui, |ui, _| {
+                Slider::new(Bind::given(30.0), 0.0..=100.0).label("Opacity").show(ui);
+            });
+        })
+        .into()
 }
 
 #[story(Inspector<'static>, covers = [], drive = Drive::Never)]

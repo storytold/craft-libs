@@ -2,7 +2,7 @@
 //! ([`VanishingPointPass`]) and its two faces on a canvas, [`VanishingPointTool`] (Create Plane, the paste and Stamp
 //! presses) and [`VanishingPlanes`] (the planes on the canvas, each corner and edge node a part).
 
-mod control;
+pub(crate) mod control;
 mod tool;
 mod work;
 

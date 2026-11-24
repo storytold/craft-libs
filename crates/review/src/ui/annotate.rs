@@ -1,13 +1,17 @@
 //! The annotation tool on the canvas, the overlay that draws annotations, and the toolbar.
 
-mod overlay;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod overlay;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod tool;
-mod toolbar;
+pub(crate) mod toolbar;
 mod words;
 
-pub use overlay::{AnnotationOverlay, AnnotationOverlayStyle};
-pub use tool::{AnnotateTool, DEFAULT_COLOR, DEFAULT_STROKE_WIDTH, HIGHLIGHT_COLOR, NEW_ANNOTATION_FORM, TextQuads};
+pub use crate::annotate::ShiftLock;
+pub use overlay::{AnnotationOverlay, AnnotationOverlayStyle, BodyPaint};
+pub use tool::{
+    AnnotateTool, DEFAULT_COLOR, DEFAULT_STROKE_WIDTH, DrawOptions, EmptyPress, EraseMode, FarNudge, HIGHLIGHT_COLOR, HandlesWhileDrawing,
+    InkStrokes, MarkupPress, NEW_ANNOTATION_FORM, OpenOn, SelectOptions, TextQuads, ToggleMods,
+};
 pub use toolbar::{AnnotationToolbar, AnnotationToolbarOutput};
-pub use words::{AnnotateCommand, AnnotateWords, PALETTE};
+pub use words::{AnnotateCommand, AnnotateIcons, AnnotateWords, PALETTE};

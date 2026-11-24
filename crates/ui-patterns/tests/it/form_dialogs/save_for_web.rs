@@ -2,9 +2,11 @@
 
 use craft_behavior::PixelSize;
 use craft_theme::Srgba;
-use craft_ui::dialog::{DialogHost, DialogResult};
+use craft_ui::contract::Bind;
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    Animation, HostedSaveForWeb, PALETTE_COLOR_KEY, SaveForWebOptions, WebFormat, WebPreset, WebSlice, WebSlices, WebVariant,
+    Animation, ColorTableEdit, ColorTableEvent, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, WebFormat,
+    WebPictures, WebPreset, WebSlice, WebSlices, WebVariant,
 };
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -49,6 +51,96 @@ fn current(host: &Rc<RefCell<DialogHost>>) -> SaveForWebOptions {
     host.borrow_mut().get_mut::<HostedSaveForWeb>().map(|web| web.current().clone()).expect("the dialog is open")
 }
 
+#[trial]
+fn image_size_can_unlink_and_preserves_exact_pixels() {
+    let document = PixelSize::new(50_001, 100);
+    let mut preset_options = SaveForWebOptions::default();
+    preset_options.format = WebFormat::Png24;
+    let preset = WebPreset::new("PNG exact", preset_options);
+    let (host, mut fixture) = open(HostedSaveForWeb::new("wide.psd", document, texture()).presets(vec![preset.clone()]));
+    assert!(current(&host).constrain_proportions);
+
+    let field = |fixture: &mut Fixture, label, value| {
+        let field = fixture.by_label(label).expect("the size field");
+        fixture.click(&field).idle(2);
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(value).key(Key::Tab, Modifiers::NONE).idle(4);
+    };
+    field(&mut fixture, "Width", "22501");
+    assert_eq!(current(&host).percent, 45.0);
+
+    let link = fixture.by_label("Constrain proportions").expect("the proportions check box");
+    fixture.click(&link).idle(2);
+    field(&mut fixture, "Height", "37");
+    assert_eq!(current(&host).size, Some(PixelSize::new(22_501, 37)));
+
+    let select = fixture.by_label("Preset").expect("the Preset list");
+    fixture.click(&select).idle(2);
+    let entry = fixture.by_label("PNG exact").expect("the preset entry");
+    fixture.click(&entry).idle(4);
+    let current = current(&host);
+    assert!(preset.is_set_in(&current), "the preset remains selected after editing the size");
+    assert!(!current.constrain_proportions);
+    assert_eq!(current.size, Some(PixelSize::new(22_501, 37)));
+
+    let mut host = host.borrow_mut();
+    let web = host.get_mut::<HostedSaveForWeb>().expect("the dialog is open");
+    let wanted = web.wanted_variants();
+    assert_eq!(wanted[0].request.options.size, Some(PixelSize::new(22_501, 37)));
+    web.answer_path(SAVE_PATH_KEY, PathBuf::from("wide.png"));
+    let result = web.confirm(fixture.ctx()).expect("Save returns the exact unlinked size");
+    assert_eq!((result.width, result.height), (22_501, 37));
+}
+
+#[trial]
+fn initial_exact_size_respects_the_document_side_limits() {
+    let mut options = SaveForWebOptions::default();
+    options.size = Some(PixelSize::new(300_001, 0));
+    let (host, fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options));
+    let normalized = Some(PixelSize::new(300_000, 1));
+
+    let mut host = host.borrow_mut();
+    let web = host.get_mut::<HostedSaveForWeb>().expect("the dialog is open");
+    let wanted = web.wanted_variants();
+    assert_eq!(wanted[0].request.options.size, normalized);
+    assert_eq!(web.current().size, normalized);
+    let fields = web.json_fields().expect("the dialog fields");
+    assert_eq!(fields["width"], 300_000);
+    assert_eq!(fields["height"], 1);
+
+    web.answer_path(SAVE_PATH_KEY, PathBuf::from("poster.jpg"));
+    let result = web.confirm(fixture.ctx()).expect("Save returns the preview size");
+    assert_eq!((result.width, result.height), (300_000, 1));
+    assert_eq!(result.options.size, normalized);
+
+    let input = serde_json::json!({ "width": 0, "height": 300_001 });
+    web.set_json_field(fixture.ctx(), "size", input).expect("the automation accepts supplied dimensions");
+    let result = web.confirm(fixture.ctx()).expect("Save uses the new dimensions before the next frame");
+    assert_eq!((result.width, result.height), (1, 300_000));
+    assert_eq!(result.options.size, Some(PixelSize::new(1, 300_000)));
+}
+
+#[trial]
+fn bound_exact_size_matches_preview_size() {
+    let mut options = SaveForWebOptions::default();
+    options.size = Some(PixelSize::new(300_001, 0));
+    let options = Rc::new(RefCell::new(options));
+    let bound = Rc::clone(&options);
+    let size = Rc::new(RefCell::new(None));
+    let shown = Rc::clone(&size);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut options = bound.borrow_mut();
+        let output = SaveForWebDialog::new("poster.psd", IMAGE, WebPictures::new().original(texture()), Bind::bound(&mut *options)).show(ui);
+        if let Some(variant) = output.wanted_variants.first() {
+            *shown.borrow_mut() = Some((output.size, variant.request.options.size));
+        }
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(10);
+
+    let expected = PixelSize::new(300_000, 1);
+    assert_eq!(*size.borrow(), Some((expected, Some(expected))));
+    assert_eq!(options.borrow().size, Some(expected));
+}
+
 /// Shows the pictures at 100% and clicks the point `at` of the Original pane's picture.
 fn click_picture(fixture: &mut Fixture, at: Pos2) {
     let pane = fixture.by_label(ORIGINAL_PANE).expect("the Original pane");
@@ -77,6 +169,42 @@ fn gif(colors: u16) -> SaveForWebOptions {
     options
 }
 
+/// The colours of the palette the shown encode reports.
+const PALETTE: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+
+/// Answers the encode the dialog asked for with `PALETTE` and selects the Optimized pane, which shows the Color Table.
+fn show_palette(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture) {
+    let wanted = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::wanted_variants).expect("open");
+    let revision = wanted.first().map_or(1, |want| want.request.revision);
+    let variant = WebVariant::new(0, revision, texture(), 1000).colors(4).palette(PALETTE.to_vec());
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_variant(variant);
+    fixture.idle(4);
+    select_optimized_pane(fixture);
+}
+
+/// The colour table events the dialog filed since the last call.
+fn table_events(host: &Rc<RefCell<DialogHost>>) -> Vec<(ColorTableEdit, Vec<[u8; 3]>)> {
+    let events = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::take_table_events).expect("the dialog is open");
+    events.into_iter().map(|event: ColorTableEvent| (event.edit, event.colors)).collect()
+}
+
+#[trial]
+fn a_slice_warning_appears_once_below_the_preview_captions() {
+    let warning = "5 stored slices past the first 10000 were ignored";
+    let web = || HostedSaveForWeb::new("poster.psd", IMAGE, texture()).slices(slices());
+    let (_, normal) = open(web());
+    assert!(!normal.texts().iter().any(|run| run.text == warning));
+
+    let (_, mut overflow) = open(web().slice_warning(Some(warning.into())));
+    let four_up = overflow.by_label("4-Up").expect("the 4-Up view");
+    overflow.click(&four_up).idle(4);
+    let notices = overflow.texts().iter().filter(|run| run.text == warning).collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "the dialog shows one warning before Save is pressed");
+    let captions = overflow.texts().iter().filter(|run| run.text == "Encoding").collect::<Vec<_>>();
+    assert_eq!(captions.len(), 3, "the three encoded preview captions");
+    assert!(captions.iter().all(|caption| notices[0].rect.top() >= caption.rect.bottom()), "the warning follows both rows");
+}
+
 #[trial]
 fn slices_and_palette_edits_follow_the_settings() {
     let start = gif(8);
@@ -100,31 +228,27 @@ fn slices_and_palette_edits_follow_the_settings() {
     click_picture(&mut fixture, pos2(150.0, 50.0));
     fixture.hold(Modifiers::NONE);
 
-    // An edited swatch survives a change that leaves the palette alone and goes with a colour-count change.
-    let wanted = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::wanted_variants).expect("open");
-    let revision = wanted.first().map_or(1, |want| want.request.revision);
-    let palette = vec![[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
-    let variant = WebVariant::new(0, revision, texture(), 1000).colors(4).palette(palette);
-    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").set_variant(variant);
-    fixture.idle(4);
-    select_optimized_pane(&mut fixture);
+    // An answered swatch is a Shift event on its colour; a setting that leaves the palette alone files nothing, and a
+    // colour-count change restores the generated table.
+    show_palette(&host, &mut fixture);
     assert_eq!(current(&host).slices, WebSlices::Selected(vec![1, 2]), "a click beside the picture leaves the slices");
     let cell = fixture.by_label("1 #00ff00").expect("the Color Table lists the palette");
     fixture.click(&cell).key(Key::Enter, Modifiers::NONE).idle(4);
-    let request = host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_color).expect("opening a cell asks for its colour");
+    let (id, request) = host.borrow_mut().take_color_request().expect("opening a cell asks for its colour");
     assert_eq!(request.key, PALETTE_COLOR_KEY);
-    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_color(PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
+    host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
     fixture.idle(4);
-    assert_eq!(current(&host).palette_edits.get(&1), Some(&[255, 0, 255]), "the answer is the edit of the opened entry");
+    let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
+    assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour");
 
     let interlaced = fixture.by_label("Interlaced").expect("the Interlaced check box");
     fixture.click(&interlaced).idle(4);
-    assert_eq!(current(&host).palette_edits.len(), 1, "a setting that leaves the palette alone keeps the edit");
+    assert!(table_events(&host).is_empty(), "a setting that leaves the palette alone files no table event");
     let colors = fixture.by_label("Colors").expect("the Colors field");
     fixture.click(&colors).key(Key::ArrowUp, Modifiers::NONE).idle(4);
-    let after = current(&host);
-    assert_eq!(after.colors, 9, "the colour count changed");
-    assert!(after.palette_edits.is_empty(), "a colour-count change clears the edits");
+    assert_eq!(current(&host).colors, 9, "the colour count changed");
+    let restore = (ColorTableEdit::Restore, Vec::new());
+    assert_eq!(table_events(&host), vec![restore], "a colour-count change restores the generated table");
 
     // A preset pick keeps the slices.
     let select = fixture.by_label("Preset").expect("the Preset list");
@@ -143,6 +267,57 @@ fn slices_and_palette_edits_follow_the_settings() {
     fixture.idle(6);
     let result = host.borrow_mut().take::<HostedSaveForWeb>().and_then(DialogResult::ok).expect("the path finishes the dialog");
     assert_eq!(result.options.slices, WebSlices::Selected(vec![1, 2]), "Save answers the selected slices");
+}
+
+#[trial]
+fn table_edits_carry_the_selected_colors() {
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(gif(8)));
+    show_palette(&host, &mut fixture);
+    let chosen = serde_json::json!(["#ff0000", "#0000ff"]);
+    host.borrow_mut()
+        .get_mut::<HostedSaveForWeb>()
+        .expect("open")
+        .set_json_field(&egui::Context::default(), "colorSelection", chosen.clone())
+        .expect("a selection");
+    fixture.idle(4);
+    let listed = host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(|web| web.json_fields()).expect("the fields");
+    assert_eq!(listed["colorSelection"], chosen, "the selection lists back as the colours of the selected cells");
+
+    let lock = fixture.by_label("Lock Colors").expect("the Lock button");
+    fixture.click(&lock).idle(4);
+    let selected = vec![[255, 0, 0], [0, 0, 255]];
+    assert_eq!(table_events(&host), vec![(ColorTableEdit::Lock, selected.clone())]);
+    let delete = fixture.by_label("Delete Color").expect("the Delete button");
+    fixture.click(&delete).idle(4);
+    assert_eq!(table_events(&host), vec![(ColorTableEdit::Delete, selected)]);
+}
+
+#[trial]
+fn enter_in_the_optimize_rows_files_the_search_and_never_saves() {
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).optimize());
+    let opener = fixture.by_label("Optimize to File Size…").expect("the Optimize button");
+    fixture.click(&opener).idle(4);
+    let web = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().take::<HostedSaveForWeb>();
+    let _ = web;
+    assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").take_optimize_open(), "opening the rows asks for the opening size");
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("open").answer_optimize_start(Some(48 * 1024));
+    fixture.idle(4);
+
+    let field = fixture.by_label("Desired File Size (K)").expect("the Desired File Size field");
+    fixture.click(&field).key(Key::Enter, Modifiers::NONE).idle(4);
+    let request = host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::take_optimize_request).expect("Enter files the search");
+    assert_eq!(request.desired_k, 48.0, "the search asks for the size the rows opened at");
+    assert_eq!(request.options, current(&host), "the search starts from the current settings");
+    assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).is_none(), "Enter in the rows never saves");
+
+    fixture.key(Key::Enter, Modifiers::CTRL).idle(4);
+    let again = host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::take_optimize_request);
+    assert!(again.is_none(), "Enter with Ctrl held files nothing");
+
+    let cancel = fixture.by_label("Cancel Optimize").expect("the rows' Cancel");
+    fixture.click(&cancel).idle(4);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(host.borrow_mut().get_mut::<HostedSaveForWeb>().and_then(HostedSaveForWeb::pick_path).is_some(), "with the rows closed Enter saves");
 }
 
 /// The frame the animation shows after the host's passes.
@@ -224,4 +399,43 @@ fn four_up_webp_halves_the_quality_until_lossless() {
     fixture.click(&lossless).idle(4);
     let [half, quarter] = four_up_options(&host);
     assert_eq!((half.format, quarter.format), (WebFormat::Png8, WebFormat::Gif));
+}
+
+/// A palette answer that arrives as the child dialog that picked it closes and the room changes, so the dialog measures
+/// its body again before it runs it, still shifts the opened entry. Guards against a body that took the host's answers
+/// in whichever run of the pass came first: the measuring run used the answer up and the real run reported nothing.
+#[trial]
+fn a_palette_answer_survives_a_measuring_run_of_the_body() {
+    use craft_ui::dialog::{Alert, HostedAlert};
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(gif(8)));
+    show_palette(&host, &mut fixture);
+    let cell = fixture.by_label("1 #00ff00").expect("the Color Table lists the palette");
+    fixture.click(&cell).key(Key::Enter, Modifiers::NONE).idle(4);
+    let (id, _) = host.borrow_mut().take_color_request().expect("opening a cell asks for its colour");
+    let picker = host.borrow_mut().open_child(HostedAlert::new(Alert::new("Color Picker", "Pick a colour.")), id);
+    fixture.idle(4);
+    host.borrow_mut().close_by_id(picker);
+    host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
+    fixture.room(Vec2::new(1000.0, 700.0));
+    fixture.idle(4);
+    let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
+    assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour");
+}
+
+/// A palette colour the host answers in a frame whose first run measures the dialog still shifts the opened entry, once.
+/// Guards against a hosted dialog that took its host's answers in the measuring run, whose form drops them.
+#[trial]
+fn a_palette_answer_in_a_measured_frame_shifts_the_entry_once() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = super::hosted::measured_fixture(&host);
+    host.borrow_mut().open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(gif(8)));
+    fixture.idle(10);
+    show_palette(&host, &mut fixture);
+    let cell = fixture.by_label("1 #00ff00").expect("the Color Table lists the palette");
+    fixture.click(&cell).key(Key::Enter, Modifiers::NONE).idle(4);
+    let (id, _) = host.borrow_mut().take_color_request().expect("opening a cell asks for its colour");
+    host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
+    fixture.idle(4);
+    let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
+    assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour once");
 }

@@ -8,6 +8,7 @@ use craft_ui::patterns::form_dialogs::{
     HostedFormatOptions, JpegOptions, OutputPathRow, Resample, ScaleRow, ScaleSize, SizeEstimate,
 };
 use craft_ui::runtime::requests::PathRequest;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
@@ -279,6 +280,36 @@ fn export_as_starts_from_its_remembered_options_and_stores_the_confirmed_ones() 
     let again = opened_with(&host, &mut fixture, ExportOptions::default());
     assert_eq!((again.format.as_str(), again.quality), ("jpg", 40), "a result not stored leaves the stored options as they were");
     assert_eq!(again.scale_all, jpeg.scale_all, "and their Scale All rows");
+}
+
+/// Export As lists the app's resample methods in the order it gives, and an unlisted opening method opens as Automatic
+/// when listed, else as the first listed one.
+#[trial]
+fn export_as_lists_resample_methods_in_the_hosts_order() {
+    let methods = vec![Resample::Bicubic, Resample::BicubicSmoother, Resample::NearestNeighbor, Resample::PreserveDetails];
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let mut start = ExportOptions::default();
+    start.resample = Resample::Lanczos;
+    host.borrow_mut().open(HostedExportAs::new("Poster", document(), start).methods(methods.clone()));
+    fixture.idle(10);
+    let opened = host.borrow_mut().get_mut::<HostedExportAs>().map(|dialog| dialog.options().resample).expect("the dialog is open");
+    assert_eq!(opened, Resample::Bicubic, "without Automatic in the list, the first listed method opens");
+
+    let select = fixture.by_label("Resample").expect("the resample select");
+    fixture.access(AccessActionKind::Focus, &select).idle(2);
+    fixture.key(Key::Space, Modifiers::NONE).idle(3);
+    let mut options = fixture.by_role(Role::LIST_BOX_OPTION);
+    options.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+    let names: Vec<String> = options.iter().map(|option| fixture.tree().name_of(option.node).expect("the option has a name").to_owned()).collect();
+    assert_eq!(names.len(), methods.len(), "the list offers the listed methods only");
+    assert_eq!(
+        names,
+        ["Bicubic (smooth gradients)", "Bicubic Smoother (enlargement)", "Nearest Neighbor (hard edges)", "Preserve Details"],
+        "the list keeps the host's order"
+    );
 }
 
 /// Export As with the app's resample methods offers no other: an unlisted opening method opens as the first listed

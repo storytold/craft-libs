@@ -1,6 +1,7 @@
 //! The stop bar's marker vocabulary: [`StopRef`] and [`StopColor`].
 
 use craft_ui::runtime::requests::ColorRequest;
+use egui::Rect;
 
 use crate::gradient::StopRow;
 
@@ -69,11 +70,21 @@ pub struct StopColor {
     pub tag: u64,
     /// The request, opened at the stop's colour.
     pub request: ColorRequest,
+    /// What asked for the colour (the stop's marker, or the Color well), where the host opens its picker; `None`
+    /// when the request carries no place.
+    pub rect: Option<Rect>,
 }
 
 impl StopColor {
     /// A request to edit colour stop `index`, whose tag is `tag`.
     pub fn new(index: usize, tag: u64, request: ColorRequest) -> Self {
-        Self { index, tag, request }
+        Self { index, tag, request, rect: None }
+    }
+
+    /// The request raised at `rect`.
+    #[must_use]
+    pub fn at(mut self, rect: Rect) -> Self {
+        self.rect = Some(rect);
+        self
     }
 }

@@ -3,7 +3,7 @@
 
 use super::frame::maximize;
 use super::tree::{self, FrameRules};
-use super::{ColumnBar, DockSizes, HidePanels, PanelSpec, column_cells, group_rects, stepped};
+use super::{ColumnBar, DockSizes, HidePanels, PanelSpec, column_cells, group_rects};
 use craft_behavior::Flow;
 use craft_behavior::dock::{Column, Layout, Node};
 use egui::Rect;
@@ -20,7 +20,7 @@ pub struct Placing<'a, P> {
     /// The panels that always show, such as a canvas.
     pub protected: &'a dyn Fn(&P) -> bool,
     /// The panels the area hides, as the shell's visibility leaves them.
-    pub hide: HidePanels<'a, P>,
+    pub hide: HidePanels<'a>,
     /// The panel whose frame the area shows maximized.
     pub maximized: Option<&'a P>,
     /// The floating window whose column the dock lays out, by its id; `None` for a dock area's docked tree.
@@ -35,7 +35,7 @@ impl<'a, P> Placing<'a, P> {
 
     /// The area hides `hide` and shows the frame of `maximized` alone.
     #[must_use]
-    pub fn shown(mut self, hide: HidePanels<'a, P>, maximized: Option<&'a P>) -> Self {
+    pub fn shown(mut self, hide: HidePanels<'a>, maximized: Option<&'a P>) -> Self {
         self.hide = hide;
         self.maximized = maximized;
         self
@@ -109,7 +109,7 @@ fn column_rects<P: PartialEq>(
     if !column.panels().any(moves) {
         return Some(());
     }
-    if column.iconic || stepped(column, placing.spec).is_some() {
+    if column.iconic || placing.sizes.stepped(column, placing.spec).is_some() {
         return None;
     }
     if column.panels().all(moves) {

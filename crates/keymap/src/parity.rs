@@ -62,6 +62,7 @@ impl Keymap {
     // new: gap 85; PhotoCraft's `bindings()` table lets tools share keys.
     pub fn with_shared_tool_keys(mut self, on: bool) -> Keymap {
         self.shared_tool_keys = on;
+        self.index_shown();
         self
     }
 

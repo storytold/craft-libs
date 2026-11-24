@@ -1,10 +1,13 @@
 //! `Title`: the document title the bar shows in the free gap between its leading content and its trailing end.
 
-use crate::contract::{BodyCx, Props as _, WordSetCx as _};
+use crate::buttons::Button;
+use crate::contract::{BodyCx, Props as _, WordSetCx as _, clicked};
 use crate::display::{Elide, Text};
 use crate::layout::{Placed, arrange};
+use crate::runtime::env::Label;
 use crate::shell::{ShellWords, slots};
 use craft_behavior::Arrangement;
+use craft_theme::Variant;
 use egui::{Rect, Ui, Vec2, vec2};
 
 /// The title of the window's document, with the mark that says it has unsaved changes.
@@ -17,17 +20,27 @@ use egui::{Rect, Ui, Vec2, vec2};
 pub struct Title {
     text: String,
     unsaved: bool,
+    /// The tooltip of a title that is a button; `None` for a title that is text.
+    action: Option<Label>,
 }
 
 impl Title {
     /// A title for a document with no unsaved changes.
     pub fn new(text: impl Into<String>) -> Self {
-        Title { text: text.into(), unsaved: false }
+        Title { text: text.into(), unsaved: false, action: None }
     }
 
     /// A title for a document with unsaved changes.
     pub fn unsaved(text: impl Into<String>) -> Self {
-        Title { text: text.into(), unsaved: true }
+        Title { text: text.into(), unsaved: true, action: None }
+    }
+
+    /// Makes the title a focusable button named by the shown title, with `tooltip`; the bar reports its activation in
+    /// `TitleBarOutput::title_activated`. Without it the title is text.
+    #[must_use]
+    pub fn action(mut self, tooltip: impl Into<Label>) -> Self {
+        self.action = Some(tooltip.into());
+        self
     }
 
     /// The text shown: the title, followed by an asterisk while the document has unsaved changes.
@@ -52,15 +65,33 @@ impl Title {
     }
 
     /// Shows the title in the rest of `ui`, which is the bar body's row after the leading content. `body_width` is the
-    /// body's whole width and `centre` the window's centre line from the body's start edge.
-    pub(super) fn show_in_gap(&self, ui: &mut Ui, cx: &BodyCx<'_>, body_width: f32, centre: f32, margin: f32) {
+    /// body's whole width and `centre` the window's centre line from the body's start edge. Returns whether a title with
+    /// an action was activated in this pass.
+    pub(super) fn show_in_gap(&self, ui: &mut Ui, cx: &BodyCx<'_>, body_width: f32, centre: f32, margin: f32) -> bool {
         let words = cx.words::<ShellWords>();
-        let mut text = Text::new(self.shown(&words)).elide(Elide::End);
-        if self.unsaved {
-            text = text.description(words.unsaved.as_str());
-        }
         let gap = Gap { body_width, centre, margin };
-        arrange(ui, &gap, &mut [Placed::new("title", text)]);
+        let description = self.unsaved.then(|| words.unsaved.as_str().to_owned());
+        match &self.action {
+            Some(tooltip) => {
+                // A ghost button has no fill until hovered, so the title reads as text; its label is cut with an
+                // ellipsis when the gap is too narrow, as the text is.
+                let mut button = Button::new(self.shown(&words)).variant(Variant::GHOST).tooltip(tooltip.clone());
+                if let Some(description) = description {
+                    button = button.description(description);
+                }
+                let mut placed = [Placed::new("title", button)];
+                arrange(ui, &gap, &mut placed);
+                placed.first().and_then(Placed::response).is_some_and(clicked)
+            }
+            None => {
+                let mut text = Text::new(self.shown(&words)).elide(Elide::End);
+                if let Some(description) = description {
+                    text = text.description(description);
+                }
+                arrange(ui, &gap, &mut [Placed::new("title", text)]);
+                false
+            }
+        }
     }
 }
 
@@ -79,7 +110,9 @@ impl Arrangement for Gap {
         let room_start = self.body_width - room.width();
         let (from, width) = Title::span(self.centre - room_start - self.margin, free, size.x);
         out.push(Rect::from_min_size(room.min + vec2(self.margin + from, (room.height() - size.y) / 2.0), vec2(width, size.y)));
-        vec2(room.width(), size.y)
+        // The title takes no width of its own: it lies in what the leading content leaves, so a member that fills the
+        // row (a document tab strip) takes the free width and the title the rest, if any.
+        vec2(0.0, size.y)
     }
 }
 

@@ -4,7 +4,6 @@
 use super::{Act, BeginIn, FocusOrigin, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
-use craft_behavior::focus::after_removal;
 use craft_behavior::nav::step;
 use craft_behavior::{Arrows, MoveMods, NavMove, NavOutline, NavStep, ScopeKind};
 use egui::{Context, Id};
@@ -23,12 +22,24 @@ impl Entry {
         }
     }
 
-    fn holds(&self, current: &StopRec) -> bool {
+    /// Whether the entry holds `current`, whose outermost roving group is `top`.
+    fn holds(&self, current: &StopRec, top: Option<Id>) -> bool {
         match self {
             Entry::Stop(rec) => rec.stop.key() == current.stop.key(),
-            Entry::Group(group, _) => current.stop.group == Some(*group),
+            Entry::Group(group, _) => top == Some(*group),
         }
     }
+}
+
+/// The most parent links a roving group's chain is followed through. A part group joins a body group, which joins
+/// nothing, so one link is all a real chain has; the bound ends a malformed one.
+const MAX_NESTING: usize = 8;
+
+/// One member of a roving group: a stop, or a nested group that the group steps over as a whole.
+#[derive(Clone)]
+enum Slot {
+    Stop(StopRec),
+    Group(Id),
 }
 
 /// A roving group's members as a flat outline of enabled positions.
@@ -87,19 +98,74 @@ impl Lists<'_> {
         })
     }
 
-    /// The arrival member of a roving group: its selected member, else the first.
-    fn arrival(&self, group: &super::Group) -> Option<StopRec> {
-        let members = || self.stops.iter().filter(|rec| rec.stop.group == Some(group.id));
-        group.selected.and_then(|key| members().find(|rec| rec.stop.key() == key)).or_else(|| members().next()).cloned()
+    /// The member of `group` that `rec` is or sits in: `rec` itself, or the nested group of `group` whose chain holds
+    /// it. `None` when `rec` is in neither.
+    fn slot_in(&self, rec: &StopRec, group: Id) -> Option<Slot> {
+        let mut at = rec.stop.group?;
+        if at == group {
+            return Some(Slot::Stop(rec.clone()));
+        }
+        for _ in 0..MAX_NESTING {
+            let parent = self.group(at)?.parent?;
+            if parent == group {
+                return Some(Slot::Group(at));
+            }
+            at = parent;
+        }
+        None
     }
 
-    /// The Tab entries among the stops `keep` takes: a roving group once, at its arrival member; a collection's row
-    /// groups none; another stop when Tab moves over all controls or it holds text, unless only a press reaches it.
+    /// The members of `group` in reading order: its own stops, and each nested group once, where its first stop sits.
+    fn slots(&self, group: Id) -> Vec<Slot> {
+        let mut seen = HashSet::new();
+        self.stops
+            .iter()
+            .filter_map(|rec| self.slot_in(rec, group))
+            .filter(|slot| match slot {
+                Slot::Group(id) => seen.insert(*id),
+                Slot::Stop(_) => true,
+            })
+            .collect()
+    }
+
+    /// The outermost group that `group` is nested in; `group` itself when it has no parent.
+    fn outermost(&self, group: Id) -> Id {
+        let mut at = group;
+        for _ in 0..MAX_NESTING {
+            match self.group(at).and_then(|group| group.parent) {
+                Some(parent) => at = parent,
+                None => break,
+            }
+        }
+        at
+    }
+
+    /// The arrival member of a roving group: its selected member, else the first, entering a nested group at its own
+    /// arrival.
+    fn arrival(&self, group: &super::Group) -> Option<StopRec> {
+        let mut group = *group;
+        for _ in 0..MAX_NESTING {
+            let selected =
+                group.selected.and_then(|key| self.stops.iter().find(|rec| rec.stop.key() == key && self.slot_in(rec, group.id).is_some()));
+            if let Some(rec) = selected {
+                return Some(rec.clone());
+            }
+            match self.slots(group.id).into_iter().next()? {
+                Slot::Stop(rec) => return Some(rec),
+                Slot::Group(id) => group = self.group(id)?,
+            }
+        }
+        None
+    }
+
+    /// The Tab entries among the stops `keep` takes: a roving group once, at its arrival member, a nested group within
+    /// its outermost group's entry; a collection's row groups none; another stop when Tab moves over all controls or
+    /// it holds text, unless only a press reaches it.
     fn entries(&self, keep: impl Fn(&StopRec) -> bool, all_controls: bool) -> Vec<Entry> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for rec in self.stops.iter().filter(|rec| keep(rec)) {
-            match rec.stop.group.and_then(|group| self.group(group)) {
+            match rec.stop.group.and_then(|group| self.group(self.outermost(group))) {
                 Some(group) if group.row => {}
                 Some(group) => {
                     if let Some(arrival) = seen.insert(group.id).then(|| self.arrival(&group)).flatten() {
@@ -117,6 +183,7 @@ impl Lists<'_> {
 impl State {
     pub(super) fn rotate(&mut self) {
         self.last_stops = std::mem::take(&mut self.stops);
+        self.stop_ids.clear();
         self.last_scopes = std::mem::take(&mut self.scopes);
         self.last_scope_order = std::mem::take(&mut self.scope_order);
         self.last_groups = std::mem::take(&mut self.groups);
@@ -125,6 +192,7 @@ impl State {
         self.open.clear();
         self.body_from.clear();
         self.entered = false;
+        self.asked = false;
     }
 
     /// The registrations of last pass, which Tab and the arrows move over.
@@ -140,6 +208,11 @@ impl State {
     /// The registered roving group `id` of last pass: a plain group, else one of a collection's row groups.
     pub(crate) fn group(&self, id: Id) -> Option<super::Group> {
         self.last().group(id)
+    }
+
+    /// The roving group `id` as registered in the running pass so far, else in the last.
+    pub(crate) fn current_group(&self, id: Id) -> Option<super::Group> {
+        self.this().group(id).or_else(|| self.last().group(id))
     }
 
     pub(super) fn find_stop(&self, key: StopKey) -> Option<StopRec> {
@@ -167,11 +240,14 @@ impl State {
         self.focus_stop_from(rec, FocusOrigin::Request)
     }
 
-    /// [`focus_stop`](Self::focus_stop) with what moved focus there.
+    /// [`focus_stop`](Self::focus_stop) with what moved focus there. A row that takes the focus back from its removed
+    /// child is not revealed: nothing chose to show it.
     fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         let key = rec.stop.key();
         let acts = self.enter_stop(rec, origin);
-        self.revealed = Some(key);
+        if origin != FocusOrigin::Removal {
+            self.revealed = Some(key);
+        }
         acts
     }
 
@@ -254,7 +330,26 @@ impl State {
     }
 
     fn entries(&self, scope_root: Option<Id>, all_controls: bool) -> Vec<Entry> {
-        self.last().entries(|rec| self.in_scope(rec.scope, scope_root), all_controls)
+        self.last().entries(|rec| self.reaches(rec.scope, scope_root), all_controls)
+    }
+
+    /// Whether Tab and F6 inside the scope `root` reach a stop of `scope`: it lies inside `root`, and not inside a
+    /// layer opened within `root` that takes no focus, traps nothing and restores nothing (a menu's companion bar).
+    fn reaches(&self, scope: Option<Id>, root: Option<Id>) -> bool {
+        let Some(root) = root else { return true };
+        let mut at = scope;
+        while let Some(id) = at {
+            if id == root {
+                return true;
+            }
+            let Some(rec) = self.last_scopes.get(&id) else { return false };
+            let unreached = rec.entering.is_some() && !rec.policy.trap && !rec.policy.restore && rec.policy.initial == Initial::Keep;
+            if unreached {
+                return false;
+            }
+            at = rec.parent;
+        }
+        false
     }
 
     /// The stops of the running pass that keyboard focus reaches, among those `keep` takes, in Tab order: every member
@@ -265,11 +360,14 @@ impl State {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for rec in self.stops.iter().filter(|rec| keep(rec)) {
-            match rec.stop.group.and_then(|group| lists.group(group)) {
+            match rec.stop.group.and_then(|group| lists.group(lists.outermost(group))) {
                 Some(group) if group.row => {}
                 Some(group) => {
                     if seen.insert(group.id) {
-                        let members = self.stops.iter().filter(|member| member.stop.group == Some(group.id) && keep(member));
+                        let members = self
+                            .stops
+                            .iter()
+                            .filter(|member| member.stop.group.is_some_and(|inner| lists.outermost(inner) == group.id) && keep(member));
                         out.extend(members.map(|member| member.stop.key()));
                     }
                 }
@@ -310,20 +408,26 @@ impl State {
         let fields = in_dialog && dialog_tab == TabReach::Fields;
         let mut entries = self.entries(trap, all_controls && !fields);
         entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none() && (!fields || entry.arrival().stop.text));
-        let Some(next) = cycle(&entries, current.as_ref(), forward) else { return Vec::new() };
+        let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
+        let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
         self.focus_stop(arrival)
     }
 
-    /// F6: the first stop of the next pane, with its label as the announcement.
+    /// F6: the first stop of the next pane, with its label as the announcement. Inside a trapping scope (a modal
+    /// dialog or a popup, also when nothing in it is focused) F6 moves nothing and announces nothing: a pane move
+    /// would carry the focus out of the trap, which only closing the dialog may do.
     pub(super) fn pane(&mut self, forward: bool, all_controls: bool) -> (Vec<Act>, Vec<String>) {
+        let current = self.stop_of_focus();
+        if self.trap_of(current.as_ref()).is_some() {
+            return (Vec::new(), Vec::new());
+        }
         let panes: Vec<Id> = self
             .last_scope_order
             .iter()
             .copied()
             .filter(|id| self.last_scopes.get(id).is_some_and(|scope| scope.policy.kind == ScopeKind::Pane))
             .collect();
-        let current = self.stop_of_focus();
         let here = current.as_ref().and_then(|rec| self.pane_of(rec));
         let at = here.and_then(|pane| panes.iter().position(|id| *id == pane));
         let next = match (at, forward) {
@@ -359,11 +463,18 @@ impl State {
                 None => return Vec::new(),
             },
         };
-        let found = self.find_stop(key).or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned());
+        // A request for a part lands on that part, never on another stop of its component: a part first declared in
+        // this pass registers its stop after `update` asks for it, and then takes the focus (the awaited stop below).
+        let found = self.find_stop(key).or_else(|| match key.1 {
+            Some(_) => None,
+            None => self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned(),
+        });
         match found {
             Some(rec) => self.focus_stop(rec),
+            // An app's own widget, or a stop that registers later in this pass, which then takes the focus.
             None => {
                 self.revealed = Some(key);
+                self.awaited = Some(key);
                 self.focus_now = Some(key.0);
                 vec![Act::Focus(key.0, Default::default())]
             }
@@ -372,10 +483,11 @@ impl State {
 
     /// A roving move of the group of `from`: focus moves to the member the navigation core picks. A one-line text
     /// stop in the body of a group that moves with Up and Down only, which it did not join, hands the group those
-    /// keys: they enter the group at its first or last member.
+    /// keys: they enter the group at its first or last member. A move a nested group does not take passes to its
+    /// parent, which steps from the nested group as one member and enters a nested group at its arrival member.
     fn roving_move(&mut self, from: StopKey, mv: NavMove, mods: MoveMods, horizontal: bool) -> Option<Vec<Act>> {
         let current = self.find_stop(from)?;
-        let (group, member) = match current.stop.group {
+        let (mut group, member) = match current.stop.group {
             Some(group) => (self.group(group)?, true),
             None => (self.group(current.stop.body?)?, false),
         };
@@ -388,23 +500,49 @@ impl State {
         if !member && !hands_on() {
             return None;
         }
-        let mv = match (horizontal && group.rtl, mv) {
+        let along = |group: &super::Group| match (horizontal && group.rtl, mv) {
             (true, NavMove::Back) => NavMove::Forward,
             (true, NavMove::Forward) => NavMove::Back,
             (_, mv) => mv,
         };
+        // The nested group the move passed out of, which is the member it starts from in `group`.
+        let mut inner = None;
+        for _ in 0..MAX_NESTING {
+            if group.roving.takes(along(&group), mods) {
+                break;
+            }
+            let parent = self.group(group.parent?)?;
+            inner = Some(group.id);
+            group = parent;
+        }
+        let mv = along(&group);
         if !group.roving.takes(mv, mods) {
             return None;
         }
-        let members: Vec<StopRec> = self.last_stops.iter().filter(|rec| rec.stop.group == Some(group.id)).cloned().collect();
-        let lead = group.lead.unwrap_or(from);
-        let at = members.iter().position(|rec| rec.stop.key() == lead);
+        let members = self.last().slots(group.id);
+        let at = match inner {
+            Some(inner) => members.iter().position(|slot| matches!(slot, Slot::Group(id) if *id == inner)),
+            // A lead that names a component whose parts form a nested group (a menu's active row) is that group.
+            None => {
+                let lead = group.lead.unwrap_or(from);
+                members.iter().position(|slot| match slot {
+                    Slot::Stop(rec) => rec.stop.key() == lead,
+                    Slot::Group(id) => self.last_stops.iter().any(|rec| rec.stop.group == Some(*id) && rec.stop.id == lead.0),
+                })
+            }
+        };
         if group.row && mv == NavMove::Back && at == Some(0) {
             return Some(self.row_owner(&group).map(|rec| self.focus_stop(rec)).unwrap_or_default());
         }
         let mut state = group.roving.state(at);
         match step(group.roving.shape, &Members { len: members.len(), first_column: group.roving.first_column }, &mut state, mv, mods) {
-            NavStep::Moved(to) => Some(self.focus_stop(members[to].clone())),
+            NavStep::Moved(to) => {
+                let arrival = match &members[to] {
+                    Slot::Stop(rec) => Some(rec.clone()),
+                    Slot::Group(id) => self.group(*id).and_then(|nested| self.arrival(&nested)),
+                };
+                Some(arrival.map(|rec| self.focus_stop(rec)).unwrap_or_default())
+            }
             NavStep::Stay if group.roving.hands_back => None,
             _ => Some(Vec::new()),
         }
@@ -433,36 +571,44 @@ impl State {
         Some(self.focus_stop(member))
     }
 
-    /// The stop that takes focus when the focused stop was not registered this pass.
-    fn removed_focus(&self, focused: Option<Id>) -> Option<StopRec> {
+    /// The focus move when the focused stop was not registered this pass, or only inside a layer that plays its exit
+    /// (`fading`): a removed child of a collection row hands focus back to the row, as Escape does; any other removed
+    /// stop leaves focus nowhere, whatever stops are left around it.
+    fn removed_focus(&mut self, focused: Option<Id>) -> Option<Vec<Act>> {
         let root = focused?;
         let key = *self.focused.get(&root)?;
-        if self.stops.iter().any(|rec| rec.stop.key() == key) {
+        let live = |rec: &&StopRec| !self.fading(rec.scope);
+        if self.stops.iter().filter(live).any(|rec| rec.stop.key() == key) {
             return None;
         }
-        let gone = self.last_stops.iter().find(|rec| rec.stop.key() == key)?;
-        // A removed child of a collection row hands focus back to the row, as Escape does, not to the next stop.
+        let gone = self.find_stop(key)?;
         let row = gone.stop.group.and_then(|group| self.group(group)).filter(|group| group.row);
-        if let Some(owner) =
-            row.and_then(|group| self.row_owner(&group)).filter(|owner| self.stops.iter().any(|rec| rec.stop.key() == owner.stop.key()))
-        {
-            return Some(owner);
-        }
-        // Press-only stops (selectable text) are outside the Tab order, so focus never falls to them either.
-        let order: Vec<StopKey> = self
-            .last_stops
-            .iter()
-            .filter(|rec| rec.scope == gone.scope && (rec.stop.key() == key || !rec.stop.press_only))
-            .map(|rec| rec.stop.key())
-            .collect();
-        let registered = |candidate: &StopKey| self.stops.iter().any(|rec| rec.stop.key() == *candidate);
-        match after_removal(&order, &key, registered) {
-            Some(next) => self.stops.iter().find(|rec| rec.stop.key() == *next).cloned(),
-            None => self.stops.iter().find(|rec| rec.scope == gone.scope && !rec.stop.press_only).cloned(),
-        }
+        let owner =
+            row.and_then(|group| self.row_owner(&group)).filter(|owner| self.stops.iter().filter(live).any(|rec| rec.stop.key() == owner.stop.key()));
+        // A removed stop in an arena (an editor or control in a canvas body) hands focus back to the arena root's own
+        // stop (the canvas).
+        let target = owner.or_else(|| {
+            gone.stop.arena.and_then(|arena| self.stops.iter().filter(live).find(|rec| rec.stop.id == arena && rec.stop.part.is_none()).cloned())
+        });
+        Some(match target {
+            Some(target) => self.focus_stop_from(target, FocusOrigin::Removal),
+            None => vec![Act::Surrender(root)],
+        })
     }
 
-    /// The opener of a scope that went away while focus was inside it.
+    /// Whether the scope `scope` of this pass, or one around it, is a layer playing its exit: its stops take no focus.
+    fn fading(&self, scope: Option<Id>) -> bool {
+        let mut at = scope;
+        while let Some(rec) = at.and_then(|id| self.scopes.get(&id)) {
+            if rec.closing {
+                return true;
+            }
+            at = rec.parent;
+        }
+        false
+    }
+
+    /// The opener of a scope that went away, or plays its exit, while focus was inside it.
     fn restored_focus(&self, focused: Option<Id>) -> Option<StopRec> {
         let root = focused?;
         let key = *self.focused.get(&root).unwrap_or(&(root, None));
@@ -592,11 +738,11 @@ impl State {
     }
 }
 
-fn cycle(entries: &[Entry], current: Option<&StopRec>, forward: bool) -> Option<usize> {
+fn cycle(entries: &[Entry], current: Option<&StopRec>, top: Option<Id>, forward: bool) -> Option<usize> {
     if entries.is_empty() {
         return None;
     }
-    let at = current.and_then(|rec| entries.iter().position(|entry| entry.holds(rec)));
+    let at = current.and_then(|rec| entries.iter().position(|entry| entry.holds(rec, top)));
     Some(match (at, forward) {
         (Some(at), true) => (at + 1) % entries.len(),
         (Some(at), false) => (at + entries.len() - 1) % entries.len(),
@@ -631,9 +777,19 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
         return Vec::new();
     }
     let stops = &state.stops[first.min(state.stops.len())..];
+    // A first stop in a roving group arrives at the group's arrival member, as Tab does.
+    let lists = state.this();
+    let entry = stops.first().map(|rec| {
+        rec.stop
+            .group
+            .and_then(|group| lists.group(group))
+            .filter(|group| !group.row)
+            .and_then(|group| lists.arrival(&group))
+            .unwrap_or_else(|| rec.clone())
+    });
     let pick = match policy.initial {
-        Initial::First => stops.first(),
-        Initial::Default => stops.iter().find(|rec| rec.stop.default).or_else(|| stops.first()),
+        Initial::First => entry.as_ref(),
+        Initial::Default => stops.iter().find(|rec| rec.stop.default).or(entry.as_ref()),
         Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)),
         Initial::Key(name) => stops.iter().find(|rec| rec.stop.name == Some(name)),
         _ => None,
@@ -641,7 +797,7 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
     match pick.cloned() {
         Some(rec) => {
             state.entered = true;
-            state.focus_stop(rec)
+            state.focus_stop_from(rec, FocusOrigin::Open)
         }
         None => Vec::new(),
     }
@@ -684,18 +840,16 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
     // The moves below belong to the next frame's passes.
     state.frame = frame + 1;
     let mut acts = state.apply_press(focused, on_app_widget);
-    // A layer that appeared in this pass took focus already: the press that opened it does not take it back.
-    if state.entered {
+    // A layer that appeared in this pass took focus already, and a component that asked for it in this pass has it: the
+    // press of the pass does not take it back.
+    if state.entered || state.asked {
         acts.clear();
     }
     if acts.is_empty() {
-        let next = state
-            .restored_focus(focused)
-            .map(|rec| (rec, FocusOrigin::Request))
-            .or_else(|| state.removed_focus(focused).map(|rec| (rec, FocusOrigin::Removal)));
-        if let Some((rec, origin)) = next {
-            acts = state.focus_stop_from(rec, origin);
-        }
+        acts = match state.restored_focus(focused) {
+            Some(rec) => state.focus_stop(rec),
+            None => state.removed_focus(focused).unwrap_or_default(),
+        };
     }
     let now = acts.last().map_or(focused, |act| match act {
         Act::Focus(id, _) => Some(*id),
@@ -713,6 +867,8 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
+        menu_bar_by_claim: std::mem::take(&mut state.menu_bar_by_claim),
+        canvas: if stop.is_none() { state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.id) } else { None },
         foreign: false,
         host_focus: false,
         host_text: false,

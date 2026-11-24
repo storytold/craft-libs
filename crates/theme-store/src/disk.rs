@@ -77,8 +77,24 @@ impl Disk {
 
     pub fn write_selection(&self, bytes: &[u8], expected: Option<&[u8]>) -> Result<(), WriteError> {
         let path = self.selection_path();
-        let guard = Guarded { inner: &*self.fs, path: &path, expected, raced: Cell::new(false) };
-        match private().atomic_write_custom(&guard, RenameRetry::platform(), &path, bytes) {
+        self.write_guarded(&path, bytes, Expected::Bytes(expected))
+    }
+
+    pub fn replace_theme(&self, stem: &str, bytes: &[u8], expected: FileStamp) -> Result<FileStamp, WriteError> {
+        let path = self.theme_path(stem);
+        self.write_guarded(&path, bytes, Expected::Stamp(expected))?;
+        match self.stamp(&path) {
+            Ok(Some(stamp)) => Ok(stamp),
+            Ok(None) => Err(WriteError::Io(io::ErrorKind::NotFound.into())),
+            Err(e) => Err(WriteError::Io(e)),
+        }
+    }
+
+    /// Replaces `path` atomically, unless it no longer is what `expected` says just before the
+    /// rename.
+    fn write_guarded(&self, path: &Path, bytes: &[u8], expected: Expected<'_>) -> Result<(), WriteError> {
+        let guard = Guarded { inner: &*self.fs, path, expected, raced: Cell::new(false) };
+        match private().atomic_write_custom(&guard, RenameRetry::platform(), path, bytes) {
             Ok(()) => Ok(()),
             Err(_) if guard.raced.get() => Err(WriteError::Raced),
             Err(e) => Err(WriteError::Io(e)),
@@ -172,9 +188,10 @@ fn locking_unsupported(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::Unsupported || e.raw_os_error() == Some(ENOLCK)
 }
 
-/// Library files are written once (an import creates one, a delete removes it), so their stamps
-/// are the only change check: a hand edit in place that keeps length and modification time goes
-/// unnoticed. `selection.json`, which is replaced on every write, also gets byte comparisons.
+/// Library files change only by whole-file writes (an import creates one, a save replaces it, a
+/// delete removes it), each a new file, so their stamps are the only change check: a hand edit in
+/// place that keeps length and modification time goes unnoticed. `selection.json`, which is
+/// replaced on every write, also gets byte comparisons.
 fn stamp_of(meta: &fs::Metadata) -> FileStamp {
     let modified_nanos = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos());
     #[cfg(unix)]
@@ -184,14 +201,43 @@ fn stamp_of(meta: &fs::Metadata) -> FileStamp {
     FileStamp { len: meta.len(), modified_nanos, identity }
 }
 
-/// Checks `selection.json` once more just before the rename that replaces it. Advisory locks
-/// can be unreliable on network file systems; a file that changed under the lock means another
-/// writer, and the write is abandoned instead of overwriting its change.
+/// What a guarded write expects to replace.
+#[derive(Clone, Copy)]
+enum Expected<'a> {
+    /// `selection.json`'s bytes as read under the lock; `None` for a missing file.
+    Bytes(Option<&'a [u8]>),
+    /// A library file's stamp when the caller loaded it.
+    Stamp(FileStamp),
+}
+
+/// Checks the file once more just before the rename that replaces it. Advisory locks can be
+/// unreliable on network file systems; a file that changed under the lock means another writer,
+/// and the write is abandoned instead of overwriting its change.
 struct Guarded<'a> {
     inner: &'a dyn AtomicFs,
     path: &'a Path,
-    expected: Option<&'a [u8]>,
+    expected: Expected<'a>,
     raced: Cell<bool>,
+}
+
+impl Guarded<'_> {
+    fn unchanged(&self) -> io::Result<bool> {
+        match self.expected {
+            Expected::Bytes(expected) => {
+                let now = match fs::read(self.path) {
+                    Ok(bytes) => Some(bytes),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e),
+                };
+                Ok(now.as_deref() == expected)
+            }
+            Expected::Stamp(expected) => match fs::metadata(self.path) {
+                Ok(meta) => Ok(stamp_of(&meta) == expected),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(e),
+            },
+        }
+    }
 }
 
 impl AtomicFs for Guarded<'_> {
@@ -204,14 +250,9 @@ impl AtomicFs for Guarded<'_> {
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        let now = match fs::read(self.path) {
-            Ok(bytes) => Some(bytes),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
-        };
-        if now.as_deref() != self.expected {
+        if !self.unchanged()? {
             self.raced.set(true);
-            return Err(io::Error::other("selection.json changed while it was being written"));
+            return Err(io::Error::other(format!("{} changed while it was being written", self.path.display())));
         }
         self.inner.rename(from, to)
     }

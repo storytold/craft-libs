@@ -4,14 +4,17 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{EDGE, ErrorKind, FormatError, FormatErrors, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, SCHEMA, SCHEMA_VERSION, ThemeFile, WELLS};
+use super::{
+    EDGE, ErrorKind, FormatError, FormatErrors, GRIP_MARK, GRIP_NUMBER, ICON_PACK, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, SCHEMA, SCHEMA_VERSION,
+    ThemeFile, WELLS,
+};
 use crate::color::Rgba;
 use crate::scale::Radius;
 use crate::theme::{
-    AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
+    AppOverrides, ContrastIntent, EdgeSeed, GripSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
 };
-use crate::tokens::{ColorToken, KnobShape, RadiusSet, Status, WellShape};
-use crate::{AppId, ThemeId};
+use crate::tokens::{ColorToken, GripMark, KnobShape, RadiusSet, Status, WellShape};
+use crate::{AppId, IconPackId, ThemeId};
 
 /// Parses and validates a theme file. Unknown keys are allowed anywhere except in colour maps, and
 /// kept for [`write`](super::write). Every field error is reported, not
@@ -148,6 +151,7 @@ impl Parser {
             self.choice(raw, "variants", Variants::Both, &[("both", Variants::Both), ("light", Variants::LightOnly), ("dark", Variants::DarkOnly)]);
         let contrast_intent =
             self.choice(raw, "contrast_intent", ContrastIntent::Standard, &[("standard", ContrastIntent::Standard), ("low", ContrastIntent::Low)]);
+        let icon_pack = self.icon_pack(raw);
         let seeds = self.seeds(raw);
         let shape = self.shape(raw);
         let pins = self.mode_pins(raw, variants, true);
@@ -169,6 +173,7 @@ impl Parser {
             pins: pins?,
             high_contrast: high_contrast?,
             contrast_intent,
+            icon_pack,
             apps: apps?,
         })
     }
@@ -189,6 +194,19 @@ impl Parser {
                 default
             }
         }
+    }
+
+    /// The pack id under `icon_pack`: `None` when absent or null. Only the form is checked; a pack that is not
+    /// installed draws the default icons.
+    fn icon_pack(&mut self, raw: &Map<String, Value>) -> Option<IconPackId> {
+        self.at("icon_pack", |p| match raw.get("icon_pack") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => IconPackId::parse(s).map_err(|_| p.fail(ErrorKind::BadValue { expected: ICON_PACK })).ok(),
+            Some(_) => {
+                p.fail(ErrorKind::WrongType { expected: "a string" });
+                None
+            }
+        })
     }
 
     fn seeds(&mut self, raw: &Map<String, Value>) -> Option<Seeds> {
@@ -249,7 +267,12 @@ impl Parser {
                     None
                 }
             });
+            let grip = match p.optional_object(shape, "grip") {
+                Some(g) => p.at("grip", |p| p.grip(g)).map(Some),
+                None => Some(None),
+            };
             Some(Some(ShapeSeed {
+                grip: grip?,
                 radius: radius?,
                 radius_offset: radius_offset?,
                 button_radius: button_radius?,
@@ -287,6 +310,40 @@ impl Parser {
         };
         let (control, surface, window) = (get("control"), get("surface"), get("window"));
         Some(RadiusOffset { control: control?, surface: surface?, window: window? })
+    }
+
+    /// `shape.grip`: the dock grips' marks. Each value is optional; a count is a whole number.
+    fn grip(&mut self, g: &Map<String, Value>) -> Option<GripSeed> {
+        let mark = self.at("mark", |p| match g.get("mark") {
+            None | Some(Value::Null) => Some(None),
+            Some(Value::String(s)) if s == "ticks" => Some(Some(GripMark::Ticks)),
+            Some(Value::String(s)) if s == "dots" => Some(Some(GripMark::Dots)),
+            Some(_) => {
+                p.fail(ErrorKind::BadValue { expected: GRIP_MARK });
+                None
+            }
+        });
+        let number = |p: &mut Self, key: &str, min: f32, max: f32, whole: bool| -> Option<Option<f32>> {
+            p.at(key, |p| match g.get(key) {
+                None | Some(Value::Null) => Some(None),
+                Some(v) => match v.as_f64().filter(|x| x.is_finite() && (!whole || x.fract() == 0.0)) {
+                    Some(x) if (f64::from(min)..=f64::from(max)).contains(&x) => Some(Some(x as f32)),
+                    Some(_) => {
+                        p.fail(ErrorKind::OutOfRange { min, max });
+                        None
+                    }
+                    None => {
+                        p.fail(ErrorKind::BadValue { expected: GRIP_NUMBER });
+                        None
+                    }
+                },
+            })
+        };
+        let count = number(self, "count", 1.0, 32.0, true);
+        let length = number(self, "length", 0.5, 16.0, false);
+        let width = number(self, "width", 0.5, 8.0, false);
+        let gap = number(self, "gap", 0.5, 16.0, false);
+        Some(GripSeed { mark: mark?, count: count?.map(|c| c as u16), length: length?, width: width?, gap: gap? })
     }
 
     /// A signed length in logical pixels.
@@ -456,9 +513,10 @@ impl Parser {
                         Some(hc) => p.at("high_contrast", |p| p.mode_pins(hc, variants, false)),
                         None => Some(ModePins::default()),
                     };
-                    match (pins, high_contrast) {
-                        (Some(pins), Some(high_contrast)) => {
-                            out.insert(id, AppOverrides { pins, high_contrast });
+                    let shape = p.shape(app);
+                    match (pins, high_contrast, shape) {
+                        (Some(pins), Some(high_contrast), Some(shape)) => {
+                            out.insert(id, AppOverrides { pins, high_contrast, shape });
                             true
                         }
                         _ => false,

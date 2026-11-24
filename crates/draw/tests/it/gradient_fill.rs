@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use craft_behavior::EditEvent;
 use craft_color_ui::ui::gradient::{ColorStop, GradientStops};
-use craft_draw::ui::gradient::{GradientFill, GradientFillEditor, GradientGroup, GradientItem, GradientRef, GradientStyle};
+use craft_draw::ui::gradient::{
+    FocusOutline, GradientFill, GradientFillEditor, GradientGroup, GradientItem, GradientRef, GradientStyle, GradientTile,
+};
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::presets::PresetState;
@@ -109,4 +111,58 @@ fn each_row_reports_one_gesture_of_the_whole_fill() {
     for value in events.iter().filter_map(EditEvent::value) {
         assert_eq!(value, &expected, "the preset replaces the stops with centred midpoints and keeps the rest");
     }
+}
+
+#[trial]
+fn a_style_tile_samples_its_parameter_from_the_start_point_outward() {
+    let tile = |style, angle| GradientTile::Style { style, angle };
+    let t = |tile: GradientTile, x: f32, y: f32| tile.t_at(vec2(x, y));
+
+    // Linear at -90 runs down: 0 at the top, 1 at the bottom, equal along a row.
+    let down = tile(GradientStyle::Linear, -90.0);
+    assert!(t(down, 0.5, 0.0) < 0.01 && t(down, 0.5, 1.0) > 0.99);
+    assert!(t(down, 0.5, 0.25) < t(down, 0.5, 0.75));
+    assert!((t(down, 0.1, 0.4) - t(down, 0.9, 0.4)).abs() < 1e-4);
+    // At -45 the start is the top-left corner and the end the bottom-right.
+    let diagonal = tile(GradientStyle::Linear, -45.0);
+    assert!(t(diagonal, 0.0, 0.0) < 0.01 && t(diagonal, 1.0, 1.0) > 0.99);
+
+    // Radial is 0 at the centre and equal on a circle round it.
+    let radial = tile(GradientStyle::Radial, 0.0);
+    assert!(t(radial, 0.5, 0.5) < 0.01);
+    assert!(t(radial, 0.5, 0.5) < t(radial, 0.6, 0.5) && t(radial, 0.6, 0.5) < t(radial, 0.8, 0.5));
+    assert!((t(radial, 0.7, 0.5) - t(radial, 0.5, 0.3)).abs() < 1e-4);
+
+    // Reflected is mirrored about the centre.
+    let mirrored = tile(GradientStyle::Reflected, 0.0);
+    assert!(t(mirrored, 0.5, 0.5) < 0.01);
+    assert!((t(mirrored, 0.8, 0.3) - t(mirrored, 0.2, 0.7)).abs() < 1e-4);
+    assert!(t(mirrored, 0.6, 0.5) < t(mirrored, 0.9, 0.5));
+
+    // Diamond isolines run through the points of equal |dx| + |dy|, which a circle does not.
+    let diamond = tile(GradientStyle::Diamond, 0.0);
+    assert!((t(diamond, 0.7, 0.5) - t(diamond, 0.6, 0.6)).abs() < 1e-4);
+    assert!(t(diamond, 0.5, 0.5) < 0.01);
+
+    // Angle sweeps counter-clockwise from the start direction, rising round the centre.
+    let sweep = tile(GradientStyle::Angle, 0.0);
+    assert!(t(sweep, 0.9, 0.5) < 0.01);
+    assert!(t(sweep, 0.9, 0.5) < t(sweep, 0.5, 0.1), "up is a quarter turn counter-clockwise");
+    assert!(t(sweep, 0.5, 0.1) < t(sweep, 0.1, 0.5));
+    assert!(t(sweep, 0.1, 0.5) < t(sweep, 0.5, 0.9));
+
+    // Focus: 0 at the focus centre, rising outward; circles round, rectangles square.
+    let focus = egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.75, 0.75));
+    let circle = GradientTile::Focus { outline: FocusOutline::Circle, focus };
+    let rect = GradientTile::Focus { outline: FocusOutline::Rect, focus };
+    for tile in [circle, rect] {
+        assert!(t(tile, 0.5, 0.5) < 0.01);
+        assert!(t(tile, 0.5, 0.5) < t(tile, 0.6, 0.5) && t(tile, 0.6, 0.5) < t(tile, 0.9, 0.5));
+        assert!((t(tile, 0.7, 0.5) - t(tile, 0.5, 0.3)).abs() < 1e-4);
+    }
+    // Both reach 1 at the farthest corner, so a diagonal step reads the same in both; along an axis the rectangle's
+    // square isoline is nearer the centre than the circle's, so it rises faster there.
+    assert!((t(circle, 0.7, 0.7) - t(rect, 0.7, 0.7)).abs() < 1e-4, "both outlines reach the corner together");
+    assert!(t(rect, 0.9, 0.5) > t(circle, 0.9, 0.5) + 0.05, "along an axis a rectangle rises faster than a circle");
+    assert!((t(rect, 0.7, 0.7) - t(rect, 0.7, 0.5)).abs() < 1e-4, "a rectangle's isoline is square");
 }

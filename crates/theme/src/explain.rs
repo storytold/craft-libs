@@ -126,9 +126,13 @@ fn source_words(source: ColorSource, anchored_on: Option<ColorToken>) -> String 
         ColorSource::Fixed(c) => format!("fixed {}", c.to_hex()),
         ColorSource::Oklch(l, c, h) => format!("oklch {l} {c} {h}"),
         ColorSource::Same(t) | ColorSource::SolidFrom(t) => format!("= {}", t.path()),
-        ColorSource::ShiftedFrom { base, from, to, away_from } => {
-            format!("= {} moved away from {} as far as {} lies from {}", base.path(), away_from.path(), to.path(), from.path())
-        }
+        ColorSource::ShiftedFrom { base, from, to, away_from, min } => format!(
+            "= {} moved away from {} as far as {} lies from {}, at least {min} lightness (toward it when there is no room)",
+            base.path(),
+            away_from.path(),
+            to.path(),
+            from.path()
+        ),
         ColorSource::OnSolid([only]) => format!("white or black on {}", only.path()),
         ColorSource::OnSolid(solids) => match solids.first() {
             Some(first) => format!("white or black on {} and {} more solids", first.path(), solids.len() - 1),
