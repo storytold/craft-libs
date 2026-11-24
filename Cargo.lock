@@ -1846,6 +1846,7 @@ dependencies = [
  "craft-lottie",
  "craft-macho",
  "craft-markdown",
+ "craft-material-graph",
  "craft-materialx",
  "craft-math",
  "craft-mcmat",
@@ -2754,7 +2755,9 @@ dependencies = [
  "epaint_default_fonts",
  "log",
  "serde",
- "skrifa 0.44.0",
+ "serde_json",
+ "skrifa 0.47.0",
+ "wuff",
 ]
 
 [[package]]
@@ -3227,6 +3230,14 @@ dependencies = [
  "craft-flow",
  "craft-html",
  "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-material-graph"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "rayon",
 ]
 
 [[package]]

@@ -17,6 +17,7 @@
 pub mod filter;
 pub mod index;
 pub mod installed;
+pub mod remote;
 pub mod store;
 
 pub mod axes;
