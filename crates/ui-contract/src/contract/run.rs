@@ -1021,7 +1021,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     };
     if !inert && registers {
         let sensed = craft_behavior::WheelTaker::for_sense(id, rect, own).map(|taker| taker.notch(e.wheel_notch()));
-        steps::register_wheel(&ctx, id, rect, sensed, e.bound().0 && !facts.binds_view, facts.text(), env.wheel);
+        steps::register_wheel(&ctx, sensed, e.bound().0 && !facts.binds_view, facts.text(), env.wheel);
     }
     // 8 sense
     p.trace.mark(Step::Sense);

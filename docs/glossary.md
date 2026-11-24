@@ -250,6 +250,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `Sense` | The library's sense set for a root or part | craft-behavior | 1.1 |
 | `Sense::TAKE_FOCUS` | A sense bit: a press this shape wins moves key focus to its component | craft-behavior | 1.1, 8.3 |
 | `Sense::WHEEL_X` | A sense bit: takes the horizontal wheel share without focus or arming | craft-behavior | 1.1, 8.6 |
+| `Sense::WHEEL_Y_FOCUSED` | A sense bit: takes the vertical wheel share only while focused or armed, in any wheel scope | craft-behavior | 1.1, 8.6 |
 | `SetPosition` | An item's index, set size and level for AccessKit | `craft_ui::runtime::access` | 12.1 |
 | Settle | Step 15 | `craft_ui::contract` | 1.6 |
 | `ShellInfo` | OS, runtime, backend, capabilities, menu placement and window info | craft-host (`target`) | 21.1 |

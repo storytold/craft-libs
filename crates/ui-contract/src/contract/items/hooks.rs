@@ -238,7 +238,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             if cx.core.resolved.enabled
                 && let Some(taker) = WheelTaker::for_sense(cx.core.id, cx.core.rect, crate::contract::Component::sense(comp))
             {
-                wheel::register(&cx.core.ctx, taker.notch(self.notch).gated(cx.core.env.wheel() == WheelScope::Gated));
+                wheel::register(&cx.core.ctx, taker.notch(self.notch).gated(taker.gated || cx.core.env.wheel() == WheelScope::Gated));
             }
         } else if self.scrolls {
             // The taker covers the whole collection, header row and frame included: the wheel over the header scrolls

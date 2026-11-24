@@ -1,6 +1,6 @@
 //! `TextField`: the search form's clear part empties the text; a multi-line field grows to `max_lines` or fills its
-//! room and scrolls its text inside; a bound caret goes both ways; the wheel over a focused field scrolls the form
-//! around it.
+//! room and scrolls its text inside; a bound caret goes both ways; the wheel over a focused field or check box scrolls
+//! the form around it, and a focused number field or range still takes it.
 
 use craft_behavior::PartKey;
 use craft_ui::contract::{Bind, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
@@ -350,4 +350,52 @@ fn the_wheel_over_a_focused_text_field_scrolls_the_form_around_it() {
     assert_ne!(value.get(), Some(10.0), "the wheel steps the focused number field");
     let still = fixture.by_label("Size").expect("the Size field").rect;
     assert!((still.top() - field.rect.top()).abs() <= SNAP, "and the form stays put: {:?} to {still:?}", field.rect);
+}
+
+/// The wheel over a focused check box, which neither senses nor reads the wheel, scrolls the form around it; a range
+/// slider, which senses the wheel only while focused (`Sense::WHEEL_Y_FOCUSED`), still steps its focused thumb and
+/// keeps the form still.
+#[trial]
+fn the_wheel_over_a_focused_check_box_scrolls_the_form_and_a_focused_range_steps() {
+    use craft_behavior::Mixed;
+    use craft_ui::choice::Checkbox;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::value_drag::RangeSlider;
+
+    let agreed = Rc::new(Cell::new(false));
+    let shown = Rc::clone(&agreed);
+    let mut fixture = scrolling_form(move |ui| {
+        let mut on = shown.get();
+        Checkbox::new(Bind::bound(&mut on)).label("Agree").id_salt("agree").show(ui);
+        shown.set(on);
+    });
+    let check = fixture.by_label("Agree").expect("the Agree check box");
+    fixture.access(AccessActionKind::Focus, &check).settle();
+    assert!(fixture.focused_stop().is_some(), "the check box holds focus");
+    fixture.frame(vec![pointer::moved(check.center())]);
+    fixture.frame(vec![pointer::wheel(-40.0)]);
+    fixture.idle(3);
+    let moved = fixture.by_label("Agree").expect("the Agree check box").rect;
+    assert!(moved.top() < check.rect.top() - 1.0, "the wheel scrolls the form, moving the check box up: {:?} to {moved:?}", check.rect);
+    assert!(!agreed.get(), "the wheel leaves the check box's value alone");
+
+    let start = (Mixed::Same(20.0), Mixed::Same(80.0));
+    let range = Rc::new(Cell::new(start));
+    let rect = Rc::new(Cell::new(Rect::NOTHING));
+    let (held, seen) = (Rc::clone(&range), Rc::clone(&rect));
+    let mut fixture = scrolling_form(move |ui| {
+        let mut pair = held.get();
+        seen.set(RangeSlider::new(Bind::bound(&mut pair), 0.0..=100.0).label("Hue").id_salt("hue").show(ui).response.rect);
+        held.set(pair);
+    });
+    let slider = rect.get();
+    // A click on the span between the thumbs focuses the nearer one and moves neither.
+    fixture.click_at(slider.center()).settle();
+    assert!(fixture.focused_stop().is_some_and(|(_, part)| part.is_some()), "the click focuses a thumb");
+    assert_eq!(range.get(), start, "the click moves neither thumb");
+    fixture.frame(vec![pointer::moved(slider.center())]);
+    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    fixture.idle(3);
+    assert_ne!(range.get(), start, "the wheel steps the focused thumb");
+    assert!((rect.get().top() - slider.top()).abs() <= SNAP, "and the form stays put: {slider:?} to {:?}", rect.get());
 }
