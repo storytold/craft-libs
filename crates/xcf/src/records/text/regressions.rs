@@ -97,13 +97,70 @@ fn bare_atoms_end_at_comments_but_quoted_hashes_remain_literal() {
 }
 
 #[test]
+fn both_text_readers_decode_octal_as_a_byte_and_keep_lexical_source() {
+    for (input, decoded, modern_text, legacy_text) in [
+        (r"X\101Y", b"XAY".as_slice(), Some("XAY"), "XAY"),
+        (r"X\501Y", b"XAY".as_slice(), Some("XAY"), "XAY"),
+        (r"X\377Y", b"X\xffY".as_slice(), None, "X\u{ff}Y"),
+        (r"X\400Y", b"X\0Y".as_slice(), Some("X"), "X"),
+    ] {
+        let modern = format!("(text \"{input}\")");
+        let scan = gimp(modern.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        let record = &scan.records[0];
+        assert_eq!(record.raw, modern.as_bytes());
+        let atom = &record.config().unwrap().field("text").unwrap().unwrap()[0];
+        assert_eq!(atom.bytes().unwrap(), decoded);
+        let span = atom.span();
+        assert_eq!(&modern[span.start..span.end], format!("\"{input}\""));
+        if let Some(expected) = modern_text {
+            assert_eq!(record.text().unwrap(), Some(expected));
+        } else {
+            assert!(record.text().is_err());
+        }
+
+        let legacy = super::tests::legacy_bytes(input, "iso8859");
+        let scan = gdyntext(&legacy, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        let record = &scan.records[0];
+        assert_eq!(record.raw, legacy);
+        assert_eq!(record.text().unwrap(), Some(legacy_text));
+        let Source::Gdyntext(fields) = &record.source else { panic!("legacy") };
+        assert_eq!(fields.fields[0], input);
+    }
+}
+
+#[test]
+fn gdyntext_cancellation_at_publication_refunds_retention_only() {
+    let raw = super::tests::legacy_bytes("valid text", "iso8859");
+    let mut budget = Budget::default();
+    let retained = budget.retained_remaining();
+    let work = budget.work_remaining();
+    let polls = std::cell::Cell::new(0);
+    let keep = || {
+        polls.set(polls.get() + 1);
+        // One admission, a poll for each of the eight fields and their scans,
+        // and one decoded-text poll precede the final publication check.
+        polls.get() <= 18
+    };
+    assert!(matches!(gdyntext(&raw, 0, Limits::default(), &mut budget, &keep), Err(crate::Error::Cancelled)));
+    assert_eq!(budget.retained_remaining(), retained);
+    assert!(budget.work_remaining() < work);
+    let scan = gdyntext(&raw, 0, Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(scan.records[0].text().unwrap(), Some("valid text"));
+}
+
+#[test]
 fn literal_legacy_nul_is_rejected_in_every_field_except_the_optional_terminator() {
     let original = super::tests::legacy_bytes("valid text", "iso8859");
     let scan = gdyntext(&original, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
     let Source::Gdyntext(legacy) = &scan.records[0].source else { panic!("legacy") };
-    for span in &legacy.spans {
+    let body = original.strip_prefix(b"GDT10{").unwrap().strip_suffix(b"}").unwrap();
+    let starts = [6].into_iter().chain(body.windows(2).enumerate().filter_map(|(index, pair)| (pair == b"}{").then_some(index + 8)));
+    let starts: Vec<_> = starts.collect();
+    assert_eq!(starts.len(), 8);
+    assert_eq!(legacy.spans.iter().map(|span| span.start).collect::<Vec<_>>(), starts);
+    for start in starts {
         let mut raw = original.clone();
-        raw.splice(span.start + 1..span.start + 1, b"\0junk".iter().copied());
+        raw.splice(start + 1..start + 1, b"\0junk".iter().copied());
         let scan = gdyntext(&raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
         assert!(scan.records.is_empty());
         assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);

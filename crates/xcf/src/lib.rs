@@ -884,14 +884,14 @@ impl<'a> Xcf<'a> {
             return Err(Error::Cancelled);
         }
         let precision = self.image.precision;
-        let head = self.hierarchy_head(hptr, source_channels)?;
+        let mut head = self.hierarchy_head(hptr, source_channels)?;
         let (w, h, bpp) = (head.width, head.height, head.bpp);
         let channels = if indexed { source_channels + 2 } else { source_channels };
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
         let across = w.div_ceil(TILE) as usize;
-        let tiles = self.hierarchy_tiles(&head, false, excluded, keep_going)?;
+        let tiles = self.hierarchy_tiles(&mut head, false, excluded, keep_going)?;
         if !keep_going() {
             return Err(Error::Cancelled);
         }

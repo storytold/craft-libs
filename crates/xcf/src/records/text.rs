@@ -360,7 +360,8 @@ impl<'a> Parser<'a, '_> {
                                     break;
                                 }
                             }
-                            u8::try_from(value).map_err(|_| Failure::Stop(StopReason::Malformed))?
+                            // One to three octal digits encode a single byte modulo 256.
+                            value.to_le_bytes()[0]
                         }
                         b'n' => b'\n',
                         b'r' => b'\r',
@@ -764,6 +765,7 @@ pub fn gdyntext<'a>(
         for field in font_fields {
             parser.budget.retain(&mut stored_font_fields, field)?;
         }
+        parser.check()?;
         Ok(TextRecord {
             raw: bytes,
             span: Span { start: source_offset, end },

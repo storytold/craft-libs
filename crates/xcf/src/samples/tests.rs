@@ -1127,6 +1127,60 @@ fn corroborated_dummy_level_headers_bound_tile_payloads() {
 }
 
 #[test]
+fn unused_mip_pointer_into_primary_terminator_does_not_hide_complete_tiles() {
+    let mut source = Source::gray(150, 1, vec![0]);
+    source.version = 11;
+    let mut file = W { out: source.write(), wide: true };
+    let hierarchy = file.out.len();
+    for word in [1, 65, 1] {
+        file.u32(word);
+    }
+    let level_slot = file.slot();
+    let dummy_slot = file.slot();
+    file.ptr(0);
+    let level = file.out.len();
+    file.patch(level_slot, level);
+    file.u32(1);
+    file.u32(65);
+    let first_slot = file.slot();
+    let second_slot = file.slot();
+    file.ptr(0);
+    let first = file.out.len();
+    // The terminator suffix and the first eight pixels resemble a 0x32 dummy.
+    file.patch(dummy_slot, first - 4);
+    file.patch(first_slot, first);
+    let mut expected = [0; 65];
+    expected[3] = 32;
+    expected[64] = 74;
+    file.patch(second_slot, first + 64);
+    file.out.extend(expected);
+    let reader = Xcf::parse(&file.out).unwrap();
+    assert_eq!(reader.hierarchy(hierarchy, 1, false, &mut (65 * 4), GO).unwrap().data, expected.map(|value| f32::from(value) / 255.));
+    let mut raw = Vec::new();
+    reader
+        .visit_hierarchy(
+            VisitTarget {
+                pointer: hierarchy,
+                channels: 1,
+                indexed: false,
+                dimensions: Some((1, 65)),
+                coverage: false,
+                transfer_is_assumed: false,
+                excluded_source: None,
+            },
+            SampleOptions::default(),
+            &mut 65,
+            GO,
+            |tile| {
+                raw.extend_from_slice(tile.data);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(raw, expected);
+}
+
+#[test]
 fn full_first_level_tables_must_not_overlap_the_hierarchy() {
     for version in [10, 11] {
         for overlap in [0, 1] {
@@ -1848,8 +1902,8 @@ fn mask_role_framing_polls_cancellation_without_retaining_metadata() {
 mod selection_roles;
 
 #[test]
-fn mask_confirmation_keeps_zero_length_names_and_rejects_tail_crossing_forward_hierarchy() {
-    for missing_tail in [false, true] {
+fn mask_transfer_requires_a_disjoint_addressable_hierarchy_and_a_complete_tail() {
+    for placement in ["forward", "backward", "overlap", "eof", "no-tail"] {
         let mut source = Source::gray(650, 4, [0.25f32, 0.75].into_iter().flat_map(f32::to_be_bytes).collect());
         source.kind = 3;
         source.channels = 2;
@@ -1874,6 +1928,13 @@ fn mask_confirmation_keeps_zero_length_names_and_rejects_tail_crossing_forward_h
         props(&mut cursor).unwrap();
         cursor.ptr().unwrap();
         let mask_slot = cursor.pos;
+        let backward = if placement == "backward" {
+            hierarchy(&mut file, 1, 1, 4, &0f32.to_be_bytes(), Compression::None)
+        } else {
+            // Reserve a prefix for a fixed header that would cross the mask start.
+            file.u32(1);
+            file.out.len() - 4
+        };
         let mask = file.out.len();
         file.patch(target_slot, mask);
         file.patch(mask_slot, mask);
@@ -1882,10 +1943,15 @@ fn mask_confirmation_keeps_zero_length_names_and_rejects_tail_crossing_forward_h
         file.u32(0);
         file.end();
         let hierarchy_slot = file.slot();
-        if !missing_tail {
+        if placement != "no-tail" {
             file.ptr(0);
         }
-        let hierarchy = hierarchy(&mut file, 1, 1, 4, &0f32.to_be_bytes(), Compression::None);
+        let hierarchy = match placement {
+            "backward" | "overlap" => backward,
+            "eof" => file.out.len(),
+            _ => hierarchy(&mut file, 1, 1, 4, &0f32.to_be_bytes(), Compression::None),
+        };
+        let confirmed = matches!(placement, "forward" | "backward");
         file.patch(hierarchy_slot, hierarchy);
         let reader = Xcf::parse(&file.out).unwrap();
         let info = reader
@@ -1895,16 +1961,16 @@ fn mask_confirmation_keeps_zero_length_names_and_rejects_tail_crossing_forward_h
             })
             .unwrap()
             .unwrap();
-        assert_eq!(info.transfer_is_assumed, missing_tail);
-        assert_eq!(info.precision.transfer, if missing_tail { Transfer::Nonlinear } else { Transfer::Linear });
+        assert_eq!(info.transfer_is_assumed, !confirmed, "{placement}");
+        assert_eq!(info.precision.transfer, if confirmed { Transfer::Linear } else { Transfer::Nonlinear });
         let visit = reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut 4, GO, |tile| {
             assert_eq!(tile.sample(0)?, SourceSample::F32(0.0));
             Ok(())
         });
-        if missing_tail {
-            assert!(visit.is_err());
-        } else {
+        if confirmed {
             assert!(visit.unwrap().is_some());
+        } else {
+            assert!(visit.is_err(), "{placement}");
         }
     }
 }
@@ -1936,41 +2002,8 @@ fn channel_tail_forward_boundary_is_checked_before_work_and_keeps_typed_work_ref
 }
 
 #[test]
-fn pre26_channel_tail_recognizes_only_one_adjacent_zero_and_keeps_direct_and_gap_layouts() {
+fn pre26_public_channel_visitors_follow_tiles_in_gaps_including_adjacent_zeros() {
     for version in [10, 11, 22] {
-        for (gap, zero, consumed) in [(0, true, 0), (1, true, 1), (1, false, 0), (2, true, 0)] {
-            let mut source = Source::gray(150, 1, vec![22]);
-            source.version = version;
-            let bytes = source.write();
-            let reader = Xcf::parse(&bytes).unwrap();
-            let width = if version >= 11 { 8 } else { 4 };
-            let mut data = vec![if zero { 0 } else { 1 }; gap * width];
-            data.extend([1u32.to_be_bytes(), 1u32.to_be_bytes(), 1u32.to_be_bytes()].concat());
-            let hierarchy = gap * width;
-            let mut cursor = crate::Cursor { b: &data, pos: 0, wide: version >= 11 };
-            reader.channel_effects_tail(&mut cursor, hierarchy, GO, None).unwrap();
-            assert_eq!(cursor.pos, consumed * width);
-            if gap == 1 && zero {
-                let mut short = crate::records::Budget::new(width + 11, 0);
-                let mut cursor = crate::Cursor { b: &data, pos: 0, wide: version >= 11 };
-                assert!(matches!(
-                    reader.channel_effects_tail(&mut cursor, hierarchy, GO, Some(&mut short)),
-                    Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
-                ));
-                assert_eq!(cursor.pos, 0);
-                let mut invalid = data.clone();
-                invalid[hierarchy..hierarchy + 4].copy_from_slice(&0u32.to_be_bytes());
-                let mut cursor = crate::Cursor { b: &invalid, pos: 0, wide: version >= 11 };
-                reader.channel_effects_tail(&mut cursor, hierarchy, GO, None).unwrap();
-                assert_eq!(cursor.pos, 0, "a zero gap without plausible hierarchy framing remains a gap");
-            }
-        }
-    }
-}
-
-#[test]
-fn pre26_public_channel_visitors_exclude_only_the_corroborated_adjacent_terminator() {
-    for version in [10, 11, 23] {
         for (gap, zero) in [(0, true), (1, true), (1, false), (2, true)] {
             for points_to_gap in [false, true] {
                 if gap == 0 && points_to_gap {
@@ -2018,17 +2051,15 @@ fn pre26_public_channel_visitors_exclude_only_the_corroborated_adjacent_terminat
                     } else {
                         reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut 2, GO, visit).map(|_| ())
                     };
-                    let legacy =
-                        if role == "channel" { reader.channel(0, &mut 8, GO).map(|_| ()) } else { reader.layer_mask(0, &mut 8, GO).map(|_| ()) };
-                    if points_to_gap && gap == 1 && zero {
-                        assert!(result.is_err());
-                        assert!(legacy.is_err());
-                        assert!(seen.is_empty());
+                    let legacy = if role == "channel" {
+                        reader.channel(0, &mut 8, GO).unwrap().1
                     } else {
-                        result.unwrap();
-                        legacy.unwrap();
-                        assert_eq!(seen, if points_to_gap { vec![if zero { 0 } else { 77 }; 2] } else { vec![22, 44] });
-                    }
+                        reader.layer_mask(0, &mut 8, GO).unwrap().unwrap().1
+                    };
+                    result.unwrap();
+                    let expected = if points_to_gap { [if zero { 0 } else { 77 }; 2] } else { [22, 44] };
+                    assert_eq!(seen, expected, "v{version} {role}, {gap} gap words");
+                    assert_eq!(legacy.data, expected.map(|value| f32::from(value) / 255.));
                 }
             }
         }

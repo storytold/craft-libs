@@ -324,6 +324,11 @@ impl Xcf<'_> {
                 }
                 let hierarchy = cursor.ptr()?;
                 self.channel_effects_tail(&mut cursor, hierarchy, keep_going, None)?;
+                let fixed_size = 12 + if cursor.wide { 8 } else { 4 };
+                let end = hierarchy.checked_add(fixed_size).ok_or_else(|| invalid("mask hierarchy header overflow"))?;
+                if hierarchy == 0 || end > cursor.b.len() || (hierarchy < cursor.pos && end > owner.mask) {
+                    return Err(invalid("mask hierarchy header is outside the file or overlaps its record"));
+                }
                 return Ok(());
             }
             if count == 4096 || length > crate::MAX_PAYLOAD {
@@ -446,32 +451,13 @@ impl Xcf<'_> {
         keep_going: &dyn Fn() -> bool,
         mut budget: Option<&mut crate::records::Budget>,
     ) -> std::result::Result<(), ChannelTailError> {
-        let width = if self.c.wide { 8 } else { 4 };
         if self.image.version < 26 {
-            // Older documented files put the hierarchy directly after its
-            // pointer. A later writer may insert one zero terminator there:
-            // recognize only exact adjacency, never scan an arbitrary gap.
-            if cursor.pos.checked_add(width) == Some(hierarchy) {
-                if !keep_going() {
-                    return Err(Error::Cancelled.into());
-                }
-                if let Some(budget) = budget.as_deref_mut() {
-                    budget.work(width).map_err(ChannelTailError::Metadata)?;
-                }
-                if cursor.b.get(cursor.pos..hierarchy).is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0)) {
-                    if let Some(budget) = budget.as_deref_mut() {
-                        budget.work(12).map_err(ChannelTailError::Metadata)?;
-                    }
-                    let mut header = cursor.at(hierarchy);
-                    let plausible = matches!((header.u32(), header.u32(), header.u32()), (Ok(w), Ok(h), Ok(bpp))
-                        if w != 0 && h != 0 && w <= crate::MAX_SIDE && h <= crate::MAX_SIDE && bpp as usize == self.image.precision.bytes);
-                    if plausible {
-                        cursor.take(width)?;
-                    }
-                }
-            }
+            // Older channels end at their hierarchy pointer. A later writer may
+            // leave a zero word in the gap, but only a tile pointer can establish
+            // that bytes in the gap are samples.
             return Ok(());
         }
+        let width = if self.c.wide { 8 } else { 4 };
         let forward_boundary = (hierarchy != 0 && hierarchy >= cursor.pos).then_some(hierarchy);
         for count in 0..=1024 {
             if !keep_going() {
@@ -618,7 +604,7 @@ impl Xcf<'_> {
 
     pub(super) fn hierarchy_tiles(
         &self,
-        head: &HierarchyHead,
+        head: &mut HierarchyHead,
         allow_empty: bool,
         excluded: Option<&std::ops::Range<usize>>,
         keep_going: &dyn Fn() -> bool,
@@ -651,6 +637,13 @@ impl Xcf<'_> {
         if overlaps(head.level, level.pos) {
             return Err(invalid("a level table overlaps its source record"));
         }
+        // An unused mip pointer cannot establish dummy framing inside the
+        // validated primary table, even when adjacent pixels match its fields.
+        for candidate in &mut head.dummy_headers {
+            if candidate.is_some_and(|(start, end)| start < level.pos && end > head.level) {
+                *candidate = None;
+            }
+        }
         Ok(offsets)
     }
 
@@ -667,7 +660,7 @@ impl Xcf<'_> {
         }
         let VisitTarget { pointer, channels, indexed, dimensions, coverage, transfer_is_assumed, excluded_source } = target;
         let order = self.source_order(options)?;
-        let head = self.hierarchy_head(pointer, channels)?;
+        let mut head = self.hierarchy_head(pointer, channels)?;
         if dimensions.is_some_and(|size| size != (head.width, head.height)) {
             return Err(invalid("drawable dimensions do not match their hierarchy"));
         }
@@ -682,7 +675,7 @@ impl Xcf<'_> {
             return Err(invalid("drawable exceeds the source pixel limit"));
         }
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the source pixel limit"))?;
-        let offsets = self.hierarchy_tiles(&head, true, excluded_source.as_ref(), keep_going)?;
+        let offsets = self.hierarchy_tiles(&mut head, true, excluded_source.as_ref(), keep_going)?;
         let mut precision = self.source_precision();
         if coverage {
             // Layer masks contain coverage, not color in the image's transfer.

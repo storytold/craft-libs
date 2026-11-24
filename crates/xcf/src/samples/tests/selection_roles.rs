@@ -151,5 +151,25 @@ fn shared_saved_channel_fixtures_have_the_versioned_effect_tail() {
                 .unwrap();
             assert_eq!(channel.selection, index == 1);
         }
+        if version == 25 {
+            // Decode through the hierarchy immediately following the record. If
+            // the writer inserts v26 framing here, this points at it and fails.
+            let mut cursor = reader.c.at(reader.channels[1]);
+            cursor.take(8).unwrap();
+            cursor.string().unwrap();
+            props(&mut cursor).unwrap();
+            let hierarchy_slot = cursor.pos;
+            cursor.ptr().unwrap();
+            let record_end = cursor.pos;
+            let mut file = W { out: bytes, wide: true };
+            file.patch(hierarchy_slot, record_end);
+            let reader = Xcf::parse(&file.out).unwrap();
+            reader
+                .visit_channel_tiles(1, SampleOptions::default(), &mut 2, GO, |tile| {
+                    assert_eq!(tile.data, [29, 193]);
+                    Ok(())
+                })
+                .unwrap();
+        }
     }
 }
