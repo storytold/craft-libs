@@ -1,7 +1,7 @@
 //! The `Overlay` data, its presets and builders, its dismissal rules and the placement changes it reports.
 
 use super::opener::{Opener, Trigger};
-use super::place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};
+use super::place::{Anchor, DragBounds, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};
 use crate::runtime::access::PopupKind;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::motion::{MotionSpec, spec};
@@ -109,6 +109,9 @@ pub struct Overlay {
     pub min_width: MinWidth,
     /// Whether the user may move it.
     pub movable: bool,
+    /// How much of it stays inside the window when the user moves it or it floats at a position (default
+    /// [`DragBounds::Inside`]).
+    pub drag_bounds: DragBounds,
     /// How the user may resize it.
     pub resize: Resize,
     /// Its rank.
@@ -180,6 +183,7 @@ impl Overlay {
             fit,
             min_width: MinWidth::None,
             movable: false,
+            drag_bounds: DragBounds::Inside,
             resize: Resize::NONE,
             rank,
             keys,
@@ -458,6 +462,13 @@ impl Overlay {
     /// Sets whether the user may move it.
     pub fn movable(mut self, on: bool) -> Overlay {
         self.movable = on;
+        self
+    }
+
+    /// Sets how much of the layer stays inside the window when the user moves it ([`DragBounds`]):
+    /// [`DragBounds::TitleVisible`] lets a dialog go past the window's edges with its title band left to grab.
+    pub fn drag_bounds(mut self, bounds: DragBounds) -> Overlay {
+        self.drag_bounds = bounds;
         self
     }
 
