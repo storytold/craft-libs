@@ -256,7 +256,8 @@ fn number_field_inline_focused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
     inline_fields(ui, data)
 }
 
-/// Fields at the measured precision ([`NumberPrecision::Measured`]): a percentage reads whole.
+/// Fields at the measured precision ([`NumberPrecision::Measured`]): a percentage reads whole, a length to a thousandth
+/// of a point.
 #[story(NumberField<'static>, covers = [], drive = Drive::Never, title = "Measured precision")]
 fn number_field_measured(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let out = with_env(
@@ -269,6 +270,10 @@ fn number_field_measured(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .show(ui, |ui, _| {
                     let first = row("Percent").show(ui, |ui, _| {
                         NumberField::new("Opacity", data.bind("opacity", Some(60.0))).range(RANGE).unit_kind(UnitKind::Percent).show(ui).edit
+                    });
+                    row("Length").show(ui, |ui, _| {
+                        let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+                        NumberField::length("X", data.bind("x", Some(357.1138)), lengths).show(ui);
                     });
                     first.inner
                 })

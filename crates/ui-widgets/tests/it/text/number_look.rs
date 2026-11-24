@@ -90,3 +90,29 @@ fn a_percent_at_the_measured_precision_reads_whole() {
     assert!(standard.starts_with("60") && measured.starts_with("60"), "both show the value: {standard:?} {measured:?}");
     assert!(measured.len() < standard.len() && !measured.contains(['.', ',']), "the measured percent is whole: {measured:?}, standard {standard:?}");
 }
+
+/// At the measured precision a length shows more of its decimals than the standard precision, and none past the
+/// value's own ("720", not "720.000").
+#[trial]
+fn a_length_at_the_measured_precision_shows_finer_decimals() {
+    let number = |value: f64, precision: Option<NumberPrecision>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+            NumberField::length("X", Bind::bound(&mut Some(value)), lengths).show(ui);
+        });
+        if let Some(precision) = precision {
+            fixture.root_value(precision);
+        }
+        fixture.settle();
+        let tree = fixture.tree();
+        tree.keys()
+            .into_iter()
+            .find_map(|key| tree.value_of(key).filter(|text| text.starts_with(&value.trunc().to_string())).map(str::to_owned))
+            .unwrap_or_default()
+    };
+    let (standard, measured) = (number(357.1138, None), number(357.1138, Some(NumberPrecision::Measured)));
+    let digits = |text: &str| text.chars().filter(char::is_ascii_digit).count();
+    assert!(digits(&measured) > digits(&standard), "the measured length shows more decimals: {measured:?}, standard {standard:?}");
+    let whole = number(720.0, Some(NumberPrecision::Measured));
+    assert!(!whole.is_empty() && whole == number(720.0, None), "a whole length shows no trailing zeros: {whole:?}");
+}

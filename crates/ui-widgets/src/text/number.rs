@@ -94,7 +94,9 @@ pub enum NumberPrecision {
     /// A percentage reads one decimal, written in full ("100.0%"); other numbers their unit kind's decimals.
     #[default]
     Standard,
-    /// A percentage reads whole ("60%"): a drawing app's opacity and scale.
+    /// A percentage reads whole ("60%"), and a length field to a thousandth of points, pixels, picas, Q and Ha and a
+    /// ten-thousandth of the larger units, without trailing zeros ("357.114 pt", "8.2677 in"): a drawing app's
+    /// positions and sizes.
     Measured,
 }
 
@@ -474,7 +476,12 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             },
             (None, Some(fixed), _, _) => fixed..=fixed,
             (None, None, Some(max), _) => 0..=max.min(12),
-            (None, None, None, Some(kind)) => kind.decimals(),
+            (None, None, None, Some(kind)) => match (self.precision, self.lengths) {
+                (NumberPrecision::Measured, Some(_)) => {
+                    0..=if matches!(kind, UnitKind::Points | UnitKind::Pixels | UnitKind::Picas | UnitKind::Q | UnitKind::Ha) { 3 } else { 4 }
+                }
+                _ => kind.decimals(),
+            },
             (None, None, None, None) => 0..=DEFAULT_DECIMALS,
         }
     }
