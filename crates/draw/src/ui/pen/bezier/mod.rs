@@ -429,6 +429,12 @@ pub struct BezierOverlay<'a> {
     /// thickness replaces the line width (and the selected segment grows by the same amount).
     #[prop]
     path_options: Option<&'a PathOptionsSettings>,
+    /// Under [`BezierTool::Convert`], how far from an anchor in device pixels a press still converts it, so the reach
+    /// is the same on every display scale (PhotoCraft's Convert Point measures 5 px: storytold/photocraft#12748,
+    /// #13174). A press on the anchor's part farther than that converts nothing and is taken all the same, so the
+    /// segment or path behind does not get it. Shown handles and segments keep the theme's reach. `None` to start.
+    #[prop]
+    anchor_reach_px: Option<f32>,
     report: Report,
     marquee: Option<DocRect>,
     hover_mark: Option<BezierHit>,
@@ -446,6 +452,7 @@ impl<'a> BezierOverlay<'a> {
             anchors: AnchorsShown::default(),
             segment_mark: SegmentMark::default(),
             path_options: None,
+            anchor_reach_px: None,
             report: Report::default(),
             marquee: None,
             hover_mark: None,
@@ -453,8 +460,6 @@ impl<'a> BezierOverlay<'a> {
         .label(label)
     }
 
-    /// The parts a pass declares for `paths`: the anchors and shown handles inside `rect` grown by `reach`, and the
-    /// segments that tool takes and that cross it.
     /// An open press keeps the tool it began under: the parts and the handling of every pass of the press follow it.
     fn press_tool(&mut self, held: Option<&Held>) {
         if let Some(held) = held {
@@ -462,12 +467,20 @@ impl<'a> BezierOverlay<'a> {
         }
     }
 
-    fn scene(&self, paths: &[EditPath], view: &CanvasView, rect: Rect, reach: f32) -> Scene {
+    /// The parts a pass declares for `paths`: the anchors and shown handles inside `rect` grown by `reach`, and the
+    /// segments that tool takes and that cross it. A Convert anchor's part also covers
+    /// [`anchor_reach_px`](Self::anchor_reach_px) at `pixels_per_point` where that is the wider.
+    fn scene(&self, paths: &[EditPath], view: &CanvasView, rect: Rect, reach: f32, pixels_per_point: f32) -> Scene {
         let limited = self.anchors == AnchorsShown::Hidden || paths.iter().map(EditPath::anchor_count).sum::<usize>() > MAX_ANCHORS;
         let mut items = Vec::new();
         if limited {
             return Scene { items, limited };
         }
+        let anchor_reach = match self.anchor_reach_px {
+            Some(px) if self.tool == BezierTool::Convert => reach.max(px / pixels_per_point.max(0.01)),
+            _ => reach,
+        };
+        let anchor_near = rect.expand(anchor_reach);
         let near = rect.expand(reach);
         let shown = shown_handles(paths, self.selection, self.handles, view);
         let mut handles = shown.iter().peekable();
@@ -479,14 +492,14 @@ impl<'a> BezierOverlay<'a> {
                 let sub = &path.subpaths[knot_ref.subpath];
                 let interior = sub.closed || (knot_ref.knot != 0 && knot_ref.knot + 1 != sub.knots.len());
                 let anchor_shown = self.selection.shows(path.key, knot_ref.subpath);
-                if near.contains(anchor) {
+                if anchor_near.contains(anchor) {
                     items.push(Item {
                         kind: Kind::Anchor,
                         path: at,
                         key: path.key,
                         knot: knot_ref,
                         at: anchor,
-                        shape: HitShape::circle(anchor, reach),
+                        shape: HitShape::circle(anchor, anchor_reach),
                         interior,
                         straight: false,
                         shown: anchor_shown,
@@ -548,6 +561,18 @@ impl<'a> BezierOverlay<'a> {
             }
         }
         Scene { items, limited }
+    }
+
+    /// What a press on `item` that hit `hit` takes: [`press_target`](Self::press_target), or nothing for a press on an
+    /// anchor past the Convert reach ([`anchor_reach_px`](Self::anchor_reach_px)) at `pixels_per_point`.
+    fn item_press_target(&mut self, item: &Item, hit: BezierHit, start: PressStart, mods: Mods, paths: &[EditPath], pixels_per_point: f32) -> Target {
+        let beyond = match self.anchor_reach_px {
+            Some(px) if self.tool == BezierTool::Convert && item.kind == Kind::Anchor => {
+                item.at.distance(start.origin) > px / pixels_per_point.max(0.01)
+            }
+            _ => false,
+        };
+        if beyond { Target::Nothing } else { self.press_target(hit, start, mods, paths) }
     }
 
     /// Whether the press on `item` is the tool's.
@@ -857,7 +882,7 @@ impl<'a> BezierOverlay<'a> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let hit = item.hit(paths, view, start.origin);
-                    let target = self.press_target(hit, start, press.mods, paths);
+                    let target = self.item_press_target(item, hit, start, press.mods, paths, cx.env.scale().0);
                     if target == Target::Nothing && self.tool.clicks() {
                         // Delete Anchor and Auto Add/Delete act on an anchor at the press.
                         tools::anchor_click(self.tool, hit, press.mods, self.selection, &mut self.report);
@@ -1276,12 +1301,12 @@ impl Component for BezierOverlay<'_> {
         let held = cx.press_slot::<Held>();
         self.press_tool(held.as_ref());
         let Some(space) = canvas_space(&cx.env) else { return };
-        let reach = cx.style.reach;
+        let (reach, ppp) = (cx.style.reach, cx.env.scale().0);
         let scene = match &held {
-            Some(held) => self.scene(&held.start, &space.view, rect, reach),
+            Some(held) => self.scene(&held.start, &space.view, rect, reach, ppp),
             None => {
                 let Some(paths) = cx.value() else { return };
-                self.scene(paths, &space.view, rect, reach)
+                self.scene(paths, &space.view, rect, reach, ppp)
             }
         };
         let focusable = self.tool != BezierTool::Anchors;
@@ -1327,7 +1352,7 @@ impl Component for BezierOverlay<'_> {
         let held = cx.press_slot::<Held>().clone();
         let Some(paths) = held.as_ref().map(|held| held.start.clone()).or_else(|| cx.value().cloned()) else { return };
         self.press_tool(held.as_ref());
-        let scene = self.scene(&paths, &space.view, cx.rect, cx.style.reach);
+        let scene = self.scene(&paths, &space.view, cx.rect, cx.style.reach, cx.env.scale().0);
         self.run_pointer(cx, &space, &scene, &paths);
         self.run_keys(cx, &space, &scene, &paths);
     }
@@ -1335,7 +1360,7 @@ impl Component for BezierOverlay<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let (Some(space), Some(paths)) = (canvas_space(&cx.env), cx.value()) else { return };
         let (view, style) = (space.view, &cx.style);
-        let scene = self.scene(paths, &view, cx.rect, style.reach);
+        let scene = self.scene(paths, &view, cx.rect, style.reach, cx.env.scale().0);
         let options = self.path_options;
         let thickness = options.and_then(|options| options.thickness);
         let option_color =
@@ -1431,7 +1456,7 @@ impl Component for BezierOverlay<'_> {
     /// in the canvas's units. None above [`MAX_ANCHORS`].
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let (Some(space), Some(paths)) = (canvas_space(&cx.env), cx.value()) else { return };
-        let scene = self.scene(paths, &space.view, cx.rect, cx.style.reach);
+        let scene = self.scene(paths, &space.view, cx.rect, cx.style.reach, cx.env.scale().0);
         let (words, units, rulers) = (cx.words::<BezierWords>(), cx.env.units(), space.rulers());
         for item in scene.items.iter().filter(|item| item.kind != Kind::Segment && item.shown) {
             let Some(knot) = paths[item.path].knot(item.knot) else { continue };

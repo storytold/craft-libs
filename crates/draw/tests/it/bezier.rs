@@ -201,6 +201,8 @@ struct State {
     canvas_tool: Option<PathTool>,
     /// Passes in which that tool ran a gesture.
     tool_gestures: usize,
+    /// The overlay's Convert anchor reach in device pixels, if set.
+    anchor_reach_px: Option<f32>,
 }
 
 struct Harness {
@@ -265,6 +267,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         tool_clicks: 0,
         canvas_tool: None,
         tool_gestures: 0,
+        anchor_reach_px: None,
     }));
     let shown = Rc::clone(&state);
     let mut fixture = Fixture::new(move |ui| {
@@ -295,8 +298,12 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
                 .tool(st.tool)
                 .handles(st.handles)
                 .anchors(st.anchors)
-                .segment_mark(st.segment_mark)
-                .show_at(ui, body.rect);
+                .segment_mark(st.segment_mark);
+            let output = match st.anchor_reach_px {
+                Some(px) => output.anchor_reach_px(px),
+                None => output,
+            }
+            .show_at(ui, body.rect);
             if let (Some(tool), Some(pass)) = (st.canvas_tool, tool_pass(&body.env)) {
                 reply = Some(ToolHost::new().run(ui, &pass, &mut AnchorTool::new(tool)));
             }
@@ -588,6 +595,50 @@ fn convert_bends_a_straight_segment_and_moves_a_fully_selected_path() {
     });
     h.drag(straight, vec2(0.0, FAR));
     assert!(matches!(h.last_change(), Some(PathEdit::BendSegment { path: 1, .. })), "{:?}", h.last_change());
+}
+
+/// PhotoCraft's Convert Point reach (storytold/photocraft#12748, #13174): an anchor 5 device pixels from the press is
+/// converted and one 6 px away is not, on every display scale. Without `anchor_reach_px` the theme's reach in points
+/// applies; Direct Selection and the shown handles keep it either way.
+#[trial]
+fn a_convert_anchor_reach_in_device_pixels_holds_on_every_display_scale() {
+    let anchor = p(60.0, 60.0);
+    let converts = |ppp: f32, px: f32, reach: Option<f32>| {
+        let mut h = two_paths();
+        h.fixture.pixels_per_point(ppp);
+        h.update(|st| (st.tool, st.anchor_reach_px) = (BezierTool::Convert, reach));
+        let at = h.screen(anchor) - vec2(px / ppp, 0.0);
+        h.drag(at, vec2(0.0, FAR));
+        let st = h.state.borrow();
+        match st.changes.last() {
+            Some(PathEdit::Convert { path: 1, knot, out: Some(_) }) if *knot == kr(0) => true,
+            None => false,
+            other => panic!("{px} px at display scale {ppp}: {other:?}"),
+        }
+    };
+    for ppp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] {
+        assert!(converts(ppp, 5.0, Some(5.01)), "5 px at display scale {ppp}");
+        assert!(!converts(ppp, 6.0, Some(5.01)), "6 px at display scale {ppp}");
+    }
+    // The theme's reach is in points: 6 px at display scale 2 is 3 points, well inside it.
+    assert!(converts(2.0, 6.0, None), "without a pixel reach");
+
+    // Direct Selection keeps the theme's reach: 6 px at display scale 2 picks the anchor.
+    let mut h = two_paths();
+    h.fixture.pixels_per_point(2.0);
+    h.update(|st| (st.tool, st.anchor_reach_px) = (BezierTool::Direct, Some(5.01)));
+    let at = h.screen(anchor) - vec2(3.0, 0.0);
+    h.press_at(at);
+    h.release_at(at);
+    assert!(h.state.borrow().selection.has_anchor(1, kr(0)), "Direct Selection picks the anchor 6 px away");
+
+    // A shown handle keeps the theme's reach under Convert: 12 px (6 points) from it at display scale 2 drags it.
+    let mut h = two_paths();
+    h.fixture.pixels_per_point(2.0);
+    h.update(|st| (st.tool, st.anchor_reach_px, st.selection) = (BezierTool::Convert, Some(5.01), sel(1, &[(0, 2)])));
+    let at = h.screen(p(290.0, 100.0)) + vec2(6.0, 0.0);
+    h.drag(at, vec2(0.0, FAR));
+    assert!(matches!(h.last_change(), Some(PathEdit::MoveHandle { path: 1, side: HandleSide::Out, .. })), "{:?}", h.last_change());
 }
 
 // Delete reports the selected anchors with `segments` true under the tools that delete anchors; under Anchors and Auto
