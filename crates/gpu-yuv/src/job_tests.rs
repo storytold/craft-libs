@@ -186,6 +186,21 @@ fn jobs_past_the_context_caps_are_refused() {
     assert!(dispatch(&r, &mut ctx, &YuvJob::new(c, 64, 4, 64, 42).job(small)).is_ok());
 }
 
+#[test]
+fn an_input_past_the_buffer_limit_is_refused_before_it_is_read() {
+    let r = registry(YuvProvider::new());
+    let caps = DeviceCaps { max_texture_dimension_2d: 64, max_buffer_size: 16128, ..DeviceCaps::default() };
+    let mut ctx = Capped::new(caps);
+    let c = Conversion::new(Format::Nv12, Matrix::Bt709, Range::Limited);
+    // 64 × 64 × 4 = 16384 bytes, more than the 16128-byte limit; 64 × 63 × 4 is exactly 16128.
+    let large = ctx.upload_buffer("large", &tests::noise(64, 64)).unwrap();
+    let at_limit = ctx.upload_buffer("at limit", &tests::noise(64, 63)).unwrap();
+    let refused = invalid(r.dispatch(&mut ctx, &YuvJob::new(c, 64, 64, 64, 4).job(large)));
+    assert!(refused.contains("16384 bytes is larger than the largest buffer, 16128"), "{refused}");
+    assert_eq!(ctx.reads, 0, "the refused input is not read");
+    assert!(dispatch(&r, &mut ctx, &YuvJob::new(c, 64, 63, 64, 4).job(at_limit)).is_ok());
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_provider_with_a_device_matches_the_cpu_through_the_registry() {

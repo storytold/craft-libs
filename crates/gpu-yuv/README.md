@@ -47,8 +47,8 @@ are decimal digits.
 
 The provider checks the job against the context's `DeviceCaps` on every context, the null one
 included: each source and output side must be at most `max_texture_dimension_2d`, and the
-read-back layout with its padded rows (`FrameLayout::buffer_size`) at most `max_buffer_size`
-bytes. It checks the input's length before reading it. A
+read-back layout with its padded rows (`FrameLayout::buffer_size`) and the RGBA8 input at most
+`max_buffer_size` bytes. It checks the input's length before reading it. A
 malformed, missing, repeated or unknown parameter, a wrong input count or length, and a size the
 caps or the conversion do not allow are `GpuFault::InvalidJob`. With a device, the provider also
 checks the device's own limits, and an error the device reports during the job is

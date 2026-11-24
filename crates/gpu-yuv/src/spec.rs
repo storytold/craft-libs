@@ -151,7 +151,8 @@ pub enum Error {
     TooLarge { width: u32, height: u32, limit: u32 },
     /// The frame's byte sizes do not fit in the integer types that hold them.
     Overflow { width: u32, height: u32 },
-    /// A read-back buffer for the frame would be larger than the device's largest buffer.
+    /// A buffer the job uses (the RGBA8 input, or the read-back buffer for the frame) would be
+    /// larger than the device's largest buffer.
     BufferLimit { needed: u64, limit: u64 },
     /// A source side is zero, or the pixels are not `width × height × 4` bytes.
     Source { width: u32, height: u32, bytes: usize },
@@ -177,7 +178,7 @@ impl fmt::Display for Error {
             Error::OutputSize { width, height } => write!(f, "a 4:2:0 picture of {width}×{height} needs both sides even and not zero"),
             Error::TooLarge { width, height, limit } => write!(f, "{width}×{height} is larger than the largest texture side, {limit}"),
             Error::Overflow { width, height } => write!(f, "a frame of {width}×{height} is too large to hold"),
-            Error::BufferLimit { needed, limit } => write!(f, "a read-back buffer of {needed} bytes is larger than the largest buffer, {limit}"),
+            Error::BufferLimit { needed, limit } => write!(f, "a buffer of {needed} bytes is larger than the largest buffer, {limit}"),
             Error::Source { width, height, bytes } => write!(f, "{bytes} bytes are not an RGBA picture of {width}×{height}"),
             Error::BufferSize { needed, actual } => write!(f, "{actual} bytes where {needed} are needed"),
             Error::Offset(offset) => write!(f, "buffer offset {offset} is not a multiple of {}", wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),

@@ -4,9 +4,9 @@
 //! A job has one input, an RGBA8 buffer of `src_width × src_height × 4` bytes in the context, and
 //! [`YuvJob::params`] as its parameters. Its outcome has one output: a new buffer that holds the
 //! packed frame in [`FrameLayout`] order. Every side must be no larger than the context's
-//! [`DeviceCaps::max_texture_dimension_2d`](craft_gpu::DeviceCaps), and the frame no larger than its
-//! `max_buffer_size`, on every context, so that a job that runs on the null context also runs on a
-//! device with the same caps.
+//! [`DeviceCaps::max_texture_dimension_2d`](craft_gpu::DeviceCaps), and the input and the frame no
+//! larger than its `max_buffer_size`, on every context, so that a job that runs on the null context
+//! also runs on a device with the same caps.
 
 use craft_gpu::{GpuContext, GpuFault, GpuJob, GpuJobOutcome, GpuJobParams, GpuProvider, HandleId};
 
@@ -223,6 +223,10 @@ impl GpuProvider for YuvProvider {
         let expected = (src_width as usize).checked_mul(src_height as usize).and_then(|n| n.checked_mul(4));
         if src_width == 0 || src_height == 0 || expected != Some(bytes) {
             return Err(fault(Error::Source { width: src_width, height: src_height, bytes }));
+        }
+        let input_bytes = bytes as u64;
+        if input_bytes > caps.max_buffer_size {
+            return Err(fault(Error::BufferLimit { needed: input_bytes, limit: caps.max_buffer_size }));
         }
         let rgba = ctx.read_buffer(*input)?;
         let frame = self.convert(&rgba, &spec).map_err(fault)?;
