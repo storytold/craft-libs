@@ -798,6 +798,64 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
     );
 }
 
+/// Texture ids of textured meshes whose centre falls inside `rect`.
+fn mesh_textures(shapes: &[egui::Shape], rect: egui::Rect, out: &mut Vec<egui::TextureId>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => mesh_textures(inner, rect, out),
+            egui::Shape::Mesh(mesh) if rect.contains(mesh.calc_bounds().center()) => {
+                out.push(mesh.texture_id);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[trial]
+fn the_missing_font_warning_icon_is_a_filled_triangle() {
+    use std::cell::Cell;
+
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let seen = Rc::new(Cell::new(None));
+    let held = Rc::clone(&seen);
+    let mut family = "Gotham".to_owned();
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).shown_as("Inter").show(ui);
+        held.set(Some(out.edit.response.id));
+    });
+    fx.pixels_per_point(2.0);
+    fx.record_paint();
+    fx.in_room(Room::Window);
+    fx.settle();
+    let picker = seen.get().expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    let mut paint = fx.take_paint().expect("recorded paint output");
+    let mut textures = Vec::new();
+    for clipped in &paint.shapes {
+        mesh_textures(std::slice::from_ref(&clipped.shape), mark, &mut textures);
+    }
+    let texture = *textures.first().expect("the missing-font warning icon paints a texture");
+    let image = paint
+        .textures_delta
+        .set
+        .get(&texture)
+        .and_then(|deltas| deltas.last())
+        .map(|delta| match &delta.image {
+            egui::ImageData::Color(color) => color,
+        })
+        .expect("the warning icon texture was uploaded");
+    let [w, h] = image.size;
+    let alpha = |fx: f32, fy: f32| {
+        let x = ((w as f32 * fx) as usize).min(w - 1);
+        let y = ((h as f32 * fy) as usize).min(h - 1);
+        image.pixels[y * w + x].a()
+    };
+    let (left, right, center) = (alpha(0.34, 0.69), alpha(0.66, 0.69), alpha(0.50, 0.48));
+    paint.textures_delta.clear();
+    assert!(left > 128 && right > 128, "the triangle interior is filled, not an outline (left={left}, right={right}, size={w}x{h})");
+    assert!(center < 128, "the exclamation stem stays knocked out inside the filled triangle (center={center})");
+}
+
 /// The library picker's family and settings, as the last pass left them.
 struct Library {
     family: String,

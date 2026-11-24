@@ -531,7 +531,7 @@ const TEXT: PartKey = PartKey::new("text");
 const CHEVRON: PartKey = PartKey::new("chevron");
 /// The mark before the chevron of a shown font that is not installed; its tooltip is the note.
 const WARNING: PartKey = PartKey::new("missing");
-const WARNING_ICON: &str = "warning";
+const WARNING_ICON: &str = "warning_filled";
 /// The popup the chevron and Alt+Down toggle.
 const POPUP: &str = "list";
 /// The Show Similar part at the end of a family row, in the `Chips` layout.
