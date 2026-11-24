@@ -1,4 +1,5 @@
-use crate::java_class::{self, ClassFile, MAX_COPIED_TEXT};
+use crate::java_class::{self, ClassFile, Const, MAX_COPIED_TEXT, Names};
+use std::cell::Cell;
 
 const BIG: usize = u16::MAX as usize;
 // Each repeat names the 65,535-byte Utf8 at least once, so 1,100 repeats exceed the limit.
@@ -12,6 +13,7 @@ enum Scope {
     Throws,
     Catches,
     InnerClasses,
+    Constants,
 }
 
 fn u16b(out: &mut Vec<u8>, n: u16) {
@@ -31,19 +33,20 @@ fn attr(out: &mut Vec<u8>, name: u16, info: &[u8]) {
 }
 
 // Every repeated entry names pool entry 1 (a 65,535-byte Utf8) directly or through the
-// `Class` at entry 2. The file stays well under 100 KiB.
+// `Class` at entry 2 or the `String` at entry 11. The file stays well under 100 KiB.
 fn fixture(scope: Scope) -> Vec<u8> {
     let mut out = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 52];
-    u16b(&mut out, 10);
+    u16b(&mut out, 12);
     utf8(&mut out, &"A".repeat(BIG)); // 1
     out.extend_from_slice(&[7, 0, 1]); // 2
     utf8(&mut out, "java/lang/Object"); // 3
     out.extend_from_slice(&[7, 0, 3]); // 4
     utf8(&mut out, "Sample"); // 5
     out.extend_from_slice(&[7, 0, 5]); // 6
-    for text in ["Exceptions", "InnerClasses", "Code"] {
-        utf8(&mut out, text); // 7..9
+    for text in ["Exceptions", "InnerClasses", "Code", "ConstantValue"] {
+        utf8(&mut out, text); // 7..10
     }
+    out.extend_from_slice(&[8, 0, 1]); // 11
     for word in [0x0021, 6, 4] {
         u16b(&mut out, word);
     }
@@ -64,6 +67,15 @@ fn fixture(scope: Scope) -> Vec<u8> {
                 for word in [0, 1, 1, 0] {
                     u16b(&mut out, word);
                 }
+            }
+        } else if matches!((scope, table), (Scope::Constants, Scope::Fields)) {
+            // Fields named `Sample` whose `ConstantValue` is the string at entry 11.
+            u16b(&mut out, REPEATS);
+            for _ in 0..REPEATS {
+                for word in [0x0018, 5, 5, 1] {
+                    u16b(&mut out, word);
+                }
+                attr(&mut out, 10, &[0, 11]);
             }
         } else if matches!((scope, table), (Scope::Throws | Scope::Catches, Scope::Methods)) {
             u16b(&mut out, 1);
@@ -131,6 +143,7 @@ fn names(parsed: &ClassFile, scope: Scope) -> Vec<&str> {
                 out.extend(row.name.as_deref());
             }
         }
+        Scope::Constants => out.extend(parsed.fields.iter().filter_map(|m| m.constant_value.as_deref())),
     }
     out
 }
@@ -143,9 +156,11 @@ fn check(scope: Scope) {
     let per_entry = if matches!(scope, Scope::Fields | Scope::Methods | Scope::InnerClasses) { 2 } else { 1 };
     // Every entry is still listed; the budget replaces names, not rows.
     assert_eq!(names.len(), usize::from(REPEATS) * per_entry, "{scope:?}");
-    let full = names.iter().filter(|n| n.len() == BIG).count();
-    assert!(full >= 1, "{scope:?}: the first names are copied in full");
-    assert!(full * BIG <= MAX_COPIED_TEXT, "{scope:?}: {} bytes of names copied", full * BIG);
+    // A string constant is shown quoted, two bytes longer than its Utf8.
+    let full: Vec<usize> = names.iter().map(|n| n.len()).filter(|&n| n >= BIG).collect();
+    assert!(!full.is_empty(), "{scope:?}: the first names are copied in full");
+    let copied: usize = full.iter().sum();
+    assert!(copied <= MAX_COPIED_TEXT, "{scope:?}: {copied} bytes of names copied");
     assert!(names.iter().any(|n| n.starts_with('<') && n.ends_with('>')), "{scope:?}: names past the budget are placeholders");
     assert!(parsed.warnings.iter().any(|w| w.contains("pool indices")), "{scope:?}: {:?}", parsed.warnings);
     assert_eq!(parsed.this_class, "Sample");
@@ -180,4 +195,34 @@ fn repeated_caught_type_names_stay_within_the_copy_budget() {
 #[test]
 fn repeated_inner_class_names_stay_within_the_copy_budget() {
     check(Scope::InnerClasses);
+}
+
+#[test]
+fn repeated_constant_values_stay_within_the_copy_budget() {
+    check(Scope::Constants);
+}
+
+thread_local! {
+    static RENDERS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn counted_render(pool: &[Const], idx: u16) -> String {
+    RENDERS.with(|n| n.set(n.get() + 1));
+    match pool.get(usize::from(idx)) {
+        Some(Const::Utf8(s)) => format!("{s:?}"),
+        _ => String::new(),
+    }
+}
+
+#[test]
+fn text_over_the_budget_is_rendered_once() {
+    let pool = vec![Const::Unusable, Const::Utf8("A".repeat(BIG))];
+    let mut names = Names::new(&pool);
+    RENDERS.with(|n| n.set(0));
+    let kept: Vec<String> = (0..2 * MAX_COPIED_TEXT / BIG).map(|_| names.keep("const", 1, counted_render)).collect();
+    let copied = kept.iter().filter(|t| t.len() == BIG + 2).count();
+    assert!(copied >= 1 && copied < kept.len(), "{copied} of {} copied", kept.len());
+    assert_eq!(kept.last().map(String::as_str), Some("<const#1>"));
+    // Only the copied texts are rendered; the refusals reuse the length kept from the first one.
+    assert_eq!(RENDERS.with(Cell::get), copied);
 }

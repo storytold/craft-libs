@@ -11,6 +11,7 @@ use crate::bytes::Reader;
 use crate::java_ops::{self, Insn};
 use crate::{FormatError, descriptor as dex};
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Most constant-pool entries, fields, methods, attributes or interfaces we read from one file.
 const MAX_ITEMS: usize = 1 << 20;
@@ -351,15 +352,17 @@ fn utf8_of(pool: &[Const], idx: u16) -> &str {
 }
 
 /// Copies constant-pool text into the parse result within `MAX_COPIED_TEXT` bytes in total.
-struct Names<'p> {
+pub(crate) struct Names<'p> {
     pool: &'p [Const],
     left: usize,
     exhausted: bool,
+    /// The length of each text `keep` has built, by kind and pool index.
+    built: HashMap<(&'static str, u16), usize>,
 }
 
 impl<'p> Names<'p> {
-    fn new(pool: &'p [Const]) -> Self {
-        Names { pool, left: MAX_COPIED_TEXT, exhausted: false }
+    pub(crate) fn new(pool: &'p [Const]) -> Self {
+        Names { pool, left: MAX_COPIED_TEXT, exhausted: false, built: HashMap::new() }
     }
 
     /// Charge `len` bytes; false once the budget cannot cover them.
@@ -376,8 +379,15 @@ impl<'p> Names<'p> {
         }
     }
 
-    /// Keep `text` when the budget covers it, otherwise the placeholder `<kind#idx>`.
-    fn keep(&mut self, text: String, kind: &str, idx: u16) -> String {
+    /// `render(pool, idx)` when the budget covers it, otherwise the placeholder `<kind#idx>`.
+    /// The length of each rendered text is kept by kind and index, so a text over the budget is
+    /// built at most once however many entries name it.
+    pub(crate) fn keep(&mut self, kind: &'static str, idx: u16, render: fn(&[Const], u16) -> String) -> String {
+        if let Some(&len) = self.built.get(&(kind, idx)) {
+            return if self.admit(len) { render(self.pool, idx) } else { format!("<{kind}#{idx}>") };
+        }
+        let text = render(self.pool, idx);
+        self.built.insert((kind, idx), text.len());
         if self.admit(text.len()) { text } else { format!("<{kind}#{idx}>") }
     }
 
@@ -590,7 +600,7 @@ fn parse_members(c: &mut Cursor<'_>, names: &mut Names<'_>, warnings: &mut Vec<S
                 "Code" => m.code = parse_code(a.info, names),
                 "ConstantValue" => {
                     if let Some(i) = Reader::new(a.info).u16_be(0) {
-                        m.constant_value = Some(names.keep(const_display(pool, i), "const", i));
+                        m.constant_value = Some(names.keep("const", i, const_display));
                     }
                 }
                 "Exceptions" => m.exceptions = parse_exceptions_attr(a.info, names),
@@ -672,7 +682,7 @@ fn parse_annotation_types(info: &[u8], names: &mut Names<'_>, visibility: &str) 
     for _ in 0..n.min(MAX_ITEMS) {
         match read_annotation(&mut c, names.pool, 0) {
             Some(idx) => {
-                let t = names.keep(field_type(utf8_of(names.pool, idx)), "utf8", idx);
+                let t = names.keep("utf8", idx, |pool, idx| field_type(utf8_of(pool, idx)));
                 out.push(format!("{t} ({visibility})"));
             }
             None => break,
