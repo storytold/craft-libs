@@ -1461,7 +1461,7 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 /// name to the muda crate, and whether one binds it to something else.
 type CrateBindings<'a> = BTreeMap<(&'a str, Option<usize>), (bool, bool)>;
 
-/// For each token, whether it is in a macro's input in parentheses or brackets, `m!(...)` or `m![...]`, in an
+/// For each token, whether it is in a macro's input, `m!(...)`, `m![...]` or `m! { ... }`, in an
 /// attribute, `#[...]` or `#![...]`, or in the body of a `macro_rules!` definition, whose templates are not
 /// expanded where they are written. Tokens in a block inside other parentheses or brackets, such as a call's
 /// argument, are not marked.
@@ -1475,7 +1475,7 @@ fn macro_tokens(toks: &[Token]) -> Vec<bool> {
         if toks[i].is_punct('(') || toks[i].is_punct('[') || toks[i].is_punct('{') {
             let ident = |k: usize| matches!(toks[k].kind, Kind::Ident(_));
             let definition = i >= 3 && ident(i - 1) && toks[i - 2].is_punct('!') && toks[i - 3].is_ident("macro_rules");
-            let input = !toks[i].is_punct('{') && i >= 2 && toks[i - 1].is_punct('!') && ident(i - 2);
+            let input = i >= 2 && toks[i - 1].is_punct('!') && ident(i - 2);
             let attribute =
                 toks[i].is_punct('[') && i >= 1 && (toks[i - 1].is_punct('#') || (i >= 2 && toks[i - 1].is_punct('!') && toks[i - 2].is_punct('#')));
             let skip = input || definition || attribute;
@@ -1790,7 +1790,7 @@ fn muda_crate_bindings<'a>(
 /// declarations from it names, `menu` is read like `muda` and `::menu::PredefinedMenuItem::quit` is
 /// reported. An `extern crate` or `mod` declaration in an item whose `cfg` is false on every configuration
 /// (`cfg(any())`, `cfg(false)`) is read as absent, and so are the tokens of an `extern crate` in a macro's
-/// input in parentheses or brackets (`m!(...)`, `m![...]`), in an attribute or in a `macro_rules!` body. Elsewhere a path that starts with `::` names the crate
+/// input (`m!(...)`, `m![...]`, `m! { ... }`), in an attribute or in a `macro_rules!` body. Elsewhere a path that starts with `::` names the crate
 /// only through `muda`. It also
 /// follows a `use` or a `type` alias that renames muda's type (`use muda::PredefinedMenuItem as Item;` then
 /// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed, including one through a

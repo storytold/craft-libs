@@ -667,7 +667,7 @@ fn predefined_quit_skips_root_aliases_that_are_never_compiled_or_in_macro_input(
     let lib = "#[cfg(target_os = \"macos\")]\nextern crate muda as menu;\nmod child;\n";
     assert_eq!(paths(&predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)])), vec![("src/child.rs".to_owned(), 1)]);
     // Neither does an `extern crate` in a macro's input, while a real one beside it does.
-    for input in ["ignore!(extern crate muda as menu;);", "ignore![extern crate muda as menu;];"] {
+    for input in ["ignore!(extern crate muda as menu;);", "ignore![extern crate muda as menu;];", "ignore! { extern crate muda as menu; }"] {
         let lib = format!("{input}\nmod child;\n");
         assert!(predefined_quit([("src/lib.rs", lib.as_str()), ("src/child.rs", call)]).is_empty(), "{input}");
         let lib = format!("{input}\nextern crate muda as native;\nmod child;\n");
@@ -725,7 +725,11 @@ fn predefined_quit_reads_target_folders_below_the_package_folder_only() {
 #[test]
 fn predefined_quit_does_not_follow_a_mod_declaration_in_a_macro_input() {
     let call = "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
-    for lib in ["extern crate muda as menu;\nignore!(mod child;);\n", "extern crate muda as menu;\n#[attr(mod child;)]\nfn h() {}\n"] {
+    for lib in [
+        "extern crate muda as menu;\nignore!(mod child;);\n",
+        "extern crate muda as menu;\nignore! {\n    mod child;\n}\n",
+        "extern crate muda as menu;\n#[attr(mod child;)]\nfn h() {}\n",
+    ] {
         assert!(predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)]).is_empty(), "{lib}");
     }
     let lib = "extern crate muda as menu;\nmod child;\n";
