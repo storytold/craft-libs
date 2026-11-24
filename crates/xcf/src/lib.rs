@@ -100,7 +100,8 @@ pub struct Precision {
     pub bytes: usize,
     /// Floating point (16, 32 or 64 bit) rather than unsigned integer.
     pub float: bool,
-    /// The values are linear light; otherwise gamma-encoded (the profile's own curve).
+    /// The values are linear light rather than nonlinear. For the exact source
+    /// transfer (including perceptual encoding), use [`Xcf::source_precision`].
     pub linear: bool,
 }
 
@@ -449,6 +450,19 @@ pub struct Layer {
 }
 
 impl Layer {
+    // One stored layout shared by the legacy float and raw source-tile APIs.
+    fn source_layout(&self, base: BaseType) -> Result<(usize, bool)> {
+        let channels = match (base, self.layer_type) {
+            (BaseType::Rgb, 0) => 3,
+            (BaseType::Rgb, 1) => 4,
+            (BaseType::Gray, 2) | (BaseType::Indexed, 4) => 1,
+            (BaseType::Gray, 3) | (BaseType::Indexed, 5) => 2,
+            (BaseType::Rgb | BaseType::Indexed, 3) if self.floating_selection => 2,
+            _ => return Err(invalid("layer type does not match the image color model")),
+        };
+        Ok((channels, matches!(self.layer_type, 4 | 5)))
+    }
+
     /// Does the layer type carry an alpha channel?
     pub fn has_alpha(&self) -> bool {
         matches!(self.layer_type, 1 | 3 | 5)
@@ -749,9 +763,7 @@ impl<'a> Xcf<'a> {
         if layer.hierarchy == 0 {
             return Ok(None);
         }
-        let color = if self.image.base_type == BaseType::Rgb { 3 } else { 1 };
-        let source_channels = color + usize::from(layer.has_alpha());
-        let indexed = self.image.base_type == BaseType::Indexed;
+        let (source_channels, indexed) = layer.source_layout(self.image.base_type)?;
         let px = self.hierarchy(layer.hierarchy, source_channels, indexed, budget, keep_going)?;
         if (px.width, px.height) != (layer.width, layer.height) {
             let (name, lw, lh) = (&layer.name, layer.width, layer.height);
@@ -836,10 +848,7 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            // A tile may precede its level table, but must not decode table bytes.
-            let boundary = if at < head.level { head.level } else { self.c.b.len() };
-            let end = tiles.get(i + 1).copied().unwrap_or(boundary).min(boundary);
-            let input = self.c.b.get(at..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
+            let input = self.tile_input(&head, at, tiles.get(i + 1).copied())?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
                 let start = (ty * side + py) * stride + tx * side * channels;

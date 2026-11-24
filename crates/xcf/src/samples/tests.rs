@@ -374,7 +374,7 @@ fn saved_selection_must_match_canvas_before_any_callback() {
     let ptr = reader.channels[0];
     drop(reader);
     let prop = ptr + 8 + 4 + "Selection".len() + 1;
-    bytes[prop..prop + 4].copy_from_slice(&6u32.to_be_bytes()); // Active channel, not selection.
+    bytes[prop..prop + 4].copy_from_slice(&3u32.to_be_bytes()); // Active channel, not selection.
     let reader = Xcf::parse(&bytes).unwrap();
     let (channel, drawable) = reader
         .visit_channel_tiles(0, SampleOptions::default(), &mut budget, GO, |tile| {
@@ -685,13 +685,15 @@ fn rgb_floating_gray_alpha_attached_to_a_channel_keeps_two_raw_components() {
 #[test]
 fn saved_channels_and_selections_report_linear_high_precision_without_converting_samples() {
     for selection in [false, true] {
-        for (code, width, data, transfer) in [
+        for (code, width, data, stored_transfer) in [
+            (175, 1, vec![128], Transfer::Linear),
             (650, 4, 0.5f32.to_be_bytes().to_vec(), Transfer::Linear),
             (600, 4, 0.5f32.to_be_bytes().to_vec(), Transfer::Linear),
             (250, 2, 0x8000u16.to_be_bytes().to_vec(), Transfer::Linear),
             (150, 1, vec![128], Transfer::Nonlinear),
             (100, 1, vec![128], Transfer::Linear),
         ] {
+            let transfer = if selection { Transfer::Linear } else { stored_transfer };
             let mut source = Source::gray(code, width, data.clone());
             source.channel = Some(data.clone());
             source.channel_selection = selection;
@@ -713,7 +715,13 @@ fn saved_channels_and_selections_report_linear_high_precision_without_converting
             assert_eq!(info.precision.transfer, transfer);
             assert_eq!(budget, 0);
             // A color layer keeps the image transfer, independently of channel role.
-            let color_transfer = if code == 600 || code == 100 { Transfer::Linear } else { Transfer::Nonlinear };
+            let color_transfer = if code == 175 {
+                Transfer::Perceptual
+            } else if code == 600 || code == 100 {
+                Transfer::Linear
+            } else {
+                Transfer::Nonlinear
+            };
             let mut color_budget = width;
             let layer = xcf
                 .visit_layer_tiles(0, SampleOptions::default(), &mut color_budget, GO, |tile| {
@@ -760,4 +768,154 @@ fn failed_channel_visits_release_only_their_name_reservation() {
     assert!(matches!(result, Err(Error::Cancelled)));
     assert_eq!(outer_pixels, 0, "decoded pixel work is never refunded");
     assert_eq!(reader.meta_budget.get(), "Mask".len(), "only the failed outer name is released");
+}
+
+#[test]
+fn legacy_pixels_use_the_same_stored_layout_as_source_tiles() {
+    use crate::tests::{TestImage, TestLayer};
+    for base in [0, 2] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.version = 22;
+        image.base_type = base;
+        let mut floating = TestLayer::rgba("Floating", 1, 1, vec![64, 192]);
+        floating.kind = 3;
+        floating.props.push((5, vec![0; 8]));
+        image.layers.push(floating);
+        let ordinary = if base == 0 { vec![20, 40, 60, 128] } else { vec![20, 128] };
+        let mut layer = TestLayer::rgba("Ordinary", 1, 1, ordinary.clone());
+        if base == 2 {
+            layer.kind = 5;
+        }
+        image.layers.push(layer);
+        image.channels.push(("Target", vec![128], false));
+        let bytes = image.write();
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let target = xcf.channels[0];
+        let mut cursor = xcf.c.at(xcf.layer_sources[0]);
+        cursor.take(12).unwrap();
+        cursor.string().unwrap();
+        let target_slot = loop {
+            let kind = cursor.u32().unwrap();
+            let size = cursor.u32().unwrap() as usize;
+            assert_ne!(kind, 0);
+            if kind == 5 {
+                break cursor.pos;
+            }
+            cursor.take(size).unwrap();
+        };
+        let mut file = W { out: bytes, wide: true };
+        file.patch(target_slot, target);
+        let xcf = Xcf::parse(&file.out).unwrap();
+        let mut budget = 24;
+        let floating = xcf.layer_pixels(0, &mut budget, GO).unwrap().unwrap();
+        assert_eq!(floating.channels, 2);
+        assert_eq!(floating.data, [64u8, 192].map(|v| f32::from(v) / 255.0));
+        let regular = xcf.layer_pixels(1, &mut budget, GO).unwrap().unwrap();
+        assert_eq!(regular.channels, 4);
+        let expected = if base == 0 { ordinary } else { vec![20, 20, 20, 128] };
+        assert_eq!(regular.data, expected.into_iter().map(|v| f32::from(v) / 255.0).collect::<Vec<_>>());
+        assert_eq!(budget, 0);
+        let mut source_budget = 2;
+        xcf.visit_layer_tiles(0, SampleOptions::default(), &mut source_budget, GO, |tile| {
+            assert_eq!(tile.drawable.channels, 2);
+            assert!(!tile.drawable.indexed);
+            assert_eq!(tile.data, [64, 192]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(source_budget, 0);
+    }
+}
+
+#[test]
+fn hierarchy_headers_are_never_tile_payload_for_either_pixel_api() {
+    for version in [10, 11] {
+        for placement in ["before", "short-before", "inside", "between", "after"] {
+            let mut source = Source::gray(150, 1, vec![0]);
+            source.version = version;
+            let mut file = W { out: source.write(), wide: version >= 11 };
+            let before = file.out.len();
+            file.out.push(22);
+            if placement != "short-before" {
+                file.out.push(44);
+            }
+            let hierarchy = file.out.len();
+            for value in [2, 1, 1] {
+                file.u32(value);
+            }
+            let level_slot = file.slot();
+            let between = file.out.len();
+            file.out.extend([22, 44]);
+            let level = file.out.len();
+            file.patch(level_slot, level);
+            file.u32(2);
+            file.u32(1);
+            let tile_slot = file.slot();
+            file.ptr(0);
+            let after = file.out.len();
+            file.out.extend([22, 44]);
+            let tile = match placement {
+                "before" | "short-before" => before,
+                "inside" => hierarchy,
+                "between" => between,
+                _ => after,
+            };
+            file.patch(tile_slot, tile);
+            let reader = Xcf::parse(&file.out).unwrap();
+            let valid = !matches!(placement, "short-before" | "inside");
+            let legacy = reader.hierarchy(hierarchy, 1, false, &mut 8, GO);
+            let mut seen = Vec::new();
+            let raw = reader.visit_hierarchy(
+                VisitTarget { pointer: hierarchy, channels: 1, indexed: false, dimensions: Some((2, 1)), coverage: false },
+                SampleOptions::default(),
+                &mut 2,
+                GO,
+                |tile| {
+                    seen.extend_from_slice(tile.data);
+                    Ok(())
+                },
+            );
+            if valid {
+                assert_eq!(legacy.unwrap().data, [22u8, 44].map(|v| f32::from(v) / 255.0), "v{version} {placement}");
+                raw.unwrap();
+                assert_eq!(seen, [22, 44]);
+            } else {
+                assert!(legacy.is_err(), "v{version} {placement}: legacy samples overlap a header");
+                assert!(raw.is_err(), "v{version} {placement}: source samples overlap a header");
+                assert!(seen.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_first_level_validation_accepts_zero_tiles_but_rejects_short_or_overlapping_headers() {
+    for version in [10, 11] {
+        let mut source = Source::gray(150, 1, vec![22]);
+        source.version = version;
+        let mut file = W { out: source.write(), wide: version >= 11 };
+        let reader = Xcf::parse(&file.out).unwrap();
+        let hierarchy = reader.image.layers[0].hierarchy;
+        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        let level = head.level;
+        let pointer_bytes = if version >= 11 { 8 } else { 4 };
+        file.patch(level + 8, 0);
+        let reader = Xcf::parse(&file.out).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        reader.validate_first_level(&head).unwrap();
+        let mut short = file.out.clone();
+        short.truncate(level + 8 + pointer_bytes - 1);
+        let reader = Xcf::parse(&short).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        assert!(reader.validate_first_level(&head).is_err());
+        let mut mismatch = file.out.clone();
+        mismatch[level..level + 4].copy_from_slice(&2u32.to_be_bytes());
+        let reader = Xcf::parse(&mismatch).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        assert!(reader.validate_first_level(&head).is_err());
+        file.patch(hierarchy + 12, hierarchy + 4);
+        let reader = Xcf::parse(&file.out).unwrap();
+        let head = reader.hierarchy_head(hierarchy, 1).unwrap();
+        assert!(reader.validate_first_level(&head).is_err());
+    }
 }

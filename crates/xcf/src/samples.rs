@@ -1,6 +1,6 @@
 //! Precision-preserving, tile-sized source delivery. No profile/transfer conversion
 //! or indexed expansion is performed; the existing f32 APIs retain their behavior.
-use crate::{BaseType, Channel, Error, Precision, Result, TILE, Xcf, invalid, props, tiles};
+use crate::{Channel, Error, Precision, Result, TILE, Xcf, invalid, props, tiles};
 
 #[cfg(test)]
 mod tests;
@@ -163,6 +163,7 @@ pub(super) struct HierarchyHead {
     pub height: u32,
     pub bpp: usize,
     pub(super) level: usize,
+    header: std::ops::Range<usize>,
 }
 
 impl Xcf<'_> {
@@ -215,22 +216,9 @@ impl Xcf<'_> {
         if layer.hierarchy == 0 {
             return Ok(None);
         }
-        let channels = match (self.image.base_type, layer.layer_type) {
-            (BaseType::Rgb, 0) => 3,
-            (BaseType::Rgb, 1) => 4,
-            (BaseType::Gray, 2) | (BaseType::Indexed, 4) => 1,
-            (BaseType::Gray, 3) | (BaseType::Indexed, 5) => 2,
-            (BaseType::Rgb | BaseType::Indexed, 3) if layer.floating_selection => 2,
-            _ => return Err(invalid("layer type does not match the image color model")),
-        };
+        let (channels, indexed) = layer.source_layout(self.image.base_type)?;
         self.visit_hierarchy(
-            VisitTarget {
-                pointer: layer.hierarchy,
-                channels,
-                indexed: matches!(layer.layer_type, 4 | 5),
-                dimensions: Some((layer.width, layer.height)),
-                coverage: false,
-            },
+            VisitTarget { pointer: layer.hierarchy, channels, indexed, dimensions: Some((layer.width, layer.height)), coverage: false },
             options,
             budget,
             keep_going,
@@ -300,14 +288,15 @@ impl Xcf<'_> {
             let hierarchy = cursor.ptr()?;
             // Saved channels/selections use linear coverage at high precision too;
             // preserve the existing nonlinear U8 channel-format exception.
-            let nonlinear_u8 = self.image.precision.bytes == 1 && !self.image.precision.float && !self.image.precision.linear;
+            let nonlinear_u8 =
+                self.image.precision.bytes == 1 && !self.image.precision.float && self.source_precision().transfer == Transfer::Nonlinear;
             let info = self.visit_hierarchy(
                 VisitTarget {
                     pointer: hierarchy,
                     channels: 1,
                     indexed: false,
                     dimensions: Some(dimensions),
-                    coverage: owner.is_some() || !nonlinear_u8,
+                    coverage: owner.is_some() || selection || !nonlinear_u8,
                 },
                 options,
                 budget,
@@ -338,14 +327,48 @@ impl Xcf<'_> {
         if level == pointer {
             return Err(invalid("a hierarchy cannot be its own level"));
         }
-        Ok(HierarchyHead { width, height, bpp, level })
+        Ok(HierarchyHead { width, height, bpp, level, header: pointer..cursor.pos })
     }
 
-    pub(super) fn hierarchy_tiles(&self, head: &HierarchyHead, allow_empty: bool, keep_going: &dyn Fn() -> bool) -> Result<Vec<usize>> {
+    /// Validate only the fixed first-level header, including the physical first
+    /// tile-pointer field. Its value may be zero; no tile table or pixels are read.
+    pub(super) fn validate_first_level(&self, head: &HierarchyHead) -> Result<()> {
+        let pointer_bytes = if self.c.wide { 8 } else { 4 };
+        let end = head.level.checked_add(8 + pointer_bytes).ok_or_else(|| invalid("level header overflow"))?;
+        if head.level < head.header.end && end > head.header.start {
+            return Err(invalid("a level header overlaps its hierarchy header"));
+        }
         let mut level = self.c.at(head.level);
         if (level.u32()?, level.u32()?) != (head.width, head.height) {
             return Err(invalid("the level does not match its hierarchy"));
         }
+        level.take(pointer_bytes)?;
+        Ok(())
+    }
+
+    // Header starts are hard boundaries, even when tile records precede them.
+    // Both pixel APIs must use the same slice to avoid decoding framing as samples.
+    pub(super) fn tile_input(&self, head: &HierarchyHead, start: usize, next: Option<usize>) -> Result<&[u8]> {
+        if head.header.contains(&start) {
+            return Err(invalid("a tile pointer is inside its hierarchy header"));
+        }
+        let mut end = next.unwrap_or(self.c.b.len());
+        if start < head.header.start {
+            end = end.min(head.header.start);
+        }
+        if start < head.level {
+            end = end.min(head.level);
+        }
+        self.c.b.get(start..end).ok_or_else(|| invalid("a tile pointer is outside the file"))
+    }
+
+    pub(super) fn hierarchy_tiles(&self, head: &HierarchyHead, allow_empty: bool, keep_going: &dyn Fn() -> bool) -> Result<Vec<usize>> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        self.validate_first_level(head)?;
+        let mut level = self.c.at(head.level);
+        level.take(8)?;
         // The enhanced source contract admits an entirely zero level; retain the
         // legacy f32 entry point's existing rejection of a zero first pointer.
         if allow_empty && level.at(level.pos).ptr()? == 0 {
@@ -403,10 +426,7 @@ impl Xcf<'_> {
             let width = (head.width - x).min(TILE);
             let height = (head.height - y).min(TILE);
             let raw = if let Some(&start) = offsets.get(index) {
-                // A pre-table tile must not consume the level dimensions or pointers.
-                let boundary = if start < head.level { head.level } else { self.c.b.len() };
-                let end = offsets.get(index + 1).copied().unwrap_or(boundary).min(boundary);
-                let input = self.c.b.get(start..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
+                let input = self.tile_input(&head, start, offsets.get(index + 1).copied())?;
                 tiles::decode(input, self.image.compression, head.bpp, width as usize * height as usize)?
             } else {
                 let length = (width as usize)
