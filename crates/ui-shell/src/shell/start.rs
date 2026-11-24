@@ -271,16 +271,20 @@ impl Outcome for StartOutput {
     }
 }
 
+/// An app's own section of the start screen: its title and its body.
+type AppSection<'a> = (Label, RefCell<&'a mut dyn FnMut(&mut Ui)>);
+
 /// The start screen, shown in a shell's body when no document is open.
 ///
 /// - **Layout.** New and Open (the first Tab stops; with `offers_new(false)` New is left out and Open leads), then the
 ///   host's [`StartPlace::BeforeRecent`] sections, Recent with the view switch and the sort (left out with
-///   `max_recent(0)`), Pinned Folders when the app gives the list (even an empty one), Templates when it gives any,
-///   then the host's [`StartPlace::AfterSections`] sections, in call order. The page scrolls as a whole, and each grid
-///   and list takes the height of its rows.
+///   `max_recent(0)`), Pinned Folders when the app gives the list (even an empty one), the app's own
+///   [`app_section`](StartScreen::app_section) when it gives one, Templates when it gives any, then the host's
+///   [`StartPlace::AfterSections`] sections, in call order. The page scrolls as a whole, and each grid and list takes
+///   the height of its rows.
 /// - **Greeting layout.** With `layout(StartLayout::Greeting)` the page shows the `title`, the templates without a
-///   section heading, the `more_templates` link, then the recent files as rows in the order the app gave them: no view
-///   switch, no sort, no Pinned Folders and no drop card.
+///   section heading, the `more_templates` link, then the recent files as rows in the order the app gave them, then the
+///   app's own section: no view switch, no sort, no Pinned Folders and no drop card.
 /// - **Recent files.** A grid of cards or a list, by the `view` binding, in the order of the `sort` binding. A click or
 ///   Enter opens a file; arrows move; the context menu (secondary click, the menu key or Shift+F10) and the
 ///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder. A file's
@@ -333,6 +337,8 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
     drop_hint: Option<Label>,
+    /// One app section, drawn after Recent and Pinned Folders and before Templates.
+    section: Option<AppSection<'a>>,
     /// How the page is laid out.
     #[prop]
     layout: StartLayout,
@@ -442,6 +448,7 @@ impl<'a> StartScreen<'a> {
             thumbnails: None,
             links: &[],
             drop_hint: None,
+            section: None,
             home: None,
             layout: StartLayout::default(),
             title: None,
@@ -470,6 +477,13 @@ impl<'a> StartScreen<'a> {
     /// The navigation links come from [`Self::links`]. Narrow rooms put both groups below the content.
     pub fn home_layout(mut self, title: impl Into<Label>, footer_links: &'a [StartLink]) -> Self {
         self.home = Some(HomeLayout { title: title.into(), footer_links });
+        self
+    }
+
+    /// One app section titled `title`, drawn as a fixed section after Recent and Pinned Folders and before Templates.
+    /// `body` may run more than once in a pass: the rail measures it.
+    pub fn app_section(mut self, title: impl Into<Label>, body: &'a mut dyn FnMut(&mut Ui)) -> Self {
+        self.section = Some((title.into(), RefCell::new(body)));
         self
     }
 
@@ -622,7 +636,7 @@ pub(super) fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead:
             }
             CollectionEvent::LeadMoved { key, .. } => *lead = Some(key),
             CollectionEvent::Delete(keys) => deleted.extend(keys),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(key) = keys.into_iter().last() {
                     *lead = Some(key);
                 }
@@ -647,6 +661,7 @@ impl StartScreen<'_> {
             thumbnails,
             links,
             drop_hint,
+            section,
             layout,
             title,
             more_templates,
@@ -715,9 +730,18 @@ impl StartScreen<'_> {
             if !beside && (offers_new || offers_open) {
                 let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui, Sizing::Content));
             }
+            let app_section = |ui: &mut Ui| {
+                if let Some((title, body)) = &section {
+                    let _ = Section::fixed(title.clone()).header_gap(Gap::Section).show(ui, |ui, _| {
+                        let mut body = body.borrow_mut();
+                        (*body)(ui);
+                    });
+                }
+            };
             host_sections(ui, StartPlace::BeforeRecent);
             if layout == StartLayout::Greeting {
                 greeting_body(&page, ui, title.as_ref(), more_templates.as_ref(), templates, recent, max_recent);
+                app_section(ui);
             } else {
                 // With `pinned_first` the pinned folders stand above the recent files, as production's Folders section
                 // does; else they follow them.
@@ -739,6 +763,7 @@ impl StartScreen<'_> {
                 if let Some(pinned) = pinned.filter(|_| !pinned_first) {
                     pinned_section(&page, ui, pinned);
                 }
+                app_section(ui);
                 if !templates.is_empty() {
                     templates_section(&page, ui, templates);
                 }

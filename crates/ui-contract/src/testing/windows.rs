@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 pub use crate::runtime::egui::fixture::{FullOutput, RawInput, dragged_id, record_input_hooks};
 
-pub use craft_window::system::{FakeSystem, NoWindows};
+pub use craft_window::system::{FakeSystem, HeldButtons, NoWindows};
 
 /// An install spec for the running build's shell and a system with no OS services, with the stories' command sets.
 /// Background work runs inline, so what a pass asks for lands in the next pass on every machine and a settled frame

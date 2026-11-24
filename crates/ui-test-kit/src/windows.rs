@@ -144,6 +144,15 @@ fn patch_window(ids: egui::ViewportIdPair, builder: ViewportBuilder) {
     });
 }
 
+/// The window OS files hover over and drop on in [`Windows::frame_with_files`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilesOver {
+    /// The root viewport's window.
+    Root,
+    /// The child viewport's window.
+    Child,
+}
+
 /// A dropped file that exists only as a path.
 #[derive(Debug)]
 struct DroppedPath(std::path::PathBuf);
@@ -260,6 +269,7 @@ pub struct Windows {
     /// The installed context.
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
+    root: RefCell<RootEnv>,
     commands: RefCell<CommandInput>,
 }
 
@@ -290,7 +300,12 @@ impl Windows {
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
-        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()), commands: RefCell::new(CommandInput::new()) }
+        Windows {
+            ctx,
+            root_info: RefCell::new(ViewportInfo::default()),
+            root: RefCell::new(RootEnv::default()),
+            commands: RefCell::new(CommandInput::new()),
+        }
     }
 
     /// The window facts child passes report from now on.
@@ -314,6 +329,11 @@ impl Windows {
         *self.root_info.borrow_mut() = info;
     }
 
+    /// The app's root values every frame gives from now on, the defaults until then.
+    pub fn root_env(&self, root: RootEnv) {
+        *self.root.borrow_mut() = root;
+    }
+
     /// The command input every following frame is given, as an app's `FrameInput.commands`: its catalog, states and
     /// gate.
     pub fn commands(&self, commands: CommandInput) {
@@ -323,27 +343,30 @@ impl Windows {
     /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
     /// window commands of the frame.
     pub fn frame(&self, root: Vec<Event>, child: Vec<Event>, ui: impl FnMut(&mut Ui)) -> Out {
-        self.frame_with_files(root, child, Vec::new(), Vec::new(), ui)
+        self.frame_with_files(root, child, FilesOver::Root, Vec::new(), Vec::new(), ui)
     }
 
-    /// [`frame`](Self::frame) where the child's next pass also gets the OS files hovering over its window and the
-    /// files dropped on it.
+    /// [`frame`](Self::frame) where the next pass of the window `over` also gets the OS files hovering over it and the
+    /// files dropped on it. The other window gets none, as the OS sends them only to the window under the pointer.
     pub fn frame_with_files(
         &self,
         root: Vec<Event>,
         child: Vec<Event>,
+        over: FilesOver,
         hovered: Vec<HoveredFile>,
         dropped: Vec<String>,
         ui: impl FnMut(&mut Ui),
     ) -> Out {
         CHILD_EVENTS.with(|events| *events.borrow_mut() = child);
-        // The root pass starts before the child's and ends an OS-file session it sees no files for, so it sees them too.
+        let ((root_hovered, root_dropped), child_files) = match over {
+            FilesOver::Root => ((hovered, dropped), Default::default()),
+            FilesOver::Child => (Default::default(), (hovered, dropped)),
+        };
         let root_dropped: Vec<egui::DroppedFileHandle> =
-            dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
-        let root_hovered = hovered.clone();
-        CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
+            root_dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+        CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(RootEnv::default()).commands(self.commands.borrow().clone()));
+        set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).commands(self.commands.borrow().clone()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,

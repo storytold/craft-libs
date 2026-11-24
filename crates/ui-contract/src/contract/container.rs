@@ -845,6 +845,8 @@ pub struct ContainerProps {
     pub collection_body: bool,
     /// The labelled rows of the body share the widest label as one column.
     pub label_column: bool,
+    /// The rank by which a body unit of a shrinking row leaves whole; unranked units never leave by rank.
+    pub fit_rank: Option<u8>,
     /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
     pub labels: Option<LabelScheme>,
     /// The bracket an unwrapped `Row` placed from its start draws from its first child's labelled rows to the child
@@ -872,6 +874,7 @@ impl ContainerProps {
             && self.sizing == other.sizing
             && self.content_in_bar == other.content_in_bar
             && self.room_height == other.room_height
+            && self.fit_rank == other.fit_rank
             && self.layout == other.layout
             && self.header == other.header
             && self.scroll == other.scroll
@@ -934,6 +937,7 @@ impl ContainerProps {
             outer_edit: false,
             collection_body: false,
             label_column: false,
+            fit_rank: None,
             labels: None,
             bracket: None,
             owner: None,
@@ -1092,6 +1096,12 @@ impl ContainerProps {
     #[doc(hidden)]
     pub const fn gates(mut self) -> Self {
         self.gates = true;
+        self
+    }
+
+    /// Sets the rank by which the container leaves a shrinking row whole.
+    pub const fn fit_rank(mut self, rank: u8) -> Self {
+        self.fit_rank = Some(rank);
         self
     }
 

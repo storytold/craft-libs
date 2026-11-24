@@ -68,6 +68,10 @@ pub enum ChromeToggle {
     Panels,
     /// Every panel of the window except the tools.
     PanelsKeepTools,
+    /// Ends Tab and Shift+Tab hiding the panels; nothing when they are shown.
+    ShowPanels,
+    /// Reveals the edge while the window is body-only or its panels are hidden; `None` ends the reveal.
+    Reveal(Option<super::env::RevealEdge>),
 }
 
 /// A step of the outer gesture of a container whose `ContainerProps::outer_edit` is on: one undo step over the edits of
@@ -106,6 +110,10 @@ pub struct FrameOutput {
     /// The commands components took since the last call, in order, whatever fired them (a key, a menu row, the
     /// palette): what ran inside the framework, for an app that records the commands it runs (an action recorder).
     pub delivered: Vec<Fired>,
+    /// The key presses since the last call that ran nothing because their chord binds only commands disabled where the
+    /// press landed, in order: each as the key would have fired its first such command. The app says why it did not
+    /// run (`commands::resolve`'s hint), as it does for a disabled menu row.
+    pub dimmed: Vec<Fired>,
     /// The app-scope commands a key press fired while only the app's own command state disabled them, in order.
     /// Refusals by the gate or the modal rule are not listed.
     pub declined: Vec<Fired>,
@@ -123,6 +131,9 @@ pub struct FrameOutput {
     pub outer_edits: Vec<OuterEdit>,
     /// Whether a component refused this pass's input since the last call (`frame::refuse`): the app plays its alert.
     pub refused: bool,
+    /// The components whose live preview ended because they stopped showing; the host ends the preview it holds for
+    /// each id.
+    pub ended_previews: Vec<egui::Id>,
 }
 
 /// The per-frame and per-context state of the frame loop.
@@ -433,6 +444,7 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
     output.delivered = commands::take_delivered(ctx);
+    output.dimmed = commands::take_dimmed(ctx);
     output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
@@ -460,6 +472,11 @@ pub(crate) fn set_frame_layers(ctx: &Context, painter: Option<fn(&Context)>) {
 /// Adds a gesture whose component was evicted to the next `FrameOutput`.
 pub(crate) fn note_removed_gesture(ctx: &Context, id: GestureId) {
     pass_state::with::<FrameState, _>(ctx, |state| state.output.removed_gestures.push(id));
+}
+
+/// Adds a component whose live preview ended to the next `FrameOutput`.
+pub(crate) fn note_ended_preview(ctx: &Context, id: Id) {
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.ended_previews.push(id));
 }
 
 /// Adds a step of an outer gesture to the next `FrameOutput`.
@@ -514,7 +531,7 @@ pub fn note_shell(ctx: &Context, viewport: ViewportId, window: &WindowKey, root:
 
 /// The root container of the shell the latest pass of `viewport` showed: where a key pressed with nothing focused
 /// matches, so the window's commands take it.
-pub(crate) fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
+pub fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
     pass_state::with::<FrameState, _>(ctx, |state| {
         state.shells.iter().filter(|shell| shell.viewport == viewport).max_by_key(|shell| shell.pass).map(|shell| shell.root)
     })
@@ -522,7 +539,7 @@ pub(crate) fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
 
 /// Adds a chrome toggle of `viewport` to the next `FrameOutput` and aims it at the window of the viewport that holds
 /// focus, or at the first shell that asks when none does.
-pub(crate) fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
+pub fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
     queue_toggle(ctx, viewport, toggle);
     pass_state::with::<FrameState, _>(ctx, |state| state.output.chrome_toggles.push((viewport, toggle)));
 }
@@ -617,10 +634,9 @@ pub fn stepped_clock(ctx: &Context, step: f64) -> f64 {
     at
 }
 
-/// The running pass's time in seconds, read once by the begin hook. Content that changes with time reads
-/// [`stepped_clock`], which shows it again when the value it read changes; this read notes nothing, for timing
-/// events in the component that has the pointer or the focus.
-#[doc(hidden)]
+/// The running pass's time in seconds, the same on every pass of a frame: for app code that times a wait. Content
+/// that changes with time reads [`stepped_clock`], which shows it again when the value it read changes; this read
+/// notes nothing, for timing events in the component that has the pointer or the focus.
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {
         Some(facts) => facts.now,
@@ -640,6 +656,12 @@ pub(crate) fn note_cancelled_press(ctx: &Context) {
 #[cfg(feature = "testing")]
 pub(crate) fn holds_input(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.holds())
+}
+
+/// The events the one-press rule (H0) or the key stage held that the frame `frame` of `viewport` gets, read in its
+/// input hook before H0 hands them on.
+pub(crate) fn held_for(ctx: &Context, viewport: ViewportId, frame: u64) -> Vec<egui::Event> {
+    PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.delivered_in(frame))
 }
 
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
@@ -662,6 +684,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
     // to the focus are counted first, before the IME and key stages take theirs.
     keys::count_sent(ctx, viewport, &events);
+    keys::note_ime_presses(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {

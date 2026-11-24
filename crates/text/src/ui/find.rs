@@ -10,7 +10,7 @@ pub(crate) mod bar;
 pub(crate) mod dialog;
 
 pub use bar::{FindBar, FindBarOutput, FindBarState, FindStep};
-pub use dialog::{FindReplaceDialog, FindRequest, FindTab, GoToKind, GoToTarget};
+pub use dialog::{FindCheck, FindReplaceDialog, FindRequest, FindTab, GoToKind, GoToTarget, ReplaceButtons};
 
 use crate::find::{FindError, MAX_COUNT, MAX_PATTERN, RegexError, WildcardError};
 
@@ -45,6 +45,7 @@ craft_ui::words! {
         special: "find.special" = "Special";
         find_next: "find.findNext" = "Find Next";
         replace: "find.replace" = "Replace";
+        replace_find: "find.replaceFind" = "Replace & Find";
         replace_more: "find.replaceMore" = "Replace…";
         replace_all: "find.replaceAll" = "Replace All";
         replaced: template "find.replaced" = "All done. We made {n} replacements.";

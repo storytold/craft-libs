@@ -306,6 +306,14 @@ pub struct FloatingGroup<'a> {
     take_drop: Option<TakeDrop<'a>>,
     /// A move by the title began this pass.
     moving: bool,
+    /// The window takes over the held primary press in this pass: its own move gesture begins from that press with the
+    /// pointer at this point inside the window, so the window follows the pointer and, with
+    /// [`window_of`](FloatingGroup::window_of), docks where it would dock on release. A request of the pass, for the
+    /// pass after a rail's `torn_off`; without a held press it does nothing. Only a window on a layer takes the press:
+    /// the OS keeps a held button's moves with the window it went down in, so a group shown in an OS window
+    /// ([`native`](FloatingGroup::native)) moves only when pressed again.
+    #[prop(quantity = "grab point")]
+    continue_move: Option<Vec2>,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
 }
@@ -352,6 +360,7 @@ impl<'a> FloatingGroup<'a> {
             start_drag: None,
             take_drop: None,
             moving: false,
+            continue_move: None,
             files: Vec::new(),
         }
         .label(title)
@@ -471,6 +480,9 @@ impl<'a> FloatingGroup<'a> {
         // A dock window's move by its title row docks it, so the app runs that move in an OS window too.
         if self.start_drag.is_some() {
             overlay = overlay.moved_by_app();
+        }
+        if let Some(grab) = self.continue_move {
+            overlay = overlay.continue_move(grab);
         }
         match &self.native {
             Some(spec) => Mount::viewport_with(overlay, spec.clone()),

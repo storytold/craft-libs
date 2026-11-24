@@ -27,7 +27,13 @@ fn show_pane(ui: &mut Ui, pane: SplitPaneAt) {
     let document = &StoryDocument::STANDARD;
     let size = document.size();
     let mut view = CanvasView::new(pane.rect, document.centre(), 1.0);
-    zoom::fit(&mut view, Size::new(f64::from(size.width), f64::from(size.height)), ui.pixels_per_point(), 0.0);
+    zoom::fit(
+        &mut view,
+        Size::new(f64::from(size.width), f64::from(size.height)),
+        ui.pixels_per_point(),
+        0.0,
+        &craft_behavior::ZoomScheme::PHOTOSHOP,
+    );
     let name = if pane.active { "Main view" } else { "View" };
     Canvas::new(name).view(view).show_at(ui, pane.rect, |ui, body| show_document(ui, body.rect, document));
 }

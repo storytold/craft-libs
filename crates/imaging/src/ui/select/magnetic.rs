@@ -407,9 +407,11 @@ impl<T: EdgeTracer> MagneticLassoTool<T> {
     }
 
     /// The pointer moved to `p` (button up or down): freehand adds points, otherwise the outline
-    /// follows the edges, walking a long jump in steps.
+    /// follows the edges, walking a long jump in steps. A pass the pointer stayed put in (a key went
+    /// down or up under it) traces the live segment again but fastens nothing.
     fn moved(&mut self, pointer: &ToolPointer, p: Point, zoom: f64) {
         let Some(o) = self.outline.as_mut() else { return };
+        let fasten = o.pointer != p;
         o.pointer = p;
         if o.freehand {
             // ⌥-drag: the pointer's path is the outline.
@@ -427,7 +429,7 @@ impl<T: EdgeTracer> MagneticLassoTool<T> {
         // along it.
         let n = ((last.distance(p) / step).ceil() as usize).clamp(1, 256);
         for k in 1..=n {
-            self.follow(last.lerp(p, k as f64 / n as f64), search, spacing, true);
+            self.follow(last.lerp(p, k as f64 / n as f64), search, spacing, fasten);
         }
     }
 

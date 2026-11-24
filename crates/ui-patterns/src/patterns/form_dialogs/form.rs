@@ -175,7 +175,7 @@ type FooterExtraFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 type OnResetFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>) + 'a>;
 
-type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
+type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V, &mut BodyCx<'_>) -> V + 'a>;
 
 /// A dialog over one value `V`.
 ///
@@ -404,9 +404,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// The value Reset sets, given the current value and the one from when the dialog opened; without it Reset sets
-    /// the opening value.
-    pub fn reset_with(mut self, target: impl Fn(&V, &V) -> V + 'a) -> Self {
+    /// The value Reset sets, given the current value, the one from when the dialog opened and the body's context (the
+    /// dialog's own memory); without it Reset sets the opening value.
+    pub fn reset_with(mut self, target: impl Fn(&V, &V, &mut BodyCx<'_>) -> V + 'a) -> Self {
         self.reset_with = Some(Box::new(target));
         self
     }
@@ -461,8 +461,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         // The app accepted the held OK: this pass finishes it. A second pass of the frame finds the answer already taken.
         let finish = !measuring_run && hold.as_deref().is_some_and(|held| held.is_accepted());
         // The refusal and the values it refused are read before the body, which may edit the values; the notice is decided
-        // after the body, in the same pass, against the values the body left.
-        let refusal = hold.as_deref().and_then(|held| held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone())));
+        // after the body, in the same pass, against the values the body left. A blocking (host) refusal shows whatever the
+        // values are.
+        let refusal =
+            hold.as_deref().and_then(|held| held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone(), held.refusal_blocks())));
         let reason_cell = Rc::new(Cell::new(None::<Label>));
         let waiting = hold.as_deref().is_some_and(|held| held.is_waiting());
         let ok_enabled = ok_enabled && !waiting;
@@ -498,7 +500,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                     Some(Mixed::Same(held)) => held,
                     _ => opened.clone(),
                 };
-                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened));
+                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened, cx));
                 let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(current), target, name.clone(), None));
                 if let Some(restore) = on_reset.as_mut() {
                     restore(cx);
@@ -566,8 +568,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         let accepts = Cell::new(ok_enabled);
         let body_pick = Cell::new(false);
         let shown = dialog.show(ui, |ui, cx| {
-            // A measuring run sees no answers and no opening pass: the real run that follows still has both.
-            let measuring = measuring_run;
+            // A measuring run sees no answers and no opening pass: the real run that follows still has both. The dialog
+            // measures its body in a run of its own too (a re-layout under a child dialog), inside a real run of the form.
+            let measuring = measuring_run || crate::runtime::measure::active(ui.ctx());
             let first = cx.appeared() && !measuring;
             let mut held = bind.borrow_mut();
             let before = match held.reborrow().read(cx) {
@@ -629,8 +632,8 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
                 *changed.borrow_mut() = Some(values.clone());
             }
-            if let Some((reason, refused)) = &refusal
-                && *refused == values
+            if let Some((reason, refused, blocks)) = &refusal
+                && (*blocks || *refused == values)
             {
                 reason_cell.set(Some(reason.clone()));
             }
@@ -649,8 +652,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         };
         if let Some(held) = hold {
             let values = work.into_inner();
+            // A blocking refusal ends only when the host withdraws it.
             if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref())
                 && refused != values
+                && !held.refusal_blocks()
             {
                 held.clear_refusal();
             }

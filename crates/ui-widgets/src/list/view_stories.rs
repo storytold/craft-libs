@@ -7,7 +7,7 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
+    Bind, CollectionEvent, ColumnSpec, Entry, Props as _, ScrollAnchor, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
     WordSetCx as _, request_rename,
 };
 use crate::layout_components::Stack;
@@ -17,6 +17,7 @@ use crate::primitives::{ContentPainterCx, IconSpec, Span};
 use crate::runtime::env::{Env, Label};
 use crate::style::{Corners, SurfaceKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
+use crate::tile_grid::GroupHeads;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Rect, Ui};
@@ -659,4 +660,72 @@ fn undo_list_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn undo_list_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (mark, mark_at) = data.value_at("mark", UndoMark::default());
     undo_list(ui, mark, mark_at, 0)
+}
+
+/// A log that follows its newest row: while the scroll is at the end, the button's new rows keep it there; scrolling up
+/// leaves it.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_follows_end(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let count = data.value("count", 12_usize);
+    let mut shown = StoryOutput::default();
+    Stack::new().show(ui, |ui, _| {
+        if crate::contract::clicked(&Button::new("Add a row").show(ui)) {
+            *count += 1;
+        }
+        let names = names(*count);
+        shown = List::<usize>::new("Log")
+            .max_rows(6)
+            .scroll_anchor(ScrollAnchor::End)
+            .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()))
+            .into();
+    });
+    shown
+}
+
+/// A tree whose top-level groups after the first are set apart by a rule, with no title and no disclosure.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_rule_heads(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let groups: Vec<usize> = (0..TREE.len()).filter(|&at| is_group(at)).collect();
+    let all_open = || {
+        let mut open = OpenSet::new();
+        for at in &groups {
+            open.set(at, true);
+        }
+        open
+    };
+    let open = data.value("open", all_open()).clone();
+    let shown = shown_nodes(&open);
+    let out = List::<usize>::new("Layers").tree(true).group_heads(GroupHeads::Rule).natural_height(true).show_items(
+        ui,
+        &TreeNodes { shown: &shown, open: &open },
+        &mut |key, _| {
+            let (name, depth) = TREE[*key];
+            let row = ListRow::new(name).depth(depth);
+            if is_group(*key) { row.group(open.is_open(key)) } else { row }
+        },
+    );
+    // The first top-level group and the nested ones keep their disclosure: the story opens and closes them.
+    for event in &out.events {
+        if let CollectionEvent::Open(change) = event {
+            data.value("open", all_open()).apply(&change.key, change.open, change.all, &groups);
+        }
+    }
+    out.into()
+}
+
+/// A row with a body under it: the body is part of the row's slot.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_detail_body(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let names = names(4);
+    List::<usize>::new("Effects")
+        .natural_height(true)
+        .show_items(ui, &Names(&names), &mut |key, icx| {
+            if *key == 1 {
+                icx.detail(|ui| {
+                    Button::new("Apply").show(ui);
+                });
+            }
+            ListRow::new(names[*key].clone())
+        })
+        .into()
 }

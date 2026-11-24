@@ -12,7 +12,7 @@ use skrifa::GlyphId;
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
 
-use super::{FamilyRow, FontClass, FontFilters, FontFormat, FontPickerSettings, HostFontGroup, HostFontKind, SIMILAR_COUNT};
+use super::{FamilyRow, FamilySet, FontClass, FontFilters, FontFormat, FontPickerSettings, FontScript, HostFontGroup, HostFontKind, SIMILAR_COUNT};
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -55,11 +55,12 @@ impl Traits {
     }
 }
 
-/// The families of one catalog generation with their sample texts, filled on first use. Built by
+/// The families of one catalog generation with their scripts and sample texts, filled on first use. Built by
 /// [`FamilyInfos::of`] and held by the one that lists with it: the picker keeps it in a derived value keyed by the
 /// catalog's generation, and an app that calls [`family_rows`](super::family_rows) keeps its own while the catalog is unchanged.
 pub struct FamilyInfos {
     pub(super) families: HashMap<String, Info>,
+    scripts: Mutex<HashMap<String, Vec<FontScript>>>,
     samples: Mutex<HashMap<(String, String), String>>,
 }
 
@@ -85,12 +86,22 @@ impl FamilyInfos {
                 Some((family, Info { localized, format, styles: faces.len(), regular }))
             })
             .collect();
-        FamilyInfos { families, samples: Mutex::new(HashMap::new()) }
+        FamilyInfos { families, scripts: Mutex::new(HashMap::new()), samples: Mutex::new(HashMap::new()) }
     }
 
     /// The family's traits, from its regular face's record.
     pub(super) fn traits(&self, family: &str) -> Option<Traits> {
         self.families.get(family).map(|i| read_traits(&i.regular))
+    }
+
+    /// The scripts the family's regular face covers, read from its `cmap` on first use; none when the face can't be read.
+    pub(super) fn scripts(&self, catalog: &Catalog, family: &str) -> Vec<FontScript> {
+        if let Some(scripts) = lock(&self.scripts).get(family) {
+            return scripts.clone();
+        }
+        let scripts = self.families.get(family).and_then(|i| read_scripts(catalog, &i.regular)).unwrap_or_default();
+        lock(&self.scripts).insert(family.to_owned(), scripts.clone());
+        scripts
     }
 
     /// What a family's sample says, in its row and in the banner: `sample` when the family's regular face (`face`, as
@@ -155,10 +166,37 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
     info.localized.iter().find(exact).or_else(|| info.localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
 }
 
+/// Whether a family name of the face is in Japanese.
+fn japanese_name(face: &FaceInfo) -> bool {
+    face.localized_families
+        .iter()
+        .any(|n| n.language.as_deref().and_then(|l| l.split(['-', '_']).next()).is_some_and(|l| l.eq_ignore_ascii_case("ja")))
+}
+
 /// A face's class, PANOSE and weight from its `OS/2` and `post` tables, as the catalog's scan recorded them.
 fn read_traits(face: &FaceInfo) -> Traits {
     let weight = face.weight_class.unwrap_or(400).clamp(1, 1000);
     Traits { class: classify(&face.family, face.family_class, face.panose, face.fixed_pitch), panose: face.panose, weight }
+}
+
+/// The JIS/Japan bit of `ulCodePageRange1`.
+const JIS_CODE_PAGE: u32 = 1 << 17;
+/// The Hiragana (49), Katakana (50) and CJK Unified Ideographs (59) bits of `ulUnicodeRange2`, which holds bits 32 to 63.
+const JAPANESE_RANGES: u32 = (1 << (49 - 32)) | (1 << (50 - 32)) | (1 << (59 - 32));
+
+/// The scripts a face covers: Latin, the basic Latin letters in its `cmap`; Japanese, the JIS code page, the kana or
+/// CJK Unicode ranges of its `OS/2` table, or a Japanese family name; Thai, ก and า in its `cmap`.
+fn read_scripts(catalog: &Catalog, face: &FaceInfo) -> Option<Vec<FontScript>> {
+    let data = catalog.load(face).ok()?;
+    let font = FontRef::from_index(&data.bytes, face.index).ok()?;
+    let map = font.charmap();
+    let mapped = |c: char| map.map(c).is_some();
+    let latin = ('A'..='Z').chain('a'..='z').all(&mapped);
+    let ranges = font.os2().ok().map_or(0, |os2| os2.ul_unicode_range_2());
+    let japanese = face.code_pages[0] & JIS_CODE_PAGE != 0 || ranges & JAPANESE_RANGES != 0 || japanese_name(face);
+    let thai = ['\u{0E01}', '\u{0E32}'].into_iter().all(&mapped);
+    let scripts = [(FontScript::Latin, latin), (FontScript::Japanese, japanese), (FontScript::Thai, thai)];
+    Some(scripts.into_iter().filter_map(|(script, covered)| covered.then_some(script)).collect())
 }
 
 /// The class of a family from its regular face, `None` when the catalog lacks it.
@@ -236,12 +274,18 @@ pub(super) struct Listing<'a> {
     pub(super) settings: Option<&'a FontPickerSettings>,
     /// The filters; they apply only to a `narrowed` list.
     pub(super) filters: &'a FontFilters,
-    /// The committed family, the reference of Show Similar Fonts.
-    pub(super) current: &'a str,
     /// The interface language code the names are shown in.
     pub(super) language: &'a str,
     /// Families the host can fetch but the catalog lacks; they list with the matches, by rank and name, with no class, format or sample.
     pub(super) served: &'a [String],
+    /// The host's family sets; those whose key is in the filters and that are enabled narrow the list.
+    pub(super) sets: &'a [FamilySet<'a>],
+}
+
+/// The sets that filter: their key is in `filters.sets` and they are enabled. A key naming a disabled set or no set
+/// filters nothing, so a toggle the user cannot turn off never hides families.
+fn active<'s, 'a>(sets: &'s [FamilySet<'a>], filters: &FontFilters) -> Vec<&'s FamilySet<'a>> {
+    sets.iter().filter(|set| set.enabled && filters.sets.iter().any(|key| key == set.key)).collect()
 }
 
 /// How the interface language folds and orders text.
@@ -307,15 +351,26 @@ pub(super) fn list(
     if let Some(class) = filters.class {
         rows.retain(|r| r.class == Some(class));
     }
+    if let Some(script) = filters.script {
+        rows.retain(|r| infos.scripts(catalog, &r.family).contains(&script));
+    }
+    let on = active(listing.sets, filters);
+    for set in &on {
+        rows.retain(|r| set.position(&r.family).is_some());
+    }
+    // The first set that is on and ordered gives the order; the others only filter.
+    if let Some(set) = on.iter().find(|set| set.ordered) {
+        rows.sort_by_cached_key(|r| set.position(&r.family));
+    }
     let mut comparable = true;
-    if filters.similar {
-        let reference = infos.traits(listing.current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
+    if let Some(reference_family) = filters.similar.as_deref() {
+        let reference = infos.traits(reference_family).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
         if let Some(reference) = reference {
             let mut scored: Vec<(f32, FamilyRow)> = rows
                 .drain(..)
                 .filter_map(|r| {
                     let traits = infos.traits(&r.family)?;
-                    let distance = if r.family == listing.current { -1.0 } else { reference.difference(&traits) };
+                    let distance = if r.family == reference_family { -1.0 } else { reference.difference(&traits) };
                     Some((distance, r))
                 })
                 .collect();
@@ -325,9 +380,10 @@ pub(super) fn list(
             comparable = false;
         }
     }
+    let narrowing = !on.is_empty() || (FontFilters { sets: Vec::new(), ..filters.clone() }).any();
     if narrowed
         && matcher.is_empty()
-        && !filters.any()
+        && !narrowing
         && let Some(settings) = settings
     {
         let recent: Vec<FamilyRow> = settings
