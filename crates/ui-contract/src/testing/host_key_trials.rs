@@ -202,9 +202,12 @@ fn a_press_during_an_app_editor_s_composition_fences_its_late_ime_events() {
         Event::Ime(ImeEvent::Commit("Q".to_owned())),
     ];
     frames.frame(late, &mut show);
-    let ime = frames.ime().expect("the editor writes the pass's IME output");
+    let ime = frames.ime();
+    assert!(ime.is_some(), "the editor writes the pass's IME output");
+    let Some(ime) = ime else { return };
     assert!(ime.owner == host_editor_id() && ime.interrupt, "the press interrupts the editor's composition in its own context");
-    let reset = ime.reset.expect("the interrupt asks for a reset");
+    assert!(ime.reset.is_some(), "the interrupt asks for a reset");
+    let Some(reset) = ime.reset else { return };
     frames.frame(vec![release(at)], &mut show);
     frames.frame(Vec::new(), &mut show);
     assert_eq!(*editor.borrow(), "ab", "the composition's late deletion and commit never reach the editor");
