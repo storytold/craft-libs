@@ -989,7 +989,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.control.sm`, `size.control.md` | Controls, fields, buttons |
 | `size.icon.sm`, `size.icon.md`, `size.icon.lg` | Icons; `md` is the glyph of a tool strip and of a panel footer's actions (`GlyphRole::Tool`), `lg` of a tool rail (`GlyphRole::ToolRail`). A stroke-set icon draws its line `stroke.icon` of its side |
 | `size.icon.glyph_sm`, `size.icon.glyph_md` | The glyph in an icon-only button (`GlyphRole::Control`, the default; a container sets another with `ContainerProps::child_glyphs`) |
-| `size.bar.title`, `size.bar.tab`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow` | Title bar, document tab bar, status bar, options bar |
+| `size.bar.title`, `size.bar.tab`, `size.bar.tab_large`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow` | Title bar, document tab bar, document tab bar with large tabs, status bar, options bar |
 | `size.panel_header` | Panel headers |
 | `size.popup_min` | Least width of a popup surface (menus only; popup lists such as Select and ComboBox take their anchor's width) |
 | `size.groove` | Groove of a value track |

@@ -392,6 +392,9 @@ pub enum DialogButtonLook {
     /// PdfCraft's: Cancel and an Alternate answer (Don't Save, No) are plain text (the ghost look) beside the accented
     /// accepting button, as production's prompts show them.
     Quiet,
+    /// VectorCraft's: every button but the accepting and the destructive one is a filled neutral tile with no edge
+    /// (`buttons::FILLED`).
+    Filled,
 }
 
 /// What a dialog button means; it decides the button's look and its place in the row.
@@ -719,7 +722,7 @@ impl FooterBar {
                 let armed_for = Env::of(&*ui).get::<ArmedFor>().0;
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.live(armed_for));
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
-                let quiet = Env::of(ui).get::<DialogButtonLook>() == DialogButtonLook::Quiet;
+                let look = Env::of(ui).get::<DialogButtonLook>();
                 let place = |ui: &mut Ui, shown: &mut Shown| {
                     for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
@@ -727,8 +730,11 @@ impl FooterBar {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
                             // Production shows Cancel and Don't Save as plain text beside the accented answer.
-                            DialogRole::Cancel | DialogRole::Alternate if quiet => Variant::GHOST,
-                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => Variant::SECONDARY,
+                            DialogRole::Cancel | DialogRole::Alternate if look == DialogButtonLook::Quiet => Variant::GHOST,
+                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => match look {
+                                DialogButtonLook::Filled => crate::buttons::FILLED,
+                                DialogButtonLook::Standard | DialogButtonLook::Quiet => Variant::SECONDARY,
+                            },
                         };
                         let live = button.live(armed_for);
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(live).least_width(least);

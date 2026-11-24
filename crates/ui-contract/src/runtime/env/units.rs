@@ -467,6 +467,12 @@ impl Units {
         self.template(kind).replace("{n}", "").trim().to_owned()
     }
 
+    /// The text before and after the number in the user's language, spacing included: `("", " mm")`, `("", "%")`.
+    pub fn affixes(&self, kind: UnitKind) -> (String, String) {
+        let template = self.template(kind);
+        template.split_once("{n}").map_or_else(|| (String::new(), template.to_owned()), |(before, after)| (before.to_owned(), after.to_owned()))
+    }
+
     /// The digits after the decimal mark `n` needs within `decimals`: the fewest that show it as it rounds at the most.
     fn digits(n: f64, decimals: &RangeInclusive<usize>) -> usize {
         let (least, most) = (*decimals.start(), *decimals.end());
