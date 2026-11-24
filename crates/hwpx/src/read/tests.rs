@@ -572,3 +572,38 @@ fn tiled_backgrounds_stop_at_the_documents_budget() {
     assert!(many < 160 * one / 2, "far fewer than every section's tiles: {many} of {}", 160 * one);
     assert!(warnings.iter().any(|w| w.contains("page background tiles")), "{warnings:?}");
 }
+
+/// A manifest href with a `.` segment (`BinData/./photo.png`) names the package entry it
+/// points at; before, the item was dropped and a picture referring to its id had no image.
+#[test]
+fn manifest_hrefs_are_normalised() {
+    let hpf = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="pic" href="BinData/./photo.png" media-type="image/png"/><opf:item id="s" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="s"/></opf:spine></opf:package>"#;
+    let sec = format!(r#"<hs:sec {NS}><hp:p><hp:run><hp:t>본문</hp:t></hp:run></hp:p></hs:sec>"#);
+    let bytes = package(&[
+        ("Contents/content.hpf", hpf.as_bytes()),
+        ("Contents/header.xml", EMPTY_HEAD),
+        ("Contents/section0.xml", sec.as_bytes()),
+        ("BinData/photo.png", b"picture"),
+    ]);
+    let pkg = crate::package::Package::open(&bytes).unwrap();
+    assert_eq!(pkg.binary("pic").map(|b| b.1), Some(&b"picture"[..]));
+}
+
+/// A section part whose root element's name is cut off where the reader stops looking (after
+/// a long run of spaces) still counts as a section the manifest lists; before, it read as
+/// another kind of part and the section was lost.
+#[test]
+fn a_section_root_cut_off_by_the_peek_still_counts() {
+    let hpf = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="s0" href="Contents/section0.xml" media-type="application/xml"/><opf:item id="s1" href="Contents/section1.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="s0"/><opf:itemref idref="s1"/></opf:spine></opf:package>"#;
+    let body = |t: &str| format!(r#"<hs:sec {NS}><hp:p><hp:run><hp:t>{t}</hp:t></hp:run></hp:p></hs:sec>"#);
+    let first = format!("{}{}", " ".repeat(4096 - "<hs:s".len()), body("첫째"));
+    let second = body("둘째");
+    let bytes = package(&[
+        ("Contents/content.hpf", hpf.as_bytes()),
+        ("Contents/header.xml", EMPTY_HEAD),
+        ("Contents/section0.xml", first.as_bytes()),
+        ("Contents/section1.xml", second.as_bytes()),
+    ]);
+    let pkg = crate::package::Package::open(&bytes).unwrap();
+    assert_eq!(pkg.section_names, ["Contents/section0.xml", "Contents/section1.xml"]);
+}

@@ -120,10 +120,10 @@ impl Package {
 
     /// Manifest hrefs are package-root relative in practice; accept hpf-relative too.
     fn resolve(&self, href: &str) -> Option<String> {
-        let href = href.replace('\\', "/");
-        let href = href.trim_start_matches('/');
-        if self.has(href) {
-            return Some(href.to_string());
+        // `BinData/./photo.png` names `BinData/photo.png`
+        let href = normalize_path(&href.replace('\\', "/"));
+        if self.has(&href) {
+            return Some(href);
         }
         let dir = self.rootfile.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d)?;
         let alt = normalize_path(&format!("{dir}/{href}"));
@@ -192,6 +192,10 @@ impl Package {
                 continue;
             }
             let name: String = rest.chars().take_while(|c| !c.is_whitespace() && *c != '>' && *c != '/').collect();
+            if name.len() == rest.len() {
+                // the name runs to the end of what was looked at: it may be cut short
+                return "?";
+            }
             let local = name.rsplit(':').next().unwrap_or("");
             return match local {
                 "head" => "head",
