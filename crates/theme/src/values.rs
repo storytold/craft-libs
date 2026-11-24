@@ -201,6 +201,8 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::SurfaceChrome => Same(T::SurfacePanel),
         T::SurfaceRaised => Anchored(pick(4, 1)),
         T::SurfaceSunken => Anchored(1),
+        // A filled tile rests on the theme's own hover fill, so the pointer adds only its edge.
+        T::SurfaceControl => Same(T::StateHover),
         // Near white in both modes (dark: about 236/255), as macOS, GNOME and PhotoCraft knobs. A
         // knob face is not a background grey, so it stays on the curve.
         T::SurfaceKnob => Neutral(pick(12, 1)),
@@ -385,6 +387,7 @@ const TEXT_BGS: &[Bg] = &[
     Token(T::SurfaceChrome),
     Token(T::SurfaceRaised),
     Token(T::SurfaceSunken),
+    Token(T::SurfaceControl),
     Token(T::StateHover),
     Token(T::StatePressed),
 ];

@@ -64,6 +64,9 @@ pub struct SurfaceColors {
     pub raised: Rgba,
     /// Fields and wells.
     pub sunken: Rgba,
+    /// The resting fill of a filled control (`Emphasis::Filled`): a neutral tile with no edge. Follows
+    /// `state.hover` unless pinned.
+    pub control: Rgba,
     /// The face of a knob that rides on a track: slider and switch thumbs. Light in both modes.
     pub knob: Rgba,
     /// Translucent cover behind modal surfaces.
@@ -321,6 +324,7 @@ impl ColorTokens {
                 chrome: c,
                 raised: c,
                 sunken: c,
+                control: c,
                 knob: c,
                 scrim: c,
                 inverse: c,
@@ -438,6 +442,8 @@ color_tokens! {
     SurfaceRaised = "surface.raised" => surface.raised;
     /// `surface.sunken`
     SurfaceSunken = "surface.sunken" => surface.sunken;
+    /// `surface.control`
+    SurfaceControl = "surface.control" => surface.control;
     /// `surface.knob`
     SurfaceKnob = "surface.knob" => surface.knob;
     /// `surface.scrim`

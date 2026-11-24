@@ -63,14 +63,38 @@ pub enum ControlPlace {
     SideMenu,
 }
 
-/// The style context a push or split button draws in: in a ribbon (`ControlPlace::Ribbon`) the default variant
-/// becomes the ghost one, so the button is flat at rest; any other variant, and any other place, stays as it is.
+/// The look of a push or split button that asks for no variant (or for the default `Variant::SECONDARY`). An app sets
+/// it once at its root (`RootEnv::values`); the default is the outline. A ribbon's flat look (`ControlPlace::Ribbon`)
+/// wins over it, and toggles keep the outline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum PushButtonLook {
+    /// The outline, filled only by state.
+    #[default]
+    Outline,
+    /// The filled neutral tile with no edge at rest (`Emphasis::Filled`): VectorCraft's buttons.
+    Filled,
+}
+
+/// The filled neutral variant a push button takes under [`PushButtonLook::Filled`].
+pub(crate) const FILLED: craft_theme::Variant = craft_theme::Variant::look(craft_theme::Emphasis::Filled, craft_theme::variant::Tone::Neutral);
+
+/// The style context a push, split or labelled toggle button draws in: in a ribbon (`ControlPlace::Ribbon`) the default
+/// variant becomes the ghost one, so the button is flat at rest; any other variant, and any other place, stays as it is.
 pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleCx<'a> {
     if cx.variant == craft_theme::Variant::SECONDARY && cx.env::<ControlPlace>() == ControlPlace::Ribbon {
         cx.with_variant(craft_theme::Variant::GHOST)
     } else {
         *cx
     }
+}
+
+/// The style context a push or split button draws in: [`placed`], then the default variant becomes the filled one
+/// under [`PushButtonLook::Filled`].
+pub(crate) fn pushed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleCx<'a> {
+    let cx = placed(cx);
+    if cx.variant == craft_theme::Variant::SECONDARY && cx.env::<PushButtonLook>() == PushButtonLook::Filled { cx.with_variant(FILLED) } else { cx }
 }
 
 /// The icon sides of the buttons in a ribbon (`ControlPlace::Ribbon`), in points: `large` for a stacked button's

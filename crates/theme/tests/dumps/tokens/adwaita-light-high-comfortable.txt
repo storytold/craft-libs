@@ -6,6 +6,7 @@ surface.panel = #ffffffff
 surface.chrome = #ffffffff
 surface.raised = #ffffffff
 surface.sunken = #ebebedff
+surface.control = #e2e2e5ff
 surface.knob = #fcfcfdff
 surface.scrim = #00000059
 surface.inverse = #262628ff

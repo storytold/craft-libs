@@ -19,6 +19,8 @@ pub enum Emphasis {
     Outline,
     /// No fill or edge until a state fills it.
     Ghost,
+    /// A neutral tile (`surface.control`) with no edge at rest; the pointer and the press fill it by state and edge it.
+    Filled,
 }
 
 /// What a variant says about its subject. The one tone type of the component layer: messages, notices, badges and
@@ -237,6 +239,16 @@ impl VariantLook {
                 VariantLook::new(state_fill, text(fg)).muted(muted).edge(States::new(edge, lit, lit, c.line.divider)).radius(button)
             }
             Emphasis::Ghost => VariantLook::new(state_fill, text(fg)).muted(muted).radius(button).edge(flat(clear)),
+            // A neutral tile takes the control edge under the pointer and the accent's under the press; a toned one keeps
+            // its edge. Disabled, it dims as a solid one does.
+            Emphasis::Filled => {
+                let (lit, pressed) = if tone == Tone::Neutral { (c.line.control_edge, c.accent.border) } else { (edge, edge) };
+                let dimmed = crate::derive::mix(c.surface.control, c.state.disabled_fill, DISABLED_SOLID_DIM);
+                VariantLook::new(States::new(c.surface.control, c.state.hover, c.state.pressed, dimmed), text(fg))
+                    .muted(muted)
+                    .edge(States::new(clear, lit, pressed, clear))
+                    .radius(button)
+            }
         }
     }
 }

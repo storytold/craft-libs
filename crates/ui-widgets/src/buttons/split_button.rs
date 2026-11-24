@@ -22,7 +22,7 @@ const ARROW: PartKey = PartKey::new("arrow");
 /// The style of a split button: one surface under both parts, each part's hover and pressed fill over it, and a
 /// divider between them.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct SplitButtonStyle {
     #[style(surface)]
@@ -162,7 +162,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     type Output = SplitOutput<T>;
 
     fn style(cx: &StyleCx<'_>, key: SplitButtonStyleKey<T>) -> SplitButtonStyle {
-        let cx = &super::placed(cx);
+        let cx = &super::pushed(cx);
         let parts = cx.variant_look();
         let metrics = face::metrics_of(cx, &parts, key.arrangement);
         let mut surface = face::surface(cx, &parts);

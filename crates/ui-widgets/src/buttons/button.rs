@@ -37,7 +37,7 @@ const SIDE_MENU_DISABLED_ALPHA: u8 = 110;
 
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct ButtonStyle {
     #[style(surface)]
@@ -296,7 +296,7 @@ impl Component for Button<'_> {
     type Output = ButtonOutput;
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
-        let cx = &super::placed(cx);
+        let cx = &super::pushed(cx);
         let mut style = match key.tint {
             Some(tint) => ButtonStyle::tinted(cx, tint),
             None => ButtonStyle::of(cx),
