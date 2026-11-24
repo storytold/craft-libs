@@ -61,7 +61,7 @@ pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
     ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DeleteTarget, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress,
     HeaderMenuRequest, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight,
-    RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    RowPressed, RowPreview, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -93,8 +93,8 @@ pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
 pub use label::{
-    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, LinkLabelInk,
-    Scrub, SideLabel,
+    CaptionColumn, CaptionInk, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme,
+    LinkLabelInk, Scrub, SideLabel,
 };
 pub use lazy::Lazy;
 #[doc(hidden)]

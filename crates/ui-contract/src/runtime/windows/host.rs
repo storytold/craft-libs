@@ -491,8 +491,19 @@ impl WindowHost {
     /// The desktop pointer in the coordinates of `viewport`, when it lies inside that window.
     pub fn pointer_in(&self, viewport: ViewportId) -> Option<Pos2> {
         let desktop = self.desktop_pointer()?;
-        let inner = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))?;
+        let inner = self.inner_on_desktop(viewport)?;
         inner.contains(desktop).then(|| Pos2::ZERO + (desktop - inner.min))
+    }
+
+    /// What a point of `from`'s window adds to land at the same desktop place in `to`'s window, by the inner rects
+    /// the windows last reported, as [`Self::pointer_in`] maps the desktop pointer.
+    pub(crate) fn offset_between(&self, from: ViewportId, to: ViewportId) -> Option<Vec2> {
+        Some(self.inner_on_desktop(from)?.min - self.inner_on_desktop(to)?.min)
+    }
+
+    /// The inner rect of `viewport`'s window on the desktop, as the window last reported it.
+    fn inner_on_desktop(&self, viewport: ViewportId) -> Option<Rect> {
+        PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts.and_then(|facts| facts.inner))
     }
 }
 

@@ -22,6 +22,19 @@ pub use swatch::{
 };
 pub use swatch_table::{RowMarks, SwatchArrangement, SwatchRows, SwatchSpacing, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 
+/// How a check box, radio button or switch track that is on fills. An app sets it once at its root
+/// (`RootEnv::values`); the default is the accent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ChoiceLook {
+    /// `accent.solid` with a `text.on_accent` mark.
+    #[default]
+    Accent,
+    /// `accent.strong` with a white `text.on_strong` mark: VectorCraft's.
+    Strong,
+}
+
 /// The well of a check box, radio button or switch track with `radius` corners: the sunken surface, so a bevelled theme
 /// draws its bevel, filled with the off fill or the on accent. A flat theme draws the outline as its edge, in the failure
 /// colour while the value is invalid.
@@ -61,21 +74,29 @@ fn well(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::S
     Stateful::new(well).off(States::new(well, well, pressed, disabled))
 }
 
-/// The fill of a check box, radio button or switch track while on: the accent, its pressed shade while pressed, and
-/// `text.disabled` while disabled.
+/// The fill of a check box, radio button or switch track while on: the accent of the [`ChoiceLook`], its pressed shade
+/// while pressed, and `text.disabled` while disabled.
 fn on_fill(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::StyleColor> {
     use craft_theme::{Stateful, States};
     let accent = &cx.tokens.color.accent;
-    let (solid, pressed, disabled) = (cx.color(accent.solid), cx.color(accent.pressed), cx.color(cx.tokens.color.text.disabled));
+    let (solid, pressed) = match cx.env::<ChoiceLook>() {
+        ChoiceLook::Accent => (accent.solid, accent.pressed),
+        ChoiceLook::Strong => (accent.strong, accent.strong_pressed),
+    };
+    let (solid, pressed, disabled) = (cx.color(solid), cx.color(pressed), cx.color(cx.tokens.color.text.disabled));
     Stateful::new(solid).off(States::new(solid, solid, pressed, disabled))
 }
 
-/// The mark on an on-accent fill (check, dash, dot): `text.on_accent`, and the panel while disabled, cut into the
-/// disabled box.
+/// The mark on the on fill (check, dash, dot): the text colour paired with the [`ChoiceLook`]'s accent, and the panel
+/// while disabled, cut into the disabled box.
 fn mark(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::StyleColor> {
     use craft_theme::{Stateful, States};
     let colors = &cx.tokens.color;
-    let (mark, disabled) = (cx.color(colors.text.on_accent), cx.color(colors.state.disabled_fill));
+    let mark = match cx.env::<ChoiceLook>() {
+        ChoiceLook::Accent => colors.text.on_accent,
+        ChoiceLook::Strong => colors.text.on_strong,
+    };
+    let (mark, disabled) = (cx.color(mark), cx.color(colors.state.disabled_fill));
     Stateful::new(mark).off(States::new(mark, mark, mark, disabled))
 }
 

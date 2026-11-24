@@ -77,3 +77,22 @@ fn document_tabs_with_name_part(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let shown = *data.value("shown", 0_usize);
     DocumentTabs::new("Documents", &tabs).selected(shown).show(ui).response.into()
 }
+
+/// VectorCraft's tabs (`DocumentTabLook::Semibold`): whole titles in the label's semibold face, the `*` of a modified
+/// tab after its name as well. The shown tab carries its view after the name.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never, title = "Semibold")]
+fn semibold_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const NAME: &str = "Untitled-1";
+    let tabs = [
+        DocumentTab::new(0, format!("{NAME} @ 93.5 % (RGB/Preview)")).modified(true).name_len(NAME.len()),
+        DocumentTab::new(1, "Poster.vectorcraft"),
+    ];
+    let shown = *data.value("shown", 0_usize);
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(crate::tabs::DocumentTabLook::Semibold);
+        },
+        |ui| DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).show(ui).response.into(),
+    )
+}

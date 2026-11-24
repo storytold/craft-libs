@@ -4,6 +4,7 @@
 extern crate craft_ui_panels as craft_ui;
 
 pub(crate) mod access;
+pub(crate) mod arrange;
 pub(crate) mod body;
 pub(crate) mod dialogs;
 pub(crate) mod dock_group;

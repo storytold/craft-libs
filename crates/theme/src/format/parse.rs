@@ -318,6 +318,7 @@ impl Parser {
             None | Some(Value::Null) => Some(None),
             Some(Value::String(s)) if s == "ticks" => Some(Some(GripMark::Ticks)),
             Some(Value::String(s)) if s == "dots" => Some(Some(GripMark::Dots)),
+            Some(Value::String(s)) if s == "bar" => Some(Some(GripMark::Bar)),
             Some(_) => {
                 p.fail(ErrorKind::BadValue { expected: GRIP_MARK });
                 None
@@ -340,7 +341,7 @@ impl Parser {
             })
         };
         let count = number(self, "count", 1.0, 32.0, true);
-        let length = number(self, "length", 0.5, 16.0, false);
+        let length = number(self, "length", 0.5, 32.0, false);
         let width = number(self, "width", 0.5, 8.0, false);
         let gap = number(self, "gap", 0.5, 16.0, false);
         Some(GripSeed { mark: mark?, count: count?.map(|c| c as u16), length: length?, width: width?, gap: gap? })
