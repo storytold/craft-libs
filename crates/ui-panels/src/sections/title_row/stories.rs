@@ -68,6 +68,11 @@ fn title_row_subheading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
+fn title_row_quiet(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    TitleRow::new("Ellipse").strength(HeaderStrength::Quiet).show(ui).edit.into()
+}
+
+#[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
 fn title_row_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     // A floating window's drag bar: no title, the Close action at the end.
     TitleRow::new("").strength(HeaderStrength::Bar).actions([HeaderAction::Close]).show(ui).edit.into()

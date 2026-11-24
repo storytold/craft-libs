@@ -158,12 +158,12 @@ impl<'a> Section<'a> {
         self.props.header = Some(header);
     }
 
-    /// The header's weight: `Section` by default, under a rule; `Caption`, `Subheading` or `Overline` for a heading over
-    /// a group of controls, with no rule.
+    /// The header's weight: `Section` by default, under a rule; `Caption`, `Subheading`, `Quiet` or `Overline` for a
+    /// heading over a group of controls, with no rule.
     #[must_use]
     pub fn strength(mut self, strength: HeaderStrength) -> Self {
         self.strength = strength;
-        let quiet = matches!(strength, HeaderStrength::Caption | HeaderStrength::Subheading | HeaderStrength::Overline);
+        let quiet = matches!(strength, HeaderStrength::Caption | HeaderStrength::Subheading | HeaderStrength::Quiet | HeaderStrength::Overline);
         self.update_header(|header| header.rule_above(!quiet));
         self
     }

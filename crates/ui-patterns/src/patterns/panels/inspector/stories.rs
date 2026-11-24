@@ -50,10 +50,10 @@ fn inspector(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     output.into()
 }
 
-/// A quiet title: the target's kind as a caption over its sections.
+/// A quiet title: the target's kind as a muted line over its sections.
 #[story(Inspector<'static>, covers = [], drive = Drive::Never)]
-fn inspector_caption_title(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let inspector = Inspector::new("Properties").target("ellipse").header("Ellipse").title_strength(HeaderStrength::Caption);
+fn inspector_quiet_title(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let inspector = Inspector::new("Properties").target("ellipse").header("Ellipse").title_strength(HeaderStrength::Quiet);
     inspector
         .show(ui, |ui, _| {
             Section::fixed("Transform").show(ui, |ui, _| {

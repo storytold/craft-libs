@@ -23,7 +23,7 @@ pub(crate) mod stories;
 /// - The body can hold a `SectionStack` for sections the user reorders.
 /// - Padding: none of its own. An inspector is a dock body, docked or floating, and the dock group insets it.
 /// - Title weight: a section heading's by default, as the headings of the sections under it;
-///   [`title_strength`](Inspector::title_strength) gives another, such as `Caption` for a quiet kind line over the
+///   [`title_strength`](Inspector::title_strength) gives another, such as `Quiet` for a muted kind line over the
 ///   sections.
 #[derive(crate::contract::Pattern)]
 pub struct Inspector<'a> {
