@@ -498,3 +498,65 @@ fn effect_icons_preserve_null_empty_and_named_wire_forms() {
         }
     }
 }
+
+fn with_leading_argument_payload(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = effect(26, &[("later", 1, 7u32.to_be_bytes().to_vec())]);
+    let at = 8 + text_value("Stored effect").len() + text_value("").len() + text_value("example:inert-operation").len() + text_value("1:0").len();
+    let mut malformed = Vec::new();
+    property(&mut malformed, 45, payload);
+    drop(bytes.splice(at..at, malformed));
+    let mask = bytes.len() - 8;
+    bytes[mask..].copy_from_slice(&8u64.to_be_bytes());
+    bytes
+}
+
+#[test]
+fn malformed_argument_names_skip_only_their_framed_property_and_keep_resource_stops() {
+    for payload in [vec![0, 0, 0, 5], vec![0, 0, 0, 2, 255, 0], vec![0, 0, 0, 1, 65], vec![0, 0, 0, 3, 0, 1, 0]] {
+        let bytes = with_leading_argument_payload(&payload);
+        let parsed = read(&bytes, 26).record;
+        assert_eq!(parsed.arguments.len(), 1);
+        assert!(matches!(parsed.arguments[0].value, ArgumentValue::Int(7)));
+        assert_eq!(parsed.mask_offset, 8);
+        assert_eq!(parsed.errors, ["effect argument has a malformed name"]);
+        assert_eq!(parsed.raw, &bytes[8..]);
+        assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::new(4096, 1), &|| true), Err(Error::Limit(Limit::Work))));
+        assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut Budget::default(), &|| false), Err(Error::Source(crate::Error::Cancelled))));
+    }
+}
+
+#[test]
+fn argument_name_work_stop_wins_over_optional_diagnostic_retention() {
+    let payload = 5u32.to_be_bytes();
+    let bytes = with_leading_argument_payload(&payload);
+    let header_bytes =
+        text_value("Stored effect").len() + text_value("").len() + text_value("example:inert-operation").len() + text_value("1:0").len();
+    // Admit the envelope, outer property and name length word, but not the
+    // declared name data. No storage remains for a fabricated optional warning.
+    let work = 64 + header_bytes + 8 + payload.len() + 4;
+    let storage = 2 * std::mem::size_of::<StoredEffect<'_>>() + "Stored effect".len() + "example:inert-operation".len() + "1:0".len();
+    let mut budget = Budget::new(storage, work);
+    assert!(matches!(Reader::new(&bytes, 26).read(OWNER, 8, &mut budget, &|| true), Err(Error::Limit(Limit::Work))));
+    assert_eq!(budget.remaining_storage(), storage);
+    assert_eq!(budget.remaining_work(), 0);
+}
+
+#[test]
+fn skipped_argument_names_spend_work_but_no_argument_storage() {
+    let mut remaining = Vec::new();
+    for name in ["short".into(), "n".repeat(4096)] {
+        let bytes = with_leading_argument_payload(&text_value(&name));
+        let mut budget = Budget::new(2048, 1 << 20);
+        let parsed = Reader::new(&bytes, 26).read(OWNER, 8, &mut budget, &|| true).unwrap().record;
+        assert_eq!(parsed.arguments.len(), 1);
+        assert!(matches!(parsed.arguments[0].value, ArgumentValue::Int(7)));
+        assert_eq!(parsed.errors, ["effect argument is missing its type word"]);
+        assert_eq!(parsed.mask_offset, 8);
+        remaining.push((budget.remaining_storage(), budget.remaining_work()));
+    }
+    assert_eq!(remaining[0].0, remaining[1].0);
+    assert!(remaining[1].1 < remaining[0].1);
+    let name = "n".repeat(4096);
+    let valid = effect(26, &[(&name, 1, 7u32.to_be_bytes().to_vec())]);
+    assert!(matches!(Reader::new(&valid, 26).read(OWNER, 8, &mut Budget::new(2048, 1 << 20), &|| true), Err(Error::Limit(Limit::Storage))));
+}

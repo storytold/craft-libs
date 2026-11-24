@@ -88,6 +88,10 @@ impl<'a> Xcf<'a> {
             let dimensions = (cursor.u32()?, cursor.u32()?);
             let mut channel_end = self.c.at(properties.end_offset);
             let hierarchy = channel_end.ptr()?;
+            // V26 channel records also own their effect list, including its
+            // terminator. Those bytes must never become mask coverage samples.
+            self.channel_effects_tail(&mut channel_end, keep_going, Some(metadata))?;
+            let channel_header = pointer..channel_end.pos;
             let head = self.hierarchy_head(hierarchy, 1)?;
             if dimensions != (head.width, head.height) {
                 return Err(invalid("effect mask dimensions do not match their hierarchy").into());
@@ -100,6 +104,15 @@ impl<'a> Xcf<'a> {
                 return Err(invalid("effect mask exceeds the source pixel limit").into());
             }
             self.validate_first_level(&head)?;
+            let fixed_end = head.level.checked_add(if self.c.wide { 16 } else { 12 }).ok_or_else(|| invalid("level header overflow"))?;
+            // Header validation cannot publish metadata for a hierarchy/level
+            // borrowed from the channel record and defer failure until pixels.
+            if head.header.start < channel_header.end && head.header.end > channel_header.start {
+                return Err(invalid("a hierarchy overlaps its source record").into());
+            }
+            if head.level < channel_header.end && fixed_end > channel_header.start {
+                return Err(invalid("a level header overlaps its source record").into());
+            }
             if !keep_going() {
                 return Err(Error::Cancelled.into());
             }
@@ -120,7 +133,7 @@ impl<'a> Xcf<'a> {
             Ok(Some(EffectMaskHeader {
                 source: self.c.b,
                 version: self.image.version,
-                channel_header: pointer..channel_end.pos,
+                channel_header,
                 dimensions,
                 channel,
                 properties: properties.records,

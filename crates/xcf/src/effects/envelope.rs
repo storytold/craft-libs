@@ -143,10 +143,17 @@ pub(super) fn decode_with_work<'a>(
         let bytes = cursor.take(length)?;
         match kind {
             45 => {
-                reserve(&mut effect.arguments, 1, budget).map_err(Error::from)?;
                 let mut argument_cursor = Cursor { b: bytes, pos: 0, wide: base.wide };
-                let argument_name = string(&mut argument_cursor, work)?;
-                charge(budget, argument_name.len())?;
+                let argument_name = match string(&mut argument_cursor, work) {
+                    Ok(name) => name,
+                    Err(error @ (Error::Limit(_) | Error::Source(crate::Error::Cancelled))) => return Err(error),
+                    Err(_) => {
+                        // The bounded outer payload already locates the next property.
+                        // Do not let a malformed optional name hide the mask or siblings.
+                        push_error(&mut effect, "effect argument has a malformed name".into(), budget)?;
+                        continue;
+                    }
+                };
                 let value_kind = match argument_cursor.u32() {
                     Ok(kind) => kind,
                     Err(_) => {
@@ -156,6 +163,8 @@ pub(super) fn decode_with_work<'a>(
                         continue;
                     }
                 };
+                reserve(&mut effect.arguments, 1, budget).map_err(Error::from)?;
+                charge(budget, argument_name.len())?;
                 let value_bytes = bytes.get(argument_cursor.pos..).ok_or_else(|| invalid("effect argument framing"))?;
                 let before_value = *budget;
                 let value = match argument(&mut argument_cursor, value_kind, budget, work, ctl) {
