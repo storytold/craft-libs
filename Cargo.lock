@@ -4375,6 +4375,7 @@ dependencies = [
  "craft-quit",
  "craft-settings",
  "craft-svg",
+ "craft-testkit",
  "craft-theme",
  "craft-tracked",
  "craft-ui-contract",
