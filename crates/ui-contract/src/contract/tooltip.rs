@@ -292,6 +292,8 @@ struct TipCall<'a> {
 fn show_tip(call: TipCall<'_>) {
     let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text: build, rich, spec, at_pointer, wants_input, pressed, subject, describes } =
         call;
+    // The host turned tooltips off: none shows, and one that was showing goes as it does when the pointer leaves.
+    let wants_input = wants_input && env.tooltips;
     let state_id = sub(id, "tip_state");
     let built = std::cell::OnceCell::new();
     let text = || built.get_or_init(build).as_deref();

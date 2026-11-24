@@ -96,7 +96,7 @@ impl<'a> Problems<'a> {
                     .events;
                 for event in events {
                     let key = match event {
-                        CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
+                        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(),
                         CollectionEvent::Activate(key) => Some(key),
                         _ => None,
                     };

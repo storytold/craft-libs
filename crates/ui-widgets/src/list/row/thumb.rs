@@ -13,7 +13,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// The width of a thumbnail as a multiple of its height.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 pub struct ThumbAspect(f32);
 
 impl ThumbAspect {

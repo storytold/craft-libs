@@ -5,7 +5,7 @@ use crate::runtime::egui::memory;
 use crate::runtime::egui::text_layout;
 pub use crate::style::Span;
 use crate::style::text_measure::{paragraph_job, span_format};
-use crate::style::{LetterCase, StyleColor, TypeRole, UiTokens};
+use crate::style::{DataColor, LetterCase, StyleColor, TypeRole, UiTokens};
 use craft_i18n::Direction;
 use egui::epaint::text::FontCacheRevision;
 use egui::text::{LayoutJob, TextWrapping};
@@ -80,6 +80,8 @@ pub struct TextRun<'a> {
     /// The angle the run is painted at, in radians clockwise about the top-left corner of its layout. Layout and
     /// measure see the unrotated run.
     pub rotation: f32,
+    /// The colour of the link spans; `None` takes the link look's.
+    pub link_color: Option<Color32>,
 }
 
 impl<'a> TextRun<'a> {
@@ -98,12 +100,13 @@ impl<'a> TextRun<'a> {
             ltr: false,
             align: HAlign::Start,
             rotation: 0.0,
+            link_color: None,
         }
     }
 
     /// A run of `spans`.
     pub fn spans(spans: Vec<Span<'a>>) -> Self {
-        TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0 }
+        TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0, link_color: None }
     }
 
     /// `text` with its character `at` underlined, as a mnemonic shows while it is in use; all of `text` plain when
@@ -126,9 +129,23 @@ impl<'a> TextRun<'a> {
         self
     }
 
+    /// Sets the colour of the run's link spans.
+    pub fn link_color(mut self, color: Color32) -> Self {
+        self.link_color = Some(color);
+        self
+    }
+
     /// Sets the colour.
     pub fn color(mut self, color: StyleColor) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Sets the colour from data, painted as given: text drawn over document content (a smart guide's label in the
+    /// guide's colour), whose colour belongs to the document and not to a state. It fills the colour slot of
+    /// [`color`](Self::color), as [`IconSpec::data_color`](super::IconSpec::data_color) does for an icon.
+    pub fn data_color(mut self, color: DataColor) -> Self {
+        self.color = Some(StyleColor(color.0));
         self
     }
 
@@ -368,6 +385,7 @@ impl LayoutQuery<'_> {
                 underline: span.underline,
                 strikethrough: span.strikethrough,
                 strong: span.strong,
+                link: span.link,
                 flag: span.flag,
             })
             .collect();
@@ -380,6 +398,7 @@ impl LayoutQuery<'_> {
                 ltr: self.run.ltr,
                 align: self.run.align,
                 rotation: self.run.rotation,
+                link_color: self.run.link_color,
             },
             tokens: self.tokens,
             token_values: self.token_values.clone(),
@@ -600,6 +619,8 @@ impl TextRun<'_> {
                 to_color(text.muted)
             } else if span.shortcut {
                 to_color(text.faint)
+            } else if span.link {
+                self.link_color.unwrap_or(base)
             } else {
                 base
             };
@@ -841,8 +862,9 @@ impl TextLayout {
         runs
     }
 
-    /// Every row as its text, its rect from the galley's origin and its bidi runs, for the AccessKit run nodes.
-    pub(crate) fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)> {
+    /// Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
+    /// the AccessKit run nodes and by a component that hits parts of a wrapped run, such as a link in a sentence.
+    pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)> {
         (0..self.galley.rows.len())
             .map(|at| {
                 let placed = &self.galley.rows[at];

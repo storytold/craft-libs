@@ -398,6 +398,8 @@ pub use craft_vectordrawable as vectordrawable;
 pub use craft_video as video;
 #[cfg(feature = "wasm")]
 pub use craft_wasm as wasm;
+#[cfg(feature = "wayland")]
+pub use craft_wayland as wayland;
 #[cfg(feature = "web-api")]
 pub use craft_web_api as web_api;
 #[cfg(feature = "web-host")]

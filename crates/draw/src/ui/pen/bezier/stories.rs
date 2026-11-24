@@ -1,7 +1,8 @@
 //! Stories of `BezierOverlay`.
 
 use super::{
-    ANCHOR, AnchorsShown, BezierOutput, BezierOverlay, BezierTool, EditPath, EditSubpath, HandlesShown, Knot, KnotRef, PathSelection, SEGMENT, index,
+    ANCHOR, AnchorsShown, BezierOutput, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleStyle, HandlesShown, Knot, KnotRef,
+    PathOptionsSettings, PathSelection, SEGMENT, index,
 };
 use craft_behavior::kurbo::Point;
 use craft_theme::Srgba;
@@ -26,6 +27,44 @@ fn on_canvas(ui: &mut Ui, mut overlay: impl FnMut(&mut Ui, egui::Rect) -> Bezier
 
 fn selected() -> PathSelection {
     PathSelection::new(Some(1), vec![KnotRef::new(0, 2)], None)
+}
+
+#[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]
+fn anchors_selected_in_two_paths(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (paths, paths_at) = data.value_at("paths", paths());
+    on_canvas(ui, |ui, at| {
+        BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected().also(2, vec![KnotRef::new(0, 0), KnotRef::new(0, 1)])).show_at(ui, at)
+    })
+}
+
+/// One anchor over both paths shows its handles; the second story's two anchors show none.
+#[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]
+fn one_anchor_shows_its_handles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (paths, paths_at) = data.value_at("paths", paths());
+    on_canvas(ui, |ui, at| BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected()).handles(HandlesShown::OneAnchor).show_at(ui, at))
+}
+
+#[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]
+fn two_anchors_show_no_handles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (paths, paths_at) = data.value_at("paths", paths());
+    on_canvas(ui, |ui, at| {
+        BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected().also(2, vec![KnotRef::new(0, 0)]))
+            .handles(HandlesShown::OneAnchor)
+            .show_at(ui, at)
+    })
+}
+
+#[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]
+fn curvature_anchors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (paths, paths_at) = data.value_at("paths", paths());
+    on_canvas(ui, |ui, at| BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected()).anchors(AnchorsShown::Curvature).show_at(ui, at))
+}
+
+#[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]
+fn anchors_in_the_users_size_and_style(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (paths, paths_at) = data.value_at("paths", paths());
+    let settings = PathOptionsSettings { anchor_size: Some(12.0), handles: HandleStyle::Large, ..PathOptionsSettings::default() };
+    on_canvas(ui, |ui, at| BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected()).path_options(&settings).show_at(ui, at))
 }
 
 #[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(ANCHOR.at(index(0, KnotRef { subpath: 0, knot: 0 }))).toward(Vec2::X)))]

@@ -43,12 +43,16 @@ pub struct HostRequests {
     listing: Option<ListingRequest>,
     preview_click: Option<Pos2>,
     action: Option<String>,
+    help_link: Option<String>,
+    sampling_ended: bool,
     preview_step: Option<PagerStep>,
     /// The keys of the rows an edit changed since the last take, each once.
     edited: Vec<String>,
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
+    /// The ids of the actions custom rows asked the host to run, in the order asked.
+    actions: Vec<String>,
 }
 
 impl HostRequests {
@@ -71,10 +75,30 @@ impl HostRequests {
         if let Some(request) = rows.listing.take() {
             self.request_listing(request);
         }
+        if let Some(link) = rows.help_link.take() {
+            self.help_link = Some(link);
+        }
+        self.sampling_ended |= std::mem::take(&mut rows.sampling_ended);
+        self.actions.append(&mut rows.actions);
         if let Some(id) = rows.action.take() {
             self.request_action(id);
         }
         self.request_edited(std::mem::take(&mut rows.edited));
+    }
+
+    /// The ids of the actions custom rows asked the host to run since the last call, once, in the order asked.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.actions)
+    }
+
+    /// The help link a row's button reported, once.
+    pub fn take_help_link(&mut self) -> Option<String> {
+        self.help_link.take()
+    }
+
+    /// Whether an Escape ended a row's sampling since the last call, once.
+    pub fn take_sampling_ended(&mut self) -> bool {
+        std::mem::take(&mut self.sampling_ended)
     }
 
     /// Files a colour request; it replaces one not taken yet.
@@ -141,7 +165,24 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, action, preview_step, edited, previews, answers } = other;
+        let HostRequests {
+            color,
+            path,
+            eyedropper,
+            listing,
+            preview_click,
+            action,
+            help_link,
+            sampling_ended,
+            preview_step,
+            edited,
+            previews,
+            answers,
+            actions,
+        } = other;
+        self.actions.extend(actions);
+        self.sampling_ended |= sampling_ended;
+        self.help_link = help_link.or(self.help_link.take());
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());
@@ -182,13 +223,18 @@ impl HostRequests {
     pub fn set_field(&mut self, params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
         let before = fields.clone();
         super::set_param_field(params, fields, field, value)?;
+        self.request_set(params, &before, fields);
+        Ok(())
+    }
+
+    /// Files what a set through automation of the rows `params` from `before` to `after` files ([`set_field`](Self::set_field)).
+    pub fn request_set(&mut self, params: &[Param], before: &DialogFields, after: &DialogFields) {
         for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
-            if let Some(request) = param.listing_after(&before, fields) {
+            if let Some(request) = param.listing_after(before, after) {
                 self.request_listing(request);
             }
         }
-        self.request_edited(edited_rows(params, &before, fields));
-        Ok(())
+        self.request_edited(edited_rows(params, before, after));
     }
 
     /// The row keys an edit changed since the last take.

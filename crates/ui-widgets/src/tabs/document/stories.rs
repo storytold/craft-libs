@@ -63,3 +63,17 @@ fn large_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let out = DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).takes_files(true).large(true).show(ui);
     out.response.into()
 }
+
+/// Modified tabs whose label carries the view after the document's name: with a name part (`name_len`) the modified
+/// mark follows the name, "Untitled-1* @ 93.5 % (RGB/Preview)"; without one it follows the whole label.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
+fn document_tabs_with_name_part(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const NAME: &str = "Untitled-1";
+    let label = format!("{NAME} @ 93.5 % (RGB/Preview)");
+    let tabs = [
+        DocumentTab::new(0, label.clone()).modified(true).name_len(NAME.len()),
+        DocumentTab::new(1, label.replace(NAME, "Untitled-2")).modified(true),
+    ];
+    let shown = *data.value("shown", 0_usize);
+    DocumentTabs::new("Documents", &tabs).selected(shown).show(ui).response.into()
+}

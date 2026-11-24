@@ -15,7 +15,7 @@ fn scene(ui: &mut Ui, query: &str) -> StoryOutput {
     let options = Options::default();
     let say = Say::of(ui);
     let mut state = DialogState::new();
-    let mut env = Env { keymap: &mut keymap, sets: None, options: &options, tabs: None, text: &say };
+    let mut env = Env { keymap: &mut keymap, sets: None, options: &options, tabs: None, text: &say, holds: None };
     state.begin(&mut env);
     state.set_query(query.to_owned());
     table::show(ui, 0.0, &mut env, &mut state);
