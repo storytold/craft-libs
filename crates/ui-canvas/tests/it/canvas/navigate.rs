@@ -152,6 +152,42 @@ fn cmd_or_ctrl_with_page_down_scrolls_a_focused_canvas_sideways_on_every_os() {
     }
 }
 
+const NEXT_ARTBOARD: &str = "canvasTrial.nextArtboard";
+
+/// A page key the app binds to a command runs it ahead of the canvas's page scroll, with nothing focused and with the
+/// canvas focused (Page Down goes to the next artboard); an unbound page key still scrolls the view.
+#[trial]
+fn a_bound_page_key_runs_its_command_and_an_unbound_one_pages_the_canvas() {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    let binding = Binding::parse("PageDown").expect("the trial's chord parses");
+    let catalog =
+        AppCatalog::new(vec![CommandDef::new(NEXT_ARTBOARD, "Next Artboard", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
+    fixture.commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let page = |fixture: &mut Fixture, key: Key| {
+        frame::take_output(fixture.ctx());
+        let before = view.get().center;
+        fixture.key(key, Modifiers::NONE).settle();
+        let fired: Vec<String> = frame::take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+        (fired, view.get().center != before)
+    };
+    assert_eq!(fixture.focused(), None, "nothing is focused");
+    assert_eq!(page(&mut fixture, Key::PageDown), (vec![NEXT_ARTBOARD.to_owned()], false), "unfocused: the bound Page Down runs its command");
+    assert_eq!(page(&mut fixture, Key::PageUp), (Vec::new(), true), "unfocused: the unbound Page Up scrolls");
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    assert!(fixture.focused().is_some(), "the click focuses the canvas");
+    assert_eq!(page(&mut fixture, Key::PageDown), (vec![NEXT_ARTBOARD.to_owned()], false), "focused: the bound Page Down runs its command");
+    assert_eq!(page(&mut fixture, Key::PageUp), (Vec::new(), true), "focused: the unbound Page Up scrolls");
+}
+
 #[trial]
 fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sideways() {
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));

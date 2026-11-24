@@ -231,9 +231,10 @@ fn a_recorder_reads_a_press_as_one_chord_and_no_command_runs() {
     assert_eq!(press_k("button").0, Vec::new(), "no other role reads chords");
 }
 
-/// With nothing focused, the window's document canvas takes Page Down and the arrows' nudge, as while it has the focus;
-/// the press is its alone, so no app shortcut runs with it as well (a page view would turn twice). Without a canvas the
-/// press is the app's.
+/// With nothing focused, the window's document canvas takes the arrows' nudge and an unbound Page Up, as while it has
+/// the focus; the press is its alone, so no app shortcut runs with it as well (a page view would turn twice). A page key
+/// the app binds to a command that runs is the app's (Page Down to the next artboard). Without a canvas every press is
+/// the app's.
 #[trial]
 fn an_unfocused_press_the_window_canvas_takes_reaches_no_app_shortcut() {
     let paged = Rc::new(Cell::new(0));
@@ -245,8 +246,10 @@ fn an_unfocused_press_the_window_canvas_takes_reaches_no_app_shortcut() {
             stop(ui, "canvas", KeyUse::CANVAS);
         }
         let mut intents = intents_of(ui.ctx(), Some(id("canvas")), false);
-        if intents.take(Intent::Move(craft_behavior::NavMove::PageDown, craft_behavior::MoveMods::PLAIN)) {
-            sink.set(sink.get() + 1);
+        for page in [craft_behavior::NavMove::PageDown, craft_behavior::NavMove::PageUp] {
+            if intents.take(Intent::Move(page, craft_behavior::MoveMods::PLAIN)) {
+                sink.set(sink.get() + 1);
+            }
         }
     };
     let mut bound = Overrides::default();
@@ -256,18 +259,21 @@ fn an_unfocused_press_the_window_canvas_takes_reaches_no_app_shortcut() {
     frames.commands(CommandInput::new().overrides(Arc::new(bound)));
     frames.frame(Vec::new(), &mut show);
     take_output(&frames.ctx);
-    let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
-        frames.frame(vec![key_press(Key::PageDown, Modifiers::NONE), key_press(Key::ArrowRight, Modifiers::NONE)], &mut *show);
-        // Released, so the next round's presses are fresh presses, not repeats of held keys.
-        frames.frame(vec![key_release(Key::PageDown, Modifiers::NONE), key_release(Key::ArrowRight, Modifiers::NONE)], &mut *show);
+    let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui), key: Key| {
+        frames.frame(vec![key_press(key, Modifiers::NONE), key_release(key, Modifiers::NONE)], &mut *show);
+        frames.frame(Vec::new(), &mut *show);
         take_output(&frames.ctx).fired.len()
     };
-    assert_eq!(fired(&mut frames, &mut show), 0, "neither press reaches the app's commands");
+    assert_eq!(fired(&mut frames, &mut show, Key::ArrowRight), 0, "the arrow is the canvas's nudge");
+    assert_eq!(fired(&mut frames, &mut show, Key::PageUp), 0, "the unbound Page Up is the canvas's");
     assert_eq!(paged.get(), 1, "the canvas pages");
+    assert_eq!(fired(&mut frames, &mut show, Key::PageDown), 1, "the bound Page Down is the app's");
+    assert_eq!(paged.get(), 1, "the canvas does not page with it");
     canvas.set(false);
     frames.idle(2, &mut show);
     take_output(&frames.ctx);
-    assert_eq!(fired(&mut frames, &mut show), 2, "without a canvas both presses are the app's");
+    let presses = [Key::PageDown, Key::ArrowRight].map(|key| fired(&mut frames, &mut show, key));
+    assert_eq!(presses, [1, 1], "without a canvas both presses are the app's");
 }
 
 /// A recorder holds every press: the app reads none from egui's input, and `focus_holds` answers so before the press.
