@@ -181,6 +181,15 @@ pub struct BoxRule {
     pub keep_fractions: bool,
 }
 
+impl BoxRule {
+    /// Whether the box [`box_drag`] makes under this rule is the drag squared: `square` with neither a usable `fixed`
+    /// size, which ignores it, nor a usable `ratio`, which turns the squared drag into a box of its ratio. The Triangle
+    /// tool draws its equilateral triangle only in such a box ([`equilateral_in`]).
+    pub fn is_square(&self) -> bool {
+        self.square && self.fixed.and_then(positive).is_none() && self.ratio.and_then(positive).is_none()
+    }
+}
+
 /// The box a drag from `start` to `end` draws under `rule`, in whole pixels unless `keep_fractions`, or `None`
 /// when a side is under [`MIN_SIDE`].
 ///

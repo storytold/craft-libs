@@ -252,6 +252,78 @@ fn whole_pixels_off_keeps_the_drags_fractions() {
     assert_eq!(shapes.committed_box(), Some(Rect::new(80.75, 81.25, 119.75, 120.25)), "⇧⌥ squares and centres before keeping the fractions");
 }
 
+/// A Triangle drag under its gear's `constraint` with `change` applied to the gear's values.
+fn triangle_gear(constraint: BoxConstraint, change: impl FnOnce(&mut BoxConstraints)) -> Shapes {
+    let mut constraints = BoxConstraints { constraint, ..Default::default() };
+    change(&mut constraints);
+    Shapes::new(ShapeDragOptions::new(ShapeKind::Triangle).constraints(constraints))
+}
+
+/// The box `[x0, y0, x1, y1]` of the triangle the last drag committed, to hundredths.
+fn triangle_box(shapes: &Shapes) -> Option<[f64; 4]> {
+    match shapes.committed() {
+        Some(ShapeGeometry::Triangle { rect }) => Some([rect.x0, rect.y0, rect.x1, rect.y1].map(|v| (v * 100.0).round() / 100.0)),
+        _ => None,
+    }
+}
+
+/// The press of storytold/photocraft#13361's runs, moved from 400,300 to fit the fixture's room: every drag and box
+/// below is the issue's, 300 left and 250 up.
+const TRIANGLE_PRESS: Point = Point::new(100.0, 50.0);
+
+/// storytold/photocraft#13361: the Triangle gear's Equilateral draws ⇧'s equilateral triangle without ⇧ (D1, D1b), and
+/// ⇧ then turns it off (D6); Fixed Size puts its box at the release (D2); Proportional draws in the largest box of its
+/// ratio (D3, D3b); From Center draws about the press (D4) and ⌥ turns it off (D5).
+#[trial]
+fn the_triangle_gear_draws_the_measured_boxes() {
+    let at = |x: f64, y: f64| Point::new(x - 300.0, y - 250.0);
+    let mut shapes = triangle_gear(BoxConstraint::Square, |_| {});
+    shapes.drag(TRIANGLE_PRESS, at(600.0, 400.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([106.7, 50.0, 193.3, 125.0]), "D1: the triangle in the circle of the shorter side's square");
+    shapes.drag(TRIANGLE_PRESS, at(450.0, 500.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([103.35, 50.0, 146.65, 87.5]), "D1b: a square of 50, a circle of radius 25");
+    shapes.drag(TRIANGLE_PRESS, at(600.0, 400.0), Modifiers::SHIFT);
+    assert_eq!(triangle_box(&shapes), Some([100.0, 50.0, 300.0, 150.0]), "D6: ⇧ turns Equilateral off");
+
+    let mut shapes = triangle_gear(BoxConstraint::FixedSize, |c| c.fixed = (Some(120.0), Some(60.0)));
+    shapes.drag(TRIANGLE_PRESS, at(600.0, 400.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([300.0, 150.0, 420.0, 210.0]), "D2: the top left at the release");
+
+    let mut shapes = triangle_gear(BoxConstraint::Proportional, |c| c.ratio = (Some(2.0), Some(1.0)));
+    shapes.drag(TRIANGLE_PRESS, at(600.0, 500.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([100.0, 50.0, 300.0, 150.0]), "D3");
+    shapes.drag(TRIANGLE_PRESS, at(450.0, 400.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([100.0, 50.0, 150.0, 75.0]), "D3b: the largest 2 : 1 box inside the drag");
+
+    let mut shapes = triangle_gear(BoxConstraint::Unconstrained, |c| c.from_center = true);
+    shapes.drag(TRIANGLE_PRESS, at(500.0, 350.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([0.0, 0.0, 200.0, 100.0]), "D4: about the press");
+    shapes.drag(TRIANGLE_PRESS, at(500.0, 350.0), Modifiers::ALT);
+    assert_eq!(triangle_box(&shapes), Some([100.0, 50.0, 200.0, 100.0]), "D5: ⌥ turns From Center off");
+}
+
+/// A Triangle is equilateral only in a squared box: with a Fixed Size it keeps that size and with a ratio it fills
+/// the box of that ratio, ⇧ or not; Equilateral with From Center draws the triangle in the circle about the press.
+#[trial]
+fn a_triangle_with_a_fixed_size_or_a_ratio_is_not_made_equilateral_by_shift() {
+    let mut shapes = triangle_gear(BoxConstraint::FixedSize, |c| c.fixed = (Some(120.0), Some(60.0)));
+    shapes.drag(TRIANGLE_PRESS, Point::new(300.0, 150.0), Modifiers::SHIFT);
+    assert_eq!(triangle_box(&shapes), Some([300.0, 150.0, 420.0, 210.0]), "⇧ leaves a Fixed Size as it is");
+
+    let mut shapes = triangle_gear(BoxConstraint::Proportional, |c| c.ratio = (Some(2.0), Some(1.0)));
+    shapes.drag(TRIANGLE_PRESS, Point::new(300.0, 200.0), Modifiers::SHIFT);
+    assert_eq!(triangle_box(&shapes), Some([100.0, 50.0, 250.0, 125.0]), "⇧ squares the drag, then the triangle fills its 2 : 1 box");
+
+    // An empty Fixed Size field draws as Unconstrained, where ⇧ still makes the triangle equilateral.
+    let mut shapes = triangle_gear(BoxConstraint::FixedSize, |c| c.fixed = (Some(120.0), None));
+    shapes.drag(TRIANGLE_PRESS, Point::new(300.0, 150.0), Modifiers::SHIFT);
+    assert_eq!(triangle_box(&shapes), Some([106.7, 50.0, 193.3, 125.0]));
+
+    let mut shapes = triangle_gear(BoxConstraint::Square, |c| c.from_center = true);
+    shapes.drag(TRIANGLE_PRESS, Point::new(300.0, 150.0), Modifiers::NONE);
+    assert_eq!(triangle_box(&shapes), Some([13.4, -50.0, 186.6, 100.0]), "the triangle in the circle about the press");
+}
+
 /// A press moved 2 × 1 points and released: a Rectangle in Shape mode draws it, in Path mode it is a click, and an
 /// Ellipse in Shape mode keeps the press slop.
 #[trial]

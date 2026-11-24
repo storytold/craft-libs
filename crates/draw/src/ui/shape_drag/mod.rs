@@ -18,7 +18,7 @@ use craft_keymap::Mods;
 use kurbo::Point;
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::shape::ShapeGeometry;
+use crate::geometry::shape::{BoxRule, ShapeGeometry};
 use crate::ui::shape::VectorMode;
 
 pub use dialog::{CreateShapeDialog, CreateShapeOptions, CreatedShape};
@@ -61,7 +61,7 @@ pub enum ShapeFrame {
     Radial,
 }
 
-/// What the Rectangle tool's gear keeps a box drag to ([`BoxConstraints::constraint`]).
+/// What a Shape tool's gear (the Rectangle's and the Triangle's) keeps a box drag to ([`BoxConstraints::constraint`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -69,7 +69,8 @@ pub enum BoxConstraint {
     /// The dragged box.
     #[default]
     Unconstrained,
-    /// A square; ⇧ draws the dragged box instead.
+    /// A square: the Rectangle's Square, the Triangle's Equilateral (its triangle in the square's circle); ⇧ draws the
+    /// dragged box instead.
     Square,
     /// The gear's width and height, with the top left at the release.
     FixedSize,
@@ -77,8 +78,8 @@ pub enum BoxConstraint {
     Proportional,
 }
 
-/// The Rectangle tool's gear: a constraint, its sizes, and From Center. A Fixed Size or Proportional pair with an
-/// empty field (`None`) or a 0 draws as Unconstrained.
+/// A Shape tool's gear (the Rectangle's or the Triangle's, each its own value): a constraint, its sizes, and From
+/// Center. A Fixed Size or Proportional pair with an empty field (`None`) or a 0 draws as Unconstrained.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
@@ -98,6 +99,21 @@ impl BoxConstraints {
     pub const FIXED: RangeInclusive<f64> = 0.0..=300_000.0;
     /// The range of a Proportional field.
     pub const RATIO: RangeInclusive<f64> = 0.0..=99_999.0;
+
+    /// The rule of a box drag under these constraints with ⇧ (`shift`) and ⌥ (`alt`) held as they are now: ⇧ turns
+    /// Square on, or off when it is chosen, and ⌥ does the same to From Center; Fixed Size and Proportional take their
+    /// pair when both fields hold a value. The box lands on whole pixels; the drag sets
+    /// [`keep_fractions`](BoxRule::keep_fractions) from its own options.
+    pub fn rule(&self, shift: bool, alt: bool) -> BoxRule {
+        let pair = |(w, h): (Option<f64>, Option<f64>)| w.zip(h);
+        BoxRule {
+            square: shift != (self.constraint == BoxConstraint::Square),
+            from_centre: alt != self.from_center,
+            fixed: (self.constraint == BoxConstraint::FixedSize).then(|| pair(self.fixed)).flatten(),
+            ratio: (self.constraint == BoxConstraint::Proportional).then(|| pair(self.ratio)).flatten(),
+            keep_fractions: false,
+        }
+    }
 }
 
 impl Default for BoxConstraints {
@@ -167,7 +183,8 @@ impl ShapeDragOptions {
         self
     }
 
-    /// The gear's constraints for a box drag (Photoshop shows the gear for the Rectangle only).
+    /// The gear's constraints for a box drag (the Rectangle's or the Triangle's gear; the app passes the selected
+    /// tool's).
     #[must_use]
     pub fn constraints(mut self, constraints: BoxConstraints) -> Self {
         self.constraints = constraints;
