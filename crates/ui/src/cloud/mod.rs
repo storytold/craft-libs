@@ -220,6 +220,10 @@ pub struct CloudFiles {
     /// drops an answer to a job issued before the bump rather than applying
     /// it to the session that replaced it.
     account_generation: Arc<AtomicU64>,
+    /// Set by [`sign_in`] and cleared by the account answer that follows it.
+    /// While it is set both folders read as loading, so no listing is asked
+    /// for before the service says who is now signed in.
+    relist_after_sign_in: bool,
     /// The document Save As must act on, when it is not the active one.
     ///
     /// Set only by the conflict modal's "Save as a copy", so the copy it asks
@@ -258,6 +262,7 @@ impl CloudFiles {
             guest: None,
             sign_in_from_menu: false,
             account_generation: Arc::new(AtomicU64::new(0)),
+            relist_after_sign_in: false,
             save_as_target: None,
         }
     }
@@ -376,8 +381,14 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     // answer, and if it does, that answer is not about this account: `pump`
     // drops it. Busy goes with it, or a stuck read from before this
     // sign-in would leave Save refused for a session that never asked for it.
+    // A folder listing that was outstanding is dropped the same way. Both
+    // folders wait for the account answer, which empties them so the next
+    // frame lists them for the account that is now signed in.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.mine = Folder { loading: true, ..Folder::default() };
+    cloud.shared = Folder { loading: true, ..Folder::default() };
+    cloud.relist_after_sign_in = true;
     submit(app, Job::SignIn);
 }
 
@@ -402,6 +413,7 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     // that never heard back does not refuse every one after it forever.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.relist_after_sign_in = false;
     cloud.save_as_target = None;
     submit(app, Job::SignOut);
 }
@@ -610,6 +622,9 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     if app.cloud().busy.is_some() {
         return Err("a cloud transfer is already running".to_owned());
     }
+    if app.cloud().relist_after_sign_in {
+        return Err("wait for the sign-in to finish".to_owned());
+    }
     // A document that does not exist yet has no content type to read. The
     // name a person just typed is the whole of what was asked for.
     let bytes = app.encode(uid, Destination::new(&name))?;
@@ -657,6 +672,15 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
 
 fn apply<A: CloudApp>(app: &mut A, event: Event) {
     let noun = app.kind().noun;
+    if matches!(event, Event::Account(_)) && app.cloud().relist_after_sign_in {
+        // The sign-in has answered, whether or not it succeeded. Both folders
+        // are emptied and not loading, so `start` and the Open page list them
+        // again for whoever is signed in now.
+        let cloud = app.cloud_mut();
+        cloud.relist_after_sign_in = false;
+        cloud.mine = Folder::default();
+        cloud.shared = Folder::default();
+    }
     match event {
         Event::Account(Ok(account)) => {
             let linked = account.provider_linked;

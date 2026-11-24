@@ -460,6 +460,26 @@ fn an_answer_queued_before_the_session_changed_is_dropped() {
 }
 
 #[test]
+fn a_sign_in_that_drops_a_listing_leaves_no_folder_loading() {
+    let (mut app, _jobs, ctx) = wired();
+
+    // Both listings are asked for, and the answer to the first waits in the
+    // channel while the user signs in again. The shared one never answers.
+    browse(&mut app, "");
+    load_shared(&mut app);
+    sign_in(&mut app);
+    pumped(&mut app, &ctx);
+    assert!(!app.cloud.mine.loading, "a dropped listing must not leave the folder loading forever");
+    assert!(!app.cloud.shared.loading, "nor the shared one, which would then never be asked for again");
+
+    // A listing the new session asks for still completes.
+    browse(&mut app, "");
+    pumped(&mut app, &ctx);
+    assert!(app.cloud.mine.loaded);
+    assert_eq!(report(&app)["entries"], serde_json::json!(["Minutes.note", "Archive"]));
+}
+
+#[test]
 fn bytes_are_said_the_way_a_person_reads_them() {
     assert_eq!(size_text(None), "");
     assert_eq!(size_text(Some(512)), "512 bytes");
