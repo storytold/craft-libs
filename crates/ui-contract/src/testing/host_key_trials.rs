@@ -172,6 +172,46 @@ fn a_focused_egui_field_takes_the_ime() {
     assert_eq!(host.borrow().text, "世", "the commit reaches the field");
 }
 
+fn host_editor_id() -> Id {
+    named_id("host editor")
+}
+
+/// A window with the app's own IME editor (`fixture::host_ime_editor`), and the text it holds.
+fn host_editor() -> (Rc<RefCell<String>>, impl FnMut(&mut Ui)) {
+    let text = Rc::new(RefCell::new(String::new()));
+    let held = Rc::clone(&text);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    (text, move |ui: &mut Ui| fixture::host_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut()))
+}
+
+/// A press during the app's own editor's composition interrupts it, in the editor's own IME context, and fences the
+/// composition's late deletion and commit, which the one-press rule holds for the next frame, until the reset
+/// completes; the events after the completion reach the editor.
+#[trial]
+fn a_press_during_an_app_editor_s_composition_fences_its_late_ime_events() {
+    let (editor, mut show) = host_editor();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("ab".to_owned()))], &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "z".to_owned(), active_range_chars: None })], &mut show);
+    let at = Pos2::new(150.0, 115.0);
+    let late = vec![
+        moved(at),
+        press(at),
+        Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+        Event::Ime(ImeEvent::Commit("Q".to_owned())),
+    ];
+    frames.frame(late, &mut show);
+    let ime = frames.ime().expect("the editor writes the pass's IME output");
+    assert!(ime.owner == host_editor_id() && ime.interrupt, "the press interrupts the editor's composition in its own context");
+    let reset = ime.reset.expect("the interrupt asks for a reset");
+    frames.frame(vec![release(at)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(*editor.borrow(), "ab", "the composition's late deletion and commit never reach the editor");
+    frames.frame(vec![Event::ImeResetCompleted { request_id: reset }, Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(*editor.borrow(), "abX", "the commit after the completion reaches the editor");
+}
+
 #[trial]
 fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     let (host, mut show) = host_window();

@@ -45,6 +45,12 @@ pub(crate) fn take_events(events: &mut Vec<Arrived>, take: bool, drop: impl Fn(&
     taken
 }
 
+/// The IME event `event` is, as the engine reads it, for the engine to follow an app's own editor through the events
+/// it leaves to egui.
+pub(crate) fn read(event: &Event) -> Option<Raw> {
+    raw_of(event).flatten()
+}
+
 /// What the IME engine reads from `event`: `None` for an event that is not the engine's, `Some(None)` for one it takes
 /// and ignores.
 fn raw_of(event: &Event) -> Option<Option<Raw>> {
@@ -99,6 +105,19 @@ pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) -> Option<
         ime.surrounding_text = out.surrounding;
         ime.change_cause = out.cause;
         output.ime = Some(ime);
+    });
+    reset
+}
+
+/// Interrupts the composition of the IME output the app's own editor wrote this pass, in its context, and asks for a
+/// reset. Returns the reset request it published, as `write` does.
+pub(crate) fn interrupt_written(ctx: &Context, viewport: ViewportId) -> Option<egui::ImeResetId> {
+    let reset = ctx.request_ime_reset(viewport);
+    ctx.output_mut(|output| {
+        if let Some(ime) = &mut output.ime {
+            ime.should_interrupt_composition = true;
+            ime.reset_request = reset;
+        }
     });
     reset
 }

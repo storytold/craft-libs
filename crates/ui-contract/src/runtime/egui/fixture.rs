@@ -500,6 +500,26 @@ pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
 }
 
+/// A host's own text editor of `id` at `rect`, as a canvas text tool draws it: it reads the IME events from egui's
+/// input into `text` (a commit appends, a deletion before the caret removes characters from its end) and writes the
+/// pass's IME output, context generation 1.
+#[cfg(feature = "suite")]
+pub(crate) fn host_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, text: &mut String) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::Ime(egui::ImeEvent::Commit(committed)) => text.push_str(&committed),
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect)));
+}
+
 /// Gives the host's own egui widget `id` key focus, as the host's code does.
 #[cfg(feature = "suite")]
 pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {

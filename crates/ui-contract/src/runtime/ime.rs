@@ -51,6 +51,17 @@ struct Engine {
     discard: bool,
     /// What the editor that owns the IME reported at its last pass.
     editor: Option<EditorFacts>,
+    /// The app's own editor that wrote the IME output of the last pass while no framework editor owned the IME.
+    host: Option<HostIme>,
+}
+
+/// An app's own editor holding the IME: the owner and context generation of the IME output it wrote, and whether it
+/// is composing, as the IME events left to it in egui's input say.
+#[derive(Clone, Copy)]
+struct HostIme {
+    owner: Id,
+    generation: u64,
+    composing: bool,
 }
 
 impl Stored for Engine {}
@@ -185,6 +196,27 @@ impl Engine {
         self.interrupt = Some(owner);
         self.discard = true;
     }
+
+    /// Follows the composition of the app's own editor through the IME events left to it in egui's input, and
+    /// interrupts it at a pointer press, as a press ends a framework editor's composition. The one-press rule (H0)
+    /// holds the events after the press for the next frame, where the fence drops the composition's late deletions and
+    /// commits until the reset completes.
+    fn watch_host(&mut self, events: &[Arrived]) {
+        let Some(host) = self.host.as_mut() else { return };
+        for arrived in events {
+            match (os::read(&arrived.event), &arrived.event) {
+                (Some(os::Raw::Preedit { text, .. }), _) => host.composing = !text.is_empty(),
+                (Some(os::Raw::Commit(_)), _) => host.composing = false,
+                (None, Event::PointerButton { pressed: true, .. }) if host.composing => {
+                    host.composing = false;
+                    let owner = host.owner;
+                    self.interrupt(owner);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Engine) -> R) -> R {
@@ -197,10 +229,17 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
 
 /// The input hook: takes the IME events out of raw input while a framework editor owns the IME, or while the reset
 /// the engine asked for is pending (the late events of the interrupted composition, and the OS's answer), and removes
-/// the keys that would end the composition.
+/// the keys that would end the composition. With no framework editor, the events after the reset's completion are
+/// the app's own editor's again, and the hook follows that editor's composition (`Engine::watch_host`).
 pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: ViewportId) {
     with(ctx, viewport, |engine| {
         let take = engine.owner.is_some() || engine.reset.is_some();
+        let completed =
+            |id: egui::ImeResetId| move |arrived: &Arrived| matches!(arrived.event, Event::ImeResetCompleted { request_id } if request_id == id);
+        let mut after = match engine.reset {
+            Some(id) if engine.owner.is_none() => events.iter().position(completed(id)).map(|at| events.split_off(at + 1)),
+            _ => None,
+        };
         let guarded = engine.composing || engine.guard > 0;
         let ends_composition = |event: &Event| {
             matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. })
@@ -208,6 +247,14 @@ pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: Vie
         let taken = os::take_events(events, take, |event| guarded && ends_composition(event));
         engine.queue.extend(taken);
         engine.guard = engine.guard.saturating_sub(1);
+        if engine.owner.is_none() {
+            match &mut after {
+                Some(after) => engine.watch_host(after),
+                None if !take => engine.watch_host(events),
+                None => {}
+            }
+        }
+        events.extend(after.into_iter().flatten());
     });
 }
 
@@ -405,11 +452,14 @@ pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, pas
 }
 
 /// The end hook: observes the owner on the tracker, then writes the pass's IME output while a framework editor owns the
-/// IME or an interrupt is due. Otherwise the output is egui's: an app's own `TextEdit` or IME reader writes it.
+/// IME or an interrupt is due. Otherwise the output is egui's: an app's own `TextEdit` or IME reader writes it, and the
+/// engine records that editor (`Engine::host`). An interrupt of the app's editor rides on the output it wrote this
+/// pass, so its context does not change.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (frame_nr, pass_nr) = (ctx.cumulative_frame_nr_for(viewport), ctx.cumulative_pass_nr_for(viewport));
-    let (owner, interrupt, caret, update, published) = with(ctx, viewport, |engine| {
+    let app_wrote = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation)));
+    let (owner, interrupt, caret, update, published, host) = with(ctx, viewport, |engine| {
         let ran = std::mem::take(&mut engine.ran);
         if !ran {
             engine.edits.clear();
@@ -423,20 +473,28 @@ pub(crate) fn end_pass(ctx: &Context) {
         {
             engine.set_owner(None);
         }
-        // The fence has no request the integration can answer: the owner's output asks again.
+        // The app's editor as the last pass recorded it: an interrupt in a pass it wrote nothing names its context.
+        let last_host = engine.host;
+        let kept = engine.host.filter(|host| app_wrote.is_some_and(|(owner, _)| owner == host.owner)).is_some_and(|host| host.composing);
+        engine.host = app_wrote.filter(|_| engine.owner.is_none()).map(|(owner, generation)| HostIme { owner, generation, composing: kept });
+        // The fence has no request the integration can answer: the owner's output asks again, a framework editor's
+        // or the app's own.
         if engine.stale
             && engine.reset.is_none()
-            && let Some(owner) = engine.owner
+            && let Some(owner) = engine.owner.or(engine.host.map(|host| host.owner))
         {
             engine.interrupt.get_or_insert(owner);
         }
         let caret = engine.caret.take();
         let password = caret.filter(|(id, ..)| Some(*id) == engine.owner).map(|(.., password)| password);
         let update = engine.observe(viewport, frame_nr, pass_nr, password);
-        (engine.owner, engine.interrupt.take(), caret, update, engine.published)
+        (engine.owner, engine.interrupt.take(), caret, update, engine.published, last_host)
     });
+    let host_interrupt = interrupt.filter(|old| owner.is_none() && app_wrote.is_some_and(|(id, _)| id == *old));
     let written = if owner.is_none() && interrupt.is_none() {
         None
+    } else if host_interrupt.is_some() {
+        Some((os::interrupt_written(ctx, viewport), None))
     } else {
         os::clear(ctx);
         match (caret, interrupt, update) {
@@ -455,14 +513,15 @@ pub(crate) fn end_pass(ctx: &Context) {
                 Some((os::write(ctx, viewport, out), Some(generation)))
             }
             // The old owner still gets an output in the pass it lost focus, or the OS never interrupts. It names the
-            // context the OS composes in, the last one published.
+            // context the OS composes in: the last one published, or the one the app's editor wrote last.
             (_, Some(old), _) => {
+                let generation = host.filter(|host| host.owner == old).map_or(published.unwrap_or_default(), |host| host.generation);
                 let out = os::Output {
                     owner: old,
                     field: Rect::NOTHING,
                     caret: Rect::NOTHING,
                     interrupt: true,
-                    generation: published.unwrap_or_default(),
+                    generation,
                     password: false,
                     surrounding: IMESurroundingText::Unavailable,
                     cause: ImeChangeCause::Other,
