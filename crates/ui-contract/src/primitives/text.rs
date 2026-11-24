@@ -5,7 +5,7 @@ use crate::runtime::egui::memory;
 use crate::runtime::egui::text_layout;
 pub use crate::style::Span;
 use crate::style::text_measure::{paragraph_job, span_format};
-use crate::style::{LetterCase, StyleColor, TypeRole, UiTokens};
+use crate::style::{DataColor, LetterCase, StyleColor, TypeRole, UiTokens};
 use craft_i18n::Direction;
 use egui::epaint::text::FontCacheRevision;
 use egui::text::{LayoutJob, TextWrapping};
@@ -138,6 +138,14 @@ impl<'a> TextRun<'a> {
     /// Sets the colour.
     pub fn color(mut self, color: StyleColor) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Sets the colour from data, painted as given: text drawn over document content (a smart guide's label in the
+    /// guide's colour), whose colour belongs to the document and not to a state. It fills the colour slot of
+    /// [`color`](Self::color), as [`IconSpec::data_color`](super::IconSpec::data_color) does for an icon.
+    pub fn data_color(mut self, color: DataColor) -> Self {
+        self.color = Some(StyleColor(color.0));
         self
     }
 
