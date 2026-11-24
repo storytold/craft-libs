@@ -896,16 +896,30 @@ fn kept_channel_names(header: &Header, prefix: Option<&str>, keep: &dyn Fn(&str)
 /// reader picks the chunks it reads by their place in the offset table, which follows the
 /// part's blocks in increasing y order, and reads only the blocks of the largest resolution
 /// level, and none when the decode keeps no channel (`reads_any` false). The packed length of
-/// each chunk the reader reads, and of each chunk whose table entry names no block of the part,
-/// must also fit in [`Limits::max_bytes`].
+/// each chunk the reader reads must also fit in [`Limits::max_bytes`].
+///
+/// The table has one entry per block (`header.chunk_count`). Every block of a scan-line part is
+/// at the largest level. In a tiled part the largest level's tiles come first, so an entry is at
+/// that level when its place is below that level's tile count. The check works from these counts
+/// and does not list the blocks, so its memory does not grow with the size of the offset table.
 fn check_flat_packed_lengths(bytes: &[u8], meta: &MetaData, index: usize, reads_any: bool, limits: &Limits) -> Result<()> {
     let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
     let multipart = meta.requirements.is_multilayer();
     let (offsets, tables_end) = part_offset_table(bytes, meta, index)?;
-    let mut blocks = header.blocks_increasing_y_order();
-    for &entry in offsets.as_chunks::<8>().0 {
+    let largest_level_blocks = match &header.blocks {
+        exr::meta::BlockDescription::Tiles(tiles) => {
+            let (tile_w, tile_h) = (tiles.tile_size.width(), tiles.tile_size.height());
+            if tile_w == 0 || tile_h == 0 {
+                return Err(malformed("flat block has a zero dimension"));
+            }
+            header.layer_size.width().div_ceil(tile_w).saturating_mul(header.layer_size.height().div_ceil(tile_h))
+        }
+        exr::meta::BlockDescription::ScanLines => header.chunk_count,
+    };
+    let read_count = if reads_any { largest_level_blocks } else { 0 };
+    for (place, &entry) in offsets.as_chunks::<8>().0.iter().enumerate() {
         let (_, size) = flat_chunk_at(bytes, header, multipart, index, u64::from_le_bytes(entry), tables_end)?;
-        let read = blocks.next().is_none_or(|block| reads_any && block.location.is_largest_resolution_level());
+        let read = place < read_count;
         if read && size as u64 > limits.max_bytes {
             return Err(Error::LimitExceeded("packed flat block exceeds the byte budget".into()));
         }
