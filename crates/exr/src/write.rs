@@ -17,7 +17,7 @@ use exr::meta::attribute::{
 };
 use exr::meta::{BlockDescription, Headers, header::Header};
 
-use crate::decode::{Compression, Error, Result, SampleType, Window, f16, to_exr_compression};
+use crate::decode::{Compression, Error, MAX_HEADER_ATTRIBUTES, Result, SampleType, Window, f16, to_exr_compression};
 
 const MAX_PARTS: usize = 1024;
 const MAX_CHANNELS: usize = 16_384;
@@ -64,7 +64,10 @@ pub struct Metadata<'a> {
     /// CIE xy for red, green, blue and white, shared by every part.
     pub chromaticities: Option<[[f32; 2]; 4]>,
     /// Text attributes by input part index. An empty slice supplies no attributes. The file
-    /// accepts at most 16,384 text attributes and 8 MiB of estimated headers.
+    /// accepts at most 16,384 text attributes and 8 MiB of estimated headers. A part's header
+    /// holds at most 4,096 attributes, so its text attributes leave room for the standard
+    /// attributes the writer adds (channels, windows, compression and the like, plus the part
+    /// name and type in a multipart file).
     pub text_attributes: &'a [TextAttributes<'a>],
 }
 
@@ -446,6 +449,12 @@ fn prepare_headers<'a>(
         header.own_attributes.layer_name = name;
         header.shared_attributes.chromaticities = chromaticities;
         set_text_attributes(&mut header, attributes)?;
+        let header_attributes = header.all_named_attributes().count();
+        if header_attributes > MAX_HEADER_ATTRIBUTES {
+            return Err(encode(format_args!(
+                "part {index} has {header_attributes} attributes, standard ones included, and a header holds at most {MAX_HEADER_ATTRIBUTES}"
+            )));
+        }
         headers.push(header);
         channel_orders.push(order);
     }

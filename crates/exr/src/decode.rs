@@ -65,6 +65,10 @@ fn map_exr(e: exr::error::Error) -> Error {
     }
 }
 
+/// The most attributes one header may hold, standard ones included. The readers refuse a header
+/// above it and the writer refuses to produce one.
+pub(crate) const MAX_HEADER_ATTRIBUTES: usize = 4096;
+
 /// Caps on what a file may ask the reader to allocate. `#[non_exhaustive]`: start from
 /// [`Limits::default`] and set the fields you change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

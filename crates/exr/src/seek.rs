@@ -60,7 +60,7 @@ use exr::meta::MetaData;
 use exr::meta::attribute::SampleType as ExrSample;
 use exr::meta::header::Header;
 
-use crate::decode::{Limits, PartInfo, Window, check_previews, part_info};
+use crate::decode::{Limits, MAX_HEADER_ATTRIBUTES, PartInfo, Window, check_previews, part_info};
 
 /// Why a read failed. More kinds may be added: a `match` needs a catch-all arm.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -119,10 +119,10 @@ fn exr_error(e: exr::error::Error) -> Error {
 }
 
 const MAGIC: [u8; 4] = [0x76, 0x2f, 0x31, 0x01];
-/// Headers of all parts together: at most this many bytes, parts, and attributes per part.
+/// Headers of all parts together: at most this many bytes and parts. Attributes per header are
+/// bounded by `MAX_HEADER_ATTRIBUTES`.
 const META_BYTES: usize = 8 << 20;
 const MAX_PARTS: usize = 1024;
-const MAX_ATTRIBUTES: usize = 4096;
 /// The most chunks all parts of a file may have together. The offset tables and the index hold
 /// a few bytes per chunk, so a header declaring billions of tiny tiles (whose tables a short file
 /// can't hold anyway) is refused before anything is sized by it. 16 million chunks is a 64K ×
@@ -393,8 +393,8 @@ fn read_headers<R: Read + ?Sized>(r: &mut R, cancel: &dyn Fn() -> bool) -> Resul
                 break;
             }
             attributes += 1;
-            if attributes > MAX_ATTRIBUTES {
-                return Err(Error::LimitExceeded("more than 4096 attributes in a header".into()));
+            if attributes > MAX_HEADER_ATTRIBUTES {
+                return Err(Error::LimitExceeded(format!("more than {MAX_HEADER_ATTRIBUTES} attributes in a header")));
             }
             read_name(r, &mut prefix, None)?;
             let mut size = [0u8; 4];

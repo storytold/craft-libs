@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::io::{self, Cursor, Seek, SeekFrom, Write};
 
-use crate::decode::{self, Compression, Error, Limits, SampleType, Samples, Window, f16};
+use crate::decode::{self, Compression, Error, Limits, MAX_HEADER_ATTRIBUTES, SampleType, Samples, Window, f16};
 use crate::seek::{Index, Request, read_planes};
 use crate::write::{Channel, Metadata, Part, RowSamples, TilePart, TileWriter, write_scanlines, write_scanlines_with_metadata, write_tiles};
 
@@ -194,6 +194,82 @@ fn invalid_tile_dimensions_and_metadata_fail_before_output() {
         assert!(matches!(result, Err(Error::Encode(_))), "{result:?}");
         assert!(out.get_ref().is_empty());
     }
+}
+
+// Chunk count, channels, compression, line order, display and data windows, pixel aspect ratio,
+// screen window centre and width, block type and part name
+const MULTIPART_SCANLINE_ATTRIBUTES: usize = 11;
+
+fn numbered_attributes(count: usize) -> Vec<(String, String)> {
+    (0..count).map(|n| (format!("pass{n}"), format!("value{n}"))).collect()
+}
+
+fn borrowed(attributes: &[(String, String)]) -> Vec<(&str, &str)> {
+    attributes.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect()
+}
+
+#[test]
+fn multipart_header_at_the_attribute_limit_round_trips() {
+    let window = Window { width: 2, height: 2, ..WINDOW };
+    let beauty = Part { name: Some("Beauty"), data_window: window, channels: &[FLOAT], compression: Compression::Zip16 };
+    let depth = Part { name: Some("Depth"), ..beauty };
+    let user_attributes = numbered_attributes(MAX_HEADER_ATTRIBUTES - MULTIPART_SCANLINE_ATTRIBUTES);
+    let borrowed_attributes = borrowed(&user_attributes);
+    let text = [&borrowed_attributes[..], &[("passLabel", "Depth")][..]];
+    let metadata = Metadata { text_attributes: &text, ..Metadata::default() };
+    let mut out = Cursor::new(Vec::new());
+
+    write_scanlines_with_metadata(&mut out, window, &[beauty, depth], &metadata, sample_row).unwrap();
+
+    let index = Index::build(&mut out, &Limits::default(), &|| false).unwrap();
+    let last = user_attributes.len() - 1;
+    assert_eq!(index.parts()[0].text("pass0"), Some("value0"));
+    assert_eq!(index.parts()[0].text(&format!("pass{last}")), Some(format!("value{last}").as_str()));
+    assert_eq!(index.parts()[1].text("passLabel"), Some("Depth"));
+}
+
+#[test]
+fn multipart_header_over_the_attribute_limit_is_refused_before_output() {
+    let window = Window { width: 2, height: 2, ..WINDOW };
+    let beauty = Part { name: Some("Beauty"), data_window: window, channels: &[FLOAT], compression: Compression::Zip16 };
+    let depth = Part { name: Some("Depth"), ..beauty };
+    let user_attributes = numbered_attributes(MAX_HEADER_ATTRIBUTES - MULTIPART_SCANLINE_ATTRIBUTES + 1);
+    let borrowed_attributes = borrowed(&user_attributes);
+    let text = [&[][..], &borrowed_attributes[..]];
+    let metadata = Metadata { text_attributes: &text, ..Metadata::default() };
+    let mut out = Cursor::new(Vec::new());
+
+    let result = write_scanlines_with_metadata(&mut out, window, &[beauty, depth], &metadata, |_, _, _, _| panic!("reached callback"));
+
+    assert!(matches!(&result, Err(Error::Encode(message)) if message.contains("part 1") && message.contains("4096")), "{result:?}");
+    assert!(out.get_ref().is_empty());
+}
+
+#[test]
+fn tiled_header_with_chromaticities_counts_them_against_the_attribute_limit() {
+    let window = Window { width: 2, height: 2, ..WINDOW };
+    let part = Part { name: Some("Beauty"), data_window: window, channels: &[FLOAT], compression: Compression::Zip16 };
+    let tiled = TilePart { part, tile_width: 2, tile_height: 2 };
+    let chromaticities = Some([[0.64, 0.33], [0.3, 0.6], [0.15, 0.06], [0.3127, 0.329]]);
+    // The scan-line set plus the tile description and the shared chromaticities
+    let user_count = MAX_HEADER_ATTRIBUTES - MULTIPART_SCANLINE_ATTRIBUTES - 2;
+    let user_attributes = numbered_attributes(user_count);
+    let borrowed_attributes = borrowed(&user_attributes);
+    let text = [&borrowed_attributes[..]];
+    let metadata = Metadata { chromaticities, text_attributes: &text };
+    let mut out = Cursor::new(Vec::new());
+
+    write_tiles(&mut out, window, &[tiled], &metadata, |_, window, tile| fill_tile(tiled, window, tile)).unwrap();
+
+    Index::build(&mut out, &Limits::default(), &|| false).unwrap();
+    let over_attributes = numbered_attributes(user_count + 1);
+    let borrowed_over = borrowed(&over_attributes);
+    let over_text = [&borrowed_over[..]];
+    let over = Metadata { chromaticities, text_attributes: &over_text };
+    let mut refused = Cursor::new(Vec::new());
+    let result = write_tiles(&mut refused, window, &[tiled], &over, |_, _, _| panic!("reached callback"));
+    assert!(matches!(result, Err(Error::Encode(_))), "{result:?}");
+    assert!(refused.get_ref().is_empty());
 }
 
 #[test]
