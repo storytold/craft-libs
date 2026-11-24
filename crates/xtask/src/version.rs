@@ -681,6 +681,7 @@ impl Scanner<'_> {
             b'f' => return Ok('\u{c}'),
             b'r' => return Ok('\r'),
             b'e' => return Ok('\u{1b}'),
+            b'x' => 2,
             b'u' => 4,
             b'U' => 8,
             _ => return Err(self.err("unknown escape in a string")),
@@ -864,6 +865,18 @@ mod tests {
         assert_eq!(out, "[workspace.package]  # shared\nversion = '1.3.0' # the release\nedition = \"2024\"\n");
         let spaced = "[ workspace . package ]\n\"version\"=\"1.2.3\"#c\n";
         assert_eq!(replace(spaced, "1.2.4").unwrap(), "[ workspace . package ]\n\"version\"=\"1.2.4\"#c\n");
+    }
+
+    #[test]
+    fn decodes_hex_escapes_in_basic_strings() {
+        let manifest = "[workspace.package]\nversion = \"0\\x2E1.0\"\ndescription = \"caf\\xE9 \\x41\"\n";
+        assert_eq!(read(manifest).unwrap(), "0.1.0");
+        let out = replace(manifest, "0.2.0").unwrap();
+        assert_eq!(out, "[workspace.package]\nversion = \"0.2.0\"\ndescription = \"caf\\xE9 \\x41\"\n");
+        for bad in ["\\x2", "\\xG0", "\\x\""] {
+            let manifest = format!("[workspace.package]\nversion = \"0.1.0\"\nnote = \"{bad}\"\n");
+            assert!(read(&manifest).is_err(), "{manifest:?}");
+        }
     }
 
     #[test]
