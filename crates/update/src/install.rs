@@ -19,8 +19,6 @@
 //! Every download is checked against its published SHA-256 before anything is unpacked, a
 //! running app is never replaced, and a new copy is fully in place before the old one goes.
 
-use crate::Reason;
-
 use std::path::{Path, PathBuf};
 
 use crate::protocol::{CANCELLED, INSTALL_CANCELLED, InstallLocations, JobPhase};

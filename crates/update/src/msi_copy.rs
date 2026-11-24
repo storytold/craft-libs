@@ -135,7 +135,6 @@ pub(crate) fn app_path_value(value: &str) -> Option<PathBuf> {
 
 #[cfg(windows)]
 pub(crate) mod windows {
-    use crate::Reason;
     use std::path::{Path, PathBuf};
 
     use winreg::RegKey;

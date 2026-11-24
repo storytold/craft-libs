@@ -19,8 +19,6 @@
 //! Anything else (FreeBSD, a development build, an unsigned Windows copy) gets the download link
 //! instead.
 
-use crate::Reason;
-
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -81,7 +79,7 @@ impl Install {
 }
 
 mod detect;
-mod helper;
+pub(crate) mod helper;
 #[cfg(unix)]
 mod relaunch;
 mod replace;

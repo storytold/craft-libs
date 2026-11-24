@@ -11,6 +11,7 @@ use super::helper::{clear_failure, done_file};
 use super::{Path, Paths, Release};
 #[cfg(not(windows))]
 use super::{PathBuf, install};
+#[cfg(unix)]
 use crate::Reason;
 
 /// Records `release` as just installed, so it isn't offered again for [`super::detect::JUST_UPDATED_FOR`]: its

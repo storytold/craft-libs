@@ -687,7 +687,7 @@ pub(super) fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path,
 }
 
 #[cfg(test)]
-mod reason_tests {
+pub(crate) mod reason_tests {
     use super::*;
     use craft_ui::testing::trial;
 
@@ -752,7 +752,7 @@ mod reason_tests {
                     std::fs::write(&file, vec![b' '; RECORD_LIMIT + 1]).unwrap();
                 }
             }
-            if bad < 4 || bad >= 6 {
+            if !(4..6).contains(&bad) {
                 std::fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
             }
             assert_eq!(take_failure_reason(&paths), Some(Reason::data(original.to_string())), "case {bad}");
