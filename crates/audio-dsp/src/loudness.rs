@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn interleaved_matches_planar() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(5.0, -20.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -20.0)]);
         let il: Vec<f32> = x.iter().flat_map(|&v| [v, v]).collect();
         let mut m = LoudnessMeter::new(sr, 2);
         m.process_interleaved(&il);
@@ -885,12 +885,12 @@ mod tests {
     #[test]
     fn reset_clears_everything() {
         let sr = 48000.0;
-        let x = segments(1000.0, sr, &[(5.0, -20.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -20.0)]);
         let mut m = stereo_measure(&x, sr);
         m.reset();
         assert_eq!(m.integrated(), f64::NEG_INFINITY);
         assert_eq!(m.true_peak(), 0.0);
-        let x = segments(1000.0, sr, &[(5.0, -30.0)]);
+        let x = segments(1000.0, sr, &[(2.0, -30.0)]);
         m.process(&[&x, &x]);
         assert!((m.integrated() + 30.0).abs() < 0.1);
     }

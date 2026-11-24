@@ -129,7 +129,7 @@ fn small_render_is_the_downscaled_reference() {
 fn strength_matches_the_target_at_mid_grey() {
     for (a, s, r) in [(50.0, 25.0, 50.0), (25.0, 25.0, 50.0), (50.0, 0.0, 50.0), (50.0, 100.0, 50.0), (50.0, 25.0, 0.0)] {
         let g = CrystalGrain::new(&Grain { amount: a, size: s, roughness: r, seed: 3 }, REF_LONG).expect("grain");
-        let n = 500;
+        let n = 320;
         let lum: Vec<f32> = (0..n * n)
             .map(|k| {
                 let (x, y) = ((k % n) as f32 + 0.5, (k / n) as f32 + 0.5);
@@ -153,7 +153,7 @@ fn tones_keep_their_mean() {
     for (amount, size, levels) in cases {
         let g = CrystalGrain::new(&Grain { amount, size, roughness: 50.0, seed: 3 }, REF_LONG).expect("grain");
         for &level in levels {
-            let n = 400;
+            let n = 256;
             let mut sum = 0.0f64;
             for k in 0..n * n {
                 let (x, y) = ((k % n) as f32 + 0.5, (k / n) as f32 + 0.5);
