@@ -68,10 +68,10 @@ impl TaskBarPlace {
 /// members and a More menu (Hide, Pin, Reset, then the host's rows). One place, pin and Hide setting for Crop and
 /// Frame.
 ///
-/// - Place: on `side` of the anchor's bounds on screen (below, centred, by default), a section gap away, following the
-///   anchor each pass; it flips to the other side when there is no room. Dragged by its grip (any free point of the
-///   bar), it keeps its offset from that place while the anchor moves or the bar grows; a press with no drag changes
-///   nothing. A moved bar whose offset place would cover the `keep_clear` point shows at its unmoved place and keeps
+/// - Place: on `side` of the anchor's bounds on screen (below, centred, by default), a section gap away (or as far as
+///   [`hang_gap`](Self::hang_gap) says), following the anchor each pass; it flips to the other side when there is no
+///   room. Dragged by its grip (any free point of the bar), it keeps its offset from that place while the anchor moves
+///   or the bar grows; a press with no drag changes nothing. A moved bar whose offset place would cover the `keep_clear` point shows at its unmoved place and keeps
 ///   its offset. Pinned, it stays where it shows.
 /// - Area: the bar shows inside `area` (the canvas rect): a move stays inside it, and a stored place outside it comes
 ///   back inside, its left and top edges winning where the bar does not fit. Its members continue on a new line when
@@ -120,6 +120,9 @@ pub struct TaskBar<'a> {
     /// apart.
     #[prop(into)]
     member_gap: Option<Gap>,
+    /// How far from its anchor's bounds a bar hung from document points hangs: a section gap by default.
+    #[prop]
+    hang_gap: TaskBarHang,
 }
 
 /// What a bar hangs from: the screen bounds of document points, or the canvas view's top edge, aligned in reading
@@ -155,6 +158,17 @@ pub enum TaskBarGrip {
     /// One rounded upright bar, a value track's groove wide and the members' line less a row gap at each end tall, in
     /// the control edge's line colour; muted text under the pointer and while the bar moves (VectorCraft's).
     Bar,
+}
+
+/// How far from its anchor's bounds a [`TaskBar`] hangs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarHang {
+    /// A section gap away.
+    #[default]
+    Gap,
+    /// The handle ring and a section gap away: clear of a selection's handles on that side and their hit area.
+    ClearOfHandles,
 }
 
 /// What an outside press does to a [`TaskBar`].
@@ -280,6 +294,7 @@ impl<'a> TaskBar<'a> {
             compact: false,
             grip: TaskBarGrip::Icon,
             member_gap: None,
+            hang_gap: TaskBarHang::Gap,
         }
     }
 
@@ -308,6 +323,7 @@ impl<'a> TaskBar<'a> {
             compact: false,
             grip: TaskBarGrip::Icon,
             member_gap: None,
+            hang_gap: TaskBarHang::Gap,
         }
     }
 
@@ -336,7 +352,7 @@ impl<'a> TaskBar<'a> {
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact, grip: grip_look, member_gap } = self;
+        let TaskBar { label, hang, mut place, rows, kind, side, align, keep_clear, dismiss, compact, grip: grip_look, member_gap, hang_gap } = self;
         let side = side.unwrap_or(match kind {
             TaskBarKind::Task | TaskBarKind::Fixed => Side::Below,
             TaskBarKind::Selection => Side::Above,
@@ -354,7 +370,8 @@ impl<'a> TaskBar<'a> {
                     bounds.extend_with(at);
                     bounds
                 });
-                let gap = env.tokens.space.gap.section;
+                let clear = if hang_gap == TaskBarHang::ClearOfHandles { env.tokens.size.handle.ring } else { 0.0 };
+                let gap = env.tokens.space.gap.section + clear;
                 // A fixed bar keeps the gap on both sides of its anchor: it opens above when there is no room below.
                 let rect = if kind == TaskBarKind::Fixed { bounds.expand2(Vec2::new(0.0, gap)) } else { hang_rect(bounds, gap, side) };
                 (room && bounds.is_finite()).then(|| Hung {

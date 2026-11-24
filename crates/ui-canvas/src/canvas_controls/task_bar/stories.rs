@@ -1,6 +1,6 @@
 //! Stories of `TaskBar`.
 
-use super::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarPlace};
+use super::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarHang, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
 use crate::contract::{Gap, Props as _, Show as _};
@@ -236,4 +236,10 @@ fn bar_grip_dragged(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
 fn control_gap(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     configured(ui, data, &turned_frame(), None, |bar| bar.member_gap(Gap::Item))
+}
+
+/// A bar hung clear of the frame's handles: the handle ring and a section gap below it.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn clear_of_handles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.hang_gap(TaskBarHang::ClearOfHandles))
 }
