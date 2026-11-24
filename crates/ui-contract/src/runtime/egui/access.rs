@@ -194,7 +194,7 @@ fn focused_node_key(viewport: ViewportId) -> Id {
 /// of a list that holds focus, else the focused component's own; `None` when nothing holds focus.
 pub fn focused_node(ctx: &Context) -> Option<Id> {
     let viewport = pass::current_viewport(ctx);
-    ctx.data(|data| data.get_temp::<FocusedNode>(focused_node_key(viewport))).map(|node| node.0)
+    memory::peek_copy::<FocusedNode>(ctx, focused_node_key(viewport)).map(|node| node.0)
 }
 
 /// The runtime's nodes of a pass in the order it emitted them: the first time each node was reported as a child or
@@ -312,12 +312,10 @@ pub(crate) fn order_children(ctx: &Context) {
         ctx.set_accesskit_focus(owner);
     }
     let focused = widget.map(|widget| emitted.focus.or(folded).unwrap_or(widget));
-    ctx.data_mut(|data| match focused {
-        Some(node) => {
-            data.insert_temp(focused_node_key(viewport), FocusedNode(node));
-        }
-        None => data.remove::<FocusedNode>(focused_node_key(viewport)),
-    });
+    match focused {
+        Some(node) => memory::put(ctx, focused_node_key(viewport), FocusedNode(node)),
+        None => drop(memory::take::<FocusedNode>(ctx, focused_node_key(viewport))),
+    }
     hide_behind_modal(ctx, viewport, &emitted.written);
     for parent in emitted.written {
         ctx.accesskit_node_builder(parent, |node| {
