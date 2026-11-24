@@ -94,6 +94,72 @@ fn a_title_bar_in_an_embedded_shell_acts_on_no_window() {
     assert!(!commands.is_empty(), "the window's bar acts on the window");
 }
 
+/// The window commands a title bar with a Home button in its leading content sends for each step list of `gestures`,
+/// in order, given the Home button's centre and a free point of the band.
+fn home_bar_sent(gestures: impl Fn(Pos2, Pos2) -> Vec<Vec<Vec<Event>>>) -> Vec<Vec<ViewportCommand>> {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let bar = Cell::new(Rect::NOTHING);
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            let shown = TitleBar::new().show_titled(
+                ui,
+                Title::new("Landscape.psd"),
+                |ui, _| {
+                    Button::new("Home").show(ui);
+                },
+                |_, _| {},
+            );
+            bar.set(shown.response.rect);
+        })
+    };
+    frame(vec![]);
+    let settled = frame(vec![]);
+    let tree = &settled.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    let home = tree
+        .with_role(Role::BUTTON)
+        .into_iter()
+        .find(|key| tree.name_of(*key) == Some("Home"))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the bar shows its Home button")
+        .center();
+    // The title is no control: the band lies under it.
+    let band = bar.get().center();
+    gestures(home, band)
+        .into_iter()
+        .map(|steps| {
+            steps
+                .into_iter()
+                .flat_map(|events| frame(events).commands)
+                .map(|(_, command)| command)
+                .filter(|command| matches!(command, ViewportCommand::StartDrag | ViewportCommand::Maximized(_) | ViewportCommand::OuterPosition(_)))
+                .collect()
+        })
+        .collect()
+}
+
+/// A press on a control over the band is the control's: a press-drag that starts on the bar's Home button neither
+/// moves the window nor drags, and a double click on it does not maximize the window. The band used to take the drag
+/// under the button, as a drag-only root under a button in it does, so the drag moved the window and the double click
+/// zoomed it. The free band still moves the window, and its double click still maximizes it.
+#[trial]
+fn a_press_on_a_control_over_the_band_never_moves_or_zooms_the_window() {
+    let sent = home_bar_sent(|home, band| {
+        let drag = |at: Pos2| vec![vec![moved(at)], vec![press(at)], vec![moved(at + vec2(40.0, 0.0))], vec![release(at + vec2(40.0, 0.0))], vec![]];
+        let double = |at: Pos2| vec![vec![moved(at)], vec![press(at)], vec![release(at)], vec![press(at)], vec![release(at)], vec![]];
+        vec![drag(home), double(home), drag(band), double(band)]
+    });
+    let [home_drag, home_double, band_drag, band_double] = &sent[..] else { panic!("four gestures ran: {sent:?}") };
+    assert!(home_drag.is_empty(), "a drag from Home does not move the window: {home_drag:?}");
+    assert!(home_double.is_empty(), "a double click on Home does not maximize the window: {home_double:?}");
+    assert!(band_drag.contains(&ViewportCommand::StartDrag), "a drag of the free band moves the window: {band_drag:?}");
+    assert!(band_double.contains(&ViewportCommand::Maximized(true)), "a double click on the free band maximizes the window: {band_double:?}");
+}
+
 /// The shell sends the window title once after a change and not again while the viewport reports it; an embedded shell
 /// sends none.
 #[trial]
