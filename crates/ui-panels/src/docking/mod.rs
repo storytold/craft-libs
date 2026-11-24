@@ -62,13 +62,14 @@ pub use dock_column::{
     group_rects, scale_widths, stacked, width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
-pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicSizes};
+pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicMode, IconicSizes};
 pub use window_menu::{WindowMenuRows, WindowMenuRowsOutput};
 
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Outcome, Pad, PaintUi,
     PartsCx, Props as _, Role, Sizing, WordSetCx as _,
 };
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::runtime::memory::sub;
@@ -113,6 +114,12 @@ pub struct PanelTitle {
     pub title: Label,
     /// Whether the panel's tab shows a close button, where the group's tabs close.
     pub closable: bool,
+    /// The panel's toggle command: the tab resolves it for its marker and its hint.
+    pub command: Option<CommandRef>,
+    /// The number the tab shows after the title ([`PanelSpec::count`]).
+    pub count: Option<usize>,
+    /// The line under the header row while the panel is shown ([`PanelSpec::caption`]).
+    pub caption: Option<Label>,
 }
 
 /// The tab titles of one group with their content key, taken once when they are made: a memoized view that holds them
@@ -146,7 +153,28 @@ impl Hash for Titles {
 impl PanelTitle {
     /// A panel `key` titled `title`, not closable from its tab.
     pub fn new(key: PanelKey, title: impl Into<Label>) -> Self {
-        PanelTitle { key, title: title.into(), closable: false }
+        PanelTitle { key, title: title.into(), closable: false, command: None, count: None, caption: None }
+    }
+
+    /// The number the tab shows after the title.
+    #[must_use]
+    pub fn count(mut self, count: Option<usize>) -> Self {
+        self.count = count;
+        self
+    }
+
+    /// The line under the header row while the panel is shown.
+    #[must_use]
+    pub fn caption(mut self, caption: Option<Label>) -> Self {
+        self.caption = caption;
+        self
+    }
+
+    /// The panel's toggle command.
+    #[must_use]
+    pub fn command(mut self, command: Option<CommandRef>) -> Self {
+        self.command = command;
+        self
     }
 
     /// Whether the panel's tab shows a close button.

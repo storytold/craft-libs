@@ -4,6 +4,7 @@ use super::divider::{self, Divider, Drag};
 use super::dock_column::{
     BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
 };
+use super::group::GripMarks;
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
@@ -16,7 +17,7 @@ use crate::menu::GroupItem;
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, GlyphRole, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
@@ -54,12 +55,6 @@ pub struct IconicSizes {
 /// The column width, in rail widths, from which the cells show their panels' names: 96 points at the Compact size.
 const LABELS_IN_RAIL_WIDTHS: f32 = 2.4;
 
-/// The length of a group's grip line, in icon cell heights: half a cell, 15 points at the Compact size (18 at
-/// Comfortable). That holds several dots, so it reads as a handle and not as a dot, and in a rail-wide column (40
-/// points at Compact) it leaves more than a quarter of the width free on each side, so it does not read as a rule
-/// between the groups.
-const GRIP_LINE_IN_CELLS: f32 = 0.5;
-
 impl IconicSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
@@ -67,7 +62,7 @@ impl IconicSizes {
         IconicSizes {
             column: DockSizes::style(cx),
             cell: size.rail.button,
-            grip: size.hit.target,
+            grip: super::group::grip_strip(cx.tokens),
             separator: cx.tokens.space.gap.tight,
             labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
         }
@@ -88,6 +83,19 @@ impl IconicSizes {
     }
 }
 
+/// What the icons of an iconic column open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum IconicMode {
+    /// A click on an icon opens its panel in a flyout beside the collapsed column.
+    #[default]
+    Flyouts,
+    /// The icons are a rail that stays beside the column when it expands: a click on an icon expands the column with
+    /// that panel in front of its group, and a click on the icon of a panel in front of the expanded column collapses
+    /// the column again. The column opens no flyouts.
+    Rail,
+}
+
 /// What an iconic column reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -97,8 +105,12 @@ pub struct IconicColumnOutput<P> {
     pub edit: EditResponse<Option<P>>,
     /// The rect the column took, for `DockAreaOutput::columns`.
     pub placed: Rect,
-    /// The user asked to expand the column (`false`); the host sets `Column::iconic`.
+    /// The user asked to expand the column (`false`), or in [`IconicMode::Rail`] to collapse the expanded column
+    /// (`true`); the host sets `Column::iconic`.
     pub iconic: Option<bool>,
+    /// In [`IconicMode::Rail`], the panel whose icon the user chose to bring to the front of its group; the host
+    /// makes it its group's active panel.
+    pub front: Option<P>,
     /// The dock row the user picked in the column menu.
     pub picked: Option<GroupItem>,
     /// The width the user gave a docked iconic column on its inner edge this pass. A floating window's sides set the
@@ -149,24 +161,17 @@ pub struct IconicColumnStyle {
     name_open: StyleColor,
     /// The room between an icon and its name.
     name_gap: f32,
-    /// The ink of a group's grip line.
-    grip: StyleColor,
-    /// The ink of a group's grip line while the pointer is over it or drags it.
-    grip_active: StyleColor,
-    /// The grip line's length across the group.
-    grip_length: f32,
-    /// The side of the grip line's dots, and the gap between two of them.
-    grip_dot: f32,
+    /// The marks of a group's grip.
+    grip: GripMarks,
 }
 
 /// A column collapsed to icons: the column bar over icon groups, one cell per panel. A panel without an icon shows the
 /// first letter of its name in a box. A column widened past `IconicSizes::labels` shows each panel's name beside its
 /// icon, cut with an ellipsis to the cell; a click or drag on the name acts as one on the icon. A click or Enter on an icon
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
-/// time. A drag of an icon starts a move of its panel, a drag of the grip line on top of a group a move of the group, a
-/// drag of the bar beside its button a move of the column; each starts through the drag session, and a press outside
-/// the flyout closes it. Escape and a press
-/// outside close the flyout; with `auto_collapse` the focus leaving it does too.
+/// time. A drag of an icon starts a move of its panel, a drag of the grip on top of a group a move of the group, a
+/// drag of the bar beside its button a move of the column; each starts through the drag session. Escape closes the
+/// flyout; with `auto_collapse` a press outside it and the focus leaving it do too.
 ///
 /// The open flyout is the bound `Option<P>` of [`new`](IconicColumn::new), owned by the host like the layout: a click
 /// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The
@@ -180,6 +185,11 @@ pub struct IconicColumnStyle {
 ///
 /// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's sides set
 /// its width: the column shows its icons under it, with no divider on its inner edge, and registers no edge bands.
+///
+/// In [`IconicMode::Rail`] the icons open no flyouts and the bound open panel is not used: the column is a rail the
+/// host also shows beside the expanded column. While `Column::iconic` is off the panels in front of their groups show
+/// selected and the bar's chevron collapses the column; a click on an icon reports
+/// [`IconicColumnOutput::front`] and [`IconicColumnOutput::iconic`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, overlay, probe(IconicColumn<'static, u8>))]
 pub struct IconicColumn<'a, P: Value + Hash + 'static> {
@@ -204,6 +214,9 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// Whether Auto-Collapse Iconic Panels is on.
     #[prop]
     auto_collapse: bool,
+    /// What the icons open: flyouts, or the column itself as a rail.
+    #[prop]
+    mode: IconicMode,
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column, and the rect its
     /// flyouts open in. Unset, the flyouts take the room layers opened there have (`overlay::layer_room`): around a
     /// palette window, the work area.
@@ -222,6 +235,10 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     expand: bool,
     /// The size the user gave the open flyout this pass.
     flyout: Option<FlyoutResize<P>>,
+    /// In rail mode, what a click on an icon asked for this pass: the column collapsed (`true`) or expanded.
+    rail_iconic: Option<bool>,
+    /// In rail mode, the panel a click on its icon brought to the front this pass.
+    front: Option<P>,
 }
 
 /// Where the flyout of one cell shows: the group with the cell's panel active, its top left, its size, whether the
@@ -264,6 +281,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             opens: Side::End,
             bar: ColumnBar::Own,
             auto_collapse: false,
+            mode: IconicMode::Flyouts,
             within: Rect::NOTHING,
             open,
             view: None,
@@ -274,6 +292,8 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             laid: None,
             expand: false,
             flyout: None,
+            rail_iconic: None,
+            front: None,
         }
         .label(label)
     }
@@ -302,7 +322,36 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
         self.show_at(ui, rect, |_, _| ()).output
     }
 
-    /// The panels of the column in order, each with its group.
+    /// Whether the column is a rail beside its expanded column: its chevron collapses the column.
+    fn expanded(&self) -> bool {
+        self.mode == IconicMode::Rail && !self.column.iconic
+    }
+
+    /// Whether the cell `at`, of the panel `(group, panel)`, shows selected: the open flyout's, or in rail mode a
+    /// panel in front of the expanded column.
+    fn shows_selected(&self, at: usize, (group, panel): (usize, usize)) -> bool {
+        match self.mode {
+            IconicMode::Flyouts => self.shown == Some(at),
+            IconicMode::Rail => self.expanded() && self.column.groups.get(group).is_some_and(|group| group.active == panel),
+        }
+    }
+
+    /// In rail mode, what a click on the cell `at` asks for: on a panel in front of the expanded column, the column
+    /// collapses; on any other, the column expands with that panel in front.
+    fn rail_click(&mut self, at: usize) {
+        let Some((group, panel)) = self.flat().get(at).copied() else { return };
+        if self.shows_selected(at, (group, panel)) {
+            self.rail_iconic = Some(true);
+            return;
+        }
+        if self.column.iconic {
+            self.rail_iconic = Some(false);
+        }
+        if self.column.groups.get(group).is_some_and(|shown| shown.active != panel) {
+            self.front = self.panel(group, panel).cloned();
+        }
+    }
+
     /// The divider on the column's inner edge: the width runs from the rail to the width the column expands to.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
         let (least, most) = sizes.iconic_bounds(self.column, self.spec);
@@ -422,12 +471,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
-            // A handle that is found when looked for, as the references' faint grips: hairline dots one dot apart in
-            // the faint ink, the normal ink under the pointer.
-            grip: cx.color(colors.text.faint),
-            grip_active: cx.color(colors.text.normal),
-            grip_length: cx.tokens.size.rail.button * GRIP_LINE_IN_CELLS,
-            grip_dot: cx.tokens.stroke.thin,
+            // The references' grip: a row of upright ticks, in the theme's grip ink.
+            grip: GripMarks::style(cx),
         }
     }
 
@@ -447,20 +492,23 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         self.bar_rect = plan.bar;
         if self.bar == ColumnBar::Own {
             let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
-            let name = ColumnArrow::Collapse.name(&cx.words::<DockWords>(), false);
+            let name = ColumnArrow::Collapse.name(&cx.words::<DockWords>(), self.expanded());
             let _ = cx.header_part(chevron_edge(self.edge), CHEVRON, chevron).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
         }
         for (at, (_, _, cell)) in plan.cells.iter().enumerate() {
             let Some(panel) = self.flat().get(at).and_then(|(group, panel)| self.panel(*group, *panel)) else { continue };
             let label = (self.spec)(panel).label;
-            cx.part(CELL.at(at as u64), *cell)
-                .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
-                .focusable()
-                .tooltip(label)
-                .toggles_at("flyout", at)
-                .on_click();
+            // A rail's icons expand and collapse the column, which `update` reads from their activation.
+            let rail = self.mode == IconicMode::Rail;
+            let part = cx.part(CELL.at(at as u64), *cell).sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS).focusable().tooltip(label);
+            if !rail {
+                part.toggles_at("flyout", at).on_click();
+            }
             if let Some(name) = plan.names.get(at) {
-                cx.part(NAME.at(at as u64), *name).sense(Sense::CLICK | Sense::DRAG).keyboard_via(CELL).toggles_at("flyout", at).on_click();
+                let part = cx.part(NAME.at(at as u64), *name).sense(Sense::CLICK | Sense::DRAG).keyboard_via(CELL);
+                if !rail {
+                    part.toggles_at("flyout", at).on_click();
+                }
             }
         }
         for (group, grip) in &plan.grips {
@@ -517,6 +565,16 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
                 self.move_edge(rect, &edge, coord);
             }
         }
+        if self.mode == IconicMode::Rail {
+            for at in 0..flat.len() {
+                if !began && (cx.part_activated(CELL.at(at as u64)).is_some() || cx.part_activated(NAME.at(at as u64)).is_some()) {
+                    self.rail_click(at);
+                }
+            }
+            self.register(&ctx, rect, rtl, &plan, &sizes);
+            self.laid = Some(plan);
+            return;
+        }
         let handles: Vec<_> = (0..flat.len()).map(|at| popup.at(at)).collect();
         // A toggle of an icon (click, Enter, Alt+Down) changed a popup this pass: the user chose. Otherwise the
         // bound value is the truth and the popups follow it.
@@ -558,31 +616,33 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
         if self.bar == ColumnBar::Own {
             ui.draw().surface(self.bar_rect, SurfaceKind::Background, Corners::None);
-            paint_chevron(ui, self.edge, ColumnArrow::Collapse, false, cx.flow.is_rtl(), &cx.words::<DockWords>());
+            paint_chevron(ui, self.edge, ColumnArrow::Collapse, self.expanded(), cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
         let flat = self.flat();
-        for (at, (group, panel)) in flat.iter().enumerate() {
-            let Some(panel) = self.panel(*group, *panel) else { continue };
+        for (at, &cell) in flat.iter().enumerate() {
+            let Some(panel) = self.panel(cell.0, cell.1) else { continue };
             let spec = (self.spec)(panel);
             let icon: IconSpec<'static> = spec.icon.unwrap_or_else(|| IconSpec::initial(spec.label.as_str()));
-            let selected = self.shown == Some(at);
+            let selected = self.shows_selected(at, cell);
             if let Some(name) = self.laid.as_ref().and_then(|plan| plan.names.get(at)) {
                 let style = &cx.style;
                 let room = if cx.flow.is_rtl() { name.with_max_x(name.max.x - style.name_gap) } else { name.with_min_x(name.min.x + style.name_gap) };
                 let ink = if selected { style.name_open } else { style.name };
                 let _ = ui.draw().text(room, &TextRun::new(spec.label.as_str().to_owned()).color(ink).elide());
             }
+            // A cell bound to the panel's toggle command shows that command's marker and hint; the column's `CELL`
+            // part keeps the press, as the face only resolves the command.
+            let face = match spec.command {
+                Some(command) => IconButton::command(icon, command),
+                None => IconButton::new(icon),
+            };
             // A cell is a rail button: the tool rail's size and glyphs, so a collapsed column's icons match the tools'.
-            let cell = IconButton::new(icon).label(spec.label).selected(selected).size(ControlSize::Md).glyphs(GlyphRole::ToolRail);
+            let cell = face.label(spec.label).selected(selected).size(ControlSize::Md).glyphs(GlyphRole::ToolRail);
             ui.face(CELL.at(at as u64), cell);
         }
         let style = &cx.style;
-        for (group, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
-            let part = cx.part(GRIP.at(*group as u64));
-            let ink = if part.hovered || part.pressed() { style.grip_active } else { style.grip };
-            let half = Vec2::new(style.grip_length.min(strip.width()) / 2.0, 0.0);
-            let look = RuleLook { color: ink.egui(), width: RuleWidth::Points(style.grip_dot) };
-            ui.draw().dotted_rule_with(&look, strip.center() - half, strip.center() + half, style.grip_dot);
+        for (_, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
+            style.grip.paint_in(ui, *strip);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
         // edges are the window's.
@@ -608,13 +668,16 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         }
         if self.bar == ColumnBar::Own {
             divider::describe(access, EDGE, 0, &self.edge_divider(cx.rect, &sizes.column), words.resize.as_str(), sizes.column.step);
-            describe_chevron(access, &ColumnArrow::Collapse.name(&words, false));
+            describe_chevron(access, &ColumnArrow::Collapse.name(&words, self.expanded()));
         }
     }
 
     /// The flyout of every cell whose popup is open, beside the column on the side it opens on. A resize the user makes
     /// comes back as the open group's new size and, when its top moved, its top's offset from the group's icons.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        if self.mode == IconicMode::Rail {
+            return;
+        }
         let popup = cx.popup("flyout");
         let sizes = cx.style.sizes.column;
         let (opens, auto_collapse, column) = (self.opens, self.auto_collapse, cx.rect);
@@ -667,8 +730,17 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> IconicColumnOutput<P> {
-        let iconic = self.record.iconic.or(self.expand.then_some(false));
-        IconicColumnOutput { edit: cx.edit_response(), placed: cx.rect, iconic, picked: self.record.picked, width: self.width, flyout: self.flyout }
+        // The chevron expands a collapsed column, and collapses the expanded one a rail stands beside.
+        let iconic = self.record.iconic.or(self.expand.then_some(self.expanded())).or(self.rail_iconic);
+        IconicColumnOutput {
+            edit: cx.edit_response(),
+            placed: cx.rect,
+            iconic,
+            front: self.front,
+            picked: self.record.picked,
+            width: self.width,
+            flyout: self.flyout,
+        }
     }
 }
 
@@ -746,6 +818,6 @@ impl<P: Value + Hash + Debug + 'static> Container for IconicColumn<'_, P> {
         }
         let (column, spec, auto_collapse) = (self.column, self.spec, self.auto_collapse);
         let band = bar_band(ui, self.bar_rect, self.edge);
-        self.record = show_bar(ui, band, false, auto_collapse, ColumnArrow::Collapse, true, column_grip(column, spec, cx));
+        self.record = show_bar(ui, band, self.expanded(), auto_collapse, ColumnArrow::Collapse, true, column_grip(column, spec, cx));
     }
 }

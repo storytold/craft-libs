@@ -97,7 +97,7 @@ pub fn painter(ctx: &Context) -> egui::Painter {
 /// The painted pointer the cursor service settled on: the window's cursor image where the window takes one at its
 /// size, else painted at the pointer. A brush tip too large for an image hands its centre cross and badge to the
 /// window and paints only its ring, so the pointer itself still moves with the hardware. A badged system cursor keeps
-/// the system's arrow and has only its badge painted.
+/// the system's arrow and has only its badge painted. Where the shell cannot set the system cursor nothing is painted.
 ///
 /// A tip outline requested within a region (`cursor::request_within`: a canvas's view on the canvas's layer) is a
 /// mark on that canvas: the whole outline goes to the window only while it lies inside the region with no layer above
@@ -106,7 +106,7 @@ pub fn painter(ctx: &Context) -> egui::Painter {
 fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     use craft_behavior::{Cursor, PaintedCursor};
     let Some(at) = areas::pointer_pos(ctx) else { return };
-    let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
+    let Some(Cursor::Painted(cursor)) = cursor::current(ctx).filter(|_| cursor::paints(ctx)) else { return };
     let closed = pointer::frame_raw(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
     let tip = matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. });
     let whole = pointer_art(env, &cursor, closed, false);

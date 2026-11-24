@@ -1,12 +1,20 @@
 //! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards and
 //! the pixel aspect ratio.
 
-use craft_ui::contract::{Bind, SaveKey};
-use craft_ui::patterns::form_dialogs::{BackgroundContents, BitDepth, ColorMode, DocumentOptions, NewDocumentDialog};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, SaveKey, Show as _, clicked};
+use craft_ui::dialog::DialogHost;
+use craft_ui::display::Text;
+use craft_ui::patterns::form_dialogs::{
+    BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, HostedNewDocument,
+    NewDocumentDialog,
+};
 use craft_ui::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary};
 use craft_ui::runtime::memory::MemoryStage;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers, Vec2};
+use egui::{Key, Modifiers, Ui, Vec2};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -22,6 +30,179 @@ fn save_preset(fixture: &mut Fixture, name: &str) {
 
 fn shows(fixture: &Fixture, text: &str) -> bool {
     fixture.texts().iter().any(|painted| painted.text == text)
+}
+
+/// Opens `tab` and clicks the card titled `card` in it.
+fn pick(fixture: &mut Fixture, tab: &str, card: &str) {
+    let target = fixture.by_label(tab).unwrap_or_else(|| panic!("the {tab} tab"));
+    fixture.click(&target).idle(10);
+    // A card's node is named by its title and size line together; its title is clicked where it is painted.
+    let title = fixture.texts().iter().find(|painted| painted.text == card).map(|painted| painted.rect.center());
+    fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).idle(10);
+}
+
+/// The most a host's count may be: its `fitted` caps it.
+const MOST: u32 = 3;
+
+/// A host's own settings: a count its details row bumps, which `fitted` caps. Its memory notes the fields set from
+/// outside and the cards applied, and its details row shows them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Counted {
+    name: String,
+    count: u32,
+}
+
+impl DocumentSettings for Counted {
+    type Preset = ();
+    type Setup = ();
+    type Memory = Vec<String>;
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
+    fn page(&self) -> (f64, f64) {
+        (1.0, 1.0)
+    }
+
+    fn same_document(&self, other: &Self) -> bool {
+        self.count == other.count
+    }
+
+    fn fits(&self) -> bool {
+        true
+    }
+
+    fn fitted(mut self) -> Self {
+        self.count = self.count.min(MOST);
+        self
+    }
+
+    fn note_set(&mut self, field: &str, memory: &mut Vec<String>) {
+        memory.push(field.to_owned());
+    }
+
+    fn open(&mut self, _setup: &(), untitled: &str) {
+        if self.name.is_empty() {
+            untitled.clone_into(&mut self.name);
+        }
+    }
+
+    fn preset_card(_preset: &(), _cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
+        DocumentCard::new("Preset".to_owned(), String::new(), Counted::default(), CardSource::preset(None))
+    }
+
+    fn recent_cards(_cx: &CardCx<'_, Self>) -> Vec<DocumentCard<Self>> {
+        Vec::new()
+    }
+
+    fn saved_card(name: &str, saved: &Self, _cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
+        DocumentCard::new(name.to_owned(), String::new(), saved.clone(), CardSource::Recent)
+    }
+
+    fn apply_card(&mut self, card: &DocumentCard<Self>, _setup: &(), memory: &mut Vec<String>) {
+        self.count = card.settings.count;
+        memory.push("card".to_owned());
+    }
+
+    fn details(ui: &mut Ui, values: &mut Self, cx: &mut DetailsCx<'_, Self>) {
+        if clicked(&Button::new("Bump".to_owned()).show(ui)) {
+            values.count += 1;
+            cx.request_action("bump");
+        }
+        Text::new(format!("Noted {}", cx.memory().join(" "))).show(ui);
+    }
+}
+
+/// What automation sets reaches the memory the details rows read: a set field is noted there, and a saved preset set
+/// by name is applied as its card is.
+#[trial]
+fn automation_writes_reach_the_memory_the_details_rows_read() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let ctx = fixture.ctx().clone();
+    let mut saved = PresetLibrary::new();
+    saved.add(&GroupPath::root(), "Two", Counted { name: String::new(), count: 2 }).expect("a saved preset");
+    let dialog = HostedNewDocument::new(&ctx, Counted::default(), |options| NewDocumentDialog::over(Bind::bound(options))).saved(saved);
+    let id = host.borrow_mut().open(dialog);
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "count", json!(1)), Ok(()));
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "preset", json!("Two")), Ok(()));
+    fixture.idle(10);
+    assert!(shows(&fixture, "Noted count card"), "{:?}", fixture.texts().iter().map(|painted| painted.text.clone()).collect::<Vec<_>>());
+}
+
+/// A host's settings type edits its own details row through the dialog; its `fitted` runs after the edit, the action it
+/// asked for comes out once per click, and Create answers the edited settings.
+#[trial]
+fn a_host_settings_type_edits_its_details_and_create_answers_them() {
+    let asked = Rc::new(RefCell::new(Vec::<String>::new()));
+    let created = Rc::new(RefCell::new(None::<Counted>));
+    let mut options = Counted::default();
+    let (reported, made) = (asked.clone(), created.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = NewDocumentDialog::over(Bind::bound(&mut options)).show(ui);
+        reported.borrow_mut().extend(shown.actions);
+        if let Some(result) = shown.result {
+            *made.borrow_mut() = Some(result.options);
+        }
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    for _ in 0..MOST + 2 {
+        let bump = fixture.by_label("Bump").expect("the host's row");
+        fixture.click(&bump).idle(4);
+    }
+    assert_eq!(asked.borrow().len(), (MOST + 2) as usize, "each click asked once, not once per pass: {:?}", asked.borrow());
+    assert!(asked.borrow().iter().all(|id| id == "bump"));
+    let create = fixture.by_label("Create").expect("the Create button");
+    fixture.click(&create).idle(10);
+    let answered = created.borrow().clone().expect("Create answered");
+    assert_eq!(answered.count, MOST, "`fitted` capped the count after each edit");
+    assert_eq!(answered.name, "Untitled-1", "the settings opened with the default name");
+}
+
+/// The orientation control turns the built-in cards, and a card picked afterwards keeps the orientation.
+#[trial]
+fn the_orientation_turns_the_built_in_cards() {
+    let shared = Rc::new(RefCell::new(DocumentOptions::default()));
+    let held = shared.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut options = held.borrow().clone();
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+        *held.borrow_mut() = options;
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let art = fixture.by_label("Art & Illustration").expect("the Art tab");
+    fixture.click(&art).idle(10);
+    let turn = |fixture: &mut Fixture, orientation: &str| {
+        let control = fixture.by_label(orientation).unwrap_or_else(|| panic!("the {orientation} control"));
+        fixture.click(&control).idle(10);
+    };
+    let page = |shared: &Rc<RefCell<DocumentOptions>>| {
+        let size = shared.borrow().size;
+        (size.width, size.height)
+    };
+
+    turn(&mut fixture, "Portrait");
+    pick(&mut fixture, "Art & Illustration", "Postcard");
+    let (width, height) = page(&shared);
+    assert!(height > width, "Portrait turns the landscape Postcard: {width} x {height}");
+    pick(&mut fixture, "Art & Illustration", "Comic Book");
+    let (width, height) = page(&shared);
+    assert!(height > width, "the orientation stays for the next card: {width} x {height}");
+
+    turn(&mut fixture, "Landscape");
+    pick(&mut fixture, "Art & Illustration", "Poster");
+    let (width, height) = page(&shared);
+    assert!(width > height, "Landscape turns the portrait Poster: {width} x {height}");
+    pick(&mut fixture, "Art & Illustration", "Postcard");
+    let (width, height) = page(&shared);
+    assert!(width > height, "a landscape card stays wider than tall: {width} x {height}");
 }
 
 #[trial]
@@ -214,13 +395,6 @@ fn web_cards_turn_artboards_on_and_only_take_back_their_own() {
         *held.borrow_mut() = options;
     });
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
-    let pick = |fixture: &mut Fixture, tab: &str, card: &str| {
-        let target = fixture.by_label(tab).unwrap_or_else(|| panic!("the {tab} tab"));
-        fixture.click(&target).idle(10);
-        // A card's node is named by its title and size line together; its title is clicked where it is painted.
-        let title = fixture.texts().iter().find(|painted| painted.text == card).map(|painted| painted.rect.center());
-        fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).idle(10);
-    };
     pick(&mut fixture, "Web", "Web Most Common");
     assert!(shared.borrow().artboard, "a Web card turns Artboards on");
     pick(&mut fixture, "Photo", "Landscape, 6 x 4");
@@ -354,6 +528,36 @@ fn grey_create_on_empty_saved_greys_create_only_there() {
             fixture.click(&create).idle(10);
             assert_eq!(*created.borrow(), 1, "without the option Create creates from the details");
         }
+    }
+}
+
+/// The dialog's Enter shortcut cannot create or close while its Create action is disabled.
+#[trial]
+fn enter_respects_create_disabled_on_empty_saved() {
+    use std::cell::Cell;
+
+    for grey in [false, true] {
+        let mut options = DocumentOptions::default();
+        let entered = Rc::new(Cell::new((false, false)));
+        let events = Rc::clone(&entered);
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = NewDocumentDialog::new(Bind::bound(&mut options)).saved_after_recent(true).grey_create_on_empty_saved(grey).show(ui);
+            let (closed, created) = events.get();
+            events.set((closed || shown.closed.is_some(), created || shown.result.is_some()));
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        let saved = fixture.by_label("Saved").expect("the Saved tab");
+        fixture.click(&saved).idle(10);
+        assert!(shows(&fixture, "No saved presets yet."), "the Saved tab is empty");
+
+        // Test the dialog shortcut, not Enter on a focused tab or field.
+        fixture.ctx().memory_mut(|memory| {
+            if let Some(focus) = memory.focused() {
+                memory.surrender_focus(focus);
+            }
+        });
+        fixture.key(Key::Enter, Modifiers::NONE).idle(10);
+        assert_eq!(entered.get(), (!grey, !grey), "Enter closes and creates only when Create is enabled");
     }
 }
 

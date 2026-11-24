@@ -166,6 +166,9 @@ pub(super) struct BodyHooks<'b> {
     /// The container is a row of a vertical flow, not a member of a row's line (`label::in_column`), as its parent
     /// flow showed it this run: its own measuring run shows its content in a flow of its own.
     in_column: bool,
+    /// The container is shown in a cell of an `egui::Grid` (`LabelIn::egui_cell`), as its parent flow showed it this
+    /// run: its label is decided at its own width.
+    egui_cell: bool,
     /// The line just before the container in its flow is a rule (`layout::flow_start`), as its parent flow showed it
     /// this run: a rule above its header is not drawn, so two rules never follow each other.
     after_rule: bool,
@@ -174,9 +177,10 @@ pub(super) struct BodyHooks<'b> {
 }
 
 impl<'b> BodyHooks<'b> {
-    /// The hooks of `comp`'s run, over its props as they are now.
-    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Self {
-        Self::new(body, Arc::new(comp.props(super::Internal::new()).clone()))
+    /// The hooks of `comp`'s run, over its props as they are now. They live on the heap: the run holds them while its
+    /// children run.
+    pub(super) fn of<C: super::Container>(comp: &C, body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>)) -> Box<Self> {
+        Box::new(Self::new(body, Arc::new(comp.props(super::Internal::new()).clone())))
     }
 
     pub(super) fn new(body: &'b mut dyn FnMut(&mut Ui, &mut BodyCx<'_>), props: Arc<ContainerProps>) -> Self {
@@ -245,6 +249,7 @@ impl<'b> BodyHooks<'b> {
             held: false,
             across: false,
             in_column: true,
+            egui_cell: false,
             after_rule: false,
             follows_end: false,
         }

@@ -26,14 +26,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         };
         let marked = (0..rows.len()).find(|at| held(*at));
         let name = cx.label();
-        let events = ui.show(popup, Overlay::dropdown(), |ui, _| {
+        let list = cx.id.with("presets");
+        let events = ui.show(popup, Overlay::dropdown().list(list), |ui, _| {
             let selection = marked.map_or_else(Selection::default, |at| Selection::new(vec![at], Some(at), Some(at)));
             let source = Presets { rows, labels: &labels };
             List::<usize>::options(name.clone())
+                .id(list)
                 .selection(Bind::given(selection))
                 .show_items(ui, &source, &mut |at, _| {
                     if rows[*at].is_separator() {
-                        ListRow::spacer()
+                        ListRow::separator()
                     } else if rows[*at].is_heading() {
                         ListRow::new(labels[*at].clone()).heading()
                     } else {

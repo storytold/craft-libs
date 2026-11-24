@@ -12,7 +12,7 @@ name = "ParamDialog"
 old = "craft_ui::dialog::params::ParamDialog"
 new = "craft_ui::patterns::form_dialogs::ParamDialog"
 status = "moved"
-note = "A pattern: `ParamDialog::new(key, title, params)` with `show(ui) -> ParamDialogOutput { response, closed, result, rows, values, preview_on }`. A `DialogHost` owns it as `HostedParamDialog`, whose `build` closure makes the dialog over the host's values each pass."
+note = "A pattern: `ParamDialog::new(key, title, params)` with `show(ui) -> ParamDialogOutput { response, closed, result, rows, values, preview_on, comparing, preview_click, action, preview_step }`. A `DialogHost` owns it as `HostedParamDialog`, whose `build` closure makes the dialog over the host's values each pass."
 
 [[type]]
 name = "HostedParamDialog"
@@ -404,13 +404,37 @@ note = "The close action is named by the dialog title row; `closable(false)` rem
 type = "ParamDialog"
 old = "footer_extra(FnMut(&mut Ui) + Send + 'static)"
 new = ""
-note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::footer_action`."
+note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::action` (hosted: `HostedParamDialog::take_action`), the channel a custom row's `CustomContext::request_action` shares."
 
 [[setter]]
 type = "ParamDialog"
 old = "preview(bool)"
-new = "preview(SizedTexture)"
-note = "The picture the pane shows; a dialog without one has no Preview check box. `set_preview_image` is the next pass's `preview`, `preview_on()` is `ParamDialogOutput::preview_on`."
+new = "previews(bool) / preview(PreviewState)"
+note = "`previews(true)` gives the Preview check box; `preview(PreviewState)` is what the pane shows: `Pending` (the progress line), `Failed` (its message) or `Ready(SizedTexture)` (the picture, with the zoom row). `set_preview_image` is the next pass's `preview` (hosted: `HostedParamDialog::set_preview(Option<PreviewState>)`), `preview_on()` is `ParamDialogOutput::preview_on`."
+
+[[setter]]
+type = "ParamDialog"
+old = "preview_pager(PanePager) / preview_overlay(FnOnce(&ContentPainterCx, CanvasTransform, Rect)) / preview_tint(DataColor)"
+new = "preview_pager(PanePager) / preview_overlay(FnOnce(&ContentPainterCx, CanvasTransform, Rect)) / preview_tint(DataColor)"
+note = "New: the pager row centred under the pane, its step reported as `ParamDialogOutput::preview_step`; the host's drawing over a `Ready` picture; the tint that multiplies its colours. Hosted: `set_preview_pager(Option<PanePager>)`, `set_preview_overlay(Option<SharedOverlay>)`, `set_preview_tint(Option<DataColor>)` and `take_preview_step()`."
+
+[[setter]]
+type = "ParamDialog"
+old = "tabs(Vec<ParamTab>) / shared_rows(SharedRows) / tab(Bind<usize>)"
+new = "tabs(Vec<ParamTab>) / shared_rows(SharedRows) / tab(Bind<usize>)"
+note = "New: a tab strip over the shown tab's rows; the dialog's own `params` are the shared rows, above the strip or below the tab's rows. Every tab's values open, are checked and answer together. Hosted: `HostedParamDialog::tab(usize)`, `set_tab(usize)`, `shown_tab()`."
+
+[[setter]]
+type = "ParamDialog"
+old = "read_only(bool) / title_note(impl Into<Label>)"
+new = "read_only(bool) / title_note(impl Into<Label>)"
+note = "New: `read_only` shows the values without controls, with an OK-only footer and no Alt reset, and answers with no values; `title_note` is passed to `Dialog::title_note`."
+
+[[setter]]
+type = "HostedParamDialog"
+old = "take_action() / take_edited()"
+new = "take_action() / take_edited()"
+note = "New: the id of the footer or row button pressed, once; the row keys an edit changed since the last take."
 
 [[setter]]
 type = "ParamDialog"
@@ -504,7 +528,7 @@ new = "below(impl Fn(&mut Ui, &DialogFields))"
 type = "ParamDialog"
 old = "footer_extra(impl FnMut(&mut Ui))"
 new = ""
-note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::footer_action`."
+note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::action` (hosted: `HostedParamDialog::take_action`), the channel a custom row's `CustomContext::request_action` shares."
 
 [[setter]]
 type = "ParamDialog"

@@ -3,7 +3,7 @@
 use craft_theme::TypeRole;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::display::Text;
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetSource, PresetState};
+use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRowMenu, PresetSource, PresetState};
 use egui::Ui;
 
 use super::labels::LayerStyleWords;
@@ -27,7 +27,8 @@ pub(super) fn styles_page(ui: &mut Ui, presets: Option<&PresetSource<'_, String>
     Text::new(words.styles.clone()).role(TypeRole::Title).show(ui);
     let mut out = StylesOutput { apply_style: None };
     if let Some(presets) = presets {
-        let browser = PresetBrowser::new(words.styles.clone(), Bind::<PresetState<String>>::kept(), presets).row_menu(false).max_rows(STYLE_ROWS);
+        let browser =
+            PresetBrowser::new(words.styles.clone(), Bind::<PresetState<String>>::kept(), presets).row_menu(PresetRowMenu::Off).max_rows(STYLE_ROWS);
         for event in browser.show(ui).events {
             if let PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } = event {
                 out.apply_style = Some(key);

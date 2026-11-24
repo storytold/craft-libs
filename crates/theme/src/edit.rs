@@ -9,7 +9,9 @@ use crate::color::Rgba;
 use crate::format::FormatErrors;
 use crate::id::{AppId, IconPackId};
 use crate::ramp::Mode;
-use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, ModePins, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants};
+use crate::theme::{
+    AppOverrides, ContrastIntent, EdgeSeed, GripSeed, ModePins, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
+};
 use crate::tokens::{ColorToken, KnobShape, RadiusSet, WellShape};
 
 /// One of the six seed colours.
@@ -136,6 +138,8 @@ pub enum ShapeValue {
     Knob(Option<KnobShape>),
     /// [`ShapeSeed::wells`].
     Wells(Option<WellShape>),
+    /// [`ShapeSeed::grip`].
+    Grip(Option<GripSeed>),
 }
 
 /// Which field of the shape a [`ShapeValue`] holds.
@@ -153,11 +157,20 @@ pub enum ShapeField {
     Knob,
     /// [`ShapeSeed::wells`].
     Wells,
+    /// [`ShapeSeed::grip`].
+    Grip,
 }
 
 impl ShapeField {
-    const ALL: [ShapeField; 6] =
-        [ShapeField::Radius, ShapeField::RadiusOffset, ShapeField::ButtonRadius, ShapeField::Edge, ShapeField::Knob, ShapeField::Wells];
+    const ALL: [ShapeField; 7] = [
+        ShapeField::Radius,
+        ShapeField::RadiusOffset,
+        ShapeField::ButtonRadius,
+        ShapeField::Edge,
+        ShapeField::Knob,
+        ShapeField::Wells,
+        ShapeField::Grip,
+    ];
 
     fn get(self, s: &ShapeSeed) -> ShapeValue {
         match self {
@@ -167,6 +180,7 @@ impl ShapeField {
             ShapeField::Edge => ShapeValue::Edge(s.edge),
             ShapeField::Knob => ShapeValue::Knob(s.knob),
             ShapeField::Wells => ShapeValue::Wells(s.wells),
+            ShapeField::Grip => ShapeValue::Grip(s.grip),
         }
     }
 }
@@ -180,6 +194,7 @@ impl ShapeValue {
             ShapeValue::Edge(_) => ShapeField::Edge,
             ShapeValue::Knob(_) => ShapeField::Knob,
             ShapeValue::Wells(_) => ShapeField::Wells,
+            ShapeValue::Grip(_) => ShapeField::Grip,
         }
     }
 
@@ -191,11 +206,12 @@ impl ShapeValue {
             ShapeValue::Edge(v) => s.edge = v,
             ShapeValue::Knob(v) => s.knob = v,
             ShapeValue::Wells(v) => s.wells = v,
+            ShapeValue::Grip(v) => s.grip = v,
         }
     }
 }
 
-const NO_SHAPE: ShapeSeed = ShapeSeed { radius: None, radius_offset: None, button_radius: None, edge: None, knob: None, wells: None };
+const NO_SHAPE: ShapeSeed = ShapeSeed { radius: None, radius_offset: None, button_radius: None, edge: None, knob: None, wells: None, grip: None };
 
 /// A theme's name, variants, contrast intent or icon pack.
 #[derive(Clone, Debug, PartialEq)]
