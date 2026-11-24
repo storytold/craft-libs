@@ -463,7 +463,8 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     }
 
     /// The band the group is dragged by and the panel menu button, at the end of the header: the band first. The
-    /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did.
+    /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
+    /// [`PanelTabLook::Pill`] tabs, in the strip's middle with their pills.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
@@ -475,7 +476,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             // An icon button is square: its side is the slot's room past the band and the gap.
             let side = (slot.width() - grip_width(cx.tokens) - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
-            let button = Rect::from_min_size(egui::Pos2::new(end.left(), slot.top()), Vec2::new(end.width(), side.min(slot.height())));
+            let height = side.min(slot.height());
+            let top = if self.tab_look == PanelTabLook::Pill { slot.center().y - height / 2.0 } else { slot.top() };
+            let button = Rect::from_min_size(egui::Pos2::new(end.left(), top), Vec2::new(end.width(), height));
             let _ = cx
                 .header_part(HeaderEdge::End, MENU, button)
                 .sense(Sense::CLICK | Sense::FOCUS)

@@ -28,7 +28,8 @@ pub enum PanelTabLook {
     #[default]
     Plain,
     /// VectorCraft's tabs: the shown tab on a filled pill (`surface.control` with `shape.radius.control` corners), a
-    /// small control high in the middle of the strip; a tab under the pointer shows the pill too.
+    /// small control high in the middle of the strip; a tab under the pointer shows the pill too. A dock group's panel
+    /// menu button stands in the strip's middle with them.
     Pill,
 }
 
