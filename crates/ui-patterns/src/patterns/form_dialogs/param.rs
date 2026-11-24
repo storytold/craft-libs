@@ -559,6 +559,8 @@ pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
     pub(crate) popup_slider: bool,
     randomize: bool,
+    /// The value an int row takes when its text is emptied ([`Param::empty_value`]).
+    empty_value: Option<i64>,
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
@@ -1245,6 +1247,15 @@ impl Param {
         self
     }
 
+    /// The value a [`ParamKind::Int`] row takes when its text is emptied and the field is left, as a field whose empty
+    /// text counts as a number does (a starting serial number whose empty field is 0). Without it an emptied field
+    /// keeps the row's value. Other kinds are unchanged.
+    #[must_use]
+    pub fn empty_value(mut self, value: i64) -> Self {
+        self.options.get_or_insert_default().empty_value = Some(value);
+        self
+    }
+
     /// A pipette toggle after the colour control of a [`ParamKind::Color`] row. A press comes back as
     /// `ParamRowsOutput::eyedropper`, and the host arms or disarms its own dropper from it; other kinds are
     /// unchanged.
@@ -1491,6 +1502,11 @@ impl RowOptions {
     /// Whether an int row has a Random button.
     pub(crate) fn randomize(&self) -> bool {
         self.randomize
+    }
+
+    /// The value an int row takes when its text is emptied ([`Param::empty_value`]).
+    pub(crate) fn empty_value(&self) -> Option<i64> {
+        self.empty_value
     }
 
     /// Whether a colour row has an eyedropper toggle.

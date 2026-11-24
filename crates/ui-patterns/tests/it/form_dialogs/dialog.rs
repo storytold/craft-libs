@@ -976,6 +976,63 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     assert!(!alert(), "and raises no alert");
 }
 
+// Enter on a value typed past a row's range clamps it and raises the range alert in the same pass. The dialog does not
+// also answer OK with the clamped value: it stays open with the alert, as the reference's Batch does with Starting
+// Serial # 12345 (photocraft#13893). A second Enter answers OK with the closest value.
+#[trial]
+fn enter_on_a_value_past_a_rows_range_alerts_and_keeps_the_dialog_open() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "light", DialogFields::new(), light));
+    fixture.idle(6);
+    let field = fixture.by_label("Size").expect("the size field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("0");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(host.borrow_mut().take_keyed::<HostedParamDialog>().is_none(), "the Enter that clamps answers nothing");
+    assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "the dialog stays open with 0 clamped to 1");
+    assert_eq!(on_dialog(&host, |dialog| dialog.take_range_alert().is_some()), Some(true), "the open dialog holds the range alert");
+
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    let answered = host.borrow_mut().take_keyed::<HostedParamDialog>();
+    assert!(
+        matches!(answered, Some((DialogResult::Ok(ref result), _)) if result.fields.int("size") == Some(1)),
+        "a second Enter answers OK with the closest value"
+    );
+}
+
+/// Batch's Starting Serial # (photocraft#13893): an int row whose emptied text is 0, beside one without an empty value.
+fn serial(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let params = vec![
+        Param::new("serial", "Serial", ParamKind::int(Some(0), Some(9999), 1)).empty_value(0),
+        Param::new("count", "Count", ParamKind::int(Some(0), Some(9999), 5)),
+    ];
+    ParamDialog::new("serial", "Batch", params).values(Bind::bound(fields))
+}
+
+// An int row with an empty value takes it when its text is emptied and the field is left, with no range alert; a row
+// without one keeps its value.
+#[trial]
+fn an_emptied_int_row_takes_its_empty_value() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "serial", DialogFields::new(), serial));
+    fixture.idle(6);
+    let empty = |fixture: &mut Fixture, label: &str| {
+        let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).key(Key::Backspace, Modifiers::NONE);
+        fixture.key(Key::Tab, Modifiers::NONE).settle();
+    };
+    let int = |key: &str| on_dialog(&host, |dialog| dialog.fields().int(key)).flatten();
+    assert_eq!((int("serial"), int("count")), (Some(1), Some(5)), "the rows open with their defaults");
+    empty(&mut fixture, "Serial");
+    assert_eq!(int("serial"), Some(0), "an emptied Serial is its empty value, 0");
+    empty(&mut fixture, "Count");
+    assert_eq!(int("count"), Some(5), "an emptied row without an empty value keeps its value");
+    assert_eq!(on_dialog(&host, |dialog| dialog.take_range_alert().is_some()), Some(false), "emptying raises no range alert");
+}
+
 /// Runs a one-row dialog for `row`; the values of its answer are filed in the returned cell.
 fn single_row(row: Param) -> (Fixture, Rc<RefCell<Option<DialogFields>>>) {
     let answered = Rc::new(RefCell::new(None::<DialogFields>));

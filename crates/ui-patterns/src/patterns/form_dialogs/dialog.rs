@@ -878,8 +878,10 @@ impl<'a> ParamDialog<'a> {
                 let states: Vec<bool> = footer_rows.iter().map(|param| values.bool(&param.key).unwrap_or(false)).collect();
                 with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on = states);
             }
-            // OK and Enter wait while a row's text does not parse.
-            rows.as_ref().is_none_or(|rows| !rows.unparsed)
+            // OK and Enter wait while a row's text does not parse, and in the pass a typed value past a row's range was
+            // clamped: the Enter or click that left the field shows the range alert over the open dialog, as the
+            // reference does, rather than also answering OK with the clamped value (and losing the alert with the dialog).
+            rows.as_ref().is_none_or(|rows| !rows.unparsed && rows.out_of_range.is_none())
         });
 
         // `picked` is this pass's press: a second pass of the frame has none, so a press is reported once.
