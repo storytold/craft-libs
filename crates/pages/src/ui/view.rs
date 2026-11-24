@@ -1544,7 +1544,8 @@ impl KeyMoves {
     /// Page Up and Down a screen less a key line (a row when not continuous, and with Cmd), Home and End the first
     /// and last page, Up and Down a key line (not continuous, a turn once the row is at its edge that way), Left and
     /// Right a key line sideways while the current page or spread has more to show that way, else a turn of a page or
-    /// spread; Cmd with Left or Right turns at once. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
+    /// spread; Cmd with Left or Right turns at once. Home and End with Shift, or with Cmd off macOS (which gives Cmd
+    /// with them no move), and Page Up, Page Down, Up and
     /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift alone with the other keys,
     /// leave them to nothing.
     fn of(
