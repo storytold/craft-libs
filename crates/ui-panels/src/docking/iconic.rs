@@ -179,7 +179,8 @@ pub struct IconicColumnStyle {
 /// icon groups, the top and bottom of the stack and each icon group's cells, which join its tabs. The flyout shows
 /// its group through the `view` of [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
 /// group within the room and at least the height of its panels' default heights; a group the user sized keeps that
-/// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`.
+/// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`;
+/// a flyout taller than the room below that top moves up by what it overflows and no further.
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
 /// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 ///
