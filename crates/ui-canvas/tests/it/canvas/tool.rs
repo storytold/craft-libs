@@ -5,6 +5,7 @@ use craft_behavior::geometry::{SnapKind, SnapLine, SnapOptions, SnapTarget, Snap
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerSample};
 use craft_keymap::Mods;
+use craft_ui::buttons::Button;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
     NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, ToolRegion,
@@ -14,6 +15,7 @@ use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, MemoProps, MemoView, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
@@ -1490,6 +1492,52 @@ fn menu_canvas(momentary: bool, bars: bool) -> MenuRig {
     });
     fixture.settle();
     (fixture, contexts, view, rect)
+}
+
+/// A right-click on the canvas while another control's context menu is open closes that menu and reaches the canvas,
+/// which asks for its own menu where the button came up, as a second right-click does in a native app: only a primary
+/// press outside a menu goes no further.
+#[trial]
+fn a_right_click_on_the_canvas_closes_another_context_menu_and_asks_for_the_canvas_menu() {
+    const OPENER: Rect = Rect { min: Pos2::new(8.0, 8.0), max: Pos2::new(120.0, 32.0) };
+    let (contexts, rect) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown_contexts, shown_rect, shown_view) = (Rc::clone(&contexts), Rc::clone(&rect), Cell::new(None::<CanvasView>));
+    let mut hand = HandTool::new(NavigationOptions::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let layers = Button::new("Layers").show_at(ui, OPENER);
+        Menu::context("Layers menu", &layers).show(ui, |ui, _| {
+            MenuItem::new("Duplicate layer").show(ui);
+        });
+        // The canvas fills the right half of the window, clear of the opener and of the menu it opens.
+        let room = ui.max_rect();
+        let room = Rect::from_min_max(Pos2::new(room.center().x, room.min.y), room.max);
+        let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
+        shown_rect.set(room);
+        let mut reply = None;
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut hand));
+            }
+        });
+        let reply = reply.unwrap_or_default();
+        shown_contexts.borrow_mut().extend(reply.context);
+        shown_view.set(Some(reply.view.or(shown.output.view).unwrap_or(current)));
+    });
+    fixture.settle();
+    let right_click = |fixture: &mut Fixture, at: Pos2| {
+        fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::secondary(at, true)]).frame(vec![pointer::secondary(at, false)]);
+        fixture.settle();
+    };
+    let opener = fixture.by_label("Layers").expect("the opener has a node").center();
+    right_click(&mut fixture, opener);
+    let menu = fixture.by_role(Role::MENU).first().map(|menu| menu.rect).expect("the right-click on Layers opens its menu");
+    let at = rect.get().center();
+    assert!(!menu.contains(at), "the canvas point lies outside the menu: {menu:?} {at:?}");
+    assert!(contexts.borrow().is_empty(), "the canvas was not asked yet: {:?}", contexts.borrow());
+    right_click(&mut fixture, at);
+    assert!(fixture.by_label("Duplicate layer").is_none(), "the right-click on the canvas closed the Layers menu");
+    let asked = contexts.borrow().iter().map(|request| request.at).collect::<Vec<_>>();
+    assert_eq!(asked, [at], "the secondary press reached the canvas, which asks for its menu where it came up");
 }
 
 #[trial]

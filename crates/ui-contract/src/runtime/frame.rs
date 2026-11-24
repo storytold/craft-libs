@@ -668,7 +668,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
         PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.hold_ahead(later));
     }
     Arrived::into_input(events, input);
-    // H3b: a press outside the top menu family goes no further than the menu's dismissal.
+    // H3b: a press outside the top menu family closes the menu; a primary one goes no further than its dismissal.
     let absorbed = overlay::absorb_presses(ctx, input);
     // H4: release after an OS resize.
     let released = windows::input_hook(ctx, input);
