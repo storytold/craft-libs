@@ -141,17 +141,22 @@ impl Document {
         self.note_object(num, |notes| &mut notes.unreadable, reason);
     }
 
-    fn note_spaced_key(&self, num: u32) {
-        self.note_object(num, |notes| &mut notes.repaired, || "a dictionary key written with spaces was read as one key".into());
+    /// Record `num` as repaired by the syntax repairs `repairs` (see
+    /// [`crate::cos::parser::swap_syntax_repairs`]); none records nothing.
+    fn note_syntax_repairs(&self, num: u32, repairs: u8) {
+        if repairs != 0 {
+            self.note_object(num, |notes| &mut notes.repaired, || crate::cos::parser::syntax_repair_reasons(repairs));
+        }
     }
 
-    /// [`Self::scan_for`] counted as a read of `num` of its own: a spaced key it joins is noted
+    /// [`Self::scan_for`] counted as a read of `num` of its own: a syntax repair it makes is noted
     /// under `num`, not under the object whose read called it.
     fn scan_for_noting(&self, num: u32) -> Option<(ObjRef, Object)> {
-        let outer = crate::cos::parser::swap_spaced_keys(0);
+        let outer = crate::cos::parser::swap_syntax_repairs(0);
         let found = self.scan_for(num);
-        if crate::cos::parser::swap_spaced_keys(outer) > 0 && found.is_some() {
-            self.note_spaced_key(num);
+        let repairs = crate::cos::parser::swap_syntax_repairs(outer);
+        if found.is_some() {
+            self.note_syntax_repairs(num, repairs);
         }
         found
     }
@@ -628,17 +633,18 @@ impl Document {
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
         let _scope = crate::cos::security::FollowScope::enter();
         let edits_read = overlay_reads();
-        // Counts every attempt `load` makes, so an object found only at a second offset is listed
-        // if an abandoned copy had a spaced key: a rare false report, never a missed one.
-        let outer = crate::cos::parser::swap_spaced_keys(0);
+        // Takes the repairs of every attempt `load` makes, so an object found only at a second offset is
+        // listed if an abandoned copy needed a syntax repair: a rare false report, never a missed one.
+        let outer = crate::cos::parser::swap_syntax_repairs(0);
         let frame = ReadFrame::enter();
         let loaded = self.load(num, 0).map(Arc::new);
         let reads = frame.reads();
         drop(frame);
         // The notes are shared by clones, so a load that read this document's edits (an edited
         // object stream) is not noted, as it is not cached below.
-        if crate::cos::parser::swap_spaced_keys(outer) > 0 && loaded.is_ok() && overlay_reads() == edits_read {
-            self.note_spaced_key(num);
+        let repairs = crate::cos::parser::swap_syntax_repairs(outer);
+        if loaded.is_ok() && overlay_reads() == edits_read {
+            self.note_syntax_repairs(num, repairs);
         }
         if let Err(e) = &loaded
             && !matches!(e, CosError::Poisoned)

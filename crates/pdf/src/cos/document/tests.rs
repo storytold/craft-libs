@@ -2775,6 +2775,45 @@ fn a_spaced_key_is_listed_once_as_a_repair_of_its_object() {
     assert!(doc.unreadable_objects().is_empty());
 }
 
+/// A structure element whose `/K` array holds an `R` that lost its object number reads with the
+/// rest of its kids, is listed as repaired, and a full save keeps the element and its kids instead
+/// of writing `null` where the parent tree points at it.
+#[test]
+fn an_array_with_a_stray_keyword_keeps_its_object_through_a_full_save() {
+    let file = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>",
+            "<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            "<< /S /Link /P 6 0 R /K [ 5 0 R 0 R << /Obj 7 0 R /Pg 4 0 R /Type /OBJR >> ] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [7 0 R] /StructParents 0 >>",
+            "<< /S /Span /P 3 0 R >>",
+            "<< /Type /StructTreeRoot /K [3 0 R] /ParentTree << /Nums [1 3 0 R] >> /ParentTreeNextKey 2 >>",
+            "<< /Type /Annot /Subtype /Link /Rect [0 0 10 10] /StructParent 1 >>",
+        ],
+        "/Root 1 0 R",
+    );
+    let doc = Document::open(Arc::new(file)).unwrap();
+    let kids = |d: &Document| d.get(ObjRef::new(3, 0)).as_dict().and_then(|e| e.get(b"K").cloned());
+    let Some(Object::Array(k)) = kids(&doc) else { panic!("the element did not read: {:?}", doc.unreadable_objects()) };
+    assert_eq!(k.len(), 3, "{k:?}");
+    assert_eq!(k[0], Object::Ref(ObjRef::new(5, 0)));
+    assert!(k[2].as_dict().is_some_and(|d| d.name(b"Type") == Some(&b"OBJR"[..])), "{k:?}");
+    assert!(doc.unreadable_objects().is_empty(), "{:?}", doc.unreadable_objects());
+    assert_eq!(doc.repaired_objects(), ["object 3 0 was repaired: a keyword in an array that is no object was left out"]);
+    let saved = Document::open(Arc::new(crate::cos::write_full(&doc, &crate::cos::SaveOptions::default()).unwrap())).unwrap();
+    let tree = saved.get(saved.root().unwrap());
+    let root = tree.as_dict().and_then(|c| c.reference(b"StructTreeRoot")).map(|r| saved.get(r)).unwrap();
+    let nums = root.as_dict().and_then(|r| r.get(b"ParentTree")).and_then(|p| p.as_dict()).and_then(|p| p.get(b"Nums")).cloned();
+    let Some(Object::Array(nums)) = nums else { panic!("no /Nums") };
+    let Some(Object::Ref(link)) = nums.get(1).cloned() else { panic!("the parent tree lost the element: {nums:?}") };
+    let element = saved.get(link);
+    let element = element.as_dict().unwrap();
+    assert_eq!(element.name(b"S"), Some(&b"Link"[..]));
+    let Some(Object::Array(k)) = element.get(b"K") else { panic!("{element:?}") };
+    assert_eq!(k.len(), 3, "{k:?}");
+    assert!(saved.repaired_objects().is_empty(), "what was saved needs no repair: {:?}", saved.repaired_objects());
+}
+
 /// A scan of a fresh document lists the repaired object as a read does, and once.
 #[test]
 fn a_scan_lists_a_spaced_key_repair_once() {
