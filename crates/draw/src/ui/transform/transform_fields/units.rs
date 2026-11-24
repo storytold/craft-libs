@@ -132,8 +132,17 @@ impl Conversion {
         }
     }
 
-    /// What `field` shows for `state`, whose V skew is `skew_v`.
+    /// What `field` shows for `state`, whose V skew is `skew_v`. A value that rounds to zero at the field's decimals
+    /// is zero: an unturned box reads a skew of a hair below zero from its corners' arithmetic, and showed "-0".
     pub(super) fn shown(&self, state: &BoxState, skew_v: f64, field: TransformField) -> f64 {
+        let value = self.shown_exact(state, skew_v, field);
+        let (_, decimals) = self.format(field);
+        let half_step = 0.5 * 10f64.powi(-(decimals.min(12) as i32));
+        if value.abs() < half_step { 0.0 } else { value }
+    }
+
+    /// [`shown`](Self::shown) before its rounding to zero.
+    fn shown_exact(&self, state: &BoxState, skew_v: f64, field: TransformField) -> f64 {
         let parts = state.parts(self.rect, skew_v);
         match field {
             TransformField::X => self.position(state, 0) * self.rulers.x.units.per_doc,
