@@ -15,3 +15,6 @@ workspace = true
 libm = "0.2.16"
 # Data-parallel loops (MIT OR Apache-2.0).
 rayon = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
