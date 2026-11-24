@@ -452,7 +452,7 @@ fn write_failure(paths: &Paths, english: &str) -> Option<Fingerprint> {
 pub(crate) fn record_failure_reason(paths: &Paths, reason: &Reason) {
     let english = reason.to_string();
     let Some(primary) = write_failure(paths, &english) else { return };
-    if english.len() > RECORD_LIMIT {
+    if english.len() > RECORD_LIMIT || reason.english_bounded(RECORD_LIMIT).as_deref() != Some(english.as_str()) {
         return;
     }
     let file = reason_file(paths);
@@ -488,13 +488,15 @@ fn paired_reason(paths: &Paths, snapshot: &FailureSnapshot) -> Option<Reason> {
         return None;
     }
     let stored: StoredReason = serde_json::from_slice(&bytes).ok()?;
+    if stored.version != 1 || stored.english != snapshot.text || stored.primary != *primary {
+        return None;
+    }
     // The named primary may have been replaced while the bounded sidecar was read.
     let current = std::fs::symlink_metadata(failure_file(paths)).ok()?;
     if !current.file_type().is_file() || Fingerprint::of(&current).as_ref() != Some(primary) {
         return None;
     }
-    (stored.version == 1 && stored.english == snapshot.text && stored.reason.to_string() == snapshot.text && stored.primary == *primary)
-        .then_some(stored.reason)
+    (stored.reason.english_bounded(RECORD_LIMIT)? == snapshot.text).then_some(stored.reason)
 }
 
 /// The last failure once, retaining authored provenance when a recognized companion matches.
@@ -733,7 +735,7 @@ pub(crate) mod reason_tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let original = authored();
-        for bad in 0..9 {
+        for bad in 0..10 {
             record_failure_reason(&paths, &original);
             let file = reason_file(&paths);
             let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -748,6 +750,15 @@ pub(crate) mod reason_tests {
                 6 => value["reason"]["unknown"] = true.into(),
                 7 => value["reason"]["contexts"][0]["unknown"] = true.into(),
                 8 => value["reason"]["body"]["Message"]["unknown"] = true.into(),
+                9 => {
+                    // The serialized reason is small; rendering it without a bound would double 32 times.
+                    let mut amplified = Reason::data("x");
+                    for _ in 0..32 {
+                        amplified = amplified.context("{reason}{reason}", &[]);
+                    }
+                    value["reason"] = serde_json::to_value(amplified).unwrap();
+                    assert!(serde_json::to_vec(&value).unwrap().len() <= RECORD_LIMIT);
+                }
                 _ => {
                     std::fs::write(&file, vec![b' '; RECORD_LIMIT + 1]).unwrap();
                 }
@@ -785,6 +796,16 @@ pub(crate) mod reason_tests {
         record_failure_reason(&paths, &Reason::data(fits_primary.clone()));
         assert!(!reason_file(&paths).exists(), "complete JSON must fit, not only its primary");
         assert_eq!(take_failure(&paths), Some(fits_primary));
+        // A small final English value can still require an oversized intermediate before trimming.
+        let mut whitespace = Reason::data(" ");
+        for _ in 0..14 {
+            whitespace = whitespace.context("{reason}{reason}", &[]);
+        }
+        let trimmed = whitespace.trimmed();
+        record_failure_reason(&paths, &trimmed);
+        assert_eq!(std::fs::read(failure_file(&paths)).unwrap(), b"");
+        assert!(!reason_file(&paths).exists(), "a companion must fit the reader's intermediate rendering bound too");
+        assert_eq!(take_failure_reason(&paths), Some(Reason::data("")));
     }
 
     #[trial]

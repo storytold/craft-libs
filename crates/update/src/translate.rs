@@ -54,6 +54,15 @@ impl Message {
         }
         translate(&self.text, &args)
     }
+
+    fn english_bounded(&self, cause: Option<&str>, limit: usize) -> Option<String> {
+        let mut args: Vec<(&str, &str)> =
+            self.args.iter().filter(|(key, _)| cause.is_none() || key != "reason").map(|(key, value)| (key.as_str(), value.as_str())).collect();
+        if let Some(cause) = cause {
+            args.push(("reason", cause));
+        }
+        fill_bounded(&self.text, &args, limit)
+    }
 }
 
 impl Reason {
@@ -85,6 +94,38 @@ impl Reason {
             text = context.translated(translate, Some(&text));
         }
         text
+    }
+
+    // A stored companion is untrusted even when its serialized bytes fit the record limit.
+    // Reject oversized intermediate values too, before a later frame can amplify them again.
+    pub(crate) fn english_bounded(&self, limit: usize) -> Option<String> {
+        let mut text = match &self.body {
+            ReasonBody::Data(text) => {
+                if text.len() > limit {
+                    return None;
+                }
+                text.clone()
+            }
+            ReasonBody::Message(message) => message.english_bounded(None, limit)?,
+            ReasonBody::Joined(first, second) => {
+                let first = first.english_bounded(limit)?;
+                let second = second.english_bounded(limit)?;
+                let len = first.len().checked_add(2)?.checked_add(second.len())?;
+                if len > limit {
+                    return None;
+                }
+                let mut joined = String::with_capacity(len);
+                joined.push_str(&first);
+                joined.push_str("; ");
+                joined.push_str(&second);
+                joined
+            }
+            ReasonBody::Trimmed(reason) => reason.english_bounded(limit)?.trim().to_owned(),
+        };
+        for context in &self.contexts {
+            text = context.english_bounded(Some(&text), limit)?;
+        }
+        Some(text)
     }
 
     pub(crate) fn joined(self, other: Self) -> Self {
@@ -138,27 +179,39 @@ pub fn english(text: &str, args: &[(&str, &str)]) -> String {
 /// and one that `args` lacks stays as written, braces and all. An inserted value is never read as
 /// a template, so a value containing `{app}` stays intact.
 pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(template.len());
+    fill_bounded(template, args, usize::MAX).expect("filled text exceeds addressable memory")
+}
+
+fn fill_bounded(template: &str, args: &[(&str, &str)], limit: usize) -> Option<String> {
+    let capacity = if limit == usize::MAX { template.len() } else { limit };
+    let mut out = String::with_capacity(capacity);
+    let mut append = |value: &str| {
+        if out.len().checked_add(value.len())? > limit {
+            return None;
+        }
+        out.push_str(value);
+        Some(())
+    };
     let mut rest = template;
     while let Some((before, after_open)) = rest.split_once('{') {
-        out.push_str(before);
+        append(before)?;
         let Some((name, after_close)) = after_open.split_once('}') else {
-            out.push('{');
+            append("{")?;
             rest = after_open;
             break;
         };
         match args.iter().find(|(key, _)| *key == name) {
-            Some((_, value)) => out.push_str(value),
+            Some((_, value)) => append(value)?,
             None => {
-                out.push('{');
-                out.push_str(name);
-                out.push('}');
+                append("{")?;
+                append(name)?;
+                append("}")?;
             }
         }
         rest = after_close;
     }
-    out.push_str(rest);
-    out
+    append(rest)?;
+    Some(out)
 }
 
 /// One of the crate's own messages under the startup prompt ("The update is installed…"), kept as
@@ -217,6 +270,17 @@ pub(crate) mod tests {
         assert!(!a.contains("must not replace the cause"));
         assert_eq!(loaded.to_string(), failure.translated(english));
         assert_eq!(Reason::from("rollback failed").translated(first), "rollback failed");
+        let english = loaded.to_string();
+        assert_eq!(loaded.english_bounded(english.len()), Some(english));
+        assert_eq!(loaded.english_bounded(8), None);
+        assert_eq!(Reason::new("{value}: {missing}{", &[("value", "é{reason}")]).english_bounded(32), Some("é{reason}: {missing}{".into()));
+        assert_eq!(Reason::new("{value}", &[("value", "é")]).english_bounded(1), None);
+        let mut expanding = Reason::data("x");
+        for _ in 0..32 {
+            expanding = expanding.context("{reason}{reason}", &[]);
+        }
+        assert!(serde_json::to_vec(&expanding).unwrap().len() < 4096);
+        assert_eq!(expanding.english_bounded(4096), None);
     }
 
     #[trial]
@@ -226,5 +290,6 @@ pub(crate) mod tests {
         let loaded: Reason = serde_json::from_slice(&serde_json::to_vec(&reason).unwrap()).unwrap();
         assert_eq!(loaded.translated(second), reason.translated(second));
         assert_ne!(loaded.translated(first), loaded.translated(second));
+        assert_eq!(loaded.english_bounded(4096), Some(reason.to_string()));
     }
 }

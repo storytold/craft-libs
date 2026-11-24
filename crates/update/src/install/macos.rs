@@ -167,7 +167,7 @@ pub fn install_dmg_reason(
     let attached = {
         let _one_at_a_time = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // An image an earlier install left attached makes hdiutil refuse the same file.
-        clear_mounts(app, &paths.cache, process_ended(), detach);
+        clear_mounts(app, &paths.cache, process_ended(), |mount| detach(mount).map_err(|reason| reason.to_string()));
         let attach = || {
             process::run_reason(
                 HDIUTIL,
@@ -547,7 +547,7 @@ fn process_ended() -> impl Fn(u32) -> bool {
 /// partway, and removes their mount points. A mount point belongs to an install that ended
 /// when `ended` says its process ended, or when it is this process's and no install here uses
 /// it. `detach` detaches an image. Failures are logged and the install goes on.
-pub(crate) fn clear_mounts<E: std::fmt::Display>(app: &App, cache: &Path, ended: impl Fn(u32) -> bool, detach: impl Fn(&Path) -> Result<(), E>) {
+pub(crate) fn clear_mounts(app: &App, cache: &Path, ended: impl Fn(u32) -> bool, detach: impl Fn(&Path) -> Result<(), String>) {
     let Ok(entries) = std::fs::read_dir(cache) else { return };
     let prefix = format!("mount-{}-", app.id);
     // Read before `ended` runs `ps`, which then lists every process that made one of them.
@@ -561,7 +561,7 @@ pub(crate) fn clear_mounts<E: std::fmt::Display>(app: &App, cache: &Path, ended:
         if !gone {
             continue;
         }
-        match detach(&mount).map_err(|e| e.to_string()).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
+        match detach(&mount).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
             Ok(()) => log::info!("removed {}, left by an install that ended partway", mount.display()),
             Err(e) => log::warn!("couldn't clear {}, left by an install that ended partway ({e})", mount.display()),
         }
