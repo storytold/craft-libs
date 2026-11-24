@@ -269,7 +269,13 @@ impl Collection for Probe<'_> {
             }
             None => (enter.get(), Mods::NONE),
         };
-        let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), events, None);
+        // A probe that opens a layer is a real focus stop, as a text field is, so the focus it holds and the layer takes from
+        // it are the focus service's own.
+        let response = match self.layer {
+            Some(layer) => Stop::new(&layer.field).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show_at(ui, label),
+            None => ui.allocate_rect(label, egui::Sense::hover()),
+        };
+        let mut editor = EditResponse::lifted(response, events, None);
         if let Some(layer) = self.layer {
             layer.editor.set(editor.response.id);
         }
@@ -279,7 +285,9 @@ impl Collection for Probe<'_> {
                 let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(label), Side::Below, Align::Start));
                 let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
                 Menu { common: Common::new(), props }.id_salt("rename_layer").show(ui, |ui, _| {
-                    Stop::new(&layer.seen).size(Vec2::new(60.0, 20.0)).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui);
+                    let stop = Stop::new(&layer.seen).size(Vec2::new(60.0, 20.0)).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui);
+                    // An edit menu's first row takes the focus when the menu opens; so does this stop.
+                    request(ui.ctx(), FocusTarget::Id(stop.id));
                 });
             }
             // The probe field is no focus stop, so it asks for the focus a real text field keeps: a field that holds the focus
@@ -298,12 +306,14 @@ impl Collection for Probe<'_> {
 struct Layered {
     open: Cell<bool>,
     editor: Cell<Id>,
+    /// What the editor's own stop and the layer's stop saw.
+    field: RefCell<Seen>,
     seen: RefCell<Seen>,
 }
 
 impl Layered {
     fn new() -> Self {
-        Layered { open: Cell::new(false), editor: Cell::new(Id::NULL), seen: RefCell::new(Seen::default()) }
+        Layered { open: Cell::new(false), editor: Cell::new(Id::NULL), field: RefCell::new(Seen::default()), seen: RefCell::new(Seen::default()) }
     }
 }
 
