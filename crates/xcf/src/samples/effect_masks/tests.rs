@@ -98,7 +98,10 @@ fn auxiliary_header_and_tiles_keep_exact_single_component_source_precision() {
         assert_eq!(budget, 0);
         assert_eq!(info.channels, 1);
         assert!(!info.indexed);
-        assert_eq!(info.precision, xcf.source_precision());
+        assert_eq!(info.precision.storage.bytes, xcf.source_precision().storage.bytes);
+        assert_eq!(info.precision.storage.float, xcf.source_precision().storage.float);
+        assert!(info.precision.storage.linear);
+        assert_eq!(info.precision.transfer, crate::samples::Transfer::Linear);
     }
 }
 
