@@ -6,6 +6,7 @@ use craft_ui::testing::style::{tokens, with_cx};
 
 pub(crate) mod render;
 
+pub(crate) mod focus;
 pub(crate) mod panel_menu;
 pub(crate) mod runs;
 

@@ -18,7 +18,7 @@ use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::primitives::PaintShape;
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
-use crate::runtime::focus::{self, FocusTarget};
+use crate::runtime::focus::{self, FocusRequest, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
@@ -369,6 +369,8 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// single titled panel does: the panels are shown from a rail, not by tabs.
     #[prop(flag)]
     titled: bool,
+    /// The tab row takes key focus in this pass: [`take_focus`](DockGroup::take_focus).
+    take_focus: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -422,6 +424,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             wheel_selects_tabs: false,
             tab_look: PanelTabLook::Plain,
             titled: false,
+            take_focus: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
@@ -444,6 +447,14 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         self.props = self.props.footer(FooterRegion::new());
         self.footer = Some(Box::new(content));
         self
+    }
+
+    /// The group takes key focus in this pass, as a click on its tabs gives it: its tab row's stop takes it while the
+    /// row runs, so the keys of the next pass route through the group; a titled header, which has no tab row, focuses
+    /// its drag band. A request of the pass.
+    #[must_use]
+    pub fn take_focus(self) -> Self {
+        DockGroup { take_focus: true, ..self }
     }
 
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
@@ -564,6 +575,10 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
                 cx.core.memory.shown::<MenuAt>(sub(cx.core.id, MENU_AT)).0 = Some(at);
                 popup.open(cx);
             }
+        }
+        // A titled header has no tab row: its drag band is the group's stop.
+        if self.take_focus && self.titled && cx.part_if_declared(GRIP).is_some() {
+            focus::request(&cx.core.ctx, FocusTarget::Part(cx.core.id, GRIP.into()));
         }
         if let Some(grip) = cx.part_if_declared(GRIP).map(|grip| grip.press) {
             self.reported.toggle_minimized |= grip.double_pressed();
@@ -690,6 +705,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
                     look: self.tab_look,
+                    take_focus: self.take_focus,
                     dock: self.dock,
                     sent: Outbox::new(&mut sent),
                 };
@@ -768,6 +784,9 @@ struct TabRow<'a, P> {
     closable: bool,
     wheel_selects: bool,
     look: PanelTabLook,
+    /// The strip takes key focus in this pass (`DockGroup::take_focus`): in the key, so the row runs and the strip
+    /// takes it while it runs.
+    take_focus: bool,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
 }
@@ -807,6 +826,10 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
         strip = strip.wheel_selects();
+    }
+    // The strip takes the focus while it runs, so it runs focused and the keys of the next pass route through it.
+    if row.take_focus {
+        strip = strip.request_focus(FocusRequest::Take);
     }
     let marks = &row.marks;
     let strip = strip.show_items(ui, &source, &mut |key, _| {
