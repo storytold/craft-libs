@@ -548,9 +548,10 @@ const MAX_XATTR_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 /// binding, quarantine, resource forks) to the stage. The attributes are as untrusted as the
 /// bytes, so the reads are bounded; one that cannot be read or written whole, or passes a bound,
 /// refuses the save rather than dropping the user's metadata unnoticed. Only a volume without
-/// extended attributes (`ENOTSUP`) is skipped, and so is a file whose data the user may not read
-/// (mode 0200) when it has no attribute names the user can list either; one whose names can be
-/// listed refuses the save, as its attributes can't be copied without its data.
+/// extended attributes (`ENOTSUP`) is skipped. So is a file whose data the user may not read when
+/// its attribute names can't be listed either, as with mode 0200: its attributes are dropped, as
+/// before attributes were kept, since the user can't read them (or its bytes) at all. One whose
+/// data is denied but whose names can be listed (an ACL that denies reading) refuses the save.
 /// `com.apple.provenance` belongs to macOS, which gives the new file its own. Compression
 /// bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
 #[cfg(target_os = "macos")]
@@ -599,10 +600,10 @@ fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     Ok(())
 }
 
-/// For a target whose data can't be opened for reading: `Ok` when it has no extended attribute the
-/// user can list (or the volume has none), so the save loses nothing; otherwise refuse the save, as
-/// the attributes can't be copied without opening the file. The names are read without following a
-/// link, by path.
+/// For a target whose data can't be opened for reading: `Ok` when the user can list no extended
+/// attribute names on it (none, only `com.apple.provenance`, none supported, or listing is denied too,
+/// as for mode 0200, whose attributes are then dropped); otherwise refuse the save, as the attributes
+/// can't be copied without opening the file. The names are read without following a link, by path.
 #[cfg(target_os = "macos")]
 fn unreadable_has_no_attributes(target: &Path) -> io::Result<()> {
     use rustix::fs::llistxattr;
