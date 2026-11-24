@@ -197,3 +197,7 @@ adapting code from [PiJellyPin's MaterialCraft](https://github.com/PiJellyPin/Ma
 `NOTICE` for the original attribution. This extraction retains vangel76's subsequent evaluator and GPU work.
 The format reference and tests are from the same TextureCraft source. The tests' numerical rule tables document
 their provenance in their headers.
+
+## AV1 host parser
+
+`crates/video/src/av1/decode/host.rs`, `RefInfo::store` in `crates/video/src/av1/decode/header.rs` and the tile-group split it shares with `crates/video/src/av1/decode/decoder.rs` are ported from ezTxmMC's [FilmCraft #4171](https://github.com/storytold/filmcraft/pull/4171) at `5d23f0ad719690e3a13ccf836a9f2e1f20c714e8` (MIT OR Apache-2.0); only module paths changed for craft-video.

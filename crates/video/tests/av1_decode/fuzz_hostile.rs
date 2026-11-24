@@ -1,10 +1,11 @@
 //! Hostile-input robustness: truncation, header-region sweeps and random mutation of small
-//! ffmpeg-generated AV1 streams (frame by frame) must never panic or run away. Skips without ffmpeg.
+//! ffmpeg-generated AV1 streams (frame by frame) must never panic or run away, in the decoder or
+//! in the host parser. Skips without ffmpeg.
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use craft_video::av1::decode::Decoder;
+use craft_video::av1::decode::{Decoder, HostParser};
 
 struct Rng(u64);
 impl Rng {
@@ -92,9 +93,17 @@ fn run_all(frames: &[Vec<u8>], threads: &[usize], label: &str) {
                 })
             })
             .collect();
+        // The stateless hardware path reads the same headers through HostParser.
+        let host = s.spawn(move || {
+            let mut parser = HostParser::new();
+            for f in frames {
+                let _ = parser.parse(f);
+            }
+        });
+        let host_ok = host.join().is_ok();
         // Join every run (no short cut), then check them all.
         let joined: Vec<bool> = runs.into_iter().map(|r| r.join().is_ok()).collect();
-        joined.into_iter().all(|ok| ok)
+        host_ok && joined.into_iter().all(|ok| ok)
     });
     assert!(ok && PANICS.load(Ordering::SeqCst) == before, "panic: {label}");
 }
