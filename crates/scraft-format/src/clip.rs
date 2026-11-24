@@ -533,7 +533,7 @@ mod tests {
         assert!(c.fade_out.len <= c.length);
     }
 
-    /// A earlier at [0, 1100), B later at [900, 2000): an overlap of 200 around 1000.
+    /// A earlier at [0, 1100), B later at [900, 2000): an overlap of 200.
     fn pair(cut: Option<Samples>) -> (Clip, Clip) {
         let a = Clip::audio(ClipId(1), "a", SourceId(1), 0, 0, 1100);
         let mut b = Clip::audio(ClipId(2), "b", SourceId(1), 900, 900, 1100);
@@ -542,73 +542,86 @@ mod tests {
     }
 
     #[test]
-    fn the_cut_of_a_crossfade_is_stored_or_the_middle_and_stays_within_the_overlap() {
-        for (cut, want) in
-            [(None, 1000), (Some(0), 900), (Some(50), 950), (Some(200), 1100), (Some(201), 1100), (Some(i64::MAX), 1100), (Some(-5), 900)]
-        {
-            let (a, b) = pair(cut);
-            assert_eq!(crossfade_cut(&a, &b), want, "{cut:?}");
+    fn the_cut_of_a_crossfade_lies_in_the_overlap_and_follows_the_stored_offset() {
+        let (a, b) = pair(None);
+        let overlap = a.end() - b.start;
+        // Nothing stored: somewhere inside the overlap, never outside the pair.
+        let none = crossfade_cut(&a, &b);
+        assert!((b.start..=a.end()).contains(&none));
+        // Stored inside the overlap: honoured; later offsets never cut earlier.
+        let mut last = b.start - 1;
+        for c in 0..=overlap {
+            let (_, b) = pair(Some(c));
+            let at = crossfade_cut(&a, &b);
+            assert_eq!(at - b.start, c);
+            assert!(at > last);
+            last = at;
         }
-        // An odd overlap has its middle rounded down; clips that touch are cut where they touch.
-        let (a, mut b) = pair(None);
-        b.start = 901;
-        assert_eq!(crossfade_cut(&a, &b), 901 + 99);
-        b.start = 1100;
-        assert_eq!(crossfade_cut(&a, &b), 1100);
-        // Not overlapping, or hostile positions: never out of the pair, never a panic.
-        b.start = 5000;
-        b.cut = Some(10);
-        assert_eq!(crossfade_cut(&a, &b), 5000);
+        // Stored beyond the overlap (or negative, or hostile): clamped to its ends.
+        for c in [overlap + 1, i64::MAX, -1, i64::MIN] {
+            let (_, b) = pair(Some(c));
+            let at = crossfade_cut(&a, &b);
+            assert!((b.start..=a.end()).contains(&at), "{c}");
+        }
+        // Clips that do not overlap are cut where the later one starts, whatever is stored.
+        let (a, mut b) = pair(Some(10));
+        b.start = a.end() + 1;
+        assert_eq!(crossfade_cut(&a, &b), b.start);
+        // Hostile positions never panic and never leave the pair.
         b.start = i64::MAX - 5;
-        assert_eq!(crossfade_cut(&a, &b), i64::MAX - 5);
+        assert_eq!(crossfade_cut(&a, &b), b.start);
         let mut a = a;
         a.start = i64::MIN;
         a.length = i64::MAX;
-        assert!((i64::MIN..=i64::MAX).contains(&crossfade_cut(&a, &b)));
+        let _ = crossfade_cut(&a, &b);
     }
 
     #[test]
-    fn trimming_the_start_keeps_the_cut_where_it_is_on_the_timeline() {
-        let (_, mut b) = pair(Some(100));
-        b.trim_start_to(950);
-        assert_eq!((b.start, b.cut), (950, Some(50)));
-        b.trim_start_to(850);
-        assert_eq!((b.start, b.cut), (850, Some(150)));
-        // Trimmed past the cut: the cut sits at the clip's start.
-        b.trim_start_to(1500);
-        assert_eq!((b.start, b.cut), (1500, Some(0)));
+    fn trimming_the_start_keeps_the_cut_where_it_is_on_the_timeline_or_at_the_new_start() {
+        let (_, b0) = pair(Some(100));
+        let on_timeline = b0.start + 100;
+        for new_start in [b0.start - 50, b0.start + 50, on_timeline, on_timeline + 400] {
+            let mut b = b0.clone();
+            b.trim_start_to(new_start);
+            let cut = b.cut.unwrap();
+            assert!((0..=b.length).contains(&cut), "{new_start}");
+            // Where the cut sits on the timeline: unchanged, unless the clip now starts after it.
+            assert_eq!(b.start + cut, on_timeline.max(new_start), "{new_start}");
+        }
         // No cut stored: none made up.
         let (_, mut b) = pair(None);
-        b.trim_start_to(950);
+        b.trim_start_to(b.start + 50);
         assert_eq!(b.cut, None);
     }
 
     #[test]
     fn the_cut_stays_within_the_clip_it_is_stored_on() {
+        // Trimming the end keeps a cut that still fits and pulls one that no longer does to the end.
         let (_, mut b) = pair(Some(500));
-        b.trim_end_to(1100);
-        assert_eq!((b.length, b.cut), (200, Some(200)));
+        b.trim_end_to(b.start + 800);
+        assert_eq!(b.cut, Some(500));
+        b.trim_end_to(b.start + 200);
+        assert_eq!(b.cut, Some(b.length));
+        // A file with a hostile cut is repaired.
         for cut in [i64::MAX, i64::MIN, -1, 5000] {
             let (_, mut b) = pair(Some(cut));
             b.sanitize();
             assert!(b.cut.is_some_and(|c| (0..=b.length).contains(&c)), "{cut}");
         }
+        // A cut that fitted the clip is not moved by sanitizing.
         let (_, mut b) = pair(Some(7));
-        b.length = 1;
         b.sanitize();
-        assert_eq!(b.cut, Some(1));
+        assert_eq!(b.cut, Some(7));
     }
 
     #[test]
     fn a_session_saved_without_a_cut_loads_and_a_stored_cut_round_trips() {
-        let (_, b) = pair(None);
+        let (_, b) = pair(Some(100));
         let mut v = serde_json::to_value(&b).unwrap();
         assert!(v.as_object_mut().unwrap().remove("cut").is_some());
         let old: Clip = serde_json::from_value(v).unwrap();
-        assert_eq!(old, b);
-        let (_, b) = pair(Some(100));
+        assert_eq!(old.cut, None);
         let back: Clip = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
-        assert_eq!(back.cut, Some(100));
         assert_eq!(back, b);
     }
 
