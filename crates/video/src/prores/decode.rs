@@ -500,13 +500,16 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) ->
     let n = out.len();
     let mut idx = 0;
     loop {
+        // Every value before `done` ended with its continuation bit or run. Byte-alignment
+        // padding can decode as a value but never as a terminated one, so it never counts.
+        let done = idx;
         if r.bits_left() < 1 {
-            return alpha_ended(out, idx, required);
+            return alpha_ended(out, done, required);
         }
         let full = r.read_bit();
         let delta_bits = if full { bits } else { short_bits };
         if r.bits_left() < delta_bits as isize {
-            return alpha_ended(out, idx, required);
+            return alpha_ended(out, done, required);
         }
         let d = if full {
             r.read(bits)
@@ -520,7 +523,7 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) ->
         idx += 1;
 
         if r.bits_left() < 1 {
-            return alpha_ended(out, idx, required);
+            return alpha_ended(out, done, required);
         }
         if r.read_bit() {
             if idx == n {
@@ -529,12 +532,12 @@ fn decode_alpha(data: &[u8], ty: AlphaType, out: &mut [u16], required: usize) ->
             continue;
         }
         if r.bits_left() < 4 {
-            return alpha_ended(out, idx, required);
+            return alpha_ended(out, done, required);
         }
         let short_run = r.read(4) as usize;
         let run = if short_run == 0 {
             if r.bits_left() < 11 {
-                return alpha_ended(out, idx, required);
+                return alpha_ended(out, done, required);
             }
             let long_run = r.read(11) as usize;
             if long_run < 16 {
@@ -681,6 +684,12 @@ mod alpha_decode_tests {
         assert!(decode_alpha(&compact, AlphaType::Bits16, &mut out, width * 8).is_ok());
         assert!(out[..width * 8].iter().zip(&visible).all(|(&o, &v)| u32::from(o) == v));
         assert!(out[width * 8..].iter().all(|&o| u32::from(o) == visible[width * 8 - 1]));
+
+        // Byte padding after a stream one value short must not supply the last visible value.
+        let mut short8 = Writer::new();
+        encode_alpha(&mut short8, &vec![0x80; width * 8 - 1], 8);
+        let short8 = short8.finish();
+        assert!(decode_alpha(&short8, AlphaType::Bits8, &mut out, width * 8).is_err());
 
         // A stream that stops inside the visible lines is still corrupt.
         assert!(decode_alpha(&compact, AlphaType::Bits16, &mut out, width * 8 + 1).is_err());
