@@ -165,15 +165,16 @@ pub(crate) fn hyperlink_url(el: &Element) -> Option<String> {
         if !matches!(sp.get("name"), Some("Command" | "Path")) {
             continue;
         }
-        // up to the first ';' not escaped with a backslash
+        // up to the first ';' not escaped: behind an odd run of backslashes (a pair is one
+        // backslash, escaped, as `unescape_backslash` reads it)
         let raw = &sp.text;
         let mut first = String::new();
-        let mut prev_backslash = false;
+        let mut backslashes = 0usize;
         for ch in raw.chars() {
-            if ch == ';' && !prev_backslash {
+            if ch == ';' && backslashes % 2 == 0 {
                 break;
             }
-            prev_backslash = ch == '\\';
+            backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
             first.push(ch);
         }
         let url = unescape_backslash(&first).trim().to_string();

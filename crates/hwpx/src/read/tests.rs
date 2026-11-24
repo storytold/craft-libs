@@ -623,3 +623,20 @@ fn a_memo_ended_by_both_its_names_ends_once() {
     let ends = objects.iter().filter(|o| matches!(o, InlineObject::CommentEnd { .. })).count();
     assert_eq!((starts, ends), (1, 1));
 }
+
+/// A hyperlink command whose target ends in an escaped backslash (`\\`) before the `;` that
+/// ends it: the target stops there. Before, the pair read as escaping the `;`, and the field's
+/// other settings went into the link.
+#[test]
+fn a_link_target_ends_at_a_semicolon_after_an_escaped_backslash() {
+    let link = |cmd: &str| {
+        let xml = format!(
+            r#"<hp:fieldBegin {NS} type="HYPERLINK"><hp:parameters><hp:stringParam name="Command">{cmd}</hp:stringParam></hp:parameters></hp:fieldBegin>"#
+        );
+        super::text::hyperlink_url(&crate::xml::parse(xml.as_bytes(), false).unwrap())
+    };
+    let url = link(r"https://example.com/a\\;1;0;0;").expect("a link");
+    assert!(!url.contains(';'), "{url}");
+    // one backslash still escapes the semicolon
+    assert!(link(r"https://example.com/a\;b;1;0;0;").expect("a link").contains("a;b"));
+}
