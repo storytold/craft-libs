@@ -93,7 +93,10 @@ impl<'a> Images<'a> {
 /// A picture from `data` sized as graphicx's `width`, `height`, `scale` and `keepaspectratio`
 /// say; `None` when the bytes aren't a picture.
 fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
-    let natural = model::image_px(&data).filter(|&(w, h)| w > 0 && h > 0).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75));
+    // Bytes that look like a picture but whose size can't be read aren't one: the lookup goes
+    // on, and ends in the placeholder.
+    let natural = model::image_px(&data).filter(|&(w, h)| w > 0 && h > 0).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75))?;
+    let natural = Some(natural);
     let (mut w, mut h, mut scale, mut keep) = (None, None, None, false);
     for opt in options.split(',') {
         let (k, v) = opt.split_once('=').map_or((opt.trim(), ""), |(k, v)| (k.trim(), v.trim()));
@@ -121,6 +124,10 @@ fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
 /// A graphicx length in points. Fractions of the text width are fractions of the column the
 /// picture is shown in, so `0.8\textwidth` keeps its share of the line.
 fn length(v: &str) -> Option<f32> {
+    // A number with no unit is in big points, as graphicx reads it.
+    if let Ok(bp) = v.parse::<f32>() {
+        return (bp.is_finite() && bp > 0.0 && bp < 10_000.0).then_some(bp);
+    }
     let pt = length_pt(v)?;
     let relative = ["\\textwidth", "\\linewidth", "\\columnwidth", "\\hsize"].iter().any(|m| v.contains(m));
     Some(if relative { pt * COLUMN / LINE_WIDTH } else { pt * 72.0 / 72.27 })

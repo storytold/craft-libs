@@ -761,6 +761,9 @@ fn includegraphics_sizes_follow_the_options() {
     // A square stays square when only the width is given.
     assert!((big.h - big.w).abs() < 0.5);
     let (Some(x4), Some(x8)) = (pic("scale=4"), pic("scale=8")) else { panic!("every picture loads") };
+    // A unitless length is in big points.
+    let (Some(bare), Some(bp)) = (pic("width=100"), pic("width=100bp")) else { panic!("every picture loads") };
+    assert!((bare.w - bp.w).abs() < 0.01);
     // A box with `keepaspectratio` fits a picture smaller than a point as it fits any other.
     let (Some(boxed), Some(wide)) = (pic("width=100pt,height=100pt,keepaspectratio"), pic("width=100pt")) else { panic!("every picture loads") };
     assert!((boxed.w - wide.w).abs() < 0.5 && (boxed.h - wide.h).abs() < 0.5);
@@ -772,7 +775,14 @@ fn includegraphics_falls_back_to_placeholder_text() {
     let junk = std::sync::Arc::new(b"not a picture".to_vec());
     let load_junk = |_: &str| Some(junk.clone());
     let none = |_: &str| None;
+    // A PNG signature on bytes that aren't a PNG: not a picture, so the next candidate is tried.
+    let fake = std::sync::Arc::new(b"\x89PNG\r\n\x1a\n not really".to_vec());
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load_fake = |p: &str| if p == "a.png" { Some(fake.clone()) } else { None };
+    let next = |p: &str| if p == "a.png" { Some(fake.clone()) } else { Some(png.clone()) };
+    assert_eq!(pictures(&parse_with("\\graphicspath{{f/}}\\begin{document}\\includegraphics{a.png}\\end{document}", Some(&next))).len(), 1);
     for flow in [
+        parse_with("\\begin{document}\\includegraphics{a.png}\\end{document}", Some(&load_fake)),
         parse_with("\\begin{document}\\includegraphics{fig.pdf}\\end{document}", Some(&load_junk)),
         parse_with("\\begin{document}\\includegraphics{missing}\\end{document}", Some(&none)),
     ] {
