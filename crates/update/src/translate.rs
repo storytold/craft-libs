@@ -179,19 +179,28 @@ pub fn english(text: &str, args: &[(&str, &str)]) -> String {
 /// and one that `args` lacks stays as written, braces and all. An inserted value is never read as
 /// a template, so a value containing `{app}` stays intact.
 pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
-    fill_bounded(template, args, usize::MAX).expect("filled text exceeds addressable memory")
+    let mut out = String::with_capacity(template.len());
+    // This sink always accepts a piece; only the bounded sink below can stop early.
+    let _ = fill_into(template, args, |value| {
+        out.push_str(value);
+        Some(())
+    });
+    out
 }
 
 fn fill_bounded(template: &str, args: &[(&str, &str)], limit: usize) -> Option<String> {
-    let capacity = if limit == usize::MAX { template.len() } else { limit };
-    let mut out = String::with_capacity(capacity);
-    let mut append = |value: &str| {
+    let mut out = String::with_capacity(limit);
+    fill_into(template, args, |value| {
         if out.len().checked_add(value.len())? > limit {
             return None;
         }
         out.push_str(value);
         Some(())
-    };
+    })?;
+    Some(out)
+}
+
+fn fill_into(template: &str, args: &[(&str, &str)], mut append: impl FnMut(&str) -> Option<()>) -> Option<()> {
     let mut rest = template;
     while let Some((before, after_open)) = rest.split_once('{') {
         append(before)?;
@@ -211,7 +220,7 @@ fn fill_bounded(template: &str, args: &[(&str, &str)], limit: usize) -> Option<S
         rest = after_close;
     }
     append(rest)?;
-    Some(out)
+    Some(())
 }
 
 /// One of the crate's own messages under the startup prompt ("The update is installed…"), kept as
