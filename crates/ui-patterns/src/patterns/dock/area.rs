@@ -13,10 +13,10 @@ use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
-    ColumnArrow, ColumnBar, DividerKind, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot,
-    DockScene, DockSizes, DockSource, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, GroupGrip,
-    HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SourceKind, SpecSource,
-    SplitArea, Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
+    ColumnArrow, ColumnBar, DividerKind, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels,
+    DockRoot, DockScene, DockSizes, DockSource, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt,
+    GroupDrag, GroupGrip, HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing,
+    SourceKind, SpecSource, SplitArea, Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
 };
 use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
@@ -771,7 +771,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
         }
     });
-    let splits = area.output.dividers.iter().map(|(path, rect, node)| DockSource::new(SourceKind::Divider(DividerKind::Split(path.clone())), *rect, *node));
+    let splits =
+        area.output.dividers.iter().map(|(path, rect, node)| DockSource::new(SourceKind::Divider(DividerKind::Split(path.clone())), *rect, *node));
     pass.report.sources.extend(splits);
     let mut edit = area.output.edit.events.map(|edited| {
         let mut layout = current.layout().clone();
@@ -1176,7 +1177,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             return None;
         };
-        let tabs = output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(SourceKind::Tab(scene.panel(*key)?.clone()), *rect, *node)));
+        let tabs =
+            output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(SourceKind::Tab(scene.panel(*key)?.clone()), *rect, *node)));
         self.report.sources.extend(tabs);
         if let Some((rect, node)) = output.grip {
             self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));
@@ -1641,7 +1643,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let output = shown.output;
             // The window's grips, then everything it drew, in the OS window it shows in, if it has one.
             let grips = output.grip.map(|(rect, node)| DockSource::new(SourceKind::WindowGrip(anchor.clone()), rect, node));
-            let resize = output.resize.iter().map(|(edge, rect, node)| DockSource::new(SourceKind::WindowResize(anchor.clone(), *edge), *rect, *node));
+            let resize =
+                output.resize.iter().map(|(edge, rect, node)| DockSource::new(SourceKind::WindowResize(anchor.clone(), *edge), *rect, *node));
             let inside = self.report.sources.split_off(drawn);
             self.report.sources.extend(grips.into_iter().chain(resize).chain(inside));
             if let Some(viewport) = opening.spec.as_ref().and_then(|_| WindowHost::of(&ctx).viewport_of(output.response.id)) {
