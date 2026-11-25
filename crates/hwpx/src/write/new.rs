@@ -61,6 +61,12 @@ pub(crate) fn hu(pt: f32) -> i64 {
     if pt.is_finite() { (f64::from(pt) * 100.0).round().clamp(-1e9, 1e9) as i64 } else { 0 }
 }
 
+/// An offset in points as HWPX writes one: HWPUNIT as an unsigned 32-bit number, so -1 is
+/// 4294967295. Hancom's viewer reads an offset written with a minus sign as 0 (2026-11-25).
+fn offset_hu(pt: f32) -> u32 {
+    hu(pt).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32 as u32
+}
+
 fn color(c: Option<craft_wordmodel::Rgb>) -> String {
     c.map(|c| format!("#{}", c.hex())).unwrap_or_else(|| "none".into())
 }
@@ -703,17 +709,19 @@ fn placement_xml(f: &craft_wordmodel::para::Float, area: Option<Area>) -> (&'sta
     // Hancom's offset places the object's outer margin, where DOCX's places the object.
     x -= f.dist.max(0.0);
     y -= f.dist_top.max(0.0);
+    let (x, y) = (if inline || f.h_align.is_some() { 0.0 } else { x }, if inline || f.v_align.is_some() { 0.0 } else { y });
     let pos = format!(
         "<hp:pos treatAsChar=\"{}\" affectLSpacing=\"0\" flowWithText=\"{}\" allowOverlap=\"{}\" holdAnchorAndSO=\"0\" vertRelTo=\"{v_rel}\" horzRelTo=\"{h_rel}\" vertAlign=\"{}\" horzAlign=\"{}\" vertOffset=\"{}\" horzOffset=\"{}\"/>",
         b(inline),
         // an object placed on the page keeps its place (flowing with the text would hold it
-        // inside the body area)
-        b(inline || v_rel == "PARA"),
+        // inside the body area); so does one above its paragraph, which flowing would hold at the
+        // paragraph's top (Hancom's viewer, 2026-11-25)
+        b(inline || (v_rel == "PARA" && hu(y) >= 0)),
         b(!inline),
         align(f.v_align, "TOP", "BOTTOM"),
         align(f.h_align, "LEFT", "RIGHT"),
-        if inline || f.v_align.is_some() { 0 } else { hu(y) },
-        if inline || f.h_align.is_some() { 0 } else { hu(x) }
+        offset_hu(y),
+        offset_hu(x)
     );
     let margin = format!(
         "<hp:outMargin left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\"/>",
@@ -1740,7 +1748,7 @@ impl Builder<'_> {
             b(repeat),
             hu(total_w),
             hu(total_h),
-            hu(offset),
+            offset_hu(offset),
             hu(ml),
             hu(mr),
             hu(mt),

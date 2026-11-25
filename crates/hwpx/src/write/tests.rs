@@ -472,3 +472,46 @@ fn new_hwpx_writes_a_turned_object_in_the_box_around_it() {
     assert!((off("horzOffset") + fw / 2 - (1000 + cw / 2)).abs() <= 1, "{}", off("horzOffset"));
     assert!((off("vertOffset") + fh / 2 - (5000 + ch / 2)).abs() <= 1, "{}", off("vertOffset"));
 }
+
+/// Offsets left of or above their anchor are written as Hancom writes them, unsigned 32-bit (its
+/// viewer reads a minus sign as 0: 2026-11-25), and read back where they were; one above its
+/// paragraph isn't held in the body (held, the viewer draws it at the paragraph's top).
+#[test]
+fn new_hwpx_writes_offsets_before_their_anchor_as_hancom_does() {
+    use craft_wordmodel::{
+        CharProps, InlineObject, Paragraph,
+        para::{Anchor, Float, ShapeKind, Wrap},
+        para_block,
+    };
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: -20.0, y: -30.0, ..Float::default() };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 40.0,
+        h: 20.0,
+        fill: None,
+        stroke: Some(craft_wordmodel::props::Rgb(0, 0, 0)),
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut doc = craft_wordmodel::Document::from_text("");
+    let mut p = Paragraph::with_text("x", CharProps::default());
+    p.insert_object(0, shape, &CharProps::default()).unwrap();
+    doc.body = vec![para_block(p)];
+    let (bytes, _) = new_hwpx(&doc).unwrap();
+    let sec = xml::parse(zip_part(&bytes, "Contents/section0.xml").as_bytes(), false).unwrap();
+    let pos = sec.iter("hp:pos").next().expect("the shape's place");
+    for k in ["horzOffset", "vertOffset"] {
+        assert!(pos.get(k).is_some_and(|v| v.parse::<u32>().is_ok()), "{k} unsigned: {:?}", pos.get(k));
+    }
+    assert_eq!(pos.get("flowWithText"), Some("0"), "not held at the paragraph's top");
+    let back = crate::read(&bytes).unwrap();
+    let f = back.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Shape { float, .. } => Some(float.clone()),
+        _ => None,
+    });
+    assert!(f.is_some_and(|f| f.x < 0.0 && f.y < 0.0), "read back before its anchor");
+}
