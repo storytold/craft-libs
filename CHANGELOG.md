@@ -1,6 +1,35 @@
 # Changelog
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
+## v1.0.6
+
+- **Release Notes:** [GitHub Release v1.0.6](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.6)
+
+### 2026-11-25 - Upstream Merge (`next`) and Five Repairs
+
+- **Merged `storytold/craft-libs` into the fork's `next`:** `next` at `9f2961402`, 88 upstream
+  commits on top of the line this fork follows, with the fork's own crates and their trials kept.
+  The workspace-test harness takes upstream's copy whole.
+- **A printer listing that fails is no longer read as an empty list.** The platform answers `None`
+  when the spooler cannot list its queues; that answer was flattened into an empty list, so a
+  transient failure looked like "the printer is gone" and the Print dialog dropped the chosen
+  queue. The listing now fails instead: the panel keeps the remembered printer and says the listing
+  failed, while a listing that answers - even with no printer in it - still replaces a destination
+  it does not name.
+- **Without an installed host the library writes English dates and numbers.** Its words were
+  English while its date and number formats followed the machine's region, so a calendar named its
+  weekdays in the machine's language. Both fall back to `en-US`, which is what the trials assume.
+- **A caption's literal backslash survives ffmpeg's ASS reader.** `{}` is plain text to ffmpeg, not
+  an override block, so a literal `\N` came back as `\{}N`. The writer emits `\{\i0}`, an override
+  block ffmpeg strips, and the crate's own reader reads the same two characters back.
+- **Every egui memory access goes through `runtime::egui::memory`.** The held-Space record read and
+  wrote the context's memory directly; the design lint names that as a contract violation.
+- **`Option::is_some_and` takes its closure by value**, as clippy's
+  `needless_borrows_for_generic_args` asks.
+- **The browser-POST trial sends the end of the request head**, as a browser does: a host HTTP
+  inspection holds an incomplete head and never passes it on. What the trial asserts is unchanged.
+- **Suites:** the whole workspace runs **18,373 passed / 0 failed / 57 skipped**; the corpus samples
+  run 670 passed / 0 failed / 11 ignored; the design lint's 28 trials run clean.
 
 ## v1.0.5
 
