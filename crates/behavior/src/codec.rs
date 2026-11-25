@@ -172,6 +172,8 @@ pub struct NumberCodec {
     /// A lone percentage is that share of the start value ([`NumberCodec::share_of_start`]).
     share: bool,
     signed_zoom: bool,
+    /// A positive value is written with its `+` ([`NumberCodec::explicit_plus`]).
+    plus: bool,
 }
 
 impl fmt::Debug for NumberCodec {
@@ -183,6 +185,7 @@ impl fmt::Debug for NumberCodec {
             .field("zoom", &self.zoom)
             .field("share", &self.share)
             .field("signed_zoom", &self.signed_zoom)
+            .field("plus", &self.plus)
             .field("custom", &self.custom.is_some())
             .field("primary", &self.primary.is_some())
             .finish()
@@ -207,6 +210,7 @@ impl PartialEq for NumberCodec {
             && self.zoom == other.zoom
             && self.share == other.share
             && self.signed_zoom == other.signed_zoom
+            && self.plus == other.plus
             && same_custom
             && same_primary
     }
@@ -242,7 +246,16 @@ const NUMBER_SAMPLE: &str = "0000.00";
 impl NumberCodec {
     /// A codec reading with `reader` and writing at most `decimals` decimal places.
     pub fn new(reader: Reader, decimals: usize) -> Self {
-        NumberCodec { reader, decimals, fixed: false, custom: None, primary: None, zoom: false, share: false, signed_zoom: false }
+        NumberCodec { reader, decimals, fixed: false, custom: None, primary: None, zoom: false, share: false, signed_zoom: false, plus: false }
+    }
+
+    /// The same codec writing a positive value with its sign ("+2.50"), as an angle or an offset from a neutral value
+    /// reads; a value that rounds to zero at the codec's decimals stays unsigned ("0.00"). A leading `+` in typed text
+    /// is then the number's sign, as the field writes it, not the relative `+` of a plain field (which adds to the
+    /// value the edit started from).
+    pub fn explicit_plus(mut self) -> Self {
+        self.plus = true;
+        self
     }
 
     /// The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
@@ -372,7 +385,9 @@ impl Codec for NumberCodec {
         } else {
             fixed
         };
-        trimmed.replace('.', &self.reader.decimal_separator().to_string())
+        let shown = trimmed.replace('.', &self.reader.decimal_separator().to_string());
+        let zero = trimmed.bytes().all(|byte| matches!(byte, b'0' | b'.'));
+        if self.plus && !trimmed.starts_with('-') && !zero { format!("+{shown}") } else { shown }
     }
 
     fn parse(&self, text: &str, start: &Option<f64>) -> Result<Option<f64>, NotAValue> {
@@ -391,6 +406,13 @@ impl Codec for NumberCodec {
         }
         if self.zoom {
             return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
+        }
+        // The `+` an explicit-plus field writes is the number's sign when it is typed back, not a relative edit.
+        if self.plus
+            && let Some(rest) = trimmed.strip_prefix('+')
+            && rest.starts_with(|c: char| c.is_ascii_digit() || c == self.reader.decimal_separator())
+        {
+            return self.parse_tagged(rest, &None);
         }
         if self.share
             && let Some(share) = self.reader.share(trimmed)
@@ -426,5 +448,30 @@ mod tests {
         assert_eq!(one.format(&Some(-0.04)), "0");
         assert_eq!(one.format(&Some(-0.06)), "-0.1");
         assert_eq!(NumberCodec::new(Reader::new(), 1).fixed().format(&Some(-0.04)), "0.0");
+    }
+
+    #[test]
+    fn an_explicit_plus_codec_writes_the_sign_of_a_positive_value() {
+        let angle = NumberCodec::new(Reader::new(), 2).fixed().explicit_plus();
+        assert_eq!(angle.format(&Some(2.5)), "+2.50");
+        assert_eq!(angle.format(&Some(-3.25)), "-3.25");
+        assert_eq!(angle.format(&Some(0.0)), "0.00", "zero is unsigned");
+        assert_eq!(angle.format(&Some(0.004)), "0.00", "a value that rounds to zero is unsigned");
+        assert_eq!(angle.format(&Some(-0.004)), "0.00");
+        assert_eq!(angle.format(&None), "");
+        assert_eq!(NumberCodec::new(Reader::new(), 2).explicit_plus().format(&Some(1.5)), "+1.5", "trimmed decimals keep the sign");
+        assert_eq!(NumberCodec::new(Reader::new(), 2).fixed().format(&Some(2.5)), "2.50", "without it a positive value has no sign");
+    }
+
+    #[test]
+    fn an_explicit_plus_codec_reads_a_leading_plus_as_the_sign() {
+        let angle = NumberCodec::new(Reader::new(), 2).fixed().explicit_plus();
+        assert_eq!(angle.parse("+2.50", &Some(10.0)).ok(), Some(Some(2.5)), "the written text reads back as itself, not added to the start");
+        assert_eq!(angle.parse(&angle.format(&Some(7.25)), &Some(-1.0)).ok(), Some(Some(7.25)));
+        assert_eq!(angle.parse("-3.25", &Some(10.0)).ok(), Some(Some(-3.25)));
+        assert_eq!(angle.parse("4", &None).ok(), Some(Some(4.0)));
+        assert!(angle.parse("+", &Some(1.0)).is_err(), "a lone plus is no number");
+        let plain = NumberCodec::new(Reader::new(), 2);
+        assert_eq!(plain.parse("+2", &Some(10.0)).ok(), Some(Some(12.0)), "a plain field's leading plus still adds to the start");
     }
 }
