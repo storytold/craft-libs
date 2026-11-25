@@ -73,7 +73,8 @@ fn reference_point_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Reference point", data.bind("compact", Some(Anchor9::Centre))).compact().show(ui).into()
 }
 
-/// The squares look at the options bar's size, as an inspector's transform fields lead with it.
+/// The squares look in the compact picker, as an inspector's transform fields lead with it: the same size as the
+/// full picker, from `shape.locator`.
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_squares_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ReferencePoint::new("Reference point", data.bind("squares_compact", Some(Anchor9::Centre)))

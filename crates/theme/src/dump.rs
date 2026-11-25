@@ -66,7 +66,7 @@ fn edge(e: Edge) -> String {
 }
 
 fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
-    let ShapeTokens { radius, edge: e, knob, wells, grip } = shape;
+    let ShapeTokens { radius, edge: e, knob, wells, grip, locator } = shape;
     let RadiusSet { sm, control, surface, window, panel, button, pill } = radius;
     for (k, v) in [("sm", sm), ("control", control), ("surface", surface), ("window", window), ("panel", panel), ("button", button), ("pill", pill)] {
         out.line(&format!("shape.radius.{k}"), len(*v));
@@ -81,6 +81,8 @@ fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
     for (k, v) in [("length", length), ("width", width), ("gap", gap)] {
         out.line(&format!("shape.grip.{k}"), len(*v));
     }
+    out.line("shape.locator.cell", len(locator.cell));
+    out.line("shape.locator.square", len(locator.square));
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
@@ -120,6 +122,7 @@ fn space_lines(out: &mut Lines, space: &SpaceTokens) {
 fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let SizeTokens {
         control,
+        button,
         icon,
         rail,
         bar,
@@ -144,6 +147,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let ControlSizes { sm, md } = control;
     out.line("size.control.sm", len(*sm));
     out.line("size.control.md", len(*md));
+    out.line("size.button", len(*button));
     let IconSizes { sm, md, lg, glyph_sm, glyph_md } = icon;
     out.line("size.icon.sm", len(*sm));
     out.line("size.icon.md", len(*md));

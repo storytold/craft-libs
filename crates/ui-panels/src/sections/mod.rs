@@ -20,7 +20,7 @@ pub use section::{Section, SectionOutput, SectionStyle};
 pub use stack::{SectionStack, SectionStackOutput, SectionStackStyle, StackRows, StackSlot};
 #[doc(hidden)]
 pub use title_row::MenuRows;
-pub use title_row::{HeaderAction, HeaderCommand, HeaderStrength, TitleOutput, TitleRow, TitleRowStyle};
+pub use title_row::{HeaderAction, HeaderCommand, HeaderStrength, QuietTitleRow, TitleOutput, TitleRow, TitleRowStyle};
 pub use words::SectionWords;
 
 pub use panel::{Panel, PanelOutput, PanelStyle};

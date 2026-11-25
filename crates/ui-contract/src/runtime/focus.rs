@@ -183,6 +183,11 @@ pub(crate) struct State {
     pub(super) arrived: Option<(u64, StopKey, FocusOrigin)>,
     /// The running pass's begin hook left a Tab to egui (`NavKeys::tab_to_egui`); its end hook takes it.
     pub(super) tab_to_egui: bool,
+    /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
+    surrender_after_scopes: Option<Id>,
+    /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
+    /// closing by the next pass, and its restoration needs the widget to still hold the focus.
+    surrender_deferred: Option<Id>,
 }
 
 fn viewport(ctx: &Context) -> ViewportId {
@@ -277,10 +282,14 @@ pub(crate) fn is_canvas_member(ctx: &Context, rec: &StopRec) -> bool {
     })
 }
 
-/// Whether a Tab in `viewport` has nothing to leave and nowhere to go: egui held no focus at the end of its last pass
-/// and it registered no focus stop there. Read by the input hook, before the begin hook rotates the registrations.
-pub(crate) fn tab_from_nothing(ctx: &Context, viewport: ViewportId) -> bool {
-    with_viewport(ctx, viewport, |state| state.focus_now.is_none() && state.stops.is_empty())
+/// Whether a bare Tab in `viewport` is egui's own focus move: the window registered no framework stop in its last pass,
+/// only stops of the app's own egui widgets (`Stop::host`) if any, which egui's Tab order holds with the app's other
+/// widgets; and egui held no focus at the end of that pass, or held it on one of those stops. A framework move would
+/// reach the host stops alone. Read by the input hook, before the begin hook rotates the registrations.
+pub(crate) fn tab_is_egui_s(ctx: &Context, viewport: ViewportId) -> bool {
+    with_viewport(ctx, viewport, |state| {
+        state.stops.iter().all(|rec| rec.stop.host) && state.focus_now.is_none_or(|id| state.stops.iter().any(|rec| rec.stop.root == id))
+    })
 }
 
 /// How many stops the running pass has registered so far.
@@ -1004,8 +1013,8 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
         let (acts, announcements) = nav::begin(state, input);
         (acts, announcements, host_focus)
     });
-    // egui's direction moves focus from the widget it holds, an app's own, or from nothing with a Tab the key stage
-    // left to egui; never in a pass whose focus the framework moves.
+    // egui's direction moves focus from the widget it holds, an app's own, or with a Tab the key stage left to egui
+    // (from nothing or a host stop); never in a pass whose focus the framework moves.
     if !(host_focus || tab_to_egui) || !acts.is_empty() {
         egui_focus::clear_directional_focus(ctx);
     }
@@ -1013,6 +1022,12 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     for text in announcements {
         crate::runtime::frame::announce(ctx, text);
     }
+}
+
+/// Releases the text widget `widget` at the end of this pass, after the enclosing scopes have had its Escape: a scope
+/// deciding whether to close still finds the focused stop. No key is replayed and no other widget loses focus.
+pub(crate) fn surrender_after_scopes(ctx: &Context, widget: Id) {
+    with(ctx, |state| state.surrender_after_scopes = Some(widget));
 }
 
 /// The end hook: applies the press's focus move, returns focus to the opener of a scope that went away,
@@ -1025,6 +1040,34 @@ pub(crate) fn end(ctx: &Context) {
         && let Some(id) = egui_focus::focused(ctx).filter(|id| crate::runtime::pointer::made_by_component(ctx, viewport, *id))
     {
         egui_focus::surrender(ctx, id);
+    }
+    // A field held a pass for the scope it sits in lets go now, unless that scope is going away with focus in the field:
+    // nav::end below then gives the focus back to the scope's opener from where the field holds it.
+    if let Some(widget) = with(ctx, |state| state.surrender_deferred.take())
+        && !with(ctx, |state| state.restored_focus(Some(widget)).is_some())
+    {
+        egui_focus::surrender(ctx, widget);
+    }
+    if let Some(widget) = with(ctx, |state| state.surrender_after_scopes.take()) {
+        // A field in a scope that restores focus to an opener (a popover, a dialog) may be in the scope its Escape closes,
+        // which is only closing by the next pass: it is let go then, once the restoration has had its chance.
+        let restoring = with(ctx, |state| {
+            let key = state.focused.get(&widget).copied().unwrap_or((widget, None));
+            let mut at = state.stops.iter().find(|rec| rec.stop.key() == key).and_then(|rec| rec.scope);
+            while let Some(id) = at {
+                let Some(scope) = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id)) else { break };
+                if scope.opener.is_some() {
+                    return true;
+                }
+                at = scope.parent;
+            }
+            false
+        });
+        if restoring {
+            with(ctx, |state| state.surrender_deferred = Some(widget));
+        } else {
+            egui_focus::surrender(ctx, widget);
+        }
     }
     let app_widget = |id: Id| {
         let made = crate::runtime::pointer::made_by_component(ctx, viewport, id);

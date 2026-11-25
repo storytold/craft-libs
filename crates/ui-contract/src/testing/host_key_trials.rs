@@ -172,6 +172,85 @@ fn a_focused_egui_field_takes_the_ime() {
     assert_eq!(host.borrow().text, "世", "the commit reaches the field");
 }
 
+fn host_editor_id() -> Id {
+    named_id("host editor")
+}
+
+/// A window with the app's own IME editor (`fixture::host_ime_editor`), and the text it holds.
+fn host_editor() -> (Rc<RefCell<String>>, impl FnMut(&mut Ui)) {
+    let text = Rc::new(RefCell::new(String::new()));
+    let held = Rc::clone(&text);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    (text, move |ui: &mut Ui| fixture::host_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut()))
+}
+
+/// A press during the app's own editor's composition interrupts it, in the editor's own IME context, and fences the
+/// composition's late deletion and commit, which the one-press rule holds for the next frame, until the reset
+/// completes; the events after the completion reach the editor.
+#[trial]
+fn a_press_during_an_app_editor_s_composition_fences_its_late_ime_events() {
+    let (editor, mut show) = host_editor();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("ab".to_owned()))], &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "z".to_owned(), active_range_chars: None })], &mut show);
+    let at = Pos2::new(150.0, 115.0);
+    let late = vec![
+        moved(at),
+        press(at),
+        Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+        Event::Ime(ImeEvent::Commit("Q".to_owned())),
+    ];
+    frames.frame(late, &mut show);
+    let ime = frames.ime();
+    assert!(ime.is_some(), "the editor writes the pass's IME output");
+    let Some(ime) = ime else { return };
+    assert!(ime.owner == host_editor_id() && ime.interrupt, "the press interrupts the editor's composition in its own context");
+    assert!(ime.reset.is_some(), "the interrupt asks for a reset");
+    let Some(reset) = ime.reset else { return };
+    frames.frame(vec![release(at)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(*editor.borrow(), "ab", "the composition's late deletion and commit never reach the editor");
+    frames.frame(vec![Event::ImeResetCompleted { request_id: reset }, Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(*editor.borrow(), "abX", "the commit after the completion reaches the editor");
+}
+
+/// An app editor that asks for its own reset at the press that interrupts its composition keeps that request: the
+/// platform is asked to answer the app's id, the late events stay fenced, and the completion reaches the editor, which
+/// takes the events after it and composes again.
+#[trial]
+fn an_app_editor_s_own_reset_at_the_press_reaches_it_and_it_composes_again() {
+    let editor = Rc::new(RefCell::new(fixture::ResettingEditor::default()));
+    let held = Rc::clone(&editor);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    let mut show = move |ui: &mut Ui| fixture::host_resetting_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut());
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("ab".to_owned()))], &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "z".to_owned(), active_range_chars: None })], &mut show);
+    let at = Pos2::new(150.0, 115.0);
+    let late = vec![
+        moved(at),
+        press(at),
+        Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+        Event::Ime(ImeEvent::Commit("Q".to_owned())),
+    ];
+    frames.frame(late, &mut show);
+    let own = editor.borrow().reset;
+    assert!(own.is_some(), "the editor asked for its own reset at the press");
+    let reset = frames.ime().and_then(|ime| ime.interrupt.then_some(ime.reset).flatten());
+    assert_eq!(reset, own, "the interrupt asks the platform to answer the editor's own request");
+    let Some(reset) = reset else { return };
+    frames.frame(vec![release(at)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(editor.borrow().text, "ab", "the composition's late deletion and commit never reach the editor");
+    frames.frame(vec![Event::ImeResetCompleted { request_id: reset }, Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(editor.borrow().reset, None, "the completion of its own request reaches the editor");
+    assert_eq!(editor.borrow().text, "abX", "the commit after it reaches the editor");
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "y".to_owned(), active_range_chars: None })], &mut show);
+    assert!(editor.borrow().composing, "the editor composes again");
+}
+
 #[trial]
 fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     let (host, mut show) = host_window();
@@ -325,6 +404,39 @@ fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
     assert_eq!(tab_from_nothing(Before::Unstopped, false), (None, true), "egui's Tab gives no focus to a component's widget without a stop");
     let (focused, reached) = tab_from_nothing(Before::FocusedUnstopped, false);
     assert!(focused.is_some() && focused != first && !reached, "egui focus on that widget is focus: the Tab is not egui's and moves nothing");
+}
+
+/// A window whose only stop is the app's own canvas, between two of the app's own buttons: a bare Tab moves egui
+/// focus through egui's order, from nothing focused and from the canvas alike, and a canvas that keeps Tab keeps it.
+#[trial]
+fn tab_moves_egui_focus_through_the_app_s_widgets_while_every_stop_is_a_host_stop() {
+    let (first, canvas, last) = (named_id("host first"), named_id("host canvas"), named_id("host last"));
+    let keeps = Rc::new(Cell::new(false));
+    let reached = Rc::new(Cell::new(false));
+    let (keep, seen) = (Rc::clone(&keeps), Rc::clone(&reached));
+    let mut show = move |ui: &mut Ui| {
+        seen.set(seen.get() || key_reached(ui.ctx(), Key::Tab));
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)));
+        fixture::host_button(ui, canvas, Rect::from_min_size(Pos2::new(220.0, 300.0), egui::vec2(80.0, 30.0)));
+        host_canvas(ui.ctx(), canvas, if keep.get() { KeyUse::CANVAS.with_keep(KeepKeys::Tab) } else { KeyUse::CANVAS });
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(340.0, 300.0), egui::vec2(80.0, 30.0)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let tab = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
+        reached.set(false);
+        frames.frame(vec![key_press(Key::Tab, Modifiers::NONE), key_release(Key::Tab, Modifiers::NONE)], &mut *show);
+        frames.frame(Vec::new(), &mut *show);
+        (egui_focused(&frames.ctx), reached.get())
+    };
+    assert_eq!(tab(&mut frames, &mut show), (Some(first), true), "Tab from nothing gives egui focus to the first widget in egui's order");
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "the next Tab reaches the canvas");
+    assert_eq!(tab(&mut frames, &mut show), (Some(last), true), "Tab from the canvas moves on through egui's order");
+    keeps.set(true);
+    request(&frames.ctx, FocusTarget::Id(canvas));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas));
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "a canvas that keeps Tab gets it from egui and keeps the focus");
 }
 
 #[trial]

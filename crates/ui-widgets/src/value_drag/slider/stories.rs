@@ -1,7 +1,7 @@
 //! Stories of `Slider`, in the old gallery's groups: Values, Step, Disabled and Right to left as form rows, then the
 //! groups the old gallery did not have.
 
-use super::{Slider, SliderScale, SliderThumb};
+use super::{Slider, SliderScale, SliderThumb, TrackPress};
 use crate::contract::{Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Progress;
 use crate::form::Field;
@@ -55,6 +55,13 @@ fn slider_marks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Slider<'static>, covers = [], drive = Drive::Never, group = "Values", title = "Triangle, ticks")]
 fn slider_triangle_ticks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Slider::new(data.bind_ranged("value", 30.0, RANGE), RANGE).thumb(SliderThumb::Triangle).ticks(10).label("Triangle").show(ui).into()
+}
+
+/// A press on the track sets the value as the button goes down, not on its release (`TrackPress::OnPress`): the
+/// thumb answers the first touch, as an editor's live preview wants.
+#[story(Slider<'static>, covers = [], drive = Drive::Never, group = "Track press", title = "On press")]
+fn slider_track_on_press(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Slider::new(data.bind_ranged("value", 50.0, RANGE), RANGE).track_press(TrackPress::OnPress).label("On press").show(ui).into()
 }
 
 /// A slider of the "Step" group: steps of `step` from `start`.

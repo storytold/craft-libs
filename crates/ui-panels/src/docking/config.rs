@@ -68,7 +68,8 @@ pub struct DockConfig {
     /// the drag; only Ctrl/Cmd held at the release or a release outside the window floats.
     pub float_on_empty_drop: bool,
     /// Dragging a floating window's title bar onto a drop target docks the whole window there. Off: the title bar
-    /// only moves the window; tabs and drag bars dock.
+    /// only moves the window; tabs and drag bars dock, and so does a window that took over a panel's drag
+    /// (`DockArea::continue_move`).
     pub title_bar_docks: bool,
     /// Shows the built-in Close items in tab and group menus for closable panels. A host that draws its own Close
     /// items turns this off.

@@ -18,9 +18,9 @@ use crate::contract::{
 };
 use crate::menu::GroupItem;
 use crate::primitives::{IconSpec, TextRun};
-use crate::runtime::env::Label;
+use crate::runtime::env::{EnvValue, Label};
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
+use crate::style::{ComponentStyle, Corners, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
@@ -99,6 +99,20 @@ pub enum IconicMode {
     Rail,
 }
 
+/// What marks the icon groups of a collapsed column apart. An app sets it once at its root (`RootEnv::values`). Either
+/// way each group keeps its grip strip above its first icon, which drags the group.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum IconGroupSeparator {
+    /// Each group's grip strip shows the dock's grip marks (`shape.grip`, in `line.grip`).
+    #[default]
+    Grip,
+    /// The grip strips are bare, and an edge rule (`line.border`) lies level across the room between two groups,
+    /// `space.gap.inline` short of the column's sides: VectorCraft's icon groups, as production drew them.
+    Rule,
+}
+
 /// What an iconic column reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -166,6 +180,10 @@ pub struct IconicColumnStyle {
     name_gap: f32,
     /// The marks of a group's grip.
     grip: GripMarks,
+    /// What marks the icon groups apart.
+    separator: IconGroupSeparator,
+    /// How far short of the column's sides a [`IconGroupSeparator::Rule`] stops.
+    rule_inset: f32,
     /// The card of a column shown as one ([`card`](IconicColumn::card)).
     card: SurfaceStyle,
 }
@@ -501,6 +519,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name_gap: cx.tokens.space.gap.item,
             // The references' grip: a row of upright ticks, in the theme's grip ink.
             grip: GripMarks::style(cx),
+            separator: cx.env::<IconGroupSeparator>(),
+            rule_inset: cx.tokens.space.gap.inline,
             card: card_style(cx),
         }
     }
@@ -674,8 +694,18 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             ui.face(CELL.at(at as u64), cell);
         }
         let style = &cx.style;
-        for (_, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
-            style.grip.paint_in(ui, *strip);
+        if let Some(plan) = self.laid.as_ref() {
+            match style.separator {
+                IconGroupSeparator::Grip => plan.grips.iter().for_each(|(_, strip)| style.grip.paint_in(ui, *strip)),
+                IconGroupSeparator::Rule => {
+                    let xs = plan.body.x_range().shrink(style.rule_inset);
+                    // In the middle of the room from a group's last icon to the next group's first.
+                    for ((_, above), (_, strip)) in plan.groups.iter().zip(plan.grips.iter().skip(1)) {
+                        let y = (above.bottom() + strip.bottom()) / 2.0;
+                        ui.draw().rule(RuleKind::Edge, Pos2::new(xs.min, y), Pos2::new(xs.max, y));
+                    }
+                }
+            }
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
         // edges are the window's.
