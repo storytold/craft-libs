@@ -688,7 +688,7 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: 
         state.keyboard.key = Some(key);
     }
     if let Some(c) = go {
-        state.go_to(&c);
+        state.go_to(env, &c);
     }
     if assign && let (Some(command), Some(key)) = (state.selected.clone(), state.keyboard.key) {
         let trigger = Trigger::single(Chord { mods, key });

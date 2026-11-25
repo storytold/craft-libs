@@ -1,6 +1,6 @@
-//! The places a dock area drew in a pass where a press starts a dock gesture: tabs, group bars, a floating window's
-//! grip and resize grips, and the dividers. A host names them for its own automation (an element id per source) and
-//! reads which one holds key focus by the source's node id.
+//! The places a dock area drew in a pass where a press starts a dock gesture: tabs, group bars, a tab strip's overflow
+//! button, a floating window's grip and resize grips, and the dividers. A host names them for its own automation (an
+//! element id per source) and reads which one holds key focus by the source's node id.
 
 use crate::runtime::windows::ResizeEdge;
 use egui::{Id, Rect, ViewportId};
@@ -38,6 +38,9 @@ pub enum SourceKind<P> {
     Document(P, u64),
     /// The bar a group is dragged by, named by the group's first panel.
     GroupBar(P),
+    /// The overflow button of a group's tab strip, named by the group's first panel: a click opens the menu of the tabs
+    /// that do not fit. Only while some tabs do not fit.
+    Overflow(P),
     /// The band a floating window is moved by, named by the window's first panel.
     WindowGrip(P),
     /// A grip a floating window is resized by, named by the window's first panel, with the edge or corner it moves.

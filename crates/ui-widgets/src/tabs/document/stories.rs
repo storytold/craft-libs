@@ -96,3 +96,19 @@ fn semibold_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         |ui| DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).show(ui).response.into(),
     )
 }
+
+/// VectorCraft's close buttons (`TabCloseLook::Glyph`): the × alone, a small muted glyph that turns to the text colour
+/// under the pointer, with no fill.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never, title = "Close glyph")]
+fn close_glyph_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tabs = [DocumentTab::new(0, "Untitled-1 @ 93.5 % (RGB/Preview)").modified(true).name_len(10), DocumentTab::new(1, "Poster.vectorcraft")];
+    let shown = *data.value("shown", 0_usize);
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(crate::tabs::DocumentTabLook::Semibold);
+            overrides.values.set(crate::tabs::TabCloseLook::Glyph);
+        },
+        |ui| DocumentTabs::new("Documents", &tabs).selected(shown).show(ui).response.into(),
+    )
+}

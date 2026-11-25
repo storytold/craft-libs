@@ -287,6 +287,10 @@ pub struct Options {
     /// The window title [`ShortcutsDialog::show`] draws and the summary's heading, already translated.
     /// `None`: the dialog's own "Keyboard Shortcuts".
     pub title: Option<String>,
+    /// `None`: an editable dialog opens at the room the window gives it, and a read-only one at a moderate fixed size.
+    /// Otherwise the dialog opens at this size, in points, until the user resizes it; a size that is not finite is
+    /// ignored.
+    pub size: Option<egui::Vec2>,
     /// true; false shows the table read-only with Close and Summarize.
     pub editable: bool,
     /// The name, already translated, that edits of a built-in set are saved under. `None`: the dialog's own
@@ -308,6 +312,10 @@ pub struct Options {
     pub area_tabs: bool,
     /// The app's own Show entries.
     pub areas: Vec<Area>,
+    /// false: Show lists All Commands, each menu, Tools, each panel and Other before the app's own
+    /// [`areas`](Self::areas); true: it lists only the app's own entries (and Fixed Keys), and the
+    /// dialog opens on the first of them.
+    pub own_areas: bool,
     /// `None`: every catalog entry is listed. Otherwise the table, its Show entries and search
     /// list only the entries it returns true for; the others keep their bindings and still count
     /// in conflicts.
@@ -336,6 +344,7 @@ impl Default for Options {
     fn default() -> Options {
         Options {
             title: None,
+            size: None,
             editable: true,
             custom_set_name: None,
             conflicts: ConflictMode::Ask,
@@ -346,6 +355,7 @@ impl Default for Options {
             sort_by_label: false,
             area_tabs: false,
             areas: Vec::new(),
+            own_areas: false,
             visible: None,
             keyboard: false,
             keyboard_height: None,
@@ -622,10 +632,15 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
     // A read-only reference opens at a fixed, moderate height (production's key list scrolls inside it), not at the
     // window's; the user's own resize is still remembered.
     let reference = !env.options.editable;
+    let asked = env.options.size.filter(|size| size.is_finite());
+    let size = asked.or(reference.then_some(egui::vec2(READ_ONLY_WIDTH, READ_ONLY_HEIGHT)));
     let session = RefCell::new(Session { env, state });
     let shown = Dialog::new(title)
         .resizable(true)
-        .overlay(|overlay| if reference { overlay.size(egui::vec2(READ_ONLY_WIDTH, READ_ONLY_HEIGHT)) } else { overlay })
+        .overlay(|overlay| match size {
+            Some(size) => overlay.size(size),
+            None => overlay,
+        })
         .remember(SaveKey::new("craft_menu.shortcuts"))
         .outer_gesture(true)
         .collection_body()

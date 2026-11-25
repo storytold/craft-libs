@@ -92,7 +92,7 @@ fn message(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) {
     }
     let out = notice.show(ui);
     match (out.action, &goto) {
-        (Some(0), Some(command)) => state.go_to(command),
+        (Some(0), Some(command)) => state.go_to(env, command),
         (Some(at), Some(_)) if undo && at == 1 => state.undo(env),
         (Some(0), None) if undo => state.undo(env),
         _ => {}

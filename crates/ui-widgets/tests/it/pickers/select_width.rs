@@ -43,3 +43,30 @@ fn a_quiet_select_fits_the_entry_it_shows() {
     let (short, long) = (quiet_width(0), quiet_width(1));
     assert!(short > 0.0 && short < long, "the quiet select is narrower showing the short entry: {short} against {long}");
 }
+
+/// A filled select (`SelectLook::Filled`, VectorCraft's status bar) paints its closed box in `surface.control`, which
+/// a field does not, and keeps a field's width whichever entry it shows.
+#[trial]
+fn a_filled_select_lies_on_the_control_surface_at_a_fields_width() {
+    let shown = |look: SelectLook, held: u8| {
+        let rect = Rc::new(Cell::new(egui::Rect::NOTHING));
+        let seen = rect.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let entries = [Entry::new(0u8, "Essentials"), Entry::new(1u8, "Print production and prepress")];
+            seen.set(Select::new("Workspace", Bind::given(held), &entries).look(look).show(ui).response.rect);
+        });
+        fixture.settle();
+        let control = craft_ui::style::StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.control).0;
+        let control = egui::Color32::from_rgba_unmultiplied(control[0], control[1], control[2], control[3]);
+        let box_rect = rect.get();
+        let filled = fixture.frame_shapes().iter().any(|shape| {
+            matches!(shape, egui::Shape::Rect(fill) if fill.fill == control && fill.rect.expand(0.5).contains_rect(box_rect) && box_rect.expand(0.5).contains_rect(fill.rect))
+        });
+        (box_rect.width(), filled)
+    };
+    let ((short, filled), (long, _)) = (shown(SelectLook::Filled, 0), shown(SelectLook::Filled, 1));
+    assert!(filled, "the filled select's box is surface.control");
+    assert!((short - long).abs() <= 0.5, "the filled select keeps its width: {short} against {long}");
+    let (_, field) = shown(SelectLook::Field, 0);
+    assert!(!field, "a field's box is not surface.control");
+}

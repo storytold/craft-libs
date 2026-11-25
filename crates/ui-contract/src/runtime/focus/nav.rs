@@ -184,6 +184,7 @@ impl State {
     pub(super) fn rotate(&mut self) {
         self.last_stops = std::mem::take(&mut self.stops);
         self.stop_ids.clear();
+        self.stop_roots.clear();
         self.last_scopes = std::mem::take(&mut self.scopes);
         self.last_scope_order = std::mem::take(&mut self.scope_order);
         self.last_groups = std::mem::take(&mut self.groups);
@@ -193,6 +194,7 @@ impl State {
         self.body_from.clear();
         self.entered = false;
         self.asked = false;
+        self.candidates_seen = 0;
     }
 
     /// The registrations of last pass, which Tab and the arrows move over.
@@ -228,10 +230,12 @@ impl State {
             .or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.root == root).cloned())
     }
 
-    /// Whether `id`, holding egui focus, is an app's own widget: no stop's root and, as `made` says, no widget a
-    /// component made (`pointer::made_by_component`).
+    /// Whether `id`, holding egui focus, is an app's own widget: as `made` says, no widget a component made
+    /// (`pointer::made_by_component`), and the root of no stop but the one every focusable egui widget of the app has
+    /// (`Stop::automatic`). The app's canvas (`host_canvas`, `KeyUse::chrome_key`) is none: its declared
+    /// keys route as a framework stop's do, so egui's arrows and Tab never move focus off it.
     pub(super) fn app_widget(&self, id: Id, made: bool) -> bool {
-        !made && self.find_stop((id, None)).is_none() && !self.stops.iter().chain(&self.last_stops).any(|rec| rec.stop.root == id)
+        !made && !self.stops.iter().chain(&self.last_stops).any(|rec| !rec.stop.automatic() && (rec.stop.root == id || rec.stop.key() == (id, None)))
     }
 
     /// Moves focus to `rec` and asks the enclosing scroll owner to reveal it: the egui widget is its root, and the stop
@@ -873,6 +877,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         menu_bar_by_claim: std::mem::take(&mut state.menu_bar_by_claim),
         canvas: if stop.is_none() { state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.id) } else { None },
         foreign: false,
+        tab_in_egui: false,
         host_focus: false,
         host_text: false,
         label_selection: false,

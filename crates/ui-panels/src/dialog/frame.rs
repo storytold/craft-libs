@@ -278,7 +278,7 @@ pub const SIDE_BUTTONS: EndRegion = EndRegion::new().gap(REGION_GAP);
 /// `size.dialog.least` with paragraphs wrapping at `size.dialog.wrap`. A layer scrolls its body vertically unless the
 /// body is a collection; a frame in a parent's flow asks for the scroll itself.
 pub(crate) fn chrome_props() -> ContainerProps {
-    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Regular).header(HEADER).least_width(LeastWidth::Dialog).wrap_width(WrapWidth::Dialog)
+    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Dialog).header(HEADER).least_width(LeastWidth::Dialog).wrap_width(WrapWidth::Dialog)
 }
 
 /// The style of a dialog frame: the surface and padding come from the container.
@@ -313,7 +313,7 @@ impl<'a> DialogFrame<'a> {
     /// The larger frame margin.
     #[must_use]
     pub fn roomy(mut self, on: bool) -> Self {
-        self.props = self.props.pad(if on { Pad::Roomy } else { Pad::Regular });
+        self.props = self.props.pad(if on { Pad::Roomy } else { Pad::Dialog });
         self
     }
 
