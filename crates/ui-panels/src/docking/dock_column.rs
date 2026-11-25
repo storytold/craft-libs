@@ -339,14 +339,28 @@ pub(crate) fn card_style(cx: &StyleCx<'_>) -> SurfaceStyle {
     SurfaceStyle { radius: UiTokens::corner(cx.tokens.shape.radius.surface), edge: SurfaceEdge::None, shadow: None, ..cx.surface(SurfaceKind::Panel) }
 }
 
-/// Paints a column in `rect` whose content sits in `card`: the card over the dock's background where the column is
-/// one, else the column's panel surface.
-pub(crate) fn paint_card(ui: &mut PaintUi<'_>, rect: Rect, card: Rect, style: &SurfaceStyle) {
+/// Paints a column in `rect` whose content sits in `card`, with its own `bar` if it has one, beside tabs in `look`: the
+/// card over the dock's background where the column is one, else the column's panel surface; the bar on the surface
+/// of the dock's strips. A card's bar is part of the card, unless the strips have a surface of their own
+/// ([`PanelTabLook::Block`]): then it is a square strip across the card's top, and only the card's foot is rounded.
+pub(crate) fn paint_card(ui: &mut PaintUi<'_>, rect: Rect, card: Rect, style: &SurfaceStyle, bar: Option<Rect>, look: PanelTabLook) {
+    let strip = strip_surface(look);
     if card == rect {
         ui.draw().surface(rect, SurfaceKind::Panel, Corners::All);
-    } else {
-        ui.draw().surface(rect, SurfaceKind::Background, Corners::None);
-        ui.draw().surface_styled(card, style);
+        if let Some(bar) = bar {
+            ui.draw().surface(bar, strip, Corners::None);
+        }
+        return;
+    }
+    ui.draw().surface(rect, SurfaceKind::Background, Corners::None);
+    match bar.filter(|_| look == PanelTabLook::Block) {
+        Some(bar) => {
+            let mut foot = *style;
+            (foot.radius.nw, foot.radius.ne) = (0, 0);
+            ui.draw().surface_styled(card, &foot);
+            ui.draw().surface(bar, strip, Corners::None);
+        }
+        None => ui.draw().surface_styled(card, style),
     }
 }
 
@@ -522,15 +536,10 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
         let Some(plan) = self.laid.as_ref() else { return };
         // Painted here, not as the container's surface, which lies over what `paint` draws.
         let card = self.inner(cx.rect, cx.flow.is_rtl(), &cx.style.sizes);
-        paint_card(ui, cx.rect, card, &cx.style.card);
-        if self.bar == ColumnBar::Own {
-            // A card's bar is part of the card.
-            if card == cx.rect {
-                ui.draw().surface(plan.bar, strip_surface(self.tab_look), Corners::None);
-            }
-            if self.arrow.shown() {
-                paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
-            }
+        let bar = (self.bar == ColumnBar::Own).then_some(plan.bar);
+        paint_card(ui, cx.rect, card, &cx.style.card, bar, self.tab_look);
+        if self.bar == ColumnBar::Own && self.arrow.shown() {
+            paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
     }
 

@@ -5,7 +5,7 @@ use super::dock_column::{
     BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, card_rect, card_style, column_grip, describe_chevron, paint_card, paint_chevron,
     register_edges, show_bar,
 };
-use super::group::{GripMarks, strip_surface};
+use super::group::GripMarks;
 use super::{CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::{ActiveLook, IconButton};
 use crate::contract::overlay::Anchor;
@@ -701,12 +701,9 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         // Painted here, not as the container's surface, which lies over what `paint` draws.
         let card = card_rect(cx.rect, self.card, &cx.style.sizes.column, self.edge, cx.flow.is_rtl());
-        paint_card(ui, cx.rect, card, &cx.style.card);
+        let bar = (self.bar == ColumnBar::Own).then_some(self.bar_rect);
+        paint_card(ui, cx.rect, card, &cx.style.card, bar, self.tab_look);
         if self.bar == ColumnBar::Own {
-            // A card's bar is part of the card.
-            if self.card.is_none() {
-                ui.draw().surface(self.bar_rect, strip_surface(self.tab_look), Corners::None);
-            }
             paint_chevron(ui, self.edge, ColumnArrow::Collapse, self.expanded(), cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
         let flat = self.flat();
