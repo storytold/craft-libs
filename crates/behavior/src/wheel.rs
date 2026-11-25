@@ -428,14 +428,17 @@ impl<O> WheelTaker<O> {
 
     /// The taker a shape with `sense` registers, `None` when `sense` has no wheel bit: `WHEEL` takes both scroll
     /// axes and zoom; `WHEEL_X`, `WHEEL_Y` and `WHEEL_ZOOM` take one share each and combine; `WHEEL_ZOOMS_VIEW`
-    /// makes a zoom zone.
+    /// makes a zoom zone; `WHEEL_Y_FOCUSED` takes the vertical share and makes the taker gated, so every axis it takes
+    /// waits for focus or arming.
     pub fn for_sense(owner: O, rect: Rect, sense: Sense) -> Option<Self> {
         let all = sense.contains(Sense::WHEEL);
+        let focused = sense.contains(Sense::WHEEL_Y_FOCUSED);
         let taker = WheelTaker::new(owner, rect)
             .horizontal(all || sense.contains(Sense::WHEEL_X))
-            .vertical(all || sense.contains(Sense::WHEEL_Y))
+            .vertical(all || focused || sense.contains(Sense::WHEEL_Y))
             .zoom(all || sense.contains(Sense::WHEEL_ZOOM))
-            .zooms_view(sense.contains(Sense::WHEEL_ZOOMS_VIEW));
+            .zooms_view(sense.contains(Sense::WHEEL_ZOOMS_VIEW))
+            .gated(focused);
         (taker.horizontal || taker.vertical || taker.zoom || taker.zooms_view).then_some(taker)
     }
 

@@ -1,8 +1,8 @@
 //! `Slider`: a thumb on a track over an `f64` range. A press on the thumb grabs it and a drag moves it by the pointer's
-//! travel; a press on the track jumps the thumb there; arrows, the wheel and AccessKit step the value; a double click
-//! or the reset intent restores the binding's reset value. The vertical wheel steps it while it is focused or armed, so
-//! a panel scrolls over it; inside a `WheelScope::Free` scope (an adjustment dialog) without focus too. The track maps
-//! positions to values through a [`SliderScale`], linear by default.
+//! travel; a press on the track, or any press while the value is mixed, jumps the thumb there; arrows, the wheel and
+//! AccessKit step the value; a double click or the reset intent restores the binding's reset value. The vertical wheel
+//! steps it while it is focused or armed, so a panel scrolls over it; inside a `WheelScope::Free` scope (an adjustment
+//! dialog) without focus too. The track maps positions to values through a [`SliderScale`], linear by default.
 
 use super::track::{self, Along, Fill, MarkInk, MarkSpace, Marks, Press, Scale, SliderScale, ThumbRing, TrackFace, Travel};
 use crate::contract::{
@@ -328,7 +328,11 @@ impl Component for Slider<'_> {
             marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)))
         };
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(|| scale.middle());
-        let press_at = |cx: &Cx<'_, Self>, x: f32| pick.press(&[along.x(scale.position(current(cx)))], x);
+        // A mixed value has no thumb to grab, so a press anywhere jumps it to the pointer: a click sets that value.
+        let press_at = |cx: &Cx<'_, Self>, x: f32| match cx.value() {
+            Some(value) => pick.press(&[along.x(scale.position(*value))], x),
+            None => Some(Press::Jump(0)),
+        };
         // Multi-clicks keep the legacy track path: reset wins on Down, and a later drag
         // can still begin from the reset value through the existing DragStart handling.
         let follow_track_on_down = self.track_press == TrackPress::OnPress
@@ -392,8 +396,8 @@ impl Component for Slider<'_> {
                         && let Some(jump @ Press::Jump(_)) = press_at(&*cx, start.origin.x)
                         && let Some(next) = travel.value(jump, 0.0, &press, false)
                     {
-                        // A press on the track jumps to the pointer; a click on the thumb changes nothing. A second
-                        // click is the reset, which the pipeline applies.
+                        // A press on the track, or on a mixed slider, jumps to the pointer; a click on the thumb
+                        // changes nothing. A second click is the reset, which the pipeline applies.
                         cx.set(at(next));
                     }
                 }

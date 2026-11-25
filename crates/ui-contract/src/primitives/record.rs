@@ -54,7 +54,8 @@ impl std::fmt::Debug for Adopted {
 pub struct FaceRecord {
     /// The part the face looks for.
     pub part: PartRef,
-    /// The instance's resolved label, the full text when elided.
+    /// The text the face's `access` named it with (`Name::Text` or `Name::Joined`), else the instance's resolved
+    /// label, the full text when elided.
     pub name: String,
     /// The face's value flags.
     pub flags: crate::style::Flags,

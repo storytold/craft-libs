@@ -4,42 +4,33 @@ use crate::runtime::env::WheelScope;
 use crate::runtime::wheel;
 use crate::style::{Flags, StateSet};
 use craft_theme::{State, StateMix};
-use egui::{Context, Id, Rect};
+use egui::{Context, Id};
 
 /// Registers a wheel taker for next pass's split (8.6): `sensed`, the taker the wheel bits of the component's sense
-/// make (`WheelTaker::for_sense`). Every value control is a `WheelTaker::value` taker, in any scope: a wheel gesture it
-/// owns ends with a `WheelPhase::End` share. A value control with a text part that steps by the wheel (it senses a
-/// wheel axis: a number field) is a field (`WheelTaker::field`), which takes the plain wheel while focused wherever the
-/// pointer is; a text field that does not step leaves the wheel over the rest of the window to what is there. A value
-/// control takes the wheel only while focused or armed, on the axes it senses (the vertical one when it senses none);
-/// inside a `WheelScope::Free` scope one that senses the wheel takes it without focus. A value control that steps by
-/// the wheel declares the axis it steps in its sense, so a free scope frees it; one that does not step keeps the
-/// fallback and stays gated. Inside a `WheelScope::Gated` scope every taker waits for focus or arming. A zoom zone that
+/// make (`WheelTaker::for_sense`). A component that senses no wheel bit takes no wheel, value control or not: the wheel
+/// over a focused check box or text field scrolls the region around it, as native controls do, and a multi-line text
+/// part whose text overflows registers its own scroll taker (`text_adapter`), which passes the wheel on at its ends.
+/// Every value control that takes the wheel is a `WheelTaker::value` taker, in any scope: a wheel gesture it owns ends
+/// with a `WheelPhase::End` share. A value control with a text part that steps by the wheel (a number field) is a field
+/// (`WheelTaker::field`), which takes the plain wheel while focused wherever the pointer is. A value control takes the
+/// wheel only while focused or armed, on the axes it senses; inside a `WheelScope::Free` scope one that senses the
+/// wheel takes it without focus, unless it senses `Sense::WHEEL_Y_FOCUSED`, which no scope frees (a range whose wheel
+/// steps its focused thumb). Inside a `WheelScope::Gated` scope every taker waits for focus or arming. A zoom zone that
 /// takes no axis itself waits only for a gated scope: its wheel goes to the view around it.
-pub(crate) fn register_wheel(
-    ctx: &Context,
-    id: Id,
-    rect: Rect,
-    sensed: Option<craft_behavior::WheelTaker<Id>>,
-    value_control: bool,
-    text: bool,
-    scope: WheelScope,
-) {
-    let free = sensed.is_some() && scope == WheelScope::Free;
-    let directional = sensed.is_some() && value_control && scope == WheelScope::Directional;
-    let zone = sensed.is_some_and(|taker| taker.zooms_view && !(taker.horizontal || taker.vertical || taker.zoom));
-    let taker = sensed.or_else(|| value_control.then(|| craft_behavior::WheelTaker::new(id, rect).vertical(true)));
-    if let Some(taker) = taker {
-        wheel::register(
-            ctx,
-            taker
-                .value(value_control)
-                .field(value_control && text && sensed.is_some())
-                .gated(scope == WheelScope::Gated || (value_control && !free && !zone))
-                .horizontal(taker.horizontal || directional)
-                .directional(directional),
-        );
-    }
+pub(crate) fn register_wheel(ctx: &Context, sensed: Option<craft_behavior::WheelTaker<Id>>, value_control: bool, text: bool, scope: WheelScope) {
+    let Some(taker) = sensed else { return };
+    let free = !taker.gated && scope == WheelScope::Free;
+    let directional = value_control && scope == WheelScope::Directional;
+    let zone = taker.zooms_view && !(taker.horizontal || taker.vertical || taker.zoom);
+    wheel::register(
+        ctx,
+        taker
+            .value(value_control)
+            .field(value_control && text)
+            .gated(taker.gated || scope == WheelScope::Gated || (value_control && !free && !zone))
+            .horizontal(taker.horizontal || directional)
+            .directional(directional),
+    );
 }
 
 /// The part states: each part's press and hover from the sensing core, with its own flags.
