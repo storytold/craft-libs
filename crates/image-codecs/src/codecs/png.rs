@@ -2324,6 +2324,9 @@ mod streamed_tests {
     /// gives, at 8 and 16 bits, with a profile, resolution, text and XMP.
     #[test]
     fn streamed_rows_match_the_whole_image_encoder() {
+        // The gate runs every divisor-th (image, level, bands) case, nightly all twelve.
+        let divisor = craft_media_testkit::hostile::divisor();
+        let mut case = 0usize;
         for (layout, sample, ch, bytes, w, h) in
             [(ChannelLayout::Rgba, SampleType::U8, 4usize, 1usize, 1024u32, 1025u32), (ChannelLayout::Rgb, SampleType::U16, 3, 2, 1024, 700)]
         {
@@ -2339,9 +2342,20 @@ mod streamed_tests {
                 .with_meta(meta);
             for level in [PngCompression::Fast, PngCompression::Default] {
                 let opts = EncodeOptions { png_compression: level, ..Default::default() };
+                let one_band = [h];
+                let cases: Vec<&[u32]> = [&[1u32, 77, 300][..], &[256, 256, 256], &one_band]
+                    .into_iter()
+                    .filter(|_| {
+                        case += 1;
+                        (case - 1).is_multiple_of(divisor)
+                    })
+                    .collect();
+                if cases.is_empty() {
+                    continue;
+                }
                 let whole = crate::encode(&img, Format::Png, &opts).unwrap();
                 let (head, zlib, _) = split(&whole);
-                for heights in [&[1u32, 77, 300][..], &[256, 256, 256], &[h]] {
+                for heights in cases {
                     let png = streamed(&img, heights, &opts);
                     let (h2, z2, _) = split(&png);
                     assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");

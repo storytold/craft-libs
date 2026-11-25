@@ -25,6 +25,13 @@ pub(super) const CASES: &[Case] = &[
     Case::new("press-removal", ANY, removal_cancels_a_press),
 ];
 
+/// Whether a click path left the component as it found it: no node state changed and no layer opened. The paths of one
+/// part share a fixture while this holds; a path that moved something starts the next in a fresh fixture, so
+/// a path never sees another's effect.
+fn left_as_found(fixture: &Fixture, before: &HashMap<NodeKey, String>, layers: usize) -> bool {
+    signature(fixture.tree()) == *before && crate::runtime::overlay::open_entries(fixture.ctx()).len() == layers
+}
+
 /// Enter, Space, AccessKit `Click` and a primary click each give exactly one click on a component that reports
 /// clicks and carries no value (value types are checked by the values case).
 fn each_activation_clicks_once(subject: &Subject) -> Result<(), String> {
@@ -37,13 +44,19 @@ fn each_activation_clicks_once(subject: &Subject) -> Result<(), String> {
         if !matches!(plan, Plan::Activate) || !fixture.tree().declares_key(root.node, Declared::Click) {
             continue;
         }
+        // The variants share one fixture while each leaves the component as it found it ([`left_as_found`]).
+        let mut shared: Option<Fixture> = None;
         for variant in variants(plan, subject.probe) {
-            let mut fixture = input_fixture(story);
+            let mut fixture = shared.take().unwrap_or_else(|| input_fixture(story));
+            let (before, layers) = (signature(fixture.tree()), crate::runtime::overlay::open_entries(fixture.ctx()).len());
             fixture.take_outputs();
             run(&mut fixture, plan, variant);
             let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
             if clicks != 1 {
                 return Err(format!("{}: {} gave {clicks} clicks", story.name, variant_name(plan, variant)));
+            }
+            if left_as_found(&fixture, &before, layers) {
+                shared = Some(fixture);
             }
         }
     }
@@ -82,12 +95,15 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
                 (2, "Enter", keys[0].1 && declares(Declared::Focus)),
                 (3, "Space", keys[1].1 && declares(Declared::Focus)),
             ];
+            // The paths of a part share one fixture while each leaves the component as it found it ([`left_as_found`]).
+            let mut shared: Option<Fixture> = None;
             for (path, name, _) in paths.into_iter().filter(|(_, _, has)| *has) {
-                let mut fixture = input_fixture(story);
+                let mut fixture = shared.take().unwrap_or_else(|| input_fixture(story));
                 let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
                 if fixture.tree().data_of(target.node).is_some_and(|node| node.is_disabled()) {
                     continue;
                 }
+                let (before, layers) = (signature(fixture.tree()), crate::runtime::overlay::open_entries(fixture.ctx()).len());
                 fixture.take_outputs();
                 match path {
                     0 => {
@@ -106,6 +122,9 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
                 let clicks = fixture.take_outputs().iter().filter(|output| output.activated()).count();
                 if clicks != 1 {
                     return Err(format!("{}: {name} on the part {part:?} gave {clicks} clicks", story.name));
+                }
+                if left_as_found(&fixture, &before, layers) {
+                    shared = Some(fixture);
                 }
             }
         }

@@ -321,6 +321,20 @@ pub enum SectionRhythm {
     Spaced,
 }
 
+/// Whether a titled header that draws no rule under it (a quiet title, [`HeaderRegion::heads`]) still heads its body as
+/// a rule would. An app sets it once at its root (`RootEnv::values`); the default is `Ruled`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum QuietHeader {
+    /// The body's first section draws its own rule above, as under no header.
+    #[default]
+    Ruled,
+    /// The header heads the body: its flow starts as after a rule, so the first section under the title draws no rule
+    /// above it and sections after it keep theirs. Production VectorCraft's kind line over its inspector's sections.
+    Heads,
+}
+
 /// A header region, filled by `Container::header`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -332,6 +346,9 @@ pub struct HeaderRegion {
     /// Whether a rule separates the header from the body, in a band of its own between them. An inline header has no
     /// rule.
     pub rule: bool,
+    /// Whether the header is a title that heads the body as a rule would where the app asks for it
+    /// ([`QuietHeader::Heads`]), though it draws none.
+    pub heads: bool,
     /// Whether a rule runs across the container's width above the header, in a band of its own at the top edge.
     pub rule_above: bool,
     /// Whether the header shares a line with the body: the header at its measured width, the body in the rest.
@@ -351,7 +368,17 @@ pub struct HeaderRegion {
 impl HeaderRegion {
     /// A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
     pub const fn new() -> Self {
-        HeaderRegion { band: DragBand::None, rule: false, rule_above: false, inline: false, trailing: false, fill: None, inset: Pad::None, gap: None }
+        HeaderRegion {
+            band: DragBand::None,
+            rule: false,
+            heads: false,
+            rule_above: false,
+            inline: false,
+            trailing: false,
+            fill: None,
+            inset: Pad::None,
+            gap: None,
+        }
     }
 
     /// The surface of a band behind the header.
@@ -388,6 +415,13 @@ impl HeaderRegion {
     /// Whether a rule separates the header from the body.
     pub const fn rule(mut self, on: bool) -> Self {
         self.rule = on;
+        self
+    }
+
+    /// Whether the header is a title that heads the body as a rule would where the app asks for it
+    /// ([`QuietHeader::Heads`]), though it draws none.
+    pub const fn heads(mut self, on: bool) -> Self {
+        self.heads = on;
         self
     }
 
