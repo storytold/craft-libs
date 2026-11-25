@@ -1798,6 +1798,13 @@ fn measure_step(
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(ctx, row, id, size.x),
         _ => {}
     }
+    // A leaf that fills a shrinking row is no unit of it, but a row under a label counts its least among the controls'.
+    let fills_row = t.fills() == Some(craft_behavior::Axis::X) || begun.common.sizing == Some(super::Sizing::Fill);
+    if let (Some(least), Some(crate::layout::Shrink::Count(row))) = (min_took.filter(|_| fills_row), env.shrink)
+        && shrink.is_none()
+    {
+        crate::layout::report_fill_least(ctx, row, size.x, least.x);
+    }
     // A body that fills the rest of a shrinking row needs at least its content: the row counts it at that width, so
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
