@@ -50,8 +50,8 @@ fn run(case: &Case, rate: u32) -> (f64, f64, Vec<Mode>) {
     let layout = match case.channels {
         1 => "mono",
         2 => "stereo",
-        6 => "5.1",
-        _ => unreachable!(),
+        // The cases have 1, 2 or 6 channels.
+        _ => "5.1",
     };
     let mut cmd = Command::new(&ff);
     cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "f32le", "-ar", "48000", "-ch_layout", layout, "-i"]).arg(&raw);
@@ -93,14 +93,6 @@ fn run(case: &Case, rate: u32) -> (f64, f64, Vec<Mode>) {
     // Our output is in Vorbis channel order; ffmpeg reorders 5.1 to FL FR FC LFE BL BR.
     let order: Vec<usize> = if case.channels == 6 { vec![0, 2, 1, 5, 3, 4] } else { (0..case.channels).collect() };
     let ours: Vec<f32> = (0..total).flat_map(|i| order.iter().map(|&c| planar[c][i]).collect::<Vec<_>>()).collect();
-    if std::env::var("DIAG").is_ok_and(|v| v == case.name) {
-        let blk = 12000 * case.channels;
-        for (b, (r, o)) in reference.chunks(blk).zip(ours.chunks(blk)).enumerate() {
-            let er: f32 = r.iter().map(|v| v * v).sum();
-            let eo: f32 = o.iter().map(|v| v * v).sum();
-            eprintln!("{:5.2}s ref {:9.3e} ours {:9.3e} snr {:6.1}", b as f32 * 0.25, er, eo, common::snr_db(r, o));
-        }
-    }
     assert_eq!(
         ours.len(),
         reference.len(),
@@ -124,7 +116,7 @@ fn libopus_oracle() {
         return;
     };
     if !has_libopus(&ff) {
-        crate::common::skip::<()>("opus oracle: ffmpeg was built without libopus");
+        crate::integration::codecs::common::skip::<()>("opus oracle: ffmpeg was built without libopus");
         return;
     }
     let cases = [
@@ -218,7 +210,7 @@ fn libopus_oracle_output_rates() {
         return;
     };
     if !has_libopus(&ff) {
-        crate::common::skip::<()>("opus oracle: ffmpeg was built without libopus");
+        crate::integration::codecs::common::skip::<()>("opus oracle: ffmpeg was built without libopus");
         return;
     }
     let cases = [

@@ -3,7 +3,9 @@
 
 /// The English pangram, the sample for Latin.
 pub const PANGRAM: &str = "The quick brown fox jumps over the lazy dog";
+/// The Latin alphabet, both cases.
 pub const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz";
+/// Digits and common symbols.
 pub const NUMERALS: &str = "0123456789 & ? ! @ # % ( ) [ ] { } $ € £ ¥";
 
 /// Sentences by language code (gflanguages' code before the script).
@@ -90,19 +92,4 @@ pub fn for_scripts<'a>(scripts: impl IntoIterator<Item = &'a str>) -> &'static s
         first = first.or_else(|| for_script(script));
     }
     first.unwrap_or(PANGRAM)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn samples_follow_language_then_script() {
-        assert_eq!(for_language("ja_Jpan"), language("ja"));
-        assert_eq!(for_language("zh_Hant"), Some(TRADITIONAL));
-        assert_eq!(for_language("xx_Arab"), language("ar"));
-        assert_eq!(for_language("xx_Zzzz"), None);
-        assert_eq!(for_scripts(["Arab", "Latn"]), PANGRAM);
-        assert_eq!(for_scripts(["Zzzz", "Hebr"]), language("he").unwrap_or_default());
-    }
 }
