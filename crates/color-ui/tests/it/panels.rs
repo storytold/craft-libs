@@ -266,6 +266,28 @@ fn a_shift_drag_moves_the_other_inks_in_proportion() {
     assert!(in_proportion(&before, &after, 0, 4), "the inks kept their proportions ({before:?}, {after:?})");
 }
 
+/// With the host applying each update, a CMYK Shift drag keeps every step in proportion to the colour it began on,
+/// not to the last step's colour, and the commit lands where the last step was.
+#[trial]
+fn an_applied_shift_drag_keeps_each_step_in_proportion() {
+    let mut rig = PanelRig::applying(ColorPanelMode::CmykSliders, Srgba::rgb(0.3, 0.5, 0.6));
+    let from = slider(&rig, 0).center();
+    rig.fixture.hold(Modifiers::SHIFT).drag_hold_at(from, Vec2::new(-10.0, 0.0));
+    let mut steps = vec![last_values(&rig)];
+    for step in 2..=4 {
+        rig.fixture.frame(vec![moved(from + Vec2::new(-10.0 * step as f32, 0.0))]);
+        steps.push(last_values(&rig));
+    }
+    let last = last_values(&rig);
+    rig.fixture.release_at(from + Vec2::new(-40.0, 0.0)).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] < before[0], "the cyan fell ({before:?}, {after:?})");
+    for values in &steps {
+        assert!(in_proportion(&before, values, 0, 4), "each step kept the proportions ({before:?}, {values:?})");
+    }
+    assert!(after.iter().zip(&last).all(|(a, l)| (a - l).abs() < 0.01), "the commit is the last step ({after:?}, {last:?})");
+}
+
 /// Dragged with Command held to zero and back, an RGB slider brings the other channels back in proportion: they
 /// scale from where they stood when the modifier went down, not from the zero they passed through.
 #[trial]
@@ -347,6 +369,36 @@ fn a_drag_moves_one_channel_without_the_modifier_or_in_hsb() {
             assert!((before[channel] - after[channel]).abs() < 0.01, "{mode:?}: channel {channel} kept ({before:?}, {after:?})");
         }
     }
+}
+
+/// Only a pointer drag moves the channels together: a Shift key step on the slider, or a value typed into the
+/// field with Shift held, changes its own channel alone.
+#[trial]
+fn a_shift_key_step_or_typed_value_moves_one_channel() {
+    let start = Srgba::rgb(0.6, 0.4, 0.2);
+    let kept = |rig: &PanelRig, what: &str| {
+        let edits = rig.edits.borrow();
+        let edited = edits.iter().rev().find_map(|(_, edit)| edit.value()).expect("the edit").color;
+        let [before, after] = [start, edited].map(|color| RgbModel.from_srgb(color).values);
+        assert_ne!(before[0], after[0], "{what}: red moved");
+        for channel in [1, 2] {
+            assert!((before[channel] - after[channel]).abs() < 0.01, "{what}: channel {channel} kept ({before:?}, {after:?})");
+        }
+    };
+
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.access(AccessActionKind::Focus, &red).settle();
+    rig.fixture.key(Key::ArrowRight, Modifiers::SHIFT).settle();
+    kept(&rig, "a Shift key step");
+
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let field = rig.fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the red field");
+    rig.fixture.access(AccessActionKind::Focus, &field).settle();
+    rig.fixture.hold(Modifiers::SHIFT).key(Key::A, Modifiers::COMMAND).type_text("200").key(Key::Enter, Modifiers::NONE).settle();
+    kept(&rig, "a value typed with Shift held");
 }
 
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
