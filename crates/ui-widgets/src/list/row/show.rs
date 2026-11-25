@@ -466,7 +466,8 @@ impl Component for ListRow<'_> {
             access.expanded(open);
             if !self.disclosure_by_host {
                 let pattern = if open { &words.collapse } else { &words.expand };
-                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, label));
+                // the triangle names the row as a screen reader hears it
+                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, self.accessible_name.as_deref().unwrap_or(label)));
             }
         }
         let selected =
@@ -590,7 +591,10 @@ impl Component for ListRow<'_> {
             && placed.disclosure.is_some()
             && !self.disclosure_by_host
         {
-            ui.face(DISCLOSURE, Disclosure::new(Bind::given(open)).node(false).label(cx.resolved.label.to_owned()));
+            ui.face(
+                DISCLOSURE,
+                Disclosure::new(Bind::given(open)).node(false).label(self.accessible_name.clone().unwrap_or_else(|| cx.resolved.label.to_owned())),
+            );
         }
         {
             let draw = ui.draw();

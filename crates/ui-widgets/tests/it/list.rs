@@ -1704,6 +1704,33 @@ fn a_filter_matches_any_of_a_rows_texts_and_keeps_the_ancestors_of_a_match() {
     }
 }
 
+/// A group row's triangle is named after the row as a screen reader hears it: a row drawn "March" whose accessible
+/// name is "March 2025" has the triangle "Expand March 2025", so two rows with one caption are told apart. A row
+/// without an accessible name keeps naming its triangle after its label.
+#[trial]
+fn a_triangle_is_named_after_the_rows_accessible_name() {
+    const MONTHS: [(&str, Option<&str>); 3] = [("March", Some("March 2025")), ("March", Some("March 2026")), ("April", None)];
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let list = List::new("Months").tree(true);
+        let _ = list.show_items(ui, &source, &mut |key, _| {
+            let (title, name) = MONTHS[*key];
+            let row = ListRow::new(title).depth(0).group(false);
+            match name {
+                Some(name) => row.accessible_name(name),
+                None => row,
+            }
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    assert!(fixture.by_label("Expand March 2025").is_some(), "the first March's triangle names its year");
+    assert!(fixture.by_label("Expand March 2026").is_some(), "the second March's triangle names its year");
+    assert!(fixture.by_label("Expand March").is_none(), "no triangle is named by the drawn caption alone");
+    assert!(fixture.by_label("Expand April").is_some(), "a row without an accessible name names its triangle after its label");
+}
+
 /// A row that a rename request names stays listed while its rename runs, though the query excludes it, and goes when
 /// the rename ends.
 #[trial]

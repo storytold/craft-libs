@@ -123,6 +123,7 @@ craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
+craft-font-os-windows = { path = "crates/font-os-windows" }
 craft-font-store = { path = "crates/font-store" }
 craft-gainmap = { path = "crates/gainmap" }
 craft-flow = { path = "crates/flow" }
