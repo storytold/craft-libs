@@ -500,6 +500,70 @@ pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
 }
 
+/// A host's own text editor of `id` at `rect`, as a canvas text tool draws it: it reads the IME events from egui's
+/// input into `text` (a commit appends, a deletion before the caret removes characters from its end) and writes the
+/// pass's IME output, context generation 1.
+#[cfg(feature = "suite")]
+pub(crate) fn host_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, text: &mut String) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::Ime(egui::ImeEvent::Commit(committed)) => text.push_str(&committed),
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect)));
+}
+
+/// What [`host_resetting_ime_editor`] holds between passes.
+#[cfg(feature = "suite")]
+#[derive(Default)]
+pub(crate) struct ResettingEditor {
+    pub(crate) text: String,
+    pub(crate) composing: bool,
+    /// The reset the editor asked for at a press during its composition, until its completion arrives; the editor
+    /// takes no IME event meanwhile.
+    pub(crate) reset: Option<egui::ImeResetId>,
+}
+
+/// A host's own text editor of `id` at `rect` that fences its own interrupted composition, as EffectCraft's viewer text
+/// editor does: a primary press while it composes ends the composition and asks the platform for a reset in its own IME
+/// output, and the editor ignores IME events until that reset's completion. Otherwise as [`host_ime_editor`].
+#[cfg(feature = "suite")]
+pub(crate) fn host_resetting_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, editor: &mut ResettingEditor) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::ImeResetCompleted { request_id } if editor.reset == Some(request_id) => editor.reset = None,
+            _ if editor.reset.is_some() => {}
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) => editor.composing = !text.is_empty(),
+            Event::Ime(egui::ImeEvent::Commit(committed)) => {
+                editor.text.push_str(&committed);
+                editor.composing = false;
+            }
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    editor.text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ime = egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect);
+    if editor.composing && ui.input(|input| input.pointer.primary_pressed()) {
+        editor.composing = false;
+        editor.reset = ui.ctx().request_ime_reset(ui.ctx().viewport_id());
+        ime.should_interrupt_composition = true;
+        ime.reset_request = editor.reset;
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(ime));
+}
+
 /// Gives the host's own egui widget `id` key focus, as the host's code does.
 #[cfg(feature = "suite")]
 pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {

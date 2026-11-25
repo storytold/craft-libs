@@ -45,7 +45,7 @@ pub use panels::{close_requests, open_requests};
 pub use placed::{Placing, placed_rect, with_area_rules};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
 pub use sources::{DividerKind, DockSource, SourceKind};
-pub use spec::{DockGrid, DockHeights, PanelSpec};
+pub use spec::{DockGrid, DockHeights, PanelDocument, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};
 pub use targets::{CardInset, DockSizes, DockSpot, DockTargets, GroupDrag, ZoneRule};
 pub use words::DockWords;
@@ -133,6 +133,10 @@ pub struct PanelTitle {
     pub count: Option<usize>,
     /// The line under the header row while the panel is shown ([`PanelSpec::caption`]).
     pub caption: Option<Label>,
+    /// The data colour before the tab's text ([`PanelSpec::swatch`]).
+    pub swatch: Option<Option<craft_theme::Srgba>>,
+    /// The panel's documents, as tabs after the group's panel tabs ([`PanelSpec::documents`]).
+    pub documents: Vec<PanelDocument>,
 }
 
 /// The tab titles of one group with their content key, taken once when they are made: a memoized view that holds them
@@ -154,6 +158,13 @@ impl Titles {
     pub fn as_slice(&self) -> &[PanelTitle] {
         &self.list
     }
+
+    /// The panel and the document whose tab `key` is ([`PanelTitle::document_key`]); `None` for a panel's tab.
+    pub fn document_of(&self, key: PanelKey) -> Option<(PanelKey, u64)> {
+        self.list
+            .iter()
+            .find_map(|panel| panel.documents.iter().find(|document| panel.document_key(document.id) == key).map(|document| (panel.key, document.id)))
+    }
 }
 
 /// Feeds the content key taken when the titles were made, not the titles.
@@ -166,7 +177,26 @@ impl Hash for Titles {
 impl PanelTitle {
     /// A panel `key` titled `title`, not closable from its tab.
     pub fn new(key: PanelKey, title: impl Into<Label>) -> Self {
-        PanelTitle { key, title: title.into(), closable: false, command: None, count: None, caption: None }
+        PanelTitle { key, title: title.into(), closable: false, command: None, count: None, caption: None, swatch: None, documents: Vec::new() }
+    }
+
+    /// The key of the tab of the panel's document `id`.
+    pub fn document_key(&self, id: u64) -> PanelKey {
+        PanelKey::of(&(self.key, "document", id))
+    }
+
+    /// The data colour before the tab's text; `Some(None)` is the theme's empty swatch.
+    #[must_use]
+    pub fn swatch(mut self, swatch: Option<Option<craft_theme::Srgba>>) -> Self {
+        self.swatch = swatch;
+        self
+    }
+
+    /// The panel's documents.
+    #[must_use]
+    pub fn documents(mut self, documents: Vec<PanelDocument>) -> Self {
+        self.documents = documents;
+        self
     }
 
     /// The number the tab shows after the title.

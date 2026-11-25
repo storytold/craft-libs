@@ -322,6 +322,8 @@ while let Some(Finished { key, result }) = queue.try_recv() { show(key, result) 
 
 A pass shows the whole UI once. egui may repeat a pass within a frame (a discard pass); only the frame's last pass is painted. Within a pass, a container's contents run twice: a measuring run, then the real run. Both runs of a pass give the same result.
 
+Host code that does work once per shown frame (a frame count, a screenshot's settle count) skips it while `runtime::frame::will_rerun` is true. egui's `Context::will_discard` is not enough: layout memory requests its discard pass from egui at the end of the pass, so during the app's UI `will_discard` is still false in a pass that a changed size runs again.
+
 Content runs in every pass, and its sizes come from this pass. Layouts also read some state earlier passes left, for example a scroll area's offset and its last view and extent (step 4 and the scroll bars read them) and the sizes layout memory keeps (`runtime::layout_memory`; a changed size asks for a discard pass). The one exception to running in every pass is out-of-view content.
 
 **Layout memory.** A record of layout memory holds a measure or a text. A body whose inputs did not change takes its kept measurement instead of running a measuring run. A text that a measuring run found for content outside the body (a value readout beside a story, for example) is kept with the measurement: `layout_memory::emit_text` hands it forward, `layout_memory::text` reads it, and a body that takes its kept measurement gives the text its measuring run found. A real run that finds another text marks the kept transcript as changed.

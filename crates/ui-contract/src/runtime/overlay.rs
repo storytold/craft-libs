@@ -659,7 +659,8 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
 }
 
 /// Brings the family of the open layer `id` in front of the other families of its class at the end of this pass, as a
-/// press on it does.
+/// press on it does: a floating window goes to the top of egui's area order, which it shares with the app's own egui
+/// windows.
 pub fn raise(ctx: &Context, id: Id) {
     with_pass(ctx, |pass| pass.raise.push(id));
 }
