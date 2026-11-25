@@ -49,3 +49,15 @@ fn the_input_methods_characters_after_the_caret_are_deleted() {
     fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 2 })]).settle();
     assert_eq!(*text.borrow(), "d", "one character before the caret and two after it");
 }
+
+/// A range wider than the text around the caret deletes what there is, rather than underflowing its count of
+/// characters before it.
+#[trial]
+fn a_character_range_wider_than_the_text_deletes_what_there_is() {
+    let (mut fixture, text) = field("ab", 0);
+    fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 5, after_chars: 0 })]).settle();
+    assert_eq!(*text.borrow(), "", "five characters asked of two bytes before the caret");
+    let (mut fixture, text) = field("ab", 2);
+    fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 0, after_chars: 5 })]).settle();
+    assert_eq!(*text.borrow(), "", "and five asked after it");
+}
