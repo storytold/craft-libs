@@ -122,6 +122,7 @@ fn space_lines(out: &mut Lines, space: &SpaceTokens) {
 fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let SizeTokens {
         control,
+        button,
         icon,
         rail,
         bar,
@@ -146,6 +147,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let ControlSizes { sm, md } = control;
     out.line("size.control.sm", len(*sm));
     out.line("size.control.md", len(*md));
+    out.line("size.button", len(*button));
     let IconSizes { sm, md, lg, glyph_sm, glyph_md } = icon;
     out.line("size.icon.sm", len(*sm));
     out.line("size.icon.md", len(*md));

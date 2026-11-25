@@ -145,6 +145,7 @@ space.inset.page_margin = 28
 space.inset.page_gap = 14
 size.control.sm = 24
 size.control.md = 28
+size.button = 28
 size.icon.sm = 14
 size.icon.md = 18
 size.icon.lg = 22

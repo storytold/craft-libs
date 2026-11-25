@@ -266,6 +266,9 @@ pub struct BarSizes {
 pub struct SizeTokens {
     /// Control heights.
     pub control: ControlSizes,
+    /// The height of a standard push button, a text button's face (a small one stands `control.sm` high). An app that
+    /// sets `size.control.md` and not this keeps its buttons a control high.
+    pub button: f32,
     /// Icon sizes.
     pub icon: IconSizes,
     /// Tool rail.
