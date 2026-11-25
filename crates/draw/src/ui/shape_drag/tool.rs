@@ -33,6 +33,8 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 /// - ⇧ makes a square or circle from the drag's shorter side (a Line: onto the axis within 30° of it, keeping the
 ///   offset along it, else onto the diagonal at the shorter offset); ⌥ draws from the centre.
 ///   Both may go down or up mid-drag; the shape follows the modifiers held now.
+/// - The modifiers held at the press stay with the gesture: [`press_mods`](Self::press_mods) reads them back after the
+///   commit, for an app that decides what a committed drag adds to from the press.
 /// - The options' [`BoxConstraints`](super::BoxConstraints) (the Rectangle tool's gear) keep a box drag square, at a
 ///   fixed size at the release, or at a ratio, and From Center draws from the press as the centre; with Square or
 ///   From Center on, ⇧ or ⌥ turns it off.
@@ -60,6 +62,8 @@ pub struct ShapeDragTool {
     drag: Option<Drag>,
     /// The id the next gesture takes.
     next: GestureId,
+    /// The modifiers held at the press of the current or most recent gesture.
+    press_mods: Mods,
 }
 
 impl Default for ShapeDragTool {
@@ -71,6 +75,7 @@ impl Default for ShapeDragTool {
             events: Vec::new(),
             drag: None,
             next: GestureId::default(),
+            press_mods: Mods::default(),
         }
     }
 }
@@ -134,6 +139,15 @@ impl ShapeDragTool {
     /// The shape of the last `Update` while a drag has begun; `None` otherwise.
     pub fn shape(&self) -> Option<&ShapeGeometry> {
         self.drag.as_ref().filter(|drag| drag.began).and_then(|drag| drag.shape.as_ref())
+    }
+
+    /// The modifiers held when the button went down for the current gesture, or for the most recent
+    /// one that ended: read it in `drain` beside the events of that gesture. The drag's shape follows
+    /// the modifiers held during the drag, so this answers a different question: what the press itself
+    /// asked for. None held before the first press.
+    #[must_use]
+    pub fn press_mods(&self) -> Mods {
+        self.press_mods
     }
 
     /// The events since the last call, in order.
@@ -273,6 +287,8 @@ impl CanvasTool for ShapeDragTool {
         // pc: crates/ui-egui/src/canvas/gesture.rs:84 (a shape drag that stays inside
         // `shape_dialog::is_click` opens the dialog).
         let Some(space) = cx.space() else { return ToolAction::Ignored };
+        // The press's modifiers stay with the tool: the shape follows the ones held during the drag.
+        self.press_mods = pointer.mods;
         let options = self.options;
         let origin = cx.snap(space.view.to_doc(pointer.pos));
         // pc: crates/ui-egui/src/dialogs/shape_dialog.rs `is_tool_click` (#13340).

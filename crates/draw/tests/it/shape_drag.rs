@@ -268,6 +268,45 @@ fn space_moves_the_box_by_the_full_motion() {
     assert_eq!(shapes.committed_box(), Some(Rect::new(110.0, 105.0, 170.0, 155.0)), "without Space the drag resizes from the moved press");
 }
 
+/// The modifiers held at the press stay with the gesture: [`press_mods`](ShapeDragTool::press_mods) reads them back
+/// after the commit, while the shape goes on following the modifiers held during the drag.
+#[trial]
+fn the_press_modifiers_stay_with_the_drag_while_the_shape_follows_the_ones_held_now() {
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle));
+    let to = PRESS + Vec2::new(60.0, 20.0);
+
+    // Shift only at the press: the gesture keeps it, and the box is not squared.
+    shapes.press(PRESS, Modifiers::SHIFT);
+    shapes.move_to(PRESS + Vec2::new(40.0, 30.0), Modifiers::NONE);
+    shapes.move_to(to, Modifiers::NONE);
+    shapes.release(to, Modifiers::NONE);
+    assert!(shapes.fixture.tool().press_mods().shift, "the press held Shift");
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 160.0, 120.0)), "the shape follows the modifiers held now, not the press's");
+
+    // The other way round: nothing at the press, Shift held for the drag: the box squares as it always did.
+    shapes.forget();
+    shapes.press(PRESS, Modifiers::NONE);
+    shapes.move_to(PRESS + Vec2::new(40.0, 30.0), Modifiers::SHIFT);
+    shapes.move_to(to, Modifiers::SHIFT);
+    shapes.release(to, Modifiers::SHIFT);
+    assert!(!shapes.fixture.tool().press_mods().shift, "the press held nothing");
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 120.0, 120.0)), "Shift held during the drag squares the box");
+
+    // Alt at the press and held on: Alt shows in the press, and the drag draws from the centre.
+    shapes.forget();
+    shapes.press(PRESS, Modifiers::ALT);
+    shapes.move_to(PRESS + Vec2::new(40.0, 30.0), Modifiers::ALT);
+    shapes.move_to(to, Modifiers::ALT);
+    shapes.release(to, Modifiers::ALT);
+    let mods = shapes.fixture.tool().press_mods();
+    assert!(mods.alt && !mods.shift, "the press held Alt alone");
+    assert_eq!(shapes.committed_box(), Some(Rect::new(40.0, 80.0, 160.0, 120.0)), "Alt draws from the press as the centre");
+
+    // A tool that has seen no press holds nothing.
+    let fresh = tool(ShapeKind::Rectangle);
+    assert!(!(fresh.press_mods().shift || fresh.press_mods().alt), "before the first press nothing is held");
+}
+
 #[trial]
 fn the_shape_tool_owes_the_canvas_what_every_tool_owes() {
     ToolFixture::with_view("Shape", tool(ShapeKind::Rectangle), room_view, |_, _| {}).check();
