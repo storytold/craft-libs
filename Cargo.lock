@@ -2005,6 +2005,7 @@ dependencies = [
 name = "craft-epub"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-xml",
  "craft-zip",
  "thiserror 2.0.21",

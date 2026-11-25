@@ -24,22 +24,13 @@ pub fn valid_language_tag(tag: &str) -> bool {
     true
 }
 
-/// `s` as the `CCYY-MM-DDThh:mm:ssZ` form `dcterms:modified` requires, when it starts with a
-/// date and time of that shape whose fields are in range. Fractions and zone offsets after the
-/// seconds are cut, not converted.
+/// An RFC 3339 timestamp as the `CCYY-MM-DDThh:mm:ssZ` form `dcterms:modified` requires.
+/// Offsets are converted to UTC and fractional seconds are discarded. An invalid date, missing
+/// timezone, trailing data or a UTC result outside the four-digit year range is refused.
 pub fn w3cdtf(s: &str) -> Option<String> {
-    let b = s.as_bytes().get(..19)?;
-    let shape = b"dddd-dd-ddTdd:dd:dd";
-    if !b.iter().zip(shape).all(|(c, p)| if *p == b'd' { c.is_ascii_digit() } else { c == p }) {
-        return None;
-    }
-    let number = |range: std::ops::Range<usize>| s.get(range).and_then(|v| v.parse::<u32>().ok());
-    let (month, day) = (number(5..7)?, number(8..10)?);
-    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
-        return None;
-    }
-    Some(format!("{}Z", s.get(..19)?))
+    let instant = chrono::DateTime::parse_from_rfc3339(s).ok()?.with_timezone(&chrono::Utc);
+    let formatted = instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    (formatted.len() == 20 && formatted.as_bytes().get(..4)?.iter().all(u8::is_ascii_digit)).then_some(formatted)
 }
 
 /// A `urn:uuid:` identifier derived from `seed`: the same seed gives the same identifier, so a
@@ -108,7 +99,7 @@ mod tests {
     #[test]
     fn dates() {
         assert_eq!(w3cdtf("2026-10-13T09:30:00Z").as_deref(), Some("2026-10-13T09:30:00Z"));
-        assert_eq!(w3cdtf("2026-10-13T09:30:00.123+02:00").as_deref(), Some("2026-10-13T09:30:00Z"));
+        assert_eq!(w3cdtf("2026-10-13T09:30:00.123+02:00").as_deref(), Some("2026-10-13T07:30:00Z"));
         for bad in
             ["", "2026-10-13", "2026-13-13T09:30:00Z", "2026-10-32T09:30:00Z", "2026-10-13T24:30:00Z", "2026-10-13 09:30:00", "12026-10-13T09:30:00Z"]
         {

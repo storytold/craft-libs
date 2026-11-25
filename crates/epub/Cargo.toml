@@ -14,6 +14,7 @@ workspace = true
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
 craft-zip = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 # The tests build hostile archives by hand.
