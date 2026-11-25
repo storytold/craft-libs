@@ -19,11 +19,12 @@
 //! ```
 //!
 //! The index and its lookups, [`verify_font`] and [`IndexPin`] build on every target. The store,
-//! the HTTP client and Language packs (the store's second item kind, `language-pack`: see
-//! [`FontStore::install_language_pack`]) are native only.
+//! the HTTP client, the preview service's client ([`preview`]) and Language packs (the store's
+//! second item kind, `language-pack`: see [`FontStore::install_language_pack`]) are native only.
 
 mod index;
 mod pin;
+mod service;
 mod source;
 mod sources;
 mod verify;
@@ -33,13 +34,16 @@ mod http;
 #[cfg(not(target_arch = "wasm32"))]
 mod language_packs;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod preview;
+#[cfg(not(target_arch = "wasm32"))]
 mod store;
 
 pub use index::{
-    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, LICENSES, Language, LicenseFile, MAJOR_VERSION, MAX_FILE_BYTES,
-    MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Script, SourceProblem, Unavailable, parse_style,
+    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, Instance, LICENSES, Language, LicenseFile, MAJOR_VERSION,
+    MAX_FILE_BYTES, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Sample, Script, SourceProblem, Unavailable, parse_style,
 };
 pub use pin::{IndexPin, PINNED_INDEX};
+pub use service::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, PreviewStore};
 pub use sources::{SourceEntry, SourcesFile};
 pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
 
@@ -58,14 +62,14 @@ pub struct UserSource {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use http::{Cancel, Client, FetchError, Timeouts, USER_AGENT};
+pub use http::{Cancel, Client, FetchError, SERVICE_BACKOFF, Timeouts, USER_AGENT};
 #[cfg(not(target_arch = "wasm32"))]
 pub use language_packs::{
     InstalledLanguagePack, LANGUAGE_PACK_INDEX_ENV, LANGUAGE_PACKS, MAX_PACK_ARCHIVE_BYTES, MAX_PACK_ENTRIES, MAX_PACK_FILE_BYTES,
     MAX_PACK_INDEX_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, PackIndex, PackIndexPin, language_pack_index_overridden,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress};
+pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress, check_preview_service};
 
 #[cfg(test)]
 mod tests;

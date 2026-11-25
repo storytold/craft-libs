@@ -21,6 +21,10 @@
       "mark": "bar",
       "length": 18,
       "width": 3
+    },
+    "locator": {
+      "cell": 9,
+      "square": 5
     }
   },
   "light": {
@@ -30,6 +34,7 @@
     "line.border": "#a9b0bc",
     "line.control_edge": "#9aa2b0",
     "line.divider": "#bcc3ce",
+    "line.grip": "#7d8594",
     "line.outline": "#8a93a2",
     "seeds": {
       "accent": "#d9472f",
@@ -56,6 +61,7 @@
     "line.border": "#11141a",
     "line.control_edge": "#3a414e",
     "line.divider": "#323946",
+    "line.grip": "#626b7a",
     "line.outline": "#5a6476",
     "state.hover": "#353c49",
     "state.pressed": "#633f3e",

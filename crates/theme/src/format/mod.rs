@@ -43,8 +43,8 @@ const KNOB: &str = "\"round\" or \"tab\"";
 const WELLS: &str = "\"square\" or \"round\"";
 /// What `shape.grip.mark` takes.
 const GRIP_MARK: &str = "\"ticks\", \"dots\" or \"bar\"";
-/// What the numbers of `shape.grip` take.
-const GRIP_NUMBER: &str = "a number";
+/// What the numbers of `shape.grip` and `shape.locator` take.
+const SHAPE_NUMBER: &str = "a number";
 /// What `icon_pack` takes.
 const ICON_PACK: &str = "an icon pack id: 2 to 64 of a-z, 0-9, '.', '_' or '-', starting with a-z or 0-9";
 const EDGE: &str = "\"flat\" or {\"bevel\": {\"width\": n}} with n above 0";

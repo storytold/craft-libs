@@ -1,8 +1,10 @@
 //! What the container and collection cases read from the AccessKit tree of a fixture.
 
 use crate::runtime::access::Role;
-use crate::runtime::egui::access::{AccessTree, NodeKey};
+use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::testing::fixture::{Fixture, Target};
+use crate::testing::story::Story;
+use craft_behavior::PartRef;
 
 /// `node` and every node below it.
 pub(super) fn subtree(tree: &AccessTree, node: NodeKey) -> Vec<NodeKey> {
@@ -76,4 +78,104 @@ pub(super) fn position_in_set(fixture: &Fixture, row: NodeKey) -> Option<(usize,
 /// Whether the node reports itself selected.
 pub(super) fn is_selected(fixture: &Fixture, node: NodeKey) -> bool {
     fixture.tree().data_of(node).and_then(|data| data.is_selected()).unwrap_or(false)
+}
+
+/// Whether the cases that run once per member of a repeated set (each repeat of a part, each row that declares an
+/// action) run on a fixed sample of the set: under the gate's sweep fraction, `craft_testkit::hostile::divisor` above
+/// 1. The nightly run sets no fraction and checks every member.
+fn samples_repeats() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        craft_testkit::hostile::divisor() > 1
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// The first, middle and last of `members`; all of them when there are three or fewer. The members of a repeated set
+/// come from one code path, so these cover it, its edges included.
+fn sample<T: Copy>(members: &[T]) -> Vec<T> {
+    match members.len() {
+        0..=3 => members.to_vec(),
+        n => vec![members[0], members[n / 2], members[n - 1]],
+    }
+}
+
+/// `parts` with each repeated part ([`PartRef::index`]) cut to the lowest, middle and highest index of its key when
+/// [`samples_repeats`]; a part that occurs once always stays.
+pub(super) fn sampled_parts(parts: Vec<PartRef>) -> Vec<PartRef> {
+    if !samples_repeats() {
+        return parts;
+    }
+    let mut kept: Vec<PartRef> = Vec::new();
+    for part in &parts {
+        if part.index.is_none() {
+            kept.push(*part);
+            continue;
+        }
+        if kept.iter().any(|done| done.key == part.key && done.index.is_some()) {
+            continue;
+        }
+        let mut indices: Vec<u64> = parts.iter().filter(|other| other.key == part.key).filter_map(|other| other.index).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        kept.extend(sample(&indices).into_iter().map(|index| part.key.at(index)));
+    }
+    kept
+}
+
+/// The keys of `tree` depth first from its root, children in their declared order; nodes the root does not reach
+/// follow in the tree's own order.
+fn tree_order(tree: &AccessTree) -> Vec<NodeKey> {
+    let mut ordered = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pending: Vec<NodeKey> = tree.root_key().into_iter().collect();
+    while let Some(key) = pending.pop() {
+        if seen.insert(key) {
+            ordered.push(key);
+            pending.extend(tree.children_of(key).into_iter().rev());
+        }
+    }
+    ordered.extend(tree.keys().into_iter().filter(|key| !seen.contains(key)));
+    ordered
+}
+
+/// `pairs` (a node and an action it declares) in tree order; when [`samples_repeats`], set by set, each repeated set
+/// cut to its first, middle and last node. Nodes that share a parent and a role and declare the same action are one set.
+pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declared)>) -> Vec<(NodeKey, Declared)> {
+    let rank: std::collections::HashMap<NodeKey, usize> = tree_order(tree).into_iter().enumerate().map(|(at, key)| (key, at)).collect();
+    pairs.sort_by_key(|(node, _)| rank.get(node).copied().unwrap_or(usize::MAX));
+    let ordered = pairs;
+    if !samples_repeats() {
+        return ordered;
+    }
+    let set_of = |(node, declared): &(NodeKey, Declared)| (tree.parent_of_key(*node), tree.role_of(*node), *declared);
+    let mut sets: Vec<Vec<(NodeKey, Declared)>> = Vec::new();
+    for pair in ordered {
+        match sets.iter_mut().find(|set| set_of(&set[0]) == set_of(&pair)) {
+            Some(set) => set.push(pair),
+            None => sets.push(vec![pair]),
+        }
+    }
+    sets.iter().flat_map(|set| sample(set)).collect()
+}
+
+/// `stories` cut, when [`samples_repeats`], to the first story of each distinct kind: stories that cover the same
+/// required states, drive the same way, give the same disabled reason and set command states alike differ only in
+/// what they show, which the cases that read the type as a whole (`reads`, `variants`, `containers`) see through
+/// the first of them. The nightly run keeps every story.
+pub(super) fn sampled_stories(stories: Vec<Story>) -> Vec<Story> {
+    if !samples_repeats() {
+        return stories;
+    }
+    let kind = |story: &Story| (story.covers, std::mem::discriminant(&story.drive), story.disabled_text, story.commands.is_some());
+    let mut kept: Vec<Story> = Vec::new();
+    for story in stories {
+        if !kept.iter().any(|known| kind(known) == kind(&story)) {
+            kept.push(story);
+        }
+    }
+    kept
 }

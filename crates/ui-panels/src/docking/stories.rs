@@ -5,7 +5,8 @@ use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
 use super::{
-    DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows,
+    DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelDocument, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles,
+    WindowMenuRows,
 };
 use crate::buttons::Button;
 use crate::contract::SizeLimits;
@@ -17,6 +18,7 @@ use crate::tabs::PanelTabLook;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Layout, Node, SplitSize};
 use craft_behavior::{Axis, IconId, Mixed};
+use craft_theme::Srgba;
 use egui::{Ui, Vec2};
 
 const LAYERS: usize = 0;
@@ -116,6 +118,26 @@ fn a_group_with_a_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = vec![title_of(LAYERS).count(Some(3)).caption(Some("2 hidden".into())), title_of(CHANNELS).count(Some(4))];
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
+}
+
+/// A group whose Timeline lists its open compositions as tabs after the panel tabs, each with its label colour and a
+/// close button; the shown composition's tab is selected while the Timeline shows, a pick shows another and a close
+/// closes it.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_panel_with_documents(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = *data.value("shown", 1_u64);
+    let open = data.value("open", vec![1_u64, 2]).clone();
+    let comp = |id: u64| {
+        let color = (id == 1).then(|| Srgba::rgb(0.8, 0.3, 0.3));
+        PanelDocument::new(id, format!("Comp {id}")).swatch(color).closable(true).shown(id == shown)
+    };
+    let panels = vec![title_of(LAYERS).documents(open.iter().map(|id| comp(*id)).collect()), title_of(CHANNELS)];
+    let output = DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).closable().show(ui, |_, _| ()).output;
+    if let Some((_, id)) = output.picked_document {
+        *data.value("shown", 1_u64) = id;
+    }
+    data.value("open", vec![1_u64, 2]).retain(|id| !output.closed_documents.iter().any(|(_, closed)| closed == id));
+    output.into()
 }
 
 /// A click on the panel menu button opens the group's panel menu.
