@@ -19,7 +19,7 @@ use craft_host::target::{Caps, WindowChrome, WindowState};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 
-pub(crate) const MOVE_BAND: PartKey = PartKey::new("move_band");
+pub(crate) use crate::runtime::pointer::MOVE_BAND;
 
 const GRIP: PartKey = PartKey::new("resize_grip");
 

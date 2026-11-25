@@ -11,8 +11,8 @@ use crate::runtime::inputs::{self, Input};
 use crate::runtime::sampler;
 use craft_behavior::press::{MULTI_TAP_SLOP, MULTI_TAP_TIME};
 use craft_behavior::{
-    Buttons, MultiTap, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape,
-    Winner, count_clicks, resolve,
+    Buttons, MultiTap, MultiTouch, PartKey, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor,
+    Shape, Winner, count_clicks, resolve,
 };
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
@@ -20,6 +20,10 @@ use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, TouchId, TouchPhase, Vec2, Vie
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// The key of a container's move band, the part a press-drag moves its layer or window by (the body step declares
+/// it). The press winners give it no drag from under a control over it ([`PressWinners`]).
+pub(crate) const MOVE_BAND: PartKey = PartKey::new("move_band");
 
 /// Points one wheel line adds to `PointerFrame.scroll`; scroll owners apply their own notch (the wheel service).
 pub(crate) const WHEEL_LINE_POINTS: f32 = 40.0;
@@ -1131,7 +1135,7 @@ fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
             (true, false) => {
                 let passes = winners.click.is_some_and(|(top, _)| top.sense.contains(craft_behavior::Sense::PASSES_DRAG));
                 let root_target = winners.click.is_some_and(|(top, owner)| top.drag_to_root && root != owner);
-                let band = winner.part.is_some_and(|part| part.key == crate::contract::MOVE_BAND);
+                let band = winner.part.is_some_and(|part| part.key == MOVE_BAND);
                 if drags && !root_target && (passes || !(clicks || root_clicks || band)) {
                     winners.drag = Some((winner, root));
                 }

@@ -15,8 +15,10 @@ use std::rc::Rc;
 const ROOM: Vec2 = Vec2::new(900.0, 600.0);
 /// The floating frame a pane starts in, clear of every edge band.
 const FLOAT: Rect = Rect { min: Pos2::new(300.0, 200.0), max: Pos2::new(540.0, 360.0) };
-/// A point on a floating frame's title row, clear of the action parts at its end.
+/// Where a floating frame's title row is first tried from its corner; [`Bed::title`] steps past any button there.
 const TITLE_AT: Vec2 = Vec2::new(24.0, 10.0);
+/// How far past a button's bounds [`Bed::title`] steps, clear of the button's part.
+const PAST_BUTTON: f32 = 8.0;
 
 /// The app's one pane: it docks at `edges` and the app keeps its state by applying the area's requests.
 struct Panes {
@@ -86,9 +88,26 @@ impl Bed {
             .collect()
     }
 
-    /// The point on the floating pane's title row.
+    /// A point on the floating pane's title row where the window's move band takes the press: clear of the row's
+    /// buttons (Float and Close). A press on a button over the band is the button's and never moves the window, and in
+    /// a pane's window, which sizes to its content, the row's buttons may lie at the fixed corner offset, so the point
+    /// steps past every button there.
     fn title(&self) -> Pos2 {
-        self.state.get().float_rect.unwrap_or(FLOAT).min + TITLE_AT
+        let frame = self.state.get().float_rect.unwrap_or(FLOAT);
+        let y = frame.min.y + TITLE_AT.y;
+        let buttons: Vec<Rect> = self
+            .fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .map(|button| button.rect)
+            .filter(|button| frame.contains(button.center()) && button.y_range().contains(y))
+            .collect();
+        let mut x = frame.min.x + TITLE_AT.x;
+        while let Some(button) = buttons.iter().find(|button| button.expand(PAST_BUTTON / 2.0).x_range().contains(x)) {
+            x = button.max.x + PAST_BUTTON;
+        }
+        assert!(x < frame.max.x, "the title row keeps a free point of its band: buttons {buttons:?} in {frame:?}");
+        Pos2::new(x, y)
     }
 
     /// Presses the floating pane's title and moves it to `to` in steps, leaving the button down.
