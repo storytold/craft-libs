@@ -52,6 +52,17 @@ const MAX_CACHED_PIECES: usize = 1 << 14;
 #[derive(Default)]
 pub(crate) struct Pieces([crate::patterns::FxMap<Box<str>, Box<[Info]>>; 2], usize);
 
+/// Outcome of checking whether a word decomposes as a flag-based compound at a given byte offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompoundBoundary {
+    /// The word has a valid flag-based compound decomposition with a part starting at `split_byte`.
+    Matched,
+    /// The word decomposes as a flag-based compound, but not at `split_byte`.
+    DifferentSplit,
+    /// The dictionary does not decompose the word as a flag-based compound.
+    NotCompound,
+}
+
 /// One compound check: the word, its parts' analyses (each piece looked up once), the parts
 /// chosen so far and the work done.
 pub(super) struct Search<'a> {
@@ -74,6 +85,10 @@ pub(super) struct Search<'a> {
     pub(super) near: Option<bool>,
     /// Pieces analysed by earlier checks with the same exclusions.
     pub(super) cache: Option<&'a mut Pieces>,
+    /// When set, a compound analysis succeeds only if a part begins at this char index.
+    pub(super) required_boundary: Option<usize>,
+    /// Skip capitalization-only near-word rejection when analyzing an already valid word's splits.
+    pub(super) skip_case_near: bool,
 }
 
 impl AffixDict {
@@ -123,6 +138,8 @@ impl AffixDict {
             work: MAX_WORK - (*budget).min(MAX_WORK),
             near: None,
             cache,
+            required_boundary: None,
+            skip_case_near: false,
         };
         let start = s.work;
         let found = self.parts_from(&mut s, 0);
@@ -160,6 +177,8 @@ impl AffixDict {
                 work: MAX_WORK - (*budget).min(MAX_WORK),
                 near: None,
                 cache: Some(&mut *pieces),
+                required_boundary: None,
+                skip_case_near: false,
             };
             let start = s.work;
             let fits = |s: &mut Search, a: usize, b: usize, place: u8| {
@@ -199,6 +218,61 @@ impl AffixDict {
         Some((from.min(to), from.max(to)))
     }
 
+    /// Check whether `w` decomposes as a flag-based compound with a constituent boundary at
+    /// byte offset `split_byte`.
+    pub(crate) fn compound_boundary(&self, w: &str, split_byte: usize) -> CompoundBoundary {
+        let Some(c) = self.cpd.as_deref() else { return CompoundBoundary::NotCompound };
+        if w.is_empty()
+            || w.len() > super::super::MAX_WORD_BYTES
+            || split_byte == 0
+            || split_byte >= w.len()
+            || !w.is_char_boundary(split_byte)
+            || self.is_forbidden(w)
+        {
+            return CompoundBoundary::NotCompound;
+        }
+        let Some(left) = w.get(..split_byte) else { return CompoundBoundary::NotCompound };
+        let target = left.chars().count();
+        let excluded = self.excluded(false);
+        let capitalized = w.chars().next().is_some_and(char::is_uppercase);
+        let check_form = |word: &str, first_excluded: Excluded, cap: bool, req: Option<usize>| {
+            if self.is_forbidden(word) {
+                return false;
+            }
+            let cuts: Vec<usize> = word.char_indices().map(|(i, _)| i).chain(std::iter::once(word.len())).collect();
+            let chars: Vec<char> = word.chars().collect();
+            let n = cuts.len();
+            let mut s = Search {
+                c,
+                w: word,
+                cuts,
+                chars,
+                excluded: excluded.without_keep(),
+                first_excluded,
+                capitalized: cap,
+                memo: vec![None; n * n],
+                infos: Vec::new(),
+                path: Vec::with_capacity(MAX_PARTS),
+                work: 0,
+                near: None,
+                cache: None,
+                required_boundary: req,
+                skip_case_near: true,
+            };
+            self.parts_from(&mut s, 0)
+        };
+        let decap = capitalized.then(|| super::super::decapitalize(w)).filter(|d| d != w && d.chars().count() == w.chars().count());
+        let decap_first = excluded.keeping(self.keepcase);
+        if check_form(w, excluded, capitalized, Some(target)) || decap.as_deref().is_some_and(|d| check_form(d, decap_first, true, Some(target))) {
+            return CompoundBoundary::Matched;
+        }
+        if check_form(w, excluded, capitalized, None) || decap.as_deref().is_some_and(|d| check_form(d, decap_first, true, None)) {
+            CompoundBoundary::DifferentSplit
+        } else {
+            CompoundBoundary::NotCompound
+        }
+    }
+
     /// Can the rest of the word, from char `start`, be split into parts after `s.path`?
     fn parts_from(&self, s: &mut Search, start: usize) -> bool {
         let total = s.chars.len();
@@ -232,7 +306,11 @@ impl AffixDict {
                     continue;
                 }
                 s.path.push((start, end, info));
-                let ok = if last { self.whole_ok(s) } else { self.words_ok(s, false) && self.next_parts(s, end) };
+                let ok = if last {
+                    s.required_boundary.is_none_or(|b| s.path.iter().any(|&(a, _, _)| a == b)) && self.whole_ok(s)
+                } else {
+                    self.words_ok(s, false) && self.next_parts(s, end)
+                };
                 s.path.pop();
                 if ok {
                     return true;

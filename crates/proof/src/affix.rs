@@ -51,7 +51,7 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use compound::{MAX_SUGGEST_COMPOUND_WORK, Pieces};
+pub(crate) use compound::{CompoundBoundary, MAX_SUGGEST_COMPOUND_WORK, Pieces};
 use flags::FlagKey;
 pub use flags::FlagMode;
 pub(crate) use flags::SuggestSteps;

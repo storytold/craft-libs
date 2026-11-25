@@ -613,3 +613,13 @@ const PINNED: &[Pinned] = &[
         listed: "fahr rad verkehr fahrrad fahrverkehr fahrradverkehr",
     },
 ];
+
+#[test]
+fn compound_boundary_matches_and_distinguishes_splits() {
+    let aff = "COMPOUNDFLAG c\nCOMPOUNDMIN 3\n";
+    let d = load(aff, "haus/c tür/c schuh/c leder/c");
+    assert_eq!(d.compound_boundary("Haustür", 4), super::CompoundBoundary::Matched);
+    assert_eq!(d.compound_boundary("Haustür", 3), super::CompoundBoundary::DifferentSplit);
+    assert_eq!(d.compound_boundary("Lederschuh", 5), super::CompoundBoundary::Matched);
+    assert_eq!(d.compound_boundary("Unbekannt", 2), super::CompoundBoundary::NotCompound);
+}

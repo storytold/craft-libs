@@ -348,6 +348,26 @@ pub(crate) fn is_correct(word: &str, locale: PackLocale, opts: &crate::Options) 
     known(w)
 }
 
+/// Is `word` directly accepted by `locale`'s dictionary (or the user dictionary), without option
+/// exemptions (`ignore_numbers`, `ignore_uppercase`) or hyphen-part fallback splitting?
+pub(crate) fn is_known_word(word: &str, locale: PackLocale) -> bool {
+    let (d, _, scripts) = get_with_scripts(locale);
+    if d.is_empty() || word.chars().take(2).count() < 2 || !word.chars().any(char::is_alphabetic) || other_script(word, &scripts) {
+        return false;
+    }
+    d.check(word) || crate::in_user_dictionary(&word.to_lowercase())
+}
+
+/// Check whether `locale`'s Hunspell dictionary decomposes `word` as a compound with a boundary at
+/// byte offset `split_byte`.
+pub(crate) fn compound_boundary(word: &str, split_byte: usize, locale: PackLocale) -> crate::affix::CompoundBoundary {
+    let (d, _, scripts) = get_with_scripts(locale);
+    if d.is_empty() || other_script(word, &scripts) {
+        return crate::affix::CompoundBoundary::NotCompound;
+    }
+    d.compound_boundary(word, split_byte)
+}
+
 /// Suggestions for `word` in `locale`, best first, at most `max`.
 pub(crate) fn suggest(word: &str, max: usize, locale: PackLocale) -> Vec<String> {
     let (d, _) = get(locale);
