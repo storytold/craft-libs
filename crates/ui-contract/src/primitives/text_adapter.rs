@@ -188,6 +188,8 @@ pub(crate) struct AdapterOut {
     pub clicked: bool,
     /// The screen y of the first row's baseline; `None` while the text is empty.
     pub baseline: Option<f32>,
+    /// Where the laid-out text's origin sits on screen, after the multi-line scroll.
+    pub origin: Pos2,
 }
 
 /// The rows of a laid-out text as AccessKit lines, with the byte where each starts in the text.
@@ -617,6 +619,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         hint: input.placeholder,
         mono: input.options.mono,
         role: input.options.role,
+        size: input.options.size,
+        top: input.options.top,
         ink: input.ink,
         filter,
         char_limit: input.options.limit,
@@ -704,7 +708,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
     let baseline = (!layout.full().is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
-    AdapterOut { layout, focused: shown.focused, tab, clicked: shown.clicked, baseline }
+    AdapterOut { layout, focused: shown.focused, tab, clicked: shown.clicked, baseline, origin: shown.galley_pos }
 }
 
 /// What [`show_selectable`] shows: the read-only text of a selection part.
@@ -755,6 +759,8 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             hint: None,
             mono: false,
             role: run.role,
+            size: None,
+            top: false,
             ink,
             filter: egui_focus::event_filter(keep, false),
             char_limit: None,

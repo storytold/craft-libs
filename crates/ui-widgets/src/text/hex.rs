@@ -133,8 +133,9 @@ pub type HexField<'a> = TextField<'a, HexCodec>;
 const NOT_HEX: Word = Word::keyed("hexField.unparsed", "Not a hex color");
 
 impl<'a> TextField<'a, HexCodec> {
-    /// A hex field named `label` that shows and edits `value` as monospace digits. A draft that is no colour says so
-    /// ("Not a hex color", `TextField::unparsed`). Its row names the digits with [`hash_label`](Self::hash_label).
+    /// A hex field named `label` that shows and edits `value` as monospace digits; sized `Sizing::Content`, it is as wide
+    /// as its digits in that face. A draft that is no colour says so ("Not a hex color", `TextField::unparsed`). Its row
+    /// names the digits with [`hash_label`](Self::hash_label).
     pub fn hex(label: impl Into<Label>, value: Bind<'a, Rgba>) -> Self {
         let mut field = TextField::with_codec(label, value, HexCodec::default()).mono().unparsed(NOT_HEX);
         field.empty = Some(Rgba::rgb(0, 0, 0));
