@@ -129,3 +129,19 @@ fn a_stretched_view_draws_and_reads_the_document_over_whole_pixels_while_its_zoo
     let odd = plain.stretch([f64::NAN, 0.0]);
     assert_eq!(odd.to_screen(Point::new(600.0, 450.0)), plain.to_screen(Point::new(600.0, 450.0)));
 }
+
+/// The reference reads the pointer half a document pixel up and left along an axis drawn at its nominal zoom, and on
+/// the pointer itself along an axis the canvas stretches over whole device pixels (measured 2026-11-25 with Warp anchor
+/// drags at 100 % and 33.3 %).
+#[test]
+fn the_pointer_is_read_on_itself_along_a_stretched_axis() {
+    let rect = ScreenRect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+    let plain = CanvasView::new(rect, Point::new(300.0, 225.0), 1.0);
+    assert_eq!(plain.pointer_offset(), kurbo::Vec2::new(-0.5, -0.5));
+    // 600 × 450 at a third: 201 × 151 device pixels, both axes stretched.
+    let third = CanvasView::new(rect, Point::new(300.0, 225.0), 1.0 / 3.0).stretch([201.0 / 200.0, 151.0 / 150.0]);
+    assert_eq!(third.pointer_offset(), kurbo::Vec2::new(0.0, 0.0));
+    // At a quarter only the height is stretched (150 × 113).
+    let quarter = CanvasView::new(rect, Point::new(300.0, 225.0), 0.25).stretch([1.0, 113.0 / 112.5]);
+    assert_eq!(quarter.pointer_offset(), kurbo::Vec2::new(-0.5, 0.0));
+}
