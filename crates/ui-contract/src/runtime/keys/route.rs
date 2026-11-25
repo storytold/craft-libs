@@ -19,6 +19,23 @@ use std::sync::Arc;
 /// The begin hook's intents: the pass's key events, AccessKit requests and claimed chords, routed to the
 /// focused component (or to the component that owns a requested node). Returns how the pass's Escapes split
 /// between the captured press and the components.
+/// A held Space: a pass with neither a release nor a pending one clears the hold (a Space pressed in an earlier pass
+/// is still down), and the pass that brings the release activates the stop that was pressed - as a mouse release
+/// clicks, and even when the focus has moved since, since the held stop's member and root are what the release has.
+fn space_release(ctx: &Context, batch: &Batch, target: Option<&StopRec>, routed: &mut HashMap<Option<Id>, Routed>, activated: &mut IdMap<Id>) {
+    if !batch.space_released && !batch.space_release_pending {
+        space_held::clear(ctx);
+        return;
+    }
+    if target.is_none() {
+        return;
+    }
+    if let Some(held) = space_held::held(ctx) {
+        space_held::clear(ctx);
+        route_activate(ctx, &held.record(), routed, activated);
+    }
+}
+
 pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
@@ -84,10 +101,6 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
     // it from egui's input, so no egui text widget reads it in this pass (`withdraw_taken`).
-    if !batch.space_released && !batch.space_release_pending {
-        // A Space pressed in an earlier pass is still down: the pass that brings its release activates the stop then.
-        space_held::clear(ctx);
-    }
     let mut taken_texts = vec![false; batch.texts.len()];
     // A held-over repeat's text is withdrawn as a claim's is: no field types it.
     let mut withdrawn_texts: Vec<usize> = batch
@@ -98,15 +111,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         .map(|(at, _)| at)
         .chain(batch.presses.iter().filter(|press| held_press(press)).filter_map(|press| press.text))
         .collect();
+    space_release(ctx, &batch, target.as_ref(), &mut routed, &mut activated);
     if let Some(rec) = &target {
-        // A held Space activates on its release, as a mouse release clicks, and it activates the stop that was
-        // pressed even when the focus has moved since: the held stop's member and root are what the release has.
-        if (batch.space_released || batch.space_release_pending)
-            && let Some(held) = space_held::held(ctx)
-        {
-            space_held::clear(ctx);
-            route_activate(ctx, &held.record(), &mut routed, &mut activated);
-        }
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             *taken = if let Some(id) = hover_delete.filter(|id| Some(*id) != target.as_ref().map(|rec| rec.stop.id))
                 && press.mods.is_none()

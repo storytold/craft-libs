@@ -163,6 +163,9 @@ impl<'a> IconButton<'a> {
 impl Component for IconButton<'_> {
     const ROLE: Role = Role::BUTTON;
     const ALT_ROLES: &'static [Role] = &[Role::COMBO_BOX];
+    /// Space presses it as a click does, as [`Button`](crate::buttons::button::Button) does: a focused icon that opens a
+    /// menu opens it from the keyboard, and the runtime activates on the release.
+    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_space_activation();
     const PARTS: bool = false;
     const SHOWS_LABEL: bool = false;
     const OVERLAYS: bool = false;
