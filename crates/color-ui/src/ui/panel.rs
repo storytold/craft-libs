@@ -449,6 +449,7 @@ pub struct ColorPanel<'a> {
     edited: Option<Option<PickedColor>>,
     shown: Option<ColorPanelShown>,
     recent: &'a [Srgba],
+    recent_models: &'a [Option<ModelValues>],
     recent_setup: Option<RecentSetup>,
     gamut: Option<Gamut<'a>>,
 }
@@ -472,6 +473,7 @@ struct Inputs<'a> {
     edited: Option<&'a Option<PickedColor>>,
     shown: &'a ColorPanelShown,
     recent: &'a [Srgba],
+    recent_models: &'a [Option<ModelValues>],
     recent_setup: Option<&'a RecentSetup>,
 }
 
@@ -489,6 +491,7 @@ impl<'a> ColorPanel<'a> {
             edited: None,
             shown: None,
             recent: &[],
+            recent_models: &[],
             recent_setup: None,
             gamut: None,
         }
@@ -547,6 +550,15 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
+    /// The model values of each Recent Colors chip, in the order of [`recent`](Self::recent). A pick on a chip that has
+    /// them reports them with its color (`PickedColor::in_model`), so a CMYK recent color stays CMYK, and a chip
+    /// that shows the edited color's sRGB in another model still sets it. A chip with `None`, or past the end of
+    /// `models`, reports its sRGB.
+    pub fn recent_models(mut self, models: &'a [Option<ModelValues>]) -> Self {
+        self.recent_models = models;
+        self
+    }
+
     /// The payload a Recent Colors chip drags.
     pub fn recent_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(usize) -> Option<P> + Send + Sync + 'static) -> Self {
         self.recent_setup = Some(recent_setup(map));
@@ -561,7 +573,7 @@ impl<'a> ColorPanel<'a> {
 
     /// Shows the panel and returns this pass's edits and requests.
     pub fn show(self, ui: &mut Ui) -> ColorPanelOutput {
-        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, edited, shown: rows, recent, recent_setup, gamut } = self;
+        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, edited, shown: rows, recent, recent_models, recent_setup, gamut } = self;
         let env = Env::of(ui);
         let (words, dialog) = (env.words::<ColorPanelWords>(), env.words::<ColorPickerDialogWords>());
         let mut held = Held::new(state);
@@ -600,6 +612,7 @@ impl<'a> ColorPanel<'a> {
                     edited: edited.as_ref(),
                     shown: rows.as_ref().unwrap_or(&default_rows),
                     recent,
+                    recent_models,
                     recent_setup: recent_setup.as_ref(),
                 },
                 now: before,

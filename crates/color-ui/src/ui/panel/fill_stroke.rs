@@ -3,7 +3,7 @@
 //! same `Body` as the Photoshop layout and shares its rows, wells, warnings and ramp helpers.
 
 use craft_behavior::{EditEvent, Mixed};
-use craft_theme::Srgba;
+use craft_theme::{ModelValues, Srgba};
 use craft_ui::choice::{Swatch, SwatchSpacing};
 use craft_ui::contract::{Bind, Gap, LabelScheme, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::Text;
@@ -14,7 +14,7 @@ use craft_ui::text::{HexField, TextField};
 use egui::Ui;
 
 use super::{Body, ColorPanelMode, ColorPanelShown, PanelTarget, TintRow};
-use crate::ui::{ChannelRow, ChannelRule, ChannelUnit, ColorRamp, PickedColor, RampKind, SwatchPalette};
+use crate::ui::{ChannelRow, ChannelRule, ChannelUnit, ColorRamp, PaletteCell, PickedColor, RampKind, SwatchPalette};
 
 impl Body<'_> {
     /// The layout. The options (rows, quick wells, recent colours) go when the state hides them; the proxy and the
@@ -154,7 +154,7 @@ impl Body<'_> {
         }
     }
 
-    /// The Recent Colors as a spaced palette; a pick sets the colour.
+    /// The Recent Colors as a spaced palette; a pick sets the color, in the chip's model when the host gave it.
     // PLAN: Alt on a recent colour or a warning chip should set the other colour; `SwatchPaletteOutput` and
     // `ColorWarningChipOutput` report no modifiers (color-w1 for the palette, the owner of warning.rs for the chip).
     fn recent(&mut self, ui: &mut Ui) {
@@ -167,11 +167,30 @@ impl Body<'_> {
         if let Some(setup) = self.inputs.recent_setup {
             palette = setup(palette);
         }
-        if let Some(event) = palette.show(ui).edit
+        let out = palette.show(ui);
+        let values = match out.cell {
+            Some(PaletteCell::Swatch(at)) => self.inputs.recent_models.get(at).copied().flatten(),
+            _ => None,
+        };
+        if let (Some(color), Some(values)) = (out.picked, values) {
+            self.set_in_model(color, values);
+        } else if let Some(event) = out.edit
             && let Some(color) = event.value()
         {
             self.set_color(self.target, *color);
         }
+    }
+
+    /// Sets the edited color to `color` in the model of `values`, keeping its alpha. It sets nothing when the host's
+    /// color already has those values and shows that color.
+    fn set_in_model(&mut self, color: Srgba, values: ModelValues) {
+        let before = self.picked().copied().unwrap_or_else(|| PickedColor::rgb(self.colors[self.target.index()]));
+        let after = PickedColor::in_model(color.with_alpha(before.color.a), values);
+        if before.model == after.model && before.color.to_rgba() == after.color.to_rgba() {
+            return;
+        }
+        let name = self.words.title.as_str();
+        self.push(self.target, EditEvent::set(Mixed::Same(before), after, name.into(), None));
     }
 
     /// Sets `target`'s colour to `color`, keeping its alpha.

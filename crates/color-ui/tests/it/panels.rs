@@ -7,11 +7,11 @@ use std::rc::Rc;
 use craft_behavior::{EditEvent, Mixed, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
-    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyWheel, PanelTarget, PickedColor, SwatchEdit, SwatchKey,
-    SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
+    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyWheel, PaletteCell, PanelTarget, PickedColor, SwatchEdit,
+    SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
-use craft_theme::{ColorModel as _, HsbModel, Srgba};
+use craft_theme::{ColorModel as _, HsbModel, ModelValues, Srgba};
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
@@ -254,6 +254,44 @@ fn the_fill_stroke_spectrums_tooltip_names_the_shown_mode_and_shift_click_cycles
     assert!(edits.borrow().is_empty(), "a Shift click picks nothing: {:?}", edits.borrow());
 }
 
+/// A Recent Colors pick in the FillStroke layout reports the chip's model values with its color, also when the chip
+/// shows the edited color's sRGB in another model or without one; a chip whose values the edited color already has
+/// sets nothing.
+#[trial]
+fn a_fill_stroke_recent_pick_keeps_the_chips_model() {
+    let chip = RECENT[0];
+    let cmyk = ModelValues::new("cmyk", &[60.0, 90.0, 0.0, 0.0]);
+    let pick = |edited: PickedColor| {
+        let edits: Edits = Default::default();
+        let seen = Rc::clone(&edits);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let out = ColorPanel::new(Bind::bound(&mut state), [edited.color, BLUE])
+                .layout(ColorPanelLayout::FillStroke)
+                .edited(Some(edited))
+                .recent(&RECENT)
+                .recent_models(&[Some(cmyk)])
+                .show(ui);
+            seen.borrow_mut().extend(out.edits);
+        });
+        fixture.room(COLOR_ROOM).settle();
+        let recent = fixture.by_label(&chip.to_hex()).expect("the recent chip is named by its hex");
+        fixture.click(&recent).settle();
+        edits.take()
+    };
+    let rgb_of = |color: Srgba| ModelValues::new("rgb", &[color.r * 255.0, color.g * 255.0, color.b * 255.0]);
+    for edited in [PickedColor::in_model(RED, rgb_of(RED)), PickedColor::in_model(chip, rgb_of(chip)), PickedColor::rgb(chip)] {
+        let edits = pick(edited);
+        assert!(
+            matches!(edits.as_slice(), [(PanelTarget::Foreground, EditEvent::Set { after, .. })]
+                if after.model == Some(cmyk) && after.color.to_rgba() == chip.to_rgba()),
+            "one Set to the chip in CMYK from {edited:?}: {edits:?}"
+        );
+    }
+    let edits = pick(PickedColor::in_model(chip, cmyk));
+    assert!(edits.is_empty(), "the chip's own values set nothing: {edits:?}");
+}
+
 const SWATCHES: [(&str, [f32; 3]); 6] = [
     ("Red", [0.90, 0.28, 0.30]),
     ("Orange", [0.97, 0.42, 0.08]),
@@ -328,6 +366,7 @@ struct PaletteReports {
     edits: Vec<EditEvent<Srgba>>,
     requests: Vec<ColorRequest>,
     picked: Vec<Srgba>,
+    cells: Vec<PaletteCell>,
 }
 
 type Reports = Rc<RefCell<PaletteReports>>;
@@ -338,6 +377,7 @@ fn collect(reports: &Reports, shown: craft_color_ui::ui::SwatchPaletteOutput) {
     reports.edits.extend(shown.edit);
     reports.requests.extend(shown.pick_color);
     reports.picked.extend(shown.picked);
+    reports.cells.extend(shown.cell);
 }
 
 fn palette_swatches() -> Vec<(Label, Srgba)> {
@@ -394,11 +434,13 @@ fn the_other_cell_files_a_request_at_the_colour_and_a_recent_pick_sets_it() {
         taken.edits[0]
     );
     assert_eq!(bound.get().to_rgba(), RECENT[0].to_rgba(), "the recent pick is written");
+    assert_eq!(taken.cells, [PaletteCell::Recent(0)], "the pick names its cell in the recent row");
 
     let violet = fixture.by_label("Violet").expect("violet");
     fixture.click(&violet).settle();
-    let _ = std::mem::take(&mut *reports.borrow_mut());
+    let taken = std::mem::take(&mut *reports.borrow_mut());
     assert_eq!(bound.get().to_rgba(), swatch("Violet").to_rgba());
+    assert_eq!(taken.cells, [PaletteCell::Swatch(5)], "the pick names its swatch");
     // Past the double-click time, so the repeat is a single click of its own.
     fixture.advance(1.0);
     let violet = fixture.by_label("Violet").expect("violet");
