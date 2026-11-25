@@ -33,9 +33,14 @@ vp8-encode = []
 mpeg2 = ["mpeg2-decode", "mpeg2-encode"]
 mpeg2-decode = []
 mpeg2-encode = ["mpeg2-decode"]
-# MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
-mpeg4 = ["mpeg4-encode"]
+# MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): decoder (`mpeg4-decode`) and
+# Simple profile encoder (`mpeg4-encode`).
+mpeg4 = ["mpeg4-decode", "mpeg4-encode"]
+mpeg4-decode = ["craft-media/bitstream"]
 mpeg4-encode = ["craft-media/bitstream"]
+# H.263 video (ITU-T H.263): decoder. It reuses the code tables, IDCT and interpolation of MPEG-4 Part 2.
+h263 = ["h263-decode"]
+h263-decode = ["mpeg4-decode"]
 # FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
 ffv1 = []
 # Hap (Vidvox): decoder and encoder, with Snappy and chunked second stages.
@@ -164,6 +169,14 @@ required-features = ["vp9-decode"]
 [[example]]
 name = "vp9_vp9dec"
 required-features = ["vp9-decode"]
+
+[[test]]
+name = "mpeg4_decode"
+required-features = ["mpeg4-decode"]
+
+[[test]]
+name = "h263_decode"
+required-features = ["h263-decode"]
 
 [[test]]
 name = "mpeg4_encode"

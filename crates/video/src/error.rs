@@ -72,6 +72,16 @@ impl From<crate::mpeg2::Error> for VideoError {
     }
 }
 
+#[cfg(feature = "mpeg4-decode")]
+impl From<crate::mpeg4::DecodeError> for VideoError {
+    fn from(e: crate::mpeg4::DecodeError) -> Self {
+        match e {
+            crate::mpeg4::DecodeError::Unsupported(_) => VideoError::Unsupported(format!("MPEG-4: {e}")),
+            crate::mpeg4::DecodeError::Invalid(_) => VideoError::Malformed(format!("MPEG-4: {e}")),
+        }
+    }
+}
+
 #[cfg(feature = "prores")]
 impl From<crate::prores::Error> for VideoError {
     fn from(e: crate::prores::Error) -> Self {

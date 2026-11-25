@@ -33,11 +33,9 @@ mod tests;
 use craft_media::bitstream::BitWriter;
 use craft_media::{CodecId, CodecParams};
 
+use super::MAX_SIDE;
 use headers::{Sequence, Timing, VopHeader};
 use picture::{Frame, PictureCoder, Plane};
-
-/// Largest width or height (the VOL stores 13 bits; sizes are even).
-pub const MAX_SIDE: u32 = 8190;
 
 /// Encoder errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
