@@ -98,15 +98,8 @@ pub(crate) fn text_id(id: Id, key: PartKey) -> Id {
     crate::runtime::memory::sub(id, ("text", key))
 }
 
-/// The keys the text part keeps, from its options and the selection of its widget `widget`: with no selection Cut,
-/// Copy and Delete are inactive, and so are Undo and Redo while the widget has no step for them, so their keys and menu
-/// picks still reach the part and the edit menu shows them disabled. Cut, Copy and Delete then do nothing and never
-/// reach the app; an Undo or Redo with no step goes on to the app command (`commands::fall_through`), which the board
-/// resolves it to. The board reads the keys the stop registered; a selection or text change repaints, which registers
-/// them again. The selection is the one the part acts on: `held`, the one it kept while its edit menu or a menu bar has
-/// the focus (egui collapses the selection of a widget without focus), else its widget's. `text` is the part's current text, which
-/// the widget's undo steps are judged against.
-pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, text: &str, base: KeyUse, options: &TextOptions) -> KeyUse {
+/// The keys the text part keeps, from its options.
+pub(crate) fn keys_of(base: KeyUse, options: &TextOptions) -> KeyUse {
     // A part whose Tab inserts, rewrites or reports keeps Tab, so the focus service never moves focus on it.
     let keys = if options.tab != TabKey::Moves {
         base.with_keep(KeepKeys::Tab)
@@ -117,6 +110,19 @@ pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, t
     };
     let keys = keys.with_value(base.value || options.steps_value);
     let keys = if options.holds_drafts { keys.with_holds_drafts() } else { keys };
+    // A multi-line part makes a plain Enter a line break.
+    if options.submits || options.multiline() { keys.with_submits() } else { keys }
+}
+
+/// `keys`, the text part's, with the edits its widget `widget` cannot run now inactive: with no selection Cut, Copy
+/// and Delete, and Undo and Redo while the widget has no step for them, so their keys and menu picks still reach the
+/// part and the edit menu shows them disabled. Cut, Copy and Delete then do nothing and never reach the app; an Undo
+/// or Redo with no step goes on to the app command (`commands::fall_through`), which the board resolves it to. The
+/// board reads the keys the stop registered, which reads them after the part applied the pass's edits, so a Select All
+/// of the pass makes Copy active. The selection is the one the part acts on: `held`, the one it kept while its edit
+/// menu or a menu bar has the focus (egui collapses the selection of a widget without focus), else its widget's.
+/// `text` is the part's current text, which the widget's undo steps are judged against.
+pub(crate) fn with_idle(ctx: &Context, widget: Id, held: Option<(usize, usize)>, text: &str, keys: KeyUse) -> KeyUse {
     let selected = held.or_else(|| selection(ctx, widget)).is_some_and(|(caret, anchor)| caret != anchor);
     let (undo, redo) = text_edit::history(ctx, widget, text);
     let idle = [
@@ -127,11 +133,9 @@ pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, t
         (EditCommand::Redo, !redo),
     ]
     .into_iter()
-    .filter(|(command, idle)| *idle && base.edits.contains(*command))
+    .filter(|(command, idle)| *idle && keys.edits.contains(*command))
     .map(|(command, _)| command);
-    let keys = keys.with_inactive(idle.fold(base.inactive, EditSet::with));
-    // A multi-line part makes a plain Enter a line break.
-    if options.submits || options.multiline() { keys.with_submits() } else { keys }
+    keys.with_inactive(idle.fold(keys.inactive, EditSet::with))
 }
 
 pub(crate) struct AdapterIn<'a> {
