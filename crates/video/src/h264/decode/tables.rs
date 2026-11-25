@@ -26,6 +26,16 @@ const fn zigzag8() -> [u8; 64] {
     out
 }
 
+/// 4x4 field scan (Table 8-13): scan position -> raster index (row * 4 + col).
+pub const FIELD_SCAN4: [u8; 16] = [0, 4, 1, 8, 12, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15];
+
+/// 8x8 field scan (Table 8-14): scan position -> raster index (row * 8 + col).
+#[rustfmt::skip]
+pub const FIELD_SCAN8: [u8; 64] = [
+    0, 8, 16, 1, 9, 24, 32, 17, 2, 25, 40, 48, 56, 33, 10, 3, 18, 41, 49, 57, 26, 11, 4, 19, 34, 42, 50, 58, 27, 12, 5, 20,
+    35, 43, 51, 59, 28, 13, 6, 21, 36, 44, 52, 60, 29, 14, 22, 37, 45, 53, 61, 30, 7, 15, 38, 46, 54, 62, 23, 31, 39, 47, 55, 63,
+];
+
 /// Table 7-3.
 pub const DEFAULT_4X4_INTRA: [u8; 16] = [6, 13, 13, 20, 20, 20, 28, 28, 28, 28, 32, 32, 32, 37, 37, 42];
 pub const DEFAULT_4X4_INTER: [u8; 16] = [10, 14, 14, 20, 20, 20, 24, 24, 24, 24, 27, 27, 27, 30, 30, 34];
@@ -156,6 +166,25 @@ mod tests {
             seen[z as usize] = true;
         }
         assert!(seen.iter().all(|&s| s));
+    }
+
+    #[test]
+    fn field_scans_are_permutations_that_favour_columns() {
+        let mut seen4 = [false; 16];
+        for &z in &FIELD_SCAN4 {
+            seen4[z as usize] = true;
+        }
+        assert!(seen4.iter().all(|&s| s));
+        let mut seen8 = [false; 64];
+        for &z in &FIELD_SCAN8 {
+            seen8[z as usize] = true;
+        }
+        assert!(seen8.iter().all(|&s| s));
+        // Table 8-13: the field scan walks down the first column before the second.
+        assert_eq!(&FIELD_SCAN4[..5], &[0, 4, 1, 8, 12]);
+        // Table 8-14 spot checks (idx 10 = c50, idx 52 = c07).
+        assert_eq!(FIELD_SCAN8[10], 40);
+        assert_eq!(FIELD_SCAN8[52], 7);
     }
 
     #[test]

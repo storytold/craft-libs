@@ -439,7 +439,8 @@ pub fn is_new_picture(prev: &SliceHeader, sh: &SliceHeader, sps: &Sps) -> bool {
     false
 }
 
-/// Output of POC computation.
+/// Output of POC computation. For a field picture `top` and `bottom` both hold the field's own
+/// order count, so [`Poc::frame`] is PicOrderCnt of the current picture either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Poc {
     pub top: i32,
@@ -455,7 +456,8 @@ impl Poc {
 }
 
 impl PocState {
-    /// Compute TopFieldOrderCnt/BottomFieldOrderCnt of a frame (8.2.1.1-8.2.1.3).
+    /// Compute TopFieldOrderCnt/BottomFieldOrderCnt of a frame, or the order count of a field
+    /// (8.2.1.1-8.2.1.3).
     pub fn compute(&self, sh: &SliceHeader, sps: &Sps) -> Poc {
         match sps.pic_order_cnt_type {
             0 => {
@@ -470,7 +472,8 @@ impl PocState {
                     prev_msb
                 };
                 let top = msb.saturating_add(lsb);
-                let bottom = top.saturating_add(sh.delta_pic_order_cnt_bottom);
+                // (8-5): a bottom field's count is PicOrderCntMsb + pic_order_cnt_lsb as well
+                let bottom = if sh.field_pic { top } else { top.saturating_add(sh.delta_pic_order_cnt_bottom) };
                 Poc { top, bottom, msb, frame_num_offset: 0 }
             }
             1 => {
@@ -493,11 +496,18 @@ impl PocState {
                 if sh.nal_ref_idc == 0 {
                     expected = expected.saturating_add(i64::from(sps.offset_for_non_ref_pic));
                 }
-                let top = expected.saturating_add(i64::from(sh.delta_pic_order_cnt[0])).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-                let bottom = i64::from(top)
-                    .saturating_add(i64::from(sps.offset_for_top_to_bottom_field))
-                    .saturating_add(i64::from(sh.delta_pic_order_cnt[1]))
-                    .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                let clamp = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                if sh.field_pic {
+                    // (8-10): a bottom field adds offset_for_top_to_bottom_field and its own
+                    // delta_pic_order_cnt[0]
+                    let offset = if sh.bottom_field { i64::from(sps.offset_for_top_to_bottom_field) } else { 0 };
+                    let v = clamp(expected.saturating_add(offset).saturating_add(i64::from(sh.delta_pic_order_cnt[0])));
+                    return Poc { top: v, bottom: v, msb: 0, frame_num_offset };
+                }
+                let top = clamp(expected.saturating_add(i64::from(sh.delta_pic_order_cnt[0])));
+                let bottom = clamp(
+                    i64::from(top).saturating_add(i64::from(sps.offset_for_top_to_bottom_field)).saturating_add(i64::from(sh.delta_pic_order_cnt[1])),
+                );
                 Poc { top, bottom, msb: 0, frame_num_offset }
             }
             _ => {

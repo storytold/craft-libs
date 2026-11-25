@@ -354,19 +354,201 @@ fn copy_clamped(line: &[u8], x0: i32, out: &mut [u8]) {
 
 pub type FrameRef = Arc<Frame>;
 
+/// A decoded picture as the DPB stores it: a frame, or the fields of a field pair. A field is a
+/// half-height [`Frame`] of its own; the second field of a pair may be missing (a non-paired
+/// field).
+#[derive(Clone)]
+pub enum Stored {
+    Frame(FrameRef),
+    /// [top, bottom]; at least one is present.
+    Fields([Option<FrameRef>; 2]),
+}
+
+impl Stored {
+    /// How the output picture is made up.
+    pub fn structure(&self) -> super::PictureStructure {
+        use super::PictureStructure as S;
+        match self {
+            Stored::Frame(_) => S::Frame,
+            Stored::Fields([Some(_), Some(_)]) => S::FieldPair,
+            Stored::Fields([None, _]) => S::BottomField,
+            Stored::Fields([Some(_), None]) => S::TopField,
+        }
+    }
+
+    /// The pictures holding the samples.
+    pub fn pictures(&self) -> impl Iterator<Item = &FrameRef> {
+        let (a, b) = match self {
+            Stored::Frame(f) => (Some(f), None),
+            Stored::Fields([t, b]) => (t.as_ref(), b.as_ref()),
+        };
+        a.into_iter().chain(b)
+    }
+
+    /// Size of the frame in macroblocks (a field pair's frame is twice a field's height).
+    pub fn mb_size(&self) -> (usize, usize) {
+        match self {
+            Stored::Frame(f) => (f.mb_w, f.mb_h()),
+            Stored::Fields(_) => self.pictures().next().map_or((0, 0), |f| (f.mb_w, 2 * f.mb_h())),
+        }
+    }
+
+    /// Id of the picture decoded first (unique among stored pictures, and unchanged when a
+    /// second field joins the first).
+    pub fn id(&self) -> u32 {
+        self.pictures().map(|f| f.id).min().unwrap_or(0)
+    }
+
+    /// Key of a view of this picture: the frame (or field pair) for `None`, field `parity` (0 top,
+    /// 1 bottom) otherwise. Views of different stored pictures get different keys, below the
+    /// `u32::MAX` sentinel; keys only need to be unique among pictures alive at the same time.
+    pub fn view_key(&self, parity: Option<usize>) -> u32 {
+        ((self.id() % (1 << 29)) << 2) | parity.map_or(0, |p| (p as u32 & 1) + 1)
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.pictures().fold(0u64, |n, f| n.saturating_add(f.bytes()))
+    }
+
+    /// Every picture has published its last row.
+    pub fn is_complete(&self) -> bool {
+        self.pictures().all(|f| f.mb_h().checked_sub(1).is_none_or(|r| f.is_published(r)))
+    }
+
+    /// Frame line `y` of a plane as (picture, line in it): the field lines interleave, and a
+    /// missing field repeats the lines of the other one.
+    fn frame_line(&self, y: usize) -> Option<(&Frame, usize)> {
+        match self {
+            Stored::Frame(f) => Some((f, y)),
+            Stored::Fields(fields) => {
+                let f = fields[y & 1].as_ref().or(fields[(y & 1) ^ 1].as_ref())?;
+                Some((f, y >> 1))
+            }
+        }
+    }
+
+    /// Crop and copy the frame (a field pair woven) into planar buffers (waits for completion).
+    pub fn copy_cropped(&self, crop: (usize, usize, usize, usize)) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        if let Stored::Frame(f) = self {
+            return f.copy_cropped(crop);
+        }
+        let (cx, cy, cw, ch) = crop;
+        let alloc = plane_allocator();
+        let mut y = alloc(cw * ch);
+        for r in cy..cy + ch {
+            if let Some((f, l)) = self.frame_line(r) {
+                let row = f.row(l >> 4);
+                let o = (l & 15) * f.width + cx;
+                y.extend_from_slice(row.y.get(o..o + cw).unwrap_or(&[]));
+            }
+        }
+        let (ccx, ccy, ccw, cch) = (cx / 2, cy / 2, cw.div_ceil(2), ch.div_ceil(2));
+        let mut u = alloc(ccw * cch);
+        let mut v = alloc(ccw * cch);
+        for r in ccy..ccy + cch {
+            if let Some((f, l)) = self.frame_line(r) {
+                let row = f.row(l >> 3);
+                let o = (l & 7) * f.cwidth + ccx;
+                u.extend_from_slice(row.cb.get(o..o + ccw).unwrap_or(&[]));
+                v.extend_from_slice(row.cr.get(o..o + ccw).unwrap_or(&[]));
+            }
+        }
+        (y, u, v)
+    }
+}
+
+/// How a reference picture is seen by the picture being decoded.
+#[derive(Clone)]
+pub enum RefSrc {
+    /// A frame referenced by a frame, or a field (picture) referenced by a field.
+    Whole(FrameRef),
+    /// Field `parity` (0 top, 1 bottom) of a coded frame, referenced by a field: field line y is
+    /// frame line 2y + parity.
+    FieldOf(FrameRef, usize),
+    /// A field pair [top, bottom] referenced by a frame: frame line y is line y / 2 of field y % 2.
+    Pair(FrameRef, FrameRef),
+}
+
 /// An entry of RefPicList0/1 for the current slice.
 #[derive(Clone)]
 pub struct RefPic {
-    pub frame: FrameRef,
+    pub src: RefSrc,
     pub long_term: bool,
+    /// PicOrderCnt of the reference as the current picture sees it (8.2.1).
+    poc: i32,
+    /// TopFieldOrderCnt and BottomFieldOrderCnt of a frame or field pair (the field's own count
+    /// twice for a field).
+    pub field_poc: [i32; 2],
+    id: u32,
+    /// Added to the vertical chroma motion vector: a field referencing a field of the other
+    /// parity (Table 8-10).
+    pub chroma_dy: i16,
 }
 
 impl RefPic {
-    pub fn poc(&self) -> i32 {
-        self.frame.poc
+    /// `key` identifies the referenced frame, field pair or field ([`Stored::view_key`]).
+    pub fn new(src: RefSrc, long_term: bool, poc: i32, field_poc: [i32; 2], key: u32) -> Self {
+        RefPic { src, long_term, poc, field_poc, id: key, chroma_dy: 0 }
     }
+
+    pub fn poc(&self) -> i32 {
+        self.poc
+    }
+
     pub fn id(&self) -> u32 {
-        self.frame.id
+        self.id
+    }
+
+    /// Luma width and height as seen by the current picture.
+    fn luma_size(&self) -> (usize, usize) {
+        match &self.src {
+            RefSrc::Whole(f) => (f.width, f.height),
+            RefSrc::FieldOf(f, _) => (f.width, f.height / 2),
+            RefSrc::Pair(t, b) => (t.width, t.height + b.height),
+        }
+    }
+
+    /// Line `y` (already clamped) of a plane of this view as (picture, line in it).
+    #[inline]
+    fn line(&self, y: usize) -> (&Frame, usize) {
+        match &self.src {
+            RefSrc::Whole(f) => (f, y),
+            RefSrc::FieldOf(f, p) => (f, 2 * y + p),
+            RefSrc::Pair(t, b) => (if y & 1 == 0 { t } else { b }, y >> 1),
+        }
+    }
+
+    /// Copy the w x h luma window at (x0, y0) (clamped to the picture) into `out` (stride `os`).
+    #[inline]
+    pub fn luma_window(&self, (x0, y0): (i32, i32), w: usize, h: usize, out: &mut [u8], os: usize) {
+        if let RefSrc::Whole(f) = &self.src {
+            return f.luma_window((x0, y0), w, h, out, os);
+        }
+        let height = self.luma_size().1;
+        for r in 0..h {
+            let yy = (y0 + r as i32).clamp(0, height as i32 - 1) as usize;
+            let (f, l) = self.line(yy);
+            let row = f.row(l >> 4);
+            let line = &row.y[(l & 15) * f.width..(l & 15) * f.width + f.width];
+            copy_line::<24>(line, x0, &mut out[r * os..], w);
+        }
+    }
+
+    /// Copy the w x h window of chroma component `c` at (x0, y0) (clamped) into `out`.
+    #[inline]
+    pub fn chroma_window(&self, c: usize, (x0, y0): (i32, i32), w: usize, h: usize, out: &mut [u8], os: usize) {
+        if let RefSrc::Whole(f) = &self.src {
+            return f.chroma_window(c, (x0, y0), w, h, out, os);
+        }
+        let ch = self.luma_size().1 / 2;
+        for r in 0..h {
+            let yy = (y0 + r as i32).clamp(0, ch as i32 - 1) as usize;
+            let (f, l) = self.line(yy);
+            let row = f.row(l >> 3);
+            let plane = if c == 0 { &row.cb } else { &row.cr };
+            let line = &plane[(l & 7) * f.cwidth..(l & 7) * f.cwidth + f.cwidth];
+            copy_line::<16>(line, x0, &mut out[r * os..], w);
+        }
     }
 }
 

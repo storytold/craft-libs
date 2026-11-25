@@ -1,11 +1,12 @@
 //! Hand-built bitstreams exercising features libx264 never emits: I_PCM (CAVLC and CABAC), long-term
-//! references, MMCO operations, frame_num gaps and reference list modification. Every picture consists
-//! of I_PCM and P_Skip macroblocks only, so the expected output is known exactly (I_PCM samples are
-//! lossless, P_Skip copies the selected reference with a zero motion vector, and deblocking cannot
-//! modify samples at these QPs).
+//! references, MMCO operations, frame_num gaps, reference list modification and field pictures.
+//! Most pictures consist of I_PCM and skipped macroblocks only, so the expected output is known
+//! exactly (I_PCM samples are lossless, a skipped macroblock copies or averages the selected
+//! references with a zero motion vector, and deblocking cannot modify samples at these QPs). The
+//! scan tests at the end code residual data and compare field pictures with progressive ones.
 
-use crate::h264::decode::Decoder;
 use crate::h264::decode::cabac::{Cabac, NEXT_STATE, RANGE_TAB_LPS};
+use crate::h264::decode::{Decoder, PictureStructure};
 use craft_media::bitstream::{BitWriter, escape_rbsp};
 
 const MB_W: usize = 4;
@@ -62,6 +63,11 @@ fn sps(profile: u8, max_refs: u32, gaps: bool, poc: PocType) -> Vec<u8> {
 }
 
 fn pps(cabac: bool, weighted: bool) -> Vec<u8> {
+    pps_with(cabac, weighted, if weighted { 1 } else { 0 })
+}
+
+/// `pps` with weighted_bipred_idc `bipred`.
+fn pps_with(cabac: bool, weighted: bool, bipred: u32) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_ue(0);
     w.write_ue(0);
@@ -71,7 +77,7 @@ fn pps(cabac: bool, weighted: bool) -> Vec<u8> {
     w.write_ue(0); // num_ref_idx_l0_default - 1
     w.write_ue(0);
     w.write_bit(weighted); // weighted_pred
-    w.write_bits(if weighted { 1 } else { 0 }, 2); // explicit weighted bi-prediction
+    w.write_bits(bipred, 2); // weighted_bipred_idc
     w.write_se(0); // pic_init_qp - 26
     w.write_se(0);
     w.write_se(0); // chroma_qp_index_offset
@@ -105,6 +111,12 @@ struct Pic {
     wt: Option<[[(i32, i32); 3]; 2]>,
     /// first_mb_in_slice (`mbs` then lists the slice's macroblocks from there).
     first_mb: u32,
+    /// The SPS allows field coding (frame_mbs_only_flag 0): the header carries field_pic_flag.
+    interlaced: bool,
+    /// A field picture: Some(bottom_field_flag).
+    field: Option<bool>,
+    /// disable_deblocking_filter_idc 1.
+    deblock_off: bool,
 }
 
 impl Pic {
@@ -127,6 +139,12 @@ fn slice_header(w: &mut BitWriter, p: &Pic, cabac: bool) {
     });
     w.write_ue(0); // pps id
     w.write_bits(p.frame_num, 4);
+    if p.interlaced {
+        w.write_bit(p.field.is_some());
+        if let Some(bottom) = p.field {
+            w.write_bit(bottom);
+        }
+    }
     if p.idr {
         w.write_ue(0);
     }
@@ -196,9 +214,13 @@ fn slice_header(w: &mut BitWriter, p: &Pic, cabac: bool) {
         w.write_ue(0); // cabac_init_idc
     }
     w.write_se(0); // slice_qp_delta
-    w.write_ue(0); // disable_deblocking_filter_idc
-    w.write_se(0);
-    w.write_se(0);
+    if p.deblock_off {
+        w.write_ue(1); // disable_deblocking_filter_idc
+    } else {
+        w.write_ue(0);
+        w.write_se(0);
+        w.write_se(0);
+    }
 }
 
 /// Minimal CABAC encoder (9.3.4, informative) writing into a BitWriter.
@@ -259,6 +281,21 @@ impl Enc {
             self.ctx[ctx_idx] = NEXT_STATE[s][0];
         }
         self.renorm(w);
+    }
+    fn bypass(&mut self, w: &mut BitWriter, bin: bool) {
+        self.low <<= 1;
+        if bin {
+            self.low += self.range;
+        }
+        if self.low >= 1024 {
+            self.put(w, true);
+            self.low -= 1024;
+        } else if self.low < 512 {
+            self.put(w, false);
+        } else {
+            self.low -= 512;
+            self.outstanding += 1;
+        }
     }
     fn terminate(&mut self, w: &mut BitWriter, bin: bool) {
         self.range -= 2;
@@ -334,7 +371,7 @@ fn slice_nal(p: &Pic, cabac: bool) -> Vec<u8> {
                 write_pcm(&mut w, s);
                 e.init();
             }
-            e.terminate(&mut w, i + 1 == NMB); // end_of_slice_flag
+            e.terminate(&mut w, i + 1 == p.mbs.len()); // end_of_slice_flag
         }
         w.align_zero();
     }
@@ -529,6 +566,46 @@ fn explicit_weighted_prediction_p_and_b_skip() {
     }
 }
 
+/// A picture with MMCO 5 decodes with its own order count; it becomes 0 only when the picture is
+/// stored (8.2.1, tempPicOrderCnt). A reference B picture with MMCO 5 at POC 12 (above every
+/// earlier picture, as 8.2.1 requires) predicts with implicit weights from POC 8 (list 0, weight 96)
+/// and POC 0 (list 1, weight -32); with POC 0 for itself it would copy the POC 0 picture.
+#[test]
+fn mmco5_picture_decodes_with_its_own_order_count() {
+    for cabac in [false, true] {
+        let mut seed = 11u32;
+        let a: Vec<Option<Vec<u8>>> = (0..NMB).map(|_| Some(random_mb(&mut seed))).collect();
+        let b: Vec<Option<Vec<u8>>> = (0..NMB).map(|_| Some(random_mb(&mut seed))).collect();
+        let pics = [
+            Pic { idr: true, frame_num: 0, ref_idc: 3, poc_lsb: Some(0), mbs: a.clone(), ..Default::default() },
+            Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(8), mbs: b.clone(), ..Default::default() },
+            Pic { frame_num: 2, ref_idc: 1, poc_lsb: Some(12), b: true, mmcos: vec![(5, 0, 0)], mbs: vec![None; NMB], ..Default::default() },
+        ];
+        let mut stream = sps(77, 2, false, PocType::T0);
+        stream.extend(pps_with(cabac, false, 2));
+        for p in &pics {
+            stream.extend(slice_nal(p, cabac));
+        }
+        let (pa, pb) = (render(&a, None), render(&b, None));
+        let mix = |x: &[u8], y: &[u8]| -> Vec<u8> {
+            x.iter().zip(y).map(|(&p, &q)| ((q as i32 * 96 - p as i32 * 32 + 32) >> 6).clamp(0, 255) as u8).collect()
+        };
+        let bi = (mix(&pa.0, &pb.0), mix(&pa.1, &pb.1), mix(&pa.2, &pb.2));
+        let expected = [pa, pb, bi];
+        cross_check_ffmpeg(&stream, &expected, if cabac { "synth_mmco5_poc_cabac" } else { "synth_mmco5_poc_cavlc" });
+        for threads in [1, 3] {
+            let mut dec = Decoder::with_threads(threads);
+            let mut out = dec.decode(&stream, 0).unwrap();
+            out.extend(dec.flush());
+            assert!(dec.take_error().is_none());
+            assert_eq!(out.len(), 3);
+            for (i, (p, e)) in out.iter().zip(expected.iter()).enumerate() {
+                assert!(p.y == e.0 && p.u == e.1 && p.v == e.2, "picture {i} differs (cabac={cabac}, threads={threads})");
+            }
+        }
+    }
+}
+
 /// POC type 1: non-reference pictures are displayed before the preceding reference picture.
 #[test]
 fn poc_type1_reordering() {
@@ -646,6 +723,9 @@ fn avcc_rejects_a_valid_picture_slice_without_starting_a_picture() {
             poc_delta: None,
             wt: None,
             first_mb: 0,
+            interlaced: false,
+            field: None,
+            deblock_off: false,
         },
         false,
     );
@@ -816,5 +896,502 @@ fn slice_qp_addition_does_not_overflow() {
         stream.extend(nal(3, 5, &w.finish()));
         let r = Decoder::with_threads(1).decode(&stream, 0).map(|pics| pics.len());
         assert!(matches!(&r, Err(crate::h264::decode::Error::Invalid(m)) if m.contains("slice QP")), "slice_qp_delta {qp_delta}: {r:?}");
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Field pictures (PAFF)
+// ------------------------------------------------------------------------------------------------
+
+/// Frame height in macroblocks of the interlaced streams; each field is half of it.
+const FRAME_MB_H: usize = 4;
+const FIELD_NMB: usize = MB_W * FRAME_MB_H / 2;
+
+/// An SPS with frame_mbs_only_flag 0 (field pictures allowed, no MBAFF), POC type 0 with a 4-bit
+/// lsb, 4 reference frames.
+fn interlaced_sps(profile: u8) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(profile as u32, 8);
+    w.write_bits(0, 8);
+    w.write_bits(30, 8);
+    w.write_ue(0); // sps id
+    w.write_ue(0); // log2_max_frame_num - 4
+    w.write_ue(0); // pic_order_cnt_type
+    w.write_ue(0); // log2_max_pic_order_cnt_lsb - 4
+    w.write_ue(4); // max_num_ref_frames
+    w.write_bit(false); // gaps
+    w.write_ue(MB_W as u32 - 1);
+    w.write_ue(FRAME_MB_H as u32 / 2 - 1); // pic_height_in_map_units_minus1 (field rows)
+    w.write_bit(false); // frame_mbs_only_flag
+    w.write_bit(false); // mb_adaptive_frame_field_flag
+    w.write_bit(true); // direct_8x8_inference
+    w.write_bit(false); // cropping
+    w.write_bit(false); // vui
+    w.rbsp_trailing();
+    nal(3, 7, &w.finish())
+}
+
+/// Planes of a picture `mb_w` x `mb_h` macroblocks made of PCM blocks.
+fn render_pcm(mbs: &[Option<Vec<u8>>], mb_w: usize, mb_h: usize) -> Planes3 {
+    let (w, h) = (mb_w * 16, mb_h * 16);
+    let (mut y, mut u, mut v) = (vec![0; w * h], vec![0; w * h / 4], vec![0; w * h / 4]);
+    for (i, mb) in mbs.iter().enumerate() {
+        let Some(s) = mb else { continue };
+        let (x0, y0) = ((i % mb_w) * 16, (i / mb_w) * 16);
+        for r in 0..16 {
+            y[(y0 + r) * w + x0..(y0 + r) * w + x0 + 16].copy_from_slice(&s[r * 16..r * 16 + 16]);
+        }
+        for r in 0..8 {
+            let o = (y0 / 2 + r) * (w / 2) + x0 / 2;
+            u[o..o + 8].copy_from_slice(&s[256 + r * 8..256 + r * 8 + 8]);
+            v[o..o + 8].copy_from_slice(&s[320 + r * 8..320 + r * 8 + 8]);
+        }
+    }
+    (y, u, v)
+}
+
+/// A field predicted with a zero motion vector from a field of the other parity: luma is copied,
+/// chroma moves by `dy` eighth chroma samples (Table 8-10) and is interpolated (8.4.2.2.2).
+fn chroma_moved(field: &Planes3, dy: i32) -> Planes3 {
+    let (cw, ch) = (MB_W * 8, FRAME_MB_H * 4);
+    let (step, frac) = (dy.div_euclid(8), dy.rem_euclid(8));
+    let shift = |c: &[u8]| -> Vec<u8> {
+        let at = |x: usize, r: i32| i32::from(c[r.clamp(0, ch as i32 - 1) as usize * cw + x]);
+        (0..ch as i32)
+            .flat_map(|r| (0..cw).map(move |x| ((8 - frac) * at(x, r + step) + frac * at(x, r + step + 1) + 4) >> 3))
+            .map(|v| v as u8)
+            .collect()
+    };
+    (field.0.clone(), shift(&field.1), shift(&field.2))
+}
+
+/// The frame whose even lines are `top` and odd lines `bottom`.
+fn weave(top: &Planes3, bottom: &Planes3) -> Planes3 {
+    let lines = |t: &[u8], b: &[u8], w: usize| -> Vec<u8> { t.chunks(w).zip(b.chunks(w)).flat_map(|(a, b)| a.iter().chain(b).copied()).collect() };
+    (lines(&top.0, &bottom.0, MB_W * 16), lines(&top.1, &bottom.1, MB_W * 8), lines(&top.2, &bottom.2, MB_W * 8))
+}
+
+/// Decode `pics` as one interlaced stream at 1 and 3 threads and compare with `expected`; with a
+/// name, also check that ffmpeg agrees.
+/// `structures` is the expected [`PictureStructure`] of each output picture.
+fn check_interlaced(cabac: bool, pics: &[Pic], expected: &[Planes3], structures: &[PictureStructure], ffmpeg_name: Option<&str>) {
+    let mut stream = interlaced_sps(77);
+    stream.extend(pps(cabac, false));
+    for p in pics {
+        stream.extend(slice_nal(&Pic { interlaced: true, ..p.clone() }, cabac));
+    }
+    if let Some(name) = ffmpeg_name {
+        cross_check_ffmpeg(&stream, expected, &format!("{name}_{}", if cabac { "cabac" } else { "cavlc" }));
+    }
+    for threads in [1, 3] {
+        let mut dec = Decoder::with_threads(threads);
+        let mut out = dec.decode(&stream, 0).unwrap();
+        out.extend(dec.flush());
+        assert!(dec.take_error().is_none(), "cabac={cabac} threads={threads}");
+        assert_eq!(out.len(), expected.len(), "cabac={cabac} threads={threads}");
+        let got: Vec<PictureStructure> = out.iter().map(|p| p.structure).collect();
+        assert_eq!(got, structures, "cabac={cabac} threads={threads}");
+        for (i, (p, e)) in out.iter().zip(expected).enumerate() {
+            assert_eq!((p.width as usize, p.height as usize), (MB_W * 16, FRAME_MB_H * 16));
+            assert!(p.y == e.0 && p.u == e.1 && p.v == e.2, "picture {i} differs (cabac={cabac}, threads={threads})");
+        }
+    }
+}
+
+fn pcm_field(seed: &mut u32) -> Vec<Option<Vec<u8>>> {
+    (0..FIELD_NMB).map(|_| Some(random_mb(seed))).collect()
+}
+
+/// A field pair whose second field is predicted from the first (chroma moved by a quarter chroma
+/// sample, Table 8-10), a frame predicted from the pair (the pair woven) and a field pair
+/// predicted from that frame (every other line of it, 8.2.4.2.5).
+fn field_pair_then_frame_then_fields(cabac: bool, bottom_first: bool) {
+    let mut seed = if bottom_first { 7 } else { 5 };
+    let first = pcm_field(&mut seed);
+    let skip_field = vec![None; FIELD_NMB];
+    let field = |frame_num, bottom, poc_lsb, mbs: &Vec<Option<Vec<u8>>>| Pic {
+        idr: frame_num == 0 && bottom == bottom_first,
+        frame_num,
+        ref_idc: 2,
+        field: Some(bottom),
+        poc_lsb: Some(poc_lsb),
+        mbs: mbs.clone(),
+        ..Default::default()
+    };
+    let (b, t) = (bottom_first, !bottom_first);
+    let pics = [
+        field(0, b, 0, &first),
+        field(0, t, 1, &skip_field),
+        Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(4), mbs: vec![None; MB_W * FRAME_MB_H], ..Default::default() },
+        field(2, b, 8, &skip_field),
+        field(2, t, 9, &skip_field),
+    ];
+    let p0 = render_pcm(&first, MB_W, FRAME_MB_H / 2);
+    // a bottom field referencing a top field moves chroma down (+2), a top field up (-2)
+    let p1 = chroma_moved(&p0, if bottom_first { -2 } else { 2 });
+    let frame = if bottom_first { weave(&p1, &p0) } else { weave(&p0, &p1) };
+    let name = if bottom_first { "synth_fields_bottom_first" } else { "synth_fields_top_first" };
+    use PictureStructure::{FieldPair, Frame};
+    check_interlaced(cabac, &pics, &[frame.clone(), frame.clone(), frame], &[FieldPair, Frame, FieldPair], Some(name));
+}
+
+#[test]
+fn field_pictures_reference_fields_frames_and_pairs() {
+    for cabac in [false, true] {
+        for bottom_first in [false, true] {
+            field_pair_then_frame_then_fields(cabac, bottom_first);
+        }
+    }
+}
+
+/// A reference field followed by a non-reference field of the same frame_num does not form a
+/// complementary field pair (3.30, 3.37): each is a non-paired field in a frame buffer of its own
+/// and is output on its own, its lines repeated.
+#[test]
+fn reference_and_non_reference_fields_are_output_separately() {
+    for cabac in [false, true] {
+        let mut seed = 3;
+        let (top, bottom) = (pcm_field(&mut seed), pcm_field(&mut seed));
+        let pics = [
+            Pic { idr: true, ref_idc: 2, field: Some(false), poc_lsb: Some(0), mbs: top.clone(), ..Default::default() },
+            Pic { ref_idc: 0, field: Some(true), poc_lsb: Some(1), mbs: bottom.clone(), ..Default::default() },
+        ];
+        let (t, b) = (render_pcm(&top, MB_W, FRAME_MB_H / 2), render_pcm(&bottom, MB_W, FRAME_MB_H / 2));
+        check_interlaced(cabac, &pics, &[weave(&t, &t), weave(&b, &b)], &[PictureStructure::TopField, PictureStructure::BottomField], None);
+    }
+}
+
+/// A field without a second field is output once the next picture shows none follows.
+#[test]
+fn a_lone_field_is_output_with_its_lines_repeated() {
+    for cabac in [false, true] {
+        let mut seed = 11;
+        let top = pcm_field(&mut seed);
+        let frame: Vec<Option<Vec<u8>>> = (0..MB_W * FRAME_MB_H).map(|_| Some(random_mb(&mut seed))).collect();
+        let pics = [
+            Pic { idr: true, ref_idc: 2, field: Some(false), poc_lsb: Some(0), mbs: top.clone(), ..Default::default() },
+            Pic { frame_num: 1, ref_idc: 2, poc_lsb: Some(2), mbs: frame.clone(), ..Default::default() },
+        ];
+        let t = render_pcm(&top, MB_W, FRAME_MB_H / 2);
+        check_interlaced(
+            cabac,
+            &pics,
+            &[weave(&t, &t), render_pcm(&frame, MB_W, FRAME_MB_H)],
+            &[PictureStructure::TopField, PictureStructure::Frame],
+            None,
+        );
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Coefficient scans and significance contexts of field pictures
+// ------------------------------------------------------------------------------------------------
+//
+// A field picture is coded with field scans (8.5.6, 8.5.7) and, in CABAC, with the contexts of
+// field coded blocks (Tables 9-34, 9-43). Each test codes a field pair whose transform blocks carry
+// one coefficient each, at every scan position across the pair, and compares it with two
+// progressive pictures of the same size carrying the same coefficient at the zig-zag position that
+// lands on the same matrix entry. The tables below are transcribed from the specification, not taken
+// from the decoder, so a wrong decoder table makes the two differ.
+
+/// Table 8-13: matrix entry c_ij ("ij") of 4x4 scan position idx.
+const ZIGZAG4: [&str; 16] = ["00", "01", "10", "20", "11", "02", "03", "12", "21", "30", "31", "22", "13", "23", "32", "33"];
+const FIELD4: [&str; 16] = ["00", "10", "01", "20", "30", "11", "21", "31", "02", "12", "22", "32", "03", "13", "23", "33"];
+/// Table 8-14: the same for 8x8 blocks.
+const ZIGZAG8: [&str; 64] = [
+    "00", "01", "10", "20", "11", "02", "03", "12", "21", "30", "40", "31", "22", "13", "04", "05", "14", "23", "32", "41", "50", "60", "51", "42",
+    "33", "24", "15", "06", "07", "16", "25", "34", "43", "52", "61", "70", "71", "62", "53", "44", "35", "26", "17", "27", "36", "45", "54", "63",
+    "72", "73", "64", "55", "46", "37", "47", "56", "65", "74", "75", "66", "57", "67", "76", "77",
+];
+const FIELD8: [&str; 64] = [
+    "00", "10", "20", "01", "11", "30", "40", "21", "02", "31", "50", "60", "70", "41", "12", "03", "22", "51", "61", "71", "32", "13", "04", "23",
+    "42", "52", "62", "72", "33", "14", "05", "24", "43", "53", "63", "73", "34", "15", "06", "25", "44", "54", "64", "74", "35", "16", "26", "45",
+    "55", "65", "75", "36", "07", "17", "46", "56", "66", "76", "27", "37", "47", "57", "67", "77",
+];
+/// Table 9-43: ctxIdxInc of significant_coeff_flag (frame and field coded) and
+/// last_significant_coeff_flag of 8x8 blocks by scan position.
+const SIG8_FRAME_INC: [usize; 63] = [
+    0, 1, 2, 3, 4, 5, 5, 4, 4, 3, 3, 4, 4, 4, 5, 5, 4, 4, 4, 4, 3, 3, 6, 7, 7, 7, 8, 9, 10, 9, 8, 7, 7, 6, 11, 12, 13, 11, 6, 7, 8, 9, 14, 10, 9, 8,
+    6, 11, 12, 13, 11, 6, 9, 14, 10, 9, 11, 12, 13, 11, 14, 10, 12,
+];
+const SIG8_FIELD_INC: [usize; 63] = [
+    0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 7, 7, 8, 4, 5, 6, 9, 10, 10, 8, 11, 12, 11, 9, 9, 10, 10, 8, 11, 12, 11, 9, 9, 10, 10, 8, 11, 12, 11, 9, 9, 10,
+    10, 8, 13, 13, 9, 9, 10, 10, 8, 13, 13, 9, 9, 10, 10, 14, 14, 14, 14, 14,
+];
+const LAST8_INC: [usize; 63] = [
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+    5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8,
+];
+/// Table 9-7, tzVlcIndex 1: total_zeros codes (length, value) for one coefficient in 16.
+const TOTAL_ZEROS1: [(u32, u32); 16] =
+    [(1, 1), (3, 3), (3, 2), (4, 3), (4, 2), (5, 3), (5, 2), (6, 3), (6, 2), (7, 3), (7, 2), (8, 3), (8, 2), (9, 3), (9, 2), (9, 1)];
+/// The level each test coefficient carries.
+const SCAN_LEVEL: u32 = 8;
+/// Macroblocks per picture of the scan tests (MB_W x 2, a field of the interlaced SPS).
+const SCAN_NMB: usize = FIELD_NMB;
+
+/// SPS of the scan tests: MB_W x 2 macroblocks per picture (a field of a 4-row frame when
+/// `interlaced`), High profile when `high`.
+fn scan_sps(high: bool, interlaced: bool) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(if high { 100 } else { 77 }, 8);
+    w.write_bits(0, 8);
+    w.write_bits(30, 8);
+    w.write_ue(0); // sps id
+    if high {
+        w.write_ue(1); // chroma_format_idc 4:2:0
+        w.write_ue(0); // bit_depth_luma_minus8
+        w.write_ue(0); // bit_depth_chroma_minus8
+        w.write_bit(false); // qpprime_y_zero_transform_bypass_flag
+        w.write_bit(false); // seq_scaling_matrix_present_flag
+    }
+    w.write_ue(0); // log2_max_frame_num - 4
+    w.write_ue(0); // pic_order_cnt_type
+    w.write_ue(0); // log2_max_pic_order_cnt_lsb - 4
+    w.write_ue(2); // max_num_ref_frames
+    w.write_bit(false); // gaps
+    w.write_ue(MB_W as u32 - 1);
+    w.write_ue(1); // pic_height_in_map_units_minus1: two MB rows per field or frame
+    w.write_bit(!interlaced); // frame_mbs_only_flag
+    if interlaced {
+        w.write_bit(false); // mb_adaptive_frame_field_flag
+    }
+    w.write_bit(true); // direct_8x8_inference
+    w.write_bit(false); // cropping
+    w.write_bit(false); // vui
+    w.rbsp_trailing();
+    nal(3, 7, &w.finish())
+}
+
+/// PPS of the scan tests, with transform_8x8_mode_flag when `t8`.
+fn scan_pps(cabac: bool, t8: bool) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_bit(cabac);
+    w.write_bit(false);
+    w.write_ue(0); // slice groups
+    w.write_ue(0);
+    w.write_ue(0);
+    w.write_bit(false);
+    w.write_bits(0, 2);
+    w.write_se(0); // pic_init_qp - 26
+    w.write_se(0);
+    w.write_se(0);
+    w.write_bit(true); // deblocking_filter_control_present
+    w.write_bit(false);
+    w.write_bit(false);
+    if t8 {
+        w.write_bit(true); // transform_8x8_mode_flag
+        w.write_bit(false); // pic_scaling_matrix_present_flag
+        w.write_se(0); // second_chroma_qp_index_offset
+    }
+    w.rbsp_trailing();
+    nal(3, 8, &w.finish())
+}
+
+/// A residual block coded with CABAC holding SCAN_LEVEL at scan position `pos` of `n`
+/// (significance map and level, 9.3.2.3; the coded_block_flag is the caller's).
+fn cabac_one_coeff(
+    e: &mut Enc,
+    w: &mut BitWriter,
+    pos: usize,
+    n: usize,
+    sig: impl Fn(usize) -> usize,
+    last: impl Fn(usize) -> usize,
+    level_ctx: usize,
+) {
+    for i in 0..n - 1 {
+        e.encode(w, sig(i), u32::from(i == pos));
+        if i == pos {
+            e.encode(w, last(i), 1);
+            break;
+        }
+    }
+    // coeff_abs_level_minus1 = SCAN_LEVEL - 1, unary below cMax 14 (ctxIdxInc 1, then 5)
+    e.encode(w, level_ctx + 1, 1);
+    for _ in 1..SCAN_LEVEL - 1 {
+        e.encode(w, level_ctx + 5, 1);
+    }
+    e.encode(w, level_ctx + 5, 0);
+    e.bypass(w, false); // coeff_sign_flag: positive
+}
+
+/// One I picture of the scan tests (deblocking off). Without `t8` every macroblock is
+/// I_16x16_2_0_0 (DC prediction, no AC, no chroma residual) whose Intra16x16DCLevel holds one
+/// coefficient at scan position `pos[mb]`; with `t8` (CABAC only) every macroblock is I_NxN with
+/// the 8x8 transform, all four 8x8 luma blocks coded, block `b` holding one coefficient at
+/// `pos[4 * mb + b]`. `field` is the parity of a field picture, None for a progressive frame.
+fn scan_picture(cabac: bool, t8: bool, field: Option<bool>, idr: bool, pos: &[usize]) -> Vec<u8> {
+    let second = field == Some(true);
+    let header = Pic {
+        idr,
+        frame_num: u32::from(!idr && field.is_none()),
+        ref_idc: 2,
+        poc_lsb: Some(if field.is_some() {
+            u32::from(second)
+        } else if idr {
+            0
+        } else {
+            2
+        }),
+        mbs: vec![Some(Vec::new()); SCAN_NMB],
+        interlaced: field.is_some(),
+        field,
+        deblock_off: true,
+        ..Default::default()
+    };
+    let mut w = BitWriter::new();
+    slice_header(&mut w, &header, cabac);
+    let fld = field.is_some();
+    if !cabac {
+        for &p in pos {
+            w.write_ue(3); // I_16x16_2_0_0
+            w.write_ue(0); // intra_chroma_pred_mode DC
+            w.write_se(0); // mb_qp_delta
+            // Intra16x16DCLevel: nC 0 (the neighbours' AC blocks are empty), TotalCoeff 1 without
+            // trailing ones, level_prefix 12 (levelCode 12 + 2 = 14, level 8), total_zeros = pos
+            w.write_bits(0b000101, 6);
+            w.write_bits(1, 13);
+            let (len, code) = TOTAL_ZEROS1[p];
+            w.write_bits(code, len);
+        }
+        w.rbsp_trailing();
+    } else {
+        while !w.is_byte_aligned() {
+            w.write_bit(true);
+        }
+        let mut e = Enc::new(26, 3);
+        for mb in 0..SCAN_NMB {
+            let avail = usize::from(mb % MB_W > 0) + usize::from(mb >= MB_W);
+            if t8 {
+                e.encode(&mut w, 3, 0); // I_NxN (neighbours are I_NxN: condTerm 0)
+                e.encode(&mut w, 399 + avail, 1); // transform_size_8x8_flag
+                for _ in 0..4 {
+                    e.encode(&mut w, 68, 1); // prev_intra8x8_pred_mode_flag
+                }
+                e.encode(&mut w, 64, 0); // intra_chroma_pred_mode DC
+                for _ in 0..4 {
+                    e.encode(&mut w, 73, 1); // coded_block_pattern luma: every neighbour coded
+                }
+                e.encode(&mut w, 77, 0); // no chroma
+                e.encode(&mut w, 60, 0); // mb_qp_delta
+                for b in 0..4 {
+                    // 4:2:0: no coded_block_flag for 8x8 blocks
+                    let (sig, last) = if fld { (436, 451) } else { (402, 417) };
+                    let inc = if fld { &SIG8_FIELD_INC } else { &SIG8_FRAME_INC };
+                    cabac_one_coeff(&mut e, &mut w, pos[4 * mb + b], 64, |i| sig + inc[i], |i| last + LAST8_INC[i], 426);
+                }
+            } else {
+                e.encode(&mut w, 3 + avail, 1); // not I_NxN (neighbours are I_16x16)
+                e.terminate(&mut w, false); // not I_PCM
+                e.encode(&mut w, 6, 0); // no AC
+                e.encode(&mut w, 7, 0); // no chroma
+                e.encode(&mut w, 9, 1); // prediction mode 2
+                e.encode(&mut w, 10, 0);
+                e.encode(&mut w, 64, 0); // intra_chroma_pred_mode DC
+                e.encode(&mut w, 60, 0); // mb_qp_delta
+                // coded_block_flag of the DC block: neighbours coded or unavailable (intra) -> 3
+                e.encode(&mut w, 85 + 3, 1);
+                let (sig, last) = if fld { (277, 338) } else { (105, 166) };
+                cabac_one_coeff(&mut e, &mut w, pos[mb], 16, |i| sig + i, |i| last + i, 227);
+            }
+            e.terminate(&mut w, mb + 1 == SCAN_NMB);
+        }
+        w.align_zero();
+    }
+    nal(2, if idr { 5 } else { 1 }, &w.finish())
+}
+
+fn decode_all(stream: &[u8], threads: usize) -> Vec<Planes3> {
+    let mut dec = Decoder::with_threads(threads);
+    let mut out = dec.decode(stream, 0).unwrap();
+    out.extend(dec.flush());
+    assert!(dec.take_error().is_none());
+    out.into_iter().map(|p| (p.y, p.u, p.v)).collect()
+}
+
+/// A field pair coding every scan position once against two progressive pictures coding the
+/// matching zig-zag positions.
+fn check_field_scan(cabac: bool, t8: bool, name: &str) {
+    let (field_scan, zigzag): (&[&str], &[&str]) = if t8 { (&FIELD8, &ZIGZAG8) } else { (&FIELD4, &ZIGZAG4) };
+    let n = field_scan.len();
+    let per_pic = if t8 { 4 * SCAN_NMB } else { SCAN_NMB };
+    assert_eq!(2 * per_pic, n);
+    // field positions 0..n over the pair; the progressive pictures code the same entries
+    let field_pos: Vec<usize> = (0..n).collect();
+    let frame_pos: Vec<usize> = field_pos.iter().map(|&p| zigzag.iter().position(|z| *z == field_scan[p]).unwrap()).collect();
+    let mut fields = scan_sps(t8, true);
+    fields.extend(scan_pps(cabac, t8));
+    fields.extend(scan_picture(cabac, t8, Some(false), true, &field_pos[..per_pic]));
+    fields.extend(scan_picture(cabac, t8, Some(true), false, &field_pos[per_pic..]));
+    let mut frames = scan_sps(t8, false);
+    frames.extend(scan_pps(cabac, t8));
+    frames.extend(scan_picture(cabac, t8, None, true, &frame_pos[..per_pic]));
+    frames.extend(scan_picture(cabac, t8, None, false, &frame_pos[per_pic..]));
+    let progressive = decode_all(&frames, 1);
+    assert_eq!(progressive.len(), 2);
+    // the coefficients do reach the samples
+    assert!(progressive[0].0.iter().any(|&v| v != progressive[0].0[0]));
+    let expected = [weave(&progressive[0], &progressive[1])];
+    cross_check_ffmpeg(&fields, &expected, name);
+    for threads in [1, 3] {
+        assert!(decode_all(&fields, threads) == expected, "{name}: field pair differs (threads={threads})");
+    }
+}
+
+/// Intra16x16DCLevel of field pictures uses the field scan (CAVLC).
+#[test]
+fn field_pictures_use_the_field_scan_cavlc() {
+    check_field_scan(false, false, "synth_field_scan4_cavlc");
+}
+
+/// Intra16x16DCLevel of field pictures uses the field scan and the significance contexts of field
+/// coded blocks (ctxIdx 277 and 338 instead of 105 and 166).
+#[test]
+fn field_pictures_use_the_field_scan_and_contexts_cabac() {
+    check_field_scan(true, false, "synth_field_scan4_cabac");
+}
+
+/// 8x8 blocks of field pictures use the 8x8 field scan and the field contexts of Table 9-43.
+#[test]
+fn field_pictures_use_the_8x8_field_scan_and_contexts() {
+    check_field_scan(true, true, "synth_field_scan8_cabac");
+}
+
+/// Draft mode switched on between the two fields of a non-reference pair: the output pair says
+/// draft, since its second field skipped deblocking.
+#[test]
+fn draft_mode_switched_between_two_fields_marks_the_pair_draft() {
+    for (d0, d1) in [(false, true), (true, false)] {
+        let mut seed = 3u32;
+        let first = pcm_field(&mut seed);
+        let skip = vec![None; FIELD_NMB];
+        let field = |frame_num: u32, ref_idc: u8, bottom: bool, poc_lsb: u32, mbs: &Vec<Option<Vec<u8>>>| Pic {
+            idr: frame_num == 0 && !bottom,
+            frame_num,
+            ref_idc,
+            field: Some(bottom),
+            poc_lsb: Some(poc_lsb),
+            mbs: mbs.clone(),
+            interlaced: true,
+            ..Default::default()
+        };
+        let mut head = interlaced_sps(77);
+        head.extend(pps(false, false));
+        head.extend(slice_nal(&field(0, 2, false, 0, &first), false));
+        head.extend(slice_nal(&field(0, 2, true, 1, &skip), false));
+        let top = slice_nal(&field(1, 0, false, 4, &skip), false);
+        let bottom = slice_nal(&field(1, 0, true, 5, &skip), false);
+        let mut dec = Decoder::with_threads(1);
+        let mut out = dec.decode(&head, 0).unwrap();
+        dec.set_draft(d0);
+        out.extend(dec.decode(&top, 1).unwrap());
+        dec.set_draft(d1);
+        out.extend(dec.decode(&bottom, 2).unwrap());
+        out.extend(dec.flush());
+        assert!(dec.take_error().is_none());
+        let drafts: Vec<bool> = out.iter().map(|p| p.draft).collect();
+        assert_eq!(drafts, [false, true], "draft {d0} then {d1}");
     }
 }

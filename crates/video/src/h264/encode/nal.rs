@@ -44,6 +44,9 @@ pub struct Sps {
     pub max_num_ref_frames: u32,
     /// BitDepthY = BitDepthC (8 to 10).
     pub bit_depth: u8,
+    /// Interlaced frames coded as frame pictures: `frame_mbs_only_flag` 0 without MBAFF, the
+    /// height in macroblock pairs, the cropping in units of 4 lines, and `pic_struct_present_flag`.
+    pub interlaced: bool,
     pub vui: Vui,
 }
 
@@ -67,16 +70,22 @@ impl Sps {
         w.write_ue(self.max_num_ref_frames);
         w.write_bit(false); // gaps_in_frame_num_value_allowed_flag
         w.write_ue(self.width_mbs - 1);
-        w.write_ue(self.height_mbs - 1);
-        w.write_bit(true); // frame_mbs_only_flag
-        w.write_bit(true); // direct_8x8_inference_flag
+        // pic_height_in_map_units_minus1: map units are macroblock pairs when frame_mbs_only_flag is 0 (7-18).
+        w.write_ue(if self.interlaced { self.height_mbs / 2 - 1 } else { self.height_mbs - 1 });
+        w.write_bit(!self.interlaced); // frame_mbs_only_flag
+        if self.interlaced {
+            w.write_bit(false); // mb_adaptive_frame_field_flag
+        }
+        w.write_bit(true); // direct_8x8_inference_flag (required with frame_mbs_only_flag 0)
         let crop = self.crop_right > 0 || self.crop_bottom > 0;
         w.write_bit(crop);
         if crop {
+            // CropUnitY is 2 lines, or 4 with frame_mbs_only_flag 0 (7-20).
+            let crop_unit_y = if self.interlaced { 4 } else { 2 };
             w.write_ue(0);
             w.write_ue(self.crop_right / 2);
             w.write_ue(0);
-            w.write_ue(self.crop_bottom / 2);
+            w.write_ue(self.crop_bottom / crop_unit_y);
         }
         w.write_bit(true); // vui_parameters_present_flag
         let v = &self.vui;
@@ -106,7 +115,7 @@ impl Sps {
         w.write_bit(true); // fixed_frame_rate_flag
         w.write_bit(false); // nal_hrd_parameters_present_flag
         w.write_bit(false); // vcl_hrd_parameters_present_flag
-        w.write_bit(false); // pic_struct_present_flag
+        w.write_bit(self.interlaced); // pic_struct_present_flag
         w.write_bit(true); // bitstream_restriction_flag
         w.write_bit(true); // motion_vectors_over_pic_boundaries_flag
         w.write_ue(0); // max_bytes_per_pic_denom
@@ -161,6 +170,21 @@ impl Pps {
 pub fn aud_rbsp(primary_pic_type: u8) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(primary_pic_type as u32, 3);
+    w.rbsp_trailing();
+    w.finish()
+}
+
+/// Picture timing SEI (payloadType 1, D.1.3) of a sequence without HRD parameters whose VUI has
+/// `pic_struct_present_flag`: `pic_struct` 3 (top field, bottom field) when `top_first`, else 4
+/// (bottom, top), with no clock timestamps (NumClockTS 2, both flags 0).
+pub fn sei_pic_timing_rbsp(top_first: bool) -> Vec<u8> {
+    let mut w = BitWriter::new();
+    w.write_bits(1, 8); // payloadType pic_timing
+    w.write_bits(1, 8); // payloadSize: 6 bits and the alignment bits
+    w.write_bits(if top_first { 3 } else { 4 }, 4); // pic_struct
+    w.write_bits(0, 2); // clock_timestamp_flag[0], [1]
+    w.write_bit(true); // bit_equal_to_one
+    w.write_bit(false); // bit_equal_to_zero
     w.rbsp_trailing();
     w.finish()
 }
@@ -228,6 +252,8 @@ pub struct SliceHeader {
     pub disable_deblocking: u32,
     pub alpha_offset_div2: i32,
     pub beta_offset_div2: i32,
+    /// The sequence is interlaced (`frame_mbs_only_flag` 0): `field_pic_flag` is written (0, a frame picture).
+    pub interlaced: bool,
 }
 
 impl SliceHeader {
@@ -237,6 +263,9 @@ impl SliceHeader {
         w.write_ue(self.slice_type as u32);
         w.write_ue(0); // pic_parameter_set_id
         w.write_bits(self.frame_num, self.log2_max_frame_num);
+        if self.interlaced {
+            w.write_bit(false); // field_pic_flag: a frame picture
+        }
         if self.idr {
             w.write_ue(self.idr_pic_id);
         }

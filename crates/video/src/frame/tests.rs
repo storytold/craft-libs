@@ -85,6 +85,7 @@ fn h264_picture(y_len: usize) -> crate::h264::decode::Picture {
         color: crate::h264::decode::ColorInfo { full_range: true, primaries: 1, transfer: 1, matrix: 1 },
         sar: (0, 0),
         draft: false,
+        structure: crate::h264::decode::PictureStructure::Frame,
     }
 }
 

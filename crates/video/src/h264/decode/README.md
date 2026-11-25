@@ -19,7 +19,13 @@ oracles and fixture generators.
 - Slice header: all fields incl. reference list modification, prediction weight table and
   decoded reference picture marking. POC types 0, 1, 2. `frame_num` gap handling ("non-existing"
   frames).
-- Entropy coding: CAVLC and CABAC (all syntax elements needed for frame coding, 4:2:0).
+- Entropy coding: CAVLC and CABAC (all syntax elements needed for frame and field pictures, 4:2:0).
+- Interlaced streams (`frame_mbs_only_flag = 0`): frame pictures and field pictures, also mixed
+  picture by picture (PAFF). A field is decoded as a half-height picture of its own; field scans,
+  field CABAC contexts, field POC, reference lists of fields (alternating parity), field marking
+  and MMCOs, direct prediction across frame and field structure, the chroma offset between fields
+  of opposite parity and field deblocking follow the specification. A complementary field pair is
+  output as one woven frame; a field without a second field is output with its lines repeated.
 - Macroblocks: I (Intra 4x4 / 8x8 / 16x16, I_PCM), P (all partitions, P_8x8ref0, P_Skip),
   B (all partitions and sub-partitions, B_Skip, B_Direct_16x16, B_Direct_8x8), spatial and temporal
   direct prediction with/without `direct_8x8_inference`, constrained intra prediction.
@@ -27,8 +33,9 @@ oracles and fixture generators.
   scaling matrices (SPS and PPS level).
 - Inter prediction: quarter-sample 6-tap luma, eighth-sample chroma, explicit and implicit weighted
   prediction, multiple reference frames, long-term references.
-- DPB: sliding window, all MMCOs (1-6), IDR / `no_output_of_prior_pics`, bumping with DPB size from
-  the level (or VUI `max_dec_frame_buffering`) and `max_num_reorder_frames`.
+- DPB: sliding window, all MMCOs (1-6) on frames and on single fields, IDR /
+  `no_output_of_prior_pics`, bumping with DPB size from the level (or VUI `max_dec_frame_buffering`)
+  and `max_num_reorder_frames`.
 - Deblocking filter: full bS derivation, `disable_deblocking_filter_idc` 0/1/2, slice offsets,
   8x8-transform edges.
 - Output: cropped 8-bit planar 4:2:0 pictures in output order with the caller's `pts`, POC, key
@@ -118,7 +125,21 @@ with ffmpeg + libx264; tests print a message and skip when `/opt/homebrew/bin/ff
 - Synthetic streams (`synth_tests.rs`): hand-built CAVLC and CABAC bitstreams covering what
   libx264 never produces — I_PCM, long-term references, MMCO 1-6, `frame_num` gaps, reference list
   modification (short- and long-term), explicit weighted prediction in P and B slices, B_Skip with
-  explicit bi-prediction. The expected output is known exactly and is also checked against ffmpeg.
+  explicit bi-prediction, and field pictures (top or bottom field first, a field predicted from the
+  other field of its frame, a frame from a field pair, fields from a frame, non-paired fields). The
+  expected output is known exactly and is also checked against ffmpeg, except for non-paired
+  fields, which ffmpeg drops (C.4.5.3 outputs them; the decoder repeats their lines and marks the
+  picture `PictureStructure::TopField` or `BottomField`).
+- Field scans and field CABAC contexts (`synth_tests.rs`): a field pair whose transform blocks
+  carry one coefficient each, at every scan position, is compared with two progressive pictures
+  carrying it at the matching zig-zag position: Intra16x16 DC blocks in CAVLC and CABAC (4x4 field
+  scan, significance contexts 277 and 338) and 8x8 blocks in High profile CABAC (8x8 field scan,
+  Table 9-43 field contexts). The scan and context tables of these tests are transcribed from the
+  specification separately from the decoder's, and ffmpeg checks the field pairs. Inter field
+  macroblocks with residual data, the remaining block categories and larger pictures are covered
+  only by the ITU-T H.264 conformance bitstreams with field pictures. Those are not in the
+  repository; they were decoded outside it and compared with ffmpeg (the fixtures below are
+  progressive libx264 streams).
 - Robustness: avcC input with pts round trip; randomly corrupted, truncated and garbage input never
   panics or deadlocks (single- and multi-threaded).
 - Conformance (`tests/it/conformance.rs`): every fixture is decoded single-threaded, with 3 threads
@@ -214,7 +235,7 @@ file; `H264_BENCH_ITERS=n` (and `H264_THREADS=t`, `H264_DRAFT=1`) turns it into 
 
 ## Known gaps
 
-- Interlaced coding (field pictures, PAFF, MBAFF): streams with `frame_mbs_only_flag = 0` return
+- MBAFF (`mb_adaptive_frame_field_flag = 1`): frame pictures of such streams return
   `Error::Unsupported`.
 - Only 8-bit 4:2:0. High 10 / 4:2:2 / 4:4:4 / monochrome and lossless
   (`qpprime_y_zero_transform_bypass`) return `Error::Unsupported`.
