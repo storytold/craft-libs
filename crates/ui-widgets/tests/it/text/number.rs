@@ -787,21 +787,21 @@ fn slider_percent(fixture: &craft_ui::testing::Fixture) -> (String, craft_ui::te
     (number.text.to_string(), field, slider)
 }
 
-/// A slider field over a percent shows the suite's one-decimal percent look by default; with
-/// `field_decimals(FieldDecimals::Step)` it shows the decimals its step needs ("67" over 66.7 with a step of 1), and a
-/// drag and a typed value still land on whole steps.
+/// A slider field over a percent shows its percent look by default, at most one decimal: with a step of a hundredth
+/// it shows "66.7" over 66.7, and with `field_decimals(FieldDecimals::Step)` the two decimals its step needs, "66.70".
+/// With a step of 1 it shows "67", and a drag and a typed value land on whole steps.
 #[trial]
 fn a_slider_fields_step_decimals_win_over_the_percent_look_and_keep_the_snap() {
     use craft_ui::form::{FieldDecimals, SliderField};
     use craft_ui::testing::Fixture;
     use std::rc::Rc;
-    let shown = |decimals: FieldDecimals| {
+    let shown = |step: f64, decimals: FieldDecimals| {
         let value = Rc::new(Cell::new(66.7_f64));
         let held = Rc::clone(&value);
         let mut fixture = Fixture::new(move |ui| {
             let mut now = held.get();
             SliderField::new("Saturation", Bind::bound(&mut now), 0.0..=100.0)
-                .step(1.0)
+                .step(step)
                 .unit_kind(UnitKind::Percent)
                 .field_decimals(decimals)
                 .show(ui);
@@ -810,12 +810,17 @@ fn a_slider_fields_step_decimals_win_over_the_percent_look_and_keep_the_snap() {
         fixture.settle();
         (fixture, value)
     };
-    let (look, _) = shown(FieldDecimals::Look);
-    assert_eq!(slider_percent(&look).0, "66.7", "by default a percent keeps the one-decimal look");
+    // The percent look shows the decimals the field commits, up to one: a step of 1 commits none, so the look alone
+    // already reads "67" there. A step of a hundredth commits two, past the look's one: that is where the step's
+    // decimals have to win over the look.
+    let (look, _) = shown(0.01, FieldDecimals::Look);
+    assert_eq!(slider_percent(&look).0, "66.7", "by default a percent keeps the look's one decimal");
+    let (fine, _) = shown(0.01, FieldDecimals::Step);
+    assert_eq!(slider_percent(&fine).0, "66.70", "the step's two decimals win over the percent look");
 
-    let (mut fixture, value) = shown(FieldDecimals::Step);
+    let (mut fixture, value) = shown(1.0, FieldDecimals::Step);
     let (number, field, slider) = slider_percent(&fixture);
-    assert_eq!(number, "67", "the step's whole numbers win over the percent look");
+    assert_eq!(number, "67", "a step of 1 shows whole numbers");
 
     fixture.drag_at(slider.rect.left_center() + Vec2::new(slider.rect.width() * 0.3, 0.0), Vec2::new(slider.rect.width() * 0.137, 0.0));
     fixture.settle();
