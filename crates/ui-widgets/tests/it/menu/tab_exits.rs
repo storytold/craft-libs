@@ -14,16 +14,19 @@ use std::rc::Rc;
 struct Rig {
     fixture: Fixture,
     ran: Rc<Cell<u32>>,
+    before: Rc<Cell<Option<Id>>>,
+    opener: Rc<Cell<Option<Id>>>,
     after: Rc<Cell<Option<Id>>>,
 }
 
 fn rig(exits: bool) -> Rig {
     let ran = Rc::new(Cell::new(0));
+    let before = Rc::new(Cell::new(None));
     let after = Rc::new(Cell::new(None));
     let opener = Rc::new(Cell::new(None));
-    let (shown_ran, shown_after, shown_opener) = (ran.clone(), after.clone(), opener.clone());
+    let (shown_ran, shown_before, shown_after, shown_opener) = (ran.clone(), before.clone(), after.clone(), opener.clone());
     let mut fixture = Fixture::new(move |ui| {
-        Button::new("Before").show(ui);
+        shown_before.set(Some(Button::new("Before").show(ui).id));
         let preset = Button::new("Preset").show(ui);
         shown_opener.set(Some(preset.id));
         let menu = Menu::new("Presets").opened_by(&preset, Trigger::Press);
@@ -44,7 +47,7 @@ fn rig(exits: bool) -> Rig {
     fixture.key(Key::Enter, Modifiers::NONE);
     fixture.settle();
     assert!(fixture.by_label("Linear").is_some(), "Enter on the focused opener opens the menu");
-    Rig { fixture, ran, after }
+    Rig { fixture, ran, before, opener, after }
 }
 
 impl Rig {
@@ -55,6 +58,10 @@ impl Rig {
     fn tab(&mut self) {
         self.fixture.key(Key::Tab, Modifiers::NONE);
         self.fixture.settle();
+    }
+
+    fn focused(&self) -> Option<Id> {
+        self.fixture.focused_stop().map(|(id, _)| id)
     }
 }
 
@@ -84,4 +91,30 @@ fn arrows_still_move_through_a_tab_exits_menu() {
     rig.fixture.key(Key::Enter, Modifiers::NONE);
     rig.fixture.settle();
     assert_eq!(rig.ran.get(), 1, "Enter runs the row the arrows reached");
+}
+
+#[trial]
+fn shift_tab_leaves_a_tab_exits_menu_for_the_stop_before_its_opener() {
+    let mut rig = rig(true);
+    rig.fixture.key(Key::ArrowDown, Modifiers::NONE);
+    rig.fixture.key(Key::Tab, Modifiers::SHIFT);
+    rig.fixture.settle();
+    assert!(!rig.menu_open(), "the menu closes");
+    assert_eq!(rig.ran.get(), 0, "no row runs");
+    assert_eq!(rig.focused(), rig.before.get(), "the focus moves to the stop before the opener, not back to the opener");
+}
+
+/// An Escape closes the menu and gives the focus back to its opener; a Tab pressed while the menu still plays its exit
+/// goes on to the stop after the opener, and the closing menu does not take the focus back.
+#[trial]
+fn tab_right_after_escape_goes_on_from_the_opener_of_a_tab_exits_menu() {
+    let mut rig = rig(true);
+    rig.fixture.key(Key::ArrowDown, Modifiers::NONE);
+    rig.fixture.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(rig.focused(), rig.opener.get(), "Escape gives the focus back to the opener");
+    rig.fixture.key(Key::Tab, Modifiers::NONE);
+    rig.fixture.settle();
+    assert!(!rig.menu_open(), "the menu is closed");
+    assert_eq!(rig.ran.get(), 0, "no row runs");
+    assert_eq!(rig.focused(), rig.after.get(), "the focus goes on to the stop after the opener and stays there");
 }
