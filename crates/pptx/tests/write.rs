@@ -101,6 +101,25 @@ fn a_deck_without_masters_gets_the_callers() {
 }
 
 #[test]
+fn subset_font_setting_is_not_invented_and_survives_when_present() {
+    let bytes = craft_pptx::export(&deck(), &Plain).unwrap();
+    assert!(!part(&bytes, "ppt/presentation.xml").contains("saveSubsetFonts"), "a new deck must not opt into font subsetting");
+    let with_subset = common::rewrite(
+        &bytes,
+        |name, data| {
+            if name != "ppt/presentation.xml" {
+                return Some(data.to_vec());
+            }
+            let xml = String::from_utf8(data.to_vec()).unwrap();
+            Some(xml.replace("<p:presentation ", "<p:presentation saveSubsetFonts=\"1\" ").into_bytes())
+        },
+        &[],
+    );
+    let round_trip = craft_pptx::export(&craft_pptx::import(&with_subset, &Plain).unwrap(), &Plain).unwrap();
+    assert!(part(&round_trip, "ppt/presentation.xml").contains("saveSubsetFonts=\"1\""), "an explicit subset-font setting must survive");
+}
+
+#[test]
 fn a_missing_picture_is_written_as_a_transparent_stand_in() {
     let mut p = deck();
     add(
