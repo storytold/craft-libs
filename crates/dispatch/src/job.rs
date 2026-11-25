@@ -43,7 +43,7 @@ pub enum PixelFormat {
 impl PixelFormat {
     /// Returns true if this format includes an alpha channel.
     pub fn has_alpha(&self) -> bool {
-        matches!(self, Self::Rgba8 | Self::Bgra8 | Self::Rgba16 | Self::RgbaF32 | Self::Yuv444p12)
+        matches!(self, Self::Rgba8 | Self::Bgra8 | Self::Rgba16 | Self::RgbaF32)
     }
 
     /// Returns true if this format is planar (Y, U, V in separate memory buffers).
@@ -298,7 +298,7 @@ impl MediaStreamKind {
 
 /// Mode of media source ingestion.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SourceDescriptor {
     /// File source already present on disk.
     File {
@@ -761,15 +761,10 @@ impl ContainerType {
     /// Primary media domain for this container.
     pub fn media_kind(&self) -> MediaStreamKind {
         match self {
-            Self::IsoBmffMp4
-            | Self::QuickTimeMov
-            | Self::MatroskaMkv
-            | Self::WebM
-            | Self::MpegTs
-            | Self::MxfOp1a
-            | Self::MxfOpAtom
-            | Self::Avi
-            | Self::AnimatedGif => MediaStreamKind::VideoWithAudio,
+            Self::IsoBmffMp4 | Self::QuickTimeMov | Self::MatroskaMkv | Self::WebM | Self::MpegTs | Self::MxfOp1a | Self::MxfOpAtom | Self::Avi => {
+                MediaStreamKind::VideoWithAudio
+            }
+            Self::AnimatedGif => MediaStreamKind::VideoOnly,
             Self::Wave
             | Self::Aiff
             | Self::Flac
@@ -860,7 +855,23 @@ impl ContainerType {
                 Self::Omf,
                 Self::ArtcraftSoundcraft,
             ],
-            MediaStreamKind::VideoWithAudio | MediaStreamKind::VideoOnly => vec![
+            MediaStreamKind::VideoOnly => vec![
+                Self::IsoBmffMp4,
+                Self::QuickTimeMov,
+                Self::WebM,
+                Self::MatroskaMkv,
+                Self::MpegTs,
+                Self::MxfOp1a,
+                Self::MxfOpAtom,
+                Self::Avi,
+                Self::AnimatedGif,
+                Self::StillSequence,
+                Self::Edl,
+                Self::Otio,
+                Self::Aaf,
+                Self::Omf,
+            ],
+            MediaStreamKind::VideoWithAudio => vec![
                 Self::IsoBmffMp4,
                 Self::QuickTimeMov,
                 Self::WebM,
@@ -1520,12 +1531,33 @@ pub struct CraftJobSpec {
     pub targets: Vec<OutputTarget>,
 }
 
+/// Major version of the job schema this crate reads and writes.
+const SUPPORTED_SCHEMA_MAJOR: &str = "1";
+
+impl SourceDescriptor {
+    /// Checks the frame rates and timebases the source carries.
+    pub fn validate(&self) -> Result<(), DispatchError> {
+        match self {
+            Self::Pipe { frame_rate, .. } => frame_rate.validate_positive("frameRate"),
+            Self::File { timebase: Some(timebase), .. } => timebase.validate_positive("timebase"),
+            _ => Ok(()),
+        }
+    }
+}
+
 impl CraftJobSpec {
     /// Validates the internal consistency of the job specification.
     pub fn validate(&self) -> Result<(), DispatchError> {
         if self.job_id.trim().is_empty() {
             return Err(DispatchError::InvalidJobSpec("jobId cannot be empty".into()));
         }
+        if self.version.split('.').next() != Some(SUPPORTED_SCHEMA_MAJOR) {
+            return Err(DispatchError::InvalidJobSpec(format!(
+                "unsupported schema version `{}` (expected {SUPPORTED_SCHEMA_MAJOR}.x)",
+                self.version
+            )));
+        }
+        self.source.validate()?;
         for target in &self.targets {
             target.selection.validate()?;
         }
@@ -1540,6 +1572,12 @@ impl CraftJobSpec {
             }
             if target.output_path.as_os_str().is_empty() {
                 return Err(DispatchError::InvalidJobSpec(format!("target `{}` has empty outputPath", target.target_id)));
+            }
+            if target.image_quality.is_some_and(|q| !(1..=100).contains(&q)) {
+                return Err(DispatchError::InvalidJobSpec(format!("target `{}` has imageQuality outside 1..=100", target.target_id)));
+            }
+            if let Some(rate) = target.custom_frame_rate {
+                rate.validate_positive("customFrameRate")?;
             }
         }
 
@@ -1722,5 +1760,44 @@ mod tests {
         let spec = CraftJobSpec::from_json(json).unwrap();
         assert_eq!(spec.job_id, "job_future");
         assert_eq!(spec.targets.len(), 1);
+    }
+
+    fn minimal_spec(source: &str, extra_target: &str, version: &str) -> String {
+        format!(
+            r#"{{"version":"{version}","jobId":"j","clientInfo":{{"appName":"a","appVersion":"1","pid":1}},
+            "source":{source},"targets":[{{"targetId":"t","outputPath":"/o.mp4","presetName":"p","container":"IsoBmffMp4"{extra_target}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn test_source_fields_use_camel_case_keys() {
+        let json = minimal_spec(r#"{"type":"file","path":"/a.mov","startTick":5,"durationTicks":10}"#, "", "1.0.0");
+        let spec = CraftJobSpec::from_json(&json).unwrap();
+        assert!(matches!(spec.source, SourceDescriptor::File { start_tick: Some(5), duration_ticks: Some(10), .. }));
+        assert!(spec.to_json().unwrap().contains("startTick"));
+    }
+
+    #[test]
+    fn test_validation_rejects_bad_version_quality_and_rates() {
+        let file = r#"{"type":"file","path":"/a.mov"}"#;
+        assert!(CraftJobSpec::from_json(&minimal_spec(file, "", "1.7.2")).is_ok());
+        for version in ["", "2.0.0", "x"] {
+            assert!(CraftJobSpec::from_json(&minimal_spec(file, "", version)).is_err(), "version {version:?}");
+        }
+        assert!(CraftJobSpec::from_json(&minimal_spec(file, r#","imageQuality":100"#, "1.0.0")).is_ok());
+        for q in [0, 101] {
+            assert!(CraftJobSpec::from_json(&minimal_spec(file, &format!(r#","imageQuality":{q}"#), "1.0.0")).is_err(), "quality {q}");
+        }
+        let pipe = r#"{"type":"pipe","endpoint":"e","width":1,"height":1,"frameRate":{"num":25,"den":0},"sampleRate":48000,"channels":2}"#;
+        assert!(CraftJobSpec::from_json(&minimal_spec(pipe, "", "1.0.0")).is_err());
+        assert!(CraftJobSpec::from_json(&minimal_spec(file, r#","customFrameRate":{"num":25,"den":0}"#, "1.0.0")).is_err());
+    }
+
+    #[test]
+    fn test_animated_gif_offers_no_audio_extraction() {
+        assert!(!ContainerType::AnimatedGif.can_convert_to(ContainerType::Wave));
+        assert!(ContainerType::AnimatedGif.can_convert_to(ContainerType::IsoBmffMp4));
+        assert!(ContainerType::IsoBmffMp4.can_convert_to(ContainerType::Wave));
+        assert!(!super::PixelFormat::Yuv444p12.has_alpha());
     }
 }

@@ -35,12 +35,29 @@ impl Rational64 {
             return Err(DispatchError::InvalidJobSpec("rational denominator cannot be zero".into()));
         }
 
-        let g = gcd(num.abs(), den.abs());
-        let sign = if den < 0 { -1 } else { 1 };
-        let reduced_num = (num / g).checked_mul(sign).ok_or_else(|| DispatchError::InvalidJobSpec("overflow reducing rational fraction".into()))?;
-        let reduced_den = den.abs() / g;
+        // Reduce on unsigned magnitudes so `i64::MIN` cannot overflow.
+        let g = gcd(num.unsigned_abs(), den.unsigned_abs());
+        let negative = (num < 0) != (den < 0);
+        let overflow = || DispatchError::InvalidJobSpec("overflow reducing rational fraction".into());
+        let magnitude_num = i128::from(num.unsigned_abs() / g);
+        let signed_num = if negative { -magnitude_num } else { magnitude_num };
+        let reduced_num = i64::try_from(signed_num).map_err(|_| overflow())?;
+        let reduced_den = i64::try_from(den.unsigned_abs() / g).map_err(|_| overflow())?;
 
         Ok(Self { num: reduced_num, den: reduced_den })
+    }
+
+    /// Checks that the value is a usable rate: a positive numerator over a positive denominator.
+    ///
+    /// `Deserialize` bypasses [`Rational64::new`], so job validation calls this on decoded rates.
+    pub fn validate_positive(&self, field: &str) -> Result<(), DispatchError> {
+        if self.num <= 0 || self.den <= 0 {
+            return Err(DispatchError::InvalidJobSpec(format!(
+                "{field} must have a positive numerator and denominator, got {}/{}",
+                self.num, self.den
+            )));
+        }
+        Ok(())
     }
 
     /// Converts to floating-point representation.
@@ -57,7 +74,7 @@ impl Rational64 {
     }
 }
 
-fn gcd(mut a: i64, mut b: i64) -> i64 {
+fn gcd(mut a: u64, mut b: u64) -> u64 {
     while b != 0 {
         let t = b;
         b = a % b;
@@ -146,7 +163,35 @@ impl MediaTimecode {
         let seconds = parse_part(2)?;
         let frames = parse_part(3)?;
 
-        Ok(Self::new(hours, minutes, seconds, frames, is_drop, rate))
+        let timecode = Self::new(hours, minutes, seconds, frames, is_drop, rate);
+        timecode.validate()?;
+        Ok(timecode)
+    }
+
+    /// Checks that the label exists at this rate: components in range, drop-frame only at 29.97
+    /// or 59.94 fps, and none of the frame labels drop-frame skips at the start of a minute that
+    /// is not a multiple of ten.
+    pub fn validate(&self) -> Result<(), DispatchError> {
+        self.rate.validate_positive("timecode rate")?;
+        let nominal = self.rate.num.saturating_add(self.rate.den / 2) / self.rate.den;
+        let invalid = |what: &str| DispatchError::InvalidJobSpec(format!("invalid timecode {}: {what}", self.to_smpte_string()));
+        if self.hours > 23 || self.minutes > 59 || self.seconds > 59 {
+            return Err(invalid("component out of range"));
+        }
+        if i64::from(self.frames) >= nominal {
+            return Err(invalid("frame count beyond the frame rate"));
+        }
+        if self.drop_frame {
+            let drop = match (self.rate.num, self.rate.den) {
+                (30_000, 1_001) => 2,
+                (60_000, 1_001) => 4,
+                _ => return Err(invalid("drop-frame needs 29.97 or 59.94 fps")),
+            };
+            if self.seconds == 0 && !self.minutes.is_multiple_of(10) && self.frames < drop {
+                return Err(invalid("frame label is skipped by drop-frame counting"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -186,5 +231,30 @@ mod tests {
     fn test_timecode_frame_index() {
         let tc = MediaTimecode::new(0, 0, 1, 0, false, Rational64::FPS_25);
         assert_eq!(tc.to_frame_index(), 25);
+    }
+
+    #[test]
+    fn extreme_rationals_reduce_without_overflow() {
+        assert_eq!(Rational64::new(i64::MIN, i64::MIN).unwrap(), Rational64 { num: 1, den: 1 });
+        assert_eq!(Rational64::new(i64::MIN, 2).unwrap().den, 1);
+        assert!(Rational64::new(i64::MIN, -1).is_err(), "2^63 does not fit");
+    }
+
+    #[test]
+    fn decoded_rates_must_be_positive() {
+        let decoded: Rational64 = serde_json::from_str(r#"{"num":25,"den":0}"#).unwrap();
+        assert!(decoded.validate_positive("frameRate").is_err());
+        assert!(Rational64::FPS_29_97.validate_positive("frameRate").is_ok());
+    }
+
+    #[test]
+    fn drop_frame_labels_that_do_not_exist_are_refused() {
+        let rate = Rational64::FPS_29_97;
+        assert!(MediaTimecode::parse_smpte("00:01:00;00", rate).is_err());
+        assert!(MediaTimecode::parse_smpte("00:01:00;01", rate).is_err());
+        assert!(MediaTimecode::parse_smpte("00:01:00;02", rate).is_ok());
+        assert!(MediaTimecode::parse_smpte("00:10:00;00", rate).is_ok());
+        assert!(MediaTimecode::parse_smpte("00:01:00;02", Rational64::FPS_25).is_err(), "drop-frame needs 29.97/59.94");
+        assert!(MediaTimecode::parse_smpte("00:00:00:25", Rational64::FPS_25).is_err(), "frame beyond the rate");
     }
 }

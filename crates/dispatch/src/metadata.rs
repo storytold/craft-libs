@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::timecode::Rational64;
+
 /// Standardized media metadata conforming to Adobe XMP and Dublin Core specifications.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +41,9 @@ pub struct XmpMetadata {
     /// Starting timecode string e.g. `"01:00:00:00"` (`xmpDM:startTimecode`).
     #[serde(default)]
     pub start_timecode: Option<String>,
+    /// Frame rate of `start_timecode`, which gives the `xmpDM:timeFormat` of the structure.
+    #[serde(default)]
+    pub start_timecode_rate: Option<Rational64>,
     /// Composer or songwriter (`xmpDM:composer`).
     #[serde(default)]
     pub composer: Option<String>,
@@ -51,6 +56,26 @@ pub struct XmpMetadata {
 }
 
 impl XmpMetadata {
+    /// The `xmpDM:timeFormat` value for `start_timecode`, when its rate is a standard one.
+    /// A `;` before the frames marks drop-frame counting.
+    fn start_timecode_format(&self) -> Option<&'static str> {
+        let rate = self.start_timecode_rate?;
+        let drop = self.start_timecode.as_deref().is_some_and(|t| t.contains(';'));
+        Some(match (rate.num, rate.den, drop) {
+            (24_000, 1_001, _) => "23976Timecode",
+            (24, 1, _) => "24Timecode",
+            (25, 1, _) => "25Timecode",
+            (30_000, 1_001, true) => "2997DropTimecode",
+            (30_000, 1_001, false) => "2997NonDropTimecode",
+            (30, 1, _) => "30Timecode",
+            (50, 1, _) => "50Timecode",
+            (60_000, 1_001, true) => "5994DropTimecode",
+            (60_000, 1_001, false) => "5994NonDropTimecode",
+            (60, 1, _) => "60Timecode",
+            _ => return None,
+        })
+    }
+
     /// Generates a standardized, Adobe-compliant XMP packet in XML/RDF format.
     ///
     /// The packet includes standard `xpacket` PI headers and Dublin Core / XMP Dynamic Media tags.
@@ -93,8 +118,16 @@ impl XmpMetadata {
 
         let mut dm_elements = String::new();
         if let Some(ref tc) = self.start_timecode {
-            let escaped = escape_xml(tc);
-            dm_elements.push_str(&format!("      <xmpDM:startTimecode>{escaped}</xmpDM:startTimecode>\n"));
+            let value = escape_xml(tc);
+            // `xmpDM:startTimecode` is a Timecode structure: a time value and the format that
+            // gives its frame rate. Without a rate only the value is known.
+            let format = match self.start_timecode_format() {
+                Some(f) => format!(" xmpDM:timeFormat=\"{f}\""),
+                None => String::new(),
+            };
+            dm_elements.push_str(&format!(
+                "      <xmpDM:startTimecode>\n        <rdf:Description{format} xmpDM:timeValue=\"{value}\"/>\n      </xmpDM:startTimecode>\n"
+            ));
         }
         if let Some(ref album) = self.album {
             let escaped = escape_xml(album);
@@ -138,6 +171,8 @@ impl XmpMetadata {
     }
 }
 
+/// Escapes `s` for XML 1.0 text and attribute values. Characters XML forbids (NUL, most C0
+/// controls, U+FFFE and U+FFFF) are replaced with U+FFFD so the packet stays well-formed.
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -147,6 +182,8 @@ fn escape_xml(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
+            '\t' | '\n' | '\r' => out.push(c),
+            c if c < ' ' || c == '\u{FFFE}' || c == '\u{FFFF}' => out.push('\u{FFFD}'),
             other => out.push(other),
         }
     }
@@ -155,7 +192,7 @@ fn escape_xml(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::XmpMetadata;
+    use super::{Rational64, XmpMetadata, escape_xml};
 
     #[test]
     fn test_xmp_packet_generation() {
@@ -171,6 +208,7 @@ mod tests {
             project_name: Some("FilmCraft Sequence 1".into()),
             create_date: Some("2026-11-02T12:00:00Z".into()),
             start_timecode: Some("01:00:00:00".into()),
+            start_timecode_rate: Some(Rational64::FPS_25),
             composer: Some("ArtCraft Audio Lab".into()),
             isrc: Some("US-S1Z-26-00001".into()),
             export_sidecar_xmp: true,
@@ -188,7 +226,22 @@ mod tests {
         assert!(packet.contains("Soundtrack"));
         assert!(packet.contains("&copy; 2026 Storytold Organization") || packet.contains("© 2026 Storytold Organization"));
         assert!(packet.contains("FilmCraft Sequence 1"));
-        assert!(packet.contains("01:00:00:00"));
+        assert!(packet.contains("xmpDM:timeFormat=\"25Timecode\" xmpDM:timeValue=\"01:00:00:00\""));
         assert!(packet.contains("<?xpacket end=\"w\"?>"));
+    }
+
+    #[test]
+    fn xml_forbidden_characters_never_reach_the_packet() {
+        assert_eq!(escape_xml("a\u{0}b\u{1b}c\u{FFFE}"), "a\u{FFFD}b\u{FFFD}c\u{FFFD}");
+        assert_eq!(escape_xml("tab\tnew\nline <&>"), "tab\tnew\nline &lt;&amp;&gt;");
+        let meta = XmpMetadata { title: Some("bad\u{0}title".into()), ..XmpMetadata::default() };
+        assert!(!meta.to_xmp_packet().contains('\u{0}'));
+    }
+
+    #[test]
+    fn drop_frame_start_timecode_names_its_format() {
+        let meta =
+            XmpMetadata { start_timecode: Some("01:00:00;00".into()), start_timecode_rate: Some(Rational64::FPS_29_97), ..XmpMetadata::default() };
+        assert!(meta.to_xmp_packet().contains("2997DropTimecode"));
     }
 }

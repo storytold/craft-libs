@@ -2,7 +2,7 @@
 //!
 //! Defines the wire contract for `queue.submit`, `queue.status`, `queue.list`, `queue.cancel`,
 //! `queue.subscribe`, `queue.start`, `queue.pause`, `queue.clear_finished`, and `queue.log`
-//! carried over [`craft_ipc`] (`storytold/craft-libs#505`).
+//! carried over `craft-ipc` (`storytold/craft-libs#505`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,7 +12,7 @@ use crate::DispatchError;
 use crate::job::CraftJobSpec;
 use crate::job::{JobPriority, JobStatus};
 
-/// Method name for submitting a [`CraftJobSpec`] to the encoderCraft queue.
+/// Method name for submitting a [`CraftJobSpec`](crate::CraftJobSpec) to the encoderCraft queue.
 pub const METHOD_QUEUE_SUBMIT: &str = "queue.submit";
 /// Method name for querying the status of a specific job.
 pub const METHOD_QUEUE_STATUS: &str = "queue.status";

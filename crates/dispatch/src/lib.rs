@@ -2,7 +2,7 @@
 //!
 //! Craft applications build a [`CraftJobSpec`] describing the media source (`File`,
 //! `StitchedClips`, `Pipe`, or `ProjectReference`) and one or more [`OutputTarget`]s, and dispatch
-//! it over [`craft_ipc`] using the [`queue`] method names and payload structures (`queue.submit`,
+//! it over `craft-ipc` using the [`queue`] method names and payload structures (`queue.submit`,
 //! `queue.status`, `queue.list`, `queue.cancel`, `queue.subscribe`).
 //!
 //! Moved from `encoderCraft`'s `encodercraft-core` and `encodercraft-dispatch` crates

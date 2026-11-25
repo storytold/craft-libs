@@ -1,6 +1,6 @@
 [package]
 name = "craft-dispatch"
-description = "Shared job schema, queue payloads and live frame-stream framing for handing export work to encoderCraft over craft-ipc"
+description = "Shared job schema and queue payloads for handing export work to encoderCraft over craft-ipc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

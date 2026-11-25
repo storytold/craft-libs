@@ -53,6 +53,9 @@ pub struct AudioChannelMapping {
     pub matrix: Vec<Vec<f32>>,
 }
 
+/// Largest input channel count a routing row may grow to.
+pub const MAX_INPUT_CHANNELS: usize = 256;
+
 impl AudioChannelMapping {
     /// Creates a 1:1 identity passthrough mapping for N channels.
     pub fn new_pass_through(channels: usize) -> Self {
@@ -77,12 +80,18 @@ impl AudioChannelMapping {
 
     /// Retrieves the routing gain from `input_ch` to `output_ch`.
     pub fn get_gain(&self, output_ch: usize, input_ch: usize) -> f32 {
+        if output_ch >= self.output_channels {
+            return 0.0;
+        }
         self.matrix.get(output_ch).and_then(|row| row.get(input_ch)).copied().unwrap_or(0.0)
     }
 
-    /// Sets the routing gain from `input_ch` to `output_ch`.
+    /// Sets the routing gain from `input_ch` to `output_ch`, clamped to `0.0..=4.0`.
+    ///
+    /// Writes to outputs the mapping does not declare, to inputs at or beyond
+    /// [`MAX_INPUT_CHANNELS`], and non-finite gains are ignored.
     pub fn set_gain(&mut self, output_ch: usize, input_ch: usize, gain: f32) {
-        if output_ch >= self.output_channels {
+        if output_ch >= self.output_channels || input_ch >= MAX_INPUT_CHANNELS || !gain.is_finite() {
             return;
         }
         if self.matrix.len() <= output_ch {
@@ -108,5 +117,18 @@ mod tests {
         assert_eq!(map.get_gain(0, 1), 0.0);
         map.set_gain(0, 1, 0.5);
         assert_eq!(map.get_gain(0, 1), 0.5);
+    }
+
+    #[test]
+    fn routing_ignores_undeclared_outputs_hostile_indices_and_nan() {
+        let mut map = AudioChannelMapping::new_pass_through(2);
+        map.matrix.push(vec![0.5, 0.0]); // a third row the mapping does not declare
+        assert_eq!(map.get_gain(2, 0), 0.0);
+        map.set_gain(0, usize::MAX, 1.0);
+        map.set_gain(0, 0, f32::NAN);
+        assert_eq!(map.get_gain(0, 0), 1.0);
+        assert_eq!(map.matrix[0].len(), 2);
+        map.set_gain(0, 0, 9.0);
+        assert_eq!(map.get_gain(0, 0), 4.0);
     }
 }
