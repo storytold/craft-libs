@@ -1,6 +1,6 @@
 //! What the font store and the preview service's client share with the font manager on every target: which legal
-//! text to read, where the preview service comes from, and what the preview pool reads from a store. The store and
-//! the client themselves are native only.
+//! text to read, where the preview service comes from, what keeps a family out of the OS user font folder, and what
+//! the preview pool reads from a store. The store and the client themselves are native only.
 
 use std::path::PathBuf;
 
@@ -27,6 +27,17 @@ pub enum PreviewServiceSource {
     Default,
     /// There is no service.
     None,
+}
+
+/// What stops a family being copied into the OS user font folder: a font that already has one
+/// of its PostScript names, or a file in the way of a copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Conflict {
+    /// The PostScript name `path` has too; `None` for a file the store didn't add (another
+    /// family's copy, a link) sitting where a copy would go.
+    pub postscript: Option<String>,
+    /// A system font or another store family's copy with the name, or the file in the way.
+    pub path: PathBuf,
 }
 
 /// What [`Previews`](crate::preview::Previews) reads from the font store: the service and the user's setting on each request, the client and
