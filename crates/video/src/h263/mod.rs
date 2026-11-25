@@ -2,12 +2,17 @@
 //!
 //! | Feature | What |
 //! |---|---|
-//! | `h263-decode` | Decoder: baseline, custom picture formats and Annexes D, F and J ([`Decoder`], [`Picture`]) |
+//! | `h263-decode` | Decoder: baseline, custom picture formats and Annexes D, F and J (`Decoder`, `Picture`) |
+//! | `h263-encode` | Encoder: baseline and custom picture formats, I- and P-pictures (`Encoder`) |
 //!
-//! The decoder shares the code tables, the inverse transform and the interpolation of
-//! [`crate::mpeg4`], so `h263-decode` turns `mpeg4-decode` on.
+//! Both share the code tables, the transform and the interpolation of `crate::mpeg4`, so each
+//! turns the matching `mpeg4-*` feature on.
 
 #[cfg(feature = "h263-decode")]
 mod decode;
 #[cfg(feature = "h263-decode")]
 pub use decode::*;
+#[cfg(feature = "h263-encode")]
+mod encode;
+#[cfg(feature = "h263-encode")]
+pub use encode::*;

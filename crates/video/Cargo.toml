@@ -39,8 +39,9 @@ mpeg4 = ["mpeg4-decode", "mpeg4-encode"]
 mpeg4-decode = ["craft-media/bitstream"]
 mpeg4-encode = ["craft-media/bitstream"]
 # H.263 video (ITU-T H.263): decoder. It reuses the code tables, IDCT and interpolation of MPEG-4 Part 2.
-h263 = ["h263-decode"]
+h263 = ["h263-decode", "h263-encode"]
 h263-decode = ["mpeg4-decode"]
+h263-encode = ["mpeg4-encode"]
 # FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
 ffv1 = []
 # Hap (Vidvox): decoder and encoder, with Snappy and chunked second stages.
@@ -177,6 +178,10 @@ required-features = ["mpeg4-decode"]
 [[test]]
 name = "h263_decode"
 required-features = ["h263-decode"]
+
+[[test]]
+name = "h263_encode"
+required-features = ["h263"]
 
 [[test]]
 name = "mpeg4_encode"

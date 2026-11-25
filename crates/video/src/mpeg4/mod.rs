@@ -16,6 +16,6 @@ pub(crate) mod decode;
 pub use decode::*;
 
 #[cfg(feature = "mpeg4-encode")]
-mod encode;
+pub(crate) mod encode;
 #[cfg(feature = "mpeg4-encode")]
 pub use encode::*;

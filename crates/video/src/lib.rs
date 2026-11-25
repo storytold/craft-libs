@@ -9,7 +9,7 @@
 //! | `apv` | [`apv`] | APV (RFC 9924): decoder (`apv-decode`) and encoder (`apv-encode`) |
 //! | `vp8` | [`vp8`] | VP8 (RFC 6386): decoder (`vp8-decode`) and key-frame encoder (`vp8-encode`) |
 //! | `mpeg2` | [`mpeg2`] | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder with CBR / VBR (`mpeg2-encode`) |
-//! | `h263` | [`h263`] | H.263 video (ITU-T H.263): decoder (`h263-decode`) |
+//! | `h263` | [`h263`] | H.263 video (ITU-T H.263): decoder (`h263-decode`) and encoder (`h263-encode`) |
 //! | `mpeg4` | [`mpeg4`] | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): decoder (`mpeg4-decode`) and Simple profile encoder (`mpeg4-encode`) |
 //! | `ffv1` | [`ffv1`] | FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder |
 //! | `hap` | [`hap`] | Vidvox Hap, Hap Alpha, Hap Q, Hap Q Alpha, Hap Alpha-Only: decoder and encoder |
@@ -88,7 +88,7 @@ pub mod mpeg2;
 #[cfg(any(feature = "mpeg4-decode", feature = "mpeg4-encode"))]
 pub mod mpeg4;
 
-#[cfg(feature = "h263-decode")]
+#[cfg(any(feature = "h263-decode", feature = "h263-encode"))]
 pub mod h263;
 
 #[cfg(feature = "ffv1")]

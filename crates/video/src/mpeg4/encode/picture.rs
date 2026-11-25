@@ -9,7 +9,7 @@ use super::tables::{self, CBPY, DC_SIZE_CHROMA, DC_SIZE_LUMA, ESCAPE, MCBPC_INTE
 
 /// An 8-bit sample plane, `w` samples a row.
 #[derive(Clone, Debug)]
-pub(super) struct Plane {
+pub(crate) struct Plane {
     pub w: usize,
     pub h: usize,
     pub data: Vec<u8>,
@@ -22,7 +22,7 @@ impl Plane {
 
     /// The sample at `(x, y)`, coordinates clamped to the plane.
     #[inline]
-    fn at(&self, x: i32, y: i32) -> i32 {
+    pub(crate) fn at(&self, x: i32, y: i32) -> i32 {
         let x = x.clamp(0, self.w as i32 - 1) as usize;
         let y = y.clamp(0, self.h as i32 - 1) as usize;
         i32::from(self.data[y * self.w + x])
@@ -31,7 +31,7 @@ impl Plane {
 
 /// A picture at macroblock-aligned size.
 #[derive(Clone, Debug)]
-pub(super) struct Frame {
+pub(crate) struct Frame {
     pub y: Plane,
     pub u: Plane,
     pub v: Plane,
@@ -87,7 +87,7 @@ pub(super) fn dc_scaler(qp: i32, luma: bool) -> i32 {
 
 /// The second inverse quantisation method (H.263 style, §7.4.2.2), saturated to [-2048, 2047].
 #[inline]
-fn dequant(level: i32, qp: i32) -> i32 {
+pub(crate) fn dequant(level: i32, qp: i32) -> i32 {
     if level == 0 {
         return 0;
     }
@@ -96,7 +96,7 @@ fn dequant(level: i32, qp: i32) -> i32 {
 }
 
 /// The largest level the fixed-length escape carries.
-const MAX_LEVEL: i32 = 2047;
+pub(crate) const MAX_LEVEL: i32 = 2047;
 
 /// The value of an intra DC prediction neighbour outside the VOP or not intra (`2^(8+2)`).
 const DC_DEFAULT: i32 = 1024;
@@ -149,7 +149,7 @@ impl DcStore {
 
 /// Motion-compensated prediction of a `size`×`size` block at `(x, y)` with a half-sample vector
 /// (§7.6.2), samples outside the plane taken from its edge.
-fn predict(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding: bool, out: &mut [u8]) {
+pub(crate) fn predict(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding: bool, out: &mut [u8]) {
     let (ix, iy) = (x + (mv.0 >> 1), y + (mv.1 >> 1));
     let (hx, hy) = (mv.0 & 1, mv.1 & 1);
     let r = i32::from(rounding);
@@ -171,18 +171,18 @@ fn predict(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding:
 /// The chrominance vector of a 16×16 luminance vector: halved, with every fraction to a half
 /// sample (§7.6.2.2).
 #[inline]
-fn chroma_mv(mv: (i32, i32)) -> (i32, i32) {
+pub(crate) fn chroma_mv(mv: (i32, i32)) -> (i32, i32) {
     ((mv.0 >> 1) | (mv.0 & 1), (mv.1 >> 1) | (mv.1 & 1))
 }
 
 /// The median of three.
 #[inline]
-fn median(a: i32, b: i32, c: i32) -> i32 {
+pub(crate) fn median(a: i32, b: i32, c: i32) -> i32 {
     a.max(b).min(a.min(b).max(c))
 }
 
 /// Bits of a motion vector difference at `fcode` 1 (an estimate for the motion search).
-fn mvd_bits(d: i32) -> u32 {
+pub(crate) fn mvd_bits(d: i32) -> u32 {
     let a = d.unsigned_abs().min(32) as usize;
     u32::from(MVD[a].1) + u32::from(a != 0)
 }
@@ -432,7 +432,7 @@ impl PictureCoder<'_> {
 }
 
 /// The plane and top-left sample of block `b` (0–3 luminance in raster order, 4 Cb, 5 Cr).
-fn block_origin(f: &Frame, b: usize, mx: usize, my: usize) -> (&Plane, usize, usize) {
+pub(crate) fn block_origin(f: &Frame, b: usize, mx: usize, my: usize) -> (&Plane, usize, usize) {
     match b {
         0..=3 => (&f.y, mx * 16 + (b & 1) * 8, my * 16 + (b >> 1) * 8),
         4 => (&f.u, mx * 8, my * 8),
@@ -440,7 +440,7 @@ fn block_origin(f: &Frame, b: usize, mx: usize, my: usize) -> (&Plane, usize, us
     }
 }
 
-fn block_origin_mut(f: &mut Frame, b: usize, mx: usize, my: usize) -> (&mut Plane, usize, usize) {
+pub(crate) fn block_origin_mut(f: &mut Frame, b: usize, mx: usize, my: usize) -> (&mut Plane, usize, usize) {
     match b {
         0..=3 => (&mut f.y, mx * 16 + (b & 1) * 8, my * 16 + (b >> 1) * 8),
         4 => (&mut f.u, mx * 8, my * 8),
@@ -466,13 +466,13 @@ pub(super) fn mv_pred(mbs: &[Mb], mb_w: usize, mx: usize, my: usize) -> (i32, i3
     }
 }
 
-fn put(w: &mut BitWriter, (code, len): (u16, u8)) {
+pub(crate) fn put(w: &mut BitWriter, (code, len): (u16, u8)) {
     w.write_bits(u32::from(code), u32::from(len));
 }
 
 /// One `motion_code` and `motion_residual` (§7.6.3), the difference wrapped into the range of
 /// `fcode`.
-fn write_mvd(w: &mut BitWriter, d: i32, fcode: u8) {
+pub(crate) fn write_mvd(w: &mut BitWriter, d: i32, fcode: u8) {
     let r_size = u32::from(fcode - 1);
     let f = 1i32 << r_size;
     let (low, high, range) = (-32 * f, 32 * f - 1, 64 * f);
@@ -497,7 +497,7 @@ fn write_mvd(w: &mut BitWriter, d: i32, fcode: u8) {
 }
 
 /// The run-length events of a block from scan position `start`, as `(run, level)`.
-fn events(levels: &[i16; 64], start: usize) -> Vec<(usize, i32)> {
+pub(crate) fn events(levels: &[i16; 64], start: usize) -> Vec<(usize, i32)> {
     let mut out = Vec::new();
     let mut run = 0;
     for &z in &ZIGZAG[start..] {
