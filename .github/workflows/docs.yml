@@ -1,0 +1,49 @@
+name: Docs
+
+# Builds the documentation of every workspace crate with warnings as errors, so a public item
+# without a doc comment or a broken doc link fails, including crates no other workflow covers.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, next]
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['crates/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docs.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    timeout-minutes: 30
+    name: Workspace docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # The token isn't needed after checkout; cargo runs build scripts and proc macros from
+          # dependencies, so don't leave it in .git/config for that third-party code to read.
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          components: clippy
+      # Pull requests restore the cache but never save one (a 1.1 GB entry per open PR otherwise).
+      - uses: step-security/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # A lib build selects no dev-dependency, so craft-ui's `testing` stays off as in an app's
+      # build: warnings that show only without it fail here.
+      - name: Facade as an app builds it
+        run: cargo clippy -p craft --lib --locked --features ui,layers,color,draw,imaging -- -D warnings
+      - name: Docs (links and missing docs)
+        run: cargo doc --workspace --no-deps --locked --keep-going
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The crates whose features add public items document with every feature too; the
+      # per-crate workflows document the media, audio and video crates.
+      - name: Docs with all features
+        run: cargo doc -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell -p craft-doc -p craft-pdf --all-features --no-deps --locked --keep-going
+        env:
+          RUSTDOCFLAGS: -D warnings

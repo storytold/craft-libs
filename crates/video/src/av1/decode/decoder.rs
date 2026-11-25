@@ -604,6 +604,11 @@ impl Decoder {
         self.draft = on;
     }
 
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+
     pub fn stats(&self) -> DecodeStats {
         self.stats.lock().map(|s| *s).unwrap_or_default()
     }

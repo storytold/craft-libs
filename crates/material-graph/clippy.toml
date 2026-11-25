@@ -1,0 +1,56 @@
+# Same as PhotoCraft: the never-panic lints that new crates deny at their root (AGENTS.md) don't apply to tests.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# The engine's own: the platform's transcendental functions round differently from one C library to the next, so renders
+# would differ by machine. `crate::math` has the same functions from one implementation.
+disallowed-methods = [
+    { path = "f32::sin", reason = "use crate::math::sin (same bits on every platform)" },
+    { path = "f32::cos", reason = "use crate::math::cos (same bits on every platform)" },
+    { path = "f32::sin_cos", reason = "use crate::math::sin_cos (same bits on every platform)" },
+    { path = "f32::tan", reason = "use crate::math::tan (same bits on every platform)" },
+    { path = "f32::asin", reason = "use crate::math::asin (same bits on every platform)" },
+    { path = "f32::acos", reason = "use crate::math::acos (same bits on every platform)" },
+    { path = "f32::atan", reason = "use crate::math::atan (same bits on every platform)" },
+    { path = "f32::atan2", reason = "use crate::math::atan2 (same bits on every platform)" },
+    { path = "f32::sinh", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::cosh", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::tanh", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::exp", reason = "use crate::math::exp (same bits on every platform)" },
+    { path = "f32::exp2", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::exp_m1", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::ln", reason = "use crate::math::ln (same bits on every platform)" },
+    { path = "f32::ln_1p", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::log", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::log2", reason = "use crate::math::log2 (same bits on every platform)" },
+    { path = "f32::log10", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f32::powf", reason = "use crate::math::powf (same bits on every platform)" },
+    { path = "f32::powi", reason = "use crate::math::powi (a fixed order of multiplications)" },
+    { path = "f32::cbrt", reason = "use crate::math::cbrt (same bits on every platform)" },
+    { path = "f32::hypot", reason = "use crate::math::hypot (same bits on every platform)" },
+    { path = "f64::sin", reason = "use crate::math::sin (same bits on every platform)" },
+    { path = "f64::cos", reason = "use crate::math::cos (same bits on every platform)" },
+    { path = "f64::sin_cos", reason = "use crate::math::sin_cos (same bits on every platform)" },
+    { path = "f64::tan", reason = "use crate::math::tan (same bits on every platform)" },
+    { path = "f64::asin", reason = "use crate::math::asin (same bits on every platform)" },
+    { path = "f64::acos", reason = "use crate::math::acos (same bits on every platform)" },
+    { path = "f64::atan", reason = "use crate::math::atan (same bits on every platform)" },
+    { path = "f64::atan2", reason = "use crate::math::atan2 (same bits on every platform)" },
+    { path = "f64::sinh", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::cosh", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::tanh", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::exp", reason = "use crate::math::exp (same bits on every platform)" },
+    { path = "f64::exp2", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::exp_m1", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::ln", reason = "use crate::math::ln (same bits on every platform)" },
+    { path = "f64::ln_1p", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::log", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::log2", reason = "use crate::math::log2 (same bits on every platform)" },
+    { path = "f64::log10", reason = "add it to crate::math (same bits on every platform)" },
+    { path = "f64::powf", reason = "use crate::math::powf (same bits on every platform)" },
+    { path = "f64::powi", reason = "use crate::math::powi (a fixed order of multiplications)" },
+    { path = "f64::cbrt", reason = "use crate::math::cbrt (same bits on every platform)" },
+    { path = "f64::hypot", reason = "use crate::math::hypot (same bits on every platform)" },
+]

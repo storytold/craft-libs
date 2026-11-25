@@ -8,7 +8,7 @@
 //! - `paths` (feature `paths`, on by default): the geometry of a document as Bézier paths in
 //!   millimetres, for cutters, plotters and CAD import.
 //! - [`color`]: CSS colours.
-//! - [`write`]: a writer for SVG documents, their path data and numbers.
+//! - [`mod@write`]: a writer for SVG documents, their path data and numbers.
 //! - `tree` (feature `tree`): the full parser. usvg at the one version the Craft apps share,
 //!   re-exported, behind an entry point that runs the checks above before it parses.
 //!
@@ -27,7 +27,7 @@ pub mod paths;
 pub mod preflight;
 pub mod sniff;
 pub mod svgz;
-#[cfg(feature = "tree")]
+#[cfg(feature = "tree-core")]
 pub mod tree;
 pub mod write;
 
@@ -38,3 +38,6 @@ pub mod simple_css;
 
 /// Prefix-preserving SVG transform-list compatibility.
 pub mod transform_compat;
+
+/// Compatibility SVG document/CSS interpretation helpers (style cascade, lengths, paints, viewBox).
+pub mod doc_style;
