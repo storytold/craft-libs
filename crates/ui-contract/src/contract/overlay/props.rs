@@ -162,9 +162,9 @@ pub struct Overlay {
     pub continue_move: Option<Vec2>,
     /// What the layer is for; a progress window is left out of `any_open`.
     pub role: LayerRole,
-    /// The layer stands among the floating windows, in the order egui keeps for them: the last of them shown, pressed
-    /// or raised is on top, and the app's own egui windows stack with it. Read only for `Rank::Popup`, which otherwise
-    /// stands above every window.
+    /// The layer stands among the floating windows, in the order egui keeps for them, whatever its rank: the last of
+    /// them shown, pressed or raised is on top, and the app's own egui windows stack with it. Unset, a `Rank::Popup`
+    /// stands above every window instead; a collapsed dock column's flyout sets it.
     pub among_windows: bool,
     /// Set only by [`Overlay::full_window`].
     full_window: bool,
