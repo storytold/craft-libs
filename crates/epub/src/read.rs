@@ -270,11 +270,17 @@ impl<'a> Epub<'a> {
     /// The bytes of archive entry `path`, or `None` when the archive has no such entry. An entry
     /// past the limits is an error, and so is one that expands to more than it declared.
     pub fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.read_with_limit(path, self.limits.max_entry_bytes)
+    }
+
+    /// Read one entry with an additional caller limit in bytes. This limit can only tighten the
+    /// package's entry and remaining aggregate limits; failed reads do not spend the budget.
+    pub fn read_with_limit(&mut self, path: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         if path.ends_with('/') {
             return Ok(None);
         }
-        let limit = self.limits.max_entry_bytes.min(self.zip.budget().remaining());
-        self.zip.read(path, self.limits.max_entry_bytes).map_err(|e| match e {
+        let limit = max.min(self.limits.max_entry_bytes).min(self.zip.budget().remaining());
+        self.zip.read(path, limit).map_err(|e| match e {
             craft_zip::Error::EntryTooLarge { .. } | craft_zip::Error::BudgetSpent { .. } => Error::TooLarge { part: path.to_string(), limit },
             e => Error::Part { part: path.to_string(), msg: e.to_string() },
         })
