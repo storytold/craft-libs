@@ -120,21 +120,6 @@ fn body_text(doc: &Document) -> String {
     doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect::<Vec<_>>().join("\n")
 }
 
-/// The texts of a document's parts of `kind`, each with whether it shows a PAGE field.
-fn stories(doc: &Document, kind: PartKind) -> Vec<(String, bool)> {
-    doc.parts
-        .values()
-        .filter(|p| p.kind == kind)
-        .map(|p| {
-            let paras: Vec<_> = p.blocks.iter().filter_map(|b| b.as_para()).collect();
-            let text = paras.iter().map(|q| q.text.as_str()).collect::<Vec<_>>().join("\n");
-            let page =
-                paras.iter().flat_map(|q| q.objects.iter()).any(|o| matches!(o, InlineObject::Field { instr, .. } if instr.starts_with("PAGE")));
-            (text, page)
-        })
-        .collect()
-}
-
 #[test]
 fn names_are_normalised_and_paragraphs_numbered() {
     // A file using its own prefix ("p") for the paragraph namespace.
@@ -391,8 +376,10 @@ fn an_inherited_footer_without_a_number_takes_one() {
     );
     let bytes =
         package(&[("Contents/header.xml", EMPTY_HEAD), ("Contents/section0.xml", first.as_bytes()), ("Contents/section1.xml", second.as_bytes())]);
-    let footers = stories(&read_bytes(&bytes).unwrap(), PartKind::Footer);
-    assert!(footers.iter().any(|(t, page)| t.contains("꼬리말 글") && *page), "a footer with the text and the number: {footers:?}");
+    let doc = read_bytes(&bytes).unwrap();
+    let footer = sections(&doc)[1].footers.default;
+    assert!(part_text(&doc, footer).contains("꼬리말 글"), "the second section's footer has the text");
+    assert!(!part_page_fields(&doc, footer).is_empty(), "and the number");
 }
 
 /// A section that continues an earlier section's numbered footer and hides the page number on
@@ -407,8 +394,13 @@ fn a_hidden_first_page_number_is_taken_from_an_inherited_footer() {
     );
     let bytes =
         package(&[("Contents/header.xml", EMPTY_HEAD), ("Contents/section0.xml", first.as_bytes()), ("Contents/section1.xml", second.as_bytes())]);
-    let footers = stories(&read_bytes(&bytes).unwrap(), PartKind::Footer);
-    assert!(footers.iter().any(|(t, page)| t.contains("꼬리말 글") && !*page), "a first-page footer without the number: {footers:?}");
+    let doc = read_bytes(&bytes).unwrap();
+    let footers = &sections(&doc)[1].footers;
+    assert!(part_text(&doc, footers.first).contains("꼬리말 글"), "the first page's footer has the text");
+    assert!(part_page_fields(&doc, footers.first).is_empty(), "without the number");
+    // (no default footer of its own: it inherits the first section's)
+    let default = footers.default.or(sections(&doc)[0].footers.default);
+    assert!(!part_page_fields(&doc, default).is_empty(), "the other pages keep it");
 }
 
 /// Table cells a file declares but doesn't hold are made up to a budget for the whole document;
@@ -604,16 +596,24 @@ fn tiled_backgrounds_stop_at_the_documents_budget() {
     png.extend(30u32.to_be_bytes());
     png.extend(30u32.to_be_bytes());
     png.extend([8, 6, 0, 0, 0]);
-    let read = |sections: usize| {
-        let names: Vec<String> = (0..sections).map(|i| format!("Contents/section{i}.xml")).collect();
+    let read = |count: usize| {
+        let names: Vec<String> = (0..count).map(|i| format!("Contents/section{i}.xml")).collect();
         let mut parts: Vec<(&str, &[u8])> = vec![("Contents/header.xml", header.as_bytes()), ("BinData/image1.png", &png)];
         parts.extend(names.iter().map(|n| (n.as_str(), sec.as_bytes())));
         let (doc, warnings) = crate::test_log::warnings(|| read_bytes(&package(&parts)));
-        (header_floats(&doc.unwrap()).iter().filter(|o| matches!(o, InlineObject::Image { .. })).count(), warnings)
+        let doc = doc.unwrap();
+        let pictures = |id: Option<u32>| {
+            id.and_then(|id| doc.parts.get(&id)).map_or(0, |p| {
+                p.blocks.iter().filter_map(|b| b.as_para()).flat_map(|q| q.objects.iter()).filter(|o| matches!(o, InlineObject::Image { .. })).count()
+            })
+        };
+        let last = pictures(sections(&doc).last().and_then(|s| s.headers.default));
+        (header_floats(&doc).iter().filter(|o| matches!(o, InlineObject::Image { .. })).count(), warnings, last)
     };
-    let (one, _) = read(1);
+    let (one, _, _) = read(1);
     assert!(one > 1, "one section's page is tiled: {one}");
-    let (many, warnings) = read(160);
+    let (many, warnings, last) = read(160);
+    assert_eq!(last, 1, "a late section keeps its background, one stretched picture");
     assert!(many > one, "the first sections are still tiled: {many}");
     assert!(many < 160 * one / 2, "far fewer than every section's tiles: {many} of {}", 160 * one);
     assert!(warnings.iter().any(|w| w.contains("page background tiles")), "{warnings:?}");
@@ -633,6 +633,18 @@ fn manifest_hrefs_are_normalised() {
     ]);
     let pkg = crate::package::Package::open(&bytes).unwrap();
     assert_eq!(pkg.binary("pic").map(|b| b.1), Some(&b"picture"[..]));
+    // relative to a manifest in a folder of its own, `..` steps out of that folder
+    let container = br#"<ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Docs/Sub/content.hpf"/></ocf:rootfiles></ocf:container>"#;
+    let hpf = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="pic" href="../Pics/photo.png" media-type="image/png"/><opf:item id="s" href="../../Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="s"/></opf:spine></opf:package>"#;
+    let bytes = package(&[
+        ("META-INF/container.xml", container),
+        ("Docs/Sub/content.hpf", hpf.as_bytes()),
+        ("Contents/header.xml", EMPTY_HEAD),
+        ("Contents/section0.xml", sec.as_bytes()),
+        ("Docs/Pics/photo.png", b"picture"),
+    ]);
+    let pkg = crate::package::Package::open(&bytes).unwrap();
+    assert_eq!(pkg.binary("pic").map(|b| b.1), Some(&b"picture"[..]), "Docs/Pics/photo.png");
 }
 
 /// A section part whose root element's name is cut off where the reader stops looking (after
@@ -777,8 +789,38 @@ fn column_breaks_follow_the_written_column_count() {
     // the breaks before the first paragraph that starts a page without one
     let run = paras.iter().skip(1).take_while(|p| breaks(p)).count();
     let count = paras.iter().find_map(|p| p.section.as_ref()).map(|s| s.columns.count).unwrap_or(doc.last_section.columns.count);
-    assert!(count > 1, "laid out in columns");
-    assert_eq!(run + 1, count as usize, "a page's column breaks are one fewer than its columns");
+    // 200 asked for, 45 the most a section's properties hold
+    assert_eq!(count, 45, "the columns a section's properties hold");
+    assert_eq!(run + 1, 45, "a page's column breaks are one fewer than its columns");
+}
+
+/// An explicit page break starts its page in the first column: in two columns, the next page's
+/// second column is still a column, not a page. Before, the break counted as one more column
+/// restart, and columns and pages after it alternated the wrong way.
+#[test]
+fn a_page_break_starts_its_page_in_the_first_column() {
+    // cached lines start again at the top in every paragraph; the fourth asks for a page break
+    let para = |k: usize| {
+        let pb = if k == 3 { r#" pageBreak="1""# } else { "" };
+        format!(
+            r#"<hp:p{pb}><hp:run><hp:t>단 {k}</hp:t></hp:run><hp:linesegarray><hp:lineseg vertpos="0"/><hp:lineseg vertpos="1000"/></hp:linesegarray></hp:p>"#
+        )
+    };
+    let first = r#"<hp:p><hp:run><hp:secPr/><hp:ctrl><hp:colPr type="NEWSPAPER" colCount="2" sameGap="0"/></hp:ctrl><hp:t>단 0</hp:t></hp:run><hp:linesegarray><hp:lineseg vertpos="0"/><hp:lineseg vertpos="1000"/></hp:linesegarray></hp:p>"#;
+    let body: String = (1..6).map(para).collect();
+    let doc = read_bytes(&hwpx(&format!(r#"<hs:sec {NS}>{first}{body}</hs:sec>"#))).unwrap();
+    let column = |k: usize| {
+        doc.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .find(|p| p.text.contains(&format!("단 {k}")))
+            .is_some_and(|p| p.text.starts_with(craft_wordmodel::para::COLUMN_BREAK))
+    };
+    // page 1: 0 | 1, page 2: 2 | (page break) page 3: 3 | 4, page 4: 5
+    assert!(column(1) && !column(2), "two columns a page");
+    assert!(!column(3), "the page break starts a page");
+    assert!(column(4), "the page after the break has its second column");
+    assert!(!column(5), "and then a new page");
 }
 
 /// A cell whose span runs past the widest grid a table can have spans only the columns left.
@@ -789,7 +831,7 @@ fn a_span_past_the_grid_ends_at_its_edge() {
             r#"<hp:tc><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="{col}" rowAddr="0"/><hp:cellSpan colSpan="{span}" rowSpan="1"/><hp:cellSz width="300" height="300"/></hp:tc>"#
         )
     };
-    let cells: String = (0..62).map(|c| cell(c, 1)).collect::<String>() + &cell(62, 5);
+    let cells: String = (0..62).map(|c| cell(c, 1)).collect::<String>() + &cell(62, 5).replace("칸", "끝 칸");
     let sec = format!(
         r#"<hs:sec {NS}><hp:p><hp:run><hp:tbl rowCnt="1" colCnt="70"><hp:sz width="20000" height="300"/><hp:pos treatAsChar="1"/><hp:tr>{cells}</hp:tr></hp:tbl></hp:run></hp:p></hs:sec>"#
     );
@@ -799,6 +841,9 @@ fn a_span_past_the_grid_ends_at_its_edge() {
         let spanned: usize = row.cells.iter().map(|c| c.props.span.max(1) as usize).sum();
         assert!(spanned <= t.grid.len(), "the row spans {spanned} of {} columns", t.grid.len());
     }
+    let last = t.rows.iter().flat_map(|r| r.cells.iter()).find(|c| c.blocks.iter().filter_map(|b| b.as_para()).any(|p| p.text == "끝 칸"));
+    let last = last.expect("the clipped cell stays");
+    assert_eq!(last.props.span.max(1) as usize, t.grid.len() - 62, "it spans the columns left");
 }
 
 /// An explicit page break starts a new page even where the cache starts its lines at the same
@@ -844,6 +889,12 @@ fn sections(doc: &Document) -> Vec<craft_wordmodel::SectionProps> {
 fn part_floats(doc: &Document, id: Option<u32>) -> usize {
     let Some(p) = id.and_then(|id| doc.parts.get(&id)) else { return 0 };
     p.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).filter(|o| o.is_floating()).count()
+}
+
+/// The text of part `id`'s paragraphs, one line each.
+fn part_text(doc: &Document, id: Option<u32>) -> String {
+    let Some(p) = id.and_then(|id| doc.parts.get(&id)) else { return String::new() };
+    p.blocks.iter().filter_map(|b| b.as_para()).map(|q| q.text.as_str()).collect::<Vec<_>>().join("\n")
 }
 
 /// The PAGE fields of part `id`.
@@ -949,7 +1000,10 @@ fn an_inherited_footer_shows_the_sections_own_page_number() {
     assert_eq!(part_page_fields(&doc, secs[0].footers.default), ["PAGE"]);
     let footer = secs[1].footers.default;
     assert_eq!(part_page_fields(&doc, footer), ["PAGE \\* roman"], "one number, the section's own");
-    assert!(stories(&doc, PartKind::Footer).iter().filter(|(t, _)| t.contains("꼬리말 글")).count() >= 2, "the footer's text in both");
+    assert!(
+        part_text(&doc, secs[0].footers.default).contains("꼬리말 글") && part_text(&doc, footer).contains("꼬리말 글"),
+        "the footer's text in both"
+    );
 }
 
 /// A section that hides the page number on its first page, inheriting a numbered footer without
@@ -970,6 +1024,9 @@ fn a_hidden_first_page_number_hides_an_inherited_one() {
     assert!(secs[1].title_page, "the first page is set apart");
     let first_page = secs[1].footers.first;
     assert!(part_page_fields(&doc, first_page).is_empty(), "no number on the first page");
+    // (no default footer of its own: it inherits the first section's)
+    let default = secs[1].footers.default.or(secs[0].footers.default);
+    assert!(!part_page_fields(&doc, default).is_empty(), "the other pages keep it");
     assert!(
         doc.parts.get(&first_page.unwrap_or(0)).is_some_and(|p| p.blocks.iter().filter_map(|b| b.as_para()).any(|p| p.text == "꼬리말 글")),
         "the text stays"

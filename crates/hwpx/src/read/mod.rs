@@ -339,18 +339,25 @@ impl Converter<'_> {
                         } else if (0 <= first && first < last_pos) || (truthy(p.get("pageBreak")) && !blocks.is_empty()) {
                             // (an explicit page break is a new page even where the cache starts
                             // its lines at the same place as the page before)
-                            region_col += 1;
                             let cols = self.columns.0;
-                            if cols > 1 && region_col % cols != 0 && !truthy(p.get("pageBreak")) {
-                                set_column_break = Some("1");
-                            } else {
+                            if truthy(p.get("pageBreak")) {
+                                // a new page, in its first column
+                                region_col = 0;
                                 self.sec.page_index += 1;
+                            } else {
+                                region_col += 1;
+                                if cols > 1 && region_col % cols != 0 {
+                                    set_column_break = Some("1");
+                                } else {
+                                    self.sec.page_index += 1;
+                                }
                             }
                         }
                         last_pos = last;
                     }
                     _ => {
                         if truthy(p.get("pageBreak")) && !blocks.is_empty() {
+                            region_col = 0;
                             self.sec.page_index += 1;
                         }
                     }

@@ -121,12 +121,14 @@ impl Package {
     /// Manifest hrefs are package-root relative in practice; accept hpf-relative too.
     fn resolve(&self, href: &str) -> Option<String> {
         // `BinData/./photo.png` names `BinData/photo.png`
-        let href = normalize_path(&href.replace('\\', "/"));
+        let raw = href.replace('\\', "/");
+        let href = normalize_path(&raw);
         if self.has(&href) {
             return Some(href);
         }
+        // hpf-relative: joined first, so a `..` steps out of the manifest's folder
         let dir = self.rootfile.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d)?;
-        let alt = normalize_path(&format!("{dir}/{href}"));
+        let alt = normalize_path(&format!("{dir}/{}", raw.trim_start_matches('/')));
         self.has(&alt).then_some(alt)
     }
 
