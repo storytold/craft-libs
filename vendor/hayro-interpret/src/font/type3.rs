@@ -257,6 +257,16 @@ impl<'a> Type3<'a> {
         paint: &Paint<'a>,
         device: &mut impl Device<'a>,
     ) -> Option<()> {
+        let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
+        let program = self.char_procs.get(&name)?;
+        // PdfCraft patch (#7380): a procedure is not drawn inside itself. It is refused before
+        // the glyph is charged to the page's nested-paint budget, so its refused drawings of
+        // itself don't spend what the glyphs after it need.
+        let proc_id = program.obj_id();
+        if glyph.glyph_procs.contains(proc_id) {
+            warn!("Type 3 glyph procedure shows itself; the inner drawing is skipped");
+            return None;
+        }
         // PdfCraft patch: a glyph procedure may show text in this same font (through
         // inherited resources), recursing until the stack overflowed.
         if glyph.nesting_depth > crate::context::MAX_PAINT_NESTING
@@ -273,8 +283,6 @@ impl<'a> Type3<'a> {
         // (though the graphics state itself should be preserved).
         state.text_state = TextState::default();
 
-        let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
-        let program = self.char_procs.get(&name)?;
         let (decoded, _held) = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
         let iter = TypedIter::new(&decoded);
 
@@ -308,6 +316,8 @@ impl<'a> Type3<'a> {
             state,
             glyph.nesting_depth,
         );
+        // PdfCraft patch (#7380): the procedure's content is drawn inside it.
+        context.set_glyph_procs(glyph.glyph_procs.with(proc_id));
 
         // A procedure's own dictionary replaces the font's, and the font's replaces the
         // enclosing scope. Only absence inherits; an explicit empty dictionary is isolated.

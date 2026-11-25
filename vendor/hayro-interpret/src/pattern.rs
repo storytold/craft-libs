@@ -181,6 +181,9 @@ pub struct TilingPattern<'a> {
     pub(crate) cache: InterpreterCache<'a>,
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
+    // PdfCraft patch (#7380).
+    /// The Type 3 glyph procedures the pattern was set inside; its cell is drawn inside them.
+    glyph_procs: crate::context::GlyphProcs,
     nesting_depth: u32,
 }
 
@@ -279,6 +282,7 @@ impl<'a> TilingPattern<'a> {
             parent_resources: resources.clone(),
             cache: ctx.interpreter_cache.clone(),
             xref: ctx.xref,
+            glyph_procs: ctx.glyph_procs().clone(),
             nesting_depth,
         })
     }
@@ -309,6 +313,7 @@ impl<'a> TilingPattern<'a> {
             state,
             self.nesting_depth,
         );
+        context.set_glyph_procs(self.glyph_procs.clone());
 
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
         let decoded = crate::context::decode_content(&self.stream)?;

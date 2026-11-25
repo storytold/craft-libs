@@ -221,6 +221,9 @@ pub struct Type3Glyph<'a> {
     pub(crate) xref: &'a XRef,
     pub(crate) settings: InterpreterSettings,
     pub(crate) nesting_depth: u32,
+    // PdfCraft patch (#7380).
+    /// The Type 3 glyph procedures the glyph was shown inside.
+    pub(crate) glyph_procs: crate::context::GlyphProcs,
     pub(crate) char_code: u32,
 }
 
@@ -385,6 +388,7 @@ impl<'a> Font<'a> {
                     xref: ctx.xref,
                     settings: ctx.settings.clone(),
                     nesting_depth,
+                    glyph_procs: ctx.glyph_procs().clone(),
                     char_code,
                 };
 

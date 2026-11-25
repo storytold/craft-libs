@@ -345,6 +345,20 @@ products match its vertices (moving the points alone skewed barycentric coordina
 `restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
 palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
 
+From [PdfCraft #7380](https://github.com/storytold/pdfcraft/pull/7380), open when it was ported,
+marked `PdfCraft patch (#7380)` because PdfCraft's numbers for its open pull requests overlap
+(it numbered this one 107): a Type 3 glyph procedure that shows its own glyph, through the
+resources it inherits, describes nothing finite. It recursed to the paint-nesting limit, and one
+that showed itself several times per level spent the page's whole nested-paint budget
+(PdfCraft #7385). A procedure is no longer drawn inside itself. The procedures some content is
+drawn inside (`context::GlyphProcs`) travel with it: a glyph takes them from the content that
+shows it, and a soft mask, tiling pattern or CMYK group from the content that sets it, so a mask
+set outside a glyph that a device interprets while the glyph paints still draws that glyph. A
+procedure is refused before its glyph is charged to the nested-paint budget, and the skip is not
+reported as `ContentTruncated`, as a form that draws itself is not. The pull request kept the
+procedures on a per-page stack, as (89) keeps forms, and reported the skip. Tests:
+`context::glyph_proc_cycle_tests`.
+
 `hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
 `images` feature, matching `filter::ccitt`.
 

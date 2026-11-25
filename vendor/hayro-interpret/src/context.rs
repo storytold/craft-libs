@@ -45,6 +45,28 @@ std::thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
+// PdfCraft patch (#7380).
+/// The Type 3 glyph procedures some content is drawn inside, outermost first. A procedure that
+/// shows its own glyph describes nothing finite, and is not drawn inside itself (see
+/// `Type3::render_glyph`). A glyph takes the list from the content that shows it, and a soft
+/// mask, tiling pattern or CMYK group from the content that sets it, so the list holds where the
+/// content is, however late a device interprets it: a soft mask set on the page and drawn while a
+/// glyph paints may show that glyph. Every procedure on it is a different one.
+#[derive(Clone, Default, Hash)]
+pub(crate) struct GlyphProcs(Rc<[hayro_syntax::object::ObjectIdentifier]>);
+
+impl GlyphProcs {
+    /// Whether the procedure `id` is among these: whether it is drawing itself.
+    pub(crate) fn contains(&self, id: hayro_syntax::object::ObjectIdentifier) -> bool {
+        self.0.contains(&id)
+    }
+
+    /// These and then `id`, for the content of the procedure `id`.
+    pub(crate) fn with(&self, id: hayro_syntax::object::ObjectIdentifier) -> Self {
+        Self(self.0.iter().copied().chain([id]).collect())
+    }
+}
+
 /// PdfCraft patch: decoded content-stream bytes one page may hold at once: its contents, and
 /// the forms, tiling patterns and Type 3 glyph procedures being painted. Each stream already
 /// stops at `MAX_DECODED_STREAM`, but forms nest fifty deep and every level keeps its content
@@ -266,6 +288,9 @@ pub struct Context<'a> {
     /// so a `/DeviceCMYK` fill or stroke colour paints as its gray (ISO 32000-2 §11.5.3,
     /// §10.4.2.3) rather than through the CMYK profile used for display.
     pub(crate) luminosity_in_device_cmyk: bool,
+    // PdfCraft patch (#7380).
+    /// The Type 3 glyph procedures this content is drawn inside.
+    glyph_procs: GlyphProcs,
 }
 
 /// PdfCraft patch: most graphics states saved at once. Every `q` copies the current state, dash
@@ -351,6 +376,7 @@ impl<'a> Context<'a> {
             skipped_saves: Vec::new(),
             stream_floor: 0,
             luminosity_in_device_cmyk: false,
+            glyph_procs: GlyphProcs::default(),
         }
     }
 
@@ -635,6 +661,18 @@ impl<'a> Context<'a> {
 
     pub(crate) fn nesting_depth(&self) -> u32 {
         self.nesting_depth
+    }
+
+    // PdfCraft patch (#7380).
+    /// The Type 3 glyph procedures this content is drawn inside.
+    pub(crate) fn glyph_procs(&self) -> &GlyphProcs {
+        &self.glyph_procs
+    }
+
+    // PdfCraft patch (#7380).
+    /// This content is drawn inside the glyph procedures `procs`.
+    pub(crate) fn set_glyph_procs(&mut self, procs: GlyphProcs) {
+        self.glyph_procs = procs;
     }
 
     pub(crate) fn begin_nested_interpretation(&mut self) -> bool {
@@ -939,5 +977,219 @@ mod form_cycle_tests {
         let warnings = warnings_from(&pdf);
         assert!(!content_was_truncated());
         assert!(!is_truncated(&warnings), "{warnings:?}");
+    }
+}
+
+// PdfCraft patch (#7380) tests.
+/// A Type 3 glyph procedure that shows its own glyph is drawn once, directly or through a form,
+/// soft mask, tiling pattern or CMYK group it sets; its refused drawings of itself don't spend
+/// the page's nested-paint budget or report the page truncated; and a soft mask set outside a
+/// glyph draws that glyph wherever the device interprets the mask.
+#[cfg(test)]
+mod glyph_proc_cycle_tests {
+    use super::*;
+    use crate::cmyk_group::CmykGroup;
+    use crate::font::Glyph;
+    use crate::interpret::{InterpreterSettings, InterpreterWarning, interpret_page};
+    use crate::pattern::Pattern;
+    use crate::{BlendMode, ClipPath, Device, GlyphDrawMode, Image, Paint, PathDrawMode, SoftMask};
+    use hayro_syntax::Pdf;
+    use kurbo::Shape;
+    use std::sync::{Arc, Mutex};
+
+    fn stream(entries: &str, data: &str) -> String {
+        format!("<< /Length {} {entries} >>\nstream\n{data}\nendstream", data.len() + 1)
+    }
+
+    /// A page drawing `content` with a Type 3 font `/T3` whose glyphs `a`, `b` and `c` are drawn
+    /// by `procs`, in that order, and the page resources `resources` naming `objects`, which are
+    /// numbered from `6 + procs.len()`. The font has no resources of its own, so a procedure
+    /// inherits the page's and may show the font's glyphs. (A font naming itself in its own
+    /// `/Resources` is not read: the reader refuses that reference as a cycle.)
+    fn pdf(content: &str, procs: &[&str], resources: &str, objects: &[String]) -> Pdf {
+        let names = ["a", "b", "c"];
+        let char_procs: String = procs.iter().enumerate().map(|(i, _)| format!("/{} {} 0 R ", names[i], 6 + i)).collect();
+        let mut bodies = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> {resources} >> >>"),
+            stream("", content),
+            format!(
+                "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 10] /FontMatrix [1 0 0 1 0 0] /CharProcs << {char_procs}>> /Encoding << /Type /Encoding /Differences [97 /a /b /c] >> /FirstChar 97 /LastChar 99 /Widths [10 10 10] >>"
+            ),
+        ];
+        bodies.extend(procs.iter().map(|proc| stream("", proc)));
+        bodies.extend_from_slice(objects);
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    /// What a page drew. Like a renderer, the device draws each Type 3 glyph, tiling pattern
+    /// and CMYK group by interpreting it into itself when it is given one, and it interprets
+    /// each soft mask it is given at that time, apart.
+    #[derive(Default)]
+    struct Drawn {
+        /// The left edge of each fill, in the order drawn.
+        fills: Vec<f64>,
+        /// For each time a soft mask was interpreted, the fills it drew.
+        mask_fills: Vec<usize>,
+        cmyk_groups: usize,
+    }
+
+    impl<'a> Device<'a> for Drawn {
+        fn set_soft_mask(&mut self, mask: Option<SoftMask<'a>>) {
+            if let Some(mask) = mask {
+                let mut drawn = Self::default();
+                mask.interpret(&mut drawn);
+                self.mask_fills.push(drawn.fills.len());
+                self.mask_fills.extend(drawn.mask_fills);
+            }
+        }
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &BezPath, transform: Affine, paint: &Paint<'a>, _: &PathDrawMode) {
+            self.fills.push(transform.transform_rect_bbox(path.bounding_box()).x0);
+            if let Paint::Pattern(pattern) = paint
+                && let Pattern::Tiling(tiling) = &**pattern
+            {
+                tiling.interpret(self, transform, false);
+            }
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, glyph: &Glyph<'a>, transform: Affine, glyph_transform: Affine, paint: &Paint<'a>, _: &GlyphDrawMode) {
+            if let Glyph::Type3(glyph) = glyph {
+                glyph.interpret(self, transform, glyph_transform, paint);
+            }
+        }
+        fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+        fn draw_isolated_cmyk_group(&mut self, group: &CmykGroup<'a, '_>) -> bool {
+            self.cmyk_groups += 1;
+            group.interpret(self, (0.0, 0.0));
+            true
+        }
+    }
+
+    /// What the page drew, and whether it was reported truncated.
+    fn draw(pdf: &Pdf) -> (Drawn, bool) {
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let settings = InterpreterSettings {
+            warning_sink: {
+                let warnings = warnings.clone();
+                Arc::new(move |warning| warnings.lock().expect("warnings").push(warning))
+            },
+            ..InterpreterSettings::default()
+        };
+        let cache = InterpreterCache::new();
+        let mut context = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 100.0, 100.0), &cache, pdf.xref(), settings);
+        let mut drawn = Drawn::default();
+        interpret_page(&pdf.pages()[0], &mut context, &mut drawn);
+        let warned = warnings.lock().expect("warnings").iter().any(|w| matches!(w, InterpreterWarning::ContentTruncated));
+        (drawn, warned || content_was_truncated())
+    }
+
+    /// Each fill is to the right of the one before it.
+    fn left_to_right(fills: &[f64]) -> bool {
+        fills.windows(2).all(|pair| pair[0] < pair[1])
+    }
+
+    /// Glyph `a` fills a square and then shows `a` again to its right: only the outer `a`
+    /// draws. A glyph that shows another glyph of its own font draws both.
+    #[test]
+    fn a_type3_glyph_that_shows_itself_is_drawn_once() {
+        let (drawn, truncated) = draw(&pdf("BT /T3 1 Tf (a) Tj ET", &["0 0 d0 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (a) Tj ET"], "", &[]));
+        assert_eq!(drawn.fills.len(), 1, "{:?}", drawn.fills);
+        assert!(!truncated);
+
+        let procs = ["0 0 d0 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (b) Tj ET", "0 0 d0 0 0 10 10 re f"];
+        let (drawn, truncated) = draw(&pdf("BT /T3 1 Tf (a) Tj ET", &procs, "", &[]));
+        assert_eq!(drawn.fills.len(), 2, "{:?}", drawn.fills);
+        assert!(left_to_right(&drawn.fills), "{:?}", drawn.fills);
+        assert!(!truncated);
+    }
+
+    /// Glyph `a` shows `b`, whose procedure shows `b` 50,000 times, and then `c`. The refused
+    /// drawings of `b` inside itself don't spend the page's nested-paint budget, so `c` draws.
+    #[test]
+    fn a_glyph_showing_itself_does_not_spend_the_budget_of_the_glyphs_after_it() {
+        let b = format!("0 0 d0 0 0 10 10 re f BT /T3 1 Tf 20 0 Td ({}) Tj ET", "b".repeat(50_000));
+        let procs = ["0 0 d0 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (b) Tj ET BT /T3 1 Tf 40 0 Td (c) Tj ET", &b, "0 0 d0 0 0 10 10 re f"];
+        let (drawn, truncated) = draw(&pdf("BT /T3 1 Tf (a) Tj ET", &procs, "", &[]));
+        assert_eq!(drawn.fills.len(), 3, "a, b once and c: {:?}", drawn.fills);
+        assert!(left_to_right(&drawn.fills), "{:?}", drawn.fills);
+        assert!(!truncated);
+    }
+
+    /// Glyph `a` fills a square and sets something whose content shows `a`: a form it draws, a
+    /// soft mask, a tiling pattern it fills with, or a CMYK group. That content is inside `a`,
+    /// so its `a` is refused and only the outer square is drawn.
+    #[test]
+    fn a_glyph_reaching_itself_through_what_its_procedure_sets_is_drawn_once() {
+        let shows_a = "BT /T3 1 Tf 20 0 Td (a) Tj ET";
+        let form = |group: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 100 10] {group}"), shows_a);
+        let cases = [
+            ("a form", "0 0 d0 0 0 10 10 re f /F Do", "/XObject << /F 7 0 R >>", vec![form("")]),
+            (
+                "a soft mask",
+                "0 0 d0 /G gs 0 0 10 10 re f",
+                "/ExtGState << /G 7 0 R >>",
+                vec![
+                    "<< /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 8 0 R >> >>".into(),
+                    form("/Group << /S /Transparency /CS /DeviceGray >>"),
+                ],
+            ),
+            (
+                "a tiling pattern",
+                "0 0 d0 /Pattern cs /P scn 0 0 10 10 re f",
+                "/Pattern << /P 7 0 R >>",
+                vec![stream(
+                    "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 10] /XStep 100 /YStep 10 /Resources << /Font << /T3 5 0 R >> >>",
+                    shows_a,
+                )],
+            ),
+            (
+                "a CMYK group",
+                "0 0 d0 0 0 10 10 re f /K Do",
+                "/XObject << /K 7 0 R >>",
+                vec![form("/Group << /S /Transparency /I true /CS /DeviceCMYK >>")],
+            ),
+        ];
+        for (what, a, resources, objects) in cases {
+            let (drawn, truncated) = draw(&pdf("BT /T3 1 Tf (a) Tj ET", &[a], resources, &objects));
+            assert_eq!(drawn.fills.len(), 1, "{what}: {:?}", drawn.fills);
+            assert!(drawn.mask_fills.iter().all(|&fills| fills == 0), "{what}: {:?}", drawn.mask_fills);
+            assert!(!truncated, "{what}");
+            if what == "a CMYK group" {
+                assert!(drawn.cmyk_groups > 0, "the device drew the group");
+            }
+        }
+    }
+
+    /// The page sets a soft mask whose group shows glyph `a`, then shows `a`. The device
+    /// interprets the mask for each paint, inside `a` too, and every time the mask draws `a`:
+    /// the mask is not inside `a`.
+    #[test]
+    fn a_soft_mask_set_outside_a_glyph_draws_that_glyph() {
+        let objects = [
+            "<< /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 8 0 R >> >>".to_string(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /CS /DeviceGray >>", "BT /T3 1 Tf (a) Tj ET"),
+        ];
+        let pdf = pdf("/G gs BT /T3 1 Tf (a) Tj ET", &["0 0 d0 0 0 10 10 re f"], "/ExtGState << /G 7 0 R >>", &objects);
+        let (drawn, truncated) = draw(&pdf);
+        assert!(drawn.mask_fills.len() > 1, "the mask is interpreted inside `a` too: {:?}", drawn.mask_fills);
+        assert!(drawn.mask_fills.iter().all(|&fills| fills > 0), "{:?}", drawn.mask_fills);
+        assert!(!truncated);
     }
 }

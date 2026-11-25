@@ -39,6 +39,9 @@ pub struct CmykGroup<'a, 'b> {
     interpreter_cache: InterpreterCache<'a>,
     settings: InterpreterSettings,
     xref: &'a XRef,
+    // PdfCraft patch (#7380).
+    /// The Type 3 glyph procedures the group is drawn inside.
+    glyph_procs: crate::context::GlyphProcs,
     nesting_depth: u32,
 }
 
@@ -57,6 +60,7 @@ impl<'a, 'b> CmykGroup<'a, 'b> {
             interpreter_cache: context.interpreter_cache.clone(),
             settings: context.settings.clone(),
             xref: context.xref,
+            glyph_procs: context.glyph_procs().clone(),
             nesting_depth: context.nesting_depth(),
         }
     }
@@ -85,6 +89,7 @@ impl<'a, 'b> CmykGroup<'a, 'b> {
             state,
             self.nesting_depth,
         );
+        context.set_glyph_procs(self.glyph_procs.clone());
         interpret_form_contents(self.resources, self.form, &mut context, device);
     }
 }
