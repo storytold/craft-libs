@@ -514,7 +514,10 @@ impl State {
         if !member && !hands_on() {
             return None;
         }
-        let along = |group: &super::Group| match (horizontal && group.rtl, mv) {
+        // A group whose members are laid out in reading order swaps Back and Forward when its rows run right to left,
+        // so Back still means toward the start of the row. A `Spatial` group steps by where its members sit on screen,
+        // where Left is Left whichever way the text reads.
+        let along = |group: &super::Group| match (horizontal && group.rtl && group.roving.shape != NavShape::Spatial, mv) {
             (true, NavMove::Back) => NavMove::Forward,
             (true, NavMove::Forward) => NavMove::Back,
             (_, mv) => mv,

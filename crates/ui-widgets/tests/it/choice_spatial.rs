@@ -49,3 +49,24 @@ fn arrows_in_a_spatial_radio_group_move_to_the_member_in_their_direction() {
         assert_eq!(value.get(), expected, "{what}, which Enter then picks");
     }
 }
+
+/// Right to left, the rows run the other way but the arrows still step by where the members sit: Left reaches the
+/// member drawn to its left, and there is none to its right.
+#[trial]
+fn arrows_in_a_right_to_left_spatial_group_step_by_the_screen() {
+    let value = Rc::new(Cell::new(1u8));
+    let mut fixture = grid(&value);
+    fixture.direction(craft_i18n::Direction::Rtl).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert!(fixture.focused_stop().is_some(), "Tab lands on the group's chosen member");
+    fixture.key(Key::ArrowLeft, Modifiers::NONE).settle();
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), 2, "Left reaches the member drawn to the left, which is the group's second");
+    let value = Rc::new(Cell::new(1u8));
+    let mut fixture = grid(&value);
+    fixture.direction(craft_i18n::Direction::Rtl).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), 1, "there is no member to the right of the first, the rightmost");
+}
