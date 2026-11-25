@@ -210,7 +210,7 @@ pub enum Builtin {
     /// Hide the other apps: a custom item, because AppKit's own always takes ⌥⌘H.
     HideOthers,
     /// Minimize: a custom item, used when the app binds ⌘M (AppKit's own always takes ⌘M).
-    /// [`crate::NativeMenu::take_clicks`] runs it.
+    /// [`crate::NativeMenu::take_clicks`] runs it on the focused window.
     Minimize,
     /// Quit for an app without its own quit item: asks the window to close, through
     /// [`craft_quit::on_menu_event`], so the app's unsaved-changes check runs.

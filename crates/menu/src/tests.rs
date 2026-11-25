@@ -375,6 +375,36 @@ fn clicks_and_syncs() {
     assert_eq!((builds.get(), synced.borrow().len()), (3, 3), "an event re-syncs");
 }
 
+/// Window › Minimize follows the window that has the keyboard. The click is taken in the root
+/// pass, which is where an app calls [`NativeMenu::take_clicks`].
+#[test]
+fn minimize_goes_to_the_focused_window() {
+    let child = egui::ViewportId::from_hash_of("palette");
+    let mut input = egui::RawInput::default();
+    input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(false);
+    input.viewports.entry(child).or_default().focused = Some(true);
+
+    let events = Rc::new(RefCell::new(vec![Event::Click(Builtin::Minimize.command())]));
+    let mut menu = NativeMenu::new(Box::new(Fake { events, ..Default::default() }));
+    menu.raw_input(&mut egui::RawInput::default());
+
+    let ctx = egui::Context::default();
+    // A real desktop app has native windows. Embedded viewports are not separate windows, and egui
+    // drops a deferred viewport that this pass did not show, commands included.
+    ctx.set_embed_viewports(false);
+    let mut clicks = Vec::new();
+    let mut out = ctx.run_ui(input, |ui| {
+        assert_eq!(ui.ctx().viewport_id(), egui::ViewportId::ROOT, "menu clicks are taken in the root pass");
+        ui.ctx().show_viewport_deferred(child, egui::ViewportBuilder::default(), |_, _| {});
+        clicks = menu.take_clicks(ui.ctx());
+    });
+    out.textures_delta.clear(); // not painted
+    assert!(clicks.is_empty(), "Minimize runs in the crate");
+    let minimized = |id| out.viewport_output.get(&id).is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::Minimized(true)));
+    assert!(minimized(child), "the focused window minimizes");
+    assert!(!minimized(egui::ViewportId::ROOT), "the root window stays open");
+}
+
 fn press() -> egui::Event {
     egui::Event::PointerButton { pos: egui::pos2(300.0, 200.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }
 }
