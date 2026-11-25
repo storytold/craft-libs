@@ -4,6 +4,7 @@ use crate::{CodecError, Format};
 
 /// Stored width, height and EXIF orientation without decoding pixels. The image payload must
 /// fit in the input, but its compressed contents are not validated. Uses the default decode limits.
+#[cfg(feature = "webp")]
 pub fn header(bytes: &[u8]) -> Result<(u32, u32, u16), CodecError> {
     let err = |s: &str| CodecError::malformed(Format::WebP, s);
     let mut p = 12usize;
@@ -51,7 +52,7 @@ pub fn has_alpha(bytes: &[u8]) -> Result<bool, CodecError> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "webp"))]
 mod tests {
     use super::*;
 

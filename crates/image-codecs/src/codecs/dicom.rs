@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use crate::error::CodecError;
-use crate::format::Format;
+use crate::format::{Format, is_dicom};
 use crate::image::{ChannelLayout, Image, SampleType};
 use crate::options::Limits;
 
@@ -19,11 +19,6 @@ const UNDEFINED: u32 = 0xFFFF_FFFF;
 
 fn bad(msg: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, msg)
-}
-
-/// A DICOM file begins with a 128-byte preamble and the `DICM` magic.
-pub(crate) fn is_dicom(b: &[u8]) -> bool {
-    b.get(128..132) == Some(b"DICM")
 }
 
 #[derive(Clone, Copy)]

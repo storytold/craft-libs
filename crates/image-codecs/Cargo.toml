@@ -12,7 +12,25 @@ workspace = true
 
 [features]
 corpus = []
-default = []
+# Every codec below is on by default; a build that never reads or writes a format can turn
+# `default-features` off and list the ones it needs. A format left out is still detected, and
+# reading or writing it returns `CodecError::Unsupported` naming the feature.
+default = ["dds", "dicom", "dpx", "exr", "fits", "iff", "jpegls", "jxl-encode", "pnm", "tga", "webp", "xpm"]
+dds = []
+dicom = []
+# DPX and Cineon.
+dpx = []
+# OpenEXR, including deep data, Cryptomatte and the streaming reader.
+exr = ["dep:exr"]
+fits = []
+iff = []
+jpegls = []
+# Lossless JPEG XL export (zune-jpegxl). Decode is the separate `jxl` feature.
+jxl-encode = ["dep:zune-jpegxl"]
+pnm = []
+tga = ["image/tga"]
+webp = ["dep:image-webp"]
+xpm = []
 # Opt in to threaded AVIF encoding without enabling AVIF (or assembly) by itself.
 threads = ["ravif?/threading", "rav1e?/threading"]
 sgi = []
@@ -30,21 +48,21 @@ avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
 craft-dds = { workspace = true }
 crc32fast = "1.5"
 thiserror = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "tga", "ico", "qoi", "hdr"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "ico", "qoi", "hdr"] }
 png = "0.18"
 tiff = { version = "0.11", default-features = false, features = ["deflate", "fax", "jpeg", "lzw"] }
-exr = { version = "1.73", default-features = false }
+exr = { version = "1.73", default-features = false, optional = true }
 half = "2"
 serde_json = { workspace = true }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
-image-webp = "0.2"
+image-webp = { version = "0.2", optional = true }
 zune-jpeg = "0.5"
 zune-core = "0.5"
 jpeg-encoder = "0.6"
 craft-jpeg = { workspace = true }
 craft-metadata = { workspace = true }
 craft-tiff = { workspace = true, features = ["plain-rgba16"] }
-zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
+zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"], optional = true }
 craft-heif = { workspace = true, optional = true }
 craft-jxl = { workspace = true, optional = true, features = ["decode"] }
 ravif = { version = "0.13", default-features = false, optional = true }
@@ -57,7 +75,7 @@ hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["st
 craft-dds = { workspace = true, features = ["parallel"] }
 rayon = { workspace = true }
 craft-video = { workspace = true, optional = true }
-exr = { version = "1.73", default-features = false, features = ["rayon"] }
+exr = { version = "1.73", default-features = false, features = ["rayon"], optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

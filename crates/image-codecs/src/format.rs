@@ -103,9 +103,10 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     ),
     (
         Format::Jxl,
-        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder in every build; JPEG XL decode \
-         (craft-jxl on jxl-oxide, pure Rust) is behind the non-default `jxl` feature, which official \
-         builds enable. Without the feature JPEG XL is written but not read.",
+        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder behind the default \
+         `jxl-encode` feature; JPEG XL decode (craft-jxl on jxl-oxide, pure Rust) is behind the \
+         non-default `jxl` feature, which official builds enable. With only one of them JPEG XL is \
+         written but not read, or read but not written.",
     ),
     (
         Format::Heif,
@@ -276,8 +277,34 @@ impl Format {
     }
 }
 
+/// The Cargo feature holding `format`'s codec, when this build leaves it out.
+pub(crate) fn missing_feature(format: Format) -> Option<&'static str> {
+    let (feature, enabled) = match format {
+        Format::Dds => ("dds", cfg!(feature = "dds")),
+        Format::Dicom => ("dicom", cfg!(feature = "dicom")),
+        Format::Dpx | Format::Cineon => ("dpx", cfg!(feature = "dpx")),
+        Format::OpenExr => ("exr", cfg!(feature = "exr")),
+        Format::Fits => ("fits", cfg!(feature = "fits")),
+        Format::Iff => ("iff", cfg!(feature = "iff")),
+        Format::JpegLs => ("jpegls", cfg!(feature = "jpegls")),
+        Format::Pnm => ("pnm", cfg!(feature = "pnm")),
+        Format::Sgi => ("sgi", cfg!(feature = "sgi")),
+        Format::SunRaster => ("sunraster", cfg!(feature = "sunraster")),
+        Format::Tga => ("tga", cfg!(feature = "tga")),
+        Format::WebP => ("webp", cfg!(feature = "webp")),
+        Format::Xpm => ("xpm", cfg!(feature = "xpm")),
+        _ => return None,
+    };
+    (!enabled).then_some(feature)
+}
+
 /// Capability table. `read`/`write` reflect the current build's features.
 pub fn caps(format: Format) -> FormatCaps {
+    let caps = format_caps(format);
+    if missing_feature(format).is_some() { FormatCaps { read: false, write: false, ..caps } } else { caps }
+}
+
+fn format_caps(format: Format) -> FormatCaps {
     let base = FormatCaps {
         read: true,
         write: true,
@@ -335,7 +362,13 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Jxl => FormatCaps {
+            read: cfg!(feature = "jxl"),
+            write: cfg!(feature = "jxl-encode"),
+            depths: &[S::U8, S::U16],
+            layouts: &[L::Gray, L::Rgb, L::Rgba],
+            ..base
+        },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
@@ -396,7 +429,6 @@ impl PrefixDetector {
     /// The answer [`detect_prefix`] gives for `bytes`. The `bytes` of each call must start with
     /// the `bytes` of the previous call on this detector.
     pub fn detect(&mut self, bytes: &[u8]) -> Detection {
-        use crate::codecs::jpegls::{JpegFrame, jpeg_frame_from};
         match jpeg_frame_from(bytes, &mut self.jpeg_pos) {
             Some(JpegFrame::Short(len)) => Detection::NeedBytes(len),
             Some(JpegFrame::Ls) => Detection::Format(Format::JpegLs),
@@ -418,7 +450,7 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
     }
-    if crate::codecs::jpegls::looks_like_jpegls(b) {
+    if looks_like_jpegls(b) {
         return Some(Format::JpegLs);
     }
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
@@ -474,13 +506,13 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.starts_with(b"SDPX") || b.starts_with(b"XPDS") {
         return Some(Format::Dpx);
     }
-    if crate::codecs::dpx::is_cineon(b) {
+    if is_cineon(b) {
         return Some(Format::Cineon);
     }
-    if crate::codecs::dicom::is_dicom(b) {
+    if is_dicom(b) {
         return Some(Format::Dicom);
     }
-    if crate::codecs::iff::looks_like_iff(b) {
+    if looks_like_iff(b) {
         return Some(Format::Iff);
     }
     if b.starts_with(b"SIMPLE  =") {
@@ -504,6 +536,85 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
         return Some(Format::Tga);
     }
     None
+}
+
+/// The JPEG-LS frame marker.
+pub(crate) const SOF55: u8 = 0xF7;
+
+/// What the marker segments after a JPEG SOI lead to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JpegFrame {
+    /// An SOF55 frame header: JPEG-LS.
+    Ls,
+    /// Another frame header, a scan header, an EOI, or a byte that is not a marker where one
+    /// should be.
+    Other,
+    /// The bytes end before a frame or scan header. The next step reads the bytes up to this
+    /// length.
+    Short(usize),
+}
+
+/// Walks the marker segments of `b` from its SOI up to the first frame or scan header. `None`
+/// when `b` does not start with an SOI. Each step moves forward at least one byte, so the walk
+/// takes at most `b.len()` steps and reaches the frame header after any number of segments.
+pub(crate) fn jpeg_frame(b: &[u8]) -> Option<JpegFrame> {
+    jpeg_frame_from(b, &mut 0)
+}
+
+/// [`jpeg_frame`], started at `*pos`. A `*pos` of 0 starts at the SOI. Any other value is the
+/// offset of the marker where an earlier walk of a shorter prefix of the same file stopped, and the
+/// walk does not read the bytes before it. The walk leaves `*pos` at the marker it stopped at, so
+/// walking longer and longer prefixes of one file this way reads each marker segment once.
+pub(crate) fn jpeg_frame_from(b: &[u8], pos: &mut usize) -> Option<JpegFrame> {
+    if *pos == 0 {
+        if !b.starts_with(&[0xFF, 0xD8]) {
+            return None;
+        }
+        *pos = 2;
+    }
+    loop {
+        let (Some(&prefix), Some(&marker)) = (b.get(*pos), b.get(*pos + 1)) else {
+            return Some(if b.get(*pos).is_none_or(|&p| p == 0xFF) { JpegFrame::Short(*pos + 2) } else { JpegFrame::Other });
+        };
+        if prefix != 0xFF {
+            return Some(JpegFrame::Other);
+        }
+        match marker {
+            SOF55 => return Some(JpegFrame::Ls),
+            // `FF 00` is a stuffed zero, not a marker.
+            0x00 | 0xDA | 0xD9 => return Some(JpegFrame::Other),
+            // A DRI segment (`0xDD`) may precede an SOF55 frame header, so it takes the
+            // length-prefixed path below.
+            0xC0..=0xCF | 0xDB | 0xDC | 0xDE | 0xDF => return Some(JpegFrame::Other),
+            0x01 | 0xD0..=0xD7 | 0xFF => *pos += if marker == 0xFF { 1 } else { 2 },
+            _ => {
+                let Some(len) = b.get(*pos + 2..*pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else {
+                    return Some(JpegFrame::Short(*pos + 4));
+                };
+                *pos += 2 + len;
+            }
+        }
+    }
+}
+
+/// Whether `b` is a JPEG-LS file: an SOI followed by marker segments up to an SOF55 frame header.
+pub(crate) fn looks_like_jpegls(b: &[u8]) -> bool {
+    jpeg_frame(b) == Some(JpegFrame::Ls)
+}
+
+/// A DICOM file begins with a 128-byte preamble and the `DICM` magic.
+pub(crate) fn is_dicom(b: &[u8]) -> bool {
+    b.get(128..132) == Some(b"DICM")
+}
+
+/// The Cineon magic number (`802A5FD7` hex), big-endian.
+pub(crate) fn is_cineon(b: &[u8]) -> bool {
+    b.get(..4) == Some(&[0x80, 0x2A, 0x5F, 0xD7])
+}
+
+/// `FORM` + a bitmap type (`ILBM` interleaved, `PBM ` chunky) at offset 8.
+pub(crate) fn looks_like_iff(b: &[u8]) -> bool {
+    b.get(0..4) == Some(b"FORM") && matches!(b.get(8..12), Some(b"ILBM" | b"PBM "))
 }
 
 /// The major brand and complete compatible brands in a leading ISO-BMFF `ftyp` box.

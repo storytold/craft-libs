@@ -5,15 +5,21 @@
 //! Gray+alpha sources are expanded losslessly to RGBA by the export plan.
 //! The flat export pipeline converts tagged RGB documents to sRGB first.
 
+#[cfg(feature = "jxl-encode")]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[cfg(feature = "jxl-encode")]
 use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions as ZuneOptions};
+#[cfg(feature = "jxl-encode")]
 use zune_jpegxl::JxlSimpleEncoder;
 
 use crate::error::CodecError;
+#[cfg(feature = "jxl-encode")]
 use crate::fidelity::Plan;
 use crate::format::Format;
-use crate::image::{ChannelLayout, Image, SampleType};
+use crate::image::Image;
+#[cfg(any(feature = "jxl", feature = "jxl-encode"))]
+use crate::image::{ChannelLayout, SampleType};
 
 const F: Format = Format::Jxl;
 
@@ -26,6 +32,7 @@ const F: Format = Format::Jxl;
 // This deliberately verifies the pinned encoder's header layout rather than
 // trying to parse or rewrite arbitrary JPEG XL codestreams. A different header
 // must fail closed, not produce a file that silently corrupts transparency.
+#[cfg(feature = "jxl-encode")]
 fn correct_16_bit_alpha_header(bytes: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CodecError> {
     fn read(bytes: &[u8], pos: &mut usize, count: usize) -> Option<u32> {
         let mut value = 0u32;
@@ -113,6 +120,7 @@ fn correct_16_bit_alpha_header(bytes: &[u8], width: u32, height: u32) -> Result<
     Ok(fixed)
 }
 
+#[cfg(feature = "jxl-encode")]
 pub(crate) fn encode(image: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
     let image = image.converted(plan.layout, plan.sample);
     let space = match image.layout() {
@@ -225,7 +233,7 @@ fn unpremultiply(pixels: &mut [f32], layout: ChannelLayout) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "jxl-encode"))]
 mod tests {
     use super::*;
 

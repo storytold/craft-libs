@@ -323,7 +323,12 @@ mod tests {
         }
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
         image.meta.exif = Some(EXIF.to_vec());
-        for format in [Format::Jpeg, Format::Png, Format::WebP] {
+        for format in [
+            Format::Jpeg,
+            Format::Png,
+            #[cfg(feature = "webp")]
+            Format::WebP,
+        ] {
             let encoded = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
             for at in 0..encoded.len() {
                 for value in [0, 255] {
@@ -363,7 +368,12 @@ mod tests {
     fn explicit_replacements_preserve_raw_orientation_in_real_encodings() {
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
         image.meta.exif = Some(EXIF.to_vec());
-        for format in [Format::Jpeg, Format::Png, Format::WebP] {
+        for format in [
+            Format::Jpeg,
+            Format::Png,
+            #[cfg(feature = "webp")]
+            Format::WebP,
+        ] {
             let mut bytes = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
             let normal = crate::decode_as_with(format, &bytes, &crate::DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
             assert_eq!(normal.meta.exif.as_deref().map(crate::exif_orientation), Some(1), "default {format:?}");

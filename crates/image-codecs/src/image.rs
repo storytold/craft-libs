@@ -283,6 +283,7 @@ impl fmt::Display for DecodeWarning {
 }
 
 /// One channel of a [`DeepImage`]: the samples of every pixel, one flat list in pixel order.
+#[cfg(feature = "exr")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepChannel {
     /// The channel name as in the file (e.g. `R`, `G`, `B`, `A`, `Z`).
@@ -298,6 +299,7 @@ pub struct DeepChannel {
 /// Deep image data (OpenEXR `deepscanline`/`deeptile`): a variable-length list of samples
 /// per pixel, each with its own colour, alpha and depth. All channels share the same sample
 /// layout, so a sample is one index into every channel.
+#[cfg(feature = "exr")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepImage {
     pub width: u32,
@@ -317,6 +319,7 @@ pub struct DeepImage {
     pub counts: Vec<u64>,
 }
 
+#[cfg(feature = "exr")]
 impl DeepImage {
     /// A channel by its exact name.
     pub fn channel(&self, name: &str) -> Option<&DeepChannel> {
@@ -337,6 +340,7 @@ impl DeepImage {
 
 /// One channel of an [`ExrPartInfo`]: the name as in the file (a Maya/Arnold AOV layer
 /// keeps its prefix, e.g. `diffuse.R`) and the sample type that part stores it with.
+#[cfg(feature = "exr")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExrChannelInfo {
     pub name: String,
@@ -347,6 +351,7 @@ pub struct ExrChannelInfo {
 /// header facts only, no pixel data. [`crate::exr_info`] lists them, and the index is
 /// what [`crate::decode_exr_part`] decodes; [`crate::decode_as_with`] opens the part
 /// the ranking in [`ExrPartInfo::color_rank`] prefers.
+#[cfg(feature = "exr")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExrPartInfo {
     /// Index into the part list, in file order.
@@ -370,6 +375,7 @@ pub struct ExrPartInfo {
     pub channels: Vec<ExrChannelInfo>,
 }
 
+#[cfg(feature = "exr")]
 impl ExrPartInfo {
     /// How much this part looks like a colour image the plain [`Image`] decode can show:
     /// 4 RGBA, 3 RGB, 2 YA, 1 Y or any-single-channel, 0 anything else (e.g. `Z` beside `A`).
@@ -384,6 +390,7 @@ impl ExrPartInfo {
 /// One selection policy for header ranking/probing and flat decoding: never synthesize
 /// RGB(A) or YA from separate layers. OpenEXR layers use the full prefix before the last
 /// dot, including nested layers; a leading or trailing dot alone does not name a layer.
+#[cfg(feature = "exr")]
 pub(crate) fn exr_color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(ChannelLayout, Vec<usize>)> {
     #[derive(Default)]
     struct Group {
@@ -442,6 +449,7 @@ pub(crate) fn exr_color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -
 }
 
 /// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
+#[cfg(feature = "exr")]
 pub(crate) fn base_channel_name(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
@@ -450,6 +458,7 @@ pub(crate) fn base_channel_name(name: &str) -> &str {
 /// material IDs with coverage, as written by Arnold, V-Ray, Redshift, Mantra/Karma or Cycles.
 /// Header facts plus the parsed manifest; the samples come from
 /// [`crate::decode_cryptomatte`].
+#[cfg(feature = "exr")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CryptomatteLayer {
     /// The part (see [`crate::exr_info`]) the channels and attributes live in.
@@ -470,6 +479,7 @@ pub struct CryptomatteLayer {
     pub channels: Vec<String>,
 }
 
+#[cfg(feature = "exr")]
 impl CryptomatteLayer {
     /// The manifest name for an ID value, when the manifest lists it.
     pub fn name_of(&self, id: f32) -> Option<&str> {
@@ -480,6 +490,7 @@ impl CryptomatteLayer {
 /// Decoded Cryptomatte samples: per pixel the (ID, coverage) pairs with coverage above zero,
 /// sorted by descending coverage. The IDs are the float values as stored (compared by value,
 /// never by bit pattern, like the reference readers).
+#[cfg(feature = "exr")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct CryptomatteBuffer {
     pub width: u32,
@@ -487,6 +498,7 @@ pub struct CryptomatteBuffer {
     pub pixels: Vec<Vec<(f32, f32)>>,
 }
 
+#[cfg(feature = "exr")]
 impl CryptomatteBuffer {
     /// The pairs of one pixel; empty for a pixel covered by nothing.
     pub fn at(&self, x: u32, y: u32) -> &[(f32, f32)] {

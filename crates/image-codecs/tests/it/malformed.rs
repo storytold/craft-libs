@@ -142,6 +142,7 @@ fn pnm_specific_malformations() {
     }
 }
 
+#[cfg(feature = "pnm")]
 #[test]
 fn pnm_valid_variants() {
     let img = decode(b"P1\n# comment\n3 2\n1 0 1\n0 1 0\n").unwrap();

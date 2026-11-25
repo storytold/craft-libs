@@ -379,6 +379,7 @@ fn png_invalid_optional_text_does_not_spend_an_exhausted_budget() {
     assert_eq!(image.meta.text[0].1.len(), PNG_TEXT_BUDGET - 1);
 }
 
+#[cfg(feature = "pnm")]
 #[test]
 fn pnm_bomb_header_rejected() {
     assert!(is_limit(decode(b"P6\n200000 200000\n255\n\0\0\0")));
@@ -421,6 +422,7 @@ fn pnm_header_sizes_that_overflow_usize_are_errors_without_limits() {
     }
 }
 
+#[cfg(feature = "pnm")]
 #[test]
 fn ascii_pnm_with_the_tightest_layout_still_decodes() {
     // The capacity bound for #1110 must not cut off files with no slack: PBM digits need no
@@ -618,6 +620,7 @@ fn pcx_header_declaring_gigabytes_needs_a_plausible_file_size() {
     }
 }
 
+#[cfg(feature = "xpm")]
 #[test]
 fn xpm_rows_shorter_than_the_header_declares_are_refused_before_allocating() {
     let b = b"/* XPM */\nstatic char *x[] = {\n\"30000 30000 1 1\",\n\". c #000000\",\n\".\",\n};\n".to_vec();
@@ -627,6 +630,7 @@ fn xpm_rows_shorter_than_the_header_declares_are_refused_before_allocating() {
     }
 }
 
+#[cfg(feature = "exr")]
 #[test]
 fn exr_header_declaring_gigabytes_needs_a_plausible_file_size() {
     let mut b = encoded(Format::OpenExr);
@@ -637,6 +641,7 @@ fn exr_header_declaring_gigabytes_needs_a_plausible_file_size() {
     refused_as_implausible(Format::OpenExr, &b);
 }
 
+#[cfg(feature = "exr")]
 #[test]
 fn a_dwab_exr_gets_a_looser_file_size_bound() {
     // DWA passes 2^16:1 (a flat 8K frame with 12 alpha-scheme mattes is about 30 KB), so a DWAB
@@ -666,7 +671,13 @@ fn a_dwab_exr_gets_a_looser_file_size_bound() {
 #[test]
 fn highly_compressible_jpeg_and_gif_still_decode() {
     let img = Image::from_u8(3000, 3000, ChannelLayout::Rgba, vec![255u8; 3000 * 3000 * 4]).unwrap();
-    for f in [Format::Jpeg, Format::Gif, Format::Qoi, Format::OpenExr] {
+    for f in [
+        Format::Jpeg,
+        Format::Gif,
+        Format::Qoi,
+        #[cfg(feature = "exr")]
+        Format::OpenExr,
+    ] {
         let b = encode(&img, f, &EncodeOptions::default()).unwrap();
         assert_eq!(decode(&b).unwrap().width(), 3000, "{f:?}");
     }

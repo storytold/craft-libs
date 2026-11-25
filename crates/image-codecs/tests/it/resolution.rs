@@ -409,7 +409,12 @@ fn jpeg_export_writes_one_resolution_everywhere() {
 fn other_formats_take_the_exif_resolution_when_they_have_none() {
     let mut img = Image::from_raw(4, 4, ChannelLayout::Rgb, SampleType::U8, vec![90; 48]).unwrap();
     img.meta.exif = Some(camera_exif(&LE));
-    for fmt in [Format::WebP, Format::Png] {
+    let formats = [
+        #[cfg(feature = "webp")]
+        Format::WebP,
+        Format::Png,
+    ];
+    for fmt in formats {
         // Written at 240 with the 300 ppi EXIF: the EXIF follows the image.
         img.meta.dpi = Some((240.0, 240.0));
         let out = encode(&img, fmt, &EncodeOptions::default()).unwrap();
@@ -533,7 +538,12 @@ fn exports_drop_the_source_exif_thumbnail() {
         img.meta.exif = Some(exif.clone());
         let jpeg = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
         assert_eq!(next_ifd(e, &exif_of(&jpeg)), 0, "JPEG");
-        for format in [Format::Png, Format::WebP] {
+        let formats = [
+            Format::Png,
+            #[cfg(feature = "webp")]
+            Format::WebP,
+        ];
+        for format in formats {
             let back = decode(&encode(&img, format, &EncodeOptions::default()).unwrap()).unwrap();
             let got = back.meta.exif.unwrap_or_else(|| panic!("{format:?} kept no EXIF"));
             let body = got.strip_prefix(b"Exif\0\0").unwrap_or(&got);

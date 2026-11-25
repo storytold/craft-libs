@@ -63,6 +63,36 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
+### Leaving codecs out
+
+Each codec below sits behind a Cargo feature that is on by default, so the default build reads and
+writes everything in the matrix. A build that never handles some formats turns `default-features`
+off and lists the ones it needs; the codecs left out, and their dependencies, are not compiled in.
+
+| Feature | Formats |
+|---|---|
+| `dds` | DDS |
+| `dicom` | DICOM |
+| `dpx` | DPX, Cineon |
+| `exr` | OpenEXR, with deep data, Cryptomatte and `exr_stream` (the `exr` dependency) |
+| `fits` | FITS |
+| `iff` | Amiga IFF |
+| `jpegls` | JPEG-LS |
+| `jxl-encode` | JPEG XL export (the `zune-jpegxl` dependency); decode is the separate `jxl` feature |
+| `pnm` | Netpbm |
+| `tga` | TGA (the `image` crate's TGA decoder) |
+| `webp` | WebP, with the VP8 encoder (the `image-webp` dependency) |
+| `xpm` | XPM |
+
+PNG, JPEG, TIFF, GIF, BMP, ICO, QOI, Radiance HDR, PCX and JPEG 2000 are always built. A format left
+out is still detected; reading or writing it returns `CodecError::Unsupported` naming the feature,
+and its `caps` say it can be neither read nor written. The functions specific to a left-out format
+(`exr_info`, `decode_webp_frames`, `webp_encoding`, `xpm_named_color_rgb`...) are not compiled in.
+
+```toml
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<commit>", default-features = false, features = ["webp"] }
+```
+
 "Native" means the data is stored and read back without conversion. Anything else is converted by
 the encode plan, and `fidelity_warnings` reports the conversion when it loses information:
 

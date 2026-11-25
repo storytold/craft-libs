@@ -353,6 +353,7 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
     }
     let img = src.converted(plan.layout, plan.sample);
     // Targa is written by our encoder: the image crate's RLE packets cross scanlines (#6382).
+    #[cfg(feature = "tga")]
     if f == Format::Tga {
         return super::tga::encode(&img);
     }

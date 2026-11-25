@@ -49,23 +49,32 @@ fn default_build_formats_all_symmetric() {
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
+        #[cfg(feature = "webp")]
         Format::WebP,
         Format::Gif,
         Format::Bmp,
+        #[cfg(feature = "tga")]
         Format::Tga,
         Format::Ico,
+        #[cfg(feature = "pnm")]
         Format::Pnm,
         Format::Qoi,
+        #[cfg(feature = "exr")]
         Format::OpenExr,
         Format::Hdr,
+        #[cfg(feature = "fits")]
         Format::Fits,
+        #[cfg(feature = "dpx")]
         Format::Dpx,
+        #[cfg(feature = "dpx")]
         Format::Cineon,
+        #[cfg(feature = "iff")]
         Format::Iff,
         #[cfg(feature = "sunraster")]
         Format::SunRaster,
         #[cfg(feature = "sgi")]
         Format::Sgi,
+        #[cfg(feature = "jpegls")]
         Format::JpegLs,
     ];
     for f in expected {
@@ -234,7 +243,7 @@ fn detect_magic_cineon() {
     b[0..4].copy_from_slice(&[0x80, 0x2A, 0x5F, 0xD7]);
     assert_eq!(detect(&b), Some(Format::Cineon));
     assert_eq!(from_extension("scan.CIN"), Some(Format::Cineon));
-    assert!(caps(Format::Cineon).read && caps(Format::Cineon).write, "Cineon is read and written");
+    assert_eq!(caps(Format::Cineon).read && caps(Format::Cineon).write, cfg!(feature = "dpx"), "Cineon is read and written");
     assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Cineon));
     // A bare magic is an error, never a panic.
     assert!(decode_as(Format::Cineon, &b).is_err());
@@ -247,7 +256,7 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14PBM "), Some(Format::Iff));
     assert_eq!(from_extension("art.LBM"), Some(Format::Iff));
     assert_eq!(from_extension("art.ilbm"), Some(Format::Iff));
-    assert!(caps(Format::Iff).read && caps(Format::Iff).write, "IFF is read and written");
+    assert_eq!(caps(Format::Iff).read && caps(Format::Iff).write, cfg!(feature = "iff"), "IFF is read and written");
     assert!(caps(Format::Iff).alpha);
     assert!(caps(Format::Iff).layouts.contains(&craft_image_codecs::ChannelLayout::Rgba));
     assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Iff));
@@ -273,6 +282,7 @@ fn detect_magic_sgi() {
     assert!(decode_as(Format::Sgi, &[0x01, 0xda]).is_err());
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn detect_magic_jpeg_ls() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
@@ -289,6 +299,7 @@ fn detect_magic_jpeg_ls() {
 }
 
 /// `file` with `count` marker segments of `body` bytes each inserted right after its SOI.
+#[cfg(feature = "jpegls")]
 fn with_segments(file: &[u8], marker: u8, count: usize, body: usize) -> Vec<u8> {
     let mut out = file[..2].to_vec();
     for i in 0..count {
@@ -300,6 +311,7 @@ fn with_segments(file: &[u8], marker: u8, count: usize, body: usize) -> Vec<u8> 
     out
 }
 
+#[cfg(feature = "jpegls")]
 fn jpeg_ls_file() -> (Image, Vec<u8>) {
     let img = Image::from_u8(5, 3, ChannelLayout::Gray, (0..15).collect()).unwrap();
     let bytes = encode(&img, Format::JpegLs, &EncodeOptions::default()).unwrap();
@@ -308,6 +320,7 @@ fn jpeg_ls_file() -> (Image, Vec<u8>) {
 
 /// Grows a prefix of `bytes` as a [`PrefixDetector`] asks, starting from `first` bytes, and checks
 /// each answer against [`detect_prefix`].
+#[cfg(feature = "jpegls")]
 fn detect_by_prefix(bytes: &[u8], first: usize) -> Detection {
     let mut detector = PrefixDetector::new();
     let mut len = first.min(bytes.len());
@@ -324,6 +337,7 @@ fn detect_by_prefix(bytes: &[u8], first: usize) -> Detection {
     }
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn jpeg_ls_after_a_long_comment_needs_the_frame_header() {
     let (img, plain) = jpeg_ls_file();
@@ -338,6 +352,7 @@ fn jpeg_ls_after_a_long_comment_needs_the_frame_header() {
     assert_eq!(detect_prefix(&bytes), Detection::Format(Format::JpegLs));
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn jpeg_ls_after_many_segments_is_still_jpeg_ls() {
     // An ICC profile can span 255 APP2 segments.
@@ -352,6 +367,7 @@ fn jpeg_ls_after_many_segments_is_still_jpeg_ls() {
     assert_eq!(detect_by_prefix(&jpeg, 64), Detection::Format(Format::Jpeg));
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn a_cut_off_jpeg_asks_for_more_bytes() {
     let (_, plain) = jpeg_ls_file();
@@ -371,6 +387,7 @@ fn a_cut_off_jpeg_asks_for_more_bytes() {
     assert_eq!(detect_prefix(&[]), Detection::Unknown);
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn a_restart_interval_before_the_frame_header_is_jpeg_ls() {
     // A DRI segment may come before the frame header. An interval of 0 turns restarts off.
@@ -398,6 +415,7 @@ fn a_restart_interval_before_the_frame_header_is_jpeg_ls() {
     }
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn the_restart_interval_in_effect_at_the_scan_decides_decoding() {
     // The 5x3 file's frame header ends at byte 15, where its scan header starts.
@@ -424,6 +442,7 @@ fn the_restart_interval_in_effect_at_the_scan_decides_decoding() {
     assert!(matches!(decode(&with_dri(&[0, 2])), Err(CodecError::Unsupported { .. })));
 }
 
+#[cfg(feature = "jpegls")]
 #[test]
 fn a_restart_marker_after_a_scan_of_one_interval_is_an_error() {
     // With an interval of 3 lines the 5x3 scan is one interval, which no restart marker follows.
@@ -499,7 +518,8 @@ fn detect_magic_dicom() {
     assert_eq!(detect(&b), Some(Format::Dicom));
     assert_eq!(from_extension("scan.DCM"), Some(Format::Dicom));
     assert_eq!(from_extension("scan.dc3"), Some(Format::Dicom));
-    assert!(caps(Format::Dicom).read && !caps(Format::Dicom).write);
+    assert_eq!(caps(Format::Dicom).read, cfg!(feature = "dicom"));
+    assert!(!caps(Format::Dicom).write);
     assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Dicom));
     // A bare magic is an error, never a panic.
     assert!(decode_as(Format::Dicom, &b).is_err());
@@ -598,4 +618,42 @@ fn sun_raster_disabled_by_default() {
     assert!(decode_as(Format::SunRaster, &bytes).is_err());
     let image = Image::from_u8(1, 1, ChannelLayout::Gray, vec![42]).unwrap();
     assert!(encode(&image, Format::SunRaster, &EncodeOptions::default()).is_err());
+}
+
+/// A codec the build leaves out still has its files detected, and reading, writing or inspecting
+/// one is refused with the missing feature named.
+#[test]
+fn formats_left_out_of_the_build_are_detected_and_refused_by_name() {
+    let mut dicom = vec![0u8; 128];
+    dicom.extend_from_slice(b"DICM");
+    let samples: [(Format, &str, bool, Vec<u8>); 12] = [
+        (Format::Dds, "dds", cfg!(feature = "dds"), b"DDS \x7c\0\0\0".to_vec()),
+        (Format::Dicom, "dicom", cfg!(feature = "dicom"), dicom),
+        (Format::Dpx, "dpx", cfg!(feature = "dpx"), b"SDPX\0\0\0\0".to_vec()),
+        (Format::Cineon, "dpx", cfg!(feature = "dpx"), vec![0x80, 0x2A, 0x5F, 0xD7, 0, 0, 0, 0]),
+        (Format::OpenExr, "exr", cfg!(feature = "exr"), vec![0x76, 0x2F, 0x31, 0x01, 2, 0, 0, 0]),
+        (Format::Fits, "fits", cfg!(feature = "fits"), b"SIMPLE  =                    T".to_vec()),
+        (Format::Iff, "iff", cfg!(feature = "iff"), b"FORM\0\0\0\x14ILBM".to_vec()),
+        (Format::JpegLs, "jpegls", cfg!(feature = "jpegls"), vec![0xFF, 0xD8, 0xFF, 0xF7, 0, 11]),
+        (Format::Pnm, "pnm", cfg!(feature = "pnm"), b"P6 1 1 255 abc".to_vec()),
+        (Format::WebP, "webp", cfg!(feature = "webp"), b"RIFF\x04\0\0\0WEBP".to_vec()),
+        (Format::Xpm, "xpm", cfg!(feature = "xpm"), b"/* XPM */".to_vec()),
+        (Format::Jxl, "jxl-encode", cfg!(feature = "jxl-encode"), vec![0xFF, 0x0A, 0, 0]),
+    ];
+    let image = Image::from_u8(1, 1, ChannelLayout::Rgb, vec![1, 2, 3]).unwrap();
+    let names_feature = |r: Result<_, CodecError>, f: Format, feature: &str| matches!(r, Err(CodecError::Unsupported { format, reason }) if format == f && reason.contains(feature));
+    for (format, feature, enabled, bytes) in samples {
+        assert_eq!(detect(&bytes), Some(format), "{feature}");
+        if enabled {
+            continue;
+        }
+        assert!(!caps(format).write, "{feature}");
+        assert!(names_feature(encode(&image, format, &EncodeOptions::default()).map(drop), format, feature), "{feature}");
+        if format != Format::Jxl {
+            assert!(!caps(format).read, "{feature}");
+            assert!(names_feature(decode(&bytes).map(drop), format, feature), "{feature}");
+            assert!(names_feature(probe_size(&bytes).map(drop), format, feature), "{feature}");
+            assert!(names_feature(has_unretained_source_data(&bytes).map(drop), format, feature), "{feature}");
+        }
+    }
 }

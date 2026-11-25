@@ -64,6 +64,7 @@ fn cmyk_to_png_converted() {
     let w = warns(&test_image(ChannelLayout::Cmyk, SampleType::U8), Format::Png);
     assert!(w.contains(&W::CmykConverted { to: ChannelLayout::Rgb }));
 }
+#[cfg(feature = "webp")]
 #[test]
 fn cmyka_to_webp_converted_keeps_alpha() {
     let w = warns(&test_image(ChannelLayout::CmykA, SampleType::U8), Format::WebP);
@@ -104,6 +105,7 @@ fn exif_xmp_dpi_text_dropped_for_qoi() {
         assert!(w.contains(&x), "{x:?}");
     }
 }
+#[cfg(feature = "webp")]
 /// WebP keeps the resolution in EXIF (#2399); only free-form text has nowhere to go.
 #[test]
 fn webp_drops_text_only() {
@@ -131,28 +133,33 @@ fn in_range_float_not_clipped() {
     let w = warns(&test_image(ChannelLayout::Rgb, SampleType::F32), Format::Png);
     assert!(!w.contains(&W::RangeClipped));
 }
+#[cfg(feature = "fits")]
 #[test]
 fn hdr_float_to_fits_clips() {
     let img = Image::from_f32(2, 1, ChannelLayout::Gray, &[0.5, 3.0]).unwrap();
     assert!(warns(&img, Format::Fits).contains(&W::RangeClipped));
     assert!(!warns(&test_image(ChannelLayout::Gray, SampleType::F32), Format::Fits).contains(&W::RangeClipped));
 }
+#[cfg(all(feature = "exr", feature = "pnm"))]
 #[test]
 fn float_to_exr_and_tiff_is_clean() {
     for f in [Format::OpenExr, Format::Tiff, Format::Pnm] {
         assert!(warns(&test_image(ChannelLayout::Rgb, SampleType::F32), f).is_empty(), "{f:?}");
     }
 }
+#[cfg(feature = "exr")]
 #[test]
 fn f16_to_exr_is_clean() {
     assert!(warns(&test_image(ChannelLayout::Rgba, SampleType::F16), Format::OpenExr).is_empty());
 }
+#[cfg(feature = "exr")]
 #[test]
 fn integer_to_exr_is_lossless() {
     for s in [SampleType::U8, SampleType::U16] {
         assert!(warns(&test_image(ChannelLayout::Rgb, s), Format::OpenExr).is_empty(), "{s:?}");
     }
 }
+#[cfg(feature = "pnm")]
 #[test]
 fn float_pnm_drops_alpha() {
     let w = warns(&test_image(ChannelLayout::Rgba, SampleType::F32), Format::Pnm);
@@ -165,6 +172,7 @@ fn gif_quantizes_and_binarizes() {
     assert!(w.contains(&W::AlphaBinarized));
     assert!(!w.contains(&W::LossyCompression));
 }
+#[cfg(feature = "iff")]
 #[test]
 fn iff_binarizes_alpha_and_reduces_16_bit() {
     assert_eq!(warns(&test_image(ChannelLayout::Rgba, SampleType::U8), Format::Iff), vec![W::AlphaBinarized]);

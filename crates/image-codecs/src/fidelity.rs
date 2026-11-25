@@ -4,7 +4,10 @@
 
 use std::fmt;
 
-use crate::codecs::{dds, dpx};
+#[cfg(feature = "dds")]
+use crate::codecs::dds;
+#[cfg(feature = "dpx")]
+use crate::codecs::dpx;
 use crate::format::{Format, caps};
 use crate::image::{ChannelLayout, Image, SampleType};
 use crate::options::{DdsCompression, EncodeOptions};
@@ -170,6 +173,7 @@ pub(crate) fn plan(image: &Image, format: Format, opts: &EncodeOptions) -> Plan 
         }
         // DPX has no luma + alpha descriptor: gray with alpha is written as luma, alpha dropped.
         // The sample type follows the chosen bits (U8 for 8, U16 for 10, 12 and 16).
+        #[cfg(feature = "dpx")]
         Format::Dpx => Plan {
             layout: if layout == ChannelLayout::GrayA { ChannelLayout::Gray } else { pick_layout(layout, c.layouts, c.alpha) },
             sample: dpx::plan_sample(opts.dpx_bits, sample),
@@ -180,7 +184,12 @@ pub(crate) fn plan(image: &Image, format: Format, opts: &EncodeOptions) -> Plan 
         // BC4, red and green for BC5 (written from RGB, blue dropped), RGBA for BC1 to BC3.
         // Uncompressed keeps gray and RGB.
         Format::Dds if opts.dds.compression.is_block() => {
-            Plan { layout: opts.dds.compression.layout().map_or(ChannelLayout::Rgba, dds::channel_layout), sample: SampleType::U8 }
+            #[cfg(feature = "dds")]
+            let layout = opts.dds.compression.layout().map_or(ChannelLayout::Rgba, dds::channel_layout);
+            // Without the `dds` feature no DDS is written.
+            #[cfg(not(feature = "dds"))]
+            let layout = ChannelLayout::Rgba;
+            Plan { layout, sample: SampleType::U8 }
         }
         _ => Plan { layout: pick_layout(layout, c.layouts, c.alpha), sample: pick_sample(sample, c.depths) },
     }
@@ -218,8 +227,15 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     };
     // DPX at 10 or 12 bits and Cineon keep fewer bits than their U16 plan: float samples always
     // lose precision there, 16-bit ones unless they are already code values at that depth.
-    if let Some(bits) = dpx::packed_bits(format, opts).filter(|_| ss != SampleType::U8) {
-        if ss.is_float() || !dpx::keeps_u16_samples(&image.converted(p.layout, SampleType::U16), bits) {
+    // Without the `dpx` feature no DPX or Cineon is written, so nothing is packed.
+    #[cfg(feature = "dpx")]
+    let packed = dpx::packed_bits(format, opts)
+        .filter(|_| ss != SampleType::U8)
+        .map(|bits| (bits, ss.is_float() || !dpx::keeps_u16_samples(&image.converted(p.layout, SampleType::U16), bits)));
+    #[cfg(not(feature = "dpx"))]
+    let packed: Option<(u8, bool)> = None;
+    if let Some((bits, reduced)) = packed {
+        if reduced {
             w.push(W::BitsReduced { from: ss, bits });
         }
     } else if lossy_depth {
@@ -276,11 +292,20 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
                 w.push(W::MetadataTooLarge { what: "XMP", bytes: xmp.len() });
             }
         }
-        if m.dpi.is_some() && (!c.dpi || (format == Format::WebP && !crate::codecs::webp::keeps_dpi(image))) {
+        // Without the feature, WebP and DPX are not written (see `c.write` above).
+        #[cfg(feature = "webp")]
+        let webp_drops_dpi = format == Format::WebP && !crate::codecs::webp::keeps_dpi(image);
+        #[cfg(not(feature = "webp"))]
+        let webp_drops_dpi = false;
+        if m.dpi.is_some() && (!c.dpi || webp_drops_dpi) {
             w.push(W::DpiDropped);
         }
+        #[cfg(feature = "dpx")]
+        let dpx_key = |k: &str| dpx::KEYS.contains(&k);
+        #[cfg(not(feature = "dpx"))]
+        let dpx_key = |_: &str| false;
         // DPX keeps its own header fields, not free-form text.
-        let text_kept = |k: &str| c.text && (format != Format::Dpx || crate::codecs::dpx::KEYS.contains(&k));
+        let text_kept = |k: &str| c.text && (format != Format::Dpx || dpx_key(k));
         if m.text.iter().any(|(k, _)| !text_kept(k)) {
             w.push(W::TextDropped);
         }

@@ -9,7 +9,7 @@
 //!   tells the UI exactly what an export will lose.
 //! * APIs use bytes or caller-provided readers, with no ambient filesystem access,
 //!   and build for `wasm32-unknown-unknown`. Byte decoders enforce [`Limits`];
-//!   [`exr_stream`] instead bounds metadata and one decoded compression block.
+//!   `exr_stream` instead bounds metadata and one decoded compression block.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -21,6 +21,7 @@ pub mod cicp;
 mod codecs;
 mod error;
 pub mod exif_color;
+#[cfg(feature = "exr")]
 pub mod exr_stream;
 mod fidelity;
 mod format;
@@ -45,6 +46,7 @@ pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
+#[cfg(feature = "exr")]
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::jpeg::validate_jpeg_rgba8;
@@ -63,10 +65,9 @@ pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_
 pub use crate::format::{
     ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension, ftyp_brands,
 };
-pub use crate::image::{
-    ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, ExtraSample, Image,
-    MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
-};
+pub use crate::image::{ChannelLayout, DecodeWarning, ExtraSample, Image, MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples};
+#[cfg(feature = "exr")]
+pub use crate::image::{CryptomatteBuffer, CryptomatteLayer, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo};
 pub use crate::inspection::{RasterColorType, RasterInspection, ToneClass, classify_tone, embedded_icc, inspect_raster};
 pub use crate::options::{
     DdsCompression, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo,
@@ -75,14 +76,56 @@ pub use crate::options::{
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
 pub use crate::resolution_probe::file_resolution;
-pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
+pub use crate::source_settings::jpeg_quality;
+#[cfg(feature = "webp")]
+pub use crate::source_settings::{WebpEncoding, webp_encoding};
 pub use half::f16;
 
+#[cfg(feature = "dds")]
+use crate::codecs::dds;
+#[cfg(feature = "dicom")]
+use crate::codecs::dicom;
+#[cfg(feature = "dpx")]
+use crate::codecs::dpx;
+#[cfg(feature = "exr")]
+use crate::codecs::exr;
+#[cfg(feature = "fits")]
+use crate::codecs::fits;
+#[cfg(feature = "iff")]
+use crate::codecs::iff;
+#[cfg(feature = "jpegls")]
+use crate::codecs::jpegls;
+#[cfg(feature = "pnm")]
+use crate::codecs::pnm;
 #[cfg(feature = "sgi")]
 use crate::codecs::sgi;
 #[cfg(feature = "sunraster")]
 use crate::codecs::sunraster;
-use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+#[cfg(feature = "webp")]
+use crate::codecs::webp;
+#[cfg(feature = "xpm")]
+use crate::codecs::xpm;
+use crate::codecs::{bmp, heif, jp2, jpeg, jxl, pcx, png, tiff, via_image};
+
+/// `$codec` in a build with the Cargo feature `$feature`, else the error naming that feature.
+macro_rules! gated {
+    ($feature:literal, $format:expr, $codec:expr) => {{
+        #[cfg(feature = $feature)]
+        let result = $codec;
+        #[cfg(not(feature = $feature))]
+        let result = Err(CodecError::feature_missing($format, $feature));
+        result
+    }};
+}
+
+/// The error for a format `caps` says this build can't handle: the missing feature when one is
+/// the reason, else `reason`.
+fn unavailable(format: Format, reason: &str) -> CodecError {
+    match format::missing_feature(format) {
+        Some(feature) => CodecError::feature_missing(format, feature),
+        None => CodecError::unsupported(format, reason),
+    }
+}
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -104,45 +147,27 @@ pub fn decode_as(format: Format, bytes: &[u8]) -> Result<Image, CodecError> {
 pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecError> {
     // HEIF without the `heif` feature: its decoder stub says what is missing from this build.
     if !caps(format).read && !matches!(format, Format::Heif | Format::Jxl) {
-        return Err(CodecError::unsupported(format, "decoding is not available for this format"));
+        return Err(unavailable(format, "decoding is not available for this format"));
     }
     let l = &opts.limits;
     let img = match format {
         Format::Png => png::decode(bytes, l),
         Format::Jpeg => jpeg::decode(bytes, l),
         Format::Tiff => tiff::decode(bytes, l),
-        Format::WebP => webp::decode(bytes, l),
-        Format::Pnm => pnm::decode(bytes, l),
+        Format::WebP => gated!("webp", format, webp::decode(bytes, l)),
+        Format::Pnm => gated!("pnm", format, pnm::decode(bytes, l)),
         Format::Pcx => pcx::decode(bytes, l),
-        Format::Xpm => xpm::decode(bytes, l),
-        Format::Dds => dds::decode(bytes, l),
-        Format::Fits => fits::decode(bytes, l),
-        Format::Dpx => dpx::decode(bytes, l),
-        Format::Cineon => dpx::decode_cineon(bytes, l),
-        Format::Dicom => dicom::decode(bytes, l),
-        Format::Iff => iff::decode(bytes, l),
-        Format::SunRaster => {
-            #[cfg(feature = "sunraster")]
-            {
-                sunraster::decode(bytes, l)
-            }
-            #[cfg(not(feature = "sunraster"))]
-            {
-                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
-            }
-        }
-        Format::Sgi => {
-            #[cfg(feature = "sgi")]
-            {
-                sgi::decode(bytes, l)
-            }
-            #[cfg(not(feature = "sgi"))]
-            {
-                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
-            }
-        }
-        Format::JpegLs => jpegls::decode(bytes, l),
-        Format::OpenExr => exr::decode(bytes, l),
+        Format::Xpm => gated!("xpm", format, xpm::decode(bytes, l)),
+        Format::Dds => gated!("dds", format, dds::decode(bytes, l)),
+        Format::Fits => gated!("fits", format, fits::decode(bytes, l)),
+        Format::Dpx => gated!("dpx", format, dpx::decode(bytes, l)),
+        Format::Cineon => gated!("dpx", format, dpx::decode_cineon(bytes, l)),
+        Format::Dicom => gated!("dicom", format, dicom::decode(bytes, l)),
+        Format::Iff => gated!("iff", format, iff::decode(bytes, l)),
+        Format::SunRaster => gated!("sunraster", format, sunraster::decode(bytes, l)),
+        Format::Sgi => gated!("sgi", format, sgi::decode(bytes, l)),
+        Format::JpegLs => gated!("jpegls", format, jpegls::decode(bytes, l)),
+        Format::OpenExr => gated!("exr", format, exr::decode(bytes, l)),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
         Format::Jxl => jxl::decode(bytes, l),
@@ -224,7 +249,9 @@ fn finish_format(format: Format, bytes: &[u8], mut img: Image, opts: &DecodeOpti
     let o = match format {
         Format::Tiff => tiff::orientation(bytes, None),
         Format::Heif | Format::Avif => 1,
+        #[cfg(feature = "dpx")]
         Format::Dpx => dpx::orientation(bytes),
+        #[cfg(feature = "dpx")]
         Format::Cineon => dpx::cineon_orientation(bytes),
         _ => img.meta.exif.as_deref().map_or(1, exif_orientation),
     };
@@ -261,7 +288,7 @@ pub fn decode_png_rows<E: From<CodecError>>(
 pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     if !caps(format).read {
-        return Err(CodecError::unsupported(format, "decoding is not available for this format"));
+        return Err(unavailable(format, "decoding is not available for this format"));
     }
     let l = &Limits::default();
     let (w, h, exif) = match format {
@@ -271,8 +298,8 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
             let (w, h, o) = tiff::probe(bytes, l)?;
             return Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) });
         }
-        Format::WebP => webp::probe(bytes, l)?,
-        Format::OpenExr => exr::probe(bytes, l).map(|(w, h)| (w, h, None))?,
+        Format::WebP => gated!("webp", format, webp::probe(bytes, l))?,
+        Format::OpenExr => gated!("exr", format, exr::probe(bytes, l).map(|(w, h)| (w, h, None)))?,
         #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
         Format::Avif => codecs::avif_decode::probe(bytes, l).map(|(w, h)| (w, h, None))?,
         #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
@@ -328,6 +355,7 @@ pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The X11 color-name lookup used by XPM files, expressed as normalized sRGB.
+#[cfg(feature = "xpm")]
 pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
     let rgb = codecs::xpm::exact_x11_name(name)?;
     Some(rgb.map(|channel| f32::from(channel) / 255.0))
@@ -391,6 +419,7 @@ pub fn decode_gif_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anima
 /// reads it), each a full picture of the canvas with its duration and the file's ICC profile.
 /// [`decode`] keeps the first frame only. See [`MAX_GIF_FRAMES`] and `opts.limits` for what is
 /// refused.
+#[cfg(feature = "webp")]
 pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>, CodecError> {
     match crate::codecs::webp::decode_frames(bytes, &opts.limits)? {
         Some(frames) => Ok(frames),
@@ -400,6 +429,7 @@ pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anim
 
 /// Whether `bytes` is an animated WebP of more than one frame (which [`decode`] opens as its
 /// first frame, with a warning, and [`decode_webp_frames`] reads whole).
+#[cfg(feature = "webp")]
 pub fn webp_is_animated(bytes: &[u8]) -> bool {
     crate::codecs::webp::is_animated(bytes)
 }
@@ -409,11 +439,18 @@ pub fn webp_is_animated(bytes: &[u8]) -> bool {
 /// DPX elements and FITS HDU payloads.
 /// Pixels are not decoded; derived TIFF thumbnails do not require preservation here.
 /// Other formats return false; this does not establish preservation of other format-specific data.
+/// A format whose codec this build leaves out is refused with [`CodecError::Unsupported`].
 pub fn has_unretained_source_data(bytes: &[u8]) -> Result<bool, CodecError> {
-    match detect(bytes) {
+    let detected = detect(bytes);
+    if let Some(format) = detected
+        && let Some(feature) = format::missing_feature(format)
+    {
+        return Err(CodecError::feature_missing(format, feature));
+    }
+    match detected {
         Some(Format::Gif) => via_image::gif_has_more_frames(bytes).ok_or_else(|| CodecError::malformed(Format::Gif, "cannot inspect every frame")),
         Some(Format::Png) => png::has_additional_images(bytes),
-        Some(Format::WebP) => Ok(webp_is_animated(bytes)),
+        Some(Format::WebP) => gated!("webp", Format::WebP, Ok(webp_is_animated(bytes))),
         Some(Format::Tiff) => {
             let info = tiff_info(bytes)?;
             if !info.complete {
@@ -432,9 +469,9 @@ pub fn has_unretained_source_data(bytes: &[u8]) -> Result<bool, CodecError> {
                 .ok_or_else(|| CodecError::malformed(Format::Ico, "truncated image count"))?;
             Ok(u16::from_le_bytes(count) > 1)
         }
-        Some(Format::Dds) => dds::has_additional_images(bytes),
-        Some(Format::Dpx) => dpx::has_additional_images(bytes),
-        Some(Format::Fits) => fits::has_additional_images(bytes),
+        Some(Format::Dds) => gated!("dds", Format::Dds, dds::has_additional_images(bytes)),
+        Some(Format::Dpx) => gated!("dpx", Format::Dpx, dpx::has_additional_images(bytes)),
+        Some(Format::Fits) => gated!("fits", Format::Fits, fits::has_additional_images(bytes)),
         _ => Ok(false),
     }
 }
@@ -483,12 +520,14 @@ fn finish_decode(img: Image, o: u16, opts: &DecodeOptions) -> Result<Image, Code
 /// (name, view, size, channels, deep/tiled), what a multi-part chooser — a Maya/Arnold
 /// render writes one part per AOV — offers. The indices are what [`decode_exr_part`]
 /// takes; [`decode_as_with`] opens the part with the highest [`ExrPartInfo::color_rank`].
+#[cfg(feature = "exr")]
 pub fn exr_info(bytes: &[u8], limits: &Limits) -> Result<Vec<ExrPartInfo>, CodecError> {
     exr::info(bytes, limits)
 }
 
 /// Decodes part `part` (an index into [`exr_info`]'s list) of an OpenEXR file.
 /// Deep parts stay with [`decode_deep_exr`]; a file that has any is refused here.
+#[cfg(feature = "exr")]
 pub fn decode_exr_part(bytes: &[u8], part: usize, opts: &DecodeOptions) -> Result<Image, CodecError> {
     let img = exr::decode_part(bytes, part, &opts.limits)?;
     finish_decode(img, 1, opts)
@@ -498,6 +537,7 @@ pub fn decode_exr_part(bytes: &[u8], part: usize, opts: &DecodeOptions) -> Resul
 /// with coverage, as written by Arnold, V-Ray, Redshift, Mantra/Karma and Cycles) from the
 /// headers alone: name, metadata key, channels and the parsed embedded manifest. The
 /// samples come from [`decode_cryptomatte`]; names hash to IDs with [`cryptomatte_id`].
+#[cfg(feature = "exr")]
 pub fn cryptomatte_layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLayer>, CodecError> {
     codecs::exr_cryptomatte::layers(bytes, limits)
 }
@@ -505,6 +545,7 @@ pub fn cryptomatte_layers(bytes: &[u8], limits: &Limits) -> Result<Vec<Cryptomat
 /// Decodes the samples of the Cryptomatte layer called `layer_name` (a
 /// [`CryptomatteLayer::name`]): per pixel its (ID, coverage) pairs, coverage above zero,
 /// sorted by descending coverage.
+#[cfg(feature = "exr")]
 pub fn decode_cryptomatte(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<CryptomatteBuffer, CodecError> {
     codecs::exr_cryptomatte::decode(bytes, layer_name, limits)
 }
@@ -512,6 +553,7 @@ pub fn decode_cryptomatte(bytes: &[u8], layer_name: &str, limits: &Limits) -> Re
 /// Decodes the named channels of one part (exact names as the file stores them, e.g.
 /// `diffuse.R`) into an image: R/G/B (plus A when named) give Rgba, a lone Y gives Gray.
 /// This renders a channel group without the part's other channels in the way.
+#[cfg(feature = "exr")]
 pub fn decode_exr_channels(bytes: &[u8], part: usize, names: &[&str], opts: &DecodeOptions) -> Result<Image, CodecError> {
     let img = exr::decode_channels(bytes, part, names, &opts.limits)?;
     finish_decode(img, 1, opts)
@@ -521,6 +563,7 @@ pub fn decode_exr_channels(bytes: &[u8], part: usize, names: &[&str], opts: &Dec
 /// (colour, alpha and Z per sample), for callers that composite deep data themselves —
 /// [`decode_as_with`] instead flattens a deep file into a normal [`Image`] with a
 /// [`DecodeWarning::DeepFlattened`]. `Err(Unsupported)` when the file has no deep part.
+#[cfg(feature = "exr")]
 pub fn decode_deep_exr(bytes: &[u8], limits: &Limits) -> Result<DeepImage, CodecError> {
     codecs::exr::check_previews(bytes)?;
     let mut cur = std::io::Cursor::new(bytes);
@@ -533,7 +576,10 @@ pub fn decode_deep_exr(bytes: &[u8], limits: &Limits) -> Result<DeepImage, Codec
 /// format, oversize image) return an error.
 pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     if !caps(format).write {
-        return Err(CodecError::unsupported(format, "encoding is not available in this build"));
+        return Err(match format {
+            Format::Jxl if !cfg!(feature = "jxl-encode") => CodecError::feature_missing(format, "jxl-encode"),
+            _ => unavailable(format, "encoding is not available in this build"),
+        });
     }
     if image.width() == 0 || image.height() == 0 {
         return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
@@ -548,41 +594,23 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Png => png::encode(image, plan, opts),
         Format::Jpeg => jpeg::encode(image, plan, opts),
         Format::Tiff => tiff::encode(image, plan, opts),
-        Format::WebP => webp::encode(image, plan, opts),
-        Format::Pnm => pnm::encode(image, plan, opts),
+        Format::WebP => gated!("webp", format, webp::encode(image, plan, opts)),
+        Format::Pnm => gated!("pnm", format, pnm::encode(image, plan, opts)),
         Format::Pcx => Err(CodecError::unsupported(format, "PCX is import-only; save as PNG instead")),
         Format::Xpm => Err(CodecError::unsupported(format, "XPM is import-only; save as PNG instead")),
-        Format::Dds => dds::encode(image, plan, opts),
-        Format::Fits => fits::encode(image, plan, opts),
-        Format::Dpx => dpx::encode(image, plan, opts),
-        Format::Cineon => dpx::encode_cineon(image, plan),
+        Format::Dds => gated!("dds", format, dds::encode(image, plan, opts)),
+        Format::Fits => gated!("fits", format, fits::encode(image, plan, opts)),
+        Format::Dpx => gated!("dpx", format, dpx::encode(image, plan, opts)),
+        Format::Cineon => gated!("dpx", format, dpx::encode_cineon(image, plan)),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
-        Format::Iff => iff::encode(image, plan),
-        Format::SunRaster => {
-            #[cfg(feature = "sunraster")]
-            {
-                sunraster::encode(image, plan)
-            }
-            #[cfg(not(feature = "sunraster"))]
-            {
-                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
-            }
-        }
-        Format::Sgi => {
-            #[cfg(feature = "sgi")]
-            {
-                sgi::encode(image, plan)
-            }
-            #[cfg(not(feature = "sgi"))]
-            {
-                Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
-            }
-        }
-        Format::JpegLs => jpegls::encode(image, plan),
-        Format::OpenExr => exr::encode(image, plan, opts),
+        Format::Iff => gated!("iff", format, iff::encode(image, plan)),
+        Format::SunRaster => gated!("sunraster", format, sunraster::encode(image, plan)),
+        Format::Sgi => gated!("sgi", format, sgi::encode(image, plan)),
+        Format::JpegLs => gated!("jpegls", format, jpegls::encode(image, plan)),
+        Format::OpenExr => gated!("exr", format, exr::encode(image, plan, opts)),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
-        Format::Jxl => jxl::encode(image, plan),
+        Format::Jxl => gated!("jxl-encode", format, jxl::encode(image, plan)),
         // The `image` crate leaves a BMP's resolution fields 0; Photoshop fills them in. They are
         // part of the header, not metadata, so they are written whatever `embed_metadata` says.
         Format::Bmp => via_image::encode(format, image, plan, opts).map(|mut bytes| {
