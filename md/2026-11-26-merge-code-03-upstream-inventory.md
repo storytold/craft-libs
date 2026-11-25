@@ -1,0 +1,245 @@
+# The upstream range and what was verified in craft-libs
+
+Every upstream commit this merge took, the measurements made on the merged
+tree, and what those measurements do not prove.
+
+## The upstream range
+
+- The upstream commit this merge took: `6fcf61c81`.
+- The fork's pre-merge head: `89ed9dfd7`.
+- Commits in the range: **213**, of which **175** are change commits; the rest
+  are merges.
+
+### Every commit of the range
+
+- `6fcf61c81 overlay: a raise asked in the pass the floating windows show again holds: egui raises every layer that shows again and keeps the old order among them, so the asked raise is asked again in the next pass (Persist::raise_again). A document window raised as Presentation Mode ends comes to the front. Trial a_window_raised_as_the_windows_show_again_comes_to_the_front`
+- `5442cfb97 ui-contract, ui-panels dialog, ui-widgets buttons: a dialog frame is padded space.pad.dialog (Pad::Dialog; a roomy dialog keeps space.pad.roomy), and a dialog's footer button (LeastWidth::DialogButton or DialogSideButton) stands size.dialog.button_height high (StyleCx::dialog_button_height; a small one stays a small control high). Every size set gives them a panel's padding and a push button's height, so no app's dialogs change. Trial`
+- `03fea7ac4 ui-contract, ui-widgets menu: a menu row stands size.row.menu high (StyleCx::menu_row_height, grown as a control's height is; a small row stays a small control high); a compact row keeps its text line's height. Every size set gives size.row.menu the control's height, so no app's menus change. Trial`
+- `00e2d9822 theme: size.row.menu (a menu row's height), size.dialog.button_height (a dialog's footer button's height) and space.pad.dialog (a dialog frame's padding). Each size set gives them the value they replace (size.control.md, size.button, space.pad.regular), and an app that sets that value and not theirs has them follow it, through every step of FOLLOWS, so no app's look changes; the token dumps gain only the three lines, equal to the values they follow. Test: each follower starts at the value it follows and takes its override`
+- `69411864a ui-widgets: LinkLook, an env style value for how a link standing alone marks itself beside its colour: Underlined (default) or Plain, the link colour alone, as VectorCraft's start page lists its community links; a link in a sentence stays underlined. Story link_plain`
+- `9ff583260 theme, ui-contract, ui-widgets, ui-shell: a page's rhythm as size.page tokens, opt-in. size.page.gap.{title, lead, actions, section, heading, link} (Gap::PageTitle and its siblings) space a Column start page's title and subtitle, New and Open under them and beside each other, its sections, a section heading over its body and its links; size.page.link is a plain link's least row height; ControlPlace::PageAction stands New and Open at least size.page.button high with at least size.page.button_side beside their labels. The size sets give every gap the value of the gap it stands in for, size.page.button a push button's height and the rest 0, and an app's override of a followed value carries to the page's (FOLLOWS now follows a chain), so no app or story changes until an app sets them (the token dumps gain only the new lines). Story button_as_page_action; trials a_column_page_takes_its_rhythm_from_the_page_sizes, a_page_follows_the_values_it_stands_in_for_unless_the_app_sets_its_own; dumps updated`
+- `16001e721 Merge pull request #3432 from dotCooCoo/fix/shortcuts-own-areas`
+- `e90a48312 Merge pull request #3433 from dotCooCoo/fix/shortcuts-open-size`
+- `4bed21baa dock, iconic column: under IconGroupSeparator::Rule each icon group keeps a bare grip band that drags the group, as production's: the first group's over the top space.gap.inline of its first icon, a later group's over the room above it and that much of its first icon; the band takes a press there (a click in it opens no flyout), and below it every icon, the first included, drags its own panel; Grip keeps its strips`
+- `2ac970529 dock: beside PanelTabLook::Block tabs a docked column card's bar is a square strip of surface.canvas across the card's top and only the card's foot is rounded, as VectorCraft 0.24's tool card; beside the other looks the bar stays part of the card`
+- `f562e58af select: SelectLook::Filled shows the closed box filled with surface.control, with no edge until it has focus, at a field's width; Field stays the default`
+- `cadd08b98 buttons, dock: ActiveLook::Control shows an icon button or segment that is on in surface.control with no edge and the normal text; beside PanelTabLook::Block tabs a collapsed column's open panel icon takes it, as the shown tab does, and its flyouts' groups keep the active look around the column`
+- `9f1b8d6d2 dock: Flyout::docked stands a flyout as a docked column does, square on surface.panel with the column's line.border frame and no shadow; the flyouts of a flush dock's columns (DockConfig::flush_docks) take it, the others stay raised popups`
+- `5d74792c0 dock: DockConfig::flush_docks stands docks flush against the node beside them, with no gap (DockSizes::dock_gap, FrameRules::dock_gap), and frames their columns collapsed to icons in line.border as expanded columns are, so one rule parts a dock from the canvas; off by default, where the space.gap.tight gap stays`
+- `9916d1658 dock: DockConfig::column_cards takes ColumnCards: None (the default), All (every docked column a card, as the switch on was) or Stepped, which shows only the stepped columns such as a docked tool rail as cards and keeps the panel columns flush; DockSizes::card_place and card_inset read the column`
+- `9012e5208 dock, iconic column: under IconGroupSeparator::Rule a collapsed column's icon groups have no grip strips: the first icon stands right under the column's bar, a group's first icon drags the group, and the room between two groups is space.gap.stack and the rule, the rule in its middle; Grip, the default, keeps its strips`
+- `a7b48fb03 theme, dock: size.bar.column, the height of a dock column's bar (size.control.sm in both built-in sets, so the bar keeps its height unless an app sets it); a column's bar, expanded or collapsed to icons, lies on the surface its dock's tab strips do: surface.canvas beside PanelTabLook::Block tabs, the window's background otherwise`
+- `e49a32947 tabs, dock: PanelTabLook::Block shows a panel strip's shown tab as a square surface.control block as tall as the strip, a hovered tab in state.hover; a dock group's strip lies on surface.canvas under it and its panel menu button stands in the strip's middle, as beside pill tabs; Plain stays the default`
+- `9b818faae Merge pull request #3413 from aiongg/dock-gaps-2`
+- `461493afc ui-widgets, ui-patterns: Tile::page lifts the page on the knob's short shadow and fits its longer side to the largest square the picture holds, so pages of every shape stand at one scale; story new_document_dialog_page_cards for PresetCardLook::Page`
+- `205803ee6 theme, ui-widgets, ui-patterns, ui-shell: every Home look opt-in. New Document's preset cards keep the ink page outline by default; PresetCardLook::Page (env style) gives Tile::page on a flat page card. CardText::Page: a strong name on up to two centred lines, the detail right under it, a flat card with the hover fill and an accent edge when selected. surface.page (follows surface.canvas unless pinned; VectorCraft's themes pin production's page colour), size.page.margin and size.page.action; ControlPlace::CallToAction stands a button size.page.action high with a strong label; Stack and the other containers take pad_edges. StartScreen new_label and open_label; the Column page fills surface.page, keeps the page margin beside the column and size.page.margin above and below it, and stands its call to action in ControlPlace::CallToAction; page templates are page cards. Stories button_as_call_to_action, tile_page as a page card; trials; dumps gain the three tokens`
+- `8a133a094 theme, ui-widgets, ui-patterns, ui-shell: StartLayout::Column, one centred column at most size.page.column (820) wide a page margin from every edge: title (Display) and subtitle, New and Open centred, the recent files as rows only when there are any, the app's section, the templates as cards that keep their size and wrap, the links under links_title centred without icons and StartLink::primary as a primary pill with its icon; templates_title prop. Tile::page, blank paper on the popup surface's shadow fitted to the picture, now New Document's preset card and a Template's with Template::page. Stories start_screen_column, start_screen_column_without_files, tile_page; trials; New Document's page trial checks the filled page; dumps updated`
+- `f244e6212 Pin egui to storytold/egui next (b15ffe9bf), which now carries the IME reset, arrow cover, multi-pass texture and focus candidate commits`
+- `d1920c54e ui-contract: an edit command fired before the pass's UI (a system menu pick) reaches the focused component in that pass, and a text part's stop registers the edit keys its pass's edits left, so a menu Copy after a Select All is not disabled; a pick in the window's own menus or bars still reaches it in the next pass`
+- `bf12e584a layers filter bar: ObjectsSearch, a root style value; under ObjectsSearch::Fill the Objects filter's search field fills the bar's row and the Filter button stands at its end edge. ObjectsSearch::Natural, the default, keeps the field at its own width, so no other app changes. LayerFilterBar story under Fill; trial`
+- `e70ddf25c ui-widgets list rows: ThumbRows, a root style value; under ThumbRows::Tight a thumbnail row pads its thumbnail by space.gap.tight with no floor of a standard control and the panel padding (at least the row's own height), and a tree level indents by a small icon and space.gap.tight. ThumbRows::Roomy, the default, keeps today's rows and indent, so no other app changes. ListRow story under Tight; trial`
+- `36522691e ui-panels title row: QuietTitleRow, a root style value; under QuietTitleRow::Text a title of a quiet weight (Caption, Subheading, Quiet, Overline) stands a text row high (size.row.text), at least as tall as holding its text on the row's centre line needs, not a control high. QuietTitleRow::Control, the default, keeps every title row as today, so no other app changes. Section story under Text; trial`
+- `27d1e9c46 theme, ui-widgets buttons: size.button, a standard push button's height, read by the text-faced buttons (Button, SplitButton, ToggleButton) through StyleCx::button_height; a small button stays a small control high. Both size sets give it control.md's value, and an app that overrides size.control.md and not size.button has it follow, so no other app's buttons change (the token dumps gain only the size.button line, equal to control.md). Trial; dumps updated`
+- `29f9af1cb ui-contract label: LinkLabelUnderline, a root style value; under LinkLabelUnderline::Inside a one-line link label draws its underline itself, on its text box's bottom edge or its rect's, whichever is higher, where egui strokes it on the box's bottom edge, which the rect's clip cuts away when the rect is no taller than the box. The label's rect is unchanged under both; LinkLabelUnderline::Edge, the default, draws as today, so no other app changes. Trial`
+- `7cb4ffd51 ui-contract, ui-panels panel: QuietHeader, a root style value; under QuietHeader::Heads a titled panel's quiet title (an inspector's kind line) heads its body as a rule would (HeaderRegion::heads, set by Panel::titled), so the first section under it draws no rule above it and sections after it keep theirs. QuietHeader::Ruled, the default, keeps today's rule above the first section, so no other app changes. Inspector story under Heads; trial`
+- `dee3e7af5 menu: Keyboard Shortcuts can open at a size the app gives`
+- `b2910054c menu: Keyboard Shortcuts can list only the app's own Show entries`
+- `8008f3997 Merge pull request #3418 from aiongg/test-speed-3`
+- `61c197d69 Merge branch 'dock-gaps-2-ime' into dock-gaps-2`
+- `34e2534d9 IME: the app's reset request made while a framework editor owns the IME is the engine's interrupt of that editor, recorded and fenced on`
+- `86c5f7a8d Editor part: its focus widget is an egui focus candidate only while its component takes focus, so egui's arrows never reach a disabled editor; trial ids through the crate's id helpers`
+- `7f085531f Focus candidates: one per-pass set of what components made, and the stop roots as a set, replace the walks; an editor part's focus widget is its component's, so a disabled editor never becomes an app Tab stop`
+- `d103fc5ea Pin egui to aiongg/egui ime-pending-reset (b15ffe9bf)`
+- `a3715cee5 IME: an interrupt of a framework editor publishes the app's own reset request of that pass, and the request counts as the app's only when the published output carries it`
+- `bb4c82681 Bypass walk: the stop every focusable egui widget gets by itself (Stop::automatic) is no registration, so a raw egui widget beside a component is a finding again`
+- `3a567445f Merge remote-tracking branch 'upstream/next' into test-speed-3`
+- `f70d51039 Keep design-lint at the CI default opt-level: the 10 s it saves does not pay for a cold cache`
+- `a3f765290 Merge pull request #3405 from aiongg/test-speed-2`
+- `108e0e46a Merge pull request #3412 from storytold/ci/macos-windows-deps-cache-next`
+- `6e46ecce8 Merge branch 'test-speed-3-ui' into test-speed-3`
+- `ab687f0ee jbig2 symbol limits: the gate checks the coded-symbol cap at 300 through a seam, the full caps run nightly`
+- `d402a1d71 Gate-sized cases for slow non-UI tests; full sizes and every case nightly`
+- `75e3a0c33 Workspace gate: leg 1 leaves the audit crates to leg 2, leg 3 builds only craft-image-codecs, design-lint at opt-level 2`
+- `e46f5180a Focus: a Tab with no stop to move to and nothing focused stays in egui's input for the app's own binding`
+- `728c797b1 Iconic column trial: the rule between icon groups spans more than half the rail, asserted as a relation`
+- `10cd2c5e8 Merge remote-tracking branch 'upstream/next' into test-speed-2`
+- `0075c7e7f CI: a failed deps-profile hash stops the step instead of naming every entry v2-`
+- `6a02da62d Iconic column trial: the rule between icon groups spans more than half the rail, asserted as a relation`
+- `6673e63ad CI: macOS and Windows cache entries are named by the dependency settings alone, so next restores main's`
+- `62816d0e3 Merge storytold next into dock-gaps-2`
+- `3656e8aaa Merge pull request #3212 from storytold/lightcraft-pr/fw-text-fields`
+- `736c9194c Merge pull request #3086 from storytold/fix/slider-primary-down-reset-precedence`
+- `3d195ca07 Merge pull request #3058 from storytold/fix/menu-escape-held-child`
+- `c93811bcf Merge pull request #3383 from aiongg/dock-gaps`
+- `c933a9062 Every focusable egui widget the app draws is a stop of the window's one Tab order`
+- `1f14633b7 Pin egui to aiongg/egui ime-pending-reset (f678ecb71): Memory lists the pass's focus candidates and reports the focused widget's event filter`
+- `a3174010b Merge pull request #3399 from davidmann4/fix/font-manager-wasm-next`
+- `0bac50867 Trial: a dock restored with a native float in a later pass of the first frame paints`
+- `9ea549874 Pin egui to aiongg/egui ime-pending-reset (c7a2f6af5): texture deltas of a multi-pass run and of every viewport reach the shared renderer in order`
+- `25073123e Revert "material-graph: evaluate_all skips nodes already run as inputs, removing the double evaluation and thumbnail of every node"`
+- `4a9cd1f8c develop crystal test: tones keep their 256-pixel sample (160 moved the mean past the limit)`
+- `ad53534c9 craft-ps test: places stays u32 in the sampled formatter sweep`
+- `75efd2474 theme, ui-widgets: shape.locator (cell, square), the reference point's squares, each defaulting to the Size preset's size.handle.md and size.handle.sm; ReferencePointLook::Squares lays its squares a cell apart, the picker two cells and a square wide, the same compact or not; VectorCraft's themes pin production's locator, 5 point squares 9 points apart (23 point grid). Trial; dumps updated`
+- `cdb082977 draw: TransformFields' PositionFirst form puts X and W, Y and H in a grid beside the constrain link, which a bracket row (Bracket::Unlinked) stands centred across the two rows, as production's Properties panel; the angle and skews follow in a grid of their own. Trial the_position_first_link_stands_between_the_width_and_height_rows`
+- `0c1fa2f1d ui-panels: IconGroupSeparator, an env style value for what marks a collapsed column's icon groups apart: Grip (default, the dock's grip marks) or Rule (bare grip strips and an edge rule across the room between two groups), VectorCraft's icon groups as production drew them; story icon_groups_apart_by_a_rule; trial`
+- `27f174b9d theme: VectorCraft's themes pin line.grip to production's text_disabled in each variant, the ink of its Tools grip; dumps updated`
+- `3a425aeff material-graph tests: is_multiple_of for the sweep samples`
+- `b0a11ffc7 Cargo.lock: craft-testkit dev-dependency of craft-material-graph`
+- `951ca3f3d Trial: arrows in an app's popup list skip the widget it covers`
+- `f24ff7663 material-graph test: rustfmt`
+- `2bcfc4007 Merge branches 'test-speed-2-a1' and 'test-speed-2-ui' into test-speed-2`
+- `5742ac10d audio-dsp test: DIAG for the slow effects of the extreme-settings tail`
+- `4a303613d craft-menu: review row-count test over 400 entries`
+- `a3a58be57 IME: the fence follows the app's reset requests asked through egui`
+- `ddbb7e6a4 Pin egui to aiongg/egui ime-pending-reset (bbfd6471e): pending_ime_reset and covered-widget arrow focus`
+- `f5e3fda87 craft-dialogs: one trial per chooser scenario`
+- `a5409599a develop crystal tests: smaller grids, one extra tile for the eviction fill, two seeds for the held draw, margins printed`
+- `336611c0f suite: unhinted test faces, one story per kind at the gate, shared fixtures for click paths and disabled/read-only drives, no density shot equal to the default`
+- `878b4ee81 image-codecs tests: the gate flips and overwrites one value per sampled byte, rotating`
+- `4c3fcafa0 svg test: the entity expansion bomb at a limit 256 times smaller`
+- `6bbe36ea7 psd test: the every-triangle mesh is refused at a 512 px output`
+- `750fdbc36 material-graph tests: sample the per-kind sweeps at the gate, shorter chains on smaller stacks, a smaller cancelled run, one pass fewer in kind_versions`
+- `7f544f8c9 tests: xmp attribute scan ratio at smaller sizes`
+- `a403cc18d material-graph tests: the grey transform and blend sweeps run a sample at the gate and every case nightly`
+- `7a41f7902 tests: heif damage sweep runs the divisor's fraction`
+- `d1b430495 tests: xcf, mime and crw sweeps run the divisor's fraction`
+- `d105734cf material-graph: evaluate_all skips nodes already run as inputs, removing the double evaluation and thumbnail of every node`
+- `ef8cd1c27 tests: midi event flood body built once`
+- `f83ff2d49 tests: pages picture bound scrolls past the budget by half`
+- `73ea1f1e3 tests: ps number sample walks the divisor's fraction`
+- `06a4182f2 ci: opt-level 1 for pdf, pkcs7, odf and cms test builds`
+- `3408eb09a Dock: a group's tab overflow button is a gesture source (SourceKind::Overflow)`
+- `a0b1c35a8 IME: an app editor's own reset survives the host fence`
+- `8c2cd95de IME: an app editor's own reset survives the host fence`
+- `c3d02fce6 Merge origin/next`
+- `f41d84e7c Merge origin/next`
+- `2a5b120e4 Merge next (357f33254) into lightcraft-pr/merge-3212`
+- `b2cd66151 Focus: host_stop puts an app's own widgets into the one Tab order`
+- `3709418d5 Keys: an app's own focused widget keeps the plain Enter`
+- `357f33254 Merge pull request #3396 from aiongg/test-speed-1124`
+- `337974b22 tests: loudness range at full segment length (16 kHz), xml streaming limit below one element`
+- `603b9708b Docking documents trial: clippy type alias and iter`
+- `a1daa3357 IME trial: no expect in library code`
+- `4e806d57a Dock trial: each stack section reports its panel's tab source`
+- `271e9bf72 Dock: DockAreaOutput::pressed names the panel whose body a press went down in`
+- `547056ecc Dock: a panel's document tabs are gesture sources (SourceKind::Document)`
+- `d2281d2ee IME: a press during an app editor's composition interrupts and fences it`
+- `f0b97bdc7 Keys: a bare Tab is egui's while every stop is a host stop`
+- `47c7a5d04 Dock trial: the handed-over drag's drop mark is the tab strip's, not the floated window's own`
+- `e7d564b62 Merge origin/next`
+- `ed5d53675 Merge origin/next`
+- `2b6a53aa4 font-store: the preview service's plain types and PreviewStore build on wasm, so font-manager does again`
+- `79c5c887a tests: is_multiple_of for the gate-sample strides`
+- `1c838de17 NumberField and SliderField: select_on_focus`
+- `7388c580b pdf test: the node-budget test runs its gate part on wasm32, which has no divisor`
+- `1c6b664bb Merge storytold next into dock-gaps`
+- `b2aab0b8b Merge next-host-input into dock-gaps`
+- `e976deb56 Merge remote-tracking branch 'upstream/next' into test-speed-1124`
+- `3bd77702c proto test: the gate-fraction flag in the distinct-UID test`
+- `9ed45cb20 Cargo.lock: craft-testkit dev-dependencies`
+- `283490a08 Drag: look the moving container's layer up at each hit test`
+- `41c744b1b cargo fmt`
+- `56e0824f2 Merge remote-tracking branch 'upstream/next' into test-speed-1124`
+- `364b01001 Merge branch 'test-speed-a2' into test-speed-1124`
+- `905082fcb Merge branch 'test-speed-a1' into test-speed-1124`
+- `b6acf7ace ui-widgets tests: the overflow strips scroll in tenth-second clock steps`
+- `04bb1e1b5 ui-patterns tests: settle after dialog actions instead of fixed frame counts`
+- `1e26d3d4e menu tests: the ribbon slide reaches rest by the clock, not 120 frames`
+- `02f2fc044 color-ui tests: a small-grid CMYK profile; the picker's rooms compared in one look`
+- `d56ee32e1 ui-contract suite: sample repeated parts and node sets under the gate fraction`
+- `8b9e7e051 craft-raw: single testkit dev-dependency`
+- `2b4bcffc9 craft-cms: gate runs white-exactness with bpc on`
+- `3b182a7f7 mesh, cfb, exr, xlsx, wordmodel, docx: gate samples and smaller shapes`
+- `385325fda Shorter statistical and loudness signals, sampled opus multistream garbage`
+- `4d13bda62 craft-develop tests: capped bad-pixel list on a small buffer, fewer tile draws, sampled cancel polls`
+- `07885b0da craft-xfl, craft-latex, craft-pages: smaller inputs`
+- `cbe6812a0 craft-image-codecs tests: smaller bomb-guard, PNG and DDS inputs, sampled fidelity sweep`
+- `8529dbd99 craft-media tests: smaller mxf exercise and mpegts hostile seeds`
+- `0593def5d craft-openpgp, craft-raw, craft-captions, craft-xml, craft-ods, craft-proof, craft-font-subset, craft-drawingml: smaller or gated passes`
+- `b0695c24f craft-audio tests: hostile sweeps run 1/N at the gate, encoder mode sweeps use 1 s signals`
+- `59ad7eb28 craft-audio-dsp tests: sample effect sweeps by the hostile divisor, shorter loudness and sync signals`
+- `459aae1e8 craft-pst, craft-exr, craft-cms, craft-prepress: smaller or sampled passes`
+- `e448589df craft-pkcs7, android-res, jbig2: fewer slow passes`
+- `0f9802774 craft-scraft-format, craft-psd, craft-doc: gate samples of sweeps`
+- `7c31a1ea9 craft-docx, craft-drawingml: smaller sizes and nightly-only boundary tests`
+- `ad88ed14e craft-pdf: cheaper cap and boundary tests`
+- `fa1574e10 craft-proto, craft-pdf: gate-sized limit and crypt property tests`
+- `81196516c craft-xlsx: xlsb limit tests use small explicit limits`
+- `1559c08c9 Dock: a window takes over a held press a plain egui widget holds`
+- `9fd8b0cda Add frame::will_rerun for host work once per shown frame`
+- `02cdd2517 An AccessKit request on a settled view's node reruns the view`
+- `603c4f20c Dock: closable panel tabs stay panel tabs`
+- `3f75e2507 A press on an app's own drag-only egui widget in a container body is no surface press`
+- `191ad699b Dock: a panel drag a floating window took over docks whatever title_bar_docks says`
+- `a2967e3cc DockAreaOutput::window_files names the panel each drop landed on`
+- `4db99f65a Dock: a panel's documents as tabs of its group, and a data-colour swatch on tabs`
+- `fc5f4b270 DockArea::raise: the floating window holding a panel comes to the front in this pass`
+- `24d491397 Dock trial: a tab dropped at the window edge beside a start dock makes a new outer column`
+- `436af1700 Revert "Collections: an open edit menu does not end a rename as a blur"`
+- `17a65f689 Revert "Collections trials: a layer opened from the rename editor ends no rename as a blur"`
+- `f93fa9a29 Revert "Collections trials: the layer trial compiles"`
+- `db5754198 Revert "Collections trials: the layer trial's editor is a real focus stop"`
+- `f6bd40135 Collections trials: the layer trial's editor is a real focus stop`
+- `b6f4186d9 Collections trials: the layer trial compiles`
+- `316f0f717 Merge remote-tracking branch 'origin/next' into lightcraft-pr/merge-3212`
+- `f5fa9f858 Merge origin/next`
+- `4b1a5d049 Merge origin/next`
+- `70241b1a1 NumberField: a story for a derived value`
+- `5bb9ca69c Collections trials: the long rename name is typed`
+- `a70d3f294 Text fields: the keeps-on-escape trial checks the whole contract`
+- `495568fee Collections trials: a layer opened from the rename editor ends no rename as a blur`
+- `8f60c0fb4 Slider and SliderField: TrackPress names when a track press sets the value; a read-only SliderField's track is read-only`
+- `f439bf843 Merge remote-tracking branch 'origin/next' into lightcraft-pr/merge-3086`
+- `ddc7527c0 Merge remote-tracking branch 'origin/next' into lightcraft-pr/merge-3058`
+- `69f5b607f Merge remote-tracking branch 'origin/next' into lightcraft-pr/merge-3212`
+- `6a65d53b0 Collections trials: drop the rename edit-menu trial`
+- `00fe1fc0e Collections trials: the rename edit menu trial falls back to the menu key`
+- `650bd72f8 Focus: a field in a restoring scope is let go a pass after its kept Escape`
+- `b4b262f63 Text fields: the read-only Escape trial checks the cancel, not a write-back`
+- `8d41b3aec Focus: a kept Escape that closes a popover returns focus to its opener`
+- `a4e53c072 Text fields: focus moving to another part of the component is reported as a loss`
+- `0361486a0 Collections: an open edit menu does not end a rename as a blur`
+- `2751af0b3 Merge next (b436ae992) into fix/slider-primary-down-reset-precedence`
+- `bdd8e5f00 Merge next (b436ae992) into fix/menu-escape-held-child`
+- `050f6c4b4 Merge next (b436ae992) into the text-fields batch`
+- `efa1d0f7f NumberField: a blank value is not shown as a derived value`
+- `5fe6f4bfa Text parts: an edit to an idle part is made to its value, not its resting text`
+- `b58d43ffb Text fields: an open edit menu is no focus loss`
+- `f996bdca9 Text fields: Escape keeps the text only while the field can be edited`
+- `d0e17aad7 Format`
+- `a4d790cdc Collections trials: the rename editor accepts a name longer than 1,024 characters`
+- `7d913a37c Collections trials: a rename whose item left the source ends with a removed cancel`
+- `fc485b8db Text fields: an app switch reports no text_lost_focus`
+- `84c12d893 NumberField: a derived value shows in parentheses until it is edited`
+- `4723ac95f Collections: the rename editor caps no name length`
+- `86e87fc5b Collections trials: the probe rename field keeps the focus a real text field keeps`
+- `3d88842b1 Collections: a rename whose item left the source ends with a removed cancel`
+- `5ed151750 Collections: a rename ends when its editor loses the focus with nothing typed`
+- `5a9750fc1 Text fields: a typing run cut short by removal is forgotten`
+- `faa67c750 Text fields: select_on_focus leaves a pointer's caret or range alone`
+- `9f5e55a1e Text fields: focus that arrives between passes selects before the input`
+- `ea6febd71 Text fields: switching to another app is no focus move`
+- `7a8dfd61f Text fields: keep the text on Escape (keeps_on_escape) and report text_lost_focus`
+- `9ecf996eb Fix Slider wheel-to-primary press handoff`
+- `e67825a42 Preserve reset precedence for opted primary slider presses`
+- `7d486c6f1 Slider and SliderField: propose on the first primary track press`
+- `6b6b976f8 Format held-child Escape regression controls`
+- `7f5d0a820 Close a context menu after Escape cancels its held child press`
+
+## What was measured
+
+- `cargo nextest run --workspace --no-fail-fast --test-threads 4`: **18,485 passed / 0 failed / 63 skipped**, exit 0 (1,542 s).
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0.
+- `cargo fmt -- --check`: exit 0.
+- `cargo nextest run -p craft-design-lint`: the workspace check passes (1 trial, 66 s).
+- The icon-id check was run on a worktree of the upstream commit `6fcf61c81`: it fails there with the same file byte-identical, which is what makes the repair the fork's own change rather than a merge error.
+- `cargo test -p craft-pages --features screen-testing --lib`: 116 trials, all passed.
+
+## What is not proven
+
+- The figures per crate of the fork's own crates (captions, automation, print, ui-contract, ui-widgets, ui-patterns, design-lint) were measured in an earlier run of the same day; this run measured the whole workspace instead.
+- The macOS and Linux legs of the workspace workflow were not run; this is a Windows machine.
+- The workflow's own runs on the fork remote were not checked: the file's push trigger names `main`, while the fork's branch is `next`.
+- The behaviour of the HTTP inspection filter that holds a request head is specific to this host, so the automation trial's fix is verified here and not elsewhere.
+- Upstream's own CI was not reproduced; the upstream-red trial was proven in a worktree of the upstream commit, not on its CI.
+
