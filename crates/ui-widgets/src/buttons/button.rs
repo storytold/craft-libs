@@ -310,6 +310,10 @@ impl Component for Button<'_> {
         }
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
+            // A dialog's footer button stands a dialog button high.
+            if matches!(least, LeastWidth::DialogButton | LeastWidth::DialogSideButton) && key.arrangement == Arrangement::Inline {
+                style.metrics.min_size.y = cx.dialog_button_height();
+            }
         }
         if cx.env::<super::ControlPlace>() == super::ControlPlace::CallToAction {
             style.metrics.min_size.y = style.metrics.min_size.y.max(cx.tokens.size.page.action);

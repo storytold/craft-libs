@@ -138,6 +138,8 @@ pub enum Pad {
     Control,
     /// `space.pad.regular`.
     Regular,
+    /// `space.pad.dialog`: a dialog frame.
+    Dialog,
     /// `space.pad.roomy`.
     Roomy,
     /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a

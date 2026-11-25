@@ -52,6 +52,7 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
         Pad::Tight => tokens.tokens().space.gap.tight,
         Pad::Control => pads.control,
         Pad::Regular => pads.regular,
+        Pad::Dialog => pads.dialog,
         Pad::Roomy => pads.roomy,
         Pad::Page => pads.roomy * 2.5,
         _ => 0.0,

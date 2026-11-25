@@ -1009,10 +1009,11 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.row.menu` | A menu row's height at the medium control size (`MenuItem`); follows an app's `size.control.md` unless the app sets it |
 | `size.dialog.least`, `size.dialog.wrap` | A dialog's content: the least width it opens at, and the line length its paragraphs wrap at (`LeastWidth::Dialog`, `WrapWidth::Dialog`); content that cannot wrap widens it past that |
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
+| `size.dialog.button_height` | Height of a dialog's footer buttons (`LeastWidth::DialogButton`, `LeastWidth::DialogSideButton`); follows an app's `size.button` unless the app sets it |
 | `size.hit.edge` | The band inside the edge of a canvas's view in which a tool that autoscrolls on hover scrolls the view (a Polygonal Lasso's rubber band), at most a quarter of the view's shorter side |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
-| `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |
+| `space.gap.*`, `space.pad.*` | Gaps between and padding inside components. `space.pad.dialog` pads a dialog frame (`Pad::Dialog`) and follows an app's `space.pad.regular` unless the app sets it |
 
 Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. A field holds a number of characters, so `size.length.field`, `size.length.number` and `size.length.short` grow with the text size by the same factor as the type; `size.length.track` holds no text and keeps its length. NumberField is at least `size.length.number` at its control size wide; apps set other widths per field.
 

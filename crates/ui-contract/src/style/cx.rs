@@ -405,6 +405,15 @@ impl<'a> StyleCx<'a> {
         }
     }
 
+    /// The height of a dialog's footer button at the ambient size: `size.dialog.button_height` at the medium size, grown
+    /// as a control's height is; a small button stands a small control high.
+    pub fn dialog_button_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.dialog.button_height, self.line_ratio),
+        }
+    }
+
     /// The height of a menu row at the ambient size: `size.row.menu` at the medium size, grown as a control's height
     /// is; a small row stands a small control high.
     pub fn menu_row_height(&self) -> f32 {
