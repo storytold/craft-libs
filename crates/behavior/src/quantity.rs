@@ -18,9 +18,10 @@ fn is_unit_char(c: char) -> bool {
 }
 
 /// Whether `spelling` can be registered with [`Reader::unit`]: letters and unit symbols only, so the reader can
-/// tell it from a number or an operator.
+/// tell it from a number or an operator, or one `/` followed by them (`/in`, a count per inch).
 pub fn is_unit_spelling(spelling: &str) -> bool {
-    !spelling.is_empty() && spelling.chars().all(is_unit_char)
+    let letters = spelling.strip_prefix('/').unwrap_or(spelling);
+    !letters.is_empty() && letters.chars().all(is_unit_char)
 }
 
 /// A unit spelling and the factor that turns its quantity into the base unit.
@@ -41,7 +42,9 @@ struct Unit {
 /// (`3cm*50%` is 1.5 cm), whatever `%` means elsewhere. Text that starts with `+`, `*` or `/` is relative: it
 /// applies to the start value (`+5` adds 5, `*2` doubles). A leading `-` is a negative number. A unit is the longest
 /// registered spelling at the start of the letters after a number, so `2inx3` is `2in` times 3 and `2px` stays a
-/// quantity when `px` is registered. A group separator counts only before exactly three digits.
+/// quantity when `px` is registered. A registered spelling that starts with `/` (`/in`) is a unit when the letters after
+/// the `/` start it, so `40/in` is 40 of it; any other `/` divides (`80/2`). A group separator counts only before
+/// exactly three digits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reader {
     decimal: char,
@@ -213,8 +216,9 @@ impl Parse<'_> {
         }
     }
 
-    /// A number and the longest registered unit spelling at the start of the letters after it. Letters that start no
-    /// unit stay unread: a product sign (`2x3`) takes them, and anything else leaves the text unread, which refuses it.
+    /// A number and the longest registered unit spelling at the start of the letters after it, or after a `/` when a
+    /// registered spelling starts with `/`. Letters that start no unit stay unread: a product sign (`2x3`) takes them,
+    /// and anything else leaves the text unread, which refuses it. A `/` that starts no unit is left to divide.
     fn quantity(&mut self, scaled: bool) -> Result<f64, NotAValue> {
         let number = self.number()?;
         self.tag = None;
@@ -223,8 +227,11 @@ impl Parse<'_> {
             return Ok(number / 100.0);
         }
         let reader = self.reader;
-        let run: Vec<char> = self.chars[self.at..].iter().copied().take_while(|c| is_unit_char(*c)).collect();
-        let unit = (1..=run.len()).rev().find_map(|len| {
+        let after = &self.chars[self.at..];
+        let slash = usize::from(after.first() == Some(&'/'));
+        let letters = after[slash..].iter().take_while(|c| is_unit_char(**c)).count();
+        let run = &after[..slash + letters];
+        let unit = (1 + slash..=run.len()).rev().find_map(|len| {
             let lowered = run[..len].iter().collect::<String>().to_lowercase();
             reader.units.iter().find(|unit| unit.spelling == lowered).map(|unit| (len, unit))
         });
@@ -325,6 +332,20 @@ mod tests {
         near(&percent, "3cm/50%", 6.0);
         near(&percent, "2%", 14.0);
         assert_eq!(percent.read("*50%", Some(4.0)), Ok(2.0), "a relative share");
+
+        let per_inch = Reader::new().unit_tagged("/in", 1.0, 0);
+        assert!(is_unit_spelling("/in") && !is_unit_spelling("/") && !is_unit_spelling("in/") && !is_unit_spelling("//in"));
+        for text in ["40/in", "40 /in", "40/IN", "80/2", "80/2/in"] {
+            near(&per_inch, text, 40.0);
+        }
+        assert_eq!(per_inch.read_tagged("40/in", None), Ok((40.0, Some(0))), "the spelling names its unit");
+        assert_eq!(per_inch.read("*2", Some(20.0)), Ok(40.0), "a relative product");
+        assert_eq!(per_inch.read("/2", Some(80.0)), Ok(40.0), "a leading / still divides the start value");
+        for bad in ["", "/in", "40/inch", "40/"] {
+            assert_eq!(per_inch.read(bad, Some(1.0)), Err(NotAValue), "{bad:?} is not a value");
+        }
+        near(&lengths, "144/2in", 1.0);
+        assert_eq!(lengths.read("144/in", None), Err(NotAValue), "without a /in spelling, /in is a division with no number");
 
         let german = Reader::new().decimal(',').group('.');
         near(&german, "1.234,5", 1234.5);
