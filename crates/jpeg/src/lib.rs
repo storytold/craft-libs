@@ -681,6 +681,12 @@ impl<'a> Bits<'a> {
         self.d.get(p).is_some_and(|&v| p == self.pos || v == 0x00)
     }
 
+    /// Whether all remaining real (non-synthetic) buffered bits in the current byte are `1`-bits
+    /// as required for byte-alignment padding before a marker (ITU-T T.81 §F.1.2.3).
+    fn has_valid_one_bit_padding(&self) -> bool {
+        !self.exhausted && self.acc.leading_ones() >= self.n.saturating_sub(self.pad)
+    }
+
     /// The next `n` (≤ 16) bits, left in place.
     fn peek(&mut self, n: u32) -> u32 {
         if self.n < n {
@@ -1918,7 +1924,7 @@ mod tests;
 
 /// Baseline JPEG encoder (8-bit, Huffman-coded sequential DCT).
 mod encode;
-pub use encode::{ChromaSubsampling, EncodeError, encode_baseline, encode_baseline_low_memory};
+pub use encode::{ChromaSubsampling, EncodeError, encode_baseline, encode_baseline_low_memory, optimize_baseline_scan};
 
 mod app14;
 pub use app14::adobe_transform;

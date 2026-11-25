@@ -168,10 +168,7 @@ pub enum JpegFormat {
     /// Baseline ("Standard"): one sequential scan with the standard Huffman tables.
     #[default]
     Baseline,
-    /// Baseline Optimized: one sequential scan with Huffman tables fitted to the image. Only at
-    /// 4:4:4 for now: a 4:2:0 (subsampled RGB) baseline scan keeps the standard tables, because
-    /// fitted tables make jpeg-encoder write one scan per component, which zune-jpeg 0.5.15 (our
-    /// decoder) reads back wrongly when chroma is subsampled (see `web::encode_jpeg_rgb8`).
+    /// Baseline Optimized: one sequential scan with Huffman tables fitted to the image.
     Optimized,
     /// Progressive: the image refines over several scans as it loads.
     Progressive,

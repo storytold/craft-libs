@@ -314,9 +314,9 @@ pub fn encode_jpeg_rgb8(
     // Photoshop 2025's output; its Save As keeps 4:2:0 at every quality).
     let subsampled = quality <= 50;
     enc.set_progressive(progressive);
-    // jpeg-encoder 0.6 writes corrupt baseline scans when optimised Huffman tables meet 4:2:0
-    // (both zune-jpeg and image-rs decode them green); progressive output is fine.
-    enc.set_optimized_huffman_tables(progressive || (optimized && !subsampled));
+    // Let jpeg-encoder emit a single interleaved baseline scan when not progressive, then
+    // optimize the Huffman tables losslessly via `craft_jpeg::optimize_baseline_scan`.
+    enc.set_optimized_huffman_tables(progressive);
     enc.set_sampling_factor(if subsampled { jpeg_encoder::SamplingFactor::R_4_2_0 } else { jpeg_encoder::SamplingFactor::R_4_4_4 });
     if let Some(d) = dpi.filter(|d| *d >= 1.0) {
         let v = d.round().min(65535.0) as u16;
@@ -337,6 +337,12 @@ pub fn encode_jpeg_rgb8(
         enc.add_icc_profile(icc).map_err(e)?;
     }
     enc.encode(rgb, w16, h16, jpeg_encoder::ColorType::Rgb).map_err(e)?;
+    if !progressive
+        && optimized
+        && let Some(opt) = craft_jpeg::optimize_baseline_scan(&out)
+    {
+        out = opt;
+    }
     Ok(out)
 }
 
@@ -492,13 +498,16 @@ mod tests {
 mod subsampling_tests {
     use super::*;
 
-    /// jpeg-encoder 0.6 writes broken scans for baseline 4:2:0 with optimised Huffman tables;
-    /// `encode_jpeg_rgb8` must avoid that combination.
+    /// Every progressive/optimized/subsampling combination produces a single-scan or progressive
+    /// JPEG that decodes accurately, and baseline optimized shrinks output at every quality.
     #[test]
     fn every_option_combination_decodes_to_the_source() {
         let (w, h) = (64u32, 48u32);
         let rgb: Vec<u8> = (0..w * h).flat_map(|i| [((i % w) * 4) as u8, 76, ((i / w) * 5) as u8]).collect();
         for q in [30, 60, 95] {
+            let base = encode_jpeg_rgb8(w, h, &rgb, q, false, false, None, None, None, None).unwrap();
+            let opt = encode_jpeg_rgb8(w, h, &rgb, q, false, true, None, None, None, None).unwrap();
+            assert!(opt.len() < base.len(), "q{q}: optimized {} >= baseline {}", opt.len(), base.len());
             for (prog, opt) in [(false, false), (false, true), (true, false), (true, true)] {
                 let bytes = encode_jpeg_rgb8(w, h, &rgb, q, prog, opt, None, None, None, None).unwrap();
                 let ours = crate::decode(&bytes).unwrap().convert(crate::ChannelLayout::Rgb, crate::SampleType::U8);

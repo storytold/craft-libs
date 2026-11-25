@@ -260,8 +260,8 @@ fn jpeg_444_beats_420_on_chroma_detail() {
 }
 
 /// JPEG Options › Format Options: each scan layout decodes back to the same image, Progressive
-/// writes a progressive frame (SOF2), and Baseline Optimized fits its Huffman tables (smaller at
-/// 4:4:4; at 4:2:0 it keeps the standard tables, see `JpegFormat::Optimized`).
+/// writes a progressive frame (SOF2), and Baseline Optimized fits its Huffman tables while keeping
+/// a single interleaved scan at both 4:4:4 and 4:2:0.
 #[test]
 fn jpeg_format_options_round_trip() {
     let img = synth(64, 48, ChannelLayout::Rgb, SampleType::U8, 3, 0.5);
@@ -283,11 +283,9 @@ fn jpeg_format_options_round_trip() {
         }
         assert!(sof(&base, 0xC0) && !sof(&base, 0xC2));
         assert!(sof(&prog, 0xC2), "progressive frame");
-        if subsampled {
-            assert_eq!(opt, base, "4:2:0 keeps the standard tables");
-        } else {
-            assert!(opt.len() < base.len(), "fitted tables are smaller: {} vs {}", opt.len(), base.len());
-        }
+        assert!(opt.len() < base.len(), "subsampled {subsampled}: fitted tables are smaller: {} vs {}", opt.len(), base.len());
+        assert_eq!(decode(&opt).unwrap().data(), decode(&base).unwrap().data(), "subsampled {subsampled}: identical quantized coefficients");
+        assert_eq!(jpeg_info(&opt).unwrap().held_coefficients, 0, "subsampled {subsampled}: single interleaved scan");
     }
     // Gray is 4:4:4 too, so Baseline Optimized shrinks it.
     let gray = synth(64, 48, ChannelLayout::Gray, SampleType::U8, 3, 0.5);
