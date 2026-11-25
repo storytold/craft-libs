@@ -15,6 +15,8 @@ pub mod output;
 #[cfg(feature = "flatten")]
 pub mod pdfx1a;
 pub mod plates;
+#[cfg(feature = "ps")]
+pub mod ps;
 
 pub use cms::{CmsConversion, ProfileError};
 pub use coverage::{Above, Coverage, InkStats, MAX_REGIONS, Region, Stats};

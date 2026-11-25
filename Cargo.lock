@@ -3072,10 +3072,13 @@ name = "craft-prepress"
 version = "0.1.0"
 dependencies = [
  "craft-cms",
+ "craft-eps",
  "craft-pdf 0.1.0",
  "craft-plate-test",
+ "craft-ps",
  "kurbo 0.13.1",
  "linesweeper",
+ "subsetter",
  "thiserror 2.0.21",
  "ttf-parser",
 ]

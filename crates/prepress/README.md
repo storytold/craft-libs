@@ -40,6 +40,8 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
   version and conformance keys (for PDF/X-1a:2003, 1.4, `PDF/X-1:2003` and `PDF/X-1a:2003`);
   krilla has no PDF/X validator, so the app keeps its own PDF/X checks. `flatten_page` is its
   one-page case.
+- `ps` (feature `ps`): PostScript and EPS from the print PDF. See
+  [PostScript from a print PDF](#postscript-from-a-print-pdf).
 
 ## Plates from an exported PDF
 
@@ -240,6 +242,58 @@ if let Some(color) = to_pdf_color(&printed, &inks, &cms) {
     surface.set_fill(Some(Fill { paint: color.into(), ..Default::default() })); // DeviceN [Black Gold]
 }
 ```
+
+## PostScript from a print PDF
+
+`ps::ps_document(pdf, &opts)` writes the print PDF an app already exports as PostScript, and
+`ps::eps_document` writes one page of it as an EPS. The PDF is the source because placements,
+flattening, each placement's output intent, overprint and ink aliases only exist in those bytes.
+Each page is read, flattened and rasterized as `flatten_document` does, then written as
+PostScript instead of PDF.
+
+```rust
+use craft_prepress::ps::{PsColor, PsLevel, PsOptions, ps_document};
+
+let opts = PsOptions { level: PsLevel::Level3, color: PsColor::Separations, ..PsOptions::default() };
+let (files, report) = ps_document(&pdf, &opts)?;
+for file in &files {
+    // file.plate: Some("Cyan"), … Some("Gold"); file.bytes: the plate's PostScript.
+}
+// report.outlined_runs, converted_to_process, approximated_overprints: say what wasn't exact.
+```
+
+| Option | Values |
+|---|---|
+| `level` | `Level3` (default) or `Level2` |
+| `data_format` | `Ascii` (ASCII85, 7-bit clean; default) or `Binary` (inside `%%BeginData`) |
+| `fonts` | `TrueType42` (Type 42, default) or `Cid` (CIDFontType 2 under `Identity-H`; LanguageLevel 3) |
+| `color` | `Composite` (one file) or `Separations` (one file per plate) |
+| `preview` | `eps_document` only: a TIFF preview at `dpi`, behind the binary header |
+
+- **Composite**: process colors are DeviceCMYK, a spot ink alone a `Separation` space with its
+  CMYK alternate, a mix a `DeviceN` space. Overprint is `setoverprint`; an overprinting process
+  color that names fewer than four inks is a `Separation` or `DeviceN` color of just those inks,
+  as the PDF writer writes it.
+- **Separations**: one file per plate, the four process inks and each spot ink printing on its
+  own plate, each painting that plate's tint in DeviceGray. Overprint is decided per plate as
+  `plates` decides it, so each file prints what the Separations Preview shows for that ink.
+- **Pages** keep their full visible area (marks and bleed included) as the PostScript page, and
+  their TrimBox and BleedBox as `/PAGE` pdfmarks.
+- **Text** in TrueType fonts stays text: a subset of the glyphs a page shows, written as Type 42
+  or CIDFontType 2 fonts. Other fonts, and text painted with a gradient, are drawn from their
+  outlines (`outlined_runs`).
+- **Images**: JPEGs in DeviceGray or DeviceCMYK keep their DCT data in a composite (Adobe CMYK
+  JPEGs are read inverted); other images are 8-bit samples, Flate at LanguageLevel 3 and
+  RunLength at LanguageLevel 2.
+- **LanguageLevel 2** has no `DeviceN` spaces and no smooth shadings: a mix of inks including a
+  spot is written as its CMYK appearance (`converted_to_process`), an overprinting color of two
+  or three process inks as DeviceCMYK with `setoverprint` (`approximated_overprints`), and
+  gradients are rasterized at `FlattenOptions::raster_dpi` (`rasterized_gradients`).
+
+Not written yet: CFF and Type 1 fonts as fonts (they are drawn from outlines), 1-bit CCITT image
+data (the reader hands over 8-bit samples), PICT previews, and fonts shared across pages (each
+page defines its own, so pages stay independent). Gradients that don't extend at both ends are
+refused, as the PDF writer refuses them.
 
 ## In DesignCraft and VectorCraft
 

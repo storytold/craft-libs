@@ -22,7 +22,7 @@ pub use geom::FillRule;
 pub use raster::{FlattenPageError, FlattenPageOptions, FlattenPageReport, flatten_page};
 
 mod compose;
-mod document;
+pub(crate) mod document;
 pub mod font;
 pub mod geom;
 pub mod pdf;

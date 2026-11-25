@@ -151,7 +151,7 @@ pub fn flatten_document_with_progress(
     if range.is_empty() || range.end > count {
         return Err(FlattenDocumentError::PageRange { start: range.start, end: range.end, count });
     }
-    let mut colors = Colors { doc: &doc, fallback: &opts.read.fallback, cache: HashMap::new() };
+    let mut colors = Colors::new(&doc, &opts.read.fallback);
     let first = colors.get(range.start)?;
     let mut report = FlattenDocumentReport::default();
     // The page being written, to name it when krilla panics.
@@ -242,16 +242,19 @@ fn write_page(
 /// mapped into page space and clipped to `bbox`.
 fn page_settings(p: &Page<'_>, bbox: Rect) -> Option<PageSettings> {
     let size = PageSettings::from_wh(bbox.width() as f32, bbox.height() as f32).filter(|_| bbox.is_finite())?;
-    let to_page = p.initial_transform(true).to_kurbo();
     let mapped = |key: &[u8]| {
-        let r = p.raw().get::<PdfRect>(key)?;
-        let r = to_page.transform_rect_bbox(Rect::new(r.x0, r.y0, r.x1, r.y1)).intersect(bbox);
-        if !(r.is_finite() && r.width() > 0.0 && r.height() > 0.0) {
-            return None;
-        }
+        let r = page_box(p, bbox, key)?;
         KRect::from_ltrb((r.x0 - bbox.x0) as f32, (r.y0 - bbox.y0) as f32, (r.x1 - bbox.x0) as f32, (r.y1 - bbox.y0) as f32)
     };
     Some(size.with_trim_box(mapped(TRIM_BOX)).with_bleed_box(mapped(BLEED_BOX)).with_art_box(mapped(ART_BOX)))
+}
+
+/// The source page's box `key` (such as TrimBox) in page space, clipped to `bbox`; `None` when
+/// the page has none or it is empty there.
+pub(crate) fn page_box(p: &Page<'_>, bbox: Rect, key: &[u8]) -> Option<Rect> {
+    let r = p.raw().get::<PdfRect>(key)?;
+    let r = p.initial_transform(true).to_kurbo().transform_rect_bbox(Rect::new(r.x0, r.y0, r.x1, r.y1)).intersect(bbox);
+    (r.is_finite() && r.width() > 0.0 && r.height() > 0.0).then_some(r)
 }
 
 /// The source's title, author, creation and modification dates, and `producer`.
@@ -279,7 +282,7 @@ fn date(d: &PdfDate) -> DateTime {
         .utc_offset_minute(d.utc_offset_minute)
 }
 
-fn totals(pages: &[(usize, FlattenPageReport)]) -> FlattenTotals {
+pub(crate) fn totals(pages: &[(usize, FlattenPageReport)]) -> FlattenTotals {
     let mut t = FlattenTotals::default();
     for (_, r) in pages {
         t.flattened += r.flatten.flattened;
@@ -301,24 +304,28 @@ fn totals(pages: &[(usize, FlattenPageReport)]) -> FlattenTotals {
 }
 
 /// A page's printing condition, for reading, separating and writing.
-struct PageColor {
+pub(crate) struct PageColor {
     /// With the output intent.
-    settings: SerializeSettings,
-    cms: CmsConversion,
-    condition: Fallback,
-    read: ReadColor,
+    pub(crate) settings: SerializeSettings,
+    pub(crate) cms: CmsConversion,
+    pub(crate) condition: Fallback,
+    pub(crate) read: ReadColor,
 }
 
 /// The [`PageColor`]s of a document: one for the pages without their own output intents, one per
 /// page with them.
-struct Colors<'d> {
+pub(crate) struct Colors<'d> {
     doc: &'d Pdf,
     fallback: &'d Fallback,
     cache: HashMap<Option<usize>, Rc<PageColor>>,
 }
 
-impl Colors<'_> {
-    fn get(&mut self, page: usize) -> Result<Rc<PageColor>, FlattenDocumentError> {
+impl<'d> Colors<'d> {
+    pub(crate) fn new(doc: &'d Pdf, fallback: &'d Fallback) -> Self {
+        Self { doc, fallback, cache: HashMap::new() }
+    }
+
+    pub(crate) fn get(&mut self, page: usize) -> Result<Rc<PageColor>, FlattenDocumentError> {
         let own =
             self.doc.pages().get(page).and_then(|p| p.raw().get::<Array<'_>>(OUTPUT_INTENTS)).is_some_and(|a| a.iter::<Dict<'_>>().next().is_some());
         let key = own.then_some(page);
