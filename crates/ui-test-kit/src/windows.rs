@@ -8,7 +8,7 @@
 use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::RootEnv;
-use craft_ui::runtime::frame::{FrameInput, WindowInput, set_input};
+use craft_ui::runtime::frame::{FrameInput, WindowInput, input_pending, set_input};
 use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
@@ -407,7 +407,9 @@ impl Windows {
         CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
         SHAPES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).app_modal(self.app_modal.get()).window_input(self.window_input.get()));
+        if !input_pending(&self.ctx) {
+            set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()).app_modal(self.app_modal.get()).window_input(self.window_input.get()));
+        }
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,

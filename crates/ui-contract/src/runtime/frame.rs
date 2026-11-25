@@ -175,6 +175,8 @@ pub struct FrameOutput {
 #[derive(Default)]
 pub(crate) struct FrameState {
     input: Option<FrameInput>,
+    /// The root pass number when `set_input` was last called, so test drivers know whether a frame's input is set.
+    input_pass: Option<u64>,
     /// The window of `FrameInput::app_modal` and the root frame its modal first showed in: its place in the modal stack
     /// (`overlay::modal_viewport`). It stays while the app names the same window frame after frame.
     app_modal: Option<(ViewportId, u64)>,
@@ -413,6 +415,7 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
             (viewport, _) => viewport.map(|viewport| (viewport, pass::root_frame_nr(ctx))),
         };
         state.input = Some(input);
+        state.input_pass = Some(root_passes);
         ran
     });
     commands::set_input(ctx, &commands);
@@ -420,6 +423,14 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
     windows::set_input(ctx);
     debug_assert!(hooks_ran, "the runtime plugin's hooks did not run for the previous pass: drive frames with `Context::run_ui` or `run_pass`");
     scale::set_interface_scale(ctx, scale.0);
+}
+
+/// Whether [`set_input`] has already run for the upcoming root pass.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn input_pending(ctx: &Context) -> bool {
+    let root_passes = pass::pass_nr(ctx, ViewportId::ROOT);
+    pass_state::with::<FrameState, _>(ctx, |state| state.input_pass == Some(root_passes))
 }
 
 /// The tokens the app's `sizes` give the default density: the built-in sets and the overrides apply in
