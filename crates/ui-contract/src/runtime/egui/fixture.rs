@@ -500,6 +500,13 @@ pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
 }
 
+/// A host's own multi-line egui text field of `id` over `text` that locks focus, as a code editor of the app's own:
+/// its egui key filter keeps Tab, which it types.
+#[cfg(feature = "suite")]
+pub(crate) fn host_code_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
+    ui.add(egui::TextEdit::multiline(text).id(id).lock_focus(true)).rect
+}
+
 /// A host's own text editor of `id` at `rect`, as a canvas text tool draws it: it reads the IME events from egui's
 /// input into `text` (a commit appends, a deletion before the caret removes characters from its end) and writes the
 /// pass's IME output, context generation 1.

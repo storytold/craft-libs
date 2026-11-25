@@ -380,7 +380,9 @@ pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
             sizing = ui.is_sizing_pass();
             for rect in covered {
                 ui.painter().rect_filled(rect, 0.0, scrim);
-                let absorber = ui.allocate_rect(rect, Sense::click_and_drag());
+                // It absorbs presses and never takes key focus: a focusable egui widget no component made is a Tab stop
+                // of the app's own (`focus::take_app_widgets`).
+                let absorber = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
                 crate::runtime::egui::widgets::note_widget(ui.ctx(), absorber.id);
                 crate::runtime::egui::access::hide(ui.ctx(), absorber.id);
             }

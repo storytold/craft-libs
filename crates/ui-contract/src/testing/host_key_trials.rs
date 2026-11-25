@@ -7,7 +7,7 @@ use crate::runtime::commands::{
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
-use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, host_stop, request};
+use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
@@ -298,7 +298,7 @@ fn an_app_editor_s_later_reset_ends_the_fence() {
 }
 
 #[trial]
-fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
+fn a_focused_egui_field_keeps_escape_and_the_clipboard_and_tabs_on_through_the_one_order() {
     let (host, mut show) = host_window();
     let mut frames = Frames::new();
     frames.frame(Vec::new(), &mut show);
@@ -309,9 +309,9 @@ fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
     assert_eq!(host.borrow().text, "x", "the paste reaches the focused field");
     press_key(&mut frames, &mut show, Key::Tab);
-    assert_eq!(seen(&host), (vec![Key::Tab], 0), "the field's Tab is egui's");
+    assert_eq!(seen(&host), (Vec::new(), 0), "a single-line field's Tab is the framework's move, never egui's");
     frames.frame(Vec::new(), &mut show);
-    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's Tab moves focus on to the next widget");
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "the field is the last stop: Tab wraps to the framework's button");
     fixture::host_focus(&frames.ctx, field());
     frames.frame(Vec::new(), &mut show);
     press_key(&mut frames, &mut show, Key::Escape);
@@ -393,8 +393,10 @@ fn escape_cancels_a_framework_drag_while_an_egui_field_has_focus() {
     frames.frame(vec![release(inside)], &mut show);
 }
 
+/// The app's own buttons drawn after the window's framework button and host field: egui's arrows move focus among
+/// them, and Tab and Shift+Tab move it through the window's one order, which holds them.
 #[trial]
-fn arrows_and_tab_move_egui_focus_among_host_buttons() {
+fn arrows_move_egui_focus_among_host_buttons_and_tab_moves_through_the_one_order() {
     let (left, right) = (named_id("host left"), named_id("host right"));
     let (_host, mut base) = host_window();
     let mut show = move |ui: &mut Ui| {
@@ -411,7 +413,7 @@ fn arrows_and_tab_move_egui_focus_among_host_buttons() {
     press_key(&mut frames, &mut show, Key::ArrowLeft);
     assert_eq!(egui_focused(&frames.ctx), Some(left), "ArrowLeft moves it back");
     press_key(&mut frames, &mut show, Key::Tab);
-    assert_eq!(egui_focused(&frames.ctx), Some(right), "Tab moves egui focus on");
+    assert_eq!(egui_focused(&frames.ctx), Some(right), "Tab moves focus on to the next stop");
     frames.frame(vec![key_press(Key::Tab, Modifiers::SHIFT)], &mut show);
     frames.frame(Vec::new(), &mut show);
     assert_eq!(egui_focused(&frames.ctx), Some(left), "Shift+Tab moves it back");
@@ -424,15 +426,14 @@ fn arrows_and_tab_move_egui_focus_among_host_buttons() {
     assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's arrows leave a framework stop's focus alone");
 }
 
-/// Arrows from an entry of the app's own popup list stay in the list: the app's button under the list, a host stop as
-/// an app's tool slot is, is no arrow target while the list covers it, though it lies nearer below the first entry
-/// than the second entry does.
+/// Arrows from an entry of the app's own popup list stay in the list: the app's button under the list, a Tab stop as
+/// every focusable widget of the app is, is no arrow target while the list covers it, though it lies nearer below the
+/// first entry than the second entry does.
 #[trial]
 fn arrows_in_an_app_popup_list_skip_the_widget_it_covers() {
     let (button, popup, first, second) = (named_id("host tool"), named_id("host popup"), named_id("host entry 1"), named_id("host entry 2"));
     let mut show = move |ui: &mut Ui| {
         fixture::host_button(ui, button, Rect::from_min_max(Pos2::new(228.0, 31.0), Pos2::new(254.0, 57.0)));
-        host_stop(ui.ctx(), button, KeyUse::of(Input::Pointer));
         areas::host_popup_list(ui.ctx(), popup, Pos2::new(201.0, 18.0), &[first, second]);
     };
     let mut frames = Frames::new();
@@ -498,23 +499,23 @@ fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
     (egui_focused(&frames.ctx), reached)
 }
 
+/// Tab is the framework's move whatever the window holds: from nothing focused it reaches the app's own widgets as its
+/// stops, and never egui's input. A component's widget that registered no stop is no stop of the app's own.
 #[trial]
-fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
+fn tab_from_nothing_reaches_the_app_s_widgets_as_the_framework_s_move() {
     let (first, last) = (Some(named_id("host first")), Some(named_id("host last")));
-    assert_eq!(tab_from_nothing(Before::Nothing, false), (first, true), "Tab gives egui focus to the first host button");
-    assert_eq!(tab_from_nothing(Before::Nothing, true), (last, true), "Shift+Tab to the last");
-    assert_eq!(tab_from_nothing(Before::Stop, false), (Some(named_id("button")), false), "with a framework stop, Tab is the framework's move");
-    assert_eq!(tab_from_nothing(Before::Unstopped, false), (None, true), "egui's Tab gives no focus to a component's widget without a stop");
-    let (focused, reached) = tab_from_nothing(Before::FocusedUnstopped, false);
-    assert!(focused.is_some() && focused != first && !reached, "egui focus on that widget is focus: the Tab is not egui's and moves nothing");
+    assert_eq!(tab_from_nothing(Before::Nothing, false), (first, false), "Tab focuses the first host button");
+    assert_eq!(tab_from_nothing(Before::Nothing, true), (last, false), "Shift+Tab the last");
+    assert_eq!(tab_from_nothing(Before::Stop, false), (Some(named_id("button")), false), "the framework stop drawn first comes first");
+    assert_eq!(tab_from_nothing(Before::Unstopped, false), (first, false), "a component's widget without a stop gets no focus");
+    assert_eq!(tab_from_nothing(Before::FocusedUnstopped, false), (first, false), "from that widget holding focus, Tab goes to the first stop");
 }
 
-/// A window with a framework stop, two of the app's own buttons registered as host stops and the app's canvas, which
-/// keeps Tab, unfocused: Tab from nothing is the framework's move over its one order, which holds the app's buttons
-/// beside the framework's stop. The unfocused canvas does not keep the Tab; it is the last entry, and once Tab focuses
-/// it, it keeps Tab.
+/// A window with a framework stop, two of the app's own buttons and the app's canvas, which keeps Tab, unfocused: Tab
+/// from nothing is the framework's move over its one order, which holds the app's buttons beside the framework's
+/// stop. The unfocused canvas does not keep the Tab; it is the last entry, and once Tab focuses it, it keeps Tab.
 #[trial]
-fn tab_from_nothing_goes_through_the_framework_order_with_the_app_s_host_stops() {
+fn tab_from_nothing_goes_through_the_framework_order_with_the_app_s_widgets() {
     let (stop, first, second, canvas) = (named_id("button"), named_id("host first"), named_id("host second"), named_id("host canvas"));
     let reached = Rc::new(Cell::new(false));
     let seen_tab = Rc::clone(&reached);
@@ -524,7 +525,6 @@ fn tab_from_nothing_goes_through_the_framework_order_with_the_app_s_host_stops()
         register_stop(ui.ctx(), Stop::new(stop, KeyUse::of(Input::Pointer)));
         for (id, x) in [(first, 300.0), (second, 420.0)] {
             fixture::host_button(ui, id, Rect::from_min_size(Pos2::new(x, 300.0), egui::vec2(80.0, 30.0)));
-            host_stop(ui.ctx(), id, KeyUse::of(Input::Pointer));
         }
         widget(ui, canvas);
         host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_keep(KeepKeys::Tab));
@@ -544,10 +544,11 @@ fn tab_from_nothing_goes_through_the_framework_order_with_the_app_s_host_stops()
     assert_eq!(tab(&mut frames), (Some(canvas), true), "the focused canvas keeps Tab and reads it from egui");
 }
 
-/// A window whose only stop is the app's own canvas, between two of the app's own buttons: a bare Tab moves egui
-/// focus through egui's order, from nothing focused and from the canvas alike, and a canvas that keeps Tab keeps it.
+/// A window of the app's own canvas between two of the app's own buttons, with no framework stop: a bare Tab moves
+/// focus through them in the order the pass drew them, from nothing focused and from the canvas alike, and never
+/// reaches egui; a canvas that keeps Tab keeps it.
 #[trial]
-fn tab_moves_egui_focus_through_the_app_s_widgets_while_every_stop_is_a_host_stop() {
+fn tab_moves_through_the_app_s_widgets_and_canvas_in_a_window_without_framework_stops() {
     let (first, canvas, last) = (named_id("host first"), named_id("host canvas"), named_id("host last"));
     let keeps = Rc::new(Cell::new(false));
     let reached = Rc::new(Cell::new(false));
@@ -567,14 +568,143 @@ fn tab_moves_egui_focus_through_the_app_s_widgets_while_every_stop_is_a_host_sto
         frames.frame(Vec::new(), &mut *show);
         (egui_focused(&frames.ctx), reached.get())
     };
-    assert_eq!(tab(&mut frames, &mut show), (Some(first), true), "Tab from nothing gives egui focus to the first widget in egui's order");
-    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "the next Tab reaches the canvas");
-    assert_eq!(tab(&mut frames, &mut show), (Some(last), true), "Tab from the canvas moves on through egui's order");
+    assert_eq!(tab(&mut frames, &mut show), (Some(first), false), "Tab from nothing focuses the first widget drawn");
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), false), "the next Tab reaches the canvas");
+    assert_eq!(tab(&mut frames, &mut show), (Some(last), false), "Tab from the canvas moves on");
     keeps.set(true);
     request(&frames.ctx, FocusTarget::Id(canvas));
     frames.idle(2, &mut show);
     assert_eq!(egui_focused(&frames.ctx), Some(canvas));
     assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "a canvas that keeps Tab gets it from egui and keeps the focus");
+}
+
+/// The window the one-order trials show: the app's own button, a framework stop, the app's own single-line text field
+/// inside a framework scope, a framework stop and the app's own button, in that order.
+const MIXED: [&str; 5] = ["app first", "framework one", "app field", "framework two", "app last"];
+
+fn mixed_window() -> impl FnMut(&mut Ui) {
+    let mut text = String::new();
+    move |ui: &mut Ui| {
+        let [first, one, field, two, last] = MIXED.map(named_id);
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(20.0, 300.0), egui::vec2(80.0, 30.0)));
+        widget(ui, one);
+        register_stop(ui.ctx(), Stop::new(one, KeyUse::of(Input::Pointer)));
+        push_scope(ui.ctx(), named_id("group"), FocusPolicy::NONE, None);
+        fixture::host_field(ui, field, &mut text);
+        pop_scope(ui.ctx());
+        widget(ui, two);
+        register_stop(ui.ctx(), Stop::new(two, KeyUse::of(Input::Pointer)));
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(420.0, 300.0), egui::vec2(80.0, 30.0)));
+    }
+}
+
+/// A Tab press with `mods`, released in the same frame, and the frame after it: where egui focus is then.
+fn tab_with(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), mods: Modifiers) -> Option<Id> {
+    frames.frame(vec![key_press(Key::Tab, mods), key_release(Key::Tab, mods)], &mut *show);
+    frames.frame(Vec::new(), &mut *show);
+    egui_focused(&frames.ctx)
+}
+
+/// Every focusable egui widget the app draws is a Tab stop of the window's one order, where the pass drew it among the
+/// framework's stops, with no registration of its own: Tab from nothing visits the five in order and wraps, and
+/// Shift+Tab walks back.
+#[trial]
+fn tab_reaches_the_app_s_egui_widgets_beside_the_framework_stops_in_registration_order() {
+    let mut show = mixed_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let order = MIXED.map(|name| Some(named_id(name)));
+    let forward: Vec<Option<Id>> = (0..6).map(|_| tab_with(&mut frames, &mut show, Modifiers::NONE)).collect();
+    assert_eq!(forward, [&order[..], &order[..1]].concat(), "Tab visits the five in the order the pass drew them, then wraps");
+    let back: Vec<Option<Id>> = (0..5).map(|_| tab_with(&mut frames, &mut show, Modifiers::SHIFT)).collect();
+    let reversed: Vec<Option<Id>> = order.iter().rev().copied().collect();
+    assert_eq!(back, reversed, "Shift+Tab walks back from the first, wrapping to the last");
+}
+
+/// F6 lands on the app's own widget in a pane whose only content it is.
+#[trial]
+fn f6_lands_on_an_app_widget_in_a_pane() {
+    let button = named_id("app pane button");
+    let mut show = move |ui: &mut Ui| {
+        show_panes(ui);
+        push_scope(ui.ctx(), named_id("app pane"), FocusPolicy::PANE, Some(Arc::from("App")));
+        fixture::host_button(ui, button, Rect::from_min_size(Pos2::new(420.0, 300.0), egui::vec2(80.0, 30.0)));
+        pop_scope(ui.ctx());
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    focus_stop(&mut frames, &mut show, named_id("right"));
+    let (focused, said) = pane_key(&mut frames, &mut show, Modifiers::NONE);
+    assert_eq!(focused, Some(button), "F6 from the right pane goes to the app's pane and its button");
+    assert!(said.contains(&"App".to_owned()), "and announces the pane: {said:?}");
+}
+
+/// A focused multi-line text field of the app's own whose egui key filter keeps Tab (it locks focus) gets the Tab in
+/// egui and types it; a single-line field of the app's own moves on to the next stop.
+#[trial]
+fn an_app_field_that_keeps_tab_types_it_and_a_single_line_field_tabs_on() {
+    let (code, line, after) = (named_id("app code"), named_id("app line"), named_id("framework after"));
+    let texts = Rc::new(RefCell::new((String::new(), String::new())));
+    let shared = Rc::clone(&texts);
+    let mut show = move |ui: &mut Ui| {
+        let mut texts = shared.borrow_mut();
+        let (code_text, line_text) = &mut *texts;
+        fixture::host_code_field(ui, code, code_text);
+        fixture::host_field(ui, line, line_text);
+        widget(ui, after);
+        register_stop(ui.ctx(), Stop::new(after, KeyUse::of(Input::Pointer)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    fixture::host_focus(&frames.ctx, code);
+    frames.idle(2, &mut show);
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(code), "the field that keeps Tab keeps the focus");
+    assert!(texts.borrow().0.contains('\t'), "and types the Tab: {:?}", texts.borrow().0);
+    fixture::host_focus(&frames.ctx, line);
+    frames.idle(2, &mut show);
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(after), "the single-line field's Tab moves on");
+    assert_eq!(texts.borrow().1, "", "and types nothing");
+}
+
+/// Where Tab reaches only text fields (the Mac's default), it reaches the app's own text field and skips the app's
+/// own buttons, as it skips the framework's.
+#[trial]
+fn tab_that_reaches_only_text_fields_reaches_the_app_s_field_and_skips_its_buttons() {
+    let mut show = mixed_window();
+    let mut frames = Frames::new();
+    crate::runtime::windows::set_os(&frames.ctx, craft_host::target::Os::Mac);
+    frames.root({
+        let mut root = RootEnv::default();
+        root.tab_all_controls = false;
+        root
+    });
+    frames.idle(2, &mut show);
+    let field = Some(named_id("app field"));
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), field, "Tab from nothing goes to the app's field");
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), field, "the field is the one entry: the next Tab stays on it");
+}
+
+/// While an app's own egui popup is open, Tab is egui's, as Escape is: the framework moves no focus with it.
+#[trial]
+fn an_open_app_popup_keeps_tab() {
+    let popup = named_id("host popup");
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        areas::host_popup(ui, popup, Pos2::ZERO);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    areas::open_host_popup(&frames.ctx, popup);
+    frames.frame(Vec::new(), &mut show);
+    assert!(areas::host_popup_open(&frames.ctx, popup));
+    seen(&host);
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert_eq!(seen(&host).0, vec![Key::Tab], "the popup's Tab is egui's");
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "the framework moved no focus");
 }
 
 #[trial]
