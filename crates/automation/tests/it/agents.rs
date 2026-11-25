@@ -308,6 +308,56 @@ fn a_token_file_that_cannot_be_written_keeps_agents_out() {
     TcpListener::bind(("127.0.0.1", port)).expect("the port was let go");
 }
 
+/// A refused token file is not tried again with the same settings: a retry can't succeed until someone changes the
+/// file, and on Windows each check starts `whoami` and PowerShell on the UI thread, about 300 ms, which a retry every
+/// few seconds turned into a stall that often (photocraft#17006). Changing the settings tries again.
+#[trial]
+fn a_refused_token_file_is_not_retried_until_the_settings_change() {
+    let dir = temp_dir("link-token-no-retry");
+    std::fs::create_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    let wanted = free_port();
+    assert!(link.sync(Some(&on(u32::from(wanted))), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+
+    // The file is fixed, but the same settings don't look at it again.
+    std::fs::remove_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    let same = link.sync(Some(&on(u32::from(wanted))), &host);
+    assert!(same.requests.is_none() && !same.changed, "no retry with the same settings");
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+
+    let changed = link.sync(Some(&on(0)), &host);
+    assert!(changed.requests.is_some(), "a settings change tries again");
+    assert_eq!(link.status().problem, None);
+}
+
+/// A retry of a taken port reuses the token its first try checked instead of reading the token file again (on Windows
+/// that check is about 300 ms on the UI thread, photocraft#17006); a start that succeeded reads it afresh next time.
+#[trial]
+fn a_taken_port_retry_reuses_the_checked_token() {
+    let dir = temp_dir("link-token-reuse");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = u32::from(taken.local_addr().unwrap().port());
+    assert!(link.sync(Some(&on(port)), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::Listen { .. })), "{:?}", link.status());
+
+    // Reading the file now fails, so a retry that read it would report a token file problem.
+    std::fs::remove_file(dir.path().join(TOKEN_FILE)).unwrap();
+    std::fs::create_dir(dir.path().join(TOKEN_FILE)).unwrap();
+    drop(taken);
+    let retried = link.sync(Some(&on(port)), &host);
+    assert!(retried.requests.is_some(), "{:?}", link.status());
+    assert_eq!(link.status().problem, None);
+
+    // Once a start succeeded, the next one reads the file again.
+    let moved = link.sync(Some(&on(0)), &host);
+    assert!(moved.requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+}
+
 /// Dropping the link stops its server and removes its connection file.
 #[trial]
 fn dropping_the_link_removes_its_connection_file() {
