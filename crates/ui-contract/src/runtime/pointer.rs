@@ -254,7 +254,7 @@ pub(crate) struct Shapes {
     #[cfg(feature = "testing")]
     resolutions: u32,
     /// The `made_by_component` lookups the running pass made, for the count trials.
-    #[cfg(feature = "testing")]
+    #[cfg(feature = "suite")]
     made_lookups: u32,
 }
 
@@ -388,6 +388,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         #[cfg(feature = "testing")]
         {
             shapes.resolutions = 0;
+        }
+        #[cfg(feature = "suite")]
+        {
             shapes.made_lookups = 0;
         }
     });
@@ -858,7 +861,7 @@ pub(crate) fn registered_widgets(ctx: &Context) -> std::collections::HashSet<Id>
 /// editor part, in the running pass of `viewport`.
 pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> bool {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        #[cfg(feature = "testing")]
+        #[cfg(feature = "suite")]
         {
             record.made_lookups += 1;
         }
@@ -867,7 +870,7 @@ pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> 
 }
 
 /// How many `made_by_component` lookups the running pass of `viewport` made so far, for the count trials.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
     PerViewport::<Shapes>::with(ctx, viewport, |record| record.made_lookups)
 }
