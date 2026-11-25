@@ -1,4 +1,4 @@
-use crate::function::{Clamper, TupleVec, Values, interpolate};
+use crate::function::{Clamper, MAX_LINEAR_BREAKS, TupleVec, Values, in_domain, interpolate};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Stream;
@@ -149,6 +149,32 @@ impl Type0 {
         self.clamper.clamp_output(&mut out);
 
         Some(out)
+    }
+
+    /// Craft patch (mesh breaks): a one-input function is affine between the inputs that
+    /// encode to its sample positions. Clamping to Range bends it only where a decoded sample
+    /// lies outside, so a Decode outside the Range gives `None`.
+    pub(crate) fn linear_breaks(&self) -> Option<Vec<f32>> {
+        let ([size], [domain], [(e0, e1)]) = (
+            self.sizes.as_slice(),
+            self.clamper.domain.as_slice(),
+            self.encode.as_slice(),
+        ) else {
+            return None;
+        };
+        let inside = self
+            .decode
+            .iter()
+            .zip(&self.range)
+            .all(|(d, r)| d.0.min(d.1) >= r.0 && d.0.max(d.1) <= r.1);
+        if !inside || *size as usize > MAX_LINEAR_BREAKS {
+            return None;
+        }
+        let mut breaks = Vec::new();
+        if e1 != e0 {
+            breaks.extend((0..*size).map(|k| interpolate(k as f32, *e0, *e1, domain.0, domain.1)));
+        }
+        Some(in_domain(*domain, breaks))
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::function::{Clamper, Values};
+use crate::function::{Clamper, Values, in_domain};
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Number;
 use hayro_syntax::object::dict::keys::{C0, C1, N};
@@ -39,6 +39,23 @@ impl Type2 {
         self.clamper.clamp_output(&mut out);
 
         out
+    }
+
+    /// Craft patch (mesh breaks): with N = 1 the function is affine, bent only where an
+    /// output reaches its Range.
+    pub(crate) fn linear_breaks(&self) -> Option<Vec<f32>> {
+        if self.n != 1.0 {
+            return None;
+        }
+        let domain = *self.clamper.domain.first()?;
+        let mut breaks = Vec::new();
+        let range = self.clamper.range.iter().flatten();
+        for ((c0, c1), (r0, r1)) in self.c0.iter().zip(&self.c1).zip(range) {
+            if c1 != c0 {
+                breaks.extend([(r0 - c0) / (c1 - c0), (r1 - c0) / (c1 - c0)]);
+            }
+        }
+        Some(in_domain(domain, breaks))
     }
 }
 

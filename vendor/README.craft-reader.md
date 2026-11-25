@@ -398,6 +398,7 @@ comments label them `Craft patch (flatten)`.
 | hayro-interpret `color.rs` | `color::InkSpace`, `ColorSpace::ink_space` and `ColorSpace::ink_values`: how a space's colors are kept as inks (gray, CMYK, its colorants, `All`, `None`) and colors converted in batches, process color as `Color::ink_paint` converts it. `ColorSpace::components`; `ColorSpace::is_device_cmyk` and `ColorSpace::spot_alternate` public |
 | hayro-interpret `types.rs`, `x_object.rs` | `RasterImage::with_inks`: an image's samples in its own space's inks (`InkImage`), `/Decode` and `/Matte` applied, transfer functions left out, with its alpha at the alpha's own size |
 | hayro-interpret `interpret/mod.rs` | The `sh` operator drops the shading's `/Background`, which only a shading pattern paints (ISO 32000-2 §8.7.4.5.1) |
+| hayro-interpret `shading.rs`, `function/mod.rs`, `function/type0.rs`, `function/type2.rs`, `function/type3.rs` | `ShadingFunction::linear_breaks`, labeled `Craft patch (mesh breaks)`: the sorted inputs between which each output is affine in the one input (Type 0 sample positions, Type 2 N 1 Range crossings, Type 3 Bounds and children's breaks through Encode), or `None` for Type 4, N other than 1, a Decode outside the Range, a Type 3 Range or more than 4096 breaks. Test: `function::type3::tests::linear_breaks_follow_bounds_encode_and_range` |
 
 Repair scan, ported from PdfCraft [4a0b1dd1](https://github.com/storytold/pdfcraft/commit/4a0b1dd15)
 (hayro-syntax patch 34, `xref.rs`, #5580): in a table rebuilt by scanning the file, an object whose

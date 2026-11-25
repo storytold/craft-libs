@@ -3,6 +3,9 @@
 #![cfg(feature = "flatten")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::sync::Arc;
+
+use craft_pdf::syntax::object::{Name, Object};
 use craft_pdf::write::backend::blend::Overprint as KOverprint;
 use craft_pdf::write::backend::geom::PathBuilder;
 use craft_pdf::write::backend::page::PageSettings;
@@ -12,9 +15,11 @@ use craft_plate_test::reference::{self, Context};
 use craft_plate_test::scene;
 use craft_prepress::flatten::kurbo::{BezPath, PathEl, Point, Shape};
 use craft_prepress::flatten::pdf::{ReadOptions, ReadReport, read_page};
+use craft_prepress::flatten::write::{WriteError, page_pdf};
 use craft_prepress::flatten::{
     BlendMode, DisplayList, FillItem, FillRule, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, MaskKind, Paint,
 };
+use craft_prepress::flatten::{FlattenPageOptions, Mesh, flatten_page};
 use craft_prepress::{CmsConversion, InkColor, InkId, Options, Overprint, Process, plates, to_pdf_color};
 
 fn scene_pdf(id: &str) -> Vec<u8> {
@@ -420,28 +425,370 @@ fn radial_process_shading_is_clipped_to_its_extent() {
     assert_eq!(extent.winding(Point::new(91.0, 70.0)), 0);
 }
 
-#[test]
-fn coons_mesh_shading_rasterizes() {
-    // One square patch over 0..100 with C, M, Y and K corners.
+/// A square Coons patch over 0..100 with corners `colors` (hex, in patch order), as a Type 6
+/// shading in `space`.
+fn coons_square(space: &str, decode: &str, colors: &str) -> String {
     let points = "00 00 00 55 00 AA 00 FF 55 FF AA FF FF FF FF AA FF 55 FF 00 AA 00 55 00";
-    let colors = "FF000000 00FF0000 0000FF00 000000FF";
-    let objects = [hex_image_free(
-        "/ShadingType 6 /ColorSpace /DeviceCMYK /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1 0 1 0 1 0 1]",
+    hex_image_free(
+        &format!("/ShadingType 6 /ColorSpace {space} /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 {decode}]"),
         &format!("00 {points} {colors}"),
-    )];
+    )
+}
+
+fn meshes(list: &DisplayList) -> Vec<&Mesh> {
+    fill_items(list)
+        .into_iter()
+        .filter_map(|(_, f)| match &f.paint {
+            Paint::Mesh(m) => Some(m.as_ref()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `pdf` read, flattened and written again.
+fn flattened(pdf: &[u8]) -> Vec<u8> {
+    flatten_page(pdf, 0, &FlattenPageOptions::default()).unwrap().0
+}
+
+/// The type, color space family and colorants of each shading in `pdf`, and whether `pdf`
+/// holds an image.
+fn shadings(pdf: &[u8]) -> (Vec<(i32, String, Vec<String>)>, bool) {
+    let doc = craft_pdf::syntax::Pdf::new(Arc::new(pdf.to_vec())).unwrap();
+    let (mut found, mut image) = (Vec::new(), false);
+    let name = |o: Option<&Object<'_>>| match o {
+        Some(Object::Name(n)) => n.as_str().to_owned(),
+        _ => String::new(),
+    };
+    for object in doc.objects() {
+        let Object::Stream(stream) = object else { continue };
+        let dict = stream.dict();
+        image |= dict.get::<Name<'_>>(b"Subtype".as_slice()).is_some_and(|n| n.as_str() == "Image");
+        let Some(kind) = dict.get::<i32>(b"ShadingType".as_slice()) else { continue };
+        let (family, names) = match dict.get::<Object<'_>>(b"ColorSpace".as_slice()) {
+            Some(Object::Array(a)) => {
+                let items: Vec<Object<'_>> = a.iter::<Object<'_>>().collect();
+                let names = match items.get(1) {
+                    Some(Object::Array(names)) => names.iter::<Name<'_>>().map(|n| n.as_str().to_owned()).collect(),
+                    other => vec![name(other)],
+                };
+                (name(items.first()), names)
+            }
+            other => (name(other.as_ref()), Vec::new()),
+        };
+        found.push((kind, family, names));
+    }
+    (found, image)
+}
+
+#[test]
+fn cmyk_coons_mesh_is_written_as_a_type_6_shading() {
+    let objects = [coons_square("/DeviceCMYK", "0 1 0 1 0 1 0 1", "FF000000 00FF0000 0000FF00 000000FF")];
     let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &objects);
     let (list, report) = read(&pdf);
-    let ims = images(&list);
-    assert_eq!((ims.len(), report.rasterized_shadings), (1, 1));
-    let im = ims[0].1;
-    assert_eq!(im.space, ImageSpace::Cmyk);
-    let corner = tints_at(im, Point::new(11.0, 109.0));
-    assert!(tint(&corner, ink(Process::Cyan)) > 0.95, "{corner:?}");
-    let center = tints_at(im, Point::new(60.0, 60.0));
-    for p in Process::ALL {
-        assert!((tint(&center, ink(p)) - 0.25).abs() < 0.03, "{center:?}");
+    assert!(images(&list).is_empty());
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    let found = meshes(&list);
+    assert_eq!(found.len(), 1);
+    // DeviceCMYK is its inks, so the patch isn't split.
+    let [patch] = found[0].patches.as_slice() else { panic!("{:?}", found[0]) };
+    // Page space runs down from the top of the 120 pt page.
+    assert_eq!((patch.points[0], patch.points[6]), (Point::new(10.0, 110.0), Point::new(110.0, 10.0)));
+    let expect = [cmyk_color(1.0, 0.0, 0.0, 0.0), cmyk_color(0.0, 1.0, 0.0, 0.0), cmyk_color(0.0, 0.0, 1.0, 0.0), cmyk_color(0.0, 0.0, 0.0, 1.0)];
+    assert_eq!(patch.colors, expect);
+
+    let (found, image) = shadings(&flattened(&pdf));
+    assert_eq!(found, vec![(6, "DeviceCMYK".to_owned(), vec![])]);
+    assert!(!image);
+}
+
+#[test]
+fn tensor_and_lattice_meshes_are_vectors_too() {
+    // A type 7 patch on the square whose p11 is pulled to (0x90, 0x20): stream order is the
+    // boundary, then p11, p12, p22, p21.
+    let boundary = "00 00 00 55 00 AA 00 FF 55 FF AA FF FF FF FF AA FF 55 FF 00 AA 00 55 00";
+    let tensor = hex_image_free(
+        "/ShadingType 7 /ColorSpace /DeviceCMYK /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1 0 1 0 1 0 1]",
+        &format!("00 {boundary} 90 20 55 AA AA AA AA 55 FF000000 00FF0000 0000FF00 000000FF"),
+    );
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[tensor]);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    // Split for its shape, not its colors.
+    assert!(meshes(&list)[0].patches.len() > 1);
+    assert!(!separates_like_the_source(&pdf), "no image");
+
+    // A type 5 lattice, two vertices a row: two triangles. Moved off the pixel grid: the plate
+    // renderer, sampling without anti-aliasing, misses pixel centers that sit exactly on the
+    // triangles' shared edge where it meets their collapsed sides.
+    let lattice = hex_image_free(
+        "/ShadingType 5 /VerticesPerRow 2 /ColorSpace /DeviceCMYK /BitsPerCoordinate 8 /BitsPerComponent 8 /Decode [0 100 0 100 0 1 0 1 0 1 0 1]",
+        "00 00 FF000000  FF 00 00FF0000  00 FF 0000FF00  FF FF 000000FF",
+    );
+    let pdf = raw_pdf("q 1 0 0 1 10.25 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[lattice]);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 2);
+    assert!(!separates_like_the_source(&pdf), "no image");
+}
+
+#[test]
+fn device_n_triangle_mesh_keeps_its_inks() {
+    let objects = [
+        hex_image_free(
+            "/ShadingType 4 /ColorSpace [/DeviceN [/Gold /Magenta] /DeviceCMYK 6 0 R] /BitsPerCoordinate 8 /BitsPerComponent 8 \
+             /BitsPerFlag 8 /Decode [0 100 0 100 0 1 0 1]",
+            "00 00 00 FF 00  00 FF 00 00 FF  00 80 FF 80 80",
+        ),
+        stream("/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1]", "{ pop pop 0 0 0 1 }"),
+    ];
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &objects);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    let gold = list.inks.lookup("Gold").unwrap();
+    let [patch] = meshes(&list)[0].patches.as_slice() else { panic!() };
+    // The triangle's third vertex is the patch's whole fourth side.
+    let c = Point::new(10.0 + 128.0 / 255.0 * 100.0, 10.0);
+    for p in &patch.points[6..10] {
+        assert!(p.distance(c) < 1e-6, "{:?}", patch.points);
     }
-    assert_eq!(im.smask.as_ref().unwrap()[0], 0, "outside the patch");
+    let tints = |k: usize| {
+        let InkColor::Tints(t) = &patch.colors[k] else { panic!() };
+        (tint(t, gold), tint(t, ink(Process::Magenta)))
+    };
+    assert_eq!((tints(0), tints(1)), ((1.0, 0.0), (0.0, 1.0)));
+    assert_eq!(tints(2), tints(3));
+
+    let (found, image) = shadings(&flattened(&pdf));
+    assert_eq!(found, vec![(6, "DeviceN".to_owned(), vec!["Magenta".to_owned(), "Gold".to_owned()])]);
+    assert!(!image);
+}
+
+#[test]
+fn rgb_mesh_is_split_where_its_conversion_bends_and_separates_like_the_source() {
+    // Saturated corners bend the conversion past what the pieces resolve; see
+    // `meshes_that_cant_be_vectors_stay_images`.
+    let mesh = coons_square("/DeviceRGB", "0 1 0 1 0 1", "CC6666 66CC66 6666CC 999999");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[mesh]);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    let pieces = meshes(&list)[0].patches.len();
+    assert!(pieces > 1, "RGB to CMYK isn't linear");
+
+    assert!(!separates_like_the_source(&pdf), "no image");
+
+    let uniform = coons_square("/DeviceRGB", "0 1 0 1 0 1", "336699 336699 336699 336699");
+    let (list, _) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[uniform]));
+    assert_eq!(meshes(&list)[0].patches.len(), 1, "a uniform mesh isn't split");
+}
+
+/// Every process plate of `pdf` and of `pdf` flattened, within a level or three, over 10..110;
+/// whether the flattened page holds an image.
+fn separates_like_the_source(pdf: &[u8]) -> bool {
+    let flat = flattened(pdf);
+    let (source, written) = (plates(pdf, 0, 72.0, &Options::default()).unwrap(), plates(&flat, 0, 72.0, &Options::default()).unwrap());
+    for y in (15..110).step_by(10) {
+        for x in (15..110).step_by(10) {
+            for p in Process::ALL {
+                let (a, b) = (source.tint(ink(p), x, y).unwrap(), written.tint(ink(p), x, y).unwrap());
+                assert!(a.abs_diff(b) <= 3, "{p:?} at ({x}, {y}): {a} written as {b}");
+            }
+        }
+    }
+    shadings(&flat).1
+}
+
+#[test]
+fn meshes_keep_their_overprint_and_sit_under_transparency() {
+    let cyan_magenta = coons_square("[/DeviceN [/Cyan /Magenta] /DeviceCMYK 6 0 R]", "0 1 0 1", "FF00 00FF FFFF 0000");
+    let tint = stream("/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1]", "{ 0 0 }");
+    let gs = "/ExtGState << /OP << /OP true /op true >> /Half << /ca 0.5 >> >>";
+    // Overprinted, the mesh leaves the black under it.
+    let pdf = raw_pdf(
+        "0 0 0 1 k 0 0 300 120 re f /OP gs q 1 0 0 1 10 10 cm /Sh1 sh Q",
+        &format!("/Shading << /Sh1 5 0 R >> {gs}"),
+        &[cyan_magenta.clone(), tint.clone()],
+    );
+    let (_, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert!(!separates_like_the_source(&pdf), "no image");
+    // Under a half-transparent yellow square, whose region is flattened to an image.
+    let pdf = raw_pdf(
+        "q 1 0 0 1 10 10 cm /Sh1 sh Q /Half gs 0 0 1 0 k 30 30 50 50 re f",
+        &format!("/Shading << /Sh1 5 0 R >> {gs}"),
+        &[cyan_magenta, tint],
+    );
+    assert!(separates_like_the_source(&pdf), "the transparent region is an image");
+}
+
+#[test]
+fn meshes_that_cant_be_vectors_stay_images() {
+    // A step in the function: no split brings the blend within tolerance.
+    let step = "/Function << /FunctionType 3 /Domain [0 1] /Bounds [0.5] /Encode [0 1 0 1] /Functions [\
+                << /FunctionType 2 /Domain [0 1] /C0 [1 0 0 0] /C1 [1 0 0 0] /N 1 >> \
+                << /FunctionType 2 /Domain [0 1] /C0 [0 1 0 0] /C1 [0 1 0 0] /N 1 >> ] >>";
+    let objects = [hex_image_free(
+        &format!("/ShadingType 4 /ColorSpace /DeviceCMYK {step} /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1]"),
+        "00 00 00 00  00 FF 00 FF  00 80 FF FF",
+    )];
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &objects));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings, images(&list).len()), (0, 1, 1));
+
+    // A conversion that still bends at the smallest piece.
+    let mesh = coons_square("/DeviceRGB", "0 1 0 1 0 1", "FF0000 00FF00 0000FF FFFFFF");
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings, images(&list).len()), (0, 1, 1));
+
+    // In a tiling cell.
+    let objects = [
+        stream(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 100] /XStep 200 /YStep 200 /Resources << /Shading << /Sh1 6 0 R >> >>",
+            "/Sh1 sh",
+        ),
+        coons_square("/DeviceCMYK", "0 1 0 1 0 1 0 1", "FF000000 00FF0000 0000FF00 000000FF"),
+    ];
+    let (list, report) = read(&raw_pdf("/Pattern cs /P1 scn 0 0 100 100 re f", "/Pattern << /P1 5 0 R >>", &objects));
+    assert_eq!((report.tiling_cells, report.vector_meshes, report.rasterized_shadings, images(&list).len()), (1, 0, 1, 1));
+
+    // Function-based.
+    let objects = [
+        stream("/ShadingType 1 /ColorSpace /DeviceGray /Domain [0 1 0 1] /Matrix [100 0 0 100 0 0] /Function 6 0 R", ""),
+        stream("/FunctionType 4 /Domain [0 1 0 1] /Range [0 1]", "{ pop }"),
+    ];
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &objects));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings, images(&list).len()), (0, 1, 1));
+}
+
+#[test]
+fn a_narrow_band_in_a_mesh_function_is_kept() {
+    // Cyan only for t in 0.125..0.375, a band no corner, edge midpoint or center of the
+    // patch samples.
+    let constant = |c: &str| format!("<< /FunctionType 2 /Domain [0 1] /C0 [{c}] /C1 [{c}] /N 1 >>");
+    let (zero, cyan) = (constant("0 0 0 0"), constant("1 0 0 0"));
+    let band = format!("/Function << /FunctionType 3 /Domain [0 1] /Bounds [0.125 0.375] /Encode [0 1 0 1 0 1] /Functions [{zero} {cyan} {zero}] >>");
+    let mesh = coons_square(&format!("/DeviceCMYK {band}"), "0 1", "00 FF FF 00");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[mesh]);
+    let source = plates(&pdf, 0, 72.0, &Options::default()).unwrap();
+    // t = 0.25, 85 pt up from the page's top edge.
+    assert_eq!(source.tint(ink(Process::Cyan), 60, 85), Some(255));
+    separates_like_the_source(&pdf);
+    // The band's edges are jumps, which no piece fits, so the shading is read as an image.
+    let (_, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (0, 1));
+    // So is a band between any two points a fixed grid over t would sample.
+    let narrow = band.replace("0.125 0.375", "0.126 0.127");
+    let mesh = coons_square(&format!("/DeviceCMYK {narrow}"), "0 1", "00 FF FF 00");
+    let (_, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (0, 1));
+
+    // A linear function stays one patch.
+    let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 0 0 0] /N 1 >>";
+    let mesh = coons_square(&format!("/DeviceCMYK {ramp}"), "0 1", "00 FF FF 00");
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 1);
+}
+
+#[test]
+fn mesh_functions_are_vectors_only_where_their_pieces_are_known() {
+    let read_mesh = |function: &str, objects: &[String]| {
+        let mut all = vec![coons_square(&format!("/DeviceCMYK /Function {function}"), "0 1", "00 FF FF 00")];
+        all.extend_from_slice(objects);
+        let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &all);
+        let (list, report) = read(&pdf);
+        let pieces = meshes(&list).first().map(|m| m.patches.len());
+        (pdf, report.vector_meshes, report.rasterized_shadings, pieces)
+    };
+    // Sampled, cyan rising to t = 0.5 and falling back: split at the middle sample.
+    let sampled = hex_image_free("/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1 0 1] /Size [3] /BitsPerSample 8", "00000000 FF000000 00000000");
+    let (pdf, vectors, images, pieces) = read_mesh("6 0 R", &[sampled]);
+    assert_eq!((vectors, images, pieces), (1, 0, Some(4)));
+    assert!(!separates_like_the_source(&pdf), "no image");
+    // Stitched linear pieces with a bend at their bound.
+    let rise = |c0: &str, c1: &str| format!("<< /FunctionType 2 /Domain [0 1] /C0 [{c0} 0 0 0] /C1 [{c1} 0 0 0] /N 1 >>");
+    let stitched =
+        format!("<< /FunctionType 3 /Domain [0 1] /Bounds [0.5] /Encode [0 1 0 1] /Functions [{} {}] >>", rise("0", "0.8"), rise("0.8", "1"));
+    let (pdf, vectors, images, pieces) = read_mesh(&stitched, &[]);
+    assert_eq!((vectors, images, pieces), (1, 0, Some(4)));
+    assert!(!separates_like_the_source(&pdf), "no image");
+    // PostScript, linear or not, has no known pieces.
+    let calculator = stream("/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1 0 1]", "{ 0 0 0 }");
+    let (_, vectors, images, _) = read_mesh("6 0 R", &[calculator]);
+    assert_eq!((vectors, images), (0, 1));
+}
+
+#[test]
+fn a_mesh_function_clamped_by_its_space_is_split_where_it_clamps() {
+    // Gray -0.5 to 1.5 over t: clamped to 0 below t = 0.25 and to 1 above t = 0.75, the two
+    // bends cancelling at t = 0.5, the only t the unsplit patch samples between its corners.
+    let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [-0.5] /C1 [1.5] /N 1 >>";
+    let mesh = coons_square(&format!("/DeviceGray {ramp}"), "0 1", "00 FF FF 00");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[mesh]);
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert!(meshes(&list)[0].patches.len() > 1);
+    assert!(!separates_like_the_source(&pdf), "no image");
+
+    // The same ramp inside the space's range stays one patch.
+    let ramp = "/Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>";
+    let mesh = coons_square(&format!("/DeviceGray {ramp}"), "0 1", "00 FF FF 00");
+    let (list, report) = read(&raw_pdf("/Sh1 sh", "/Shading << /Sh1 5 0 R >>", &[mesh]));
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 1);
+}
+
+#[test]
+fn spots_aliased_onto_one_ink_combine_across_the_mesh() {
+    // Gold and Silver both run 0 to 1 along v; on one plate they combine as overlapping
+    // halftones, 1 - (1 - v)^2, which a single patch's bilinear blend doesn't follow.
+    let spots = coons_square("[/DeviceN [/Gold /Silver] /DeviceCMYK 6 0 R]", "0 1 0 1", "0000 FFFF FFFF 0000");
+    let tint = stream("/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1 0 1]", "{ pop pop 0 0 0 1 }");
+    let pdf = raw_pdf("q 1 0 0 1 10 10 cm /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &[spots, tint]);
+    let (mut list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert_eq!(meshes(&list)[0].patches.len(), 1, "the spots are the mesh's inks");
+    let (gold, silver) = (list.inks.lookup("Gold").unwrap(), list.inks.lookup("Silver").unwrap());
+    assert!(list.inks.alias(gold, ink(Process::Cyan)) && list.inks.alias(silver, ink(Process::Cyan)));
+    let out = page_pdf(&list, Default::default(), &CmsConversion::fogra39()).unwrap();
+    assert!(!shadings(&out).1, "still a mesh, not an image");
+    let written = plates(&out, 0, 72.0, &Options::default()).unwrap();
+    for y in (15..110).step_by(10) {
+        let v = (110.0 - y as f32) / 100.0;
+        let want = (255.0 * (1.0 - (1.0 - v) * (1.0 - v))).round() as i32;
+        let got = i32::from(written.tint(ink(Process::Cyan), 60, y).unwrap());
+        assert!((got - want).abs() <= 3, "v = {v}: {got}, not {want}");
+    }
+
+    // The writer has no image fallback: a mesh it can't split within the patch limit, or
+    // with an All corner, is an error, each with its own message.
+    fn each_mesh(items: &mut [Item], edit: &dyn Fn(&mut Mesh)) -> usize {
+        let mut n = 0;
+        for item in items {
+            match item {
+                Item::Group(g) => n += each_mesh(&mut g.children, edit),
+                Item::Fill(f) => {
+                    if let Paint::Mesh(m) = &mut f.paint {
+                        edit(Arc::make_mut(m));
+                        n += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        n
+    }
+    let edited = |list: &DisplayList, edit: &dyn Fn(&mut Mesh)| {
+        let mut list = list.clone();
+        assert_eq!(each_mesh(&mut list.items, edit), 1);
+        page_pdf(&list, Default::default(), &CmsConversion::fogra39())
+    };
+    let error = |r: Result<Vec<u8>, WriteError>| match r {
+        Err(WriteError::Unsupported(what)) => what,
+        other => panic!("{:?}", other.map(|_| ())),
+    };
+    let many = edited(&list, &|m| m.patches = vec![m.patches[0].clone(); 65536]);
+    assert_eq!(error(many), "a mesh whose inks combine past the patch limit");
+    let all = edited(&list, &|m| m.patches[0].colors[0] = InkColor::All(1.0));
+    assert_eq!(error(all), "a mesh corner of the All or None colorant");
 }
 
 fn hex_image_free(dict: &str, hex: &str) -> String {
@@ -527,21 +874,13 @@ fn plate_test_gradients_and_meshes_read() {
         assert!(matches!(f.paint, Paint::Gradient { .. }), "{:?}", f.paint);
     }
 
-    let (list, report) = read(&scene_pdf("S17"));
-    let gold = list.inks.lookup("Gold").unwrap();
-    assert_eq!(report.rasterized_shadings, 1);
-    let mesh = images(&list)[0].1;
-    let expect = [
-        ((24.0, 24.0), vec![(gold, 0.95)]),
-        ((216.0, 24.0), vec![(ink(Process::Cyan), 0.95)]),
-        ((120.0, 80.0), vec![(gold, 0.375), (ink(Process::Cyan), 0.25), (ink(Process::Magenta), 0.25)]),
-    ];
-    for ((x, y), inks) in expect {
-        let at = tints_at(mesh, Point::new(x, y));
-        for (id, v) in inks {
-            assert!((tint(&at, id) - v).abs() < 0.1, "({x}, {y}): {at:?}");
-        }
-    }
+    let pdf = scene_pdf("S17");
+    let (list, report) = read(&pdf);
+    assert_eq!((report.vector_meshes, report.rasterized_shadings), (1, 0));
+    assert!(images(&list).is_empty());
+    let (found, image) = shadings(&flattened(&pdf));
+    assert_eq!(found, vec![(6, "DeviceN".to_owned(), vec!["Cyan".to_owned(), "Magenta".to_owned(), "Gold".to_owned()])]);
+    assert!(!image);
 }
 
 fn write_fills(list: &DisplayList) -> Vec<u8> {

@@ -30,8 +30,15 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
   opaque region fills, compositing one value per ink (process and spot) with blend modes, group
   opacity, isolated and knockout groups, and overprint per plate. Items without transparency
   come back unchanged (JPEG images in DeviceGray or DeviceCMYK keep their DCT data; other images
-  are written as 8-bit Flate samples); regions a gradient, image or soft mask reaches are listed
-  for rasterizing. `flatten::raster` rasterizes them: each region's items are written alone,
+  are written as 8-bit Flate samples). Mesh shadings (types 4 to 7) are written as Coons patch
+  meshes in the output inks, with their overprint, split until their converted colors are within
+  half an 8-bit level; one still out after 8 halvings, one that would need too many pieces, and
+  one in a tiling cell are read as images, as function-based shadings are. A mesh with a
+  function is kept only where the function's pieces are known (sampled, exponential with N 1
+  and stitched functions), and is split at their bounds and where an output leaves 0 to 1,
+  which the color space clamps; a PostScript function, or a jump of
+  more than half a level between pieces, sends it to the image path. Regions a gradient, image
+  or soft mask reaches are listed for rasterizing. `flatten::raster` rasterizes them: each region's items are written alone,
   separated with `plates` and written back as a DeviceN image of the page's inks, clipped to the
   region, snapped to the device grid and a pixel larger than the clip so no paper shows at its
   edges. `flatten_document` flattens every page of a PDF, or a range of pages, into one PDF with

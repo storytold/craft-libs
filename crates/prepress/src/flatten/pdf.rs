@@ -18,8 +18,12 @@
 //!   as colors do. `/Decode` and `/Matte` are applied; transfer functions are not, as on a plate.
 //! - Stencil masks become fills traced from the mask, or images when the mask is too detailed.
 //! - Axial and radial shadings become [`Paint::Gradient`]s with stops sampled in ink space.
-//!   Function-based and mesh shadings, and tiling patterns past [`MAX_TILING_CELLS`] cells or
-//!   [`MAX_TILING_ITEMS`] items, become images at [`ReadOptions::raster_dpi`]; other tiling patterns expand into their cells.
+//!   Mesh shadings (types 4 to 7) become [`Paint::Mesh`]es of Coons patches in the same ink
+//!   space, split where a conversion isn't linear (see the `mesh` module). Function-based
+//!   shadings, meshes that can't be written within the tolerance or the patch limit or that sit
+//!   in a tiling cell, and tiling patterns past [`MAX_TILING_CELLS`] cells or
+//!   [`MAX_TILING_ITEMS`] items, become images at [`ReadOptions::raster_dpi`]; other tiling
+//!   patterns expand into their cells.
 
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -43,6 +47,7 @@ use craft_pdf::{OpenError, open_slice};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Stroke, StrokeOpts};
 
 use super::font::FontCache;
+use super::mesh;
 use super::shade::{self, Canvas, StopInks};
 use super::{
     BlendMode, DisplayList, FillItem, FillRule, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, Mask, MaskKind, Paint, PlacedGlyph,
@@ -130,6 +135,8 @@ pub struct ReadReport {
     pub stencils: usize,
     /// Axial and radial shadings read as gradients.
     pub gradients: usize,
+    /// Mesh shadings read as [`Paint::Mesh`]es.
+    pub vector_meshes: usize,
     /// Function-based and mesh shadings read as images.
     pub rasterized_shadings: usize,
     /// Tiling pattern cells expanded.
@@ -198,6 +205,7 @@ pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: Re
         unreadable_images: 0,
         stencils: 0,
         gradients: 0,
+        vector_meshes: 0,
         rasterized_shadings: 0,
         tiling_cells: 0,
         rasterized_tilings: 0,
@@ -215,6 +223,7 @@ pub(crate) fn read_page_in(doc: &Pdf, page: usize, opts: &ReadOptions, color: Re
         masks: HashMap::new(),
         fonts: FontCache::new(),
         scale: f64::from(dpi) / 72.0,
+        cells: 0,
     };
 
     let items = catch_unwind(AssertUnwindSafe(|| {
@@ -255,6 +264,9 @@ struct Shared {
     fonts: FontCache,
     /// Raster pixels per point.
     scale: f64,
+    /// Tiling cells being read. Their meshes stay images: a cell past the tiling limits is
+    /// drawn on a [`Canvas`], which doesn't draw meshes.
+    cells: usize,
 }
 
 /// How a paint composites: what wraps it in a group of its own.
@@ -651,6 +663,8 @@ impl<'s, 'a> Reader<'s, 'a> {
                     None => fill,
                 }
             })
+        } else if let Some(paint) = self.mesh(sp) {
+            Some(Item::Fill(FillItem { path: clip.clone(), rule, paint, overprint }))
         } else {
             self.shading_image(&clip, sp, overprint).map(Item::Image)
         };
@@ -663,6 +677,42 @@ impl<'s, 'a> Reader<'s, 'a> {
         if !children.is_empty() {
             self.push(Item::Group(GroupItem { children, ..clip_group((clip, rule)) }), &look);
         }
+    }
+
+    /// A type 4 to 7 shading as a mesh in ink space; `None` for other types, in a tiling cell,
+    /// and when the mesh must stay an image.
+    fn mesh(&mut self, sp: &ShadingPattern) -> Option<Paint> {
+        if self.shared.cells > 0 {
+            return None;
+        }
+        let function = match sp.shading.shading_type.as_ref() {
+            ShadingType::TriangleMesh { function, .. }
+            | ShadingType::CoonsPatchMesh { function, .. }
+            | ShadingType::TensorProductPatchMesh { function, .. } => function.as_ref(),
+            _ => return None,
+        };
+        let cs = &sp.shading.color_space;
+        let simulation = self.shared.simulation.clone();
+        let space = cs.ink_space(simulation.as_ref());
+        let (inks, channels) = self.space_inks(&space, cs)?;
+        let mut convert = |source: &[f32]| -> Option<Vec<f32>> {
+            let components = match function {
+                // A parametric mesh's single input.
+                Some(f) => shade::eval(f, source.get(..1)?)?,
+                None => source.to_vec(),
+            };
+            let mut values = Vec::new();
+            cs.ink_values(&components, simulation.as_ref(), &mut values);
+            Some(channels.apply_f32(&values))
+        };
+        // A parametric mesh is a vector only where its function's pieces are known.
+        let breaks = match function {
+            Some(f) => Some(mesh::clamp_breaks(&f.linear_breaks()?, &mut |t| shade::eval(f, &[t]))?),
+            None => None,
+        };
+        let mesh = mesh::mesh(sp.shading.shading_type.as_ref(), sp.matrix, &inks.stop_inks(), breaks.as_deref(), &mut convert)?;
+        self.shared.report.vector_meshes += 1;
+        Some(Paint::Mesh(Arc::new(mesh)))
     }
 
     /// A function-based or mesh shading sampled over the visible part of `clip`.
@@ -712,10 +762,12 @@ impl<'s, 'a> Reader<'s, 'a> {
         let (Some(is), Some(js)) = (cells(pa.x0, pa.x1, b.x0, b.x1, xs), cells(pa.y0, pa.y1, b.y0, b.y1, ys)) else { return };
         let count = (is.1 - is.0 + 1) as u128 * (js.1 - js.0 + 1) as u128;
 
+        self.shared.cells = self.shared.cells.saturating_add(1);
         let mut reader = Reader::new(&mut *self.shared, false, Rect::new(-1e9, -1e9, 1e9, 1e9));
         reader.overprint = self.overprint;
         t.interpret(&mut reader, m, stroke);
         let cell = reader.finish();
+        self.shared.cells = self.shared.cells.saturating_sub(1);
         if cell.is_empty() {
             return;
         }
