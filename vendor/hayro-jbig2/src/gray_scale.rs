@@ -1,11 +1,10 @@
 //! Gray-scale image decoding procedure (Annex C).
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS};
+use crate::bitmap::{Bitmap, MAX_DIMENSION, WORD_BITS, try_filled};
 use crate::decode::generic::{ContextGatherer, decode_bitmap_mmr};
 use crate::decode::{AdaptiveTemplatePixel, Template};
 use crate::error::{OverflowError, Result, bail};
@@ -27,6 +26,8 @@ pub(crate) struct GrayScaleParams<'a> {
     /// `GSKIP` - A mask indicating which values should be skipped.
     /// None if `GSUSESKIP` = 0.
     pub(crate) skip_mask: Option<&'a [u32]>,
+    /// Craft patch: the most values the image may have (`Limits::grid_cells`).
+    pub(crate) max_cells: u64,
 }
 
 /// The gray-scale image decoding procedure (Annex C, C.5).
@@ -59,7 +60,7 @@ fn decode_mmr(data: &[u8], params: &GrayScaleParams<'_>) -> Result<Vec<u32>> {
     let stride = width.div_ceil(WORD_BITS);
 
     let mut offset = 0;
-    decode_bitplanes(width, height, stride, bits_per_pixel, |_, bitplane| {
+    decode_bitplanes(width, height, stride, bits_per_pixel, params.max_cells, |_, bitplane| {
         // Table C.4: "GBW = GSW, GBH = GSH"
         offset += decode_bitmap_mmr(bitplane, &data[offset..])?;
 
@@ -83,8 +84,9 @@ fn decode_arithmetic(
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
         bail!(OverflowError::BitmapLimit);
     }
-    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`).
-    if u64::from(width) * u64::from(height) > crate::bitmap::MAX_GRID_CELLS {
+    // PdfCraft patch: the product is bounded too (see `bitmap::MAX_GRID_CELLS`; Craft patch: the
+    // bound of the image's limits).
+    if u64::from(width) * u64::from(height) > params.max_cells {
         bail!(OverflowError::BitmapLimit);
     }
 
@@ -130,7 +132,7 @@ fn decode_arithmetic(
 
     macro_rules! gs_decode_loop {
         ($gather:expr) => {
-            decode_bitplanes(width, height, stride, bits_per_pixel, |_, bitplane| {
+            decode_bitplanes(width, height, stride, bits_per_pixel, params.max_cells, |_, bitplane| {
                 // Table C.4: "GBW = GSW, GBH = GSH, TPGDON = 0"
                 let mut gatherer = ContextGatherer::new(template, &at_pixels);
 
@@ -176,23 +178,50 @@ fn decode_arithmetic(
 /// The bitplane decoding and gray value computation procedure (C.5).
 ///
 /// The closure `decode_next` is called for each bitplane, receiving the bitplane
-/// index (`GSBPP`-1 down to 0) and a zeroed bitmap to decode into.
+/// index (`GSBPP`-1 down to 0) and a zeroed bitmap to decode into. Craft patch: the image has at
+/// most `max_cells` values, checked before any of them is allocated.
 fn decode_bitplanes<F>(
     width: u32,
     height: u32,
     stride: u32,
     bits_per_pixel: u32,
+    max_cells: u64,
+    decode_next: F,
+) -> Result<Vec<u32>>
+where
+    F: FnMut(u32, &mut Bitmap) -> Result<()>,
+{
+    decode_bitplanes_within(
+        width,
+        height,
+        stride,
+        bits_per_pixel,
+        max_cells,
+        isize::MAX as u64,
+        decode_next,
+    )
+}
+
+/// Craft patch: `decode_bitplanes` with the most bytes the array of values may take. Both the
+/// byte check and the cell check run before the bitplane or the values are allocated.
+fn decode_bitplanes_within<F>(
+    width: u32,
+    height: u32,
+    stride: u32,
+    bits_per_pixel: u32,
+    max_cells: u64,
+    max_bytes: u64,
     mut decode_next: F,
 ) -> Result<Vec<u32>>
 where
     F: FnMut(u32, &mut Bitmap) -> Result<()>,
 {
-    let size = width as usize * height as usize;
-    // `GSVALS` - The decoded gray-scale image array.
-    let mut values = vec![0_u32; size];
+    let size = value_count(width, height, max_bytes)?;
+    let mut bitplane = Bitmap::new(width, height, max_cells)?;
 
-    let mut bitplane = Bitmap::new(width, height)?;
-    let mut prev_plane = vec![0; bitplane.data.len()];
+    // `GSVALS` - The decoded gray-scale image array.
+    let mut values = try_filled(0_u32, size)?;
+    let mut prev_plane = try_filled(0, bitplane.data.len())?;
 
     simd::dispatch!(Level::new(), simd => {
         for j in (0..bits_per_pixel).rev() {
@@ -214,6 +243,22 @@ where
 
         Ok(values)
     })
+}
+
+/// Craft patch: the number of values of a `width` by `height` gray-scale image. A limit refuses
+/// the image when the `u32` array of its values would take more than `max_bytes` bytes, which
+/// `decode_bitplanes` sets to `isize::MAX`, the most one allocation may take. With 32-bit
+/// pointers, a caller's raised `Limits` lets a grid reach that size. A halftone region runs the
+/// same check before it builds its skip mask.
+pub(crate) fn value_count(width: u32, height: u32, max_bytes: u64) -> Result<usize> {
+    let count = u64::from(width) * u64::from(height);
+    if count.saturating_mul(size_of::<u32>() as u64) > max_bytes {
+        bail!(OverflowError::BitmapLimit);
+    }
+    match usize::try_from(count) {
+        Ok(count) => Ok(count),
+        Err(_) => bail!(OverflowError::BitmapLimit),
+    }
 }
 
 #[inline(always)]
@@ -308,6 +353,7 @@ mod pdfcraft_limit_tests {
                 height,
                 template: Template::Template0,
                 skip_mask: None,
+                max_cells: crate::bitmap::MAX_GRID_CELLS,
             };
             decode_gray_scale_image(&[], &params, &mut ScratchBuffers::default()).map(|_| ())
         };
@@ -318,5 +364,41 @@ mod pdfcraft_limit_tests {
             limit,
             "the cells, each side within its bound"
         );
+    }
+
+    /// Craft patch: values whose array would take more bytes than one allocation may are refused
+    /// by a limit instead of panicking. The figure is `isize::MAX` with 32-bit pointers, where a
+    /// raised `Limits` allows a grid of 2^29 cells.
+    #[test]
+    fn gray_scale_values_past_one_allocation_are_refused_by_a_limit() {
+        let max_bytes = i32::MAX as u64;
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(value_count(1 << 15, 1 << 14, max_bytes), limit, "2^31 bytes");
+        assert_eq!(
+            value_count(1 << 15, (1 << 14) - 1, max_bytes),
+            Ok((1 << 15) * ((1 << 14) - 1)),
+            "just under 2^31 bytes"
+        );
+    }
+
+    /// Craft patch: `decode_bitplanes` refuses values past the byte limit before it decodes a
+    /// bitplane. The 32,768 by 16,384 grid is within a cell limit of 2^29 and takes 2^31 bytes of
+    /// values, past `isize::MAX` with 32-bit pointers.
+    #[test]
+    fn decode_bitplanes_refuses_values_past_the_byte_limit_before_decoding() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        let grids: [(u32, u32, u64); 2] =
+            [(64, 64, 64 * 64 * 4 - 1), (1 << 15, 1 << 14, i32::MAX as u64)];
+        for (width, height, max_bytes) in grids {
+            let stride = width.div_ceil(WORD_BITS);
+            let mut decoded = 0;
+            let result =
+                decode_bitplanes_within(width, height, stride, 1, 1 << 29, max_bytes, |_, _| {
+                    decoded += 1;
+                    Ok(())
+                });
+            assert_eq!(result.map(|_| ()), limit, "{width} by {height}");
+            assert_eq!(decoded, 0, "{width} by {height}: no bitplane is decoded");
+        }
     }
 }

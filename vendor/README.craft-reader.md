@@ -114,7 +114,8 @@ the last filter of an image of known size may produce (1 GiB by default), and
 `with_max_image_pixels` sets the most pixels an image or mask may have for the interpreter to
 decode it (2^28 by default, at most 2^32), before and after its codec decodes it. With 64-bit
 pointers a caller may raise either one; elsewhere a raise is clamped to the default.
-`image_size_ok` keeps the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
+The CCITT, JBIG2 and JPEG 2000 decoders hold an image to the document's pixel limit.
+`image_size_ok` and `ccitt_size_ok` keep the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
 RGB data instead of copying them into a second buffer. Tests:
 `decode_limits_tests::image_limits_default_and_caller_figures` in hayro-syntax and
 `image_limits` in `crates/pdf/tests/interpretation.rs`.
@@ -153,7 +154,7 @@ Hostile-input bounds (CodeRabbit findings):
   inserted, so a tiny stream cannot declare billions of entries.
 - Each object stream's `/N` header pairs are parsed once per document and cached beside its
   decoded data, instead of on every compressed-object lookup.
-- An embedded JBIG2 page over 2^28 pixels is refused before the output buffer is allocated,
+- An embedded JBIG2 page over the document's pixel limit (2^28 by default) is refused before the output buffer is allocated,
   and that buffer is reserved fallibly (`Bitmap::reinitialize` allocates before touching the
   existing bitmap, so a failed reservation leaves it intact). A `JBIG2Globals` stream with an image filter is
   ignored, so globals cannot recurse through further globals.
@@ -167,7 +168,8 @@ Hostile-input bounds (CodeRabbit findings):
 - A CID font's `/W2` run that starts past CID 65535 is skipped as in `/W`, instead of
   overflowing and discarding the whole table.
 - CCITT images: `ccitt_size_ok` (inherited PdfCraft ledger item 2) allows at most 2^20
-  columns and 2^28 pixels (columns × rows) before the decoder allocates. A `/Columns` past
+  columns and 2^28 pixels (columns × rows) before the decoder allocates; the decoder applies
+  the document's pixel limit in place of 2^28. A `/Columns` past
   `u32::MAX` is refused rather than wrapped to a small width. `/Rows` follows PdfCraft (17)
   and (19): `/Rows 0` or a value below `/Height` decodes to the image height, and decoding
   still stops where the data ends.
@@ -201,9 +203,10 @@ raster tests are adapted in `tests/upstream_raster.rs` and the text contracts in
 `tests/upstream_text.rs`. (P8)'s PdfCraft test needs a Japanese substitute font and is not
 ported.
 - A CCITT image with `/Rows 0` (unknown height) decodes at most the rows that fit the stream's
-  output limit (counted in 1-bit rows) and 2^28 pixels; a known height is clamped the same way.
-  Before, it decoded to the end of the data, and a bit of 2D code can repeat a whole row.
-- A JPEG 2000 image over 2^28 pixels, or over its output limit (at least 64 MiB), by the
+  output limit (counted in 1-bit rows) and the document's pixel limit (2^28 by default); a
+  known height is clamped the same way. Before, it decoded to the end of the data, and a bit of
+  2D code can repeat a whole row.
+- A JPEG 2000 image over the document's pixel limit (2^28 by default), or over its output limit (at least 64 MiB), by the
   codestream's own dimensions is refused before decoding, and its buffer is reserved fallibly:
   the image dictionary's smaller size no longer stands in for the size the decoder allocates.
 
@@ -465,6 +468,51 @@ a decoder's limit from damage). Not ported from those commits: the page-wide all
 refused-mask handling in `hayro-syntax` and `hayro-interpret` (0ed33990, 4aa732ea, e2464e14), which rest on
 the decoded-image cache of 558ffd7f (a performance change). Tests: those that came with the patches in
 `hayro-jbig2`, and PdfCraft's raster tests adapted in `hayro-jbig2/src/pdfcraft_tests.rs`.
+
+A craft-libs patch, labeled `Craft patch` in `hayro-jbig2`, derives these bounds from one figure,
+`Limits::max_pixels` (2^28 by default): the pixels of one bitmap (the page, a region, a symbol),
+the decoding work of one image (4 × the pixels, 2^30 by default, and never less than the work of
+decoding one bitmap within the limit as a refined text instance, with its copy, its text region
+and a reference symbol of width 0 in a height class of up to 65535 rows),
+a dictionary's symbol pixels, the cells of a halftone grid
+(an eighth of the pixels rounded up, 2^25 by default) and the words a page's
+segments may hold (two bitmaps of the pixels, 64 MiB by default, plus up to 31 bits of row padding
+for each of a bitmap's rows, so a narrow or row-padded region within the limit can be stored).
+`Image::new_embedded_with_limits`
+opens and decodes an image within a caller's `Limits`; `Image::new` and `Image::new_embedded`
+keep the defaults. hayro-syntax's JBIG2 filter passes the document's
+`DecodeLimits::max_image_pixels`, and its manifest takes `hayro-jbig2` from `../hayro-jbig2`, so
+`cargo test --manifest-path vendor/hayro-syntax/Cargo.toml` builds against the patched decoder.
+Each side of a bitmap is still at most 65535. A halftone grid whose array of gray-scale values
+would take more than `isize::MAX` bytes is refused with `OverflowError::BitmapLimit` before the
+array is allocated; with 32-bit pointers a raised `Limits` can reach that size. The words of a
+bitmap (the page included), a gray-scale image's values and a halftone's skip mask are reserved
+fallibly, and memory that cannot be reserved is refused with `OverflowError::BitmapLimit`. Tests:
+`bitmap::pdfcraft_limit_tests::the_pixel_bound_follows_the_limits`,
+`bitmap::pdfcraft_limit_tests::memory_that_cannot_be_reserved_is_refused`,
+`bitmap::pdfcraft_limit_tests::a_low_limit_pays_for_a_bitmap_it_allows`,
+`pdfcraft_tests::jbig2_a_low_limit_decodes_a_refined_instance_it_allows`,
+`pdfcraft_tests::jbig2_a_low_limit_decodes_a_refined_instance_of_a_tall_reference`,
+`bitmap::pdfcraft_limit_tests::a_low_limit_allows_a_grid_of_one_cell`,
+`gray_scale::pdfcraft_limit_tests::gray_scale_values_past_one_allocation_are_refused_by_a_limit`,
+`tests::the_page_and_its_regions_follow_the_limits`,
+`tests::a_narrow_region_within_a_low_limit_can_be_stored`,
+`tests::two_row_padded_regions_within_the_limit_can_be_stored` and
+`tests::a_page_past_the_bounds_is_refused_when_opened` in hayro-jbig2;
+`filter::jbig2::tests::the_pixel_limit_given_is_the_one_applied` and
+`decode_limits_tests::a_documents_pixel_limit_reaches_the_jbig2_decoder` in hayro-syntax.
+
+Image-decoding and decryption fixes, ported from PdfCraft pull requests by mtlcl410 that were
+open when they were ported (craft-libs #2673). Only their `hayro-syntax`, `hayro-jbig2` and
+`hayro-interpret` parts are ported. Code comments keep each pull request's `PdfCraft patch` label
+and number. The tests are in the files they name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#7323](https://github.com/storytold/pdfcraft/pull/7323) | hayro-syntax `filter/dct.rs` | Patch 56: DCTDecode data is read from its first start-of-image marker (`FF D8 FF`), so bytes before it are skipped (ISO 32000-2 §7.4.8): an inline image with more white space after `ID` than §8.9.7's one character, or an XObject whose data starts with a newline. Data with no marker is read as before and still fails | `filter::dct::pdfcraft_tests::bytes_before_the_start_of_image_marker_are_skipped`, `an_inline_jpeg_after_more_white_space_than_one_decodes`, `data_without_a_start_of_image_marker_does_not_decode` |
+| [#7060](https://github.com/storytold/pdfcraft/pull/7060) | hayro-syntax `crypto/mod.rs` | Patches 48, 49 and 57, the renderer side of reading encrypted files as craft-pdf's `cos` and `crypt` read them (craft-libs #1343; code comments name them `pdfcraft-cos` and `pdfcraft-crypt`, as before the move). Patch 48: `/V`, `/R`, `/Length` and `/P` are read as integers or reals with no fraction; no `/V` is RC4 with `/Length` and no `/P` is -1; the `/V 4` key length comes from the crypt filter in use, and a revision 2–4 length outside 40–128 bits is clamped (ISO 32000-2 Table 20); a revision 2–4 password also tries its PDFDocEncoding bytes with the characters it lacks dropped; `/EncryptMetadata false` also tries the key derived with metadata; a longer revision 2 `/U` and R5/R6 `/OE` and `/UE` are read on their first 32 bytes (Table 21). Patch 49: a `/CFM` other than `None`, `V2`, `AESV2` or `AESV3` (`Identity` included) that strings, streams or embedded files use is reported as an unsupported algorithm (Table 25), and no `/CFM` is `None`. Patch 57: `/CFM /AESV3` with a 128-bit key derives each object's key as for `AESV2` (§7.6.3.2, §7.6.3.3) | `crypto::pdfcraft_password_tests::legacy_passwords_are_tried_as_given_then_in_pdf_doc_encoding`, `an_oe_and_ue_of_48_bytes_unlock_with_their_first_32`, `legacy_key_lengths_outside_40_to_128_bits_are_clamped_not_a_panic`, `a_crypt_filter_method_that_cannot_be_decrypted_is_reported`, `aesv3_with_a_128_bit_key_derives_each_objects_key_as_for_aesv2`, `encryption_entries_are_read_as_the_document_model_reads_them`, `keys_the_document_model_accepts_open`, `a_v4_key_length_comes_from_the_filter_in_use` |
+| [#7316](https://github.com/storytold/pdfcraft/pull/7316) | hayro-jbig2 `bitmap.rs`, `decode/symbol.rs`, `decode/text.rs`, `lib.rs`; hayro-interpret `x_object.rs`, `cache.rs`, `interpret/mod.rs` | A symbol dictionary may hold more than 65,535 symbols (T.88 gives SDNUMEXSYMS and SDNUMNEWSYMS 32 bits): its counts are held to the words the page may still retain before anything is reserved, and its lists reserve at most 65,536 entries up front. A dictionary's symbol pixels have no bound of their own any more (the `Limits::max_pixels` figure above still bounds each bitmap it makes): the decoding work and the retained words bound them. A height class collective bitmap is bounded by its pixels and height, not by the 65,535 bound on a bitmap's width (`Bitmap::new_collective`). A text region's instances are bounded by the decoding work they take (four integers each, against the work of the stream's `Limits`), not by a count of 10,000. A JBIG2 image drawn on its own, a stencil mask included, that one of the decoder's limits refuses is reported as `ContentTruncated`, as a picture's mask so refused is (ISO 32000-2 §7.4.7), and its failure is kept by the decoded-image cache as its stream's own | `decode::symbol::tests::symbol_counts_are_held_to_what_the_page_retains`, `bitmap::pdfcraft_limit_tests::a_collective_bitmap_is_bounded_by_its_pixels_not_its_width`, `pdfcraft_tests::jbig2_a_symbol_dictionary_holds_as_many_pixels_as_its_work_and_words_allow`, `jbig2_a_symbol_dictionary_holds_more_than_65535_symbols`, `jbig2_a_collective_bitmap_is_as_wide_as_its_symbols_together`, `jbig2_a_text_region_places_as_many_instances_as_its_work_allows` in hayro-jbig2; `a_jbig2_image_drawn_on_its_own_that_a_decoder_limit_refuses_is_content_left_out` in `crates/pdf/tests/jbig2_images.rs` |
+| [#7440](https://github.com/storytold/pdfcraft/pull/7440) | hayro-jbig2 `bitmap.rs`, `lib.rs`; hayro-syntax `filter/jbig2.rs`, `filter/mod.rs`, `object/stream.rs`; hayro-interpret `x_object.rs`, `interpret/mod.rs` | hayro-jbig2 patch 19, hayro-syntax patch 53, hayro-interpret patch 113. A JBIG2 image past the document's pixel limit (`DecodeLimits::max_image_pixels`, 2^28 by default) and of up to 2^29 pixels (`MAX_REDUCED_JBIG2_PIXELS`) is decoded at a reduced size when its caller asks (`ImageDecodeParams::reduce_past_full_size`, which the interpreter sets): each block of the smallest whole factor that brings it within 2^25 pixels is averaged into an 8-bit gray sample as the page is read out, and drawn over the same area (ISO 32000-2 §8.9.5). This builds on the `Limits` above rather than adding a second pixel limit: `Limits::with_max_page_pixels` lets the page bitmap alone reach 2^29, while every other bitmap, the decoding work and the retained words keep `Limits::max_pixels`. Not an indexed image, a colour-keyed one, or one with a side past 65,535. The reduced samples are held to the stream's byte limit, as the filter's other outputs are. An image refused for its size before decoding, in any filter, is reported as `ContentTruncated` instead of `ImageDecodeFailure`, and so is a reduced image a decoder limit refuses. A soft mask between the reduced and the full size is averaged to the drawn size, and one larger than a reduced image's actual page is kept whole, so the alpha of one draw isn't reused for another | `bitmap::pdfcraft_limit_tests::a_page_bound_raises_the_page_alone`, `tests::a_page_read_reduced_may_pass_the_bound_on_a_bitmap`, `tests::a_region_keeps_the_bound_on_a_bitmap_when_the_page_passes_it` in hayro-jbig2; `filter::jbig2::tests::a_reduced_size_is_the_smallest_whole_factor_within_2_to_the_25_pixels`, `the_reducer_averages_each_block_into_its_share_of_white`, `a_jbig2_image_past_the_pixel_limit_is_decoded_reduced_when_asked` in hayro-syntax; `jbig2_images_past_the_full_size_bound_are_drawn_reduced`, `a_jbig2_soft_mask_past_the_full_size_bound_is_drawn_reduced`, `images_too_large_to_decode_are_reported_as_content_left_out`, `a_reduced_jbig2_image_averages_each_block_of_pixels`, `a_reduced_jbig2_image_keeps_a_soft_mask_for_each_size_it_is_drawn_at`, `a_reduced_jbig2_image_of_another_size_than_its_dictionary_keeps_its_soft_mask`, `decodes::a_reduced_jbig2_image_is_decoded_once_for_every_size_it_is_drawn_at`, `decodes::a_reduced_jbig2_image_its_stream_refuses_is_decoded_once` in `crates/pdf/tests/jbig2_images.rs` |
 
 ## Craft review note: the one direct `unsafe`
 

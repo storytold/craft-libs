@@ -213,10 +213,18 @@ fn empty_class_jbig2_dictionary(classes: u32, height: u32) -> Vec<u8> {
 /// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
 /// exported, for `height` from 76 up.
 fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
+    narrow_jbig2_dictionary_of(symbols, 1, height)
+}
+
+/// [`narrow_jbig2_dictionary`], its symbols `width` columns wide, from 1 to 2.
+fn narrow_jbig2_dictionary_of(symbols: u32, width: u32, height: u32) -> Vec<u8> {
     let mut bits = Bits::default();
     bits.put(0b11111, 5); // height class delta, the upper line of table B.4
     bits.put(height - 76, 32);
-    bits.put(0b10, 2); // width delta 1 (B.2)
+    match width {
+        1 => bits.put(0b10, 2),  // width delta 1 (B.2)
+        _ => bits.put(0b110, 3), // width delta 2 (B.2)
+    }
     for _ in 1..symbols {
         bits.put(0, 1); // width delta 0 (B.2)
     }
@@ -328,7 +336,8 @@ fn square_jbig2_dictionary(side: u32, exported: bool) -> Vec<u8> {
     dictionary
 }
 
-/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` of 0 or 1.
+/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` times,
+/// each in a strip of its own one row below the last.
 fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     let mut text = jbig2_region_info(width, height);
     text.extend_from_slice(&[0x00, 0x11, 0, 0]); // Huffman, top left; tables B.6, B.8, B.11
@@ -340,7 +349,7 @@ fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     bits.put(0, 1); // symbol 0 is one bit long
     bits.align();
     bits.put(0, 1); // the first strip's T (B.11)
-    if instances > 0 {
+    for _ in 0..instances {
         bits.put(0, 1); // delta T 1 (B.11)
         bits.put(0, 9); // first S 0 (B.6)
         bits.put(0, 1); // symbol 0
@@ -372,6 +381,92 @@ fn jbig2_refined_text_region() -> Vec<u8> {
     bits.put(0b01, 2); // end of the strip (B.8)
     text.extend_from_slice(&bits.bytes);
     text
+}
+
+/// A Huffman-coded symbol dictionary of one exported symbol of width 0 in a height class of 65535
+/// rows.
+fn tall_zero_width_jbig2_dictionary() -> Vec<u8> {
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+    let mut bits = Bits::default();
+    bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+    bits.put(65_535 - 76, 32);
+    bits.put(0, 1); // width delta 0 (B.2)
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.table_b1(0); // the first export run isn't exported
+    bits.table_b1(1);
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A 1 × 65535 text region placing one instance of symbol 0 of one, refined from width 0 and
+/// height 1 to 1 × 65535, Huffman-coded.
+fn jbig2_tall_refined_text_region() -> Vec<u8> {
+    jbig2_refined_text_region_from(1)
+}
+
+/// A 1 × 65535 text region placing one instance of symbol 0 of one, refined from width 0 and
+/// `reference_height` rows to 1 × 65535, Huffman-coded.
+fn jbig2_refined_text_region_from(reference_height: u32) -> Vec<u8> {
+    let mut text = jbig2_region_info(1, 65_535);
+    text.extend_from_slice(&[0x80, 0x13]); // Huffman, refined by template 1, top left
+    text.extend_from_slice(&[0x01, 0x40]); // table B.15 for the width and height deltas
+    text.extend_from_slice(&1u32.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    bits.put(0, 1); // delta T 1 (B.11)
+    bits.put(0, 9); // first S 0 (B.6)
+    bits.put(0, 1); // symbol 0
+    bits.put(1, 1); // refined
+    bits.put(0b101, 3); // width delta 1 (B.15)
+    match 65_535 - reference_height {
+        0 => bits.put(0, 1), // height delta 0 (B.15)
+        delta => {
+            bits.put(0b111_1111, 7); // height delta, the upper line of table B.15
+            bits.put(delta - 25, 32);
+        }
+    }
+    bits.put(0, 2); // no change of offset (B.14)
+    bits.table_b1(0); // no refinement data (B.1)
+    bits.align();
+    bits.put(0b01, 2); // end of the strip (B.8)
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
+/// Craft patch: a limit of 65535 pixels decodes a bitmap of 1 × 65535 coded as a refined text
+/// instance. Its refinement alone costs more than decoding the same bitmap as a generic region, and
+/// copying it into its text region and setting up the region cost more again.
+#[test]
+fn jbig2_a_low_limit_decodes_a_refined_instance_it_allows() {
+    let mut stream = black_jbig2_page_of(1, 65_535);
+    jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(1, true));
+    jbig2_segment(&mut stream, 2, 6, &[1], &jbig2_tall_refined_text_region());
+    let limits = crate::Limits::with_max_pixels(65_535);
+    let mut count = Count::default();
+    let decoded = Image::new_embedded_with_limits(&stream, None, limits).and_then(|image| image.decode(&mut count));
+    assert_eq!(decoded, Ok(()));
+}
+
+/// Craft patch: the same refined instance decodes at a limit of 65535 pixels when its reference
+/// symbol has no width and a height class of 65535 rows, which the dictionary charges row by row.
+#[test]
+fn jbig2_a_low_limit_decodes_a_refined_instance_of_a_tall_reference() {
+    let mut stream = black_jbig2_page_of(1, 65_535);
+    jbig2_segment(&mut stream, 1, 0, &[], &tall_zero_width_jbig2_dictionary());
+    jbig2_segment(&mut stream, 2, 6, &[1], &jbig2_refined_text_region_from(65_535));
+    let limits = crate::Limits::with_max_pixels(65_535);
+    let mut count = Count::default();
+    let decoded = Image::new_embedded_with_limits(&stream, None, limits).and_then(|image| image.decode(&mut count));
+    assert_eq!(decoded, Ok(()));
 }
 
 /// A generic refinement region of 1 × 1, with whatever its data decodes to.
@@ -717,3 +812,74 @@ fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
     assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
 }
 
+
+/// The error decoding an embedded stream ends with, if any.
+fn decode_error(stream: &[u8]) -> Option<crate::DecodeError> {
+    let mut count = Count::default();
+    Image::new_embedded(stream, None).and_then(|image| image.decode(&mut count)).err()
+}
+
+/// PdfCraft patch (#7316): a symbol dictionary's pixels have no bound of their own; the decoding
+/// work and the words a page retains bound them. Held to 2^26 pixels, the soft mask of a scanned
+/// drawing, one dictionary of 7,559 symbols, passed it (#6722); held to 2^28, a book's shared
+/// dictionary of 173,132 symbols passed that, and every page drew white.
+#[test]
+fn jbig2_a_symbol_dictionary_holds_as_many_pixels_as_its_work_and_words_allow() {
+    let stream = |heights: &[u32]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &wide_jbig2_dictionary(65535, heights));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&[1100])), "72,088,500 pixels, past 2^26");
+    assert!(jbig2_image_draws(&stream(&[2047, 2048])), "268,365,825 pixels, within 2^28");
+    assert!(jbig2_image_draws(&stream(&[2048, 2049])), "268,496,895 pixels, past 2^28");
+}
+
+/// PdfCraft patch (#7316): a symbol dictionary may hold more than 65,535 symbols: T.88 gives its
+/// counts 32 bits (7.4.2.1.4, 7.4.2.1.5), and a Huffman-coded dictionary of 262,144 symbols
+/// (PDFBOX-6263) and a book's shared one of 173,132 were refused. These are 70,000 symbols without
+/// pixels, all exported, which the page's words still hold.
+#[test]
+fn jbig2_a_symbol_dictionary_holds_more_than_65535_symbols() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(70_000, true));
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// PdfCraft patch (#7316): a height class's collective bitmap (6.5.9) is as wide as its symbols
+/// together, which T.88 gives 32 bits: it is bounded by its pixels, not by the bound on a bitmap's
+/// side. PDFBOX-6263's dictionary has one class of 262,144 symbols 9 × 2, a collective bitmap of
+/// 2,359,296 × 2. These are 40,000 symbols 2 wide, 80,000 columns together.
+#[test]
+fn jbig2_a_collective_bitmap_is_as_wide_as_its_symbols_together() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &narrow_jbig2_dictionary_of(40_000, 2, 76));
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// PdfCraft patch (#7316): a text region may place more than 10,000 instances: its instances are
+/// bounded by the decoding work they take, and a scanned page of 10,508 characters (PDFBOX-1439)
+/// was refused. A count that work could never pay for is refused before anything is read, as a
+/// decoder limit; one within it that the data doesn't hold is damage.
+#[test]
+fn jbig2_a_text_region_places_as_many_instances_as_its_work_allows() {
+    let stream = |text: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(1, true));
+        jbig2_segment(&mut stream, 2, 6, &[1], text);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&jbig2_text_region(16, 2, 12_000))), "12,000 instances");
+    // A region that says it has `count` instances and holds none of them.
+    let error = |count: u32| {
+        let mut text = jbig2_text_region(16, 2, 0);
+        text.splice(21..25, count.to_be_bytes());
+        decode_error(&stream(&text))
+    };
+    // At 152 each, 7,064,091 instances are past 2^30; 7,064,090 aren't, and run out of data.
+    let past = error(7_064_091);
+    assert_eq!(past, Some(crate::SymbolError::TooManyInstances.into()), "past what work pays for");
+    assert!(past.is_some_and(|e| e.is_limit()));
+    let within = error(7_064_090);
+    assert!(within.is_some_and(|e| !e.is_limit()), "within it: the data ends, damage: {within:?}");
+}

@@ -62,25 +62,25 @@
       "path": "src/bitmap.rs",
       "source_sha256": "59ed83d8bac6c39e40270a9856ca3faee628de7d9efae1b01f714e140e2b6b7e",
       "source_git_blob": "35ed97561597d30a70fe819cf8cfbd3780538f75",
-      "sha256": "f5fa055ed19f6113d517875479ed4d4d732e06a0010067883a4c38820d55ff97"
+      "sha256": "1717250f270b9e2dcb599d7839b5eb00aa1ab1aa437b215201b63ed96a48f133"
     },
     {
       "path": "src/decode/generic.rs",
       "source_sha256": "6646417cbea6b4563f47f6fa01d521f4654d609aa86713d34b4474963d222f81",
       "source_git_blob": "a788163f237a37016948e390083aefae702c4898",
-      "sha256": "6646417cbea6b4563f47f6fa01d521f4654d609aa86713d34b4474963d222f81"
+      "sha256": "860c4fd167e07f5d3110dce85a2509cb03ccc78056ce1752b747b5f07b291f8b"
     },
     {
       "path": "src/decode/generic_refinement.rs",
       "source_sha256": "625075671e510e8ff1d7c3cade857792413c091d57a35561ad0591d7f04c2ea5",
       "source_git_blob": "a566b8de58c078dec874d5d1dea36c0f557f1a16",
-      "sha256": "7a4e36aa8b371f532e33163aad59133f8afa946935570b2312d057cd2a8b3837"
+      "sha256": "c72f950c3f4db874f1503efe417a1a4b79503b13ad456808882851e16f5d3b89"
     },
     {
       "path": "src/decode/halftone.rs",
       "source_sha256": "0e4a5ef92e194b4eba2367196e904786dd7d346cdf0ab291c72a77b5aee5873a",
       "source_git_blob": "eb5c1c21e8a7d1a99c497e83ea59547b7dd19a96",
-      "sha256": "16454b87a0c23e42d09936ae88f85cc03b4ea0e9d00ee409e751b4c94906c9d9"
+      "sha256": "71502325e04a9705b3dbe5324740b207847b18c08dbd4e11d86939bfbf35e4c6"
     },
     {
       "path": "src/decode/mod.rs",
@@ -92,19 +92,19 @@
       "path": "src/decode/pattern.rs",
       "source_sha256": "abdd326c08dee0488678d74915e6bb4138c9b0c07d44f24c3a5794ff640799ba",
       "source_git_blob": "2c15d70b8f9925638e41cec0eb1d73b91c1533f2",
-      "sha256": "d0a431725919158734f047101d004001f2e58fc21af8f5e92ef03ae06041b9b1"
+      "sha256": "d6b82d8d2310f71c1cd70d7d37fb47e6aef0b6b90720f80f869889b719708bc6"
     },
     {
       "path": "src/decode/symbol.rs",
       "source_sha256": "aa57e88cdc6fd1647d7996875c253a643fedfc4438d5137e326e00d17d0d29ee",
       "source_git_blob": "f1aa8a6639e53dd350057d8d078198d363daa918",
-      "sha256": "793e9943183b5ef119aa281dc13e782083fdac16e9b4c598083af1a95209256f"
+      "sha256": "122a4131a3bd37820e1d594179fb6026e6ce43d9b4c62f6bb428587a94b5c71d"
     },
     {
       "path": "src/decode/text.rs",
       "source_sha256": "01863cdcd48ab68b5230948d12212a815d293c7c9d5382a140772088bfb1c405",
       "source_git_blob": "bbc2ac55c7d7d5b8aebffbecfe93fda8b88526e8",
-      "sha256": "1f75a55d76111980d667713f841aa38a1fc20918e5bdcfef08a3a36842e2ca10"
+      "sha256": "83d87998b247e9c23b6225d0a0c05c84d06f7a1ceb8c6c5abfdb111c1529b026"
     },
     {
       "path": "src/error.rs",
@@ -122,7 +122,7 @@
       "path": "src/gray_scale.rs",
       "source_sha256": "46f12893f4573610789015ba7036f6afb1d30b1454c0c674fc7ccdd9337d7487",
       "source_git_blob": "2836ec77a7c8d3970b13dd46f576778c64bfe2d9",
-      "sha256": "f82a6760de85bab325cffa6c75a0fa4e1d55fb9c67617be0d0fa112f2dd6c15f"
+      "sha256": "81167f513f27e0c255a961745abac7f48b90ab8b6a6880d071d8b1a579c83bbc"
     },
     {
       "path": "src/huffman_table.rs",
@@ -158,7 +158,7 @@
       "path": "src/lib.rs",
       "source_sha256": "22463230cc82543ee93791b642566a308f0f4eb14d3089b24dc2e7f06d0f784c",
       "source_git_blob": "ad77a6dd17920b2db66f6bb5a0f2cb8efaafd41a",
-      "sha256": "ac97e81ca5ec61d5d40247b561d0c1b17d7ac80aa173ee1bde099eb90e52a82f"
+      "sha256": "5e3a7546bd9c9a523e21157d99b0fceff29f30c2ffd7435baa6af098e53f3ffe"
     },
     {
       "path": "src/page_info.rs",

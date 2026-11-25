@@ -17,6 +17,9 @@ pub(crate) fn decode(
         return None;
     }
 
+    // PdfCraft patch (56): the data is read from its start-of-image marker.
+    let data = from_start_of_image(data);
+
     // Some PDFs have weird JPEGs where the JPEG metadata is completely wrong
     // (for example indicating that one of the dimensions is u16::MAX), but the
     // metadata in the PDF image dictionary is correct. Therefore, we first
@@ -96,6 +99,25 @@ pub(crate) fn decode(
         data: Cow::Owned(decoded),
         image_data: Some(image_data),
     })
+}
+
+/// PdfCraft patch (56): `data` from its first start-of-image marker (`FF D8` and the next
+/// marker's `FF`), or all of it when it has none.
+///
+/// DCTDecode data is a JPEG interchange-format stream (ISO 32000-2 §7.4.8), which begins with
+/// that marker. Bytes before it were refused, so the image was not drawn: an inline image with
+/// one end-of-line too many after `ID` (§8.9.7 allows a single white-space character there), as
+/// in the files of PDFBOX-5992, or an image XObject whose stream data starts with a newline.
+/// PDFium, MuPDF and Poppler draw both, and also skip other bytes before the marker, in image
+/// XObjects as in inline images. The search is one pass over data already in memory.
+fn from_start_of_image(data: &[u8]) -> &[u8] {
+    if data.starts_with(&[0xFF, 0xD8]) {
+        return data;
+    }
+    data.windows(3)
+        .position(|w| w == [0xFF, 0xD8, 0xFF])
+        .and_then(|start| data.get(start..))
+        .unwrap_or(data)
 }
 
 fn maybe_patch_jpeg_dimensions<'a>(
@@ -178,4 +200,79 @@ fn find_sof_marker(data: &[u8]) -> Option<usize> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod pdfcraft_tests {
+    use super::*;
+    use crate::content::{ContentTokenizer, UntypedIter};
+    use crate::object::{Object, Stream};
+    use alloc::vec::Vec;
+
+    /// An 8 × 8 black grayscale baseline JPEG (contributor-original, written for these tests).
+    const BLACK_JPEG: &[u8] = &[
+        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43,
+        0x00, 0x10, 0x0b, 0x0c, 0x0e, 0x0c, 0x0a, 0x10, 0x0e, 0x0d, 0x0e, 0x12, 0x11, 0x10, 0x13, 0x18, 0x28, 0x1a, 0x18, 0x16, 0x16, 0x18, 0x31, 0x23,
+        0x25, 0x1d, 0x28, 0x3a, 0x33, 0x3d, 0x3c, 0x39, 0x33, 0x38, 0x37, 0x40, 0x48, 0x5c, 0x4e, 0x40, 0x44, 0x57, 0x45, 0x37, 0x38, 0x50, 0x6d, 0x51,
+        0x57, 0x5f, 0x62, 0x67, 0x68, 0x67, 0x3e, 0x4d, 0x71, 0x79, 0x70, 0x64, 0x78, 0x5c, 0x65, 0x67, 0x63, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x08,
+        0x00, 0x08, 0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x07, 0xff, 0xc4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0x3f, 0x7f, 0xff, 0xd9,
+    ];
+
+    fn params() -> ImageDecodeParams {
+        ImageDecodeParams { num_components: Some(1), bpc: Some(8), width: 8, height: 8, ..Default::default() }
+    }
+
+    /// Whether `data` decodes to the 8 × 8 black image: every sample dark.
+    fn decodes_black(data: &[u8]) -> bool {
+        decode(data, &Dict::empty(), &params()).is_some_and(|r| r.data.len() == 64 && r.data.iter().all(|&s| s < 16))
+    }
+
+    fn with_prefix(prefix: &[u8]) -> Vec<u8> {
+        [prefix, BLACK_JPEG].concat()
+    }
+
+    /// PdfCraft patch (56): data that begins with its start-of-image marker decodes as before, and
+    /// bytes before the marker are skipped: white space too many after an inline image's `ID`
+    /// (PDFBOX-5992's `ID` CR LF LF), a newline before an XObject's data, or other bytes.
+    #[test]
+    fn bytes_before_the_start_of_image_marker_are_skipped() {
+        assert!(decodes_black(BLACK_JPEG), "as written");
+        for prefix in [&b"\n"[..], b"\r\n", b"\r\n\n", b"\n\t\x0c\x00", b"xx"] {
+            assert!(decodes_black(&with_prefix(prefix)), "after {prefix:?}");
+        }
+    }
+
+    /// PdfCraft patch (56): data with no start-of-image marker, or one cut off at the end, still
+    /// doesn't decode.
+    #[test]
+    fn data_without_a_start_of_image_marker_does_not_decode() {
+        let no_marker = BLACK_JPEG.get(2..).unwrap_or_default();
+        assert!(!decodes_black(no_marker));
+        assert!(decode(no_marker, &Dict::empty(), &params()).is_none());
+        assert!(decode(b"\n\xff\xd8", &Dict::empty(), &params()).is_none(), "a cut marker");
+        assert!(decode(b"", &Dict::empty(), &params()).is_none());
+    }
+
+    /// PdfCraft patch (56): an inline image with one end-of-line more after `ID` than ISO 32000-2
+    /// §8.9.7 allows keeps that byte in its data, and decodes from its marker.
+    #[test]
+    fn an_inline_jpeg_after_more_white_space_than_one_decodes() {
+        for after_id in [&b" "[..], b"\n", b"\r\n", b"\r\n\n", b"\n\n", b"    "] {
+            let mut content = b"BI /W 8 /H 8 /CS /G /BPC 8 /F /DCT ID".to_vec();
+            content.extend_from_slice(after_id);
+            content.extend_from_slice(BLACK_JPEG);
+            content.extend_from_slice(b"\nEI Q");
+            let mut iter = UntypedIter::new(&content);
+            let instruction = iter.next_instruction().expect("the inline image");
+            assert_eq!(instruction.operator.as_ref(), b"BI");
+            let stream: Stream<'_> = match instruction.operands().next() {
+                Some(Object::Stream(stream)) => stream.clone(),
+                other => panic!("no inline image stream: {other:?}"),
+            };
+            let decoded = stream.decoded_image(&params()).expect("decodes");
+            assert!(decoded.data.len() == 64 && decoded.data.iter().all(|&s| s < 16), "after {after_id:?}");
+        }
+    }
 }
