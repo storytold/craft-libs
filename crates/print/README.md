@@ -11,7 +11,7 @@ let receipt = craft_print::submit(&pdf_bytes, &job)?;
 The caller generates the PDF, checks document permissions, and handles page selection,
 imposition, marks and bleed. This crate discovers printers, exposes CUPS driver options,
 opens Windows printer preferences, takes a Windows driver's own settings for one job, and
-submits jobs with copies, collation, duplex and color.
+submits jobs with copies, collation, duplex, color and finishing (staple, punch, output bin).
 `command_preview` returns diagnostics without creating files or starting a process.
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
@@ -142,6 +142,21 @@ Without an explicit duplex request, the queue default applies. Without a graysca
 ticket names no colour, so the colour in the user's printing preferences (Properties…, or
 Windows Settings) applies, black and white included. Single-page or single-copy jobs have no
 collating order to check.
+
+`Job::finishing` asks for a staple position, a hole punch edge and an output bin; a choice left
+`None` is the printer's own. With CUPS they are the IPP job attributes `finishings` (RFC 8011
+§5.2.6, values from PWG 5100.1: a punch with no hole count asks for two) and `output-bin`
+(PWG 5100.2), sent by `lp -o` and by `cups::print_job`. CUPS doesn't say whether a queue kept
+them: a driverless queue passes them to the printer, and a PPD queue needs its PPD to map them,
+else its own option (a `StapleLocation` in `Job::options`) is the way. On Windows each is the
+Print Schema option of the first job, document or page feature the driver's PrintCapabilities
+list it in (`JobStapleAllDocuments`/`DocumentStaple`, `JobHolePunch`/`DocumentHolePunch`,
+`JobOutputBin`/`DocumentOutputBin`/`PageOutputBin`); an output bin is the driver's own option
+whose name matches without case. A choice the driver doesn't list, or drops while it validates
+the ticket, refuses the job, and so does a hole count, which the Print Schema has no keyword for.
+A choice the job makes replaces the driver dialog's (`driver_settings_dialog`) for that feature.
+A hole count other than 2, 3 or 4, or a bin name other than letters, digits, `-`, `_` and `.`, is
+refused on every platform before anything is sent.
 
 `driver_settings_dialog(&mut job, parent)` opens the job printer's driver dialog
 ([`DocumentProperties`](https://learn.microsoft.com/en-us/windows/win32/printdocs/documentproperties)),

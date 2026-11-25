@@ -12,6 +12,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cups;
 
+mod finishing;
 #[cfg(any(test, windows))]
 mod progress;
 #[cfg(any(test, windows))]
@@ -24,6 +25,8 @@ mod ticket;
 mod windows;
 #[cfg(any(test, windows))]
 mod xml;
+
+pub use finishing::{Edge, Finishing, MAX_BIN, Punch, Staple};
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
@@ -104,6 +107,10 @@ pub struct Job {
     /// poster features are removed from them. A job printed on a printer of another name than the
     /// one they were chosen for prints without them. Windows only; CUPS ignores them.
     pub driver_settings: Option<DriverSettings>,
+    /// Staple, hole punch and output bin. A choice left `None` is the printer's own (on Windows,
+    /// also the driver dialog's); one the job makes wins over both. A Windows job asking for one
+    /// the driver doesn't list, or doesn't keep, is refused; CUPS never refuses.
+    pub finishing: Finishing,
 }
 
 /// The settings a Windows printer driver's own dialog returned for one printer
@@ -152,6 +159,7 @@ impl Default for Job {
             title: "Craft".into(),
             options: Vec::new(),
             driver_settings: None,
+            finishing: Finishing::default(),
         }
     }
 }
@@ -235,6 +243,9 @@ fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
     }
     if job.grayscale {
         opt("print-color-mode=monochrome");
+    }
+    for o in finishing::lp_options(&job.finishing) {
+        opt(&o);
     }
     opt(match job.scaling {
         Scaling::Exact => "fit-to-page=false",
@@ -971,6 +982,7 @@ pub fn submit_cancellable(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize,
 pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job, cancel: &Cancel) -> Result<String, Error> {
     use std::io::Write;
     use std::process::Stdio;
+    job.finishing.check()?;
     cancel.start_sending()?;
     let mut child = lp
         .args(lp_args(job))
@@ -1061,6 +1073,7 @@ fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
             }
         ),
     ];
+    preview.extend(finishing::describe(&job.finishing));
     if let Some(settings) = &job.driver_settings {
         let unused = match (chosen, target) {
             (true, _) => "",

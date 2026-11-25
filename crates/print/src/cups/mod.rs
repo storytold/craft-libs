@@ -56,6 +56,7 @@ const GROUP_END: u8 = 0x03;
 const GROUP_PRINTER: u8 = 0x04;
 const TAG_INTEGER: u8 = 0x21;
 const TAG_BOOLEAN: u8 = 0x22;
+const TAG_ENUM: u8 = 0x23;
 const TAG_NAME: u8 = 0x42;
 const TAG_KEYWORD: u8 = 0x44;
 const TAG_URI: u8 = 0x45;
@@ -292,6 +293,7 @@ pub fn print_job(pdf: &[u8], job: &Job) -> Result<String, Error> {
 }
 
 pub(crate) fn print_job_at(endpoints: &[Server], pdf: &[u8], job: &Job) -> Result<String, Error> {
+    job.finishing.check()?;
     let queue = match &job.printer {
         Some(name) => name.clone(),
         None => discover(endpoints, OPERATION_CUPS_GET_DEFAULT)?
@@ -416,6 +418,7 @@ pub fn submit_as_at(endpoints: &[Server], destination: &Destination, pdf: &[u8],
     if job.copies == 0 || job.copies > 999 {
         return Err(Error::Spool("copies must be between 1 and 999".into()));
     }
+    job.finishing.check()?;
     let mut last = Error::Spool("no CUPS endpoint selected".into());
     for endpoint in endpoints {
         let mut stream = match connect(endpoint) {
@@ -753,7 +756,7 @@ fn discovery_request(operation: u16) -> Vec<u8> {
 
 /// A Print-Job request for `queue`: the job's options as IPP attributes, the PDF as the document
 /// data that follows the end of attributes.
-fn print_job_request(queue: &str, pdf: &[u8], job: &Job) -> Vec<u8> {
+pub(crate) fn print_job_request(queue: &str, pdf: &[u8], job: &Job) -> Vec<u8> {
     print_job_request_path(&format!("/printers/{queue}"), pdf, job)
 }
 
@@ -789,6 +792,13 @@ fn print_job_request_for(authority: &str, path: &str, pdf: &[u8], job: &Job, use
     }
     if job.grayscale {
         r.attribute(TAG_KEYWORD, "print-color-mode", b"monochrome");
+    }
+    // RFC 8011 §5.2.6: `finishings` is a set of enums, the first value named and the rest not.
+    for (i, value) in crate::finishing::ipp_finishings(&job.finishing).into_iter().enumerate() {
+        r.attribute(TAG_ENUM, if i == 0 { "finishings" } else { "" }, &value.to_be_bytes());
+    }
+    if let Some(bin) = &job.finishing.output_bin {
+        r.attribute(TAG_KEYWORD, "output-bin", bin.as_bytes());
     }
     // PWG 5100.13 §6.2.5: `none` keeps every sheet at its size, `auto-fit` shrinks only
     // oversized ones — the same choices `lp`'s fit-to-page and print-scaling options make.

@@ -17,6 +17,7 @@ use winprint::printer::{PrinterDevice, WinPdfPrinter};
 use winprint::ticket::document::{NS_PSK, OwnedName, PrintCapabilitiesDocument, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
 use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
 
+use crate::finishing::print_schema;
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
 use crate::{Cancel, Error, Job, Printer, Scaling, rgb};
@@ -256,6 +257,8 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
             )));
         }
     };
+    job.finishing.check()?;
+    let finishing = print_schema::chosen(&job.finishing, capabilities_xml, device.name())?;
     let document_only = ticket::document_duplex_only(capabilities_xml, job.duplex);
     let requested = PrintTicket::from_xml(ticket::ticket_xml_with(job, landscape, document_only, ticket::grey_option(capabilities_xml)));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
@@ -265,6 +268,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         document.features.extend(media_document.features);
         document.parameter_inits.extend(media_document.parameter_inits);
     }
+    with_finishing(&mut document, &finishing)?;
     let scaling_name = OwnedName::qualified("PageScaling", NS_PSK, Some("psk"));
     if let Some(no_scaling) = capabilities.options_for_feature(scaling_name.clone()).find(|o| o.name.as_ref().is_some_and(|n| n.local_name == "None"))
     {
@@ -285,6 +289,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
     let validated = in_drivers_spelling(device, built);
     let xml = std::str::from_utf8(validated.get_xml()).map_err(spool_error)?;
     let paper = ticket::verify_ticket(xml, wanted, landscape)?;
+    print_schema::verify(xml, &finishing)?;
     // A media type, resolution or quality the driver replaced to resolve a conflict with the job's paper.
     if let Some(chosen_xml) = &chosen_xml {
         ticket::verify_chosen_options(std::str::from_utf8(chosen_xml).map_err(spool_error)?, xml)?;
@@ -437,9 +442,40 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
     })
 }
 
+/// Add the chosen finishing options to the job's ticket.
+fn with_finishing(document: &mut PrintTicketDocument, finishing: &[print_schema::Chosen]) -> Result<(), Error> {
+    if !finishing.is_empty() {
+        let finishing_document = PrintTicketDocument::parse_from_bytes(print_schema::ticket_xml(finishing).as_bytes()).map_err(spool_error)?;
+        document.features.extend(finishing_document.features);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The finishing merged into a job's ticket keeps each option's namespace, so `verify` finds it.
+    #[test]
+    fn merged_finishing_survives_the_ticket_round_trip() {
+        let vendor = "http://example.com/printers/finisher";
+        let caps = format!(
+            r#"<psf:PrintCapabilities version="1" xmlns:psf="{psf}" xmlns:psk="{NS_PSK}" xmlns:v="{vendor}">
+            <psf:Feature name="psk:DocumentStaple"><psf:Option name="psk:StapleTopLeft"/></psf:Feature>
+            <psf:Feature name="psk:JobOutputBin"><psf:Option name="v:Stacker1"/></psf:Feature>
+            </psf:PrintCapabilities>"#,
+            psf = ticket::NS_PSF
+        );
+        let f = crate::Finishing { staple: Some(crate::Staple::TopLeft), output_bin: Some("stacker1".into()), ..crate::Finishing::default() };
+        let finishing = print_schema::chosen(&f, &caps, "Office").unwrap();
+        let job = Job { finishing: f, ..Job::default() };
+        let requested = PrintTicket::from_xml(ticket::ticket_xml_with(&job, false, false, ticket::Grey::Monochrome));
+        let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).unwrap();
+        with_finishing(&mut document, &finishing).unwrap();
+        let merged = PrintTicket::from(document);
+        let xml = std::str::from_utf8(merged.get_xml()).unwrap();
+        assert_eq!(print_schema::verify(xml, &finishing), Ok(()), "{xml}");
+    }
 
     /// Exact option support determines scope, including asymmetric duplex and simplex drivers.
     #[test]
