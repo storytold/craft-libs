@@ -3,9 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::choice::{Checkbox, Switch};
+use craft_ui::contract::{AfterInk, Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
+use craft_ui::runtime::env::with_env;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Area, Id, LayerId, Order, Pos2, Rect, emath::TSTransform};
 
@@ -152,4 +153,34 @@ fn a_checkbox_sweep_uses_an_exposed_sliver_but_skips_covered_and_clipped_boxes()
     fixture.release(&end);
     fixture.idle(2);
     assert_eq!(*values.borrow(), [true, true, false, false, true]);
+}
+
+/// The text after a switch reads in the full ink unless the app sets `AfterInk::Muted`, which dims it without
+/// disabling the switch: it stays a click target, and the ink stays the muted token (4.5:1), not the disabled one.
+#[trial]
+fn a_switchs_label_takes_the_after_ink() {
+    let ink = |muted: bool| {
+        let mut value = false;
+        let mut fixture = Fixture::new(move |ui| {
+            let mut show = |ui: &mut egui::Ui| {
+                Switch::new(Bind::bound(&mut value)).label("AutoSave").show(ui);
+            };
+            if muted {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(AfterInk::Muted);
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        let style =
+            fixture.styles_of("craft_ui_contract::contract::label::leaf::LabelLeaf").into_iter().next().expect("the label resolved its style");
+        style.looks.texts.first().expect("a label has a text look").color.off.rest.egui()
+    };
+    assert_ne!(ink(true), ink(false), "AfterInk::Muted changes the label's ink");
 }

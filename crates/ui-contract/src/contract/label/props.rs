@@ -166,6 +166,19 @@ pub enum CaptionInk {
     Normal,
 }
 
+/// The ink of the text after a check box, a radio or a switch. An app sets it for the controls it wraps (`with_env`);
+/// the default is the full ink. A disabled control's text stays the disabled ink either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum AfterInk {
+    /// `text.normal`.
+    #[default]
+    Normal,
+    /// `text.muted`, which keeps 4.5:1 on the surfaces: a switch's label that reads as secondary while it is off.
+    Muted,
+}
+
 /// Whether the beside captions of a [`LabelScheme::Inline`] form share one column. Off (the default), each caption is
 /// as wide as its own text and its control follows it at once. On, the captions keep to the row start in one column as
 /// wide as the widest, so the controls after them line up (production's Rotate Pages dialog: Direction:, Pages: and

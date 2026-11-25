@@ -1,6 +1,6 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{CaptionInk, FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk, LinkLabelUnderline};
+use super::props::{AfterInk, CaptionInk, FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk, LinkLabelUnderline};
 use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
@@ -30,8 +30,8 @@ pub(super) struct LabelStyle {
     gap: f32,
     /// The detail: `text.muted`, `text.disabled` with a disabled control.
     detail: Stateful<StyleColor>,
-    /// The name: `TypeRole::Label` in the [`CaptionInk`]; after a check box or a radio, `TypeRole::Body` in
-    /// `text.normal`. `text.disabled` with a disabled control.
+    /// The name: `TypeRole::Label` in the [`CaptionInk`]; after a check box, a radio or a switch, `TypeRole::Body` in
+    /// `text.normal` (`text.muted` under [`AfterInk::Muted`]). `text.disabled` with a disabled control.
     #[style(text)]
     name: TextLook,
     /// The glyph and icon: their own ink (`None`), `text.disabled` with a disabled control.
@@ -177,7 +177,8 @@ impl Component for LabelLeaf {
             name: {
                 let text = &cx.tokens.color.text;
                 let caption = if cx.env::<CaptionInk>() == CaptionInk::Normal { text.normal } else { text.muted };
-                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, caption) };
+                let after = if cx.env::<AfterInk>() == AfterInk::Muted { text.muted } else { text.normal };
+                let (role, ink) = if key.after { (TypeRole::Body, after) } else { (TypeRole::Label, caption) };
                 let neutral = cx.env::<LinkLabelInk>() == LinkLabelInk::Neutral;
                 if key.link && !neutral {
                     // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
