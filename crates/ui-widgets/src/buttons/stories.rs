@@ -1,8 +1,8 @@
 //! Stories of the buttons.
 
 use super::{
-    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PopupMark, PressFocus, PushButtonLook, SplitButton,
-    SplitMenu, ToggleButton,
+    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, LinkLook, PopupMark, PressFocus, PushButtonLook,
+    SplitButton, SplitMenu, ToggleButton,
 };
 use crate::contract::{Bind, BodyCx, Entry, LeastWidth, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger, Validity};
 use crate::display::{Picture, Shade, Text};
@@ -355,6 +355,25 @@ fn button_as_call_to_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     shown.into()
 }
 
+/// A start page's New and Open in the `PageAction` place: at least `size.page.button` high with at least
+/// `size.page.button_side` beside their labels (a push button's own in the built-in size sets).
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "As page actions")]
+fn button_as_page_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ControlPlace::PageAction);
+        },
+        |ui| {
+            Row::new().show(ui, |ui, _| {
+                Button::new("New file").variant(Variant::PRIMARY).show(ui);
+                Button::new("Open").show(ui);
+            })
+        },
+    )
+    .into()
+}
+
 /// One toggle off and one on with an icon, as the gallery card shows them.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -510,6 +529,19 @@ fn split_button_command(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Link, covers = [Default])]
 fn link(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Link::new("Show all your shortcuts").url("https://example.com/shortcuts").show(ui).into()
+}
+
+/// A link in the link colour alone (`LinkLook::Plain`), as a start page's list of links shows it.
+#[story(Link, covers = [], title = "Plain")]
+fn link_plain(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(LinkLook::Plain);
+        },
+        |ui| Link::new("Source code on the web").url("https://example.com/source").show(ui),
+    )
+    .into()
 }
 
 /// A command button showing its command's chord after the label.

@@ -94,6 +94,8 @@ APP_KEYS = {
     "test_threads": (int, None),
 }
 APP_BUILDING = {"test", "check", "build", "run", "bench", "clippy", "doc", "rustc"}
+# cargo's own subcommands that resolve a profile; `cargo()` passes the dev settings after them.
+CARGO_BUILDING = {"test", "check", "build", "run", "bench", "doc", "rustc", "metadata", "tree"}
 APP_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
 # Set by main() from the workspace's `[workspace.metadata.cl]` in an app workspace; None in craft-libs.
 APP = None
@@ -379,9 +381,13 @@ def cargo(top, cargo_args, json_out=False, timings=True):
         RECORD["target"] = target
     if timings:
         cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
-    # An app workspace keeps its own profile settings.
+    # An app workspace keeps its own profile settings. For cargo's own build commands they go after the subcommand:
+    # cargo lets a `--config` given there replace every `--config` given before it, so a caller's own `--config`
+    # (.config/cargo-ci.toml) would otherwise drop the dev settings and build every crate, dependencies included, at
+    # opt-level 0. An external subcommand (fmt) would read them as its own options, so they stay before it.
     config = [] if APP else [x for c in dev_profile_config() for x in ("--config", c)]
-    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + config + cargo_args
+    split = 1 if cargo_args[:1] and cargo_args[0] in CARGO_BUILDING else 0
+    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args[:split] + config + cargo_args[split:]
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
     if DRY_RUN:
