@@ -30,7 +30,7 @@ pub(crate) fn is_emf(b: Bytes) -> bool {
 
 /// The picture frame: `rclFrame` (0.01 mm) mapped to device units through `szlDevice` and
 /// `szlMillimeters`, sized in points. Without a usable frame, the device bounds stand in (1 unit = 1 point).
-pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
+pub(crate) fn parse(input: Bytes, depth: u8) -> Result<(Canvas, Option<Frame>), Error> {
     if !is_emf(input) {
         return Err(Error::BadHeader);
     }
@@ -45,7 +45,7 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
     if let Some(px_mm) = device_px_per_mm(input) {
         cv.set_device_mm(px_mm);
     }
-    let mut plus = crate::emfplus::Plus::new();
+    let mut plus = crate::emfplus::Plus::new(depth);
     plus.frame = frame.as_ref().map(|f| f.rect);
     let mut parsed = 0usize;
     let mut pos = hsize.max(88);
@@ -77,22 +77,15 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
 }
 
 /// Device pixels per millimetre on each axis, from `szlDevice` (72) and the device's size:
-/// `szlMicrometers` (100) when the header has that extension (a header of 108 bytes or more) and
+/// `szlMicrometers` (100) when the fixed header includes that extension and
 /// it is set, which is a thousand times finer, else `szlMillimeters` (80).
 fn device_px_per_mm(input: Bytes) -> Option<(f64, f64)> {
-    let (dw, dh) = (input.i32(72)?, input.i32(76)?);
-    if dw <= 0 || dh <= 0 {
-        return None;
-    }
-    if input.u32(4)? >= 108
-        && let (Some(uw), Some(uh)) = (input.u32(100), input.u32(104))
-        && uw > 0
-        && uh > 0
-    {
-        return Some((f64::from(dw) * 1000.0 / f64::from(uw), f64::from(dh) * 1000.0 / f64::from(uh)));
-    }
-    let (mw, mh) = (input.i32(80)?, input.i32(84)?);
-    (mw > 0 && mh > 0).then(|| (f64::from(dw) / f64::from(mw), f64::from(dh) / f64::from(mh)))
+    let facts = crate::units::emf_device(input)?;
+    let (dw, dh) = (f64::from(facts.pixels.0), f64::from(facts.pixels.1));
+    Some(match facts.physical_size {
+        crate::EmfPhysicalSize::Micrometres(w, h) => (dw * 1000.0 / f64::from(w), dh * 1000.0 / f64::from(h)),
+        crate::EmfPhysicalSize::Millimetres(w, h) => (dw / f64::from(w), dh / f64::from(h)),
+    })
 }
 
 /// The frame from `rclFrame` (offset 24), `szlDevice` (72) and `szlMillimeters` (80) in the header.
@@ -357,14 +350,21 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
 /// EMR_CREATEDIBPATTERNBRUSHPT (94) and EMR_CREATEMONOBRUSH (93): handle, colour usage, then the
 /// bitmap info and bits as offset/size pairs. A mono brush (or one whose palette holds indices,
 /// DIB_PAL_COLORS) takes the text and background colours. An undecodable bitmap leaves the slot
-/// empty.
+/// empty, as does a tile past the side cap; either is counted as a dropped image unless it has no
+/// pixels.
 fn create_dib_brush(cv: &mut Canvas, r: Bytes, mono: bool) -> Option<()> {
     let slot = r.u32(8)? as usize;
     let usage = r.u32(12)?;
     let (bo, bl) = (r.u32(16)? as usize, r.u32(20)? as usize);
     let (po, pl) = (r.u32(24)? as usize, r.u32(28)? as usize);
-    let img = dib::decode(Bytes(r.slice(bo, bl)?), Bytes(r.slice(po, pl)?), false)?;
-    let b = Brush::pattern(img, mono || usage == 1)?;
+    let (info, bits) = (r.slice(bo, bl).map(Bytes), r.slice(po, pl).map(Bytes));
+    let brush = info.zip(bits).and_then(|(info, bits)| dib::decode(info, bits, false)).and_then(|img| Brush::pattern(img, mono || usage == 1));
+    let Some(b) = brush else {
+        if !info.is_some_and(|i| dib::has_no_pixels(i, bits)) {
+            cv.drop_image();
+        }
+        return None;
+    };
     cv.add_object(Some(slot), Obj::Brush(b));
     Some(())
 }
@@ -500,17 +500,35 @@ fn set_dibits(cv: &mut Canvas, r: Bytes) -> Option<()> {
 
 /// Decodes the bitmap at `at` = (offset of the bmi offset/length pair, offset of the bits pair), both
 /// inside the record, and stretches the source rectangle `src` into `dst`. Both are `[x, y, w, h]`; a
-/// non-positive source size means the whole bitmap. `blend` decides how it combines.
+/// non-positive source size means the whole bitmap. `blend` decides how it combines. A record with
+/// pixel bits whose bitmap cannot be read, or is past a limit, is counted as a dropped image. A raster
+/// operation that takes no source fills the destination instead (see [`Canvas::fill_rop`]), with or
+/// without bits.
 fn blit(cv: &mut Canvas, r: Bytes, dst: [f64; 4], src: [f64; 4], at: (usize, usize), blend: Blend) -> Option<()> {
+    if let Blend::Rop(rop) = blend
+        && !dib::uses_source(rop)
+    {
+        cv.fill_rop(dst, rop);
+        return Some(());
+    }
     let (bo, bl) = (r.u32(at.0)? as usize, r.u32(at.0 + 4)? as usize);
     let (po, pl) = (r.u32(at.1)? as usize, r.u32(at.1 + 4)? as usize);
     if pl == 0 {
         return None;
     }
-    let info = Bytes(r.slice(bo, bl)?);
-    let pixels = Bytes(r.slice(po, pl)?);
-    let (mut img, dst) = dib::decode_clip(info, pixels, blend.per_pixel(), src.map(|v| v as i64), dst)?;
+    let src = src.map(|v| v as i64);
+    let (info, bits) = (r.slice(bo, bl).map(Bytes), r.slice(po, pl).map(Bytes));
+    let decoded = info.zip(bits).and_then(|(info, pixels)| dib::decode_clip(info, pixels, blend.per_pixel(), src, dst));
+    let Some((mut img, dst)) = decoded else {
+        if !info.is_some_and(|i| dib::crop_misses(i, bits, src)) {
+            cv.drop_image();
+        }
+        return None;
+    };
     dib::prepare(&mut img, blend);
-    cv.bitmap(dst, img);
+    match blend {
+        Blend::Rop(rop) => cv.bitmap_rop(dst, img, rop),
+        Blend::Alpha { .. } => cv.bitmap(dst, img),
+    }
     Some(())
 }

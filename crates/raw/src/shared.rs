@@ -223,6 +223,22 @@ fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
     x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
+/// Canon maker-note `AspectInfo` (`0x009a`): aspect code, width, height, left, top, as 32-bit values.
+pub(crate) const ASPECT_INFO: u16 = 0x009a;
+
+/// The shot's aspect-ratio rectangle from a Canon maker note's `AspectInfo`, placed inside `image` (the image area
+/// it is measured from). `None` when the tag is absent or malformed, or its rectangle doesn't fit inside `image`.
+/// Used by CR2 and CR3, so it lives here rather than behind either decoder's feature.
+pub(crate) fn aspect_crop(maker: Option<&craft_tiff::Ifd>, image: Rect) -> Option<Rect> {
+    let data = maker?.u64s(ASPECT_INFO)?;
+    let [width, height, left, top] = [1usize, 2, 3, 4].map(|i| data.get(i).and_then(|&v| usize::try_from(v).ok()));
+    let (width, height, left, top) = (width?, height?, left?, top?);
+    if width < 2 || height < 2 || left.checked_add(width)? > image.width || top.checked_add(height)? > image.height {
+        return None;
+    }
+    Some(Rect::new(image.x.checked_add(left)?, image.y.checked_add(top)?, width, height))
+}
+
 #[cfg(test)]
 pub(crate) fn declare_strip_len(file: &mut [u8], len: u32, declared: u32) {
     let big = file.starts_with(b"MM");

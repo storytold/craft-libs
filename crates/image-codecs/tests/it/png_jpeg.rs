@@ -490,37 +490,103 @@ fn png_rows_fail_like_decode_on_damaged_files() {
 }
 
 // ---------------------------------------------------------------------------
-// PngSuite corpus (repo-root corpus/pngsuite/*.png; feature `corpus`, fetched by
-// `cargo xtask corpus --all`; missing = failure)
+// PngSuite corpus (repo-root corpus/pngsuite/; feature `corpus`). The tests read the PNGs that
+// tests/it/common/pngsuite.tsv lists, each checked against its SHA-256 first; a missing or changed
+// listed file fails the test, and an unlisted file is not read.
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "corpus")]
 #[test]
 fn pngsuite_corpus_matches_oracle() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pngsuite");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        panic!("{} is missing: run `cargo xtask corpus --all`", dir.display());
-    };
     let mut checked = 0;
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("png") {
-            continue;
-        }
-        let bytes = std::fs::read(&p).unwrap();
+    for (name, bytes) in common::pngsuite::pngs() {
         let oracle = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png);
         let ours = decode(&bytes);
         match (ours, oracle) {
             (Ok(a), Ok(b)) => {
-                assert_eq!(a.to_rgba16(), b.into_rgba16().into_raw(), "{}", p.display());
+                assert_eq!(a.to_rgba16(), b.into_rgba16().into_raw(), "{name}");
                 checked += 1;
             }
-            (Err(e), Ok(_)) => panic!("{}: we failed but oracle decoded: {e}", p.display()),
+            (Err(e), Ok(_)) => panic!("{name}: we failed but oracle decoded: {e}"),
             _ => {}
         }
     }
     eprintln!("pngsuite: {checked} files compared");
-    assert!(checked > 100, "{}: only {checked} PNGs compared: run `cargo xtask corpus --all`", dir.display());
+    assert!(checked > 100, "only {checked} PNGs compared");
+}
+
+/// The pinned list names the 178 files of the 2017 archive and `LICENSE`, a copy of the archive's
+/// `PngSuite.LICENSE` with the same SHA-256: 179 names, 176 of them PNGs, every name once.
+#[test]
+fn pngsuite_manifest_lists_the_whole_suite() {
+    use common::pngsuite::{MANIFEST, parse};
+    let rows = parse(MANIFEST).unwrap();
+    assert_eq!(rows.len(), 179);
+    assert_eq!(rows.keys().filter(|n| n.ends_with(".png")).count(), 176);
+    assert_eq!(rows["LICENSE"], rows["PngSuite.LICENSE"]);
+    for name in ["PngSuite.README", "PngSuite.png", "basn0g01.png", "xs7n0g01.png", "z09n2c08.png"] {
+        assert!(rows.contains_key(name), "{name}");
+    }
+    assert_eq!(MANIFEST.lines().filter(|l| l.starts_with('#')).count(), 7);
+}
+
+/// A row with a bad digest, a path, a hidden name or a repeated name is refused, and so is a list
+/// with no rows. Extra columns, blank lines and comments are accepted.
+#[test]
+fn pngsuite_manifest_refuses_bad_rows() {
+    use common::pngsuite::parse;
+    let d = "a".repeat(64);
+    assert_eq!(parse(&format!("# note\n\n{d}\tx.png\tCC0-1.0\thttps://example.com/x.png\n")).unwrap().len(), 1);
+    for bad in [
+        format!("{d}\tx.png\n{d}\tx.png\n"),
+        format!("{d}\t../x.png\n"),
+        format!("{d}\tdir/x.png\n"),
+        format!("{d}\tdir\\x.png\n"),
+        format!("{d}\t.x.png\n"),
+        format!("{d}\t\n"),
+        format!("{d}  x.png\n"),
+        format!("{}\tx.png\n", "a".repeat(63)),
+        format!("{}\tx.png\n", "A".repeat(64)),
+        format!("{}\tx.png\n", "g".repeat(64)),
+        "# only a comment\n".to_string(),
+        String::new(),
+    ] {
+        assert!(parse(&bad).is_err(), "{bad:?}");
+    }
+}
+
+/// The corpus reader returns every listed PNG with its bytes and nothing else: an unlisted PNG in
+/// the folder is not read, and a listed PNG that is missing, changed or not a regular file fails.
+#[test]
+fn pngsuite_reader_takes_only_listed_files_that_match() {
+    use common::pngsuite::{pinned_pngs, sha256_hex};
+    let dir = std::env::temp_dir().join(format!("craft-image-codecs-pngsuite-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = encode(&synth(5, 4, ChannelLayout::Rgb, SampleType::U8, 1, 0.5), Format::Png, &EncodeOptions::default()).unwrap();
+    let b = encode(&synth(3, 7, ChannelLayout::Gray, SampleType::U16, 2, 0.5), Format::Png, &EncodeOptions::default()).unwrap();
+    std::fs::write(dir.join("a.png"), &a).unwrap();
+    std::fs::write(dir.join("b.png"), &b).unwrap();
+    std::fs::write(dir.join("unlisted.png"), &a).unwrap();
+    let manifest = format!("# test\n{}\ta.png\n{}\tb.png\n{}\tnotes.txt\n", sha256_hex(&a), sha256_hex(&b), "0".repeat(64));
+
+    let got = pinned_pngs(&dir, &manifest).unwrap();
+    assert_eq!(got, vec![("a.png".to_string(), a.clone()), ("b.png".to_string(), b.clone())]);
+
+    let mut changed = b.clone();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    std::fs::write(dir.join("b.png"), &changed).unwrap();
+    let err = pinned_pngs(&dir, &manifest).unwrap_err();
+    assert!(err.contains("b.png") && err.contains("does not match"), "{err}");
+    std::fs::write(dir.join("b.png"), &b).unwrap();
+
+    std::fs::remove_file(dir.join("a.png")).unwrap();
+    assert!(pinned_pngs(&dir, &manifest).unwrap_err().contains("a.png"));
+    std::fs::create_dir(dir.join("a.png")).unwrap();
+    assert!(pinned_pngs(&dir, &manifest).unwrap_err().contains("regular file"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// The preflight charges the decoded layout's bytes per pixel: a 1000×1000 Gray8 PNG (1 MB) fits a
@@ -539,21 +605,12 @@ fn png_preflight_uses_the_output_layout() {
 #[cfg(feature = "corpus")]
 #[test]
 fn png_rows_equal_decode_on_the_pngsuite_corpus() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pngsuite");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        panic!("{} is missing: run `cargo xtask corpus --all`", dir.display());
-    };
     let mut checked = 0;
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("png") {
-            continue;
-        }
-        let bytes = std::fs::read(&p).unwrap();
-        assert_steps_equal_decode(&bytes, &p.display().to_string());
+    for (name, bytes) in common::pngsuite::pngs() {
+        assert_steps_equal_decode(&bytes, &name);
         checked += 1;
     }
-    assert!(checked > 100, "{}: only {checked} PNGs compared: run `cargo xtask corpus --all`", dir.display());
+    assert!(checked > 100, "only {checked} PNGs compared");
 }
 
 /// Row-by-row decoding gives `decode`'s pixels and metadata for every PngSuite file it takes (all
@@ -561,18 +618,9 @@ fn png_rows_equal_decode_on_the_pngsuite_corpus() {
 #[cfg(feature = "corpus")]
 #[test]
 fn pngsuite_corpus_rows_match_the_whole_decode() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pngsuite");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        panic!("{} is missing: run `cargo xtask corpus --all`", dir.display());
-    };
     let opts = DecodeOptions { keep_orientation: true, ..Default::default() };
     let (mut streamed, mut refused, mut skipped) = (0, 0, 0);
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("png") {
-            continue;
-        }
-        let bytes = std::fs::read(&p).unwrap();
+    for (name, bytes) in common::pngsuite::pngs() {
         // The importer only streams files `detect` takes for PNG.
         if detect(&bytes) != Some(Format::Png) {
             skipped += 1;
@@ -596,24 +644,23 @@ fn pngsuite_corpus_rows_match_the_whole_decode() {
         match (whole, rows) {
             (Ok(img), Ok(Some(x))) => {
                 let h = header.unwrap();
-                assert_eq!((img.width(), img.height(), img.layout(), img.sample_type()), (h.width, h.height, h.layout, h.sample), "{}", p.display());
-                assert!(img.data() == data, "{}: pixels", p.display());
+                assert_eq!((img.width(), img.height(), img.layout(), img.sample_type()), (h.width, h.height, h.layout, h.sample), "{name}");
+                assert!(img.data() == data, "{name}: pixels");
                 assert_eq!(
                     (&img.icc, &img.meta.exif, &img.meta.text, &img.meta.xmp, &img.warnings),
                     (&x.icc, &x.meta.exif, &x.meta.text, &x.meta.xmp, &x.warnings),
-                    "{}",
-                    p.display()
+                    "{name}"
                 );
-                assert_eq!(img.meta.dpi, x.meta.dpi, "{}", p.display());
+                assert_eq!(img.meta.dpi, x.meta.dpi, "{name}");
                 streamed += 1;
             }
             (Ok(_), Ok(None)) => refused += 1,
-            (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{}", p.display()),
-            (a, b) => panic!("{}: whole {:?}, rows {:?}", p.display(), a.map(|_| ()), b.map(|r| r.map(|_| ()))),
+            (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string(), "{name}"),
+            (a, b) => panic!("{name}: whole {:?}, rows {:?}", a.map(|_| ()), b.map(|r| r.map(|_| ()))),
         }
     }
     eprintln!("pngsuite: {streamed} streamed, {refused} refused (interlaced), {skipped} skipped (not detected as PNG)");
-    assert!(streamed > 100, "only {streamed} PNGs streamed: run `cargo xtask corpus --all`");
+    assert!(streamed > 100, "only {streamed} PNGs streamed");
 }
 
 /// Streaming a PNG's rows a group at a time gives the pixels and metadata `decode` gives, holds
@@ -664,4 +711,133 @@ fn step_stream_gives_the_pixels_and_extras_of_decode() {
 /// Bytes per row of `w` pixels.
 fn dec_line(w: u32, layout: ChannelLayout, sample: SampleType) -> usize {
     w as usize * layout.channels() * sample.bytes()
+}
+
+#[test]
+fn bounded_png_stream_does_not_charge_unretained_full_frame() {
+    let image = synth(256, 1024, ChannelLayout::Rgba, SampleType::U16, 77, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let limits = Limits { max_alloc: 512 * 1024, ..Limits::default() };
+    assert!(image.data().len() > limits.max_alloc as usize);
+    assert!(PngDecodeRows::new(bytes.as_slice(), &limits).is_err());
+    assert!(PngDecodeRows::new_streaming(bytes.as_slice(), &limits).is_err());
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &limits).unwrap();
+    assert!(decoder.streamable());
+    // Opening a stream must not become a way to bypass whole-image allocation guards.
+    assert!(decoder.reserve_output().is_err());
+    assert!(decoder.step(&mut || true).is_err());
+    let mut next = 0;
+    let mut sink = |first: u32, rows: &[u8]| -> Result<(), CodecError> {
+        assert_eq!(first as usize, next);
+        assert!(rows.len() <= 3 * 256 * 8);
+        let start = next * 256 * 8;
+        assert_eq!(rows, &image.data()[start..start + rows.len()]);
+        next += rows.len() / (256 * 8);
+        Ok(())
+    };
+    while decoder.step_stream(3, &mut || false, &mut sink).unwrap().is_none() {}
+    assert_eq!(next, 1024);
+}
+
+#[test]
+fn bounded_png_stream_keeps_group_dimension_and_fallback_limits() {
+    let image = synth(256, 1024, ChannelLayout::Rgba, SampleType::U16, 81, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let limits = Limits { max_alloc: 512 * 1024, ..Limits::default() };
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &limits).unwrap();
+    assert!(decoder.step_stream::<CodecError>(1024, &mut || true, &mut |_, _| panic!("oversized group reached sink")).is_err());
+    for strict in [
+        Limits { max_width: 255, ..limits },
+        Limits { max_height: 1023, ..limits },
+        Limits { max_pixels: 256 * 1024 - 1, ..limits },
+        Limits { max_alloc: 1024, ..limits },
+    ] {
+        assert!(PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &strict).is_err());
+    }
+    let adam7 = interlaced(&image);
+    assert!(PngDecodeRows::new_bounded_streaming(adam7.as_slice(), &limits).is_err());
+}
+
+#[test]
+fn bounded_png_stream_rejects_shrinking_below_buffered_rows() {
+    let image = synth(16, 8, ChannelLayout::Rgba, SampleType::U16, 83, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &Limits::default()).unwrap();
+    for _ in 0..3 {
+        assert!(decoder.step_stream::<CodecError>(4, &mut || false, &mut |_, _| panic!("group is incomplete")).unwrap().is_none());
+    }
+    assert!(decoder.step_stream::<CodecError>(1, &mut || true, &mut |_, _| panic!("changed group reached sink")).is_err());
+    let mut output = Vec::new();
+    decoder
+        .step_stream::<CodecError>(4, &mut || true, &mut |_, rows| {
+            output.extend_from_slice(rows);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(output, image.data());
+}
+
+#[test]
+fn bounded_png_stream_preserves_late_exif_across_metadata_yields() {
+    let image = synth(16, 8, ChannelLayout::Rgba, SampleType::U16, 89, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let mut exif = sample_exif();
+    exif[18..22].copy_from_slice(&6u32.to_le_bytes());
+    let mut chunks = vec![png_chunk(b"eXIf", &exif)];
+    for i in 0..150 {
+        chunks.push(png_chunk(b"tEXt", format!("key{i}\0value").as_bytes()));
+    }
+    let bytes = with_chunks_before_iend(&bytes, &chunks);
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &Limits::default()).unwrap();
+    assert!(decoder.streamable());
+    let mut output = Vec::new();
+    let extras = loop {
+        if let Some(extras) = decoder
+            .step_stream::<CodecError>(2, &mut || false, &mut |_, rows| {
+                output.extend_from_slice(rows);
+                Ok(())
+            })
+            .unwrap()
+        {
+            break extras;
+        }
+    };
+    assert_eq!(output, image.data());
+    assert_eq!(extras.orientation, 6);
+    assert_eq!(extras.meta.text.len(), 150);
+}
+
+/// zune-jpeg 0.5 asserts on some subsampled CMYK frames whose first component isn't the largest
+/// (jpeg-encoder writes C, M and Y at 1×1 and K larger); craft-jpeg reads those instead, and they
+/// decode to the inks they were written with. The others of these files read as before.
+#[test]
+fn cmyk_frames_zune_jpeg_panics_on_decode() {
+    use jpeg_encoder::{ColorType, Encoder, SamplingFactor as S};
+    let mut seen = 0;
+    for (s, progressive) in
+        [(S::F_2_2, true), (S::R_4_2_0, true), (S::F_4_1, false), (S::F_4_2, false), (S::F_2_4, false), (S::R_4_1_1, false), (S::R_4_1_0, false)]
+    {
+        for (w, h) in [(1u16, 1u16), (9, 1), (1, 9), (17, 13), (40, 40)] {
+            let inks: Vec<u8> = (0..usize::from(w) * usize::from(h)).flat_map(|_| [30u8, 90, 150, 210]).collect();
+            let mut out = Vec::new();
+            let mut e = Encoder::new(&mut out, 100);
+            e.set_sampling_factor(s);
+            e.set_progressive(progressive);
+            e.encode(&inks, w, h, ColorType::Cmyk).unwrap();
+            let zune = std::panic::catch_unwind(|| {
+                let mut d = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&out[..]));
+                d.decode().is_ok()
+            });
+            if zune.is_ok() {
+                // Read or refused by zune-jpeg as before; no panic either way.
+                let _ = decode(&out);
+                continue;
+            }
+            seen += 1;
+            let img = decode(&out).unwrap_or_else(|e| panic!("{s:?} {w}x{h}: {e}"));
+            assert_eq!((img.dimensions(), img.layout()), ((u32::from(w), u32::from(h)), ChannelLayout::Cmyk));
+            assert!(img.data().iter().zip(&inks).all(|(a, b)| a.abs_diff(*b) <= 3), "{s:?} progressive {progressive} {w}x{h}");
+        }
+    }
+    assert!(seen >= 10, "zune-jpeg panicked on {seen} of them");
 }

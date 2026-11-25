@@ -137,6 +137,7 @@ fn type3_fonts_draw_their_glyphs() {
          /T3 T3 definefont pop /T3 findfont 20 scalefont setfont 10 20 moveto (AA) show");
     // Two glyphs, the second 12 points (600 units at 20 pt) to the right.
     assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
+    assert!(!c.contains("/ActualText"), "Type 3 procedures are not synthetic text spans: {c}");
     assert!(c.contains("22 20 m"), "{c}");
 }
 
@@ -472,6 +473,28 @@ fn actual_text_uses_the_selected_encoding_and_omits_unknown_names() {
 }
 
 #[test]
+fn composite_show_only_omits_text_for_selected_type3_glyphs() {
+    let setup = "/T3 8 dict dup begin /FontType 3 def /FontMatrix [0.001 0 0 0.001 0 0] def /FontBBox [0 0 1000 1000] def /Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for Encoding 65 /A put /BuildChar { pop pop 600 0 0 0 500 500 setcachedevice 0 0 500 500 rectfill } def end def /T3 T3 definefont pop /T0 8 dict dup begin /FontType 0 def /FMapType 2 def /FontMatrix [1 0 0 1 0 0] def /Encoding 256 array def 0 1 255 { Encoding exch /A put } for /FDepVector [ /Helvetica findfont /T3 findfont ] def end /T0 exch definefont pop /T0 findfont 20 scalefont setfont 10 20 moveto ";
+    let (standard, _) = run(&format!("{setup} <0041> show"));
+    assert!(standard.contains("/ActualText (AA)"), "{standard}");
+    let (mixed, _) = run(&format!("{setup} <00410141> show"));
+    assert!(!mixed.contains("/ActualText"), "{mixed}");
+    assert!(mixed.lines().any(|line| line == "f"), "the Type 3 glyph is still painted: {mixed}");
+}
+
+#[test]
+fn actual_text_starts_after_persistent_clip() {
+    let (content, _) = run(
+        "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip newpath /Helvetica findfont 12 scalefont setfont 10 10 moveto (Hi) show 0 0 100 100 rectfill",
+    );
+    let clip = content.find("\nW\n").unwrap();
+    let span = content.find("/ActualText (Hi)").unwrap();
+    let end = content.find("EMC").unwrap();
+    let restore = content.rfind("\nQ").unwrap();
+    assert!(clip < span && span < end && end < restore, "{content}");
+}
+
+#[test]
 fn text_paint_keeps_completed_glyphs_when_a_later_glyph_hits_the_work_limit() {
     let ttf = tiny_ttf();
     let sfnts: String = ttf.chunks(64).map(|c| format!("<{}>\n", c.iter().map(|b| format!("{b:02x}")).collect::<String>())).collect();
@@ -752,4 +775,48 @@ fn the_web_gets_smaller_default_limits() {
     } else {
         assert!(l.memory <= 1 << 30 && l.steps <= 50_000_000);
     }
+}
+
+#[test]
+fn restore_undoes_dictionary_changes() {
+    let (_, conv) = run("/Depth 2 dict def Depth /open 0 put \
+         /enter { save Depth /open get 1 add dup 8 gt { rangecheck } if Depth exch /open exch put } def \
+         1 1 50 { pop enter 0 0 1 1 rectfill restore } for \
+         Depth /open get 0 eq { 10 10 5 5 rectfill } if");
+    assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+
+    let (c, conv) = run("/a 1 def /d 2 dict def d /k 1 put save /a 2 def /b 3 def d /k 2 put d /k undef \
+         1 dict dup /z 9 put d copy pop /a 4 store restore \
+         a 1 eq /b where not and d /k get 1 eq and d /z known not and { 0 0 10 10 rectfill } if");
+    assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+    assert!(c.lines().any(|l| l == "f"), "{c}");
+
+    let (c, _) = run("save dup restore { restore } stopped { 0 0 10 10 rectfill } if");
+    assert!(c.lines().any(|l| l == "f"), "{c}");
+}
+
+#[test]
+fn prolog_keeps_builtin_cmyk_with_where() {
+    let (c, conv) = run("/setcmykcolor where { pop } { /setcmykcolor { pop pop pop pop 0 1 0 setrgbcolor } def } ifelse \
+         0 1 1 0 setcmykcolor 0 0 10 10 rectfill");
+    assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+    assert!(c.contains("0 1 1 0 k\n"), "{c}");
+
+    let (c, conv) = run("0.1 0.2 0.3 0.4 setcmykcolor currentcmykcolor \
+         0.4 eq exch 0.3 eq and exch 0.2 eq and exch 0.1 eq and { 0 0 10 10 rectfill } if");
+    assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+    assert!(c.lines().any(|l| l == "f"), "{c}");
+}
+
+#[test]
+fn readline_partial_line_and_eof() {
+    let (c, conv) = run("/s 16 string def currentfile 0 (END) /SubFileDecode filter s readline\n\
+         okEND { (ok) eq { 0 0 10 10 rectfill } if } { pop } ifelse");
+    assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+    assert!(c.lines().any(|l| l == "f"), "{c}");
+
+    let (c, conv) = run("/s 16 string def currentfile 0 (END) /SubFileDecode filter s readline\n\
+         END not exch length 0 eq and { 0 0 10 10 rectfill } if");
+    assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
+    assert!(c.lines().any(|l| l == "f"), "{c}");
 }

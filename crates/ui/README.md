@@ -546,6 +546,38 @@ documentation has the recipe for a shortcut smoke test on a non-Latin layout thr
 letters such as ổ, so an app relying on it fails the `vi` screens until its own face covers them. The per-release manual checks are in
 [language-testing.md](../../docs/language-testing.md).
 
+### Input steps and review screenshots
+
+`testing::input` drives any egui_kittest `Harness<State>` with a fixed number of frames per step:
+`move_to` (1), `press` and `release` (2 each), `click` (3), `drag` (`steps` + 3, primary button,
+1 to `MAX_DRAG_STEPS` moves), `key` (2), `type_text` (2) and `wheel` (2, in points). The modifiers
+given to a step are held from its first frame and released in its last; `press` keeps them held
+until the matching `release`. A drag with another button is `press`, `move_to` and `release`. The
+module documentation lists the events of each frame. The counts hold when no events queued with
+`Harness::event` are waiting, so run the harness after queuing events. `docking::testing::DockDriver` runs its own
+egui context and keeps its own `window_click` and `window_hold`.
+
+`testing::snapshot` writes screenshots for review and compares nothing. `snapshot_dir(var)` reads
+the folder from the environment variable `var`: `DEFAULT_DIR_VAR` (`CRAFT_UI_SNAPSHOT_DIR`), or an
+app's own variable name. With no folder, `with_snapshot_renderer` leaves the builder unchanged and
+no GPU is set up; with one, it sets up wgpu and returns `SnapshotError::Render` on a machine that
+can't render. `save(harness, dir, name)` renders the last frame to `{dir}/{name}.png`, creating the
+folder, and runs no frames, so settle the screen and set the theme first. Names are plain file
+names (ASCII letters, digits, `-`, `_`, `.`, `@`).
+
+```rust,ignore
+use craft_ui::testing::{input, snapshot};
+use egui::{Modifiers, PointerButton, pos2};
+
+let dir = snapshot::snapshot_dir("CRAFT_EXPORT_SNAPSHOTS");
+let mut harness = snapshot::with_snapshot_renderer(Harness::builder(), dir.as_deref())?.build_ui_state(export_ui, state);
+input::click(&mut harness, pos2(40.0, 20.0), PointerButton::Primary, Modifiers::NONE);
+harness.run();
+if let Some(dir) = &dir {
+    snapshot::save(&mut harness, dir, "export-dialog")?;
+}
+```
+
 ## Print settings and feedback
 
 `printing::State` holds the transient printer selection, copies, duplex and grayscale settings,
@@ -673,12 +705,73 @@ verify the actual pixels as well as callback routing.
 
 `text::align_galley_rows` positions already shaped rows inside a fixed-width reading area without changing glyphs or logical text. Supply a per-row alignment, for example the paragraph direction from the application shaper. The helper uses stock egui APIs and keeps cached glyph meshes shared. Its logical rectangle is the requested width; ink may overflow, so clip the painter when drawing cards. Use it for read-only painting, keeping the original galley for editable hit testing.
 
+## Sharing
+
+`share::ShareDialog` is a whole dialog. It holds a recipient picker with autocomplete and
+removable chips. It offers a view-or-edit choice, a note and a notify-by-email box. Under those it
+lists who already has access, with a withdrawal beside each entry. Every Craft app gets the same
+dialog. An application's own part comes to three lines.
+
+```rust
+// Once, at startup. The host supplies the half that reaches the service.
+app.share.connect(my_backend);
+
+// Every frame, open or shut. This is also where answers are collected.
+app.share.show(ctx);
+
+// From the app's Share control, drawn only while `available()` is true.
+if app.share.available() && share_button.clicked() {
+    app.share.open(entry.id.clone(), entry.name.clone());
+}
+```
+
+The dialog opens no socket, names no provider and holds no credential. It states each piece of
+work as a `share::Request` and hands it to a `share::ShareBackend`. That backend answers through a
+`share::Replier` whenever it is ready. Nothing in this crate implements that trait. A host writes
+the half that opens a socket, and this crate never learns what it reaches. The interface half
+therefore builds for the web, and every flow is testable with no server running.
+
+Autocomplete waits `share::DEBOUNCE` after the last keystroke before it asks anything. An answer
+to a query the user has already typed past is dropped before it reaches the list. A list that
+flickers back to stale matches is worse than one that arrives late.
+
+Partial success is rendered as partial success. A share aimed at five people with one wrong
+address reaches four. The dialog names the fifth with the reason the service gave. It keeps that
+one recipient in the picker. A correction then takes one edit. `outcome()` hands back both halves.
+
+Capability is reported and never assumed. `available()` stays false until the service says the
+provider supports sharing and an account is linked. `open` does nothing while it is false. An
+application draws no Share control in that state. A hidden feature beats a button that fails on
+use. Contacts and mail are reported separately. A server with no address book accepts typed
+addresses only. A server that cannot send mail disables the notify box and says why.
+`ShareLabels` holds every string the dialog shows. The defaults are English. A localized
+application replaces them without touching this crate.
+
+A contact's `avatar` is a URL. The dialog asks for the bytes through the same backend, as the row
+that needs the picture is painted and only while that row is on screen. A search answering with
+ten people costs no pictures until somebody looks at them. Each URL is asked about once. A refusal
+is remembered, with initials painted in its place. The host decides whether a picture may be
+fetched at all. A backend that refuses `share::Request::Avatar` gets initials painted instead, and
+a host that would rather not have an application reach a provider's avatar URL directly can say
+so by refusing it. A host that relays pictures answers it. Nothing else changes.
+
+### The account
+
+`account::AccountMenu` is the badge every suite puts in the top right. It shows who is signed in,
+where they are signed in, and whether storage is linked. It holds no credential. It asks the
+service who the caller is, through the application. It reports what the user asked for through
+`take_action`. The application owns what signing in means.
+
+Without linked storage, Open and Save have nowhere to go. The menu says so at rest. A failure at
+the moment of saving arrives too late to be useful.
+
 ## Compatibility and checks
 
 The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
 features, so egui's bundled fonts and rendering features remain the application's choice. It has
 no default features; see [UI fonts](#ui-fonts) for `color_fonts` and `system_fonts`, and
-[Testing screens in each language](#testing-screens-in-each-language) for `screen-testing`;
+[Testing screens in each language](#testing-screens-in-each-language) for `screen-testing`, which
+also adds `testing::input` and `testing::snapshot`;
 `testing` adds the headless docking driver `docking::testing`. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 

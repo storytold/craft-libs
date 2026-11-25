@@ -1,6 +1,6 @@
 [package]
 name = "craft-media"
-description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, and Ogg, AVI and MPEG-TS/PS demuxers."
+description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, an MPEG-TS/PS demuxer and MPEG-TS muxer, and Ogg and AVI demuxers."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,8 +22,11 @@ matroska = []
 avi = []
 # MXF demuxer and writer (`craft_media::mxf`); the writer formats dates with chrono.
 mxf = ["dep:chrono"]
-# MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`).
+# MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`), and the
+# transport stream writer (`craft_media::mpegts::mux`).
 mpegts = []
+# Sierra VMD (Video and Music Data) demuxer (`craft_media::vmd`).
+vmd = []
 # Ogg demuxer (Ogg Opus and Vorbis mapping, `craft_media::ogg`).
 ogg = []
 # Serialize and Deserialize for `Container`, `CodecId`, `CodecParams` and `PcmFormat`.
@@ -68,6 +71,14 @@ name = "oracle_mpegts"
 required-features = ["mpegts"]
 
 [[test]]
+name = "mpegts_mux_fuzz"
+required-features = ["mpegts"]
+
+[[test]]
+name = "mpegts_mux_readback"
+required-features = ["mpegts"]
+
+[[test]]
 name = "oracle_mux"
 required-features = ["isobmff"]
 
@@ -78,6 +89,10 @@ required-features = ["mxf"]
 [[test]]
 name = "oracle_ogg"
 required-features = ["ogg"]
+
+[[test]]
+name = "oracle_vmd"
+required-features = ["vmd"]
 
 [[test]]
 name = "roundtrip"

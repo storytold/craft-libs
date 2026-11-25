@@ -92,6 +92,11 @@ fn hostile_headers_fail_without_allocating() {
     assert_eq!(dec(&f), Err(Error::LimitExceeded("pixel count")));
     let mut f = header(10, 16384, 16384, 32, 0);
     f.extend_from_slice(&[0xFF, 1, 2, 3, 4]);
+    // The aggregate decoded-storage budget rejects this before any allocation.
+    assert_eq!(dec(&f), Err(Error::LimitExceeded("decode allocation bytes")));
+    // Under budget, an incomplete RLE stream must still fail as truncated.
+    let mut f = header(10, 16, 16, 32, 0);
+    f.extend_from_slice(&[0xFF, 1, 2, 3, 4]); // only 128 of 256 pixels
     assert_eq!(dec(&f), Err(Error::Malformed("truncated run-length data")));
     let mut f = header(2, 4, 4, 24, 0);
     f.extend_from_slice(&[0; 10]);
@@ -116,8 +121,8 @@ fn hostile_headers_fail_without_allocating() {
 fn the_pixel_limit_is_checked() {
     let mut f = header(3, 2, 2, 8, 0);
     f.extend_from_slice(&[0; 4]);
-    assert!(decode(&f, &Limits { max_pixels: 4 }).is_ok());
-    assert_eq!(decode(&f, &Limits { max_pixels: 3 }), Err(Error::LimitExceeded("pixel count")));
+    assert!(decode(&f, &Limits { max_pixels: 4, ..Limits::default() }).is_ok());
+    assert_eq!(decode(&f, &Limits { max_pixels: 3, ..Limits::default() }), Err(Error::LimitExceeded("pixel count")));
 }
 
 #[test]
@@ -233,5 +238,77 @@ fn written_files_read_back() {
             })
             .collect();
         assert_eq!(r.rgba, want, "{layout:?}");
+    }
+}
+
+#[test]
+fn aggregate_decode_budget_applies_before_rle_expansion() {
+    let mut file = header(10, 16, 16, 32, 0x28);
+    file.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0, 255, 255]);
+    let mut limits = Limits { max_decoded_bytes: 2047, ..Limits::default() };
+    assert_eq!(decode(&file, &limits), Err(Error::LimitExceeded("decode allocation bytes")));
+    limits.max_decoded_bytes = 2048;
+    assert_eq!(decode(&file, &limits).unwrap().rgba.len(), 1024);
+}
+#[test]
+fn default_budget_rejects_large_rle_header_without_large_fixture() {
+    let file = header(10, 16384, 16384, 32, 0x28);
+    assert_eq!(decode(&file, &Limits::default()), Err(Error::LimitExceeded("decode allocation bytes")));
+}
+#[test]
+fn aggregate_decode_budget_counts_raw_and_palette_storage() {
+    let mut file = header(1, 1, 1, 8, 0x20);
+    file[1] = 1;
+    file[5] = 1;
+    file[7] = 24;
+    file.extend_from_slice(&[0, 0, 255, 0]);
+    let mut limits = Limits { max_decoded_bytes: 8, ..Limits::default() };
+    assert_eq!(decode(&file, &limits), Err(Error::LimitExceeded("decode allocation bytes")));
+    limits.max_decoded_bytes = 9;
+    assert_eq!(decode(&file, &limits).unwrap().rgba, [255, 0, 0, 255]);
+}
+
+#[test]
+fn raw_top_left_matches_previous_sequence_encoder_for_every_layout() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use image::{ExtendedColorType, ImageEncoder, codecs::tga::TgaEncoder};
+
+    // Original generated samples, with distinguishing rows and non-opaque alpha.
+    for (layout, color, data) in [
+        (Layout::Gray, ExtendedColorType::L8, &[9, 19, 40, 80][..]),
+        (Layout::Rgb, ExtendedColorType::Rgb8, &[3, 5, 8, 13, 21, 34, 55, 89, 144, 150, 190, 247][..]),
+        (Layout::Rgba, ExtendedColorType::Rgba8, &[3, 5, 8, 13, 21, 34, 55, 89, 144, 150, 190, 247, 17, 31, 127, 1][..]),
+    ] {
+        let mut legacy = Vec::new();
+        TgaEncoder::new(&mut legacy).disable_rle().write_image(data, 2, 2, color)?;
+        let mut shared = Vec::new();
+        write_top_left_raw(&mut shared, 2, 2, layout, data)?;
+        assert_eq!(shared, legacy, "{layout:?}");
+        assert_eq!(shared.len(), 18 + data.len(), "no footer");
+    }
+    Ok(())
+}
+
+#[test]
+fn raw_top_left_rejects_bad_input_before_touching_the_sink() {
+    let mut output = Vec::new();
+    for (w, h, layout, data) in [
+        (0, 1, Layout::Gray, &[][..]),
+        (1, 0, Layout::Gray, &[][..]),
+        (u32::from(u16::MAX) + 1, 1, Layout::Rgb, &[][..]),
+        (u32::from(u16::MAX), u32::from(u16::MAX), Layout::Rgba, &[][..]),
+        (1, 1, Layout::GrayAlpha, &[1, 2][..]),
+        (1, 1, Layout::Rgba, &[0; 3][..]),
+        (1, 1, Layout::Rgba, &[0; 5][..]),
+    ] {
+        assert!(write_top_left_raw(&mut output, w, h, layout, data).is_err());
+    }
+    assert!(output.is_empty());
+}
+
+#[test]
+fn raw_top_left_reports_header_and_pixel_write_errors() {
+    for size in [17, 20] {
+        let mut bytes = [0; 20];
+        assert!(matches!(write_top_left_raw(&mut bytes[..size], 1, 1, Layout::Rgb, &[9, 19, 40]), Err(Error::Encode(_))));
     }
 }
