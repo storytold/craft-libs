@@ -517,8 +517,8 @@ impl Scrubber {
         Id::unique("craft-ui-numeric-scrub")
     }
 
-    fn label_id() -> Id {
-        Id::unique("craft-ui-numeric-label")
+    fn label_id(layer: egui::LayerId) -> Id {
+        Id::unique("craft-ui-numeric-label").with(layer)
     }
 
     fn enabled_id() -> Id {
@@ -579,21 +579,23 @@ impl Scrubber {
     fn note(ui: &Ui, label: RegisteredLabel) {
         let pass = ui.ctx().cumulative_pass_nr();
         let layer = ui.layer_id();
-        ui.data_mut(|d| d.insert_temp(Self::label_id(), RegisteredLabel { pass, layer, ..label }));
+        ui.data_mut(|d| d.insert_temp(Self::label_id(layer), RegisteredLabel { pass, layer, ..label }));
     }
 
     fn take_label(ui: &Ui, field_rect: Rect) -> Option<RegisteredLabel> {
-        let l = ui.data_mut(|d| {
-            let l = d.get_temp::<RegisteredLabel>(Self::label_id());
-            d.remove::<RegisteredLabel>(Self::label_id());
-            l
-        })?;
-        let gap = field_rect.left() - l.rect.right();
-        (l.layer == ui.layer_id()
-            && l.pass == ui.ctx().cumulative_pass_nr()
-            && (-1.0..=LABEL_GAP).contains(&gap)
-            && field_rect.y_range().contains(l.rect.center().y))
-        .then_some(l)
+        let pass = ui.ctx().cumulative_pass_nr();
+        let layer = ui.layer_id();
+        let id = Self::label_id(layer);
+        ui.data_mut(|d| {
+            let l = d.get_temp::<RegisteredLabel>(id)?;
+            let gap = field_rect.left() - l.rect.right();
+            if l.layer == layer && l.pass == pass && (-1.0..=LABEL_GAP).contains(&gap) && field_rect.y_range().contains(l.rect.center().y) {
+                d.remove::<RegisteredLabel>(id);
+                Some(l)
+            } else {
+                None
+            }
+        })
     }
 
     /// Scrub a numeric field, stepping its value based on horizontal drag on its associated label.

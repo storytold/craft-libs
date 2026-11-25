@@ -250,6 +250,67 @@ fn label_registration_scoped_to_container_id() {
 
     let same_layer_val = run_drag_in_layers(false);
     assert!(same_layer_val > 10.0, "same container control must change value when dragged");
+
+    // Interleaved draw: container_1 notes label, container_2 draws unrelated field,
+    // then container_1 draws its intended field in the same pass.
+    let (interleaved_unrelated_val, interleaved_owning_val) = {
+        let ctx = Context::default();
+        let label_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 20.0));
+        let field_rect = Rect::from_min_size(pos2(55.0, 10.0), vec2(60.0, 20.0));
+        let bounds = 0.0..=100.0;
+        let id_unrelated = Id::unique("field-unrelated");
+        let id_owning = Id::unique("field-owning");
+        let mut val_unrelated = 10.0;
+        let mut val_owning = 10.0;
+        let center = label_rect.center();
+
+        let layer1 = egui::LayerId::new(egui::Order::Middle, Id::unique("container_1"));
+        let layer2 = egui::LayerId::new(egui::Order::Middle, Id::unique("container_2"));
+
+        let run_interleaved_frame = |ctx: &Context, events: Vec<Event>, val_unrelated: &mut f64, val_owning: &mut f64| {
+            let mut out = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+                // 1. Container 1 notes label
+                ui.scope_builder(egui::UiBuilder::new().layer_id(layer1), |ui1| {
+                    Scrubber::note_label(ui1, label_rect);
+                });
+                // 2. Container 2 draws an unrelated numeric field at adjacent coordinates
+                ui.scope_builder(egui::UiBuilder::new().layer_id(layer2), |ui2| {
+                    let params = FieldScrubParams::new(id_unrelated, field_rect, "10", Some(*val_unrelated), 1, &bounds);
+                    if let Some(v) = Scrubber::field(ui2, params, |_, _, _| {}) {
+                        *val_unrelated = v;
+                    }
+                });
+                // 3. Container 1 draws its intended numeric field
+                ui.scope_builder(egui::UiBuilder::new().layer_id(layer1), |ui1| {
+                    let params = FieldScrubParams::new(id_owning, field_rect, "10", Some(*val_owning), 1, &bounds);
+                    if let Some(v) = Scrubber::field(ui1, params, |_, _, _| {}) {
+                        *val_owning = v;
+                    }
+                });
+            });
+            out.textures_delta.clear();
+        };
+
+        run_interleaved_frame(&ctx, vec![], &mut val_unrelated, &mut val_owning);
+        run_interleaved_frame(
+            &ctx,
+            vec![
+                Event::PointerMoved(center),
+                Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::default() },
+            ],
+            &mut val_unrelated,
+            &mut val_owning,
+        );
+        let moved = center + vec2(10.0, 0.0);
+        run_interleaved_frame(&ctx, vec![Event::PointerMoved(moved)], &mut val_unrelated, &mut val_owning);
+        let drag_pos = moved + vec2(40.0, 0.0);
+        run_interleaved_frame(&ctx, vec![Event::PointerMoved(drag_pos)], &mut val_unrelated, &mut val_owning);
+
+        (val_unrelated, val_owning)
+    };
+
+    assert_eq!(interleaved_unrelated_val, 10.0, "interleaved field in container_2 must not consume container_1 label");
+    assert!(interleaved_owning_val > 10.0, "owning field in container_1 must retain label binding and change value when dragged");
 }
 
 #[test]
