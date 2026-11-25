@@ -702,13 +702,10 @@ fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense 
 }
 
 /// The widget that holds the component's text or editor and the keys it keeps, when it has either.
-fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, memory: &mut MemoryStage) -> (Option<Id>, Option<focus::KeyUse>) {
+fn text_holder(id: Id, parts: &PartsStep, base: focus::KeyUse) -> (Option<Id>, Option<focus::KeyUse>) {
     let text = parts.text.decl.as_ref().map(|decl| {
         let decl = &decl.part;
-        let widget = crate::primitives::text_adapter::text_id(id, decl.key);
-        let held = crate::contract::text::held_selection(memory, id);
-        let draft = crate::contract::text::draft(memory, id);
-        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, draft.as_deref().unwrap_or(&decl.shown), base, &decl.options))
+        (crate::primitives::text_adapter::text_id(id, decl.key), crate::primitives::text_adapter::keys_of(base, &decl.options))
     });
     let editor =
         parts.text.editor.as_ref().map(|decl| (crate::primitives::ImeSurface::of(id, decl.key).widget(), super::editor::keys_of(base, decl.purpose)));
@@ -716,6 +713,17 @@ fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, me
         (Some((widget, keys)), _) | (None, Some((widget, keys))) => (Some(widget), Some(keys)),
         (None, None) => (None, None),
     }
+}
+
+/// `keys`, those of the component's text part, with the edits it cannot run now inactive (`text_adapter::with_idle`),
+/// read after the text step, so they are as the pass's edits left the selection and the undo steps.
+fn idle_keys(ctx: &Context, id: Id, parts: &PartsStep, keys: focus::KeyUse, memory: &mut MemoryStage) -> focus::KeyUse {
+    let Some(decl) = &parts.text.decl else { return keys };
+    let decl = &decl.part;
+    let held = crate::contract::text::held_selection(memory, id);
+    let draft = crate::contract::text::draft(memory, id);
+    let widget = crate::primitives::text_adapter::text_id(id, decl.key);
+    crate::primitives::text_adapter::with_idle(ctx, widget, held, draft.as_deref().unwrap_or(&decl.shown), keys)
 }
 
 /// What the stops of a component read: the owner, its place in a member group and the text it holds.
@@ -1002,7 +1010,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     }
     steps::check_parts(&ctx, facts.name, &parts);
     let keys = e.keys();
-    let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, keys, &mut *e.core().memory);
+    let (holder_widget, text_keys) = text_holder(id, &parts, keys);
     let own = own_sense(e, resolved, inert);
     // The collection handles a row's click, but its access node must still offer the redirected action.
     let unnarrowed = own;
@@ -1177,9 +1185,10 @@ fn update_steps(p: &mut Pass<'_, '_, '_>, env: &Env, h: &HostStep) {
     }
     e.updated();
     steps::record_context(e.core_ref());
-    // The stops register after `update`, which says whether the component joins its body's roving group.
-    let at =
-        StopsStep { ctx, id, rtl, env, resolved: p.resolved, holder_widget: h.holder_widget, member: h.member, own: h.own, text_keys: h.text_keys };
+    // The stops register after `update`, which says whether the component joins its body's roving group, and after
+    // the text step, so a Select All of the pass makes Copy active.
+    let text_keys = h.text_keys.map(|keys| idle_keys(ctx, id, &h.parts, keys, &mut *e.core().memory));
+    let at = StopsStep { ctx, id, rtl, env, resolved: p.resolved, holder_widget: h.holder_widget, member: h.member, own: h.own, text_keys };
     stops_step(at, e, facts, &h.parts);
     // The body's group registers after `update`, which may change its rules from what the component knows now.
     if let Some(roving) = e.roving() {

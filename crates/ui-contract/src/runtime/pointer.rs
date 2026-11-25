@@ -411,6 +411,13 @@ pub(crate) fn pass_of(ctx: &Context) -> u64 {
     pass::pass_nr(ctx, pass::current_viewport(ctx))
 }
 
+/// The primary press of this pass when it went down in `rect` on `layer` (`areas::lies_in`), whatever takes it. Read
+/// as the press step reads it, without noting a pointer input: the press engages the sensing of what it lands on.
+pub(crate) fn primary_press_in(ctx: &Context, layer: Layer, rect: egui::Rect) -> Option<PressStart> {
+    with_pass_raw(ctx, |pass| pass.frame.as_ref().and_then(|frame| frame.press))
+        .filter(|press| press.button == PointerButton::Primary && areas::lies_in(ctx, layer, rect, press.origin))
+}
+
 /// What the begin hook read of the running pass.
 pub(crate) fn pass_pointer(ctx: &Context) -> Arc<PassPointer> {
     let viewport = pass::current_viewport(ctx);

@@ -130,7 +130,20 @@ fn escape(ctx: &Context, layer: &Layer<'_>, scope: Option<FocusPolicy>, inside: 
     }
     // The focus may be in no record of the layer's host: the Escape is read from the events of the frame.
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Sent);
-    let step = keys::scope_escape(ctx, policy.cancel, pointer::press_captured(ctx), false)?;
+    // A Menu may close after its OWN child's captured press has already been cancelled by this Escape. The
+    // first Escape still goes only to that press: do not manufacture a component Cancel or relax another scope's
+    // capture priority. Require the current actual area and the arena's same-pass Escape outcome, not a latched
+    // native press target, old registration or merely a capture that has disappeared.
+    let cancelled_menu_press = policy.kind == craft_behavior::ScopeKind::Menu
+        && policy.cancel == CancelRule::Close
+        && layer.overlay.rank == Rank::Popup
+        && matches!(pointer::cancel_of_pass(ctx), Some(craft_behavior::PressCancel::Escape))
+        && overlay::current_egui_layer(ctx, layer.id).is_some_and(|area| crate::primitives::sensing::escape_cancelled_in_layer(ctx, area));
+    let step = if cancelled_menu_press {
+        craft_behavior::focus::EscapeStep::CloseScope
+    } else {
+        keys::scope_escape(ctx, policy.cancel, pointer::press_captured(ctx), false)?
+    };
     matches!(step, craft_behavior::focus::EscapeStep::CloseScope).then_some(CloseReason::Escape)
 }
 

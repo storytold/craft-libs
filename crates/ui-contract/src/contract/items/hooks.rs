@@ -681,6 +681,18 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if self.scrolls && !ui.is_sizing_pass() && !crate::runtime::measure::active(&ctx) {
             self.follow_anchor(comp, (&ctx, id), &layout, (rect, rtl));
         }
+        // The renamed item left the source (removed, renamed or hidden by the app, or folded away): its editor is gone, so the
+        // rename ends rather than waiting for the item to return and open the old draft again.
+        if let Some(key) = self.renaming.key.clone()
+            && !self.ended_rename
+            && !ui.is_sizing_pass()
+            && !crate::runtime::measure::active(&ctx)
+            && self.index_of(&key).is_none()
+        {
+            let before = Rename { key, name: self.renaming.draft.clone() };
+            self.events.push(CollectionEvent::Rename(EditEvent::cancel(self.renaming.gesture, CancelReason::Removed, Some(Mixed::Same(before)))));
+            self.ended_rename = true;
+        }
         if self.ended_rename {
             self.renaming = Renaming::default();
             if self.refocus {
@@ -959,6 +971,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let shifted = editor.submitted && editor.submit_mods.shift;
             let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
             let (end, escaped) = rename_input(ctx, &editor, rtl, &mut self.renaming.focused, &mut self.refocus);
+            // A pass that only measures keeps no focus, so it neither opens nor ends the hold.
+            let real = !row_ui.is_sizing_pass() && !crate::runtime::measure::active(ctx);
+            let has_focus = focus::is_focused(ctx, editor.response.id);
+            // The field lost the focus with nothing typed (a click elsewhere): the text field reports no event for an
+            // unedited name, so the rename ends here, as it does by Tab and as a typed name does by committing.
+            let blurred = real && self.renaming.held && !has_focus;
+            self.renaming.held |= real && has_focus;
             match end {
                 None if !editor.events.is_empty() => {}
                 None if escaped => {
@@ -996,6 +1015,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     }
                 }
                 None if editor.left_by_tab.is_some() => {
+                    self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Blur, Some(before))));
+                    self.ended_rename = true;
+                }
+                None if blurred => {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Blur, Some(before))));
                     self.ended_rename = true;
                 }

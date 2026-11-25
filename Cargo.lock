@@ -2301,6 +2301,7 @@ dependencies = [
 name = "craft-crw"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2375,6 +2376,7 @@ dependencies = [
  "craft-geom",
  "craft-raw",
  "craft-render-parity",
+ "craft-testkit",
  "proptest",
  "rayon",
  "serde",
@@ -2533,6 +2535,7 @@ name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "craft-testkit",
  "craft-xml",
  "kurbo",
  "log",
@@ -2945,6 +2948,7 @@ dependencies = [
 name = "craft-heif"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "heic-rs",
  "proptest",
  "rayon",
@@ -3127,6 +3131,7 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "jpeg-decoder",
  "jpeg-encoder 0.6.1",
  "rayon",
@@ -3248,6 +3253,7 @@ dependencies = [
 name = "craft-material-graph"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "libm",
  "rayon",
 ]
@@ -3404,6 +3410,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "craft-codepage",
+ "craft-testkit",
  "encoding_rs",
  "proptest",
 ]
@@ -3841,6 +3848,7 @@ name = "craft-ps"
 version = "0.1.0"
 dependencies = [
  "craft-eps",
+ "craft-testkit",
  "flate2",
  "kurbo",
  "miniz_oxide 0.8.9",
@@ -4771,6 +4779,7 @@ dependencies = [
 name = "craft-xcf"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "flate2",
  "thiserror 2.0.21",
 ]

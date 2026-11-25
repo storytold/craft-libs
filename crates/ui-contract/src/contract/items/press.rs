@@ -87,10 +87,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             _ => None,
         };
         // Under `AutoScroll` a middle press on the rows starts or ends the latch (the items step's `middle_scroll`) and
-        // picks no row.
+        // picks no row. In a collection that senses `MIDDLE_CLICK` the middle click is the row's own action
+        // (`CollectionEvent::MiddleClick`: a tab strip closes the tab), so the press picks no row there either.
+        let middle_clicks = cx.core.root_sense.contains(craft_behavior::Sense::MIDDLE_CLICK);
         if let PressPhase::Down { start, .. } = cx.core.press.phase
             && local(start.origin).y >= 0.0
-            && !(start.button == PointerButton::Middle && props.middle_button == MiddleButton::AutoScroll)
+            && !(start.button == PointerButton::Middle && (props.middle_button == MiddleButton::AutoScroll || middle_clicks))
         {
             // A second press, slow or not, ends the wait of the first.
             self.drags.slow = None;

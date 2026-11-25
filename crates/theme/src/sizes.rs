@@ -93,6 +93,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
     leaves! { out;
         "base.size.control.sm" Num 16.0..=48.0 => s.control.sm;
         "base.size.control.md" Num 16.0..=48.0 => s.control.md;
+        "base.size.button" Num 16.0..=48.0 => s.button;
         "base.size.icon.sm" Num 10.0..=32.0 => s.icon.sm;
         "base.size.icon.md" Num 10.0..=32.0 => s.icon.md;
         "base.size.icon.lg" Num 10.0..=32.0 => s.icon.lg;

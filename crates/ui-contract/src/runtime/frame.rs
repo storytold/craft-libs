@@ -582,6 +582,14 @@ pub fn discardable(ctx: &Context) -> bool {
     crate::runtime::egui::sizing::discardable(ctx)
 }
 
+/// Whether egui will run the running pass again, so nothing of it paints: egui's `Context::will_discard`, or a discard
+/// pass that layout memory asked for in this pass and requests from egui only at the pass's end. Host code that does
+/// work once per shown frame (a frame count, a settle count) skips it while this is true; `will_discard` alone is still
+/// false during the app's UI in a pass that a changed size runs again.
+pub fn will_rerun(ctx: &Context) -> bool {
+    ctx.will_discard() || crate::runtime::layout_memory::discard_pending(ctx)
+}
+
 /// Discards the running pass, so nothing of it paints, and runs it again, when [`discardable`]: for a host that learns
 /// only after a part ran that the part showed what it must not. A pass after a discard carries no input (events,
 /// injected steps and press edges enter a frame's first pass only); held state persists.
