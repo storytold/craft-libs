@@ -1083,6 +1083,8 @@ pub struct Presentation {
     pub next_id: u32,
     /// Embedded fonts. The face bytes live in [`Self::media`].
     pub embedded_fonts: Vec<EmbeddedFont>,
+    /// Whether the next save should keep only the characters used by embedded fonts.
+    pub save_subset_fonts: bool,
     /// Table styles defined in the file (`ppt/tableStyles.xml`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub table_styles: Vec<table::TableStyleDef>,
@@ -1131,6 +1133,7 @@ impl Default for Presentation {
             first_slide_number: 1,
             next_id: 0,
             embedded_fonts: vec![],
+            save_subset_fonts: false,
             table_styles: vec![],
             tags: vec![],
             kept_parts: vec![],
