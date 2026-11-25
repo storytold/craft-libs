@@ -15,7 +15,7 @@ use crate::runtime::motion::{self, Driver};
 use crate::runtime::overlay::{self, Backdrop, CloseReason, OpenEntry, Rank};
 use crate::runtime::windows::{self, PopupOpen, PopupRoom, WindowSpec};
 use craft_behavior::{MotionKind, Playback};
-use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
+use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 
 /// What the host reads for one layer.
 pub(crate) struct Layer<'a> {
@@ -115,6 +115,32 @@ fn area_id(id: Id) -> Id {
     sub(id, "area")
 }
 
+/// The viewport whose pass shows the layer `id` of `overlay`, opened in the running viewport: the popup window's when
+/// it shows there ([`host_in_popup`]), else the running one. That pass is where the layer is stamped
+/// (`overlay::begin_layer`), and where a body's read step and the host read what it appeared and remembers.
+pub(crate) fn layer_viewport(ctx: &Context, overlay: &Overlay, id: Id) -> ViewportId {
+    if !overlay.is_full_window() && windows::popup_room(ctx).is_some() {
+        crate::runtime::egui::viewports::viewport_id(id)
+    } else {
+        crate::runtime::egui::pass::current_viewport(ctx)
+    }
+}
+
+/// A right-click on a context opener while its layer is open hangs the layer at the new pointer: what the layer
+/// remembered of the pass it appeared in (how its opener opened it, and the pointer it hung from) is dropped, so both
+/// are taken again in this pass.
+fn reanchor(layer: &Layer<'_>, memory: &mut LayerMemory) {
+    let pointed = layer
+        .overlay
+        .opener
+        .as_ref()
+        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
+    if pointed {
+        memory.opening = None;
+        memory.pointer_at = None;
+    }
+}
+
 /// The overlay host: shows `body` on an egui layer for `layer` and decides its dismissal. A layer opened in a palette
 /// window shows in a popup window of its own ([`host_in_popup`]); a full-window layer covers its own window.
 pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
@@ -127,16 +153,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     // exit fade or its host never saw it hide: the focus that was inside it does not close it as `focus_left`.
     let appears = overlay::appears(ctx, layer.id, layer.exiting);
     let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
-    // A right-click on a context opener while its layer is open hangs the layer at the new pointer.
-    let pointed = layer
-        .overlay
-        .opener
-        .as_ref()
-        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
-    if pointed {
-        memory.opening = None;
-        memory.pointer_at = None;
-    }
+    reanchor(layer, &mut memory);
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
@@ -294,9 +311,10 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     // The layer's body runs in the popup window's pass, which stamps the layer's appearance in that window's record:
     // this pass, which decides the window, reads it there. The opener's own record never holds the layer, so a layer
     // that appeared once would read as appearing in every pass.
-    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
+    let viewport = layer_viewport(ctx, layer.overlay, layer.id);
     let appears = overlay::appears_in(ctx, viewport, layer.id, layer.exiting);
     let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
+    reanchor(layer, &mut memory);
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);

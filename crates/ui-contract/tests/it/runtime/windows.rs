@@ -1,22 +1,28 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
-//! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
-//! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
-//! pointer, the placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted
-//! window's Control-click and window-input policy.
+//! palette's level under a modal and its visibility while the main window is minimized, a layer shown in a popup
+//! window and what it remembers while it shows (a scrolled body's offset, a context opener clicked again), injected
+//! keys across a focus loss, non-finite injected points, a
+//! repeated injected press, the window that has the keys, a wheel with no known pointer, the placement of a minimized
+//! window, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
+//! policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Dismiss, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
+    Trigger,
+};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::pointer::{moved, press, release, wheel};
+use craft_ui::testing::layout::Block;
+use craft_ui::testing::pointer::{moved, press, release, secondary, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
@@ -1298,6 +1304,262 @@ fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_clo
     assert_eq!(builder_titled(&out, "second").1.visible, Some(false), "a palette opened meanwhile opens hidden");
     let back = (0..3).filter_map(|_| visibility(&frame(false, false))).reduce(|_, latest| latest);
     assert_eq!(back, Some(true), "the palette returns once the modal closed");
+}
+
+/// A layer mounted with `props`, its open state in the caller's binding, recording the closes it is given.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Sheet<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    open: Bind<'a, bool>,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl Component for Sheet<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SheetStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Sheet<'_> {
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        Some(self.open.reborrow())
+    }
+
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
+}
+
+/// The palette window's rect, in desktop points: the room its layers may take.
+const PALETTE_AT: Rect = Rect { min: Pos2::new(200.0, 150.0), max: Pos2::new(500.0, 350.0) };
+
+/// One frame of the main window showing a palette-level window whose body shows `overlay`'s layer, the layer's open
+/// state carried back out to `open`.
+fn palette_layer_frame(windows: &Windows, overlay: &Overlay, open: &Cell<bool>, closed: &RefCell<Vec<CloseReason>>) -> Out {
+    let mut is_open = open.get();
+    let out = windows.frame(vec![], vec![], |ui| {
+        Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+            let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
+            Sheet { common: Common::new(), props, open: Bind::bound(&mut is_open), closed }.id_salt("sheet").show(ui, |_, _| {});
+        });
+    });
+    open.set(is_open);
+    out
+}
+
+/// A layer shown in a popup window of a palette window keeps what it remembered while it shows: its timed dismissal
+/// counts from the pass it appeared, not from the last pass, so it closes after its timeout with no input at all. The
+/// layer's body runs in the popup's pass, which stamps its appearance in that window's record; its host decides the
+/// window in the palette's pass, where the opener's record never holds the layer.
+#[trial]
+fn a_layer_in_a_popup_window_closes_after_its_timeout() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    // The palette's window: a tool window, whose layers show in popup windows of their own.
+    let palette = ViewportInfo {
+        focused: Some(true),
+        inner_rect: Some(PALETTE_AT),
+        outer_rect: Some(PALETTE_AT),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.child_info(palette);
+    // A menu that closes by itself a quarter second after it appears: fifteen frames at the kit's sixty a second.
+    const TIMEOUT: f32 = 0.25;
+    let overlay = Overlay::menu().dismiss(Dismiss::new().timeout(Some(TIMEOUT)));
+    let open = Cell::new(true);
+    let closed = RefCell::new(Vec::new());
+    let mut out = palette_layer_frame(&windows, &overlay, &open, &closed);
+    for _ in 0..2 {
+        out = palette_layer_frame(&windows, &overlay, &open, &closed);
+    }
+    let shown: Vec<ViewportId> = out.builders.iter().map(|(viewport, _)| *viewport).filter(|viewport| *viewport != ViewportId::ROOT).collect();
+    assert_eq!(shown.len(), 2, "the palette's window and the layer's own popup window: {shown:?}");
+    assert!(open.get(), "the layer is open early in its timeout: {:?}", closed.borrow());
+    // Well past a quarter second of frames, with no input at all.
+    for _ in 0..30 {
+        palette_layer_frame(&windows, &overlay, &open, &closed);
+    }
+    assert!(!open.get(), "the layer closes after its timeout");
+    assert_eq!(*closed.borrow(), [CloseReason::Timeout], "the timeout closed it, and no other rule did");
+}
+
+/// A scrolled body of a layer shown in a popup window keeps its offset while the layer shows. The read step that starts
+/// a layer's body at the top when it opens runs in the opener's pass, before the popup window's pass, which is where the
+/// layer is stamped: it reads the layer's appearance in that window's record, not in the opener's, which never holds it.
+#[trial]
+fn a_scrolled_body_of_a_layer_in_a_popup_window_keeps_its_offset() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    // The palette's window: a tool window, whose layers show in popup windows of their own.
+    let palette = ViewportInfo {
+        focused: Some(true),
+        inner_rect: Some(PALETTE_AT),
+        outer_rect: Some(PALETTE_AT),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.child_info(palette);
+    // A dropdown list, whose body is capped by the room its popup window leaves, holding more than it shows: it scrolls.
+    let overlay = Overlay::dropdown();
+    let owner = egui::Id::unique("a tall body in a popup window");
+    let seen = RefCell::new(Seen::default());
+    let open = Cell::new(true);
+    let closed = RefCell::new(Vec::new());
+    let frame = || {
+        let mut is_open = open.get();
+        let out = windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
+                Sheet { common: Common::new(), props, open: Bind::bound(&mut is_open), closed: &closed }.id(owner).show(ui, |ui, _| {
+                    for _ in 0..8 {
+                        Block::new(Vec2::new(60.0, 40.0)).show(ui);
+                    }
+                    Probe::new(&seen).id_salt("lowest row").show(ui);
+                });
+            });
+        });
+        open.set(is_open);
+        out
+    };
+    for _ in 0..4 {
+        frame();
+    }
+    let at_top = seen.borrow().rect;
+    assert!(at_top.height() > 0.0, "the layer's body laid its content out: {at_top:?}");
+    // Show the lowest row, which lies below the room the popup window leaves.
+    craft_ui::testing::contract::queue_reveal(&windows.ctx, owner, at_top);
+    frame();
+    frame();
+    let scrolled = seen.borrow().rect;
+    assert!(scrolled.min.y < at_top.min.y - 1.0, "the reveal scrolled the body: {at_top:?} then {scrolled:?}");
+    for _ in 0..4 {
+        frame();
+    }
+    assert_eq!(seen.borrow().rect, scrolled, "the offset stays while the layer shows, with no input at all");
+    assert!(closed.borrow().is_empty(), "scrolling the body closed nothing: {:?}", closed.borrow());
+}
+
+/// A layer mounted as `props`' layer whose open state is its opener's: a menu a context opener opens, with the body the
+/// trial gives it and the closes it is given.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct OpenedMenu<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl Component for OpenedMenu<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: OpenedMenuStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(80.0, 24.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for OpenedMenu<'_> {
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
+}
+
+/// A second right-click on a context opener hangs its menu at the new pointer while the menu stays open, also when the
+/// menu shows in a popup window of a palette window: the pointer the layer opened at goes when its opener fires again.
+#[trial]
+fn a_second_right_click_hangs_a_menu_in_a_popup_window_at_the_new_pointer() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    let palette = ViewportInfo {
+        focused: Some(true),
+        inner_rect: Some(PALETTE_AT),
+        outer_rect: Some(PALETTE_AT),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.child_info(palette);
+    let overlay = Overlay::menu();
+    let opener_at = RefCell::new(Seen::default());
+    let closed = RefCell::new(Vec::new());
+    let frame = |events: Vec<Event>| {
+        windows.frame(vec![], events, |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                let opener = Probe::new(&opener_at).size(Vec2::new(240.0, 140.0)).sense(Sense::CLICK).id_salt("opener").show(ui);
+                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone().opened_by(&opener, Trigger::Context)));
+                OpenedMenu { common: Common::new(), props, closed: &closed }.id_salt("rows").show(ui, |ui, _| {
+                    for _ in 0..3 {
+                        Block::new(Vec2::new(80.0, 24.0)).show(ui);
+                    }
+                });
+            });
+        })
+    };
+    // Where the menu shows: the window of its own that the frame opened besides the palette's.
+    let menu_window = |out: &Out| -> Rect {
+        let (palette, _) = builder_titled(out, "tool");
+        let (viewport, _) = out
+            .builders
+            .iter()
+            .find(|(viewport, _)| *viewport != ViewportId::ROOT && *viewport != palette)
+            .expect("the menu shows in a popup window of the palette's");
+        let facts = windows.facts(*viewport);
+        facts.outer_rect.or(facts.inner_rect).expect("the menu's window is placed")
+    };
+    for _ in 0..2 {
+        frame(vec![]);
+    }
+    let at = opener_at.borrow().rect;
+    assert!(at.height() > 0.0, "the opener showed: {at:?}");
+    // Two points well inside the opener, the second above the first where the menu hanging below it does not reach:
+    // the palette's body lies within its window's points, and either way both right-clicks land on the opener.
+    let (first, second) = (at.center() + Vec2::new(0.0, 20.0), at.center() - Vec2::new(30.0, 20.0));
+    // A right-click on the opener opens the menu at that point.
+    frame(vec![moved(first)]);
+    frame(vec![secondary(first, true)]);
+    let mut out = frame(vec![secondary(first, false)]);
+    for _ in 0..2 {
+        out = frame(vec![]);
+    }
+    assert!(closed.borrow().is_empty(), "the right-click opened the menu and closed nothing: {:?}", closed.borrow());
+    let opened = menu_window(&out);
+    // A second right-click on the same opener, while the menu is open, hangs the menu at the new pointer.
+    frame(vec![moved(second)]);
+    frame(vec![secondary(second, true)]);
+    let mut out = frame(vec![secondary(second, false)]);
+    for _ in 0..2 {
+        out = frame(vec![]);
+    }
+    // The press lands outside the menu's own rect, so it closes the menu and the release opens it again. The layer shows
+    // in the pass between them (the close is decided after its body ran), so it never shows nothing and keeps what it
+    // remembered: where its opener first hung it. No other rule closed it.
+    assert!(closed.borrow().iter().all(|why| *why == CloseReason::Outside), "only an outside press closed the menu: {:?}", closed.borrow());
+    let after = menu_window(&out);
+    let moved = after.min - opened.min;
+    let pointer = second - first;
+    assert!(
+        (moved - pointer).length() < 1.0,
+        "the menu hangs where the pointer is now: it stood at {opened:?}, stands at {after:?}, and the pointer moved {pointer:?}"
+    );
 }
 
 /// A key automation holds is in `keys::held` while it is held and not after its release.
