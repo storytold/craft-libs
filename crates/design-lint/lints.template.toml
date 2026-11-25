@@ -1,0 +1,5 @@
+# Lines for the app's workspace Cargo.toml.
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+allow_attributes_without_reason = "deny"

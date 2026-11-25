@@ -2181,6 +2181,132 @@ fn the_generator_names_the_writing_application() {
     assert_eq!(texts(&back), ["Normal:Hello"]);
 }
 
+/// The list paragraphs of `rtf`: their text and list info.
+fn list_paras(rtf: &[u8]) -> Vec<(String, ListInfo)> {
+    let f = parse(rtf).unwrap();
+    f.blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => p.list.map(|li| (p.text(), li)),
+            FBlock::Table(_) => None,
+        })
+        .collect()
+}
+
+/// #2085: each RTF list level keeps its number format, the number of its first item and its level
+/// text: c), d) from a lower-letter level starting at 3, (i) from a lower-roman level in
+/// parentheses, 7. from a decimal level starting at 7.
+#[test]
+fn list_levels_keep_their_number_format_start_and_level_text() {
+    use craft_wordmodel::section::NumFormat;
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable
+{\list\listtemplateid1{\listlevel\levelnfc4\levelnfcn4\levelstartat3{\leveltext\'02\'00);}{\levelnumbers\'01;}}\listid1}
+{\list\listtemplateid2{\listlevel\levelnfc2\levelnfcn2\levelstartat1{\leveltext\'03(\'00);}{\levelnumbers\'02;}}\listid2}
+{\list\listtemplateid3{\listlevel\levelnfc0\levelnfcn0\levelstartat7{\leveltext\'02\'00.;}{\levelnumbers\'01;}}\listid3}
+}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}{\listoverride\listid2\listoverridecount0\ls2}{\listoverride\listid3\listoverridecount0\ls3}}
+\pard\ls1\ilvl0 letter from c\par
+\pard\ls1\ilvl0 next letter\par
+\pard\plain plain\par
+\pard\ls2\ilvl0 roman in parens\par
+\pard\plain plain\par
+\pard\ls3\ilvl0 decimal from 7\par
+}"#;
+    let got: Vec<(String, u32, Option<model::Label>)> = list_paras(rtf).into_iter().map(|(t, li)| (t, li.start, li.label)).collect();
+    let label = |f, t| Some(model::Label::of_level(f, t));
+    assert_eq!(
+        got,
+        [
+            ("letter from c".to_owned(), 3, label(NumFormat::LowerLetter, "%1)")),
+            ("next letter".to_owned(), 3, label(NumFormat::LowerLetter, "%1)")),
+            ("roman in parens".to_owned(), 1, label(NumFormat::LowerRoman, "(%1)")),
+            ("decimal from 7".to_owned(), 7, label(NumFormat::Decimal, "%1.")),
+        ]
+    );
+    let shown: Vec<String> = got.iter().filter_map(|(_, _, l)| l.map(|l| l.text(0))).collect();
+    assert_eq!(shown, ["%1)", "%1)", "(%1)", "%1."]);
+}
+
+/// A list's deeper levels keep theirs too: a level showing the numbers above it (`%1.%2.`), an
+/// upper-letter level starting at B, and a bullet level whose bullet is a `\u` character.
+#[test]
+fn deeper_list_levels_keep_their_own_format_start_and_text() {
+    use craft_wordmodel::section::NumFormat;
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable
+{\list\listtemplateid9
+{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'02\'00.;}{\levelnumbers\'01;}}
+{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'04\'00.\'01.;}{\levelnumbers\'01\'03;}}
+{\listlevel\levelnfc3\levelnfcn3\levelstartat2{\leveltext\'02\'02);}{\levelnumbers\'01;}}
+{\listlevel\levelnfc23\levelnfcn23\levelstartat1{\leveltext\'01\u8226 ?;}{\levelnumbers;}}
+\listid9}}
+{\*\listoverridetable{\listoverride\listid9\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 one\par
+\pard\ls1\ilvl1 one one\par
+\pard\ls1\ilvl2 letter\par
+\pard\ls1\ilvl3 bullet\par
+}"#;
+    let got: Vec<(String, bool, u8, u32, Option<model::Label>)> =
+        list_paras(rtf).into_iter().map(|(t, li)| (t, li.ordered, li.level, li.start, li.label)).collect();
+    let label = |f, t| Some(model::Label::of_level(f, t));
+    assert_eq!(
+        got,
+        [
+            ("one".to_owned(), true, 0, 1, label(NumFormat::Decimal, "%1.")),
+            ("one one".to_owned(), true, 1, 1, label(NumFormat::Decimal, "%1.%2.")),
+            ("letter".to_owned(), true, 2, 2, label(NumFormat::UpperLetter, "%3)")),
+            ("bullet".to_owned(), false, 3, 1, Some(model::Label::bulleted(Some('•')))),
+        ]
+    );
+}
+
+/// A list table without level text or start numbers reads as it always did: numbered or not,
+/// starting at 1, with no label of its own; a paragraph of an unknown list is unnumbered.
+#[test]
+fn a_list_level_without_level_text_or_start_keeps_its_old_reading() {
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable{\list\listtemplateid1{\listlevel\levelnfc0}{\listlevel\levelnfc23}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 numbered\par
+\pard\ls1\ilvl1 bulleted\par
+\pard\ls2\ilvl0 unknown list\par
+}"#;
+    let got = list_paras(rtf);
+    assert_eq!(
+        got,
+        [
+            ("numbered".to_owned(), ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }),
+            ("bulleted".to_owned(), ListInfo { ordered: false, level: 1, start: 1, ..Default::default() }),
+            ("unknown list".to_owned(), ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
+        ]
+    );
+}
+
+/// Hostile list tables read without a panic and within bounds: a level text whose length runs
+/// past its characters, a length of 255 with a long text, out-of-range start numbers and number
+/// format codes, and a level text outside any level.
+#[test]
+fn hostile_list_levels_read_within_bounds() {
+    let long = "x".repeat(10_000);
+    let rtf = format!(
+        r#"{{\rtf1\ansi
+{{\*\listtable{{\list{{\leveltext\'05\'00;}}{{\listlevel\levelnfc9999\levelstartat-5{{\leveltext\'09\'00);}}}}{{\listlevel\levelnfc-3\levelstartat2147483647{{\leveltext\'ff{long};}}}}\listid1}}}}
+{{\*\listoverridetable{{\listoverride\listid1\listoverridecount0\ls1}}}}
+\pard\ls1\ilvl0 a\par
+\pard\ls1\ilvl1 b\par
+}}"#
+    );
+    let got = list_paras(rtf.as_bytes());
+    assert_eq!(got.len(), 2);
+    let (a, b) = (&got[0].1, &got[1].1);
+    assert_eq!((a.ordered, a.start), (true, 0), "a start below 0 is held to 0");
+    assert_eq!(a.label.map(|l| l.text(0)), Some("%1)".to_owned()), "a length past the text takes what is there");
+    assert_eq!(b.start, 32_767, "a start past Word's range is held to it");
+    let text = b.label.map(|l| l.text(1)).unwrap_or_default();
+    assert!(text.chars().count() <= 255, "the level text is at most its length: {}", text.chars().count());
+}
+
 /// Original RTF: only the previous paragraph properties carry spacing and borders.
 fn prior_layout_document(words: &str) -> Document {
     let rtf = format!(
