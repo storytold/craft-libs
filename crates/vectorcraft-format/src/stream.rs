@@ -67,7 +67,9 @@ pub fn write_file_json<'a>(
 /// of the file's top-level object; newlines only occur between tokens, inside strings they are
 /// escaped.
 pub struct Indent<W: Write> {
+    /// The writer the indented text goes to.
     pub inner: W,
+    /// Whether to indent (pretty output); off passes the text through unchanged.
     pub on: bool,
 }
 
@@ -102,7 +104,9 @@ const TAG: &[u8] = b"\"key\":";
 /// depth (what the images a document uses are named by). Quotes inside JSON strings are escaped,
 /// so every match is a real member.
 pub struct KeyScan<W: Write> {
+    /// The writer the text is passed on to.
     pub inner: W,
+    /// The `"key"` values seen so far.
     pub keys: HashSet<String>,
     /// Looking for keys (else it only passes the text on).
     pub active: bool,
@@ -116,6 +120,7 @@ pub struct KeyScan<W: Write> {
 }
 
 impl<W: Write> KeyScan<W> {
+    /// A scan that passes text on to `inner`, looking for keys from the start.
     pub fn new(inner: W) -> Self {
         Self { inner, keys: HashSet::new(), active: true, matched: 0, after_tag: false, value: None, escaped: false }
     }

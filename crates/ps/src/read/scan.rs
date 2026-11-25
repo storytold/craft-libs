@@ -188,6 +188,10 @@ fn string(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
 }
 
 fn hex(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
+    hex_with_limit(srcs, src, MAX_TOKEN)
+}
+
+fn hex_with_limit(srcs: &mut Sources, src: usize, max: usize) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut hi: Option<u8> = None;
     loop {
@@ -205,20 +209,21 @@ fn hex(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
             _ => return Err("bad hex string".into()),
         };
         match hi.take() {
-            Some(h) => out.push(h << 4 | v),
+            Some(h) => append_string_bytes(&mut out, &[h << 4 | v], max)?,
             None => hi = Some(v),
-        }
-        if out.len() > MAX_TOKEN {
-            return Err("string too long".into());
         }
     }
     if let Some(h) = hi {
-        out.push(h << 4);
+        append_string_bytes(&mut out, &[h << 4], max)?;
     }
     Ok(out)
 }
 
 fn ascii85(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
+    ascii85_with_limit(srcs, src, MAX_TOKEN)
+}
+
+fn ascii85_with_limit(srcs: &mut Sources, src: usize, max: usize) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut group = [0u64; 5];
     let mut n = 0;
@@ -234,7 +239,7 @@ fn ascii85(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
             break;
         }
         if c == b'z' && n == 0 {
-            out.extend([0; 4]);
+            append_string_bytes(&mut out, &[0; 4], max)?;
             continue;
         }
         if !(b'!'..=b'u').contains(&c) {
@@ -246,11 +251,8 @@ fn ascii85(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
         n += 1;
         if n == 5 {
             let v = group.iter().fold(0u64, |a, d| a * 85 + d);
-            out.extend(u32::try_from(v).map_err(|_| "ASCII85 overflow")?.to_be_bytes());
+            append_string_bytes(&mut out, &u32::try_from(v).map_err(|_| "ASCII85 overflow")?.to_be_bytes(), max)?;
             n = 0;
-        }
-        if out.len() > MAX_TOKEN {
-            return Err("string too long".into());
         }
     }
     if n > 1 {
@@ -259,9 +261,19 @@ fn ascii85(srcs: &mut Sources, src: usize) -> Result<Vec<u8>, String> {
         }
         let v = group.iter().fold(0u64, |a, d| a * 85 + d).min(u64::from(u32::MAX));
         let v = u32::try_from(v).unwrap_or(u32::MAX);
-        out.extend(v.to_be_bytes().iter().take(n - 1));
+        append_string_bytes(&mut out, v.to_be_bytes().get(..n - 1).unwrap_or_default(), max)?;
     }
     Ok(out)
+}
+
+// Check before every decoded append: zero shorthand and final partial groups can
+// produce bytes without passing through the ordinary complete-group branch.
+fn append_string_bytes(out: &mut Vec<u8>, bytes: &[u8], max: usize) -> Result<(), String> {
+    if bytes.len() > max.saturating_sub(out.len()) {
+        return Err("string too long".into());
+    }
+    out.extend_from_slice(bytes);
+    Ok(())
 }
 
 /// An integer, radix number (`16#FF`) or real; None for anything else.
@@ -282,10 +294,12 @@ pub fn number(t: &[u8]) -> Option<Obj> {
     }
     let digits_only = s.strip_prefix(['+', '-']).unwrap_or(s);
     if !digits_only.is_empty() && digits_only.bytes().all(|b| b.is_ascii_digit()) {
-        return Some(match s.parse::<i64>() {
-            Ok(i) if i32::try_from(i).is_ok() => Obj::Int(i),
-            _ => Obj::Real(s.parse::<f64>().ok()?),
-        });
+        return match s.parse::<i64>() {
+            Ok(i) if i32::try_from(i).is_ok() => Some(Obj::Int(i)),
+            // Integer-looking tokens can overflow f64 too. Apply the same finite
+            // policy as decimal/exponent reals before constructing an object.
+            _ => s.parse::<f64>().ok().filter(|value| value.is_finite()).map(Obj::Real),
+        };
     }
     // Reals: digits with a point and/or an exponent; nothing else (`1e` or `.` alone are names).
     let mut seen_digit = false;
@@ -319,6 +333,56 @@ mod tests {
             out.push(o);
         }
         out
+    }
+
+    #[test]
+    fn encoded_strings_obey_the_decoded_budget_at_every_append() {
+        fn decode(input: &[u8], max: usize, ascii85: bool) -> Result<Vec<u8>, String> {
+            let mut sources = Sources::default();
+            let id = sources.add(Source::bytes(input.to_vec()));
+            if ascii85 { ascii85_with_limit(&mut sources, id, max) } else { hex_with_limit(&mut sources, id, max) }
+        }
+        for (input, expected) in [
+            (b"~>".as_slice(), vec![]),
+            (b"z~>", vec![0; 4]),
+            (b"zz~>", vec![0; 8]),
+            (b"!!!!!~>", vec![0; 4]),
+            (b"z!!~>", vec![0; 5]),
+            (b"!!!!!!!!~>", vec![0; 6]),
+            (b"!!!!~>", vec![0; 3]),
+        ] {
+            assert_eq!(decode(input, expected.len(), true).unwrap(), expected);
+            if !expected.is_empty() {
+                assert_eq!(decode(input, expected.len() - 1, true).unwrap_err(), "string too long");
+            }
+        }
+        for (input, expected) in [(b">".as_slice(), vec![]), (b"41>", vec![0x41]), (b"414>", vec![0x41, 0x40]), (b"4>", vec![0x40])] {
+            assert_eq!(decode(input, expected.len(), false).unwrap(), expected);
+            if !expected.is_empty() {
+                assert_eq!(decode(input, expected.len() - 1, false).unwrap_err(), "string too long");
+            }
+        }
+    }
+
+    #[test]
+    fn decimal_integer_promotion_never_constructs_nonfinite_reals() {
+        for text in ["2147483647", "-2147483648"] {
+            assert!(matches!(number(text.as_bytes()), Some(Obj::Int(_))));
+        }
+        for text in ["2147483648", "-2147483649", "9223372036854775808"] {
+            assert!(matches!(number(text.as_bytes()), Some(Obj::Real(value)) if value.is_finite()));
+        }
+        let finite = "9".repeat(308);
+        assert!(matches!(number(finite.as_bytes()), Some(Obj::Real(value)) if value.is_finite()));
+        for sign in ["", "+", "-"] {
+            let overflow = format!("{sign}{}", "9".repeat(309));
+            assert!(number(overflow.as_bytes()).is_none());
+            // Follow the existing overflowing-real policy: leave the token as an
+            // executable name rather than introducing infinity into the interpreter.
+            assert!(matches!(&all(overflow.as_bytes())[..], [Obj::Name(name, true)] if name.as_ref() == overflow.as_bytes()));
+        }
+        assert!(number(b"1e309").is_none());
+        assert!(matches!(number(b"16#ffffffff"), Some(Obj::Int(-1))));
     }
 
     #[test]
