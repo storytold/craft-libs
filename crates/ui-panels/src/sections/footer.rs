@@ -692,7 +692,7 @@ impl FooterBar {
         let (enter, column, start) = (self.enter, self.column, self.start);
         if !matches!(content, Content::Body) && leading.is_none() && start == 0 {
             // Actions or buttons that do not fit beside each other continue on a new line inside the bar. A bar with a
-            // start group keeps its two groups on one line, each group wrapping in its own row.
+            // start group lays its two groups out in a wrapping row of its own.
             self.props.layout = self.props.layout.clone().wrap(true);
         }
         let mut led = None;
@@ -711,13 +711,17 @@ impl FooterBar {
                     show_end_group(ui, bar, room, |ui| {
                         let from = shown.responses.len();
                         show_actions(ui, actions, from_end(), &mut shown);
-                        line_length(ui, shown.responses[from..].iter().map(|(_, response)| response.rect))
+                        shown.responses[from..].iter().map(|(at, response)| (member_key(*at, &actions[*at].label), response.clone())).collect()
                     });
                 } else if start == 0 {
                     show_actions(ui, actions, from_end(), &mut shown);
                 } else {
-                    Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
-                    Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                    // The two groups share a wrapping row. Side by side, the end group fills the rest of the line at its
+                    // end edge; in a bar too narrow for both, it goes on a line of its own.
+                    Row::new().fill_width().wrap(true).show(ui, |ui, _| {
+                        Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
+                        Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                    });
                 }
                 shown.responses.sort_by_key(|(at, _)| *at);
                 shown
@@ -735,9 +739,9 @@ impl FooterBar {
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.live(armed_for));
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let look = Env::of(ui).get::<DialogButtonLook>();
-                // Shows the buttons and returns their line length.
+                // Shows the buttons and returns their keys and responses, in display order.
                 let place = |ui: &mut Ui, shown: &mut Shown| {
-                    let mut rects = Vec::with_capacity(buttons.len());
+                    let mut members = Vec::with_capacity(buttons.len());
                     for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
@@ -767,7 +771,7 @@ impl FooterBar {
                             widget = widget.default_stop();
                         }
                         let output = widget.show(ui);
-                        rects.push(output.response.rect);
+                        members.push((member_key(at, &button.label), output.response.clone()));
                         let clicked = crate::contract::clicked(&output);
                         if live && clicked {
                             shown.picked = Some(at);
@@ -789,7 +793,7 @@ impl FooterBar {
                             }
                         }
                     }
-                    line_length(ui, rects.into_iter())
+                    members
                 };
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest, sit at
@@ -837,11 +841,25 @@ struct RanPast {
     line: f32,
 }
 
+/// The placement of a bar's end group in the last real pass, and the member that had the focus: its key
+/// (`member_key`) and its id.
+#[derive(Clone, Copy, Debug, Default)]
+struct EndFocus {
+    wrapped: bool,
+    focused: Option<(Id, Id)>,
+}
+
+/// The key of an end group member: its index in the given order and its label.
+fn member_key(at: usize, label: &Label) -> Id {
+    Id::NULL.with((at, label.as_str()))
+}
+
 /// Shows the end group of a bar with leading controls, `body`, at the end edge of `room`, the bar's line; `body`
-/// returns the group's line length. The group stays on one line while the leading controls can narrow to leave it its
-/// width. After that line ran past the bar's edge, the group continues on a new line instead, until the bar widens, the
-/// leading controls take less or the group's line shortens: then it tries one line again.
-fn show_end_group(ui: &mut Ui, bar: &mut BodyCx<'_>, room: Rect, mut body: impl FnMut(&mut Ui) -> f32) {
+/// returns each member's key (`member_key`) and its response, in display order. The group stays on one line while the
+/// leading controls can narrow to leave it its width. After that line ran past the bar's edge, the group continues on a
+/// new line instead, until the bar widens, the leading controls take less or the group's line shortens: then it tries
+/// one line again. A member that had the focus keeps it when the group changes placement.
+fn show_end_group(ui: &mut Ui, bar: &mut BodyCx<'_>, room: Rect, mut body: impl FnMut(&mut Ui) -> Vec<(Id, Response)>) {
     let leading = ui.min_rect().width();
     let ran_past = bar.memory_at::<EndRanPast>("end_ran_past");
     // Half a point: less than a pixel shows at any scale the box runs.
@@ -854,21 +872,36 @@ fn show_end_group(ui: &mut Ui, bar: &mut BodyCx<'_>, room: Rect, mut body: impl 
         .align(RowAlign::End)
         .wrap(wraps)
         .show(ui, |ui, _| {
-            let line = body(ui);
-            (ui.min_rect(), line)
+            let members = body(ui);
+            (ui.min_rect(), members)
         })
         .inner;
     let ctx = ui.ctx().clone();
-    let Some((members, line)) = shown else { return };
+    let Some((rect, members)) = shown else { return };
     if !room.width().is_finite() || crate::runtime::measure::active(&ctx) {
         return;
     }
+    // A placement change gives the members other ids: the member with the focused member's key takes the focus back,
+    // unless the focus has moved to another widget since.
+    let now = ctx.memory(|memory| memory.focused());
+    let focus = bar.memory_at::<EndFocus>("end_focus");
+    if focus.wrapped != wraps
+        && let Some((key, was)) = focus.focused
+        && now.is_none_or(|id| id == was)
+        && let Some((_, member)) = members.iter().find(|(member_key, _)| *member_key == key)
+        && !member.has_focus()
+    {
+        member.request_focus();
+    }
+    let focused = members.iter().find(|(_, member)| member.has_focus()).map(|(key, member)| (*key, member.id));
+    *focus = EndFocus { wrapped: wraps, focused };
+    let line = line_length(ui, members.iter().map(|(_, member)| member.rect));
     let ran_past = bar.memory_at::<EndRanPast>("end_ran_past");
     if ran_past.0.is_some_and(|past| line < past.line - 0.5) {
         // The group shortened: the next pass tries one line again.
         ran_past.0 = None;
         ctx.request_repaint();
-    } else if !wraps && (members.left() < room.left() - 0.5 || members.right() > room.right() + 0.5) {
+    } else if !wraps && (rect.left() < room.left() - 0.5 || rect.right() > room.right() + 0.5) {
         ran_past.0 = Some(RanPast { width: room.width(), leading, line });
         ctx.request_repaint();
     }

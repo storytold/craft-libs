@@ -187,6 +187,32 @@ fn a_footer_bar_too_narrow_for_its_actions_keeps_them_inside_it() {
     }
 }
 
+/// A bar too narrow for its start group and end group side by side, even with an action on each of their lines, keeps
+/// every action inside it, and a focused action keeps the focus as the bar narrows.
+#[trial]
+fn a_footer_bar_too_narrow_for_its_two_groups_side_by_side_keeps_them_inside_it() {
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let actions = ["ban", "check", "copy", "trash"].map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let output = FooterBar::actions(actions).at_start(2).show_footer(ui);
+        *out.borrow_mut() = (output.response.rect, output.responses.iter().map(|response| response.rect).collect::<Vec<_>>());
+    });
+    fixture.room(Vec2::new(WIDE, 300.0)).settle();
+    let trash = fixture.by_label("trash").expect("the trash action");
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &trash).settle();
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the action takes the focus");
+    fixture.room(Vec2::new(40.0, 300.0)).settle();
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the focused action keeps its focus");
+    let (bar, actions) = seen.borrow().clone();
+    assert_eq!(actions.len(), 4);
+    for rect in &actions {
+        assert!(bar.expand(0.5).contains_rect(*rect), "{rect:?} lies outside the bar {bar:?}");
+    }
+}
+
 /// The slider's rect and the rects of three actions of a footer bar whose leading control is a thumbnail slider, in a
 /// room `width` wide.
 fn slider_footer(width: f32) -> (Rect, Vec<Rect>) {
@@ -246,6 +272,17 @@ fn a_footer_bar_whose_wrapped_actions_shorten_puts_them_back_on_one_line() {
     assert_eq!(three.len(), 3);
     assert!(three.iter().all(|rect| (rect.min.y - three[0].min.y).abs() < 0.5), "three actions share one line: {three:?}");
     assert!(three.iter().all(|rect| rect.max.x <= width + 0.5), "the three actions end inside the bar: {three:?}");
+
+    // A focused action keeps the focus as the bar widens and its actions go back on one line.
+    count.set(8);
+    fixture.settle();
+    let trash = fixture.by_label("trash").expect("the trash action");
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &trash).settle();
+    fixture.room(Vec2::new(900.0, 200.0)).settle();
+    let eight = seen.borrow().clone();
+    assert!(eight.iter().all(|rect| (rect.min.y - eight[0].min.y).abs() < 0.5), "eight actions share one line in a wide bar: {eight:?}");
+    let tree = fixture.tree();
+    assert_eq!(tree.name_of(craft_ui::testing::access::focused_key(tree)), Some("trash"), "the focused action keeps its focus");
 }
 
 const DIALOG_BUTTONS: [&str; 4] = ["Reset", "Don't Save", "Cancel", "OK"];
