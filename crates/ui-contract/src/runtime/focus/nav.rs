@@ -623,9 +623,38 @@ impl State {
         let target = owner.or_else(|| {
             gone.stop.arena.and_then(|arena| self.stops.iter().filter(live).find(|rec| rec.stop.id == arena && rec.stop.part.is_none()).cloned())
         });
-        Some(match target {
-            Some(target) => self.focus_stop_from(target, FocusOrigin::Removal),
-            None => vec![Act::Surrender(root)],
+        if let Some(target) = target {
+            return Some(self.focus_stop_from(target, FocusOrigin::Removal));
+        }
+        // A stop that Tab or a request moved the focus to in this pass, and that is not shown in it (a list a field shows
+        // only while it is focused), never held the focus: it goes on to the next stop that is, in the direction of the
+        // Tab, else back to the stop the Tab left.
+        if let Some(next) = self.arrived_unshown(key, gone.scope) {
+            return Some(self.focus_stop_from(next, FocusOrigin::Request));
+        }
+        Some(vec![Act::Surrender(root)])
+    }
+
+    /// The stop that takes the focus from `key`, a stop of `scope` the focus arrived at in this pass that is not shown in
+    /// it: the next stop of `scope` in last pass's order that this pass shows (`live`), the previous one for a Shift+Tab,
+    /// else the stop a Tab left. `None` when the focus did not arrive at `key` in this pass.
+    fn arrived_unshown(&self, key: StopKey, scope: Option<Id>) -> Option<StopRec> {
+        let live = |rec: &&StopRec| !self.fading(rec.scope);
+        // `end` has moved the frame on: an arrival of this pass is stamped with the frame before.
+        let arrived = self.arrived.is_some_and(|(frame, at, _)| at == key && frame + 1 == self.frame);
+        if !arrived {
+            return None;
+        }
+        let tab = self.press.tabbed_from;
+        let forward = tab.is_none_or(|(_, forward)| forward);
+        let order: Vec<&StopRec> =
+            self.last_stops.iter().filter(|rec| rec.scope == scope && (rec.stop.key() == key || !rec.stop.press_only)).collect();
+        let at = order.iter().position(|rec| rec.stop.key() == key)?;
+        let shown = |candidate: &&StopRec| self.stops.iter().filter(&live).find(|rec| rec.stop.key() == candidate.stop.key()).cloned();
+        let next = if forward { order[at + 1..].iter().find_map(shown) } else { order[..at].iter().rev().find_map(shown) };
+        next.or_else(|| {
+            let (from, _) = tab?;
+            self.stops.iter().filter(&live).find(|rec| rec.stop.id == from || rec.stop.root == from).cloned()
         })
     }
 
