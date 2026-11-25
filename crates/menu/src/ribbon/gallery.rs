@@ -356,7 +356,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
 // ---------------------------------------------------------------------------------------------------------------
 // The tile.
 
-/// The style of a gallery tile: the theme's selection fill and edge while it is the current one.
+/// The style of a gallery tile: the accent outline while it is the current one.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct GalleryTileStyle {
@@ -366,7 +366,9 @@ struct GalleryTileStyle {
     focus: FocusLook,
     /// Between the tile's edge and its picture.
     pad: f32,
-    /// The current tile's outline: accent, unfilled, so the picture keeps its own background.
+    /// The current tile's outline: `accent.solid`, unfilled, so the picture keeps its own background. Not
+    /// `accent.border`, which several themes pin translucent to read on a control's own fill: with no fill under it,
+    /// it falls under 3:1 on the ribbon.
     edge: StyleColor,
     /// The ink of the item's name under the picture, in a captioned gallery.
     caption: StyleColor,
@@ -439,7 +441,7 @@ impl Component for GalleryTile<'_> {
             metrics: Metrics::new().padding(Insets::new(pad, pad, pad, pad)),
             focus: cx.focus_look(),
             pad,
-            edge: cx.color(colors.accent.border),
+            edge: cx.color(colors.accent.solid),
             caption: cx.color(colors.text.normal),
             gap: cx.tokens.space.gap.tight,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
