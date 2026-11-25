@@ -344,11 +344,22 @@ impl<K: TextureKey> Thumbnails<K> {
         }
     }
 
-    fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
+    /// Reads the store for the same request as [Self::state], without queueing or rendering a picture.
+    pub fn cached_state(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest) -> TextureState {
+        let (_, revision) = self.stamped_request(source, key, request);
+        self.loader.cache().state(ctx, key, revision)
+    }
+
+    fn stamped_request(&self, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest) -> (ThumbRequest, Revision) {
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
         let request = ThumbRequest { side, ..*request };
         let revision = Revision::of(&(source.revision(key, &request), side, region_bits(request.region)));
+        (request, revision)
+    }
+
+    fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
+        let (request, revision) = self.stamped_request(source, key, request);
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
             return state;
         }
@@ -407,7 +418,7 @@ impl<K: TextureKey> Thumbnails<K> {
                 paint_placeholder(cx, rect, paint.paper);
                 if paint.states == StateLook::Captioned {
                     let waited = if let TextureState::Loading { waited, .. } = state { *waited } else { None };
-                    paint_waiting(cx, rect, waited);
+                    paint_waiting(cx, rect, waited, false);
                 }
                 true
             }
@@ -420,6 +431,15 @@ impl<K: TextureKey> Thumbnails<K> {
                 true
             }
         }
+    }
+
+    /// Paints a stand-in for a different key with the current picture's loading caption.
+    ///
+    /// The caption has a surface of its own so it stays readable over the stand-in's contents.
+    pub fn paint_waiting_over(&self, cx: &ContentPainterCx<'_>, rect: Rect, texture: &CachedTexture, paint: &ThumbPaint, waited: Option<f64>) {
+        let rect = rect.round_to_pixels(cx.pixels_per_point());
+        paint_picture(cx, rect, texture, paint);
+        paint_waiting(cx, rect, waited, true);
     }
 
     /// Stops the queue of `Later` renders and waits up to `timeout` for the running ones to end
@@ -530,7 +550,7 @@ fn paint_placeholder(cx: &ContentPainterCx<'_>, rect: Rect, paper: Option<DataCo
 
 /// The caption of a picture that has not arrived: "Rendering…", then "Still rendering…" once it has waited
 /// [`STILL_RENDERING`] seconds, with a pass asked for at that moment so the caption changes without input.
-fn paint_waiting(cx: &ContentPainterCx<'_>, rect: Rect, waited: Option<f64>) {
+fn paint_waiting(cx: &ContentPainterCx<'_>, rect: Rect, waited: Option<f64>, backed: bool) {
     let words = cx.words::<TextureWords>();
     let text = match waited {
         Some(waited) if waited >= STILL_RENDERING => &words.still_rendering,
@@ -540,18 +560,31 @@ fn paint_waiting(cx: &ContentPainterCx<'_>, rect: Rect, waited: Option<f64>) {
         }
         None => &words.rendering,
     };
-    paint_caption(cx, rect, text.as_str());
+    paint_caption_on(cx, rect, text.as_str(), backed);
 }
 
 /// `text` in the body role, centred below `rect`'s centre and wrapped to `rect` less the roomy padding on each side.
 fn paint_caption(cx: &ContentPainterCx<'_>, rect: Rect, text: &str) {
+    paint_caption_on(cx, rect, text, false);
+}
+
+fn paint_caption_on(cx: &ContentPainterCx<'_>, rect: Rect, text: &str, backed: bool) {
     let room = rect.shrink(cx.tokens.space.pad.roomy);
     let below = Rect::from_min_max(pos2(room.min.x, rect.center().y), room.max);
     if !below.is_positive() {
         return;
     }
     let run = TextRun::new(text).role(TypeRole::Body).wrap(Wrap::Wrap).align(HAlign::Center);
-    let _ = cx.with_draw(|draw| draw.text(below, &run));
+    cx.with_draw(|draw| {
+        if backed {
+            let (text, at) = draw.place_text(below, &run);
+            let caption = Rect::from_min_size(at, text.size()).expand(cx.tokens.space.pad.roomy / 2.0).intersect(rect);
+            paint_placeholder(cx, caption, None);
+            draw.galley(at, &text);
+        } else {
+            draw.text(below, &run);
+        }
+    });
 }
 
 /// The warning icon centred in `rect`, no larger than the small icon size.

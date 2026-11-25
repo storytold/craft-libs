@@ -10,7 +10,7 @@ use craft_ui::canvas::DetailPlan;
 use craft_ui::canvas::PixelRect;
 use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, NoValue, Outcome, PaintUi, Role};
 use craft_ui::primitives::textures::{
-    Priority, StateLook, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side,
+    CachedTexture, Priority, StateLook, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side,
 };
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
 use egui::{Context, Id, Rect, Response, Vec2, pos2};
@@ -174,6 +174,9 @@ pub(super) struct PagePictures<'a> {
     // The page store's hold is set where its requests are, in the view's pass, so only the detail hold is a prop.
     #[prop]
     hold_detail: bool,
+    #[prop]
+    /// Pictures of the outgoing row, used only during a pending keyboard turn.
+    stand_in: &'a [CachedTexture],
     /// The description of the text under the pages.
     #[prop]
     describer: Option<&'a dyn AccessDescriber>,
@@ -181,7 +184,7 @@ pub(super) struct PagePictures<'a> {
 
 impl<'a> PagePictures<'a> {
     pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], owner: Id, paper: DataColor) -> Self {
-        PagePictures { common: Common::new(), source, pages, owner, paper, hold_detail: false, describer: None }
+        PagePictures { common: Common::new(), source, pages, owner, paper, hold_detail: false, stand_in: &[], describer: None }
     }
 }
 
@@ -219,11 +222,20 @@ impl Component for PagePictures<'_> {
         details.hold(self.hold_detail);
         let ppp = painter.pixels_per_point();
         let paint = ThumbPaint::default().paper(self.paper).states(StateLook::Captioned);
-        for placed in self.pages {
+        for (index, placed) in self.pages.iter().enumerate() {
             let (top, bottom) = placed.band;
             let band = Rect::from_min_max(pos2(placed.rect.min.x, placed.rect.min.y + top), pos2(placed.rect.max.x, placed.rect.min.y + bottom))
                 .intersect(inside);
             painter.painter = base.with_clip_rect(band);
+            // Keep the outgoing spread together until both incoming pictures are ready.
+            if let Some(texture) = self.stand_in.get(index) {
+                if let TextureState::Loading { waited, .. } = placed.picture {
+                    thumbs.paint_waiting_over(&painter, placed.rect, texture, &paint, waited);
+                } else {
+                    thumbs.paint(&painter, placed.rect, &TextureState::Ready(*texture), &paint);
+                }
+                continue;
+            }
             thumbs.paint(&painter, placed.rect, &placed.picture, &paint);
             if let Some(detail) = Detail::of(placed.rect, band, side, ppp) {
                 let state = details.state(&ctx, self.source, &placed.page, &detail.request, Priority::VISIBLE);

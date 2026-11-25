@@ -3519,6 +3519,7 @@ name = "craft-pages"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-i18n",
  "craft-keymap",
  "craft-text",

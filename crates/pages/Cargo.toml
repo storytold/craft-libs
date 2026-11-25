@@ -39,6 +39,7 @@ craft-theme = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 
 [dev-dependencies]
+craft-host = { workspace = true }
 craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 craft-i18n = { workspace = true }
