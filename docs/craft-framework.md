@@ -995,7 +995,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.button` | A standard push button's height (`Button`, `SplitButton`, `ToggleButton` faces); follows an app's `size.control.md` unless the app sets it |
 | `size.icon.sm`, `size.icon.md`, `size.icon.lg` | Icons; `md` is the glyph of a tool strip and of a panel footer's actions (`GlyphRole::Tool`), `lg` of a tool rail (`GlyphRole::ToolRail`). A stroke-set icon draws its line `stroke.icon` of its side |
 | `size.icon.glyph_sm`, `size.icon.glyph_md` | The glyph in an icon-only button (`GlyphRole::Control`, the default; a container sets another with `ContainerProps::child_glyphs`) |
-| `size.bar.title`, `size.bar.tab`, `size.bar.tab_large`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow` | Title bar, document tab bar, document tab bar with large tabs, status bar, options bar |
+| `size.bar.title`, `size.bar.tab`, `size.bar.tab_large`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow`, `size.bar.column` | Title bar, document tab bar, document tab bar with large tabs, status bar, options bar, a dock column's bar (`size.control.sm` in the built-in sets) |
 | `size.panel_header` | Panel headers |
 | `size.popup_min` | Least width of a popup surface (menus only; popup lists such as Select and ComboBox take their anchor's width) |
 | `size.groove` | Groove of a value track |
@@ -1006,12 +1006,14 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
 | `size.length.track`, `size.length.short` | Value track, short field |
 | `size.row.text` | A row that shows text only: one body line and `space.gap.tight`; read-only display tables take it, lists the user picks from keep control-high rows |
+| `size.row.menu` | A menu row's height at the medium control size (`MenuItem`); follows an app's `size.control.md` unless the app sets it |
 | `size.dialog.least`, `size.dialog.wrap` | A dialog's content: the least width it opens at, and the line length its paragraphs wrap at (`LeastWidth::Dialog`, `WrapWidth::Dialog`); content that cannot wrap widens it past that |
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
+| `size.dialog.button_height` | Height of a dialog's footer buttons (`LeastWidth::DialogButton`, `LeastWidth::DialogSideButton`); follows an app's `size.button` unless the app sets it |
 | `size.hit.edge` | The band inside the edge of a canvas's view in which a tool that autoscrolls on hover scrolls the view (a Polygonal Lasso's rubber band), at most a quarter of the view's shorter side |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
-| `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |
+| `space.gap.*`, `space.pad.*` | Gaps between and padding inside components. `space.pad.dialog` pads a dialog frame (`Pad::Dialog`) and follows an app's `space.pad.regular` unless the app sets it |
 
 Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. A field holds a number of characters, so `size.length.field`, `size.length.number` and `size.length.short` grow with the text size by the same factor as the type; `size.length.track` holds no text and keeps its length. NumberField is at least `size.length.number` at its control size wide; apps set other widths per field.
 

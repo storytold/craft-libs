@@ -315,9 +315,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
 }
 
 /// The sizes a dock area lays out with: the dock's style, with its docked columns as cards when `config` shows them
-/// ([`DockConfig::column_cards`]).
+/// ([`DockConfig::column_cards`]) and no gap beside a flush dock ([`DockConfig::flush_docks`]).
 fn area_sizes(mut sizes: DockSizes, config: &DockConfig) -> DockSizes {
     sizes.column_cards = config.column_cards;
+    if config.flush_docks {
+        sizes.dock_gap = 0.0;
+    }
     sizes
 }
 
@@ -863,7 +866,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let limits = |panel: &P| scene.spec(panel).limits;
     let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
     let stripless = |panel: &P| scene.spec(panel).canvas;
-    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless);
+    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(scene.sizes.dock_gap);
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
     let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
     let area = SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
@@ -1433,7 +1436,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
             // tall as its content.
             self.report.placed.push((first.clone(), cell));
-            let card = scene.sizes.card_place(at);
+            let card = scene.sizes.card_place(at, column, &|panel: &P| scene.spec(panel));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone(), card };
             self.column(ui, body, column, at);
         }
@@ -1547,7 +1550,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .bar(bar)
                     .within(within)
                     .auto_collapse(scene.auto_collapse)
-                    .mode(mode);
+                    .mode(mode)
+                    .tab_look(scene.config.tab_look)
+                    .framed(scene.config.flush_docks && !in_window);
                 let shown = match card {
                     Some(place) => shown.card(place),
                     None => shown,
@@ -1606,7 +1611,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
-                .auto_collapse(scene.auto_collapse);
+                .auto_collapse(scene.auto_collapse)
+                .tab_look(scene.config.tab_look);
             let shown = match card {
                 Some(place) => shown.card(place),
                 None => shown,
