@@ -1,8 +1,8 @@
 //! `DockConfig`: how a dock behaves, apart from how it looks (the dock's `ComponentStyle`) and what it says
 //! (`DockWords`).
 
-use super::IconicMode;
 use super::targets::ZoneRule;
+use super::{ColumnCards, IconicMode};
 use crate::tabs::PanelTabLook;
 use craft_behavior::{DockSide, IconId};
 
@@ -82,13 +82,19 @@ pub struct DockConfig {
     /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
     /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
     pub floating_rounded_body: bool,
-    /// Every docked column, expanded or collapsed to icons, shows as a card on the dock's `surface.background`:
+    /// Which docked columns show as cards on the dock's `surface.background` ([`ColumnCards`]), each
     /// painted `surface.panel` with `shape.radius.surface` corners and no frame, inset by `space.gap.stack` on its top
     /// and bottom and, for the column at the window edge, on its outer side; each further column stands
     /// `space.gap.tight` from its outer neighbour's card. A column is wider by its inset, so it keeps its content's
     /// width (a tool rail its steps); its dividers, drop bands and edge handle stay on its outer rect. Off: a column
     /// fills its cell.
-    pub column_cards: bool,
+    pub column_cards: ColumnCards,
+    /// Docks stand flush against the node beside them, with no gap, and their columns collapsed to icons show the
+    /// `line.border` frame expanded columns show, so one rule parts a dock from the canvas; the flyouts of those columns
+    /// stand square on the panel surface with that frame and no shadow ([`Flyout::docked`](super::Flyout::docked)):
+    /// VectorCraft 0.24's dock.
+    /// Off: a `space.gap.tight` gap of the window's background parts them.
+    pub flush_docks: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -99,8 +105,9 @@ pub struct DockConfig {
     pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
-    /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), or on a
-    /// filled rounded pill ([`PanelTabLook::Pill`]).
+    /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), on a
+    /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
+    /// ([`PanelTabLook::Block`]).
     pub tab_look: PanelTabLook,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
@@ -132,7 +139,8 @@ impl Default for DockConfig {
             close_button: true,
             floating_grip: false,
             floating_rounded_body: false,
-            column_cards: false,
+            column_cards: ColumnCards::None,
+            flush_docks: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
@@ -252,10 +260,10 @@ impl DockConfig {
         self
     }
 
-    /// Docked columns as cards on or off ([`column_cards`](Self::column_cards)).
+    /// Which docked columns show as cards ([`column_cards`](Self::column_cards)).
     #[must_use]
-    pub fn column_cards(mut self, on: bool) -> Self {
-        self.column_cards = on;
+    pub fn column_cards(mut self, cards: ColumnCards) -> Self {
+        self.column_cards = cards;
         self
     }
 
@@ -263,6 +271,13 @@ impl DockConfig {
     #[must_use]
     pub fn tab_look(mut self, look: PanelTabLook) -> Self {
         self.tab_look = look;
+        self
+    }
+
+    /// Flush docks on or off ([`flush_docks`](Self::flush_docks)).
+    #[must_use]
+    pub fn flush_docks(mut self, on: bool) -> Self {
+        self.flush_docks = on;
         self
     }
 

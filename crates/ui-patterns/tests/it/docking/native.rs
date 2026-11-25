@@ -105,6 +105,34 @@ fn a_native_dock_window_is_moved_by_the_app_from_its_first_pass() {
     assert!(probe.0.iter().all(|known| *known), "every pass of the window knows the app moves it: {:?}", probe.0);
 }
 
+/// A dock restored with a native float in the second pass of the first frame, as an app that lays out its window in
+/// the first pass and shows its dock in the next: the float's window paints during the frame's run, before the run's
+/// output reaches the renderer the windows share, so its texture changes must come after the first pass's
+/// allocations (the font atlas). The kit's renderer panics on a change to a texture it has not allocated.
+#[trial]
+fn a_dock_restored_with_a_native_float_in_a_later_pass_of_the_first_frame_paints() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let mut window = float();
+    window.native = Some(Placement::new(PALETTE_AT.size().into(), 1.0));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![window])));
+    let mut probe = MoveProbe(Vec::new());
+    let mut passes = 0;
+    windows.frame(vec![], vec![], |ui| {
+        passes += 1;
+        if passes == 1 {
+            ui.label("Starting");
+            ui.ctx().request_discard("the dock shows in the next pass");
+            return;
+        }
+        let config = DockConfig::default().native_windows(true);
+        let _ = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut probe, config).show(ui);
+    });
+    assert_eq!(passes, 2, "the first frame runs two passes");
+    assert!(!probe.0.is_empty(), "the float's window runs its pass in the second one");
+}
+
 /// The dock records a move the OS made to its native window, and nothing while the OS reports what the model holds.
 #[trial]
 fn the_dock_records_where_the_os_put_its_native_window() {
