@@ -997,3 +997,42 @@ pub fn with_session<T: Slot, R>(ctx: &Context, id: Id, f: impl FnOnce(&mut T) ->
 pub fn unique(source: impl std::hash::Hash + std::fmt::Debug) -> Id {
     store::unique(source)
 }
+
+/// Why [`fork_into`] refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForkError {
+    /// `to` is running a pass: fork into a context between its passes.
+    DuringPass,
+}
+
+impl std::fmt::Display for ForkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForkError::DuringPass => f.write_str("fork into a context between its passes, not during one"),
+        }
+    }
+}
+
+impl std::error::Error for ForkError {}
+
+/// Gives `to` a copy of `from`'s UI memory, for a second context that draws what `from` shows (a headless capture of a
+/// window): egui's memory (areas, scroll areas, collapsing states, options) and the components' remembered state
+/// (scroll offsets, open sections, the session and shown slots of every component), copied by value. `to` keeps its
+/// own runtime: its pass state, focus, overlays, commands, windows and the rest of the services its install made, so
+/// a pass of `to` neither reads nor moves `from`'s, and `to` may run a pass inside one of `from`'s. A runtime service
+/// `to` has none of yet starts fresh in `to` on first use.
+///
+/// Copying egui's memory alone (`to.memory_mut(|m| *m = from.memory(Clone::clone))`) shares the runtime's state
+/// between the two: its services are handles, and a copy of a handle reaches the same state.
+pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError> {
+    if frame::in_pass(to) {
+        return Err(ForkError::DuringPass);
+    }
+    let copied = from.memory(Clone::clone);
+    let mut replaced = None;
+    let gone = store::keep_own_services(to, || replaced = Some(to.memory_mut(|memory| std::mem::replace(memory, copied))));
+    drop(replaced);
+    drop(gone);
+    Ok(())
+}
