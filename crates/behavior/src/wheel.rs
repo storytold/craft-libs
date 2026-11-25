@@ -759,6 +759,13 @@ fn split_at<O: Copy + PartialEq>(
             None => shares.push((owner, part)),
         }
     }
+    // A directional value control reads a plain notch: Shift reached it as the request for the sideways wheel (the
+    // rule above), never as a multiplier of its step. Another taker keeps its modifiers.
+    for (owner, share) in &mut shares {
+        if takers.iter().any(|taker| taker.directional && taker.owner == *owner) {
+            share.mods = Mods { shift: false, ..share.mods };
+        }
+    }
     shares
 }
 
@@ -876,6 +883,7 @@ mod tests {
         assert_eq!((diagonal_right[0].0, diagonal_right[0].1.scroll), (2, Vec2::new(12.0, 0.0)), "horizontal-dominant intent keeps its sign");
         let shifted = shares(directional, Wheel { mods: Mods::SHIFT, ..wheel(0.0, 6.0) }, None, None);
         assert_eq!((shifted[0].0, shifted[0].1.scroll), (2, Vec2::new(6.0, 0.0)), "Shift-wheel is explicitly sideways");
+        assert!(!shifted[0].1.mods.shift, "the directional share carries one plain notch, not Shift's ten");
         let diagonal = shares(directional, wheel(3.0, -12.0), Some(2), None);
         assert!(diagonal.iter().all(|(owner, _)| *owner == 1), "a vertical-dominant swipe stays with the panel despite focus");
         assert_eq!(diagonal[0].1.scroll.y, -12.0, "vertical scrolling remains available");

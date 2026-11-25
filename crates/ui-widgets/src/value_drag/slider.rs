@@ -60,14 +60,18 @@ struct Held {
     press: Option<Press>,
 }
 
-/// Canonical zero-origin model grid, selected explicitly by one input policy and clamped after rounding.
-fn model_grid_landing(value: f64, step: f64, bounds: (f64, f64)) -> f64 {
+/// The one zero-origin model grid both input policies land on: rounded to `step` from zero, then clamped to `bounds`.
+/// A step that is not finite and positive selects no grid.
+fn model_grid_landing(value: f64, step: f64, bounds: (f64, f64)) -> Option<f64> {
+    if !(step.is_finite() && step > 0.0) {
+        return None;
+    }
     let ticks = value / step;
     // A quantum below the value's representable resolution need not produce an infinite intermediate.
     let landed = if ticks.is_finite() { ticks.round() * step } else { value };
     let landed = if landed.is_finite() { landed } else { value };
     // Overflow reaches the finite bound; NaN has the same deterministic minimum landing as the key policy.
-    if landed.is_nan() { bounds.0 } else { landed.clamp(bounds.0, bounds.1) }
+    Some(if landed.is_nan() { bounds.0 } else { landed.clamp(bounds.0, bounds.1) })
 }
 
 /// A slider over `range`.
@@ -195,7 +199,7 @@ impl<'a> Slider<'a> {
         let scale = self.track_scale();
         let offset = policy.offset(movement, modifiers)?;
         if let Some(step) = policy.model_quantum() {
-            return Some(model_grid_landing(value.unwrap_or_else(|| scale.middle()) + offset, step, (scale.min, scale.max)));
+            return model_grid_landing(value.unwrap_or_else(|| scale.middle()) + offset, step, (scale.min, scale.max));
         }
         Some(scale.snap(value.unwrap_or_else(|| scale.middle()) + offset))
     }
@@ -321,9 +325,11 @@ impl Component for Slider<'_> {
         let pick = along.pick(false);
         let marks = &self.marks;
         let at = |position: f64| {
-            if let Some(step) = self.pointer_model_step.filter(|step| step.is_finite() && *step > 0.0) {
-                let value = marks.snapped(&scale, length, position).unwrap_or_else(|| scale.at_position(position));
-                return model_grid_landing(value, step, bounds);
+            if let Some(next) = self
+                .pointer_model_step
+                .and_then(|step| model_grid_landing(marks.snapped(&scale, length, position).unwrap_or_else(|| scale.at_position(position)), step, bounds))
+            {
+                return next;
             }
             marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)))
         };

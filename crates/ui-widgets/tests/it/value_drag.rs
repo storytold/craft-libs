@@ -538,6 +538,39 @@ fn directional_slider_wheel_disarms_on_a_leave_and_return_within_one_frame() {
     }
 }
 
+/// Shift asks for the sideways wheel rather than for a coarser step: one Shift-wheel notch over the directional slider
+/// moves it as far as one plain sideways notch.
+#[trial]
+fn directional_slider_shift_wheel_steps_one_plain_notch() {
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    let edited_by = |modifiers: Modifiers, delta: Vec2, source: egui::MouseWheelSource| {
+        let value = RefCell::new(START);
+        let mut show = |ui: &mut Ui| {
+            with_env(
+                ui,
+                |set| set.wheel = Some(WheelScope::Directional),
+                |ui| {
+                    Slider::new(Bind::bound(&mut *value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+                },
+            );
+        };
+        let mut frames = Frames::new();
+        frames.idle(3, &mut show);
+        frames.frame(vec![pointer::moved(FIELD.center())], &mut show);
+        frames.frame(
+            vec![egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, modifiers, source }],
+            &mut show,
+        );
+        frames.idle(30, &mut show);
+        *value.borrow() - START
+    };
+    let sideways = edited_by(Modifiers::NONE, Vec2::new(40.0, 0.0), egui::MouseWheelSource::Trackpad);
+    assert!(sideways > 0.0, "a plain sideways notch edits the value");
+    let shifted = edited_by(Modifiers::SHIFT, Vec2::new(0.0, 40.0), egui::MouseWheelSource::Wheel);
+    assert!(shifted > 0.0, "Shift-wheel edits the value");
+    assert!(shifted <= sideways + 1.0, "Shift-wheel steps once, like a plain sideways notch: {shifted} against {sideways}");
+}
+
 #[trial]
 fn directional_slider_wheel_disarms_on_leave_without_losing_keyboard_focus() {
     use craft_ui::runtime::env::{WheelScope, with_env};

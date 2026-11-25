@@ -152,7 +152,8 @@ pub(super) fn allowed(ctx: &Context, row: &ScalarRow) -> bool {
     })
 }
 
-/// Source order, not focus-first or hover-first, resolves conflicting eligible rows.
+/// The focused row wins over a hovered one. Hover takes the arrows only where the focus leaves them, and source order
+/// resolves the remaining rows.
 pub(super) fn choose(ctx: &Context, rows: &[ScalarRow], focused: Option<&StopRec>, press_captured: bool) -> Option<ScalarRow> {
     if rows.is_empty() || captured(ctx, press_captured)
         // A real native editor/widget without a framework stop still owns its focused editing keys.
@@ -165,19 +166,27 @@ pub(super) fn choose(ctx: &Context, rows: &[ScalarRow], focused: Option<&StopRec
     {
         return None;
     }
+    let is_focused = |row: &ScalarRow| focused.is_some_and(|record| record.stop.id == row.slider || record.stop.root == row.slider);
+    if let Some(row) = rows.iter().find(|row| is_focused(row) && allowed(ctx, row)).copied() {
+        return Some(row);
+    }
+    // A hovered row never takes Up and Down from a focused component that acts on the arrow moves itself: a
+    // collection declares them in its key role, a select or a menu in its key use, and the stop's role holds both.
+    if focused.is_some_and(|record| record.stop.role.moves) {
+        return None;
+    }
     let pointer = pointer::with_pass_pointer(ctx, |pointer| pointer.hover);
     rows.iter()
         .find(|row| {
-            let focused = focused.is_some_and(|record| record.stop.id == row.slider || record.stop.root == row.slider);
-            let hovered = row.policy.trigger == ScalarKeyTrigger::HoveredOrFocused
+            row.policy.trigger == ScalarKeyTrigger::HoveredOrFocused
                 && pointer.is_some_and(|point| {
                     let local = areas::layer_map(ctx, row.layer).map_or(point, |map| map.to_layer(point));
                     row.rect.contains(local)
                         && pointer::with_hover(ctx, crate::runtime::egui::pass::current_viewport(ctx), |under, _| {
                             under.is_some_and(|under| under.contains(row.owner))
                         })
-                });
-            (focused || hovered) && allowed(ctx, row)
+                })
+                && allowed(ctx, row)
         })
         .copied()
 }

@@ -2,8 +2,9 @@
 
 use crate::overlay::kit::{Opened, Opener, Seen};
 use craft_behavior::{EditEvent, MotionMode};
-use craft_ui::contract::{Bind, Overlay, Props as _, Role, Show as _, Trigger};
+use craft_ui::contract::{Bind, Entry, Overlay, Props as _, Role, Show as _, Trigger};
 use craft_ui::form::{SliderField, SliderFieldLayout};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::focus::{FocusTarget, Initial, KeyUse, host_canvas, request};
 use craft_ui::runtime::overlay::{OpenFilter, any_open};
 use craft_ui::testing::focus::{AccessActionKind, key_release};
@@ -54,6 +55,8 @@ struct Scene {
     raw_release: bool,
     overlay: u8,
     open: bool,
+    combo: bool,
+    pick: u8,
 }
 
 struct Rig {
@@ -88,6 +91,8 @@ impl Rig {
             raw_release: false,
             overlay: 0,
             open: false,
+            combo: false,
+            pick: 1,
         }));
         let held = Rc::clone(&scene);
         let opened = Opened::default();
@@ -149,6 +154,10 @@ impl Rig {
             }
             if scene.native_text {
                 ui.put(NATIVE_TEXT, egui::TextEdit::singleline(&mut scene.text));
+            }
+            if scene.combo {
+                let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two")];
+                Select::new("Pick", Bind::bound(&mut scene.pick), &entries).show_at(ui, HOST);
             }
             if scene.overlay != 0 {
                 let make = if scene.overlay == 1 { Overlay::popover as fn() -> Overlay } else { modal_first };
@@ -233,17 +242,35 @@ fn scalar_policy_whole_row_label_value_and_track_hover_use_one_model_nudge() {
 }
 
 #[trial]
-fn scalar_policy_first_drawn_eligible_row_wins_both_focus_hover_conflicts() {
+fn scalar_policy_focused_row_wins_the_arrow_over_a_hovered_row() {
     for focused in [0, 1] {
         let mut rig = Rig::new(true, Some(policy()));
         rig.focus_slider(focused);
         let before_focus = rig.fixture.focused_stop();
         rig.hover_label(1 - focused);
         rig.fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
-        close(rig.scene.borrow().values[0][0], 0.05);
-        close(rig.scene.borrow().values[0][1], 3.0);
+        let values = rig.scene.borrow().values;
+        let (edited, other) = if focused == 0 { (values[0][0], values[0][1]) } else { (values[0][1], values[0][0]) };
+        assert!(edited > if focused == 0 { 0.01 } else { 3.0 }, "the focused row took the arrow: {values:?}");
+        assert_eq!(other, if focused == 0 { 3.0 } else { 0.01 }, "the hovered row left it: {values:?}");
         assert_eq!(rig.fixture.focused_stop(), before_focus);
     }
+}
+
+#[trial]
+fn scalar_policy_hovered_row_leaves_the_arrows_to_a_focused_list() {
+    let mut rig = Rig::new(true, Some(policy()));
+    rig.scene.borrow_mut().combo = true;
+    rig.fixture.settle();
+    let target = rig.fixture.by_role(Role::COMBO_BOX)[0];
+    rig.fixture.access(AccessActionKind::Focus, &target).settle();
+    let focused = rig.fixture.focused_stop();
+    assert!(focused.is_some(), "the select holds the focus");
+    rig.hover_label(0);
+    let before = rig.scene.borrow().values;
+    rig.fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    assert_eq!(rig.scene.borrow().values, before, "a focused list that acts on the moves keeps Up from a hovered row");
+    assert_eq!(rig.fixture.focused_stop(), focused);
 }
 
 #[trial]
