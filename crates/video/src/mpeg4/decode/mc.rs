@@ -9,7 +9,7 @@ const ROUNDTAB_16: [i32; 16] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
 
 /// An 8-bit sample plane at macroblock-aligned dimensions (`w × h`).
 #[derive(Clone, Debug)]
-pub(super) struct Plane {
+pub(crate) struct Plane {
     pub w: usize,
     pub h: usize,
     pub data: Vec<u8>,
@@ -41,7 +41,7 @@ impl Plane {
 
 /// Per-macroblock metadata retained for spatial MV prediction and B-VOP direct mode.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct MbMeta {
+pub(crate) struct MbMeta {
     /// True if the macroblock was coded with `not_coded == 1` in a P/S-VOP.
     pub not_coded: bool,
     /// True if the macroblock was intra-coded.
@@ -61,7 +61,7 @@ impl Default for MbMeta {
 
 /// A decoded macroblock-aligned frame held as a reference or ready for display output.
 #[derive(Clone, Debug)]
-pub(super) struct RefFrame {
+pub(crate) struct RefFrame {
     pub width: u32,
     pub height: u32,
     pub y: Plane,
@@ -128,7 +128,7 @@ fn combine_mv_candidates(a: Option<(i32, i32)>, b: Option<(i32, i32)>, c: Option
 }
 
 /// Spatial motion vector predictor for 1MV macroblock `(mx, my)` or block `b` (`0..4`) in 4MV mode (§7.6.5, Figure 7-16).
-pub(super) fn mv_predictor(mbs: &[MbMeta], grid: (usize, usize), mb: (usize, usize), block: usize, slice_id: usize) -> (i32, i32) {
+pub(crate) fn mv_predictor(mbs: &[MbMeta], grid: (usize, usize), mb: (usize, usize), block: usize, slice_id: usize) -> (i32, i32) {
     let (mb_w, mb_h) = grid;
     let (mx, my) = mb;
     let (ix, iy) = (mx as isize, my as isize);
@@ -149,7 +149,7 @@ pub(super) fn mv_predictor(mbs: &[MbMeta], grid: (usize, usize), mb: (usize, usi
 /// Convert a 16×16 luminance motion vector to a 4:2:0 chrominance motion vector in half-sample units (§7.6.2.2, §7.6.2.3).
 /// When `quarter_sample` is true, each luma component is first divided by 2 (truncated towards zero) to half-sample units.
 #[inline]
-pub(super) fn chroma_mv_1mv(mv: (i32, i32), quarter_sample: bool) -> (i32, i32) {
+pub(crate) fn chroma_mv_1mv(mv: (i32, i32), quarter_sample: bool) -> (i32, i32) {
     let h = if quarter_sample { (mv.0 / 2, mv.1 / 2) } else { mv };
     ((h.0 >> 1) | (h.0 & 1), (h.1 >> 1) | (h.1 & 1))
 }
@@ -166,7 +166,7 @@ fn div_round_16(sum: i32) -> i32 {
 
 /// Convert four 8×8 luminance motion vectors to a 4:2:0 chrominance motion vector in half-sample units (Table 7-6, §7.6.1.6, §7.6.2.3).
 #[inline]
-pub(super) fn chroma_mv_4mv(mvs: &[(i32, i32); 4], quarter_sample: bool) -> (i32, i32) {
+pub(crate) fn chroma_mv_4mv(mvs: &[(i32, i32); 4], quarter_sample: bool) -> (i32, i32) {
     let mut sx = 0i32;
     let mut sy = 0i32;
     for &(vx, vy) in mvs {
@@ -179,7 +179,7 @@ pub(super) fn chroma_mv_4mv(mvs: &[(i32, i32); 4], quarter_sample: bool) -> (i32
 }
 
 /// Half-sample bilinear motion-compensated prediction of a `size × size` block at `(x, y)` (§7.6.2.1).
-pub(super) fn predict_halfpel(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding: bool, out: &mut [u8]) {
+pub(crate) fn predict_halfpel(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding: bool, out: &mut [u8]) {
     let (ix, iy) = (x + (mv.0 >> 1), y + (mv.1 >> 1));
     let (hx, hy) = (mv.0 & 1, mv.1 & 1);
     let r = i32::from(rounding);
@@ -226,7 +226,7 @@ fn fir_halfpel_1d(samples: &[i32], count: usize, rounding: i32, out: &mut [i32])
 
 /// Quarter-sample luminance motion-compensated prediction of a `size × size` (`16` or `8`) block
 /// at `(x, y)` with quarter-pel motion vector `mv` (ISO/IEC 14496-2 §7.6.2.3).
-pub(super) fn predict_qpel(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding: bool, out: &mut [u8]) {
+pub(crate) fn predict_qpel(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: usize, rounding: bool, out: &mut [u8]) {
     let (ix, iy) = (x + (mv.0 >> 2), y + (mv.1 >> 2));
     let (qx, qy) = (mv.0 & 3, mv.1 & 3);
     let r = i32::from(rounding);
@@ -309,7 +309,7 @@ pub(super) fn predict_qpel(plane: &Plane, x: i32, y: i32, mv: (i32, i32), size: 
 
 /// Predict a luminance block (`size` = 16 or 8) using either quarter-pel or half-pel interpolation.
 #[inline]
-pub(super) fn predict_luma(plane: &Plane, origin: (i32, i32), mv: (i32, i32), size: usize, quarter_sample: bool, rounding: bool, out: &mut [u8]) {
+pub(crate) fn predict_luma(plane: &Plane, origin: (i32, i32), mv: (i32, i32), size: usize, quarter_sample: bool, rounding: bool, out: &mut [u8]) {
     if quarter_sample {
         predict_qpel(plane, origin.0, origin.1, mv, size, rounding, out);
     } else {
@@ -319,7 +319,7 @@ pub(super) fn predict_luma(plane: &Plane, origin: (i32, i32), mv: (i32, i32), si
 
 /// Average two predicted sample buffers (`(a + b + 1) >> 1`, ISO/IEC 14496-2 §7.6.9).
 #[inline]
-pub(super) fn average_pred(a: &[u8], b: &[u8], out: &mut [u8]) {
+pub(crate) fn average_pred(a: &[u8], b: &[u8], out: &mut [u8]) {
     for ((o, &va), &vb) in out.iter_mut().zip(a).zip(b) {
         *o = ((u16::from(va) + u16::from(vb) + 1) >> 1) as u8;
     }

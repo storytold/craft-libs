@@ -7,11 +7,11 @@ use craft_media::bitstream::BitReader;
 use super::DecodeError;
 
 /// Table B-6, `mcbpc` of an I-VOP macroblock, indexed by `(mb_type - 3) * 4 + cbpc`.
-pub(super) const MCBPC_INTRA: [(u16, u8); 8] = [(1, 1), (1, 3), (2, 3), (3, 3), (1, 4), (1, 6), (2, 6), (3, 6)];
+pub(crate) const MCBPC_INTRA: [(u16, u8); 8] = [(1, 1), (1, 3), (2, 3), (3, 3), (1, 4), (1, 6), (2, 6), (3, 6)];
 
 /// Table B-7, `mcbpc` of a P-VOP macroblock, indexed by `mb_type * 4 + cbpc`
 /// (`mb_type` 0 inter, 1 inter+q, 2 inter4v, 3 intra, 4 intra+q).
-pub(super) const MCBPC_INTER: [(u16, u8); 20] = [
+pub(crate) const MCBPC_INTER: [(u16, u8); 20] = [
     (1, 1),
     (3, 4),
     (2, 4),
@@ -36,11 +36,11 @@ pub(super) const MCBPC_INTER: [(u16, u8); 20] = [
 
 /// Table B-8, `cbpy` indexed by the coded block pattern of an intra macroblock (block 0 in the
 /// most significant of the four bits). An inter macroblock sends the code of the inverted pattern.
-pub(super) const CBPY: [(u16, u8); 16] =
+pub(crate) const CBPY: [(u16, u8); 16] =
     [(3, 4), (5, 5), (4, 5), (9, 4), (3, 5), (7, 4), (2, 6), (11, 4), (2, 5), (3, 6), (5, 4), (10, 4), (4, 4), (8, 4), (6, 4), (3, 2)];
 
 /// Table B-12, `motion_code` by magnitude 0–32; a sign bit (1 = negative) follows every code but 0.
-pub(super) const MVD_TABLE: [(u16, u8); 33] = [
+pub(crate) const MVD_TABLE: [(u16, u8); 33] = [
     (1, 1),
     (1, 2),
     (1, 3),
@@ -77,15 +77,15 @@ pub(super) const MVD_TABLE: [(u16, u8); 33] = [
 ];
 
 /// Table B-13, `dct_dc_size_luminance` 0–12.
-pub(super) const DC_SIZE_LUMA: [(u16, u8); 13] =
+pub(crate) const DC_SIZE_LUMA: [(u16, u8); 13] =
     [(3, 3), (3, 2), (2, 2), (2, 3), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11)];
 
 /// Table B-14, `dct_dc_size_chrominance` 0–12.
-pub(super) const DC_SIZE_CHROMA: [(u16, u8); 13] =
+pub(crate) const DC_SIZE_CHROMA: [(u16, u8); 13] =
     [(3, 2), (2, 2), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11), (1, 12)];
 
 /// The TCOEF escape code (`0000 011`), shared by both coefficient tables.
-pub(super) const ESCAPE: (u16, u8) = (3, 7);
+pub(crate) const ESCAPE: (u16, u8) = (3, 7);
 
 /// Table B-16, intra TCOEF codes, ordered by `last`, then `run`, then `level`.
 const INTRA_VLC: [(u16, u8); 102] = [
@@ -327,38 +327,38 @@ const INTER_LMAX: [&[u8]; 2] = [
 ];
 
 /// Table 7-1: Zigzag scan (`ZIGZAG[i]` is the raster position of the `i`-th coefficient).
-pub(super) const ZIGZAG: [usize; 64] = [
+pub(crate) const ZIGZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43,
     36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 /// Table 7-2: Alternate-Horizontal scan.
-pub(super) const ALT_HORIZONTAL_SCAN: [usize; 64] = [
+pub(crate) const ALT_HORIZONTAL_SCAN: [usize; 64] = [
     0, 1, 2, 3, 8, 9, 16, 17, 10, 11, 4, 5, 6, 7, 15, 14, 13, 12, 19, 18, 24, 25, 32, 33, 26, 27, 20, 21, 22, 23, 28, 29, 30, 31, 34, 35, 40, 41, 48,
     49, 42, 43, 36, 37, 38, 39, 44, 45, 46, 47, 50, 51, 56, 57, 58, 59, 52, 53, 54, 55, 60, 61, 62, 63,
 ];
 
 /// Table 7-3: Alternate-Vertical scan (the transpose of [`ALT_HORIZONTAL_SCAN`]).
-pub(super) const ALT_VERTICAL_SCAN: [usize; 64] = [
+pub(crate) const ALT_VERTICAL_SCAN: [usize; 64] = [
     0, 8, 16, 24, 1, 9, 2, 10, 17, 25, 32, 40, 48, 56, 57, 49, 41, 33, 26, 18, 3, 11, 4, 12, 19, 27, 34, 42, 50, 58, 35, 43, 51, 59, 20, 28, 5, 13,
     6, 14, 21, 29, 36, 44, 52, 60, 37, 45, 53, 61, 22, 30, 7, 15, 23, 31, 38, 46, 54, 62, 39, 47, 55, 63,
 ];
 
 /// Table 7-4: Default intra quantisation matrix (in raster order).
-pub(super) const DEFAULT_INTRA_MAT: [u8; 64] = [
+pub(crate) const DEFAULT_INTRA_MAT: [u8; 64] = [
     8, 17, 18, 19, 21, 23, 25, 27, 17, 18, 19, 21, 23, 25, 27, 28, 20, 21, 22, 23, 24, 26, 28, 30, 21, 22, 23, 24, 26, 28, 30, 32, 22, 23, 24, 26,
     28, 30, 32, 35, 23, 24, 26, 28, 30, 32, 35, 38, 25, 26, 28, 30, 32, 35, 38, 41, 27, 28, 30, 32, 35, 38, 41, 45,
 ];
 
 /// Table 7-5: Default non-intra quantisation matrix (in raster order).
-pub(super) const DEFAULT_NONINTRA_MAT: [u8; 64] = [
+pub(crate) const DEFAULT_NONINTRA_MAT: [u8; 64] = [
     16, 17, 18, 19, 20, 21, 22, 23, 17, 18, 19, 20, 21, 22, 23, 24, 18, 19, 20, 21, 22, 23, 24, 25, 19, 20, 21, 22, 23, 24, 26, 27, 20, 21, 22, 23,
     25, 26, 27, 28, 21, 22, 23, 24, 26, 27, 28, 30, 22, 23, 24, 26, 27, 28, 30, 31, 23, 24, 25, 27, 28, 30, 31, 33,
 ];
 
 /// Decode a small prefix-free VLC table (`max_len <= 12`).
 #[inline]
-fn decode_small_vlc(r: &mut BitReader<'_>, table: &[(u16, u8)], err: &'static str) -> Result<usize, DecodeError> {
+pub(crate) fn decode_small_vlc(r: &mut BitReader<'_>, table: &[(u16, u8)], err: &'static str) -> Result<usize, DecodeError> {
     let peek = r.peek(12) as u16;
     let left = r.bits_left();
     for (idx, &(code, len)) in table.iter().enumerate() {
@@ -373,7 +373,7 @@ fn decode_small_vlc(r: &mut BitReader<'_>, table: &[(u16, u8)], err: &'static st
 
 /// Read `mcbpc` in an I-VOP (Table B-6), skipping any preceding stuffing codes (`0000 0000 1`).
 /// Returns `(mb_type, cbpc)` where `mb_type` is 3 (intra) or 4 (intra+q).
-pub(super) fn read_mcbpc_intra(r: &mut BitReader<'_>) -> Result<(u8, u8), DecodeError> {
+pub(crate) fn read_mcbpc_intra(r: &mut BitReader<'_>) -> Result<(u8, u8), DecodeError> {
     for _ in 0..64 {
         if r.bits_left() >= 9 && r.peek(9) == 1 {
             let _ = r.skip(9);
@@ -387,7 +387,7 @@ pub(super) fn read_mcbpc_intra(r: &mut BitReader<'_>) -> Result<(u8, u8), Decode
 
 /// Read `mcbpc` in a P-VOP (Table B-7). Returns `(mb_type, cbpc)` where `mb_type` is 0..=4, or `None`
 /// after consuming one stuffing code (`0000 0000 1`); the caller then restarts at `not_coded`.
-pub(super) fn read_mcbpc_inter(r: &mut BitReader<'_>) -> Result<Option<(u8, u8)>, DecodeError> {
+pub(crate) fn read_mcbpc_inter(r: &mut BitReader<'_>) -> Result<Option<(u8, u8)>, DecodeError> {
     if r.bits_left() >= 9 && r.peek(9) == 1 {
         // Stuffing: the macroblock header restarts at `not_coded`.
         let _ = r.skip(9);
@@ -398,14 +398,14 @@ pub(super) fn read_mcbpc_inter(r: &mut BitReader<'_>) -> Result<Option<(u8, u8)>
 }
 
 /// Read `cbpy` (Table B-8). For inter macroblocks (`!intra`), the 4 bits are inverted.
-pub(super) fn read_cbpy(r: &mut BitReader<'_>, intra: bool) -> Result<u8, DecodeError> {
+pub(crate) fn read_cbpy(r: &mut BitReader<'_>, intra: bool) -> Result<u8, DecodeError> {
     let idx = decode_small_vlc(r, &CBPY, "invalid cbpy")? as u8;
     Ok(if intra { idx } else { idx ^ 0xF })
 }
 
 /// Read `dct_dc_size_luminance` (Table B-13) or `dct_dc_size_chrominance` (Table B-14),
 /// followed by `dct_dc_differential` and the marker bit when `size > 8`.
-pub(super) fn read_dc_diff(r: &mut BitReader<'_>, luma: bool) -> Result<i32, DecodeError> {
+pub(crate) fn read_dc_diff(r: &mut BitReader<'_>, luma: bool) -> Result<i32, DecodeError> {
     let size = if luma {
         decode_small_vlc(r, &DC_SIZE_LUMA, "invalid luma dc size")?
     } else {
@@ -424,7 +424,7 @@ pub(super) fn read_dc_diff(r: &mut BitReader<'_>, luma: bool) -> Result<i32, Dec
 
 /// Read one motion vector difference component (`motion_code` from Table B-12 + residual, §7.6.3)
 /// and wrap `pred + diff` into the range of `fcode` (`1..=7`).
-pub(super) fn read_mv_component(r: &mut BitReader<'_>, pred: i32, fcode: u8) -> Result<i32, DecodeError> {
+pub(crate) fn read_mv_component(r: &mut BitReader<'_>, pred: i32, fcode: u8) -> Result<i32, DecodeError> {
     let code = decode_small_vlc(r, &MVD_TABLE, "invalid motion vector code")? as i32;
     if code == 0 {
         return Ok(pred);
@@ -449,7 +449,7 @@ pub(super) fn read_mv_component(r: &mut BitReader<'_>, pred: i32, fcode: u8) -> 
 
 /// B-VOP macroblock prediction modes (Table B-9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum BMbType {
+pub(crate) enum BMbType {
     Direct,
     Interpolate,
     Backward,
@@ -457,7 +457,7 @@ pub(super) enum BMbType {
 }
 
 /// Read B-VOP `mb_type` (Table B-9: `1` Direct, `01` Interpolate, `001` Backward, `0001` Forward).
-pub(super) fn read_b_mb_type(r: &mut BitReader<'_>) -> Result<BMbType, DecodeError> {
+pub(crate) fn read_b_mb_type(r: &mut BitReader<'_>) -> Result<BMbType, DecodeError> {
     if r.read_bit()? {
         return Ok(BMbType::Direct);
     }
@@ -474,7 +474,7 @@ pub(super) fn read_b_mb_type(r: &mut BitReader<'_>) -> Result<BMbType, DecodeErr
 }
 
 /// Fast 12-bit lookup table for TCOEF VLC decoding (Tables B-16 and B-17).
-pub(super) struct TcoefDecode {
+pub(crate) struct TcoefDecode {
     /// Indexed by 12-bit peek value: `Some((last, run, level, code_len))` or `None`.
     lut: [Option<(bool, u8, u8, u8)>; 4096],
     /// `LMAX[last][run]`
@@ -524,7 +524,7 @@ impl TcoefDecode {
 
     /// Read one `(last, run, level)` event, including the three MPEG-4 escape modes (§7.4.1.3)
     /// or the H.263 short-header fixed escape when `short_header` is set.
-    pub(super) fn read_event(&self, r: &mut BitReader<'_>, short_header: bool) -> Result<(bool, usize, i32), DecodeError> {
+    pub(crate) fn read_event(&self, r: &mut BitReader<'_>, short_header: bool) -> Result<(bool, usize, i32), DecodeError> {
         if r.bits_left() >= usize::from(ESCAPE.1) && r.peek(u32::from(ESCAPE.1)) == u32::from(ESCAPE.0) {
             let _ = r.skip(usize::from(ESCAPE.1));
             if short_header {
@@ -585,20 +585,20 @@ impl TcoefDecode {
 }
 
 /// The intra (Table B-16) TCOEF decoder.
-pub(super) fn intra_tcoef() -> &'static TcoefDecode {
+pub(crate) fn intra_tcoef() -> &'static TcoefDecode {
     static T: OnceLock<TcoefDecode> = OnceLock::new();
     T.get_or_init(|| TcoefDecode::build(&INTRA_VLC, INTRA_LMAX))
 }
 
 /// The inter (Table B-17) TCOEF decoder.
-pub(super) fn inter_tcoef() -> &'static TcoefDecode {
+pub(crate) fn inter_tcoef() -> &'static TcoefDecode {
     static T: OnceLock<TcoefDecode> = OnceLock::new();
     T.get_or_init(|| TcoefDecode::build(&INTER_VLC, INTER_LMAX))
 }
 
 /// Read the run-length coded coefficients of an 8×8 block from scan index `start` (`0` or `1`)
 /// into `levels` (indexed by raster position `0..64` via `scan`).
-pub(super) fn read_block_coeffs(
+pub(crate) fn read_block_coeffs(
     r: &mut BitReader<'_>,
     table: &TcoefDecode,
     scan: &[usize; 64],

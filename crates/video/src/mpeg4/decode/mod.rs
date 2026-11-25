@@ -10,9 +10,9 @@
 //!   bitstream unpacking.
 
 mod headers;
-mod mc;
-mod picture;
-mod vlc;
+pub(crate) mod mc;
+pub(crate) mod picture;
+pub(crate) mod vlc;
 
 #[cfg(test)]
 mod tests;

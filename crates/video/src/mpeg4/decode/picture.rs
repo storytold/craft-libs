@@ -32,7 +32,7 @@ fn idct_basis() -> &'static [[f64; 8]; 8] {
 }
 
 /// In-place 8×8 inverse DCT of dequantised coefficients (ISO/IEC 14496-2 Annex A), saturated to `[-256, 255]`.
-pub(super) fn idct(blk: &mut [i32; 64]) {
+pub(crate) fn idct(blk: &mut [i32; 64]) {
     if blk[1..].iter().all(|&c| c == 0) {
         let d = blk[0];
         let v = if d >= 0 { (d + 4) >> 3 } else { -((-d + 4) >> 3) };

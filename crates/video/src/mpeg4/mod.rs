@@ -11,7 +11,7 @@
 pub const MAX_SIDE: u32 = 8190;
 
 #[cfg(feature = "mpeg4-decode")]
-mod decode;
+pub(crate) mod decode;
 #[cfg(feature = "mpeg4-decode")]
 pub use decode::*;
 
