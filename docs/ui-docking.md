@@ -56,7 +56,7 @@ The host keeps its panels' specs in a plain-data model that implements `PanelSpe
 
 | Method | Does |
 | --- | --- |
-| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`, `host_body`. |
+| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, `FlyoutHeight`, float size, `allow_native`, `window_kind`, `canvas`, `grid`, `host_body`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
 
 The area reads them only when the model's revision, the workspace's revision or the lock changes (`runtime::derived`), and keeps what it read otherwise, so an idle pass reads no spec. A host changes a label or a limit by editing the model. A spec reads no style: a tool rail's grid is `DockGrid::rail(cells)`, which the dock sizes from its own tokens.
@@ -124,6 +124,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A drag ends without a change when another arrangement replaces the workspace it started on: it records the workspace's generation, which `Workspace::replace` and the `WorkspaceSet` switch and reset change. The dock's own edits keep the generation, so they keep the drag. Every write moves the workspace's revision (`Workspace::revision`), which keys what the area derives.
 - A floating window's id comes from a counter its layout owns (`Layout::fresh_window_id`). It starts above every id the layout is built or loaded with and only grows while the layout lives; `Workspace::replace` gives the incoming windows ids the replaced layout never gave out, and a dock area keeps the windows its actions add above every id it has shown, so a workspace an undo brings back draws no id twice (`Workspace::raise_window_floor`). An OS window never passes to another window.
 - A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
+- A flyout is as tall as its group measures, within the room below its top, and at least the `DockHeights::default` of each of its panels whose `PanelSpec::flyout_height` is `FlyoutHeight::Docked`, the default. A panel with `FlyoutHeight::Content` opens a flyout as tall as its body measures, while its `DockHeights` still size its group docked in a column. A group the user sized keeps that height.
 - Split handles are Tab stops, and the arrow keys move them. A divider drag is one gesture in `DockAreaOutput::edit`.
 - A pointer press on a panel tab (a click, a drag's press, the tab menu's secondary press) leaves key focus where it was, so the document's keys keep working; Tab still reaches the tab row.
 - Floating windows stack with the app's own egui windows in egui's area order: the one shown, pressed or raised last (`FloatingGroup::raise`, which the host's `DockArea::focus` request sets on the window holding the panel) is on top, so a dialog the app opens over a floating panel shows above it. A docked flyout with `DockConfig::flyout_layer(PopupLayer::BelowWindows)` stands below all of them.
