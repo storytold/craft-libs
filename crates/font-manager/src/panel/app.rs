@@ -45,8 +45,11 @@ pub fn install_interface_fonts(ctx: &Context, language: &str, craft_faces: &[Emb
     UiFonts::new(&I18nScripts).languages(LANGUAGES).ui_language(language).craft_faces(craft_faces).install(ctx);
 }
 
-/// The filters column takes the width of its widest section; the list and toolbar take the rest.
-const PANES: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
+/// The filters column, whatever the list beside it shows; the list and toolbar take the rest.
+const PANES: [ColumnWidth; 2] = [ColumnWidth::Fixed(248.0), ColumnWidth::fill(1.0)];
+/// The panes of a panel less than [`WIDE_PANEL`] wide.
+const NARROW_PANES: [ColumnWidth; 2] = [ColumnWidth::Fixed(212.0), ColumnWidth::fill(1.0)];
+const WIDE_PANEL: f32 = 860.0;
 
 /// Preview downloads: at most this much per file, and this many faces in a session.
 const PREVIEW_LIMITS: Limits = Limits { max_file_bytes: 64 << 20, max_faces_per_file: 512, max_added_faces: 20_000 };
@@ -936,6 +939,7 @@ impl<'a> FontsPanelView<'a> {
         let search = ui.scope_id().with("search");
         let folder = env.folder();
         let wake = panel.jobs.waker();
+        let panes = if ui.available_width() < WIDE_PANEL { &NARROW_PANES } else { &PANES };
         let mut begun = false;
         let mut shown = Stack::new().fill().label(words.panel.clone()).command_scope(FontsCommand::SCOPE).show(ui, |ui, root| {
             if !std::mem::replace(&mut begun, true) {
@@ -946,11 +950,11 @@ impl<'a> FontsPanelView<'a> {
             }
             root.publish(FontsCommand::Find, CommandState::new());
             panel.top_bar(ui, &browse, texts.format, search);
-            let panes = Grid::new(&PANES).fill().show(ui, |ui, _| {
+            let shown = Grid::new(panes).fill().show(ui, |ui, _| {
                 panel.filters(ui, &texts);
                 panel.main(ui, &texts, &folder, host.as_ref())
             });
-            panes.inner.flatten()
+            shown.inner.flatten()
         });
         // A measuring run has no rows on screen, and a pass that runs again may have the wrong ones.
         let rerun = craft_ui::runtime::frame::will_rerun(ui.ctx());

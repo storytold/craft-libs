@@ -53,14 +53,14 @@ fn lines(count: usize) -> Vec<StyleLine> {
 }
 
 fn list(ui: &mut Ui, count: usize) -> StoryOutput {
-    list_of(ui, &lines(count))
+    list_of(ui, &lines(count), PANGRAM)
 }
 
-fn list_of(ui: &mut Ui, lines: &[StyleLine]) -> StoryOutput {
+fn list_of(ui: &mut Ui, lines: &[StyleLine], sample: &str) -> StoryOutput {
     let words = Env::of(ui).words::<DetailsWords>();
     let source = Lines(lines);
     StyleList::new("Styles", words.no_styles.clone())
-        .show_items(ui, &source, &mut |key, _| StyleRow::new(&lines[*key], "Hack", PANGRAM, POINTS, &words))
+        .show_items(ui, &source, &mut |key, _| StyleRow::new(&lines[*key], "Hack", sample, POINTS, &words))
         .into()
 }
 
@@ -85,7 +85,7 @@ fn style_list_variable(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let face = HeldFace::Subset(SubsetFont { key: "story/orbitron".to_owned(), bytes: VARIABLE.into() });
     let styles = [("Regular", 400.0), ("Bold", 700.0), ("Black", 900.0)];
     let lines = styles.map(|(name, weight)| StyleLine::new(name, Some(face.clone()), Action::None).at(vec![(*b"wght", weight)]));
-    list_of(ui, &lines)
+    list_of(ui, &lines, "Orbitron")
 }
 
 #[story(StyleRow<'static>, covers = [Default], drive = Drive::Never)]

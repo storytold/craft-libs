@@ -105,11 +105,11 @@ pub(super) struct StyleList {
 }
 
 impl StyleList {
-    /// A list named `label`; it is as tall as its rows, and shows `empty` while it has none.
+    /// A list named `label`; it fills the width, is as tall as its rows, and shows `empty` while it has none.
     pub(super) fn new(label: impl Into<Label>, empty: impl Into<Label>) -> Self {
         StyleList {
             common: Common::new(),
-            props: ContainerProps::new().sizing(Sizing::Content),
+            props: ContainerProps::new().sizing(Sizing::FillWidth),
             items: CollectionProps::new().select(SelectMode::Single).natural_height(true).empty(empty),
         }
         .label(label)

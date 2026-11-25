@@ -18,19 +18,22 @@ use craft_host::Host;
 use craft_theme::variant::{Emphasis, Tone};
 use craft_ui::buttons::{Button, Link, SplitButton};
 use craft_ui::contract::overlay::Outside;
-use craft_ui::contract::{Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use craft_ui::contract::{
+    Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::{Badge, Progress, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::{Notice, NoticeAction};
 use craft_ui::primitives::Wrap;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::Initial;
 use craft_ui::style::Variant;
 use craft_ui::text::TextField;
 use egui::{Response, Ui};
 
 use self::rows::{Action, Lines, StyleLine, StyleList, StyleRow};
-use crate::axes::{AxisSliders, AxisValues, FontAxis, read_axes};
+use crate::axes::{AxisSliders, AxisValues, FontAxis, OpticalSize, read_axes, shown_axes};
 use crate::index::{Family, FontFile, Index, script_name, source_label};
 use crate::panel::app::{
     Detail, FontsPanel, FontsPanelWords, NotCopied, Pending, category_label, family_key, regular, source_name, style_count, style_name,
@@ -50,8 +53,13 @@ const HERO_POINTS: f32 = 96.0;
 /// The most languages the sheet lists; the rest are counted.
 const LANGUAGES_SHOWN: usize = 60;
 
-/// The lines of a licence or NOTICE text in view; the rest scrolls.
+/// The most lines of a licence or NOTICE text in view; the rest scrolls.
 const LEGAL_LINES: usize = 10;
+/// The lines its box has for a shorter text: the least of a multi-line field.
+const LEGAL_LEAST_LINES: usize = 2;
+
+/// The sheet's sliders show the face's optical sizes, which its samples are drawn at.
+const OPTICAL_SIZE: OpticalSize = OpticalSize::Slider;
 
 /// The facts' labels over their values.
 const FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
@@ -396,14 +404,16 @@ impl<'a> DetailsSheet<'a> {
         let points = panel.settings.size.max(MIN_SAMPLE_POINTS);
         let mut todo: Vec<Do> = Vec::new();
         let mut open = true;
+        // The sheet is for reading: no field of it takes the keyboard when it opens.
         let mut shown = Dialog::prompt(sheet.title.clone())
+            .initial_focus(Initial::Keep)
             .overlay(|overlay| {
                 let dismiss = overlay.dismiss.outside(Outside::Absorb);
                 overlay.dismiss(dismiss)
             })
             .opened(Bind::bound(&mut open))
             .show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
+                Stack::new().fill_width().show(ui, |ui, _| {
                     sheet.header(ui, &env, &words, &mut todo);
                     sheet.body(ui, &env, &words, points, &mut panel.detail_axes, &mut todo);
                 });
@@ -666,21 +676,16 @@ impl Sheet {
         out.chosen.map(Some).or_else(|| out.activated.then_some(None))
     }
 
-    /// The styles, and beside them (or below, when narrow) the facts and the languages.
+    /// The styles, the axis sliders of each variable file under its name, the facts, the languages and the licence.
     fn body(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, points: f32, axes: &mut HashMap<String, AxisValues>, todo: &mut Vec<Do>) {
-        Row::new().wrap(true).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
-                self.styles(ui, env, words, points, todo);
-                for file in &self.axes {
-                    let values = axes.entry(file.sha256.clone()).or_default();
-                    AxisSliders::new(file.label.clone(), &file.axes, Bind::bound(values)).show(ui);
-                }
-            });
-            Stack::new().show(ui, |ui, _| {
-                self.side(ui, env, words);
-                self.licence(ui, words, todo);
-            });
-        });
+        self.styles(ui, env, words, points, todo);
+        for file in &self.axes {
+            Text::new(file.label.clone()).shade(Shade::Faint).show(ui);
+            let values = axes.entry(file.sha256.clone()).or_default();
+            AxisSliders::new(file.label.clone(), &file.axes, Bind::bound(values)).optical_size(OPTICAL_SIZE).show(ui);
+        }
+        self.side(ui, env, words);
+        self.licence(ui, words, todo);
     }
 
     fn styles(&self, ui: &mut Ui, env: &Env, words: &DetailsWords, points: f32, todo: &mut Vec<Do>) {
@@ -750,8 +755,9 @@ impl Sheet {
                 LegalShown::Text(text) => {
                     Text::new(title.clone()).shade(Shade::Faint).show(ui);
                     TextField::new(title.clone(), Bind::given(text.clone()))
-                        .lines(LEGAL_LINES)
+                        .lines(LEGAL_LEAST_LINES)
                         .max_lines(LEGAL_LINES)
+                        .sizing(Sizing::FillWidth)
                         .mono()
                         .read_only(true)
                         .show(ui);
@@ -873,7 +879,8 @@ impl FamilyStyles<'_> {
         self.panel.subsets.detail_font(self.index, self.family, file, self.sample)
     }
 
-    /// The axes of the variable files among `files`: the subset's own once it is here, else the index's ranges.
+    /// The axes of the variable files among `files` that have a slider: the subset's own once it is here, else the index's
+    /// ranges.
     fn axes(&self, files: &[usize]) -> Vec<FileAxes> {
         files
             .iter()
@@ -883,6 +890,7 @@ impl FamilyStyles<'_> {
                 let own = self.subset(file).map(|font| read_axes(&font.bytes, 0)).filter(|axes| !axes.is_empty());
                 FileAxes { sha256: file.sha256.clone(), label: file_label(file), axes: own.unwrap_or_else(|| index_axes(file)) }
             })
+            .filter(|file| shown_axes(&file.axes, OPTICAL_SIZE).next().is_some())
             .collect()
     }
 }

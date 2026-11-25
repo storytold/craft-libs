@@ -18,7 +18,7 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Access, ActivateOn, Bind, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Entry,
     ItemOutput, MeasureCx, Name, NoValue, Outcome, PartsCx, Props as _, Role, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    Sizing, WrapWidth, clicked,
+    Sizing, clicked,
 };
 use craft_ui::display::{Badge, Progress, Shade, Spinner, Text};
 use craft_ui::form::{SliderField, SliderFieldLayout};
@@ -203,7 +203,7 @@ impl FontsPanel {
 
     pub(crate) fn filters(&mut self, ui: &mut Ui, texts: &Texts<'_>) {
         let browse = texts.browse;
-        Stack::new().scroll(Scroll::vertical()).wrap_width(WrapWidth::Column).label(browse.filters.clone()).show(ui, |ui, _| {
+        Stack::new().fill().scroll(Scroll::vertical()).label(browse.filters.clone()).show(ui, |ui, _| {
             match self.tab {
                 Tab::Catalogue => self.catalogue_filters(ui, texts),
                 Tab::Installed => self.installed_filters(ui, texts),
@@ -271,7 +271,7 @@ impl FontsPanel {
                 .activate(ActivateOn::Click)
                 .allow_empty(false)
                 .header(false)
-                .sizing(Sizing::Content)
+                .sizing(Sizing::FillWidth)
                 .natural_height(true)
                 .selection(Bind::given(current))
                 .show_items(ui, &CardKeys::new(&rows, |_| None), &mut |key, _| {

@@ -655,6 +655,8 @@ fn a_variable_family_draws_one_subset_at_every_axis_value() {
         assert!(rig.present(style), "no {style} row");
     }
 
+    rig.fx.type_text("9");
+    assert!(rig.present("400"), "no field of the sheet has the keyboard when it opens");
     let weight = rig.named(Role::SLIDER, "Weight");
     assert!(rig.present("400") && !rig.present("401"));
     rig.fx.access(AccessActionKind::Increment, &weight);
