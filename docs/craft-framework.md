@@ -1006,6 +1006,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
 | `size.length.track`, `size.length.short` | Value track, short field |
 | `size.row.text` | A row that shows text only: one body line and `space.gap.tight`; read-only display tables take it, lists the user picks from keep control-high rows |
+| `size.row.menu` | A menu row's height at the medium control size (`MenuItem`); follows an app's `size.control.md` unless the app sets it |
 | `size.dialog.least`, `size.dialog.wrap` | A dialog's content: the least width it opens at, and the line length its paragraphs wrap at (`LeastWidth::Dialog`, `WrapWidth::Dialog`); content that cannot wrap widens it past that |
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
 | `size.hit.edge` | The band inside the edge of a canvas's view in which a tool that autoscrolls on hover scrolls the view (a Polygonal Lasso's rubber band), at most a quarter of the view's shorter side |

@@ -405,6 +405,15 @@ impl<'a> StyleCx<'a> {
         }
     }
 
+    /// The height of a menu row at the ambient size: `size.row.menu` at the medium size, grown as a control's height
+    /// is; a small row stands a small control high.
+    pub fn menu_row_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.row.menu, self.line_ratio),
+        }
+    }
+
     /// How the icon-only buttons of the scope show their glyph.
     pub fn glyph_role(&self) -> GlyphRole {
         self.glyphs
