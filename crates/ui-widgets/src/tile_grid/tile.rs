@@ -305,7 +305,7 @@ pub struct TileStyle {
 }
 
 /// The paper of a page picture (`Tile::page`): a document's blank page, which is data, not a theme surface.
-const PAPER: DataColor = DataColor::new(Color32::WHITE);
+const PAPER: DataColor = DataColor::new(Color32::WHITE); // design: allow[raw-colour/const](a document's blank page is data, not a theme surface)
 
 /// A `width` by `height` page centred in `picture` on the knob's shadow, the theme's short hard shadow of a part lifted
 /// just off the surface under it. The page's longer side spans the largest square the picture holds with the shadow,
@@ -562,6 +562,7 @@ impl<'a> Tile<'a> {
     /// that stands for a document size shows it this way (New Document's presets in `PresetCardLook::Page`, a start
     /// page's page templates).
     #[must_use]
+    // design: allow[props/point-size](only the page's shape counts: `width` and `height` are a proportion in any one unit)
     pub fn page(self, width: f64, height: f64) -> Self {
         self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
     }

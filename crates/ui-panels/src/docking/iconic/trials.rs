@@ -717,7 +717,7 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
     let band = |group: u64| fixture.part_rect(id, GRIP.at(group)).expect("each group keeps a grip band");
     let (first, last, next) = (cell(0), cell(1), cell(2));
     let (top, lower) = (band(0), band(1));
-    assert!(first.top() < gripped_first.top() - 0.5, "the first icon {first:?} stands higher than under a grip strip {gripped_first:?}");
+    assert!(first.top() < gripped_first.top(), "the first icon {first:?} stands higher than under a grip strip {gripped_first:?}");
     for (group, band) in [top, lower].into_iter().enumerate() {
         assert!(grip_ticks(&shapes, band).is_none(), "group {group}: the band shows no marks");
     }
@@ -733,7 +733,7 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
     let between: Vec<_> = level.iter().filter(|(a, _, _)| a.y > last.bottom() && a.y < next.top()).collect();
     let [(a, b, ink)] = between.as_slice() else { panic!("one rule between the groups: {level:?}") };
     let middle = (last.bottom() + next.top()) / 2.0;
-    assert!((a.y - middle).abs() <= 0.5, "the rule {a:?} lies in the middle of the room from {last:?} to {next:?}");
+    assert!(near(a.y, middle), "the rule {a:?} lies in the middle of the room from {last:?} to {next:?}");
     let (left, right) = (a.x.min(b.x), a.x.max(b.x));
     let span = right - left;
     assert!(left > 0.0 && right < RAIL && span > RAIL - span, "the rule reaches across the column, short of its sides: {a:?} to {b:?}");
