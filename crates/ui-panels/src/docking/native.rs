@@ -9,10 +9,10 @@
 
 use super::{DockConfig, FloatingGroupOutput, PanelSpec};
 use crate::runtime::windows::{WindowAction, WindowHost, WindowSpec};
-use crate::runtime::{drag, overlay};
-use craft_behavior::GesturePhase;
+use crate::runtime::{drag, overlay, pointer};
 use craft_behavior::dock::{Action, Floating};
 use craft_behavior::placement::{Defaults, monitor_of, place};
+use craft_behavior::{Buttons, GesturePhase};
 use craft_host::target::WindowKind;
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 
@@ -29,6 +29,8 @@ pub struct Opening {
     pub rect: Rect,
     /// The OS window to open, or `None` where the group shows in the app window.
     pub spec: Option<WindowSpec>,
+    /// The group shows in the app window until the drag that moves it there ends, and in an OS window after.
+    pub waits: bool,
 }
 
 /// Whether the groups of panels with `specs` open OS windows: the dock's `config` turns them on, the platform opens
@@ -53,9 +55,11 @@ pub fn pixels_per_point(ctx: &Context, viewport: ViewportId) -> Option<f32> {
 }
 
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool
-/// window (a palette level, no taskbar entry).
+/// window (a palette level, no taskbar entry). An Escape nothing in it takes is the Cancel of the window the dock is in.
 pub fn spec_for(specs: &[PanelSpec]) -> WindowSpec {
-    if specs.iter().any(|spec| spec.window_kind == WindowKind::Document) { WindowSpec::document() } else { WindowSpec::tool() }
+    let document = specs.iter().any(|spec| spec.window_kind == WindowKind::Document);
+    let spec = if document { WindowSpec::document() } else { WindowSpec::tool() };
+    spec.hands_on_cancel(true)
 }
 
 /// The rect in the main window's points of `desktop`, a rect in desktop points: where a window at `desktop` would sit
@@ -87,17 +91,38 @@ pub fn restore<P>(ctx: &Context, window: &Floating<P>) -> Rect {
 /// at its own rect. `specs` are its panels' specs; `group` is the id of the group that shows it. A window that opens
 /// opens at its [`restore`]d rect; an open window stays at the placement the dock model recorded for it, so the
 /// monitor fit of `restore` never sends back a place the user gave it.
+///
+/// A window opens no OS window while a drag moves it in the app window: the OS gives an OS window no press that went
+/// down in another window, so the drag would end. `continues` says that the window takes over the held press in this
+/// pass (`DockArea::continue_move`), which a window never placed on the desktop does in the app window.
 #[doc(hidden)]
-pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, specs: &[PanelSpec], group: egui::Id) -> Opening {
+pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, specs: &[PanelSpec], group: egui::Id, continues: bool) -> Opening {
+    let layer = Opening { rect: window.rect, spec: None, waits: false };
     if !allowed(ctx, config, specs) {
-        return Opening { rect: window.rect, spec: None };
+        return layer;
     }
     let open = WindowHost::of(ctx).viewport_of(group).is_some();
+    if !open {
+        let takes_over = continues && window.native.is_none() && pointer::frame(ctx).buttons.contains(Buttons::PRIMARY);
+        if takes_over || pointer::pressed_part(ctx, group).is_some() || drag::sourced_by(ctx, group) {
+            return Opening { waits: true, ..layer };
+        }
+    }
     let recorded = window.native.as_ref().filter(|_| open).and_then(|native| {
         let at = native.position()?;
         Some(Rect::from_min_size(Pos2::from(at), Vec2::from(native.normal.size)))
     });
-    Opening { rect: recorded.unwrap_or_else(|| restore(ctx, window)), spec: Some(spec_for(specs)) }
+    Opening { rect: recorded.unwrap_or_else(|| restore(ctx, window)), spec: Some(spec_for(specs)), waits: false }
+}
+
+/// Asks for the pass in which a group that waits to open its OS window ([`Opening::waits`]) opens it: the next one once
+/// the press that moved it has ended, or the one after a target in another window had its chance to take the drop.
+#[doc(hidden)]
+pub fn waited(ctx: &Context, opening: &Opening, output: &FloatingGroupOutput) {
+    let ended = output.placed.is_some_and(|change| matches!(change.phase, GesturePhase::Commit | GesturePhase::Cancel));
+    if opening.waits && (ended || pointer::pressed_part(ctx, output.response.id).is_none()) {
+        crate::runtime::frame::request_repaint(ctx);
+    }
 }
 
 /// The action that records where the OS put the native window `window`, shown in `viewport`: its placement, as an
