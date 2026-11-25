@@ -276,6 +276,21 @@ impl<T: Settings> SettingsStore<T> {
         self.save()
     }
 
+    /// Applies a typed update and saves it immediately, with an explicit edit to the TOML document.
+    ///
+    /// The document edit runs after the latest disk document is read and the candidate settings
+    /// are merged into it. Use it to remove keys that the usual merge would preserve. Keep the
+    /// typed candidate and document edit consistent for the fields the application owns.
+    ///
+    /// On a successful write the candidate becomes the current value. A failed write leaves the
+    /// prior value and any pending changes in place. Backup, recovery and read-only protection
+    /// work as with [`Self::flush`]. In memory-only mode only the typed update runs.
+    pub fn update_and_flush_with(&mut self, update: impl FnOnce(&mut T), edit_document: impl FnOnce(&mut DocumentMut)) -> Result<(), SettingsError> {
+        let mut candidate = self.value.clone();
+        update(&mut candidate);
+        self.save_with(Some(candidate), edit_document)
+    }
+
     fn mark_changed(&mut self, now: Instant) {
         // An in-memory store has nothing to save, so it never becomes dirty.
         self.dirty = self.path.is_some();
@@ -342,19 +357,28 @@ impl<T: Settings> SettingsStore<T> {
     }
 
     fn save(&mut self) -> Result<(), SettingsError> {
+        self.save_with(None, |_| {})
+    }
+
+    fn save_with(&mut self, candidate: Option<T>, edit_document: impl FnOnce(&mut DocumentMut)) -> Result<(), SettingsError> {
         if let Some(why) = &self.read_only {
             return Err(SettingsError::ReadOnly(why.clone()));
         }
         let Some(path) = self.path.clone() else {
+            if let Some(candidate) = candidate {
+                self.value = candidate;
+            }
             self.dirty = false;
             return Ok(());
         };
-        if let Some(on_disk) = self.check_disk(&path)? {
+        let mut doc = self.doc.clone();
+        if let Some(on_disk) = self.check_disk(&path, &mut doc)? {
             recovery::write_backup(&path, &on_disk)?;
         }
-        merge_into(&mut self.doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
-        set_schema_version(&mut self.doc, T::SCHEMA_VERSION);
-        let text = document::render(&self.doc);
+        merge_into(&mut doc, candidate.as_ref().unwrap_or(&self.value)).map_err(|e| SettingsError::Serialize(e.to_string()))?;
+        edit_document(&mut doc);
+        set_schema_version(&mut doc, T::SCHEMA_VERSION);
+        let text = document::render(&doc);
         craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private).atomic_write_with(
             &path,
             |file| {
@@ -362,6 +386,10 @@ impl<T: Settings> SettingsStore<T> {
                 file.write_all(text.as_bytes())
             },
         )?;
+        if let Some(candidate) = candidate {
+            self.value = candidate;
+        }
+        self.doc = doc;
         self.seen_text = Some(text);
         self.dirty = false;
         self.written = true;
@@ -379,7 +407,7 @@ impl<T: Settings> SettingsStore<T> {
     /// A file that no longer parses is moved aside (the edit is kept, the previous backup stays),
     /// and a file from a newer build, or one whose migration fails, makes the store read-only
     /// instead of overwriting it, the same as at startup.
-    fn check_disk(&mut self, path: &Path) -> Result<Option<String>, SettingsError> {
+    fn check_disk(&mut self, path: &Path, current: &mut DocumentMut) -> Result<Option<String>, SettingsError> {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -403,7 +431,7 @@ impl<T: Settings> SettingsStore<T> {
                     self.read_only = Some(why.clone());
                     return Err(SettingsError::ReadOnly(why));
                 }
-                Ok(_) => self.doc = doc,
+                Ok(_) => *current = doc,
                 // Same as at startup: leave the outside file untouched and stop saving.
                 Err(e) => {
                     let why = ReadOnlyReason::Migration(e).to_string();
@@ -412,7 +440,7 @@ impl<T: Settings> SettingsStore<T> {
                 }
             }
         }
-        Ok((!text.trim().is_empty()).then_some(text))
+        Ok(Some(text))
     }
 }
 
