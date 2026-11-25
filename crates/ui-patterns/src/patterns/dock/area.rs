@@ -26,6 +26,7 @@ use crate::runtime::derived::derived;
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
+use crate::runtime::pointer;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
 use crate::sections::{HeaderAction, Panel};
 use craft_behavior::dock::{
@@ -172,8 +173,9 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// The floating window holding the panel takes over the held primary press in this pass, with the pointer at the
     /// grab point inside the window ([`FloatingGroup::continue_move`]): the window follows the pointer and docks where it
     /// would dock on release. A request of the pass: a host that floats a panel from a rail's `torn_off` keeps it for
-    /// the one pass after, when the window shows. Without a held press, or when no window holds the panel, it does
-    /// nothing.
+    /// the one pass after, when the window shows. Where the dock opens OS windows (`DockConfig::native_windows`), the
+    /// window shows in the app window until the press ends, and then opens its OS window where it was released. Without
+    /// a held press, when no window holds the panel, or when the window has shown in an OS window, it does nothing.
     #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
     /// Moves key focus to the group that shows the panel, as a press on the group's body does, and picks its tab, as a
@@ -1725,7 +1727,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
-            let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
+            let continued = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)).map(|(_, grab)| grab);
+            let opening = native::opening(&ctx, scene.config, window, &specs, group_id, continued.is_some());
             // An OS window lays out at its own monitor's scale, which sizes its chrome; one in the app window at the
             // main window's.
             let scale = opening
@@ -1791,7 +1794,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if scene.focus.is_some_and(|focus| window.panels().any(|held| held == focus)) {
                 group = group.raise();
             }
-            if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
+            if let Some(grab) = continued {
                 group = group.continue_move(grab);
             }
             if scene.raise.is_some_and(|raised| window.panels().any(|held| held == raised)) {
@@ -1844,6 +1847,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let under = output.files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
                 let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
                 self.report.files.push(WindowFiles { panel, files: output.files });
+            }
+            let ended = output.placed.is_some_and(|change| matches!(change.phase, GesturePhase::Commit | GesturePhase::Cancel));
+            // The window opens its OS window in a pass after the press that moved it: the next, or the one after a
+            // target in another window had its chance to take the drop.
+            if opening.waits && (ended || pointer::pressed_part(&ctx, group_id).is_none()) {
+                crate::runtime::frame::request_repaint(&ctx);
             }
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
