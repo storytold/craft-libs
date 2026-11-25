@@ -9,7 +9,7 @@ use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::CommandInput;
 use craft_ui::runtime::env::RootEnv;
-use craft_ui::runtime::frame::{FrameInput, WindowInput, set_input};
+use craft_ui::runtime::frame::{FrameInput, WindowInput, input_pending, set_input};
 use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
@@ -26,8 +26,9 @@ const ROOT_SIZE: Vec2 = Vec2::new(800.0, 600.0);
 const CHILD_SIZE: Vec2 = Vec2::new(400.0, 300.0);
 
 thread_local! {
-    /// The events the next child pass receives (the renderer runs on the trial's thread).
-    static CHILD_EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    /// The events of the running frame's child passes (the renderer runs on the trial's thread), each for the child it
+    /// is addressed to, or else for the first child pass.
+    static CHILD_EVENTS: RefCell<Vec<(Option<ViewportId>, Event)>> = const { RefCell::new(Vec::new()) };
     /// The modifiers held in the child's window, which every child pass reports.
     static CHILD_MODIFIERS: Cell<Modifiers> = const { Cell::new(Modifiers::NONE) };
     /// The files hovering over and dropped on the child's window in the next child pass.
@@ -209,7 +210,13 @@ impl egui::DroppedFile for DroppedPath {
 fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     patch_window(viewport.ids, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
-    let mut events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+    let this = viewport.ids.this;
+    let mut events: Vec<Event> = CHILD_EVENTS.with(|events| {
+        let mut events = events.borrow_mut();
+        let (own, others): (Vec<_>, Vec<_>) = events.drain(..).partition(|(to, _)| to.is_none_or(|to| to == this));
+        *events = others;
+        own.into_iter().map(|(_, event)| event).collect()
+    });
     // This egui takes the held modifiers as an event, not a RawInput field.
     events.insert(0, egui::Event::ModifiersChanged(CHILD_MODIFIERS.with(Cell::get)));
     let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
@@ -402,8 +409,14 @@ impl Windows {
         *self.commands.borrow_mut() = commands;
     }
 
-    /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
-    /// window commands of the frame.
+    /// Gives the next frame's pass of the child `viewport` these `events`, as a popup window's, which runs inside its
+    /// opener's pass.
+    pub fn send(&self, viewport: ViewportId, events: Vec<Event>) {
+        CHILD_EVENTS.with(|kept| kept.borrow_mut().extend(events.into_iter().map(|event| (Some(viewport), event))));
+    }
+
+    /// One frame: `root` events go to the root viewport, `child` events to the first child pass, and each other child
+    /// gets the events [`send`](Self::send) gave it. Returns what the frame sent out.
     pub fn frame(&self, root: Vec<Event>, child: Vec<Event>, ui: impl FnMut(&mut Ui)) -> Out {
         self.frame_with_files(root, child, FilesOver::Root, Vec::new(), Vec::new(), ui)
     }
@@ -419,7 +432,7 @@ impl Windows {
         dropped: Vec<String>,
         ui: impl FnMut(&mut Ui),
     ) -> Out {
-        CHILD_EVENTS.with(|events| *events.borrow_mut() = child);
+        CHILD_EVENTS.with(|events| events.borrow_mut().extend(child.into_iter().map(|event| (None, event))));
         let ((root_hovered, root_dropped), child_files) = match over {
             FilesOver::Root => ((hovered, dropped), Default::default()),
             FilesOver::Child => (Default::default(), (hovered, dropped)),
@@ -429,13 +442,15 @@ impl Windows {
         CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
         SHAPES.with(|kept| kept.borrow_mut().clear());
-        set_input(
-            &self.ctx,
-            FrameInput::new(self.root.borrow().clone())
-                .app_modal(self.app_modal.get())
-                .window_input(self.window_input.get())
-                .commands(self.commands.borrow().clone()),
-        );
+        if !input_pending(&self.ctx) {
+            set_input(
+                &self.ctx,
+                FrameInput::new(self.root.borrow().clone())
+                    .app_modal(self.app_modal.get())
+                    .window_input(self.window_input.get())
+                    .commands(self.commands.borrow().clone()),
+            );
+        }
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,
@@ -450,6 +465,7 @@ impl Windows {
         ROOT_INFO.with(|info| *info.borrow_mut() = self.root_info.borrow().clone());
         input.viewports = all_viewports();
         let mut output = self.ctx.run_ui(input, ui);
+        CHILD_EVENTS.with(|events| events.borrow_mut().clear());
         // A child the frame no longer shows has closed: like an integration, the kit drops its window, so later inputs
         // stop listing it (and what its last pass left, such as a modal, stops counting), and a window opened again
         // opens anew.

@@ -101,6 +101,44 @@ fn escape_closes_the_edit_menu_and_the_field_keeps_its_typing_run() {
     assert_eq!(*rig.text.borrow(), "hello", "the field's own Escape still restores the value from before its run");
 }
 
+/// Return in an edit menu the pointer opened, before the pointer lit a row, runs no row (it ran the first one, Undo,
+/// and took back the typing): it closes the menu and the field keeps its typing run, as a native menu does.
+#[trial]
+fn return_in_the_edit_menu_with_no_row_lit_only_closes_it() {
+    let mut rig = rig();
+    rig.fixture.type_text("abc");
+    rig.fixture.settle();
+    rig.right_click_in_the_field();
+    assert!(rig.menu_open(), "the edit menu is open");
+    rig.fixture.key(Key::Enter, Modifiers::NONE);
+    rig.fixture.settle();
+    assert!(!rig.menu_open(), "Return closes the menu");
+    assert_eq!(*rig.text.borrow(), "helloabc", "and runs none of its rows");
+    assert!(rig.focus_in_the_field(), "the focus is back in the field");
+    rig.fixture.type_text("d");
+    rig.fixture.settle();
+    assert_eq!(*rig.text.borrow(), "helloabcd", "typing goes on in the field");
+}
+
+/// Return in an edit menu the pointer opened runs the row the pointer lit, not the first row the menu focused.
+#[trial]
+fn return_in_the_edit_menu_runs_the_row_the_pointer_lit() {
+    let mut rig = rig();
+    rig.fixture.type_text("abc");
+    rig.fixture.settle();
+    rig.right_click_in_the_field();
+    let select_all = rig.fixture.by_label("Select All").expect("the Select All row").center();
+    rig.fixture.frame(vec![pointer::moved(select_all)]);
+    rig.fixture.settle();
+    rig.fixture.key(Key::Enter, Modifiers::NONE);
+    rig.fixture.settle();
+    assert!(!rig.menu_open(), "Return closes the menu");
+    assert_eq!(*rig.text.borrow(), "helloabc", "Undo, the first row, did not run");
+    rig.fixture.type_text("x");
+    rig.fixture.settle();
+    assert_eq!(*rig.text.borrow(), "x", "Select All ran: typing replaced the whole text");
+}
+
 #[trial]
 fn an_edit_command_fired_from_elsewhere_reaches_the_focused_field() {
     let mut rig = rig();

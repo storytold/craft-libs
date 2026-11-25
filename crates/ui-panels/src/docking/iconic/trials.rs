@@ -422,6 +422,112 @@ fn a_flyout_with_an_offset_in_a_short_viewport_stays_inside_and_resizes_its_widt
     }
 }
 
+/// The names of the panels of the tall-body trials, which set no heights.
+const TALL: [&str; 8] = ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"];
+/// What the body of a flyout in the tall-body trial measures.
+const TALL_BODY: f32 = 300.0;
+/// The room below the last group's icon in the short-window trial.
+const ROOM_BELOW: f32 = 200.0;
+/// How much shorter than that room the body of the flyout that fits measures, and how much taller the one that does not.
+const OVERFLOW: f32 = 40.0;
+
+/// What [`tall_flyouts`] returns: the fixture, the panel whose flyout is open (the trial sets it) and the rect the open
+/// flyout's body showed in, last pass.
+type TallFlyouts = (Fixture, Rc<Cell<Option<u8>>>, Rc<Cell<Option<Rect>>>);
+
+/// A column of the [`TALL`] panels, each in a group of its own, on the left window edge; its flyouts stay inside the
+/// bounds `within` holds and their bodies measure the height `body` holds. Returns the fixture, the panel whose flyout
+/// is open (the trial sets it) and the rect the open flyout's body showed in, last pass.
+fn tall_flyouts(within: &Rc<Cell<Rect>>, body: &Rc<Cell<f32>>) -> TallFlyouts {
+    let (open, shown) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (bounds, measures, now, seen) = (Rc::clone(within), Rc::clone(body), Rc::clone(&open), Rc::clone(&shown));
+    let mut column = Column::new((0..TALL.len() as u8).map(|panel| Group::new(vec![panel], 0)).collect());
+    column.iconic = true;
+    let mut fixture = Fixture::new(move |ui| {
+        let current = now.get();
+        let mut opened = current;
+        IconicColumn::new("Panels", global("iconic column", "tall flyouts"), &column, Bind::bound(&mut opened), &|panel: &u8| {
+            PanelSpec::new(TALL[usize::from(*panel) % TALL.len()])
+        })
+        .edge(DockEdge::Start)
+        .opens(Side::End)
+        .within(bounds.get())
+        .show_flyouts_at(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y)), |group, at, ui, _| {
+            match at {
+                GroupAt::Measure(_) => return Some(measures.get()),
+                GroupAt::Show(rect) => {
+                    if group.active_panel().is_some_and(|panel| Some(*panel) == current) {
+                        seen.set(Some(rect));
+                    }
+                    Panel::new("Flyout").show_at(ui, rect, |_, _| ());
+                }
+            }
+            None
+        });
+        now.set(opened);
+    });
+    fixture.room(SCREEN).settle();
+    (fixture, open, shown)
+}
+
+/// Closes the open flyout of [`tall_flyouts`] and opens the last group's.
+fn reopen_last(fixture: &mut Fixture, open: &Cell<Option<u8>>) {
+    open.set(None);
+    fixture.settle();
+    open.set(Some(TALL.len() as u8 - 1));
+    fixture.settle();
+}
+
+/// A flyout whose body measures taller than the room below its group's icons moves up to stay inside the bounds, as
+/// tall as the body (or as the bounds when those are shorter): it is not cut to the room below its top with the rest
+/// of its body laid out below the bounds. The panels set no heights, so the group's height does not give the room.
+#[trial]
+fn a_flyout_taller_than_the_room_below_its_icons_moves_up_inside_the_bounds() {
+    let (within, body) = (Rc::new(Cell::new(screen())), Rc::new(Cell::new(TALL_BODY)));
+    let (mut fixture, open, shown) = tall_flyouts(&within, &body);
+    let last = TALL[TALL.len() - 1];
+    let icon = fixture.by_label(last).expect("the last group's icon").rect;
+    for height in [icon.bottom() + 8.0, 200.0] {
+        // The bounds end just below the last icon, or are shorter than the body.
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(SCREEN.x, height));
+        within.set(bounds);
+        reopen_last(&mut fixture, &open);
+        let rect = shown.get().expect("the last group's flyout is open");
+        let wanted = TALL_BODY.min(bounds.height());
+        assert!(bounds.bottom() - icon.top() < TALL_BODY, "the bounds leave less room below the icon than the body takes: {icon:?} in {bounds:?}");
+        assert!(bounds.contains_rect(rect), "{height}: the flyout {rect:?} stays inside {bounds:?}");
+        assert!(rect.height() > wanted || near(rect.height(), wanted), "{height}: the flyout {rect:?} takes the body's height {wanted}");
+        assert!(rect.top() < icon.top(), "{height}: the flyout {rect:?} moves up from its icon {icon:?}");
+    }
+}
+
+/// On a short window a flyout whose body fits below its group's icons keeps its top at the icons, and one whose body
+/// is taller than the room below them moves up only by what it overflows, its bottom on the bounds' bottom: neither
+/// takes the whole height of the bounds over the column's other icons.
+#[trial]
+fn a_flyout_on_a_short_window_moves_up_only_by_its_overflow() {
+    let (within, body) = (Rc::new(Cell::new(screen())), Rc::new(Cell::new(TALL_BODY)));
+    let (mut fixture, open, shown) = tall_flyouts(&within, &body);
+    let icon = fixture.by_label(TALL[TALL.len() - 1]).expect("the last group's icon").rect;
+    let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(SCREEN.x, icon.top() + ROOM_BELOW));
+    within.set(bounds);
+    let sizes = StyleCx::with_root(fixture.ctx(), DockSizes::style);
+    let least = sizes.strip + sizes.least;
+    assert!(icon.top() - OVERFLOW > bounds.top(), "the bounds leave room above the icon for the taller flyout to move up: {icon:?}");
+    for over in [-OVERFLOW, OVERFLOW] {
+        let height = ROOM_BELOW + over;
+        assert!(height > least, "{over}: the body {height} measures taller than the flyout's least height {least}");
+        body.set(height);
+        reopen_last(&mut fixture, &open);
+        let rect = shown.get().expect("the last group's flyout is open");
+        // A body that fits stays at the icon's top; a taller one moves up by its overflow alone.
+        let top = icon.top() - over.max(0.0);
+        assert!(near(rect.height(), height), "{over}: the flyout {rect:?} takes its body's height {height}");
+        assert!(near(rect.top(), top), "{over}: the flyout {rect:?} has its top at {top}, below the icon {icon:?} or up by its overflow");
+        assert!(bounds.contains_rect(rect), "{over}: the flyout {rect:?} stays inside {bounds:?}");
+    }
+}
+
 /// Each icon group's grip strip has its own room at the group's top: across the group, below the bar or the group
 /// before it and above the group's first icon, overlapping no icon. A drag that starts on a grip moves its whole
 /// group, as a drag on an icon moves its panel.

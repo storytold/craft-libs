@@ -814,6 +814,11 @@ pub(crate) fn dragged(ctx: &Context) -> Option<Id> {
     ctx.dragged_id()
 }
 
+/// Whether a pointer button is down.
+pub(crate) fn button_down(ctx: &Context) -> bool {
+    ctx.input(|input| input.pointer.any_down())
+}
+
 /// Where the press that is held down began, while a button is down.
 pub(crate) fn held_press_origin(ctx: &Context) -> Option<Pos2> {
     ctx.input(|input| if input.pointer.any_down() { input.pointer.press_origin() } else { None })
