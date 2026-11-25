@@ -13,7 +13,7 @@ pub fn bounds(p: &[(i64, i64)]) -> [i64; 4] {
 /// it is not, and copies of one outline are not inside each other. A path is tested only against
 /// closed paths larger than it (by the area of their box, then the area they enclose, then paint
 /// order), so no two paths are each inside the other, and only against the closed paths in the
-/// [`Grid`] cell of its box's first corner. `None` once `work` is spent: a grid cell filled and a
+/// grid cell of its box's first corner. `None` once `work` is spent: a grid cell filled and a
 /// box compared cost one each, and each segment tested costs the closed path's points for its
 /// crossings and again for each part of it.
 pub fn outer(paths: &[Vec<(i64, i64)>], boxes: &[[i64; 4]], work: &mut u64) -> Option<Vec<Vec<usize>>> {

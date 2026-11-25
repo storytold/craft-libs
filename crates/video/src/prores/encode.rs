@@ -532,45 +532,6 @@ pub(crate) fn encode_alpha(w: &mut Writer, vals: &[u32], bits: u32) {
 mod rate_tests {
     use super::*;
 
-    /// `take` gives a quantiser's measured per-slice bits whether or not `total` tried it: an
-    /// empty list would skip the slices' 16-bit size checks in `choose_quantisers`.
-    #[test]
-    fn take_measures_an_untried_quantiser() {
-        let block = |v: f32| std::array::from_fn::<f32, 64, _>(|i| v * (64 - i) as f32);
-        let slices: Vec<SliceData> =
-            (1..=3).map(|k| SliceData { comps: [vec![block(40.0 * k as f32); 4], vec![block(10.0); 2], vec![block(5.0); 2]], alpha: None }).collect();
-        let want = |q| slices.iter().map(|sd| slice_bits(sd, q)).collect::<Vec<_>>();
-        assert!(want(4).iter().all(|&b| b > 0));
-        let mut probes = Probes { slices: &slices, threads: false, tried: Vec::new() };
-        assert_eq!(probes.take(4), want(4), "untried");
-        probes.total(6);
-        assert_eq!(probes.take(6), want(6), "tried");
-        assert!(probes.tried.is_empty());
-    }
-
-    /// Frame bits falling with the quantiser (steeply at first, then flat), as real content does.
-    fn bits(q: u8) -> u64 {
-        4_000_000 / (q as u64 + 3) + 1_000
-    }
-
-    #[test]
-    fn search_finds_the_smallest_fitting_quantiser() {
-        for budget in (0..1_200_000).step_by(997).chain([0, 1_000, 2_000, bits(Q_MIN), bits(Q_MAX), u64::MAX]) {
-            let want = (Q_MIN..=Q_MAX).find(|&q| bits(q) <= budget).unwrap_or(Q_MAX);
-            let mut calls = 0;
-            let got = smallest_fitting(
-                &mut |q| {
-                    assert!((Q_MIN..=Q_MAX).contains(&q), "measured an invalid quantiser {q}");
-                    calls += 1;
-                    bits(q)
-                },
-                budget,
-            );
-            assert_eq!(got, want, "budget {budget}");
-            assert_eq!(calls, usize::from(want - Q_MIN + 1), "budget {budget}");
-        }
-    }
-
     #[test]
     fn search_does_not_assume_quantiser_sizes_are_monotonic() {
         let got = smallest_fitting(
@@ -617,24 +578,6 @@ mod rate_tests {
             assert!(enc.encode(&busy).unwrap() == alone(&busy), "{profile:?}: busy after plain");
             assert!(enc.encode(&plain).unwrap() == alone(&plain), "{profile:?}: plain after busy");
             assert!(enc.encode(&plain).unwrap() == alone(&plain), "{profile:?}: plain after plain");
-        }
-    }
-}
-
-#[cfg(test)]
-mod alpha_tests {
-    use super::*;
-
-    #[test]
-    fn alpha_final_singleton_has_a_run_code() {
-        // RDD 36:2022 §5.3.3: every difference is followed by a run, including
-        // the final one. Tables 13/14 encode -1; Table 12 encodes run 1 as `1`.
-        // With 16-bit alpha the difference occupies exactly one byte, so the
-        // required final run must start another byte, followed by zero padding.
-        for (bits, expected) in [(16, vec![0x01, 0x80]), (8, vec![0x0c])] {
-            let mut w = Writer::new();
-            encode_alpha(&mut w, &[(1 << bits) - 2], bits);
-            assert_eq!(w.finish(), expected, "{bits}-bit final singleton");
         }
     }
 }

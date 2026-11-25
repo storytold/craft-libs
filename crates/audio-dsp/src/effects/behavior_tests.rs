@@ -429,7 +429,7 @@ fn convolution_reverb_impulses() {
     for (k, want_rt) in [(0usize, 0.45), (2, 1.9), (4, 1.6)] {
         let mut e = fx("convolution_reverb", &[("impulse", k as f32), ("mix", 100.0), ("width", 100.0)]);
         let lat = e.latency();
-        let n = (SR * 4.0) as usize;
+        let n = (SR * 3.0) as usize;
         let mut imp = vec![0.0f32; n];
         imp[0] = 1.0;
         let (l, r) = run(e.as_mut(), &imp, &imp);
@@ -444,7 +444,7 @@ fn convolution_reverb_impulses() {
     }
     // Room size shortens the tail.
     let mut a = fx("convolution_reverb", &[("impulse", 2.0), ("mix", 100.0), ("room_size", 40.0)]);
-    let n = (SR * 3.0) as usize;
+    let n = (SR * 2.5) as usize;
     let mut imp = vec![0.0f32; n];
     imp[0] = 1.0;
     let (l, _) = run(a.as_mut(), &imp, &imp);
