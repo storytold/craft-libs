@@ -3,7 +3,7 @@
 //! Layout of the folder ([`craft_font_catalog::font_store_dir`]):
 //!
 //! ```text
-//! settings.json        the consent setting and the sources the user added
+//! settings.json        the consent setting, the sources the user added and the other settings
 //! manifest.json        what is installed
 //! os-fonts.json        the ledger of copies in the OS user font folder
 //! indexes/             the last indexes fetched: sources.json, one file per source
@@ -230,6 +230,10 @@ struct Settings {
     preview_service: Option<String>,
     #[serde(default = "on")]
     previews: bool,
+    /// The user keeps store fonts in Craft apps only: the font manager doesn't copy families
+    /// into the OS user font folder.
+    #[serde(default)]
+    craft_apps_only: bool,
     /// The file exists but couldn't be read or parsed.
     #[serde(skip)]
     unreadable: bool,
@@ -241,7 +245,7 @@ fn on() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true, unreadable: false }
+        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true, craft_apps_only: false, unreadable: false }
     }
 }
 
@@ -500,6 +504,22 @@ impl FontStore {
             return Err(Error::NotAllowed);
         }
         self.change_settings(|s| s.previews = enabled)
+    }
+
+    /// Whether the user keeps store fonts in Craft apps only. Off by default: the font manager
+    /// then copies each family it installs into the OS user font folder
+    /// ([`FontStore::make_available`]), so other apps can use it.
+    pub fn craft_apps_only(&self) -> bool {
+        self.settings().craft_apps_only
+    }
+
+    /// Sets [`FontStore::craft_apps_only`], from the user's own action. It only records the choice:
+    /// the caller copies or withdraws the families. [`Error::NotAllowed`] for an agent.
+    pub fn set_craft_apps_only(&self, on: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        self.change_settings(|s| s.craft_apps_only = on)
     }
 
     fn change_settings(&self, change: impl FnOnce(&mut Settings)) -> Result<(), Error> {

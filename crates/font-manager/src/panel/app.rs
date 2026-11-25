@@ -9,7 +9,7 @@ use crate::filter::{Query, Search};
 use crate::index::{Category, Family, FontFile, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
 use crate::remote::Previews;
-use crate::store::{Installer, RemoveRequest, StoreError};
+use crate::store::{Conflict, Installer, MadeAvailable, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
 use craft_i18n::Folder;
 use craft_ui::direction;
@@ -133,6 +133,14 @@ pub(crate) enum Detail {
     Installed(String, Source),
 }
 
+/// Why a family installed here isn't in the OS user font folder.
+#[derive(Clone, Debug)]
+pub(crate) enum NotCopied {
+    /// Fonts already there have its PostScript names, or sit where its copies would go.
+    Refused(Vec<Conflict>),
+    Failed(String),
+}
+
 /// Why the last job for a family failed, and what Retry runs.
 #[derive(Clone, Debug)]
 pub(crate) struct Failure {
@@ -198,6 +206,10 @@ pub struct FontsPanel {
     pub(crate) failed: HashMap<String, Failure>,
     /// A problem that belongs to no family (the download setting couldn't be saved).
     pub(crate) notice: Option<String>,
+    /// Families an install couldn't copy into the OS user font folder, by lower-case name.
+    pub(crate) not_copied: HashMap<String, NotCopied>,
+    /// "Keep fonts in Craft apps only" as last read or set.
+    pub(crate) craft_apps_only: bool,
     focused: bool,
     pub(crate) folder: Folder,
     /// The download consent as last read, and when.
@@ -285,6 +297,7 @@ impl FontsPanel {
             look,
             downloads_switch: true,
             catalog: options.catalog,
+            craft_apps_only: options.installer.craft_apps_only(),
             installer: options.installer,
             catalogue,
             query: Query::default(),
@@ -316,6 +329,7 @@ impl FontsPanel {
             asking: None,
             failed: HashMap::new(),
             notice: None,
+            not_copied: HashMap::new(),
             focused: true,
             folder: Folder::new("en"),
             consent: None,
@@ -557,8 +571,20 @@ impl FontsPanel {
         for (job, result) in self.jobs.poll() {
             let key = family_key(&job.source, &job.family);
             match result {
-                Ok(Finished::Installed | Finished::Removed) => {
+                Ok(Finished::Installed(copied)) => {
                     self.failed.remove(&key);
+                    self.record_copy(&job.family, copied);
+                }
+                Ok(Finished::Removed) => {
+                    self.failed.remove(&key);
+                    self.not_copied.remove(&job.family.to_lowercase());
+                }
+                Ok(Finished::CraftAppsOnly(refused)) => {
+                    self.not_copied = refused.into_iter().map(|(f, c)| (f.to_lowercase(), NotCopied::Refused(c))).collect();
+                }
+                Err(e) if job.kind == Kind::CraftAppsOnly => {
+                    self.craft_apps_only = self.installer.craft_apps_only();
+                    self.notice = Some(fmt("The Craft apps only setting couldn't be applied: {error}", &[("error", &e.0)]));
                 }
                 Ok(Finished::Previewed(files)) => {
                     self.failed.remove(&key);
@@ -579,7 +605,7 @@ impl FontsPanel {
                     let retry = position.and_then(|i| match job.kind {
                         Kind::Install => Some(job.file.clone().map_or(Pending::Install(i), |path| Pending::InstallFile(i, path))),
                         Kind::Preview => Some(Pending::Preview(i)),
-                        Kind::Remove => None,
+                        Kind::Remove | Kind::CraftAppsOnly => None,
                     });
                     log::warn!("{} ({:?}): {e}", job.family, job.kind);
                     self.failed.insert(key, Failure { kind: job.kind, error: e.0, retry });
@@ -587,6 +613,26 @@ impl FontsPanel {
             }
         }
         self.poll_sources();
+    }
+
+    fn record_copy(&mut self, family: &str, copied: Option<Result<MadeAvailable, StoreError>>) {
+        let not_copied = match copied {
+            Some(Ok(MadeAvailable::Refused(conflicts))) => NotCopied::Refused(conflicts),
+            Some(Err(e)) => NotCopied::Failed(e.0),
+            Some(Ok(MadeAvailable::Done)) | None => {
+                self.not_copied.remove(&family.to_lowercase());
+                return;
+            }
+        };
+        self.not_copied.insert(family.to_lowercase(), not_copied);
+    }
+
+    /// Sets "Keep fonts in Craft apps only" on the worker, which then withdraws or copies every
+    /// store family.
+    pub(crate) fn set_craft_apps_only(&mut self, ctx: &Context, on: bool) {
+        self.craft_apps_only = on;
+        self.notice = None;
+        self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::CraftAppsOnly(on));
     }
 
     fn refresh_installed(&mut self) {
