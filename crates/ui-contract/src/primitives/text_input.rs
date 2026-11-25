@@ -57,9 +57,8 @@ type WholePaste = dyn Fn(&str) -> bool;
 pub struct TextOptions {
     /// Shown while the text is empty.
     pub placeholder: Option<Label>,
-    /// The placeholder takes the muted text colour instead of the faint one: a field on a fill the faint colour does
-    /// not read on (a bar's quiet field).
-    pub muted_placeholder: bool,
+    /// The field's look: a quiet one's placeholder takes the muted text colour instead of the faint one.
+    pub look: crate::style::FieldLook,
     /// Lines: 1 is a single-line field.
     pub lines: Option<usize>,
     /// The most characters a draft holds.
@@ -157,7 +156,7 @@ impl Default for TextOptions {
     fn default() -> Self {
         TextOptions {
             placeholder: None,
-            muted_placeholder: false,
+            look: crate::style::FieldLook::Normal,
             lines: None,
             limit: None,
             mask: false,

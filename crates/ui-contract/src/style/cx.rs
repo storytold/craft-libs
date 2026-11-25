@@ -500,15 +500,15 @@ impl<'a> StyleCx<'a> {
         look
     }
 
-    /// The look of a field that sits in a bar (a title bar's search box): [`field`](Self::field) filled with the bar's
-    /// `surface.chrome` at rest and with the field fill under the pointer and while it holds focus, and with the quieter
+    /// The look of a field that sits in a bar (a title bar's search box, [`FieldLook::Quiet`](crate::style::FieldLook)):
+    /// [`field`](Self::field) filled with the bar's `surface.background` at rest and with the field fill under the pointer and while it holds focus, and with the quieter
     /// `line.border` edge at rest. The focus and invalid edges are the field's own. A bevelled well keeps its bevel; only its fill changes.
     pub fn quiet_field(&self) -> SurfaceLook {
         let mut look = self.field();
         let (surface, line) = (&self.tokens.color.surface, &self.tokens.color.line);
-        let (chrome, sunken) = (self.color(surface.chrome), self.color(surface.sunken));
+        let (bar, sunken) = (self.color(surface.background), self.color(surface.sunken));
         let off = self.color(self.tokens.color.state.disabled_fill);
-        look.fill = Stateful::new(chrome).off(States::new(chrome, sunken, sunken, off)).when(Flags::FOCUSED, sunken);
+        look.fill = Stateful::new(bar).off(States::new(bar, sunken, sunken, off)).when(Flags::FOCUSED, sunken);
         if let Some(edge) = &mut look.border
             && edge.off.rest != self.color(Rgba::TRANSPARENT)
         {

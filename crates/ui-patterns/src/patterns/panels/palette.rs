@@ -18,7 +18,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::overlay::{self, CloseReason};
 use crate::runtime::words::common::CommonWords;
-use crate::style::TypeRole;
+use crate::style::{FieldLook, TypeRole};
 use crate::text::TextField;
 use callout::Pointed;
 use craft_behavior::{DisplayOrder, EditEvent, IconId, ItemSource, Mixed, Selection};
@@ -153,10 +153,11 @@ pub struct CommandPalette<'a> {
     /// Where the search shows: a centred box or in place.
     #[prop]
     face: PaletteFace,
-    /// The in-place face in the look of a bar's own field: the bar's fill and a light edge at rest, the field fill
-    /// under the pointer and while open. The field is still named, and shows its search glyph and hint.
+    /// The in-place face's field look: [`FieldLook::Quiet`] is a bar's own field, with the bar's fill and a light edge
+    /// at rest, the field fill under the pointer and while open. The field is still named, and shows its search
+    /// glyph and hint.
     #[prop]
-    quiet: bool,
+    look: FieldLook,
     /// The hint the in-place search box shows while it is closed.
     #[prop(into)]
     placeholder: Option<Label>,
@@ -180,7 +181,7 @@ impl<'a> CommandPalette<'a> {
             uses: None,
             recents: Bind::kept(),
             face: PaletteFace::default(),
-            quiet: false,
+            look: FieldLook::Normal,
             placeholder: None,
             suggested: None,
             fallback: None,
@@ -281,7 +282,7 @@ impl<'a> CommandPalette<'a> {
     }
 
     fn show_in_place(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, index, mut open, uses, mut recents, quiet, placeholder, suggested, fallback, .. } = self;
+        let CommandPalette { label, entries, index, mut open, uses, mut recents, look, placeholder, suggested, fallback, .. } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -301,7 +302,7 @@ impl<'a> CommandPalette<'a> {
             let closed_face = !is_open
                 && clicked(
                     &TextField::search(label.clone(), Bind::given(String::new()))
-                        .quiet(quiet)
+                        .look(look)
                         .placeholder(face_hint.clone())
                         .id(field_id)
                         .show(ui)
@@ -327,7 +328,7 @@ impl<'a> CommandPalette<'a> {
                 }
                 let session = inner.memory::<Session>();
                 let field = TextField::search(label.clone(), Bind::bound(&mut session.query))
-                    .quiet(quiet)
+                    .look(look)
                     .placeholder(face_hint.clone())
                     .id(field_id)
                     .show(ui)

@@ -572,7 +572,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         multiline: input.options.multiline(),
         password: input.options.mask,
         hint: input.placeholder,
-        muted_hint: input.options.muted_placeholder,
+        muted_hint: input.options.look == crate::style::FieldLook::Quiet,
         mono: input.options.mono,
         role: input.options.role,
         ink: input.ink,
