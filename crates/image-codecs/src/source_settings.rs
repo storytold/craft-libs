@@ -46,10 +46,10 @@ const ZIGZAG: [usize; 64] = [
 
 /// One quantisation table from a DQT segment, in natural order, with its precision.
 #[derive(Debug, Clone, Copy)]
-struct Table {
-    values: [u16; 64],
+pub(crate) struct Table {
+    pub(crate) values: [u16; 64],
     /// 16-bit entries (Pq = 1) rather than 8-bit.
-    wide: bool,
+    pub(crate) wide: bool,
 }
 
 /// The quality (1–100, the Independent JPEG Group's scale that Save As and Export As use) a
@@ -89,7 +89,7 @@ fn table_error(t: &Table, base: &[u16; 64], q: u8) -> u64 {
 
 /// The quantisation tables 0..=3 defined before the first scan (a later definition of the same
 /// slot replaces an earlier one).
-fn jpeg_tables(b: &[u8]) -> [Option<Table>; 4] {
+pub(crate) fn jpeg_tables(b: &[u8]) -> [Option<Table>; 4] {
     let mut tables = [None; 4];
     if b.get(..2) != Some(&[0xFF, 0xD8]) {
         return tables;
