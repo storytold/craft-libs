@@ -10,6 +10,10 @@
 //! streams, FlateDecode with PNG predictors), the page tree and each page's boxes and rotation.
 //! Every length, count and depth is bounded, and anything unreadable is an [`Error`], never a
 //! panic: the caller's PDF is input like any other.
+//!
+//! CUPS reads the sheets too, to tell Apple's filter which way they run
+//! (`crate::turns_landscape`); the update that rewrites them is Windows' alone, so it is built
+//! only there (and for tests).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -32,6 +36,7 @@ const MAX_OBJECT_NODES: usize = 32_000;
 const MAX_OBJECT_TOKENS: usize = 1 << 20;
 const MAX_SECTIONS: usize = 256;
 /// The most the page objects of repeated copies ([`Repeat`]) may take, in bytes.
+#[cfg(any(test, windows))]
 const MAX_REPEATED: usize = 64 << 20;
 /// A page without a MediaBox (invalid, but readers accept it) is US Letter.
 const DEFAULT_MEDIA: [f64; 4] = [0.0, 0.0, 612.0, 792.0];
@@ -358,6 +363,7 @@ impl<'a> Lexer<'a> {
 }
 
 /// An object written back: the value it was read as.
+#[cfg(any(test, windows))]
 fn write_obj(out: &mut Vec<u8>, obj: &Obj) {
     match obj {
         Obj::Null => out.extend_from_slice(b"null"),
@@ -379,6 +385,7 @@ fn write_obj(out: &mut Vec<u8>, obj: &Obj) {
     }
 }
 
+#[cfg(any(test, windows))]
 fn write_name(out: &mut Vec<u8>, name: &[u8]) {
     out.push(b'/');
     for &b in name {
@@ -390,6 +397,7 @@ fn write_name(out: &mut Vec<u8>, name: &[u8]) {
     }
 }
 
+#[cfg(any(test, windows))]
 fn write_dict(out: &mut Vec<u8>, dict: &Dict) {
     out.extend_from_slice(b"<<");
     for (key, value) in dict {
@@ -401,6 +409,7 @@ fn write_dict(out: &mut Vec<u8>, dict: &Dict) {
 }
 
 /// A number for a content stream or a box: at most four decimals, no exponent.
+#[cfg(any(test, windows))]
 fn number(v: f64) -> String {
     if !v.is_finite() {
         return "0".into();
@@ -410,6 +419,7 @@ fn number(v: f64) -> String {
     if s.is_empty() || s == "-" || s == "-0" { "0".into() } else { s.to_string() }
 }
 
+#[cfg(any(test, windows))]
 fn num_obj(v: f64) -> Obj {
     Obj::Num(number(v).into_bytes())
 }
@@ -901,14 +911,23 @@ impl Sheet {
 
 /// A print-ready PDF's sheets, and what an update to it needs.
 pub(crate) struct Sheets<'a> {
+    #[cfg(any(test, windows))]
     data: &'a [u8],
+    /// Elsewhere the sheets are only read: nothing of the PDF is kept for an update.
+    #[cfg(not(any(test, windows)))]
+    _data: std::marker::PhantomData<&'a [u8]>,
     pub(crate) sheets: Vec<Sheet>,
+    #[cfg(any(test, windows))]
     trailer: Dict,
+    #[cfg(any(test, windows))]
     catalog: Dict,
     /// The newest cross-reference section is a stream (so is the update's).
+    #[cfg(any(test, windows))]
     xref_stream: bool,
+    #[cfg(any(test, windows))]
     startxref: usize,
     /// The first unused object number.
+    #[cfg(any(test, windows))]
     size: u32,
 }
 
@@ -926,8 +945,8 @@ pub(crate) fn read(data: &[u8]) -> Result<Sheets<'_>, Error> {
     let start = startxref(data).ok_or_else(|| unreadable("no cross-reference table"))?;
     let mut entries = HashMap::new();
     let mut budget = Budget::default();
-    let mut trailer = None;
-    let mut xref_stream = false;
+    // The newest section's trailer, and whether that section is a stream.
+    let mut newest = None;
     let mut seen = HashSet::new();
     let mut next = Some(start);
     while let Some(offset) = next {
@@ -936,25 +955,26 @@ pub(crate) fn read(data: &[u8]) -> Result<Sheets<'_>, Error> {
         }
         let Some((section, is_stream)) = xref_section(data, offset, &mut entries, &mut budget) else {
             // An older section that can't be read only loses objects the newer ones replaced.
-            if budget.exhausted || trailer.is_none() {
+            if budget.exhausted || newest.is_none() {
                 return Err(unreadable("the cross-reference table is damaged"));
             }
             break;
         };
         next = get(&section, b"Prev").and_then(Obj::int).and_then(|v| usize::try_from(v).ok());
-        if trailer.is_none() {
-            xref_stream = is_stream;
-            trailer = Some(section);
+        if newest.is_none() {
+            newest = Some((section, is_stream));
         }
     }
-    let trailer = trailer.ok_or_else(|| unreadable("no trailer"))?;
+    let newest = newest.ok_or_else(|| unreadable("no trailer"))?;
+    let trailer = &newest.0;
+    #[cfg(any(test, windows))]
     let size = entries
         .keys()
         .max()
         .map_or(0, |m| m.saturating_add(1))
-        .max(get(&trailer, b"Size").and_then(Obj::int).and_then(|s| u32::try_from(s).ok()).unwrap_or(0));
+        .max(get(trailer, b"Size").and_then(Obj::int).and_then(|s| u32::try_from(s).ok()).unwrap_or(0));
     let mut reader = Reader { data, entries, objstms: HashMap::new(), budget };
-    let root = get(&trailer, b"Root").cloned().ok_or_else(|| unreadable("no document catalog"))?;
+    let root = get(trailer, b"Root").cloned().ok_or_else(|| unreadable("no document catalog"))?;
     let catalog = reader.resolve(&root).and_then(|c| c.dict().cloned()).ok_or_else(|| unreadable("no document catalog"))?;
     let pages_root = get(&catalog, b"Pages").cloned().ok_or_else(|| unreadable("no page tree"))?;
 
@@ -1062,10 +1082,29 @@ pub(crate) fn read(data: &[u8]) -> Result<Sheets<'_>, Error> {
     if sheets.is_empty() {
         return Err(Error::Spool("the print-ready PDF has no pages".into()));
     }
-    Ok(Sheets { data, sheets, trailer, catalog, xref_stream, startxref: start, size })
+    #[cfg(any(test, windows))]
+    let (trailer, xref_stream) = newest;
+    Ok(Sheets {
+        #[cfg(any(test, windows))]
+        data,
+        #[cfg(not(any(test, windows)))]
+        _data: std::marker::PhantomData,
+        sheets,
+        #[cfg(any(test, windows))]
+        trailer,
+        #[cfg(any(test, windows))]
+        catalog,
+        #[cfg(any(test, windows))]
+        xref_stream,
+        #[cfg(any(test, windows))]
+        startxref: start,
+        #[cfg(any(test, windows))]
+        size,
+    })
 }
 
 /// How sheets of another size than the paper are printed.
+#[cfg(any(test, windows))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Fit {
     /// Every sheet must be the paper's size (either way round).
@@ -1077,6 +1116,7 @@ pub(crate) enum Fit {
 
 /// A page's new version: its rotation, and for a page brought to the paper's size, the new
 /// geometry.
+#[cfg(any(test, windows))]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Edit {
     pub(crate) sheet: usize,
@@ -1086,6 +1126,7 @@ pub(crate) struct Edit {
 
 /// A page reframed onto the paper: its new MediaBox (unrotated space), the matrix placing the
 /// old content on it, and the old visible box, which stays the clip.
+#[cfg(any(test, windows))]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Frame {
     pub(crate) media: (f64, f64),
@@ -1093,6 +1134,7 @@ pub(crate) struct Frame {
     pub(crate) clip: [f64; 4],
 }
 
+#[cfg(any(test, windows))]
 fn close(a: (f64, f64), b: (f64, f64)) -> bool {
     (a.0 - b.0).abs() <= SAME && (a.1 - b.1).abs() <= SAME
 }
@@ -1101,6 +1143,7 @@ fn close(a: (f64, f64), b: (f64, f64)) -> bool {
 /// orientation is the job's). A sheet of the other orientation turns a quarter: a landscape sheet
 /// in a portrait job anticlockwise, as drivers put a landscape job on the paper, a portrait sheet
 /// in a landscape job clockwise. `Exact` refuses a sheet of another size; `Shrink` reframes it.
+#[cfg(any(test, windows))]
 pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<Edit>, Error> {
     let (pw, ph) = paper;
     if !(pw.is_finite() && ph.is_finite() && pw > 0.0 && ph > 0.0) {
@@ -1172,29 +1215,35 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
 /// make: each copy's pages follow the previous copy's. On two-sided paper, a document with an odd
 /// number of sheets gets a blank page after every copy but the last, so each copy starts on a
 /// sheet of its own.
+#[cfg(any(test, windows))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Repeat {
     pub(crate) copies: u32,
     pub(crate) two_sided: bool,
 }
 
+#[cfg(any(test, windows))]
 fn has_annotations(dict: &Dict) -> bool {
     get(dict, b"Annots").is_some_and(|a| !matches!(a, Obj::Null) && !matches!(a, Obj::Array(items) if items.is_empty()))
 }
 
+#[cfg(any(test, windows))]
 fn rect_obj(r: [f64; 4]) -> Obj {
     Obj::Array(r.into_iter().map(num_obj).collect())
 }
 
 /// Starts object `num` in an update, recording where it is.
+#[cfg(any(test, windows))]
 fn new_object(out: &mut Vec<u8>, num: u32, generation: u16, written: &mut Vec<(u32, u16, usize)>) {
     written.push((num, generation, out.len()));
     out.extend_from_slice(format!("{num} {generation} obj\n").as_bytes());
 }
 
 /// Boxes a reframed page drops: they were in the old geometry.
+#[cfg(any(test, windows))]
 const OLD_GEOMETRY: [&[u8]; 6] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
 
+#[cfg(any(test, windows))]
 impl Sheets<'_> {
     /// Refuse annotation print/view visibility the Windows renderer cannot preserve.
     pub(crate) fn check_print_annotations(&self) -> Result<(), Error> {

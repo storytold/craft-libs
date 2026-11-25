@@ -14,7 +14,8 @@ pub mod cups;
 
 #[cfg(any(test, windows))]
 mod progress;
-#[cfg(any(test, windows))]
+// Windows evens out the sheets' paper shape; CUPS reads which way they run (`turns_landscape`).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 mod sheets;
 #[cfg(test)]
 mod tests;
@@ -254,6 +255,43 @@ fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
         a.extend(["-o".to_string(), format!("{APPLE_TRAY}=")]);
     }
     a
+}
+
+/// [`lp_args_for`] for the print-ready `pdf` it sends: on Apple's CUPS, with
+/// `orientation-requested=4` when [`turns_landscape`] says so.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn lp_args_with_pdf(job: &Job, pdf: &[u8], apple: bool) -> Vec<String> {
+    let mut a = lp_args_for(job, apple);
+    if turns_landscape(pdf, job, apple) {
+        a.extend(["-o".to_string(), "orientation-requested=4".to_string()]);
+    }
+    a
+}
+
+/// Whether a job asks Apple's CUPS to turn its sheets a quarter turn onto the paper
+/// (`orientation-requested` 4, landscape): when every sheet of the print-ready PDF is wider than
+/// it is tall. A job's paper is named portrait (`Letter`), and Apple's PDF filter puts a sheet on
+/// it as the sheet's own box runs, so without this a landscape sheet prints unturned on portrait
+/// paper with its far side cut off (storytold/photocraft#7860, storytold/pdfcraft#2713).
+///
+/// The option is the whole job's, so a job that mixes orientations gets none. Apple's filter
+/// places a sheet by its visible box (the CropBox) and ignores `/Rotate`; a job with a
+/// quarter-turned sheet is left as it was rather than judged either way. So is a job whose
+/// `options` already name an orientation (a driver choice, or the caller's own; CUPS reads option
+/// names without regard to case), and a PDF that can't be read. Other CUPS builds get nothing
+/// new: only Apple's filter was checked.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn turns_landscape(pdf: &[u8], job: &Job, apple: bool) -> bool {
+    let named = |key: &str| key.eq_ignore_ascii_case("orientation-requested") || key.eq_ignore_ascii_case("landscape");
+    if !apple || job.options.iter().any(|(key, _)| named(key)) {
+        return false;
+    }
+    sheets::read(pdf).is_ok_and(|read| {
+        read.sheets.iter().all(|sheet| {
+            let (width, height) = sheet.size();
+            sheet.rotate % 180 == 0 && width > height + sheets::SAME
+        })
+    })
 }
 
 /// One of the printer driver's job options (a PPD `OpenUI` entry), such as the paper tray.
@@ -973,7 +1011,7 @@ pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job, c
     use std::process::Stdio;
     cancel.start_sending()?;
     let mut child = lp
-        .args(lp_args(job))
+        .args(lp_args_with_pdf(job, pdf, cfg!(target_os = "macos")))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1092,7 +1130,8 @@ pub const fn backend() -> Option<Backend> {
 /// A diagnostic command preview; creates no job file and starts no process.
 /// On Windows, where no program is started, it describes the in-process job instead: `xps-print`,
 /// then the printer and the PrintTicket's options as `key=value`. Submit with [`submit`],
-/// rather than executing this preview. PDF bytes are supplied separately.
+/// rather than executing this preview. PDF bytes are supplied separately, so what a job takes
+/// from its PDF (on macOS, `orientation-requested` for landscape sheets) is not shown.
 pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
     match backend() {
         Some(Backend::Cups) => Ok(std::iter::once("lp".to_string()).chain(lp_args(job)).collect()),

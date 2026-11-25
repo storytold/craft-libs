@@ -25,6 +25,13 @@ submits jobs with copies, collation, duplex and color.
   "Auto Select", first and as the default unless the user's defaults name another tray. Apps
   may show their own translation of the label. Other CUPS builds don't know `AP_D_InputSlot`,
   so Linux jobs are unchanged.
+- **macOS landscape sheets:** a job whose every sheet is wider than tall also sends
+  `orientation-requested=4` (over `lp`, and as the IPP attribute). Apple's PDF filter puts a sheet
+  on the job's portrait paper as its visible box runs, so a landscape sheet otherwise printed
+  unturned with its far side cut off (storytold/photocraft#7860, storytold/pdfcraft#2713). The
+  sheets are read from the print-ready PDF, as on Windows. A job that mixes orientations, has a
+  sheet turned by `/Rotate` 90 or 270, already names an orientation in its options, or can't be
+  read is sent as before; so are jobs on other CUPS builds.
 - **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
   bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
   piece is for:

@@ -1,7 +1,8 @@
 use super::*;
 use crate as spool;
 
-mod windows_native;
+// Its print-ready test PDFs serve the CUPS tests as well.
+pub(crate) mod windows_native;
 
 #[test]
 fn spooler_arguments_and_printer_list() {
@@ -366,6 +367,36 @@ fn a_job_naming_no_tray_asks_macos_for_auto_select() {
     assert!(!args(&[], false).contains("AP_D_InputSlot"));
     assert!(!args(&[("InputSlot", AUTO_SELECT)], false).contains("InputSlot"));
     assert_eq!(lp_args(&Job::default()), spool::lp_args_for(&Job::default(), cfg!(target_os = "macos")));
+}
+
+#[test]
+fn landscape_sheets_ask_apples_cups_to_turn_them_onto_the_paper() {
+    // storytold/photocraft#7860, storytold/pdfcraft#2713: Apple's filter put a landscape sheet on
+    // the job's portrait paper unturned, and its far side was cut off.
+    use windows_native::{LETTER, LETTER_LANDSCAPE, TestPage, test_pdf};
+    let turned =
+        |pdf: &[u8], job: &Job, apple: bool| spool::lp_args_with_pdf(job, pdf, apple).windows(2).any(|a| a == ["-o", "orientation-requested=4"]);
+    let job = Job::default();
+    let quarter = |page: TestPage| TestPage { rotate: Some(90), ..page };
+    for compressed in [false, true] {
+        let pdf = |pages: &[TestPage]| test_pdf(pages, compressed);
+        assert!(turned(&pdf(&[LETTER_LANDSCAPE, LETTER_LANDSCAPE]), &job, true), "every sheet landscape");
+        assert!(!turned(&pdf(&[LETTER_LANDSCAPE]), &job, false), "other CUPS filters turn a sheet themselves");
+        assert!(!turned(&pdf(&[LETTER]), &job, true), "portrait");
+        assert!(!turned(&pdf(&[LETTER_LANDSCAPE, LETTER]), &job, true), "the option is the whole job's: a mix gets none");
+        // A sheet turned by `/Rotate` is left as it was, whichever way its box runs.
+        assert!(!turned(&pdf(&[quarter(LETTER)]), &job, true));
+        assert!(!turned(&pdf(&[quarter(LETTER_LANDSCAPE)]), &job, true));
+    }
+    // A PDF that can't be read prints as before.
+    assert_eq!(spool::lp_args_with_pdf(&job, b"%PDF-1.7 not a print-ready PDF", true), spool::lp_args_for(&job, true));
+    // An orientation the job already names stands, in any case, and lp isn't given another.
+    let landscape = test_pdf(&[LETTER_LANDSCAPE], false);
+    for key in ["orientation-requested", "Orientation-Requested", "landscape"] {
+        let own = Job { options: vec![(key.into(), "5".into())], ..Job::default() };
+        assert!(!turned(&landscape, &own, true), "{key}");
+        assert!(spool::lp_args_with_pdf(&own, &landscape, true).contains(&format!("{key}=5")), "{key}");
+    }
 }
 
 #[test]

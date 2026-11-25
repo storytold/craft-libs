@@ -56,6 +56,7 @@ const GROUP_END: u8 = 0x03;
 const GROUP_PRINTER: u8 = 0x04;
 const TAG_INTEGER: u8 = 0x21;
 const TAG_BOOLEAN: u8 = 0x22;
+const TAG_ENUM: u8 = 0x23;
 const TAG_NAME: u8 = 0x42;
 const TAG_KEYWORD: u8 = 0x44;
 const TAG_URI: u8 = 0x45;
@@ -801,6 +802,10 @@ fn print_job_request_for(authority: &str, path: &str, pdf: &[u8], job: &Job, use
         }
         .as_bytes(),
     );
+    // RFC 8011 §5.2.10, landscape: as `lp` asks it of Apple's CUPS (see `turns_landscape`).
+    if super::turns_landscape(pdf, job, cfg!(target_os = "macos")) {
+        r.attribute(TAG_ENUM, "orientation-requested", &4u32.to_be_bytes());
+    }
     r.end();
     r.bytes.extend(pdf);
     r.bytes
