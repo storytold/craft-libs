@@ -2349,7 +2349,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn place(mut self, place: FooterPlace) -> Self`. Where the footer sits.
   - `pub const fn gap(mut self, gap: Gap) -> Self`. The space above the footer's content, inside the region.
   - `pub const fn status(mut self) -> Self`. The footer shows the validity message of the control the container labels as its status line.
-- `craft_ui::contract::Gap`: `pub enum Gap { None, Row, Tight, Stack, Item, Section, CardColumn, CardRow, Inline }`. The spacing between the children of a body.
+- `craft_ui::contract::Gap`: `pub enum Gap { None, Row, Tight, Stack, Item, Section, CardColumn, CardRow, Inline, PageTitle, PageLead, PageActions, PageSection, PageHeading, PageLink }`. The spacing between the children of a body.
 - `craft_ui::contract::GlyphColon`: `pub enum GlyphColon { Bar, Form }`. Which glyph labels take the colon of a scheme whose word labels take one. An app sets it once at its root
 - `craft_ui::contract::GlyphLabel`: `pub struct GlyphLabel`. The visible form of a glyph label: an icon, or a short text such as "W" or "H". The accessible name stays the
   - `pub fn icon(icon: impl Into<IconSpec<'static>>) -> Self`. Shows `icon`, as large as the control's icons.
@@ -2475,6 +2475,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn window(resize: Resize) -> Mount`. The whole content of the window: its edges resize it where `resize` has grips and the app draws the frame.
   - `pub const fn viewport(fallback: Overlay) -> Mount`. An OS viewport that falls back to `fallback`, and opens as a dialog or tool window by the fallback's rank.
   - `pub fn viewport_with(fallback: Overlay, spec: WindowSpec) -> Mount`. An OS viewport that falls back to `fallback` and opens as `spec` says.
+- `craft_ui::contract::MoveBandCursor`: `pub enum MoveBandCursor { Hand, Arrow }`. The cursor over a header's move band ([`DragBand::Move`]). An app sets it once at its root (`RootEnv::values`); the
 - `craft_ui::contract::Name`: re-export of `craft_ui::runtime::access::Name`.
 - `craft_ui::contract::NoValue`: `pub struct NoValue`. The value type of a component with no value.
 - `craft_ui::contract::Notch`: `pub enum Notch { Lines(f32), ViewShare(f32) }`. The distance of one wheel notch.
@@ -2546,7 +2547,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Overlays`: `pub trait Overlays`. The `Cx` trait that registers popups.
   - `fn popup(&mut self, name: &'static str) -> PopupHandle`. Registers the popup `name` of this component for this pass and returns its handle. A component registers every
 - `craft_ui::contract::POPUP_PAD`: `pub const POPUP_PAD: Pad`. The padding of every popup surface around its content.
-- `craft_ui::contract::Pad`: `pub enum Pad { None, Tight, Control, Regular, Roomy, Page }`. The padding tier of a body.
+- `craft_ui::contract::Pad`: `pub enum Pad { None, Tight, Control, Regular, Dialog, Roomy, Page }`. The padding tier of a body.
 - `craft_ui::contract::PadEdges`: `pub enum PadEdges { All, Block, Inline }`. The edges a container's padding tier applies to.
 - `craft_ui::contract::PaintUi`: `pub struct PaintUi<'a> { pub env: &'a Env }`. What `paint` and `paint_over` get instead of a `Ui`.
   - `pub fn draw(&self) -> Draw<'_>`. The content-paint API: text, rules, surfaces and shapes, recorded for the later steps. While the component
@@ -4729,6 +4730,8 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn control(&self) -> ControlMetrics`. The height, icon side, padding, gap and field widths of a control at the ambient size.
   - `pub fn glyph(&self) -> f32`. The side of a mark inside a control at the ambient size (`size.icon.glyph_sm`, `glyph_md`): an icon-only
   - `pub fn button_height(&self) -> f32`. The height of a push button at the ambient size: `size.button` at the medium size, grown as a control's height
+  - `pub fn dialog_button_height(&self) -> f32`. The height of a dialog's footer button at the ambient size: `size.dialog.button_height` at the medium size, grown
+  - `pub fn menu_row_height(&self) -> f32`. The height of a menu row at the ambient size: `size.row.menu` at the medium size, grown as a control's height
   - `pub fn glyph_role(&self) -> GlyphRole`. How the icon-only buttons of the scope show their glyph.
   - `pub fn control_of(&self, size: ControlSize) -> ControlMetrics`. `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's
   - `pub fn segment_control(&self) -> ControlMetrics`. `control`, with the side padding of a segment of a segmented control: `space.pad.control` at the small size
