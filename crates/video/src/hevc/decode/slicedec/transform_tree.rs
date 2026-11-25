@@ -230,23 +230,25 @@ impl<'a, S: Sample> SliceDecoder<'a, S> {
             corner = corner && intra(xl - 1, yl - 1);
         }
         let plane = &pic.planes[c];
+        // window line of component line y (y >= the window's first line wherever it is read)
+        let yb = pic.line0(c);
         let r = &mut self.refs_buf;
         if corner {
             al[0] = true;
             at[0] = true;
-            let v = plane[(y0 - 1) as usize * stride + (x0 - 1) as usize].to_u16();
+            let v = plane[((y0 - 1) as usize - yb) * stride + (x0 - 1) as usize].to_u16();
             r.left[0] = v;
             r.top[0] = v;
         }
         for_runs(ml, unit_y, |a, b| {
-            let left = (y0 as usize + a) * stride + x0 as usize - 1;
+            let left = (y0 as usize + a - yb) * stride + x0 as usize - 1;
             al[1 + a..1 + b].fill(true);
             for (k, v) in r.left[1 + a..1 + b].iter_mut().enumerate() {
                 *v = plane[left + k * stride].to_u16();
             }
         });
         for_runs(mt, unit_x, |a, b| {
-            let top = (y0 as usize - 1) * stride + x0 as usize;
+            let top = ((y0 - 1) as usize - yb) * stride + x0 as usize;
             at[1 + a..1 + b].fill(true);
             for (v, s) in r.top[1 + a..1 + b].iter_mut().zip(&plane[top + a..top + b]) {
                 *v = s.to_u16();
@@ -257,7 +259,7 @@ impl<'a, S: Sample> SliceDecoder<'a, S> {
         if c == 0 {
             intra::filter(r, mode, n, self.sps.strong_intra_smoothing, true, bd);
         }
-        let off = y0 as usize * stride + x0 as usize;
+        let off = (y0 as usize - yb) * stride + x0 as usize;
         intra::predict(r, mode, n, c == 0, bd, &mut self.pic.planes[c][off..], stride);
     }
 
@@ -506,7 +508,8 @@ impl<'a, S: Sample> SliceDecoder<'a, S> {
         let bypass = self.cu_transquant_bypass;
         let dst = self.cu_intra && c == 0 && n == 4;
         let (stride, max) = (if c == 0 { self.pic.width } else { self.pic.cwidth }, (1i32 << bd) - 1);
-        let off = y0 as usize * stride + x0 as usize;
+        let yb = self.pic.line0(c);
+        let off = (y0 as usize - yb) * stride + x0 as usize;
         let plane = &mut self.pic.planes[c];
         let bd_shift = 20 - bd;
         if !bypass && !ts && max_x == 0 && max_y == 0 && !dst {
