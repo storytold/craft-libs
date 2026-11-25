@@ -9,6 +9,7 @@ use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
 use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
+use crate::runtime::ime;
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
 use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
@@ -295,6 +296,89 @@ fn an_app_editor_s_later_reset_ends_the_fence() {
     assert_eq!(editor.borrow().text, "abX", "the late commit is fenced and the commit after the completion reaches the editor");
     frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "y".to_owned(), active_range_chars: None })], &mut show);
     assert!(editor.borrow().composing, "the editor composes again");
+}
+
+/// A framework text field of `id`, as a text component's part draws it: a text stop that takes the IME edits meant for
+/// it and notes its caret.
+fn framework_field(ui: &mut Ui, id: Id) {
+    let rect = widget(ui, id);
+    register_stop(ui.ctx(), Stop::new(id, KeyUse::of(Input::Text)).text());
+    let _ = ime::take(ui.ctx(), id, false);
+    ime::note_caret(ui.ctx(), id, rect, rect, false);
+}
+
+/// The framework field of `framework_field` and the app's resetting editor beside it at its rect, the show closure that
+/// draws both, and the frames after the field took the focus and composed "k".
+fn framework_field_composing_beside_an_app_editor() -> (Id, Rect, Rc<RefCell<fixture::ResettingEditor>>, impl FnMut(&mut Ui), Frames) {
+    let editor = Rc::new(RefCell::new(fixture::ResettingEditor::default()));
+    let held = Rc::clone(&editor);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    let framework = named_id("framework field");
+    let mut show = move |ui: &mut Ui| {
+        framework_field(ui, framework);
+        fixture::host_resetting_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut());
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(framework));
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "k".to_owned(), active_range_chars: None })], &mut show);
+    assert_eq!(frames.ime().map(|ime| ime.owner), Some(framework), "the framework field composes");
+    (framework, rect, editor, show, frames)
+}
+
+/// A press on the app's editor takes the focus from a composing framework field, and the editor asks for its own reset
+/// in the pass the field loses the IME, as EffectCraft's editor does when its caret moves after the press. The interrupt
+/// of the field's composition publishes the editor's request, so the platform's answer in the next frame reaches the
+/// editor, the field's late commit stays fenced until then, and the commit after it reaches the editor.
+#[trial]
+fn an_app_editor_s_reset_asked_as_it_takes_the_focus_from_a_composing_framework_field_completes() {
+    let (framework, rect, editor, mut show, mut frames) = framework_field_composing_beside_an_app_editor();
+    let at = rect.center();
+    frames.frame(vec![moved(at), press(at)], &mut show);
+    assert!(!frames.ime().is_some_and(|ime| ime.interrupt), "the field keeps the IME through the press pass");
+    editor.borrow_mut().ask = true;
+    frames.frame(vec![release(at)], &mut show);
+    let own = editor.borrow().reset;
+    assert!(own.is_some(), "the editor asked for its own reset");
+    let ime = frames.ime().cloned();
+    assert!(ime.as_ref().is_some_and(|ime| ime.owner == framework && ime.interrupt), "the pass interrupts the field's composition");
+    assert_eq!(ime.and_then(|ime| ime.reset), own, "the interrupt publishes the editor's request, not a new one");
+    let Some(own) = own else { return };
+    frames.frame(
+        vec![
+            Event::Ime(ImeEvent::Commit("Q".to_owned())),
+            Event::ImeResetCompleted { request_id: own },
+            Event::Ime(ImeEvent::Commit("X".to_owned())),
+        ],
+        &mut show,
+    );
+    assert_eq!(editor.borrow().reset, None, "the completion of its request reaches the editor");
+    assert_eq!(editor.borrow().text, "X", "the field's late commit is fenced and the commit after the completion reaches the editor");
+}
+
+/// The app's editor asks for its own reset at the press that takes the focus from a composing framework field, while
+/// the field still owns the IME. egui publishes that request on the field's output as an interrupt; the engine takes it
+/// as its interrupt of the field and fences on it. The field loses the IME in the next pass with no second interrupt,
+/// the platform's answer in that frame reaches the editor, the field's late commit stays fenced, and the editor takes
+/// the commits after it.
+#[trial]
+fn an_app_editor_s_reset_asked_at_the_press_on_it_while_a_framework_field_composes_completes() {
+    let (framework, rect, editor, mut show, mut frames) = framework_field_composing_beside_an_app_editor();
+    let at = rect.center();
+    editor.borrow_mut().ask = true;
+    frames.frame(vec![moved(at), press(at)], &mut show);
+    let own = editor.borrow().reset;
+    assert!(own.is_some(), "the editor asked for its own reset at the press");
+    let ime = frames.ime().cloned();
+    assert!(ime.as_ref().is_some_and(|ime| ime.owner == framework && ime.interrupt), "the request interrupts the field's composition");
+    assert_eq!(ime.and_then(|ime| ime.reset), own, "the field's output carries the editor's request");
+    let Some(own) = own else { return };
+    frames.frame(vec![release(at), Event::Ime(ImeEvent::Commit("Q".to_owned())), Event::ImeResetCompleted { request_id: own }], &mut show);
+    assert!(!frames.ime().is_some_and(|ime| ime.interrupt), "the field loses the IME without a second interrupt");
+    assert_eq!(editor.borrow().reset, None, "the completion of its request reaches the editor");
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(editor.borrow().text, "X", "the field's late commit is fenced and the editor takes the commit after the completion");
 }
 
 #[trial]
