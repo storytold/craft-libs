@@ -56,13 +56,23 @@ fn menu_rect(fixture: &Fixture) -> Rect {
     fixture.by_role(Role::MENU).first().expect("the menu is open").rect
 }
 
+/// The clock a frame resting on a strip moves on beyond its own: a strip scrolls by the pass's elapsed time, taken up
+/// to a tenth of a second, so each frame takes the longest step a strip takes.
+const STRIP_STEP: f64 = 0.1;
+
 /// Runs frames until `done` holds, at most `frames` of them; whether it held.
 fn until(fixture: &mut Fixture, frames: usize, events: impl Fn() -> Vec<egui::Event>, done: impl Fn(&Fixture) -> bool) -> bool {
-    for _ in 0..frames {
+    until_stepped(fixture, frames, 0.0, events, done)
+}
+
+/// [`until`] with the clock moved on by `step` before each frame, beyond the frame's own.
+fn until_stepped(fixture: &mut Fixture, frames: usize, step: f64, events: impl Fn() -> Vec<egui::Event>, done: impl Fn(&Fixture) -> bool) -> bool {
+    for frame in 0..frames {
         if done(fixture) {
+            eprintln!("DIAG overflow until: held after {frame} frames");
             return true;
         }
-        fixture.frame(events());
+        fixture.advance(step).frame(events());
     }
     done(fixture)
 }
@@ -82,13 +92,16 @@ fn a_menu_taller_than_its_room_scrolls_by_its_strips_and_the_wheel_at_the_width_
     assert!(in_view(&fixture, menu, 0) && !in_view(&fixture, menu, ROWS - 1));
 
     let rest_on = |at: Rect| move || vec![pointer::moved(at.center())];
-    assert!(until(&mut fixture, 400, rest_on(forward), |f| in_view(f, menu, ROWS - 1)), "resting on the lower strip reaches the last row");
+    assert!(
+        until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(forward), |f| in_view(f, menu, ROWS - 1)),
+        "resting on the lower strip reaches the last row"
+    );
     assert!(!in_view(&fixture, menu, 0));
-    assert!(until(&mut fixture, 400, rest_on(back), |f| in_view(f, menu, 0)), "resting on the upper strip reaches the first row");
+    assert!(until_stepped(&mut fixture, 400, STRIP_STEP, rest_on(back), |f| in_view(f, menu, 0)), "resting on the upper strip reaches the first row");
 
     let middle = Rect::from_min_max(back.center(), forward.center()).center();
     assert!(
-        until(&mut fixture, 200, || vec![pointer::moved(middle), pointer::wheel(-60.0)], |f| in_view(f, menu, ROWS - 1)),
+        until(&mut fixture, 200, || vec![pointer::moved(middle), pointer::wheel(-240.0)], |f| in_view(f, menu, ROWS - 1)),
         "the wheel reaches the last row"
     );
     assert!((menu_rect(&fixture).width() - width).abs() < 0.5, "scrolling keeps the width");

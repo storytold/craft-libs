@@ -15,7 +15,7 @@ pub(crate) mod stories;
 mod words;
 
 pub use alternate::Alternate;
-pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle, MenuTitlePad};
+pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle, MenuTitleLook, MenuTitlePad};
 pub(crate) use edit::text_menu;
 pub use edit::{EditMenu, EditMenuOutput};
 pub use icon_row::{MenuIcon, MenuIconRow, MenuIconRowOutput};

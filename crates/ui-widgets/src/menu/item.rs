@@ -37,15 +37,6 @@ const SAMPLES: ColumnKey = ColumnKey::new("menu_samples");
 /// over: opens its own submenu, or closes the open one. A row the pointer does not cross that way takes over at once.
 const AIM_REST: f64 = 0.3;
 
-/// `label` with a `&` marker before the first character that is `letter`, so the level's assignment honours a row's
-/// own mnemonic; a label without that letter is left as it is.
-fn with_marker(label: &str, letter: char) -> String {
-    match label.char_indices().find(|(_, c)| c.eq_ignore_ascii_case(&letter)) {
-        Some((at, _)) => format!("{}&{}", &label[..at], &label[at..]),
-        None => label.to_owned(),
-    }
-}
-
 /// Closes the menus out from the one a picked row runs in. Focus leaves them first, so a command the row fires after
 /// this reaches the stop focus returns to. Every row that runs on a pick (`MenuItem`, `MenuIconRow`) closes through
 /// this one path.
@@ -253,7 +244,8 @@ pub struct MenuItem<'a> {
     /// A radio mark, shown while the value is true; the row reserves the mark column either way.
     #[prop]
     radio_mark: Option<bool>,
-    /// The letter that runs the row, in place of the level's own pick.
+    /// The letter that runs the row, in place of the level's own pick. A letter the label lacks still runs the row,
+    /// with nothing underlined.
     #[prop]
     mnemonic: Option<char>,
     /// A muted second line under the label, in the caption role: the row is a line taller and as wide as the longer
@@ -431,11 +423,7 @@ impl<'a> MenuItem<'a> {
     }
 
     fn register(&self, ctx: &Context, level: &MenuLevel, id: Id, label: &str, enabled: bool) {
-        let text = match self.mnemonic {
-            Some(letter) => with_marker(label, letter),
-            None => label.to_owned(),
-        };
-        level.register(ctx.cumulative_pass_nr(), Row { id, text, enabled });
+        level.register(ctx.cumulative_pass_nr(), Row { id, text: label.to_owned(), own: self.mnemonic, enabled });
     }
 
     /// The row's mark and icon columns with the gap after each: as wide as the column group of the menu body gives
@@ -499,10 +487,8 @@ impl Component for MenuItem<'_> {
         // A row's content sits `space.pad.regular` in from the popup's own padding, so a label starts clear of the edge.
         let mut metrics = control.metrics();
         metrics.padding = Insets::new(tokens.space.pad.regular, tokens.space.pad.regular, metrics.padding.top, metrics.padding.bottom);
-        if key.compact {
-            // The text line sets the height, as in a classic menu: no control height floor.
-            metrics.min_size.y = 0.0;
-        }
+        // The text line sets a compact row's height, as in a classic menu; any other row stands a menu row high.
+        metrics.min_size.y = if key.compact { 0.0 } else { cx.menu_row_height() };
         MenuItemStyle {
             surface,
             metrics,
@@ -705,7 +691,7 @@ impl Component for MenuItem<'_> {
             let icon = if icon.color.is_some() { icon } else { icon.color(ink) };
             draw.icon(centred(slot), &icon);
         }
-        let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).map(|(_, at)| at) } else { None };
+        let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).and_then(|(_, at)| at) } else { None };
         let look = self.label_look(cx.style);
         let run = TextRun::mnemonic(text.as_str(), mnemonic).elide().role(look.role).color(cx.resolve(&look.color));
         // A sample-only row draws no label: the label stays its accessible name and its mnemonic source.

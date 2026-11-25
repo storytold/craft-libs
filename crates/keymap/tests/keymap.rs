@@ -1,8 +1,8 @@
 //! Integration tests of craft-keymap: keymap.
 
 use craft_keymap::{
-    Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides,
-    Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
+    Active, Binding, Chord, CommandDef, CommandRef, DeleteKeys, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods,
+    Overrides, Platform, Policy, Press, Problem, Scope, Scopes, Trigger,
 };
 use serde_json::json;
 
@@ -216,6 +216,28 @@ fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
 
     let km = Keymap::new(vec![app("layer.new.layer", &["F2"])], Scopes::new(), Platform::Mac);
     assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
+}
+
+/// Delete and Backspace: a press runs its own key's binding; with the keys one key (the default) a key with no
+/// binding of its own runs the other's, and with the keys apart it runs nothing.
+#[test]
+fn delete_and_backspace_run_their_own_bindings_and_stand_in_only_as_one_key() {
+    let hit = |km: &Keymap, key: Key| {
+        let input = KeyInput::new(Mods::NONE).with_physical(key);
+        let press = Press { input: &input, repeat: false, now: 0.0, active: &Active::NONE, outer: &[] };
+        Matcher::new().press(&Layout::new(), km, &press).map(|hit| hit.command)
+    };
+    let both = || vec![app("layer.remove", &["Delete"]), app("path.removePoint", &["Backspace"])];
+    for keys in [DeleteKeys::OneKey, DeleteKeys::Apart] {
+        let km = Keymap::new(both(), Scopes::new(), Platform::Linux).with_delete_keys(keys);
+        assert_eq!(hit(&km, Key::Delete), Some(cmd("layer.remove")), "{keys:?}: Delete runs its own binding");
+        assert_eq!(hit(&km, Key::Backspace), Some(cmd("path.removePoint")), "{keys:?}: Backspace runs its own binding");
+    }
+    let delete_only = || vec![app("layer.remove", &["Delete"])];
+    let km = Keymap::new(delete_only(), Scopes::new(), Platform::Mac);
+    assert_eq!(hit(&km, Key::Backspace), Some(cmd("layer.remove")), "one key: Backspace runs the Delete binding");
+    let km = Keymap::new(delete_only(), Scopes::new(), Platform::Mac).with_delete_keys(DeleteKeys::Apart);
+    assert_eq!(hit(&km, Key::Backspace), None, "apart: Backspace runs nothing");
 }
 
 /// A press passes over the binding of a command the caller refuses (one disabled where it lands): the chord's binding

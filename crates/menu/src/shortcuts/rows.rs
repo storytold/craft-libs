@@ -210,8 +210,30 @@ fn listed<'k>(keymap: &'k Keymap, options: &Options) -> impl Iterator<Item = &'k
     keymap.catalog().iter().filter(move |b| visible.is_none_or(|f| f(b)))
 }
 
-/// The Show entries, in catalog order, leaving out areas with no rows.
+/// The Show entries, in catalog order, leaving out areas with no rows; with [`Options::own_areas`], only the app's own
+/// entries and Fixed Keys.
 pub(crate) fn areas(keymap: &Keymap, options: &Options, text: &Say) -> Vec<AreaEntry> {
+    let mut out = if options.own_areas { Vec::new() } else { built_in_areas(keymap, options, text) };
+    let catalog = listed(keymap, options);
+    for a in options.areas.iter().filter(|a| catalog.clone().any(a.rows)) {
+        out.push(AreaEntry { id: AreaId::App(a.id), label: text.segment(a.label).into_owned() });
+    }
+    if !options.fixed.is_empty() {
+        out.push(AreaEntry { id: AreaId::Fixed, label: text.words().fixed_keys.as_str().to_owned() });
+    }
+    out
+}
+
+/// The area that shows `b`'s row: All Commands when Show lists it, else the first listed area that holds the row.
+pub(crate) fn area_of(areas: &[AreaEntry], b: &CommandDef, options: &Options) -> AreaId {
+    if areas.iter().any(|area| area.id == AreaId::All) {
+        return AreaId::All;
+    }
+    areas.iter().find(|area| in_area(&area.id, b, options)).map_or(AreaId::All, |area| area.id.clone())
+}
+
+/// All Commands, each menu, Tools, each panel and Other, leaving out areas with no rows.
+fn built_in_areas(keymap: &Keymap, options: &Options, text: &Say) -> Vec<AreaEntry> {
     let catalog = listed(keymap, options);
     let mut out = vec![AreaEntry { id: AreaId::All, label: text.words().all_commands.as_str().to_owned() }];
     let mut menus: Vec<&str> = Vec::new();
@@ -238,12 +260,6 @@ pub(crate) fn areas(keymap: &Keymap, options: &Options, text: &Say) -> Vec<AreaE
     }
     if catalog.clone().any(|b| top_menu(b).is_none() && !is_tool(b)) {
         out.push(AreaEntry { id: AreaId::Other, label: text.words().other.as_str().to_owned() });
-    }
-    for a in options.areas.iter().filter(|a| catalog.clone().any(a.rows)) {
-        out.push(AreaEntry { id: AreaId::App(a.id), label: text.segment(a.label).into_owned() });
-    }
-    if !options.fixed.is_empty() {
-        out.push(AreaEntry { id: AreaId::Fixed, label: text.words().fixed_keys.as_str().to_owned() });
     }
     out
 }

@@ -69,12 +69,22 @@ pub struct Template {
     pub name: String,
     /// The line under the name: "1920 × 1080 px".
     pub detail: String,
+    /// The width and height of the page the template makes, in any one unit: its card shows the page
+    /// (`Tile::page`), as New Document's presets do, in place of the template's thumbnail.
+    pub page: Option<(f64, f64)>,
 }
 
 impl Template {
     /// A template `id` named `name`, with `detail` under the name.
     pub fn new(id: impl Into<String>, name: impl Into<String>, detail: impl Into<String>) -> Self {
-        Template { id: id.into(), name: name.into(), detail: detail.into() }
+        Template { id: id.into(), name: name.into(), detail: detail.into(), page: None }
+    }
+
+    /// This template makes a `width` by `height` page, which its card shows.
+    #[must_use]
+    pub fn page(mut self, width: f64, height: f64) -> Self {
+        self.page = Some((width, height));
+        self
     }
 }
 

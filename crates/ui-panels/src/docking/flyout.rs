@@ -2,9 +2,10 @@
 
 use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, Place, PlacementChange, ResizeEdges};
 use crate::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PaintUi, PopupHandle, Role,
+    SizeLimits, Sizing,
 };
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Metrics, Sense};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
@@ -72,6 +73,8 @@ pub struct Flyout {
     /// The least size a resize leaves the flyout.
     #[prop(quantity = "least room a resize leaves, from the dock's measured sizes, in points")]
     least: Vec2,
+    /// The flyout stands as a docked column does: [`docked`](Flyout::docked).
+    docked: bool,
     placed: Option<PlacementChange>,
 }
 
@@ -80,7 +83,19 @@ impl Flyout {
     /// `Side::End`), closing on a press outside it and when the focus leaves it if `auto_collapse`.
     pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
-        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
+        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, docked: false, placed: None }
+    }
+
+    /// The flyout stands as a docked column does, in place of a popup's raised surface: square on `surface.panel`, with
+    /// the column's `line.border` frame and no shadow (the flyouts of a flush dock's columns,
+    /// [`DockConfig::flush_docks`](super::DockConfig::flush_docks)).
+    #[must_use]
+    pub fn docked(mut self, on: bool) -> Self {
+        if on {
+            self.props = self.props.surface(SurfaceKind::Panel);
+        }
+        self.docked = on;
+        self
     }
 
     /// The layer the flyout shows in, its top left at `top_left`: placed by the caller, resizable on every edge but
@@ -153,6 +168,12 @@ impl Component for Flyout {
 
     fn sense(&self) -> Sense {
         Sense::empty()
+    }
+
+    fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.docked {
+            ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> FlyoutOutput {
