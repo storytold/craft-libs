@@ -7,7 +7,7 @@ use super::dock_column::{
 };
 use super::group::{GripMarks, strip_surface};
 use super::{CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
-use crate::buttons::IconButton;
+use crate::buttons::{ActiveLook, IconButton};
 use crate::contract::overlay::Anchor;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, HeaderEdge, HeaderParts, HeaderRegion,
@@ -16,7 +16,7 @@ use crate::contract::{
 };
 use crate::menu::GroupItem;
 use crate::primitives::{IconSpec, TextRun};
-use crate::runtime::env::{EnvValue, Label};
+use crate::runtime::env::{Env, EnvValue, Label, with_env};
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, Corners, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
 use crate::tabs::PanelTabLook;
@@ -340,25 +340,55 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
     /// Shows the column; `view` measures the group of an open flyout at the width it gets and returns its height
     /// (`None` takes the flyout's least height), then shows it in the rect it gets.
     pub fn show_flyouts(
-        mut self,
+        self,
         ui: &mut Ui,
         view: impl FnMut(&Group<P>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
     ) -> IconicColumnOutput<P> {
-        self.view = Some(Box::new(view));
-        self.show(ui, |_, _| ()).output
+        self.in_look(ui, view, |column, ui| column.show(ui, |_, _| ()).output)
     }
 
     /// Shows the column at `rect` with no allocation, so its paint is clipped by the dock and not by a region of its
     /// own: the accent line of its edge reaches into the gutter beside it.
     #[doc(hidden)]
     pub fn show_flyouts_at(
-        mut self,
+        self,
         ui: &mut Ui,
         rect: Rect,
         view: impl FnMut(&Group<P>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
     ) -> IconicColumnOutput<P> {
-        self.view = Some(Box::new(view));
-        self.show_at(ui, rect, |_, _| ()).output
+        self.in_look(ui, view, |column, ui| column.show_at(ui, rect, |_, _| ()).output)
+    }
+
+    /// Shows the column through `show` with its flyouts' `view`. Beside [`PanelTabLook::Block`] tabs the open panel's
+    /// icon shows on `surface.control`, as the shown tab does ([`ActiveLook::Control`]); the flyouts' groups keep the
+    /// active look around the column.
+    fn in_look(
+        mut self,
+        ui: &mut Ui,
+        mut view: impl FnMut(&Group<P>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
+        show: impl FnOnce(Self, &mut Ui) -> IconicColumnOutput<P>,
+    ) -> IconicColumnOutput<P> {
+        if self.tab_look != PanelTabLook::Block {
+            self.view = Some(Box::new(view));
+            return show(self, ui);
+        }
+        let outer = Env::of(ui).get::<ActiveLook>();
+        self.view = Some(Box::new(move |group, at, ui, body| {
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(outer);
+                },
+                |ui| view(group, at, ui, body),
+            )
+        }));
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ActiveLook::Control);
+            },
+            |ui| show(self, ui),
+        )
     }
 
     /// Whether the column is a rail beside its expanded column: its chevron collapses the column.

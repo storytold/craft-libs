@@ -8,6 +8,7 @@ use crate::docking::{ColumnBar, ColumnCards, DockSizes, GroupAt, IconGroupSepara
 use crate::runtime::commands::{CommandState, CommandStates};
 use crate::runtime::env::{Env, Message, with_env};
 use crate::sections::Panel;
+use crate::tabs::PanelTabLook;
 use crate::testing::memory::global;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::Mixed;
@@ -232,4 +233,23 @@ fn a_flyout_of_a_panel_not_in_the_column(ui: &mut Ui, data: &mut StoryData) -> S
         _ => Validity::Ok,
     };
     flyout_of(ui, open_at.bind(open).check(in_column))
+}
+
+/// A column of VectorCraft 0.24's dock (`DockConfig::flush_docks`, `PanelTabLook::Block`): framed in `line.border`, its
+/// bar on `surface.canvas`, the open panel's icon on `surface.control`, and its flyout square on the panel surface with
+/// the same frame and no shadow. The flyout opens from its icon.
+#[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Custom(open_first_flyout), title = "A flush dock's column and its flyout")]
+fn a_flush_docks_column_and_its_flyout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (open, open_at) = data.value_at("open", None::<u8>);
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "flush story"), &column, open_at.bind(open), &spec)
+        .framed(true)
+        .tab_look(PanelTabLook::Block);
+    at_stage(ui, column, |group, at, ui, _| {
+        let GroupAt::Show(rect) = at else { return None };
+        let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
+        Panel::new(title).titled().show_at(ui, rect, |_, _| ());
+        None
+    })
+    .into()
 }

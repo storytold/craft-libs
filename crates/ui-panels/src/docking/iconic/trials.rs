@@ -18,6 +18,7 @@ use crate::runtime::focus::{FocusTarget, request};
 use crate::runtime::frame::take_output;
 use crate::sections::Panel;
 use crate::style::StyleCx;
+use crate::tabs::PanelTabLook;
 use crate::testing::memory::global;
 use crate::testing::relations::{equals_token, grows_with};
 use crate::testing::{Fixture, trial};
@@ -770,4 +771,39 @@ fn a_flush_docks_flyout_stands_square_with_no_shadow() {
         assert_eq!(rect.corner_radius, egui::CornerRadius::ZERO, "the docked flyout's surface is square: {rect:?}");
         assert!(rect.blur_width <= 0.0, "the docked flyout casts no shadow: {rect:?}");
     }
+}
+
+/// The fills painted on the open panel's icon of a column beside tabs in `look`, with the colour of `surface.control`.
+fn open_icon_fills(look: PanelTabLook) -> (Vec<egui::Color32>, egui::Color32) {
+    let mut fixture = Fixture::hosted(move |ui| {
+        let column = Column::new(vec![Group::new(vec![0, 1], 0)]);
+        let mut open = Some(0_u8);
+        let output = IconicColumn::new("Panels", global("iconic column", "open icon"), &column, Bind::bound(&mut open), &spec)
+            .tab_look(look)
+            .show_flyouts_at(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, 300.0)), |_, _, _, _| None);
+        Some(output.into())
+    });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let cell = fixture.part_rect(id, CELL.at(0)).expect("the open panel's icon");
+    let control = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.control).0;
+    let fills = fixture
+        .frame_shapes()
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if cell.expand(EPS).contains_rect(rect.rect) && rect.fill != egui::Color32::TRANSPARENT => Some(rect.fill),
+            _ => None,
+        })
+        .collect();
+    (fills, egui::Color32::from_rgba_unmultiplied(control[0], control[1], control[2], control[3]))
+}
+
+/// Beside block tabs (`PanelTabLook::Block`, VectorCraft's) the open panel's icon shows on `surface.control`, as the
+/// shown tab does; beside the other looks it keeps the accent's on look.
+#[trial]
+fn beside_block_tabs_the_open_icon_shows_on_the_control_surface() {
+    let (block, control) = open_icon_fills(PanelTabLook::Block);
+    assert!(block.contains(&control), "the open icon shows surface.control {control:?}: {block:?}");
+    let (plain, _) = open_icon_fills(PanelTabLook::Plain);
+    assert!(!plain.is_empty() && !plain.contains(&control), "beside plain tabs the open icon keeps its own fill: {plain:?}");
 }
