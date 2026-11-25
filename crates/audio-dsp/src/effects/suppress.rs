@@ -707,7 +707,13 @@ mod tests {
             let mut s = suppressor(24.0);
             let (n, hop) = (s.n, s.hop);
             let mut x = white(31, SR as usize / 2, 0.05);
-            let mutes = [(192 + offset, 256 + offset), (6000 + offset, 6100 + offset), (12_000 + offset, 12_200 + offset)];
+            // The last mute is one STFT size long and holds no whole frame unless it starts on a hop.
+            let mutes = [
+                (192 + offset, 256 + offset),
+                (6000 + offset, 6100 + offset),
+                (12_000 + offset, 12_200 + offset),
+                (17_984 + offset, 17_984 + offset + n),
+            ];
             for &(a, b) in &mutes {
                 x[a..b].fill(0.0);
             }
