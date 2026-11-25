@@ -727,3 +727,47 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
         fixture.release_at(icon.center() + Vec2::new(RAIL * 2.0, 0.0)).settle();
     }
 }
+
+/// The surface shapes painted around the open flyout of a column that is `framed` (a flush dock's): the rects whose
+/// rect holds the flyout's body.
+fn flyout_surfaces(framed: bool) -> Vec<egui::epaint::RectShape> {
+    let shown: Rc<Cell<Option<Rect>>> = Rc::default();
+    let seen = Rc::clone(&shown);
+    let mut fixture = Fixture::new(move |ui| {
+        let column = Column::new(vec![Group::new(vec![0, 1], 0)]);
+        let mut open = Some(0_u8);
+        IconicColumn::new("Panels", global("iconic column", "docked flyout"), &column, Bind::bound(&mut open), &spec).framed(framed).show_flyouts(
+            ui,
+            |_, at, ui, _| {
+                let GroupAt::Show(rect) = at else { return None };
+                seen.set(Some(rect));
+                Panel::new("Flyout").show_at(ui, rect, |_, _| ());
+                None
+            },
+        );
+    });
+    fixture.room(Vec2::new(RAIL, 300.0)).settle();
+    let body = shown.get().expect("the flyout shows");
+    fixture
+        .frame_shapes()
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.rect.expand(EPS).contains_rect(body) && rect.rect.width() < body.width() + RAIL => Some(rect),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The flyout of a flush dock's column (`DockConfig::flush_docks`, VectorCraft's) stands as a docked column does:
+/// square, with no shadow; a column of another dock opens a raised popup with rounded corners.
+#[trial]
+fn a_flush_docks_flyout_stands_square_with_no_shadow() {
+    let raised = flyout_surfaces(false);
+    assert!(raised.iter().any(|rect| rect.corner_radius != egui::CornerRadius::ZERO), "the popup flyout is rounded: {raised:?}");
+    let docked = flyout_surfaces(true);
+    assert!(!docked.is_empty(), "the docked flyout paints its surface");
+    for rect in &docked {
+        assert_eq!(rect.corner_radius, egui::CornerRadius::ZERO, "the docked flyout's surface is square: {rect:?}");
+        assert!(rect.blur_width <= 0.0, "the docked flyout casts no shadow: {rect:?}");
+    }
+}
