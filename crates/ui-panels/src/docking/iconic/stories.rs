@@ -4,7 +4,7 @@ use super::CELL;
 use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
-use crate::docking::{ColumnBar, DockSizes, GroupAt, IconGroupSeparator, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
+use crate::docking::{ColumnBar, ColumnCards, DockSizes, GroupAt, IconGroupSeparator, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
 use crate::runtime::commands::{CommandState, CommandStates};
 use crate::runtime::env::{Env, Message, with_env};
 use crate::sections::Panel;
@@ -97,11 +97,12 @@ fn icon_groups(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Never)]
 fn icons_as_a_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = *data.choice("place", 1_usize, &[("At the window edge", 0), ("Inward of another column", 1)]);
-    let sizes = DockSizes { column_cards: true, ..DockSizes::of_scope(ui) };
-    let inset = sizes.card_inset(at);
+    let sizes = DockSizes { column_cards: ColumnCards::All, ..DockSizes::of_scope(ui) };
     let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let inset = sizes.card_inset(at, &column, &spec);
+    let card = sizes.card_place(at, &column, &spec);
     let column = IconicColumn::new("Panels", global("iconic column", "card story"), &column, Bind::kept(), &spec);
-    let column = match sizes.card_place(at) {
+    let column = match card {
         Some(place) => column.card(place),
         None => column,
     };

@@ -6,7 +6,7 @@ use craft_theme::{AppSizes, SizeValue};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
 use craft_ui::docking::{
-    DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupAt, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights,
+    ColumnCards, DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupAt, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights,
 };
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::env::{Direction, RootEnv};
@@ -511,7 +511,7 @@ impl DockPanels<u32> for RailStage {
 
 /// A start dock in `direction` of a toolbar column of two rail steps, at the window edge, and a side column beside it,
 /// with `DockConfig::column_cards` set to `cards`: the toolbar's cell, the side column's cell and the rail's stage.
-fn rail_dock(cards: bool, direction: Direction) -> (Rect, Rect, Rect) {
+fn rail_dock(cards: ColumnCards, direction: Direction) -> (Rect, Rect, Rect) {
     let columns = vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2), Column::new(vec![Group::new(vec![2], 0)]).with_width(150.0)];
     let root = Node::split(Axis::X, SplitSize::FixedFirst(300.0), Node::dock(DockEdge::Start, columns), Node::tabs(vec![1], 0));
     let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
@@ -538,8 +538,8 @@ fn rail_dock(cards: bool, direction: Direction) -> (Rect, Rect, Rect) {
 fn a_rail_card_is_inset_alike_on_three_sides_and_keeps_its_steps() {
     for direction in [Direction::Ltr, Direction::Rtl] {
         let rtl = direction == Direction::Rtl;
-        let (plain_cell, _, plain) = rail_dock(false, direction);
-        let (cell, side, card) = rail_dock(true, direction);
+        let (plain_cell, _, plain) = rail_dock(ColumnCards::None, direction);
+        let (cell, side, card) = rail_dock(ColumnCards::All, direction);
         let (outer, inner) =
             if rtl { (cell.right() - card.right(), card.left() - cell.left()) } else { (card.left() - cell.left(), cell.right() - card.right()) };
         let top = (card.top() - cell.top()) - (plain.top() - plain_cell.top());
@@ -594,7 +594,7 @@ struct CardDock {
 
 /// An end dock in `direction` beside the canvas: an expanded column at the window edge and, inward of it, a column
 /// collapsed to icons, with `DockConfig::column_cards` set to `cards`.
-fn card_dock(cards: bool, direction: Direction) -> CardDock {
+fn card_dock(cards: ColumnCards, direction: Direction) -> CardDock {
     let mut iconic = Column::new(vec![Group::new(vec![ICONS], 0)]);
     iconic.iconic = true;
     let columns = vec![Column::new(vec![Group::new(vec![SIDE], 0)]).with_width(220.0), iconic];
@@ -630,8 +630,8 @@ fn sides(cell: Rect, inner: Rect, rtl: bool) -> (f32, f32) {
 fn every_docked_column_is_a_card_with_gutters_between_them() {
     for direction in [Direction::Ltr, Direction::Rtl] {
         let rtl = direction == Direction::Rtl;
-        let plain = card_dock(false, direction);
-        let cards = card_dock(true, direction);
+        let plain = card_dock(ColumnCards::None, direction);
+        let cards = card_dock(ColumnCards::All, direction);
         // Each inset is measured against the same column without cards, so a panel's own padding cancels out.
         let inset = |cell: Rect, inner: Rect, plain_cell: Rect, plain_inner: Rect| {
             let ((outer, inward), (plain_outer, plain_inward)) = (sides(cell, inner, rtl), sides(plain_cell, plain_inner, rtl));
@@ -688,4 +688,26 @@ fn a_columns_bar_is_as_high_as_its_token() {
     let built_in = body_top(None);
     let low = body_top(Some(14.0));
     assert!(low < built_in - 0.5, "a lower column bar raises the column's groups: {low} against {built_in}");
+}
+
+/// `ColumnCards::Stepped` (VectorCraft's dock) shows the tool rail as the card `ColumnCards::All` shows, and the panel
+/// column beside it flush, as wide as with no cards; neither overlaps the other. Right to left mirrors it.
+#[trial]
+fn only_the_tool_rail_is_a_card_with_stepped_cards() {
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let (_, plain_side, _) = rail_dock(ColumnCards::None, direction);
+        let (all_cell, _, all_stage) = rail_dock(ColumnCards::All, direction);
+        let (cell, side, stage) = rail_dock(ColumnCards::Stepped, direction);
+        assert!(
+            (stage.min - all_stage.min).length() <= 0.5 && (stage.size() - all_stage.size()).length() <= 0.5,
+            "{direction:?}: the rail's card {stage:?} is the one all cards give, {all_stage:?}"
+        );
+        assert!((cell.width() - all_cell.width()).abs() <= 0.5, "{direction:?}: the toolbar {cell:?} is as wide as with all cards, {all_cell:?}");
+        assert!(
+            (side.width() - plain_side.width()).abs() <= 0.5,
+            "{direction:?}: the panel column {side:?} is no card: as wide as {plain_side:?} without cards"
+        );
+        let clear = if direction == Direction::Rtl { side.right() <= cell.left() + 0.5 } else { side.left() >= cell.right() - 0.5 };
+        assert!(clear, "{direction:?}: the panel column {side:?} overlaps the toolbar {cell:?}");
+    }
 }

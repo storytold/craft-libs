@@ -1,7 +1,7 @@
 //! Stories of `DockColumn`.
 
 use crate::contract::{ShowContainer as _, Tracked};
-use crate::docking::{CardInset, ColumnBar, DockColumn, DockGrid, DockSizes, PanelSpec};
+use crate::docking::{CardInset, ColumnBar, ColumnCards, DockColumn, DockGrid, DockSizes, PanelSpec};
 use crate::rails::tool::stories::{BRUSH, tools};
 use crate::rails::{LastUsed, RailDensity, ToolRail, ToolSlot};
 use crate::runtime::env::Env;
@@ -59,7 +59,7 @@ fn a_tool_rail_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let cells = slots.len();
     let spec = move |_: &u8| PanelSpec::new("Tools").grid(DockGrid::rail(cells).density(density));
     let column = Column::new(vec![Group::new(vec![0], 0)]).with_steps(steps);
-    let sizes = DockSizes { column_cards: true, ..DockSizes::of_scope(ui) };
+    let sizes = DockSizes { column_cards: ColumnCards::All, ..DockSizes::of_scope(ui) };
     let width = sizes.natural(std::slice::from_ref(&column), &spec).first().map_or(0.0, |(width, _)| *width);
     let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, width);
     let rect = room.with_max_y(room.top() + CARD_HEIGHT);
@@ -83,12 +83,12 @@ fn a_tool_rail_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn a_panel_column_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = *data.choice("place", 0_usize, &[("At the window edge", 0), ("Inward of another column", 1)]);
     let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
-    let sizes = DockSizes { column_cards: true, ..DockSizes::of_scope(ui) };
-    let inset = sizes.card_inset(at);
+    let sizes = DockSizes { column_cards: ColumnCards::All, ..DockSizes::of_scope(ui) };
+    let inset = sizes.card_inset(at, &column, &spec);
     let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, CARD_WIDTH + inset);
     let rect = room.with_max_y(room.top() + 2.0 * CARD_HEIGHT);
     let shown = DockColumn::new("Panels", global("dock column", "panel card story"), &column, &spec);
-    let shown = match sizes.card_place(at) {
+    let shown = match sizes.card_place(at, &column, &spec) {
         Some(place) => shown.card(place),
         None => shown,
     };

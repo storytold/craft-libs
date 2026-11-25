@@ -92,14 +92,28 @@ pub struct DockSizes {
     /// The gutter between two neighbouring cards of a dock, on the outer side of each card past the window edge's:
     /// `space.gap.tight`.
     pub card_gutter: f32,
-    /// Whether the dock shows its docked columns as cards
-    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards)): off in the style, set by the dock that shows
+    /// Which docked columns the dock shows as cards
+    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards)): none in the style, set by the dock that shows
     /// them.
-    pub column_cards: bool,
+    pub column_cards: ColumnCards,
     /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
     /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
     /// shows itself: the least hit size, or the theme's grip marks with `space.gap.tight` above and below them.
     pub grip: f32,
+}
+
+/// Which docked columns a dock shows as cards ([`DockConfig::column_cards`](super::DockConfig::column_cards)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColumnCards {
+    /// None: every column fills its cell.
+    #[default]
+    None,
+    /// Every docked column, expanded or collapsed to icons.
+    All,
+    /// Only the stepped columns, such as a docked tool rail ([`DockSizes::stepped`]); the panel columns stand flush:
+    /// VectorCraft 0.24's dock.
+    Stepped,
 }
 
 /// Which inset a docked column's card takes on its outer side ([`DockSizes::card_place`]).
@@ -163,7 +177,7 @@ impl DockSizes {
             dense_rail_step,
             card: cx.tokens.space.gap.stack,
             card_gutter: cx.tokens.space.gap.tight,
-            column_cards: false,
+            column_cards: ColumnCards::None,
             grip: super::group::grip_strip(cx.tokens),
         }
     }
@@ -211,23 +225,24 @@ impl DockSizes {
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
-    /// The inset on the outer side of the card of a dock's docked column `at` from the window edge inwards: none
-    /// without [`column_cards`](Self::column_cards); [`card`](Self::card) for the first column, at the window edge;
-    /// [`card_gutter`](Self::card_gutter) for the others, which stand that far from their outer neighbour's card. A
-    /// docked column is that much wider than its content.
-    pub fn card_inset(&self, at: usize) -> f32 {
-        self.card_place(at).map_or(0.0, |place| self.inset(place))
+    /// The inset on the outer side of the card of `column`, a dock's docked column `at` from the window edge inwards:
+    /// none for a column [`column_cards`](Self::column_cards) shows as no card; [`card`](Self::card) for the first
+    /// column, at the window edge; [`card_gutter`](Self::card_gutter) for the others, which stand that far from their
+    /// outer neighbour. A docked column is that much wider than its content.
+    pub fn card_inset<P>(&self, at: usize, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        self.card_place(at, column, spec).map_or(0.0, |place| self.inset(place))
     }
 
-    /// Which inset the card of a dock's docked column `at` from the window edge inwards takes on its outer side: none
-    /// without [`column_cards`](Self::column_cards); [`CardInset::Edge`] for the first column, [`CardInset::Gutter`]
-    /// for the others.
-    pub fn card_place(&self, at: usize) -> Option<CardInset> {
-        match (self.column_cards, at) {
-            (false, _) => None,
-            (true, 0) => Some(CardInset::Edge),
-            (true, _) => Some(CardInset::Gutter),
-        }
+    /// Which inset the card of `column`, a dock's docked column `at` from the window edge inwards, takes on its outer
+    /// side: none for a column [`column_cards`](Self::column_cards) shows as no card; [`CardInset::Edge`] for the
+    /// first column, [`CardInset::Gutter`] for the others.
+    pub fn card_place<P>(&self, at: usize, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> Option<CardInset> {
+        let card = match self.column_cards {
+            ColumnCards::None => false,
+            ColumnCards::All => true,
+            ColumnCards::Stepped => !column.iconic && self.stepped(column, spec).is_some(),
+        };
+        card.then_some(if at == 0 { CardInset::Edge } else { CardInset::Gutter })
     }
 
     /// The inset on the outer side of a card at `place`: [`card`](Self::card) or [`card_gutter`](Self::card_gutter).
@@ -293,7 +308,7 @@ impl DockSizes {
             .iter()
             .enumerate()
             .map(|(at, column)| {
-                let (width, inset) = (self.width(column, spec), self.card_inset(at));
+                let (width, inset) = (self.width(column, spec), self.card_inset(at, column, spec));
                 let (lo, hi) = if fixed(column) { (width, width) } else { self.shown_bounds(column, spec) };
                 (width + inset, (lo + inset, hi + inset))
             })
@@ -305,7 +320,7 @@ impl DockSizes {
             .zip(current.iter().zip(widths))
             .filter(|((_, column), ((width, _), scaled))| !fixed(column) && (scaled - width).abs() >= 0.01)
             .filter_map(|((at, column), (_, width))| {
-                let width = width - self.card_inset(at);
+                let width = width - self.card_inset(at, column, spec);
                 let panel = column.groups.iter().find_map(|group| group.panels.first())?.clone();
                 Some(if column.iconic { Action::resize_iconic(panel, Some(width)) } else { Action::resize_column(panel, width) })
             })
@@ -321,7 +336,7 @@ impl DockSizes {
             .enumerate()
             .map(|(at, column)| {
                 let keeps = column.iconic || self.stepped(column, spec).is_some();
-                let inset = self.card_inset(at);
+                let inset = self.card_inset(at, column, spec);
                 (self.width(column, spec) + inset, (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0) + inset))
             })
             .collect()
