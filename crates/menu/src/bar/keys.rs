@@ -381,7 +381,14 @@ impl Keys {
             return;
         }
         // No menu open: Alt (tapped) or F10 puts the keyboard on the bar or takes it off again.
-        let f10 = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F10));
+        // F10 alone: `consume_key` would let an extra Shift through, and Shift+F10 is the
+        // keyboard's context-menu key, for the widget that has the keyboard (#2940). Every plain
+        // F10 of the frame is taken, as `consume_key` takes them, and toggles the bar once.
+        let f10 = ctx.input_mut(|i| {
+            let before = i.events.len();
+            i.events.retain(|e| !matches!(e, Event::Key { key: Key::F10, pressed: true, modifiers, .. } if modifiers.is_none()));
+            i.events.len() < before
+        });
         if tap || f10 {
             self.focus = if self.focus.is_some() { None } else { Some(0) };
             self.underline = false;

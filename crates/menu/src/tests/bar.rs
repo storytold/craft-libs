@@ -87,6 +87,8 @@ struct Bar {
     after: Option<f32>,
     /// The viewport commands the bar sent.
     sent: Vec<egui::ViewportCommand>,
+    /// The key presses the bar left for the app, with their modifiers.
+    left: Vec<(Key, Modifiers)>,
 }
 
 impl Bar {
@@ -113,6 +115,7 @@ impl Bar {
             fit: None,
             after: None,
             sent: Vec::new(),
+            left: Vec::new(),
         };
         b.run(3);
         b
@@ -130,6 +133,7 @@ impl Bar {
         let (bar, gate, target, english, preferred, fit) = (&self.bar, self.gate, self.target, self.english, &self.preferred, self.fit);
         let mut out = Vec::new();
         let mut after = None;
+        let mut left = Vec::new();
         let mut full = self.ctx.run_ui(raw, |ui| {
             let mut ui_bar = MenuBarUi::new(bar).gate(gate).target(target).mnemonics(preferred);
             if let Some(english) = &english {
@@ -144,9 +148,20 @@ impl Bar {
                 }
                 None => out = ui_bar.show(ui),
             }
+            // What reaches the widgets drawn after the bar.
+            left = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        Event::Key { key, pressed: true, modifiers, .. } => Some((*key, *modifiers)),
+                        _ => None,
+                    })
+                    .collect()
+            });
         });
         full.textures_delta.clear();
         self.after = after;
+        self.left.extend(left);
         if let Some(root) = full.viewport_output.remove(&egui::ViewportId::ROOT) {
             self.sent.extend(root.commands);
         }
