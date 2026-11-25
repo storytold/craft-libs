@@ -193,6 +193,21 @@ fn command_enter_commits_one_session_and_a_session_without_edits_commits_nothing
     assert_eq!(editor.text(), "abcd");
 }
 
+/// Typing that comes after Cmd+Enter in the same frame is not the committed session's.
+#[trial]
+fn command_enter_commits_the_typing_before_it_and_none_after_it_in_one_frame() {
+    use craft_ui::testing::focus::key_release;
+    use craft_ui::testing::input::key_press;
+    let mut editor = session("abc", None);
+    editor.focus();
+    let cmd_enter =
+        [Event::ModifiersChanged(Modifiers::COMMAND), key_press(Key::Enter, Modifiers::COMMAND), key_release(Key::Enter, Modifiers::COMMAND)];
+    let events = [vec![Event::Text("d".into())], cmd_enter.to_vec(), vec![Event::ModifiersChanged(Modifiers::NONE), Event::Text("e".into())]];
+    editor.fixture.frame(events.concat()).settle();
+    assert_eq!(*editor.ends.borrow(), [EditorEnd::Commit]);
+    assert_eq!(editor.text(), "abcd");
+}
+
 /// A calendar opened above a field editor must not commit the field when its month changes.
 #[trial]
 fn a_field_editor_keeps_its_draft_when_its_popup_is_used() {

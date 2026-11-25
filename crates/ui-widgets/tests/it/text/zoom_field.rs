@@ -148,10 +148,10 @@ fn focused(comma: bool, beside: bool) -> (Fixture, Kept) {
     (fixture, kept)
 }
 
-/// The field's text.
+/// The field's text: its text runs, which the node's value reads with the unit after it.
 fn text(fixture: &Fixture) -> String {
     let field = fixture.by_label(ZOOM).expect("the zoom field");
-    fixture.tree().value_of(field.node).unwrap_or_default().to_owned()
+    fixture.tree().run_texts_of(field.node).concat()
 }
 
 /// How an entry reaches the field.

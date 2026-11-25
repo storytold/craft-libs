@@ -113,15 +113,26 @@ pub(crate) struct OsFiles {
     pub given: Vec<(String, Vec<u8>)>,
 }
 
-/// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
-/// reports both, and the fact stays until the next such event. Before any event the focus is unknown.
-fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: Option<f32>) -> egui::ViewportIdMap<egui::ViewportInfo> {
+/// The viewport facts a frame reports: the root window's inner rect when the frame is the root's (`inner`), and its
+/// focus: a window-focus event also sets the root viewport's focus fact, as a host reports both, and the fact stays
+/// until the next such event. Before any event the focus is unknown. The root's input
+/// reports the same focus (`RawInput::focused`), a window with focus while it is unknown.
+fn window_facts(
+    ctx: &Context,
+    events: &[Event],
+    native_pixels_per_point: Option<f32>,
+    inner: Option<Rect>,
+) -> egui::ViewportIdMap<egui::ViewportInfo> {
     let last = events.iter().rev().find_map(|event| if let Event::WindowFocused(focused) = event { Some(*focused) } else { None });
     let focused = Service::<WindowFocus>::run(ctx, |state| {
         state.0 = last.or(state.0);
         state.0
     });
-    std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { focused, native_pixels_per_point, ..egui::ViewportInfo::default() })).collect()
+    std::iter::once((
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { focused, native_pixels_per_point, inner_rect: inner, ..egui::ViewportInfo::default() },
+    ))
+    .collect()
 }
 
 /// The focus the fixture's window last reported; unset before any focus event.
@@ -245,7 +256,8 @@ pub(crate) fn run_frame(
         super::files::open_reads(ctx, viewport, files.read.len());
     }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
-    let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
+    let mut viewports = window_facts(ctx, &events, native_pixels_per_point, (viewport == egui::ViewportId::ROOT).then_some(screen));
+    let focused = viewport != egui::ViewportId::ROOT || viewports.get(&egui::ViewportId::ROOT).and_then(|info| info.focused).unwrap_or(true);
     let children = open_children(ctx, viewport);
     for child in &children {
         viewports
@@ -255,6 +267,7 @@ pub(crate) fn run_frame(
         screen_rect: Some(screen),
         time: Some(time),
         viewport_id: viewport,
+        focused,
         events,
         hovered_files,
         dropped_files,
@@ -488,6 +501,70 @@ pub(crate) fn focusable_widget(ui: &mut Ui, id: egui::Id) -> Rect {
 #[cfg(feature = "suite")]
 pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
+}
+
+/// A host's own text editor of `id` at `rect`, as a canvas text tool draws it: it reads the IME events from egui's
+/// input into `text` (a commit appends, a deletion before the caret removes characters from its end) and writes the
+/// pass's IME output, context generation 1.
+#[cfg(feature = "suite")]
+pub(crate) fn host_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, text: &mut String) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::Ime(egui::ImeEvent::Commit(committed)) => text.push_str(&committed),
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect)));
+}
+
+/// What [`host_resetting_ime_editor`] holds between passes.
+#[cfg(feature = "suite")]
+#[derive(Default)]
+pub(crate) struct ResettingEditor {
+    pub(crate) text: String,
+    pub(crate) composing: bool,
+    /// The reset the editor asked for at a press during its composition, until its completion arrives; the editor
+    /// takes no IME event meanwhile.
+    pub(crate) reset: Option<egui::ImeResetId>,
+}
+
+/// A host's own text editor of `id` at `rect` that fences its own interrupted composition, as EffectCraft's viewer text
+/// editor does: a primary press while it composes ends the composition and asks the platform for a reset in its own IME
+/// output, and the editor ignores IME events until that reset's completion. Otherwise as [`host_ime_editor`].
+#[cfg(feature = "suite")]
+pub(crate) fn host_resetting_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, editor: &mut ResettingEditor) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::ImeResetCompleted { request_id } if editor.reset == Some(request_id) => editor.reset = None,
+            _ if editor.reset.is_some() => {}
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) => editor.composing = !text.is_empty(),
+            Event::Ime(egui::ImeEvent::Commit(committed)) => {
+                editor.text.push_str(&committed);
+                editor.composing = false;
+            }
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    editor.text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ime = egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect);
+    if editor.composing && ui.input(|input| input.pointer.primary_pressed()) {
+        editor.composing = false;
+        editor.reset = ui.ctx().request_ime_reset(ui.ctx().viewport_id());
+        ime.should_interrupt_composition = true;
+        ime.reset_request = editor.reset;
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(ime));
 }
 
 /// Gives the host's own egui widget `id` key focus, as the host's code does.

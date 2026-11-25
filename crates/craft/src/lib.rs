@@ -221,6 +221,8 @@ pub use craft_lottie as lottie;
 pub use craft_macho as macho;
 #[cfg(feature = "markdown")]
 pub use craft_markdown as markdown;
+#[cfg(feature = "material-graph")]
+pub use craft_material_graph as material_graph;
 #[cfg(feature = "materialx")]
 pub use craft_materialx as materialx;
 #[cfg(feature = "math")]
@@ -398,6 +400,8 @@ pub use craft_vectordrawable as vectordrawable;
 pub use craft_video as video;
 #[cfg(feature = "wasm")]
 pub use craft_wasm as wasm;
+#[cfg(feature = "wayland")]
+pub use craft_wayland as wayland;
 #[cfg(feature = "web-api")]
 pub use craft_web_api as web_api;
 #[cfg(feature = "web-host")]

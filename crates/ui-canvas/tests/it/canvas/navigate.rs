@@ -2,7 +2,7 @@
 
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, ZoomLadder};
+use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, ZoomScheme};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleAutoscrollFeel, MiddleButton, Momentary, MomentaryCommands, MomentaryTool,
@@ -150,6 +150,42 @@ fn cmd_or_ctrl_with_page_down_scrolls_a_focused_canvas_sideways_on_every_os() {
         let down = view.get().center;
         assert!(down.y > sideways.y && down.x == sideways.x, "{os:?}: plain Page Down scrolls down");
     }
+}
+
+const NEXT_ARTBOARD: &str = "canvasTrial.nextArtboard";
+
+/// A page key the app binds to a command runs it ahead of the canvas's page scroll, with nothing focused and with the
+/// canvas focused (Page Down goes to the next artboard); an unbound page key still scrolls the view.
+#[trial]
+fn a_bound_page_key_runs_its_command_and_an_unbound_one_pages_the_canvas() {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    let binding = Binding::parse("PageDown").expect("the trial's chord parses");
+    let catalog =
+        AppCatalog::new(vec![CommandDef::new(NEXT_ARTBOARD, "Next Artboard", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
+    fixture.commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let page = |fixture: &mut Fixture, key: Key| {
+        frame::take_output(fixture.ctx());
+        let before = view.get().center;
+        fixture.key(key, Modifiers::NONE).settle();
+        let fired: Vec<String> = frame::take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+        (fired, view.get().center != before)
+    };
+    assert_eq!(fixture.focused(), None, "nothing is focused");
+    assert_eq!(page(&mut fixture, Key::PageDown), (vec![NEXT_ARTBOARD.to_owned()], false), "unfocused: the bound Page Down runs its command");
+    assert_eq!(page(&mut fixture, Key::PageUp), (Vec::new(), true), "unfocused: the unbound Page Up scrolls");
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    assert!(fixture.focused().is_some(), "the click focuses the canvas");
+    assert_eq!(page(&mut fixture, Key::PageDown), (vec![NEXT_ARTBOARD.to_owned()], false), "focused: the bound Page Down runs its command");
+    assert_eq!(page(&mut fixture, Key::PageUp), (Vec::new(), true), "focused: the unbound Page Up scrolls");
 }
 
 #[trial]
@@ -852,7 +888,7 @@ fn a_canvas_runs_the_view_commands_its_app_queues_before_the_fired_ones_and_repo
     queue.borrow_mut().extend([ViewRequest::Command(ViewCommands::ZoomIn), ViewRequest::Command(ViewCommands::ZoomIn)]);
     assert!(commands::fire(fixture.ctx(), ViewCommands::ZoomOut, FireSource::Menu));
     fixture.frame(vec![]);
-    let one_in = ZoomLadder::step(start, 1, DOCUMENT);
+    let one_in = ZoomScheme::PHOTOSHOP.step(start, 1, DOCUMENT);
     assert!((zoom::device(&view.get(), ppp) / one_in - 1.0).abs() < 1e-6, "in, in, out: one rung in");
     let delivered: Vec<_> = frame::take_output(fixture.ctx()).delivered.into_iter().map(|fired| fired.command).collect();
     assert_eq!(delivered, [CommandRef::from(ViewCommands::ZoomOut)], "a queued command is the app's, not delivered");
@@ -927,9 +963,15 @@ fn fingers(phase: TouchPhase, center: Pos2, half: Vec2) -> Vec<egui::Event> {
         .into()
 }
 
-/// The zoom ratio and the rotation of the view a canvas shows after the frames of `input` over its middle, under
-/// `options`, from a view turned `rotation` degrees and mirrored when `flip`.
-fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>) -> (f64, f64) {
+/// The view a canvas shows before and after the frames of `input` over its middle, under `options` with `held`
+/// modifiers down, from a view turned `rotation` degrees and mirrored when `flip`.
+fn views_after(
+    options: NavigationOptions,
+    rotation: f64,
+    flip: bool,
+    held: Modifiers,
+    input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>,
+) -> (CanvasView, CanvasView) {
     // A view with a rect is shown as given: no first fit.
     let start = CanvasView::new(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)), Point::new(2000.0, 2000.0), 1.0);
     let view = Rc::new(Cell::new(start.rotation(rotation).flip_x(flip)));
@@ -943,11 +985,19 @@ fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn F
     fixture.settle();
     let middle = view.get().rect.center();
     fixture.frame(vec![pointer::moved(middle)]);
+    if held != Modifiers::NONE {
+        fixture.hold(held);
+    }
     let before = view.get();
     for events in input(middle) {
         fixture.frame(events);
     }
-    let after = view.get();
+    (before, view.get())
+}
+
+/// The zoom ratio and the rotation of the view a canvas shows after the frames of `input`, as [`views_after`].
+fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>) -> (f64, f64) {
+    let (before, after) = views_after(options, rotation, flip, Modifiers::NONE, input);
     (after.zoom / before.zoom, after.rotation)
 }
 
@@ -999,6 +1049,32 @@ fn pinch_and_rotation_follow_the_gesture_options_and_the_flip() {
     let five: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Rotate(5.0_f32.to_radians())]];
     let (_, wrapped) = gestured(navigation(true, true, true), 178.0, false, five);
     assert!(wrapped > -180.0 && wrapped <= 180.0 && (wrapped + 177.0).abs() < 0.05, "178° turned 5° more is -177°: {wrapped}");
+}
+
+#[trial]
+fn two_fingers_moving_together_pan_the_view_only_with_enable_gestures_and_before_the_modifier_rules() {
+    let shift = Vec2::new(30.0, 0.0);
+    let half = Vec2::new(50.0, 0.0);
+    let drag: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> =
+        &|at| vec![fingers(TouchPhase::Start, at, half), fingers(TouchPhase::Move, at + shift, half), fingers(TouchPhase::End, at + shift, half)];
+    // (case, Enable Gestures, modifiers held, pans)
+    let cases = [
+        ("with Enable Gestures", true, Modifiers::NONE, true),
+        ("without Enable Gestures", false, Modifiers::NONE, false),
+        ("with Cmd held", true, Modifiers::COMMAND, true),
+    ];
+    for (case, gestures, held, pans) in cases {
+        let (before, after) = views_after(navigation(true, gestures, false), 0.0, false, held, drag);
+        if pans {
+            assert!(
+                after.center.x < before.center.x - 1.0 && (after.center.y - before.center.y).abs() < 1e-3,
+                "{case}: the content follows the fingers: {before:?} -> {after:?}"
+            );
+        } else {
+            assert_eq!(after.center, before.center, "{case}: the view stays");
+        }
+        assert!((after.zoom / before.zoom - 1.0).abs() < 1e-4, "{case}: a pan is no zoom");
+    }
 }
 
 #[trial]
@@ -1240,10 +1316,10 @@ fn the_document_scheme_zooms_by_rungs_on_ctrl_or_cmd_wheel_and_drops_the_residua
 
     let start = device(&view);
     wheel_line(&mut fixture, &view, 1.0, Modifiers::COMMAND);
-    let one_in = ZoomLadder::step(start, 1, DOCUMENT);
+    let one_in = ZoomScheme::PHOTOSHOP.step(start, 1, DOCUMENT);
     assert!((device(&view) / one_in - 1.0).abs() < 1e-6, "Ctrl + one notch steps one rung in: {start} -> {}", device(&view));
     wheel_line(&mut fixture, &view, -1.0, Modifiers::COMMAND);
-    assert!((device(&view) / ZoomLadder::step(one_in, -1, DOCUMENT) - 1.0).abs() < 1e-6, "and one notch back steps one rung out");
+    assert!((device(&view) / ZoomScheme::PHOTOSHOP.step(one_in, -1, DOCUMENT) - 1.0).abs() < 1e-6, "and one notch back steps one rung out");
 
     let before = view.get();
     wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
@@ -1263,7 +1339,7 @@ fn the_document_scheme_zooms_by_rungs_on_ctrl_or_cmd_wheel_and_drops_the_residua
     wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
     assert_eq!(device(&view), at, "the scroll between them dropped the first half");
     wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
-    assert!((device(&view) / ZoomLadder::step(at, 1, DOCUMENT) - 1.0).abs() < 1e-6, "two halves in a row step one rung");
+    assert!((device(&view) / ZoomScheme::PHOTOSHOP.step(at, 1, DOCUMENT) - 1.0).abs() < 1e-6, "two halves in a row step one rung");
 }
 
 type ScrollRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<Pos2>>>, Rc<RefCell<Vec<Point>>>, Rc<Cell<bool>>, Rc<Cell<bool>>);

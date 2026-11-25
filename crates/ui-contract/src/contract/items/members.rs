@@ -2,7 +2,7 @@
 //! arena, updated, painted and finished at their rows, reported as sub-nodes of the collection.
 
 use super::{ITEM_NODE, ItemsHooks, key_hash};
-use crate::contract::collection::{CollectionEvent, ContextMenuRequest, OpenChange, ShownRow};
+use crate::contract::collection::ShownRow;
 use crate::contract::run;
 use crate::contract::{Collection, Component as _, Cx, Internal, ItemOpener, ItemOutput as _, Meta as _};
 use crate::primitives::sensing::{self, MemberSpec};
@@ -87,16 +87,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
                 shown.openers = self.item_openers(ui, ctx, id, enabled, openers);
             }
             let label = output.label_rect().unwrap_or(row);
-            if let Some(ask) = output.open_request() {
-                self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
-            }
-            if let Some(rect) = output.menu_request() {
-                crate::runtime::keys::request_context(ctx, id, rect, None);
-                self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
-            }
-            if let Some(event) = output.into_event() {
-                self.events.push(CollectionEvent::Item(key.clone(), event));
-            }
+            self.report_item_output(ctx, id, &key, output);
             if renaming {
                 self.rename_row(comp, ui, (ctx, id, rtl), (at, &key), label);
             }
@@ -105,11 +96,13 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
 }
 
 /// The id of the item `key` of the collection `id`: a member's owner id in the arena, as a run item's id.
-fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
+pub(super) fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     crate::runtime::memory::sub(id, ("key", key_hash(key)))
 }
 
-/// The access node a members collection's lead item stands for: the sub-node of its item part.
-pub(super) fn lead_node<K: std::hash::Hash>(id: Id, key: &K) -> Id {
+/// The access node of the item `key` of the members collection `id` (a tab strip, a swatch table): the sub-node of its
+/// item part, which [`focused_node`](crate::runtime::access::focused_node) reports while the item is the lead of the
+/// focused collection.
+pub fn item_node<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     access::sub_node_id(id, ITEM_NODE.at(key_hash(key)))
 }

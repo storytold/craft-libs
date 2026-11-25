@@ -1,5 +1,6 @@
 //! Keyboard moves and actions at the lead: navigation, pages, sections, Space, Delete, the menu key and type-ahead.
 
+use super::lead::PickBy;
 use super::rows;
 use super::{ItemsHooks, Placement, Typing};
 use crate::contract::collection::{
@@ -73,9 +74,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     self.move_lead(to, LeadSource::Keys);
                     if mods.extend && matches!(mode, SelectMode::Multi | SelectMode::Cells) {
                         let anchor = state.anchor.unwrap_or(to);
-                        self.change(SelectionChange::Set(self.range(anchor, to)));
+                        self.change_by(SelectionChange::Set(self.range(anchor, to)), PickBy::Keys);
                     } else if !mods.lead && !mods.extend && comp.items().arrows_select {
-                        self.pick(comp, to, false, false);
+                        self.pick_by(comp, to, false, false, PickBy::Keys);
                     }
                     self.reveal_with(layout, to);
                 }
@@ -105,7 +106,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let to = (1..len).map(|step| if forward { (from + step) % len } else { (from + len - step) % len }).find(takes);
         if let Some(to) = to {
             self.move_lead(to, LeadSource::Keys);
-            self.pick(comp, to, false, false);
+            self.pick_by(comp, to, false, false, PickBy::Keys);
             self.reveal_with(layout, to);
         }
     }
@@ -146,7 +147,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && cx.core.intents.take(Intent::TogglePick)
             && let Some(row) = lead_at
         {
-            self.pick(comp, row, false, true);
+            self.pick_by(comp, row, false, true, PickBy::Keys);
         }
         self.column_keys(cx, lead_at.filter(|_| !header_held));
         // The pass's `update_inputs` turned an `Activate` intent into the keyed activation.
@@ -154,11 +155,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // A disabled lead does not run, as a press on it does not.
         if activated
             && !header_held
-            && let Some(row) = lead_at.filter(|&row| self.source.enabled(row))
+            && let Some(row) = lead_at.filter(|&row| !self.source.enabled(row))
+        {
+            self.events.push(CollectionEvent::Refused(self.source.key(row)));
+        } else if activated
+            && !header_held
+            && let Some(row) = lead_at
         {
             // Where the arrows leave the selection, Enter picks the lead it activates.
             if !props.arrows_select && !self.holds(row) {
-                self.pick(comp, row, false, false);
+                self.pick_by(comp, row, false, false, PickBy::Keys);
             }
             let key = self.source.key(row);
             self.keyed_activation = Some(key.clone());
@@ -212,7 +218,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         match props.space {
             SpaceAction::Activate => match Self::select_mode(comp) {
                 SelectMode::None => self.events.push(CollectionEvent::Activate(self.source.key(row))),
-                mode => self.pick(comp, row, false, mode != SelectMode::Single),
+                mode => self.pick_by(comp, row, false, mode != SelectMode::Single, PickBy::Keys),
             },
             SpaceAction::ToggleCell => self.toggle_by_key(cx, row),
             SpaceAction::Preview => self.events.push(CollectionEvent::Preview(self.source.key(row))),
@@ -292,7 +298,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let source = &*self.source;
             if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, |at| source.text(at).unwrap_or_default(), |text| folder.key(text)) {
                 self.move_lead(to, LeadSource::Keys);
-                self.pick(comp, to, false, false);
+                self.pick_by(comp, to, false, false, PickBy::Keys);
                 self.reveal_with(layout, to);
             }
         }

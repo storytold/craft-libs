@@ -15,6 +15,22 @@ pub enum DocumentTabLook {
     /// PdfCraft's tabs: they shrink before they overflow (a name at most 22 digits wide, at its least a readable
     /// prefix), stand the inline gap apart, and a modified tab shows the marker dot in place of the `*`.
     Shrinking,
+    /// VectorCraft's tabs: whole titles as [`Whole`](Self::Whole), the title and its `*` in the label's semibold face.
+    Semibold,
+}
+
+/// The look of panel tabs ([`TabKind::Panel`]): a strip's choice ([`TabStrip::panel_look`](super::TabStrip)), which a
+/// dock makes for its groups' tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum PanelTabLook {
+    /// The shown tab on the panel surface, square and as tall as the strip.
+    #[default]
+    Plain,
+    /// VectorCraft's tabs: the shown tab on a filled pill (`surface.control` with `shape.radius.control` corners), a
+    /// small control high in the middle of the strip; a tab under the pointer shows the pill too. A dock group's panel
+    /// menu button stands in the strip's middle with them.
+    Pill,
 }
 
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.
@@ -25,7 +41,8 @@ pub enum TabKind {
     /// may give them PdfCraft's look ([`DocumentTabLook::Shrinking`]).
     #[default]
     Document,
-    /// Panel tabs: tabs shrink before they overflow, no close button, only the hidden tabs in the overflow menu.
+    /// Panel tabs: tabs shrink to their first letters before they overflow, only the hidden tabs in the overflow menu,
+    /// and a close button only on the tabs the host makes closable (`Tab::closable`, `TabStrip::can_close`).
     Panel,
     /// Text tabs: only the labels, the selected one in the text colour and the others dimmed, no tab surface,
     /// divider or close button. Whole titles, every tab in the overflow menu (a row of categories in a dialog).
@@ -130,9 +147,14 @@ impl TabKind {
         }
     }
 
-    /// Whether closable tabs show a close button on the tab; a panel's Close is in the host's context menu.
-    pub fn shows_close(self) -> bool {
+    /// Whether a tab closes unless the host says otherwise (`Tab::closable`, `TabStrip::can_close`): document tabs.
+    pub fn closes_by_default(self) -> bool {
         self == Self::Document
+    }
+
+    /// Whether closable tabs show a close button on the tab: document and panel tabs.
+    pub fn shows_close(self) -> bool {
+        matches!(self, Self::Document | Self::Panel)
     }
 
     /// Whether tabs draw only their label, with no surface, indicator or strip fill: text and ribbon tabs.
@@ -145,9 +167,9 @@ impl TabKind {
         self == Self::Ribbon
     }
 
-    /// Whether a middle click closes a closable tab.
+    /// Whether a middle click closes a closable tab: document and panel tabs.
     pub fn middle_click_closes(self) -> bool {
-        self == Self::Document
+        matches!(self, Self::Document | Self::Panel)
     }
 
     /// Whether only a primary press shows a tab: a secondary click on a document tab opens its menu and a middle click

@@ -7,12 +7,13 @@ use super::predicate::{DropTest, RowTest, RowText};
 use super::{ListRow, RowEvent, TreeLeaves};
 use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnLayout, Common, Component, ContainerProps, Cx,
-    DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
+    DragPayload, DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Show as _, Sizing,
 };
 use crate::fonts::FontRef;
 use crate::primitives::HAlign;
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
+use crate::tile_grid::GroupHeads;
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Metrics, Selection, SizeHint, SpanLayout};
 use craft_i18n::matcher::{Matcher, Rank};
 use egui::{Rect, Ui};
@@ -107,6 +108,9 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The kept rows are in order of how well they match the query.
     #[prop]
     ranked: bool,
+    /// Whether every group after the first starts below a full-width divider row instead of a titled group row.
+    #[prop]
+    group_heads: crate::tile_grid::GroupHeads,
     /// The rows' labels are document text at the document's font, size and alignment; UI text keeps its tokens.
     #[prop(name = "document_rows")]
     document: Option<DocumentRows>,
@@ -134,6 +138,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             row_menu: false,
             filter: None,
             ranked: false,
+            group_heads: crate::tile_grid::GroupHeads::Titled,
             document: None,
         }
         .label(label)
@@ -175,11 +180,26 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
         self
     }
 
+    /// Which end of the rows the list stays at while rows are added: `End` follows the newest row as long as the user
+    /// left the scroll at the end.
+    #[must_use]
+    pub fn scroll_anchor(mut self, anchor: crate::contract::ScrollAnchor) -> Self {
+        self.items.scroll_anchor = anchor;
+        self
+    }
+
     /// A row drag carries `map` of it, for the drop targets of type `P`; a row the map gives `None` for does not drag
     /// unless a reorder rule is set. The drag stays one session with one ghost.
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// A row drag carries `payload` of it too, beside the payloads given before (`CollectionProps::carry`).
+    #[must_use]
+    pub fn carry(mut self, payload: DragPayload) -> Self {
+        self.items = self.items.carry(payload);
         self
     }
 
@@ -275,7 +295,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
+        // Under `Rule` every top-level group after the first is a divider row, not a titled one.
+        let rule = self.group_heads == GroupHeads::Rule && row.group.is_some() && row.depth == Some(0) && !state.first;
         let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves);
+        let row = if rule { row.rule_head() } else { row };
         let row = match self.document.clone() {
             Some(document) => row.document(document),
             None => row,
@@ -320,7 +343,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {
-        Some(crate::text::rename_field(ui, draft, label, name))
+        Some(crate::text::rename_field(draft, name).show_at(ui, label))
     }
 }
 

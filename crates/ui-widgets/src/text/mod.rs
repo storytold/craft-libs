@@ -18,14 +18,17 @@ pub use alt_text::{AltText, AltTextField, AltTextFieldStyle, AltTextWords};
 pub use chips::{ChipCodec, ChipField, ChipFieldOutput, ChipFieldStyle, ChipWords, PartialChips};
 pub use hex::{HexCodec, HexField};
 pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, LinkedOutput, LinkedWords, follow_equal, follow_ratio, link_toggle};
-pub use number::{NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, UnitPlacement};
+pub use number::{
+    NamedOr, NumberField, NumberLook, NumberName, NumberOutput, NumberPick, NumberPrecision, NumberStepper, NumberStyle, NumberValue, RangeAlert,
+    StepArrows, UnitPlacement,
+};
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
 pub use word_run::{RunWord, WordRun, WordRunOutput, WordRunStyle, WordState};
 pub use words::TextWords;
 pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput, ZoomScale};
 
-use crate::contract::{Bind, EditResponse};
+use crate::contract::Bind;
 use crate::primitives::TextKey;
 use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, SurfaceLook};
 use craft_behavior::{Insets, Metrics, PartKey};
@@ -120,9 +123,9 @@ fn text_part<V>() -> TextKey<V> {
     TextKey::new(TEXT)
 }
 
-/// The text field every collection's `rename_editor` shows over an item's label: it selects the name on focus, so
-/// typing replaces it.
-pub(crate) fn rename_field(ui: &mut egui::Ui, draft: Bind<'_, String>, label: egui::Rect, name: &str) -> EditResponse<String> {
-    use crate::contract::Show as _;
-    TextField::new(name.to_owned(), draft).select_on_focus().show_at(ui, label)
+/// The text field every collection's `rename_editor` and the canvas `Pasteboard`'s page-name rename show over a label:
+/// it selects the name on focus, so typing replaces it. It caps nothing: the item's name is the app's, and a rename shows
+/// and edits all of it.
+pub fn rename_field<'a>(draft: Bind<'a, String>, name: &str) -> TextField<'a> {
+    TextField::new(name.to_owned(), draft).select_on_focus().limit(None::<usize>)
 }

@@ -265,7 +265,7 @@ struct MemoryPrefs {
 struct TurnOff;
 
 impl CustomSettings<MemoryPrefs> for TurnOff {
-    fn nested(&mut self, _: &egui::Context, draft: &mut SettingsDraft) {
+    fn nested(&mut self, _: &mut egui::Ui, draft: &mut SettingsDraft) {
         draft.remove("memory.percent");
     }
 }

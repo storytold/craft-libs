@@ -41,7 +41,7 @@ pub use placement::indent_steps;
 #[doc(hidden)]
 pub use placement::placement_under_fixed_sizes;
 pub use placement::{TreeLeaves, tree_steps};
-pub use style::{ListRowStyle, RowStyleCx};
+pub use style::{CommandHighlight, ListRowStyle, RowStyleCx};
 pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
 use thumb::ThumbPayload;
@@ -58,6 +58,33 @@ pub enum RowDragSpot {
     Thumb(ThumbTarget),
     /// A trailing part.
     Trailing(TrailingPart),
+}
+
+/// Where a row sits in a run of rows that share one outline ([`ListRow::run`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowRun {
+    /// A run of one row: outlined on every side.
+    Alone,
+    /// The first row of a run.
+    First,
+    /// A row inside a run.
+    Middle,
+    /// The last row of a run.
+    Last,
+}
+
+/// The line under a row's label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps, crate::contract::PlainData)]
+#[non_exhaustive]
+pub enum LabelUnderline {
+    /// No line.
+    #[default]
+    None,
+    /// A solid line.
+    Solid,
+    /// A dashed line.
+    Dashed,
 }
 
 /// The name of a label colour, or of no label, in the language of `words`.
@@ -287,6 +314,24 @@ pub struct ListRow<'a> {
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
+    /// The line under the row's label: `Solid` underlines the label span, `Dashed` draws a dashed line under it.
+    #[prop]
+    pub(super) underline: LabelUnderline,
+    /// A filled right triangle in the row's trailing top corner, in the label's ink: it marks the list's current row
+    /// and mirrors.
+    #[prop]
+    pub(super) corner_mark: bool,
+    /// The row is its thumbnails and their link glyphs (`thumbnails_only`).
+    pub(super) thumbnails_only: bool,
+    /// The full-height bar at the start of the row's content (`stripe`).
+    pub(super) stripe: Option<(crate::style::DataColor, crate::primitives::StrokeWidth)>,
+    /// One outline per run in the divider stroke and `radius.control`, inside each row's rect, for the row at this place
+    /// in a run of rows.
+    #[prop]
+    pub(super) run: Option<RowRun>,
+    /// The row is the divider that sets a group off (`GroupHeads::Rule`): a rule across the row, no title, no disclosure
+    /// and no focus stop; the label stays its accessible name.
+    pub(super) rule_head: bool,
     /// The label drawn from styled spans, as `Text::styled` draws them: a search result's match in the theme's
     /// highlight look (`Span::highlight`). The label given to `new` is their joined text, which is also what a screen
     /// reader reads. Empty for a plain label.
@@ -373,6 +418,9 @@ pub struct ListRow<'a> {
     /// The type role of the leading text: `Caption` unless set.
     #[prop]
     pub(super) lead_role: TypeRole,
+    /// The row is as tall as a row with a thumbnail of this size and draws no thumbnail; its icon stands in the thumbnail's
+    /// place.
+    #[prop(name = "thumb_height")]
     pub(super) thumb: ThumbSize,
     pub(super) thumb_aspect: ThumbAspect,
     pub(super) first: Option<ThumbPaint<'a>>,
@@ -422,6 +470,21 @@ pub struct ListRow<'a> {
 }
 
 impl<'a> ListRow<'a> {
+    /// A full-height bar at the start of the row's content, after its toggle cells and before the indent. It takes no
+    /// room from the label and mirrors in right-to-left. It is not the `striped` list tint.
+    #[must_use]
+    pub fn stripe(mut self, color: crate::style::DataColor, width: crate::primitives::StrokeWidth) -> Self {
+        self.stripe = Some((color, width));
+        self
+    }
+
+    /// Makes the row the divider of a group head under `GroupHeads::Rule`.
+    #[must_use]
+    pub(super) fn rule_head(mut self) -> Self {
+        self.rule_head = true;
+        self
+    }
+
     /// A row showing `label`, which also names it for a screen reader.
     pub fn new(label: impl Into<Label>) -> Self {
         use crate::contract::Props as _;
@@ -443,6 +506,12 @@ impl<'a> ListRow<'a> {
             sub_steps: 0,
             divider_below: true,
             italic: false,
+            underline: LabelUnderline::None,
+            corner_mark: false,
+            thumbnails_only: false,
+            stripe: None,
+            run: None,
+            rule_head: false,
             label_spans: Vec::new(),
             highlight: false,
             clipped: false,
@@ -510,6 +579,17 @@ impl<'a> ListRow<'a> {
     pub fn spacer() -> Self {
         let mut row = Self::new(Label::Empty);
         row.spacer = true;
+        row
+    }
+
+    /// The row is its thumbnails and their link glyphs, with no label band, and as wide and high as they are: it is
+    /// sized to its content (`Sizing::Content`), so a collection's row takes no more of its width than they do. The
+    /// label stays the accessible name.
+    #[must_use]
+    pub fn thumbnails_only(self) -> Self {
+        use crate::contract::Props as _;
+        let mut row = self.sizing(crate::contract::Sizing::Content);
+        row.thumbnails_only = true;
         row
     }
 
@@ -617,7 +697,8 @@ impl<'a> ListRow<'a> {
 
     /// A component in the cell of `column` in place of a text: a field that edits the row's value in that column (a
     /// tab stop's position or alignment). It fills the cell's width, inset as a text cell is, at its own height up to
-    /// the row's. In the column the label takes it stands in the label's place, and the label stays the row's
+    /// the row's; a link is only as wide as its text, so a press past it acts on the row (selects it, starts its
+    /// drag) as a press on a text cell does. In the column the label takes it stands in the label's place, and the label stays the row's
     /// accessible name. The row shows `field` and hands its output to `output` in the pass it is shown; its stop joins
     /// the row's roving group as a trailing field's does, and it takes its own presses and the keys it declares. A
     /// column that `cells(..)` does not list shows nothing.

@@ -1,7 +1,7 @@
 //! The full-window parts' own logic: the view's fit and zoom rules, the wheel zoom, Escape on a focused canvas, the
 //! close of the dialog's own window and the mapped overlay.
 
-use craft_behavior::PixelSize;
+use craft_behavior::{PixelSize, ZoomScheme};
 use craft_ui::canvas::ViewCommands;
 use craft_ui::dialog::FullWindowView;
 use craft_ui::testing::trial;
@@ -20,7 +20,7 @@ const SCALE: f32 = 1.0;
 const SAME: f64 = 1e-6;
 
 fn fitted() -> FullWindowView {
-    FullWindowView::new().settled(Rect::from_min_size(Pos2::ZERO, CANVAS), IMAGE, SCALE)
+    FullWindowView::new().settled(Rect::from_min_size(Pos2::ZERO, CANVAS), IMAGE, SCALE, &ZoomScheme::PHOTOSHOP)
 }
 
 #[trial]
@@ -32,10 +32,10 @@ fn a_zoom_command_ends_the_fit_and_fit_returns_to_it() {
     assert!(!view.apply(ViewCommands::FitOnScreen), "fitting a fitted view changes nothing");
     assert!(view.apply(ViewCommands::ZoomIn));
     assert!(!view.is_fit() && view.device_zoom() > fit);
-    let kept = view.settled(rect, IMAGE, SCALE);
+    let kept = view.settled(rect, IMAGE, SCALE, &ZoomScheme::PHOTOSHOP);
     assert!((kept.device_zoom() - view.device_zoom()).abs() < SAME, "a view that does not fit keeps its zoom when settled");
     assert!(view.apply(ViewCommands::FitOnScreen));
-    assert!((view.settled(rect, IMAGE, SCALE).device_zoom() - fit).abs() < SAME, "settling a fitted view fits again");
+    assert!((view.settled(rect, IMAGE, SCALE, &ZoomScheme::PHOTOSHOP).device_zoom() - fit).abs() < SAME, "settling a fitted view fits again");
 }
 
 /// The canvas's navigation: the wheel, the middle button and the Hand tool it falls back to.
@@ -458,5 +458,34 @@ pub(crate) mod mapped_overlay {
         let half = half.iter().find(|mesh| mesh.vertices.len() == ((CELLS + 1) * (CELLS + 1)) as usize).expect("the placed mesh");
         let (whole, part) = (corners(mapped, CELLS), corners(half, CELLS));
         assert!(part[0].distance(whole[0]) < NEAR && (part[2] - whole[0]).length() < (whole[2] - whole[0]).length() * 0.51);
+    }
+}
+
+/// The title row under the macOS traffic lights.
+pub(crate) mod title {
+    use craft_host::target::WindowChrome;
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::dialog::FullWindowDialog;
+    use craft_ui::testing::{Fixture, trial};
+
+    const TITLE: &str = "Liquify (Photo, 66%)";
+
+    /// Where the title's text starts, with the window drawn as `chrome`.
+    fn title_left(chrome: WindowChrome) -> f32 {
+        let mut fixture = Fixture::new(|ui| {
+            let _ = FullWindowDialog::new(TITLE).show(ui, |_, _| {});
+        });
+        fixture.chrome(chrome).settle();
+        fixture.texts().iter().find(|text| text.text == TITLE).expect("the title is painted").rect.left()
+    }
+
+    // The dialog covers the window's top, where an inset frame (macOS) has the traffic lights over the content.
+    #[trial]
+    fn a_full_window_dialog_title_starts_after_the_traffic_lights() {
+        let native = title_left(WindowChrome::Native);
+        let inset = title_left(WindowChrome::Inset);
+        let lights = craft_window::policy::MacInset::default().leading;
+        assert!(native < lights, "with a native frame the title starts at the dialog's own inset");
+        assert!(inset >= lights, "with the traffic lights over the content the title starts after them ({inset} < {lights})");
     }
 }
