@@ -295,3 +295,22 @@ fn an_ncx_is_written_on_request_and_reads_back() {
     taken.resources[0].path = "TOC.ncx".into();
     assert!(matches!(write(&taken), Err(Error::Invalid(m)) if m.contains("used twice")));
 }
+
+#[test]
+fn optional_doctype_keeps_default_and_allows_strict_xml_consumers() {
+    use craft_epub::{WriteOptions, write_with_options, xhtml_with_options};
+    let options = WriteOptions { include_doctype: false };
+    let chapter = xhtml_with_options("en", "Title", "", "", "<p>Content</p>", &options);
+    assert!(!chapter.contains("<!DOCTYPE"));
+    let mut b = book();
+    b.resources[1].data = chapter.into_bytes().into();
+    let bytes = write_with_options(&b, &options).unwrap();
+    for name in ["OEBPS/nav.xhtml", "OEBPS/content.xhtml"] {
+        let content = text(&bytes, name);
+        assert!(!content.contains("<!DOCTYPE"));
+        let mut xml = craft_xml::Options::local().strict();
+        xml.doctype = craft_xml::Doctype::Reject;
+        xml.parse(content.as_bytes()).unwrap();
+    }
+    assert!(text(&write(&book()).unwrap(), "OEBPS/nav.xhtml").contains("<!DOCTYPE html>"));
+}
