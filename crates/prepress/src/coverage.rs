@@ -1,11 +1,11 @@
 //! Ink coverage read from plates: per ink at a point and over a page, total area coverage
-//! (TAC) per pixel, and the pixels over a TAC limit.
+//! (TAC) per pixel, the pixels over a TAC limit, and the rich-black pixels.
 //!
 //! Inks are chosen with an `enabled` list indexed by [`InkId::index`], as a Separations
 //! Preview's toggles hold them: inks past its end are enabled, so `&[]` enables every ink.
 //! Percentages are of one ink's 100%, so a TAC runs to 100 × the number of inks.
 
-use crate::{InkId, Plates};
+use crate::{InkId, Plates, Process};
 
 /// The most regions [`Above::regions`] lists.
 pub const MAX_REGIONS: usize = 256;
@@ -44,25 +44,26 @@ pub struct Stats {
     pub mean_total: f32,
 }
 
-/// The pixels whose TAC is over a limit.
+/// The pixels a warning marks: a TAC over a limit ([`Plates::above`]) or rich black
+/// ([`Plates::rich_black`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Above {
     pub width: u32,
     pub height: u32,
-    /// One entry per pixel, row-major: `true` where the TAC is over the limit.
+    /// One entry per pixel, row-major: `true` where the warning applies.
     pub mask: Vec<bool>,
-    /// The number of pixels over the limit.
+    /// The number of marked pixels.
     pub count: usize,
 }
 
-/// A connected group of pixels over the limit (4-connected), with its bounding box in pixels.
+/// A connected group of marked pixels (4-connected), with its bounding box in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Region {
     pub x: u32,
     pub y: u32,
     pub width: u32,
     pub height: u32,
-    /// The pixels over the limit in the region.
+    /// The marked pixels in the region.
     pub pixels: u32,
 }
 
@@ -177,6 +178,31 @@ impl Plates {
         let count = mask.iter().filter(|m| **m).count();
         Above { width: self.width, height: self.height, mask, count }
     }
+
+    /// The rich-black pixels: Black at or above `black_start` percent (such as 95) with any
+    /// Cyan, Magenta or Yellow under it. Spot inks never make a black rich, and a disabled
+    /// plate counts as no ink. A pixel needs some Black even at a 0% start. A `black_start`
+    /// that isn't finite marks nothing.
+    pub fn rich_black(&self, black_start: f32, enabled: &[bool]) -> Above {
+        let start = if black_start.is_finite() { black_start.max(0.0) } else { f32::MAX };
+        let plane = |p: Process| {
+            let i = InkId::process(p).index();
+            self.planes.get(i).filter(|_| on(enabled, i)).map(Vec::as_slice).unwrap_or_default()
+        };
+        let (c, m, y, k) = (plane(Process::Cyan), plane(Process::Magenta), plane(Process::Yellow), plane(Process::Black));
+        let tint = |plane: &[u8], at: usize| plane.get(at).copied().unwrap_or(0);
+        let n = self.pixels().unwrap_or(0);
+        let Some(mut mask) = filled(n, false) else {
+            return Above { width: self.width, height: self.height, mask: Vec::new(), count: 0 };
+        };
+        let mut count = 0;
+        for (at, marked) in mask.iter_mut().enumerate() {
+            let black = tint(k, at);
+            *marked = black > 0 && percent(u64::from(black)) >= start && (tint(c, at) > 0 || tint(m, at) > 0 || tint(y, at) > 0);
+            count += usize::from(*marked);
+        }
+        Above { width: self.width, height: self.height, mask, count }
+    }
 }
 
 impl Above {
@@ -222,7 +248,7 @@ impl Above {
     }
 
     /// Paints the marked pixels of an sRGB8 image of the same size (three bytes per pixel,
-    /// such as [`Plates::composite`]'s) in `color`, as a TAC warning.
+    /// such as [`Plates::composite`]'s) in `color`, as a warning.
     pub fn paint(&self, rgb: &mut [u8], color: [u8; 3]) {
         for (px, _) in rgb.as_chunks_mut::<3>().0.iter_mut().zip(&self.mask).filter(|(_, m)| **m) {
             *px = color;
@@ -286,6 +312,27 @@ pub(crate) mod tests {
         over.paint(&mut rgb, [255, 0, 255]);
         assert_eq!(&rgb[..6], [255, 0, 255, 255, 0, 255]);
         assert_eq!(&rgb[6..9], [0, 0, 0]);
+    }
+
+    #[test]
+    fn rich_black_needs_black_from_the_start_and_a_process_color_under_it() {
+        // 6 × 1 pixels: K with C; K alone; K with Gold only; 94% K (240) with M; 95% K (243)
+        // with a trace of Y; nothing.
+        let p = synthetic(
+            6,
+            1,
+            [70.0, 5.0, 60.0],
+            [vec![128, 0, 0, 0, 0, 0], vec![0, 0, 0, 255, 0, 0], vec![0, 0, 0, 0, 1, 0], vec![255, 255, 255, 240, 243, 0], vec![0, 0, 255, 0, 0, 0]],
+        );
+        let rich = p.rich_black(95.0, &[]);
+        assert_eq!(rich.mask, [true, false, false, false, true, false]);
+        assert_eq!(rich.count, 2);
+        assert_eq!(rich.regions(), [Region { x: 0, y: 0, width: 1, height: 1, pixels: 1 }, Region { x: 4, y: 0, width: 1, height: 1, pixels: 1 }]);
+        assert_eq!(p.rich_black(90.0, &[]).count, 3, "94% K with M from a 90% start");
+        assert_eq!(p.rich_black(95.0, &[true, true, true, false]).count, 0, "Black hidden");
+        assert_eq!(p.rich_black(95.0, &[false, true, true, true]).mask, [false, false, false, false, true, false], "Cyan hidden");
+        assert_eq!(p.rich_black(0.0, &[]).count, 3, "a 0% start still needs some black");
+        assert_eq!(p.rich_black(f32::NAN, &[]).count, 0);
     }
 
     #[test]
