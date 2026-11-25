@@ -1029,3 +1029,46 @@ fn an_alt_chord_bound_only_out_of_scope_leaves_its_text_typed() {
     let fired: Vec<String> = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
     assert!(fired.is_empty(), "nothing ran: {fired:?}");
 }
+
+/// A disabled editor registers no stop, and its focus widget is still the component's own and no egui focus candidate:
+/// it never becomes a Tab stop of the app's own widgets, and egui's arrows from the app's own focused widget never
+/// reach it. With every control in Tab order, Tab and Shift+Tab land on the button beside it each time.
+#[trial]
+fn tab_never_focuses_a_disabled_editor_s_widget() {
+    let log = RefCell::new(Vec::new());
+    let seen = RefCell::new(Seen::default());
+    let (editor, button) = (Cell::new(Id::NULL), Cell::new(Id::NULL));
+    // The app's own egui button, level with the editor on its right: the editor lies straight to its left.
+    let app = craft_ui::testing::focus::named_id("app button");
+    let app_at = Rect::from_min_size(Pos2::new(AT.right() + 40.0, AT.center().y - 10.0), egui::vec2(60.0, 20.0));
+    let mut show = |ui: &mut egui::Ui| {
+        editor.set(Probe::new(&log, true).label("Source").enabled(false).id_salt("code").show_at(ui, AT).id);
+        button.set(Button::new(&seen).id_salt("next").show_at(ui, NEXT).id);
+        ui.interact(app_at, app, egui::Sense::click());
+    };
+    let mut frames = Frames::new();
+    frames.root({
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.tab_all_controls = true;
+        root
+    });
+    frames.idle(3, &mut show);
+    for shift in [false, false, true, true] {
+        let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        frames.frame(vec![key_press(Key::Tab, mods), key_release(Key::Tab, mods)], &mut show);
+        frames.frame(Vec::new(), &mut show);
+        let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+        assert!(
+            focused == Some(button.get()) || focused == Some(app),
+            "Tab (shift {shift}) lands on a control, never on the disabled editor {:?}: {focused:?}",
+            editor.get()
+        );
+    }
+    craft_ui::runtime::focus::request(&frames.ctx, craft_ui::runtime::focus::FocusTarget::Id(app));
+    frames.idle(2, &mut show);
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), Some(app), "the app's button has the focus");
+    frames.frame(vec![key_press(Key::ArrowLeft, Modifiers::NONE), key_release(Key::ArrowLeft, Modifiers::NONE)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+    assert!(focused == Some(app) || focused == Some(button.get()), "the arrow never reaches the disabled editor {:?}: {focused:?}", editor.get());
+}
