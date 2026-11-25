@@ -8,17 +8,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[allow(clippy::disallowed_methods)]
     let start = std::time::Instant::now();
     let input_bytes = bytes.len();
-    let (wb, report) = if owned { gridcraft_parquet::read_owned(bytes)? } else { gridcraft_parquet::read(&bytes)? };
-    if let Some(sheet) = wb.sheet(0) {
-        println!(
-            "input_bytes={} cells={} used_range={} seconds={:.3} warnings={}",
-            input_bytes,
-            sheet.cells.len(),
-            sheet.used_range().map(|r| r.a1()).unwrap_or_default(),
-            start.elapsed().as_secs_f64(),
-            report.warnings.len()
-        );
-    }
+    let limits = craft_parquet::TableLimits { max_rows: 1_048_575, max_columns: 16_384, max_cells: 5_000_000 };
+    let mut values = 0u64;
+    let on_row = |row: &[craft_parquet::Value]| values += row.iter().filter(|v| **v != craft_parquet::Value::Null).count() as u64;
+    let summary = if owned { craft_parquet::read_owned_rows(bytes, &limits, on_row)? } else { craft_parquet::read_rows(&bytes, &limits, on_row)? };
+    println!(
+        "input_bytes={} rows={} columns={} values={} seconds={:.3}",
+        input_bytes,
+        summary.rows,
+        summary.columns.len(),
+        values,
+        start.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 

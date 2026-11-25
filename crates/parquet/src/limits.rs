@@ -1,6 +1,6 @@
 //! Allocation preflight for the compact-Thrift envelopes. Apache owns all actual Parquet decoding.
 //! Checks lengths before its metadata vectors/page buffers are allocated; no payload values are read here.
-use crate::{Result, invalid};
+use crate::{Result, TableLimits, invalid};
 use parquet::file::metadata::ParquetMetaData;
 
 pub(crate) const MAX_DECODED: usize = 512 << 20;
@@ -17,13 +17,14 @@ enum Context {
 }
 struct Compact<'a> {
     bytes: &'a [u8],
+    limits: &'a TableLimits,
     pos: usize,
     uncompressed: Option<usize>,
     compressed: Option<usize>,
 }
 impl<'a> Compact<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0, uncompressed: None, compressed: None }
+    fn new(bytes: &'a [u8], limits: &'a TableLimits) -> Self {
+        Self { bytes, limits, pos: 0, uncompressed: None, compressed: None }
     }
     fn byte(&mut self) -> Result<u8> {
         let b = self.bytes.get(self.pos).copied().ok_or_else(|| invalid("Truncated Parquet metadata"))?;
@@ -70,7 +71,7 @@ impl<'a> Compact<'a> {
             let kind = header & 15;
             if matches!(context, Context::Footer) && id == 2 && kind == 9 {
                 let (n, element) = self.collection()?;
-                if element != 12 || n == 0 || n > gridcraft_core::MAX_COLS as usize + 1 {
+                if element != 12 || n == 0 || n > self.limits.max_columns as usize + 1 {
                     return Err(invalid("Invalid or oversized Parquet schema"));
                 }
                 for i in 0..n {
@@ -78,7 +79,7 @@ impl<'a> Compact<'a> {
                 }
             } else if matches!(kind, 4..=6) {
                 let value = self.integer()?;
-                if matches!(context, Context::SchemaRoot) && id == 5 && !(1..=i64::from(gridcraft_core::MAX_COLS)).contains(&value) {
+                if matches!(context, Context::SchemaRoot) && id == 5 && !(1..=i64::from(self.limits.max_columns)).contains(&value) {
                     return Err(invalid("Invalid Parquet schema field count"));
                 }
                 if matches!(context, Context::Schema) && id == 5 && value != 0 {
@@ -99,7 +100,7 @@ impl<'a> Compact<'a> {
                     if value < 0 || value > MAX_PAGE as i64 {
                         return Err(invalid("Invalid Parquet page count or level length"));
                     }
-                    if id == 1 && value > i64::from(gridcraft_core::MAX_ROWS) {
+                    if id == 1 && value > i64::from(self.limits.max_rows) + 1 {
                         return Err(invalid("Invalid Parquet page value count"));
                     }
                 }
@@ -167,7 +168,7 @@ impl<'a> Compact<'a> {
         Ok(())
     }
 }
-pub(crate) fn footer(bytes: &[u8]) -> Result<usize> {
+pub(crate) fn footer(bytes: &[u8], limits: &TableLimits) -> Result<usize> {
     if bytes.starts_with(b"PARE") {
         return Err(invalid("Encrypted Parquet files are not supported"));
     }
@@ -184,14 +185,14 @@ pub(crate) fn footer(bytes: &[u8]) -> Result<usize> {
         return Err(invalid("Parquet footer exceeds the 16 MiB metadata budget"));
     }
     let start = tail.checked_sub(length).filter(|start| *start >= 4).ok_or_else(|| invalid("Invalid Parquet footer length"))?;
-    let mut compact = Compact::new(bytes.get(start..tail).ok_or_else(|| invalid("Invalid Parquet footer"))?);
+    let mut compact = Compact::new(bytes.get(start..tail).ok_or_else(|| invalid("Invalid Parquet footer"))?, limits);
     compact.structure(0, Context::Footer)?;
     if compact.pos != length {
         return Err(invalid("Unexpected bytes after Parquet metadata"));
     }
     Ok(start)
 }
-pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usize) -> Result<()> {
+pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usize, limits: &TableLimits) -> Result<()> {
     let mut decoded = 0usize;
     let mut pages = 0usize;
     for group in metadata.row_groups() {
@@ -218,7 +219,7 @@ pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usiz
                 if pages > 1_000_000 {
                     return Err(invalid("Parquet file exceeds the 1,000,000-page budget"));
                 }
-                let mut header = Compact::new(bytes.get(cursor..end).ok_or_else(|| invalid("Truncated Parquet column"))?);
+                let mut header = Compact::new(bytes.get(cursor..end).ok_or_else(|| invalid("Truncated Parquet column"))?, limits);
                 header.structure(0, Context::Page)?;
                 let size = header.compressed.ok_or_else(|| invalid("Missing Parquet compressed-page size"))?;
                 let uncompressed = header.uncompressed.ok_or_else(|| invalid("Missing Parquet decoded-page size"))?;
@@ -241,24 +242,25 @@ pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usiz
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+    const LIMITS: TableLimits = crate::tests::LIMITS;
     #[test]
     fn oversized_lengths_and_deep_envelopes_fail_before_allocations() {
         // A list claiming more elements than its entire enclosing buffer.
-        assert!(Compact::new(&[0x19, 0xfc, 0xff, 0xff, 0xff, 0x7f]).structure(0, Context::Other).is_err());
+        assert!(Compact::new(&[0x19, 0xfc, 0xff, 0xff, 0xff, 0x7f], &LIMITS).structure(0, Context::Other).is_err());
         let mut nested = vec![0x1c; 40];
         nested.extend([0; 41]);
-        assert!(Compact::new(&nested).structure(0, Context::Other).is_err());
+        assert!(Compact::new(&nested, &LIMITS).structure(0, Context::Other).is_err());
         // PageHeader field 2 (uncompressed_page_size), zigzag 128 MiB.
         let header = [0x25, 0x80, 0x80, 0x80, 0x80, 0x01, 0];
-        assert!(Compact::new(&header).structure(0, Context::Page).unwrap_err().to_string().contains("64 MiB"));
+        assert!(Compact::new(&header, &LIMITS).structure(0, Context::Page).unwrap_err().to_string().contains("64 MiB"));
         // Negative decoded-page size and a data-page value count of -1.
-        assert!(Compact::new(&[0x25, 1, 0]).structure(0, Context::Page).is_err());
-        assert!(Compact::new(&[0x15, 1, 0]).structure(0, Context::Counts).is_err());
+        assert!(Compact::new(&[0x25, 1, 0], &LIMITS).structure(0, Context::Page).is_err());
+        assert!(Compact::new(&[0x15, 1, 0], &LIMITS).structure(0, Context::Counts).is_err());
     }
     #[test]
     fn impossible_footer_and_encryption_are_rejected() {
-        assert!(footer(b"PAR1\xff\xff\xff\x7fPAR1").unwrap_err().to_string().contains("metadata budget"));
-        assert!(footer(b"PARE12345678").unwrap_err().to_string().contains("Encrypted"));
-        assert!(footer(b"PAR1\x05\0\0\0PAR1").is_err());
+        assert!(footer(b"PAR1\xff\xff\xff\x7fPAR1", &LIMITS).unwrap_err().to_string().contains("metadata budget"));
+        assert!(footer(b"PARE12345678", &LIMITS).unwrap_err().to_string().contains("Encrypted"));
+        assert!(footer(b"PAR1\x05\0\0\0PAR1", &LIMITS).is_err());
     }
 }

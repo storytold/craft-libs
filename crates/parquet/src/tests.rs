@@ -1,57 +1,57 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
-fn read(bytes: &[u8]) -> Result<Workbook> {
-    let (wb, report) = super::read(bytes)?;
-    let (owned, owned_report) = super::read_owned(bytes.to_vec())?;
-    assert_eq!(wb, owned);
-    assert_eq!(report.warnings, owned_report.warnings);
-    Ok(wb)
-}
 use parquet::{data_type::Int64Type, file::properties::WriterProperties, schema::parser::parse_message_type};
 
-fn sheet() -> Sheet {
-    let mut s = Sheet::new("Data");
-    for (col, name) in ["Name", "Amount", "Active"].iter().enumerate() {
-        s.set_value(CellRef::new(0, col as u32), Value::Text((*name).into()));
-    }
-    s
+/// A spreadsheet's limits: 1,048,576 rows including the header, 16,384 columns, 5,000,000 cells.
+pub(crate) const LIMITS: TableLimits = TableLimits { max_rows: 1_048_575, max_columns: 16_384, max_cells: 5_000_000 };
+
+fn read(bytes: &[u8]) -> Result<Table> {
+    let table = super::read(bytes, &LIMITS)?;
+    let owned = super::read_owned(bytes.to_vec(), &LIMITS)?;
+    assert_eq!(table, owned);
+    Ok(table)
 }
-fn roundtrip(s: &Sheet) -> Workbook {
-    read(&write(s).unwrap()).unwrap()
+
+const NAMES: [&str; 3] = ["Name", "Amount", "Active"];
+
+fn write_rows(rows: &[Vec<Cell<&str>>]) -> Result<Vec<u8>> {
+    write("test", &NAMES, rows.len() as u32, |row, col| Ok(rows[row as usize][col].clone()))
+}
+
+fn expected(cell: &Cell<&str>) -> Value {
+    match cell {
+        Cell::Empty => Value::Null,
+        Cell::Text(s) => Value::Text((*s).into()),
+        Cell::Number(n) => Value::Float(*n),
+        Cell::Bool(b) => Value::Bool(*b),
+    }
 }
 
 #[test]
 fn typed_values_nulls_empty_strings_and_formula_like_text_roundtrip() {
-    let mut s = sheet();
-    s.set_value(CellRef::new(1, 0), Value::Text("=SUM(1,2)".into()));
-    s.set_value(CellRef::new(2, 0), Value::Text("".into()));
-    s.set_value(CellRef::new(3, 0), Value::Text("Unicode: café 日本語".into()));
-    s.set_value(CellRef::new(1, 1), Value::Number(-12.5));
-    s.set_value(CellRef::new(3, 1), Value::Number(0.0));
-    s.set_value(CellRef::new(2, 2), Value::Bool(false));
-    s.set_value(CellRef::new(3, 2), Value::Bool(true));
-    let wb = roundtrip(&s);
-    let got = wb.sheet(0).unwrap();
-    for row in 0..4 {
-        for col in 0..3 {
-            assert_eq!(got.value(CellRef::new(row, col)), s.value(CellRef::new(row, col)));
-        }
+    let rows = vec![
+        vec![Cell::Text("=SUM(1,2)"), Cell::Number(-12.5), Cell::Empty],
+        vec![Cell::Text(""), Cell::Empty, Cell::Bool(false)],
+        vec![Cell::Text("Unicode: café 日本語"), Cell::Number(0.0), Cell::Bool(true)],
+    ];
+    let table = read(&write_rows(&rows).unwrap()).unwrap();
+    assert_eq!(table.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), NAMES);
+    assert_eq!(table.rows.len(), rows.len());
+    for (got, want) in table.rows.iter().zip(&rows) {
+        assert_eq!(got, &want.iter().map(expected).collect::<Vec<_>>());
     }
-    assert!(got.cell(CellRef::new(1, 0)).unwrap().formula.is_none());
 }
 
 #[test]
 fn multiple_row_groups_and_header_only_table() {
-    let mut s = sheet();
-    assert_eq!(roundtrip(&s).sheet(0).unwrap().cells.len(), 3);
-    for row in 1..=8200 {
-        s.set_value(CellRef::new(row, 1), Value::Number(f64::from(row)));
-    }
-    let bytes = write(&s).unwrap();
+    let table = read(&write_rows(&[]).unwrap()).unwrap();
+    assert_eq!(table.columns.len(), 3);
+    assert!(table.rows.is_empty());
+    let bytes = write("test", &NAMES, 8200, |row, col| Ok(if col == 1 { Cell::Number(f64::from(row + 1)) } else { Cell::<&str>::Empty })).unwrap();
     let reader = SerializedFileReader::new(Bytes::from(bytes.clone())).unwrap();
     assert_eq!(reader.num_row_groups(), 3);
-    let wb = read(&bytes).unwrap();
-    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(8200, 1)), Value::Number(8200.0));
+    let table = read(&bytes).unwrap();
+    assert_eq!(table.rows[8199][1], Value::Float(8200.0));
 }
 
 fn integers(converted: ConvertedType, values: &[i64], compression: parquet::basic::Compression) -> Vec<u8> {
@@ -69,13 +69,11 @@ fn integers(converted: ConvertedType, values: &[i64], compression: parquet::basi
 }
 
 #[test]
-fn large_integers_are_exact_text_not_rounded() {
+fn large_integers_come_back_exact() {
     let bytes = integers(ConvertedType::INT_64, &[9_007_199_254_740_992, 9_007_199_254_740_993, i64::MIN], parquet::basic::Compression::SNAPPY);
-    let wb = read(&bytes).unwrap();
-    let s = wb.sheet(0).unwrap();
-    assert_eq!(s.value(CellRef::new(1, 0)), Value::Number(9_007_199_254_740_992.0));
-    assert_eq!(s.value(CellRef::new(2, 0)), Value::Text("9007199254740993".into()));
-    assert_eq!(s.value(CellRef::new(3, 0)), Value::Text(i64::MIN.to_string().into()));
+    let table = read(&bytes).unwrap();
+    let got: Vec<_> = table.rows.iter().map(|r| r[0].clone()).collect();
+    assert_eq!(got, [Value::Int(9_007_199_254_740_992), Value::Int(9_007_199_254_740_993), Value::Int(i64::MIN)]);
 }
 
 #[test]
@@ -91,37 +89,26 @@ fn common_compression_codecs() {
 }
 
 #[test]
-fn timestamp_and_date_values_get_number_formats() {
-    let wb = read(&integers(ConvertedType::TIMESTAMP_MICROS, &[0, 1_000_000], parquet::basic::Compression::SNAPPY)).unwrap();
-    let s = wb.sheet(0).unwrap();
-    assert_eq!(s.value(CellRef::new(1, 0)), Value::Number(25569.0));
-    assert!(wb.styles.get(s.style_id(CellRef::new(1, 0))).num_fmt.as_str().contains("yyyy"));
-    assert_eq!(value(Field::Date(0)).unwrap(), Value::Number(25569.0));
-    assert_eq!(value(Field::TimeMillis(43_200_000)).unwrap(), Value::Number(0.5));
+fn export_refuses_mixed_types_and_bad_headers() {
+    let mixed = [vec![Cell::Empty, Cell::Number(1.0), Cell::Empty], vec![Cell::Empty, Cell::Text("2"), Cell::Empty]];
+    assert!(write_rows(&mixed).unwrap_err().to_string().contains("consistent type"));
+    let names = ["Name", "Name", "Active"];
+    assert!(write("test", &names, 0, |_, _| Ok(Cell::<&str>::Empty)).unwrap_err().to_string().contains("unique"));
 }
 
 #[test]
-fn export_refuses_mixed_types_bad_headers_and_errors() {
-    let mut s = sheet();
-    s.set_value(CellRef::new(1, 1), Value::Number(1.0));
-    s.set_value(CellRef::new(2, 1), Value::Text("2".into()));
-    assert!(write(&s).unwrap_err().to_string().contains("consistent type"));
-    s.remove_cell(CellRef::new(2, 1));
-    s.set_value(CellRef::new(0, 1), Value::Text("Name".into()));
-    assert!(write(&s).unwrap_err().to_string().contains("unique"));
-    s.set_value(CellRef::new(0, 1), Value::Number(5.0));
-    assert!(write(&s).unwrap_err().to_string().contains("text header"));
-    s.set_value(CellRef::new(0, 1), Value::Text("Amount".into()));
-    s.set_value(CellRef::new(1, 1), Value::Error(gridcraft_core::CellError::Value));
-    assert!(write(&s).unwrap_err().to_string().contains("cell errors"));
+fn cell_callback_errors_and_nonfinite_numbers_stop_the_write() {
+    let error = write("test", &NAMES, 1, |_, col| if col == 1 { Err(invalid("caller refused")) } else { Ok(Cell::<&str>::Empty) }).unwrap_err();
+    assert_eq!(error.to_string(), "caller refused");
+    assert!(write("test", &NAMES, 1, |_, _| Ok(Cell::<&str>::Number(f64::INFINITY))).is_err());
 }
 
 #[test]
-fn empty_and_sparse_huge_sheets_fail_without_expansion() {
-    assert!(write(&Sheet::new("Empty")).is_err());
-    let mut s = sheet();
-    s.set_value(CellRef::new(MAX_ROWS - 1, MAX_COLS - 1), Value::Bool(true));
-    assert!(write(&s).unwrap_err().to_string().contains("budget"));
+fn table_limits_are_enforced() {
+    let bytes = integers(ConvertedType::INT_64, &[1, 2], parquet::basic::Compression::SNAPPY);
+    assert!(super::read(&bytes, &TableLimits { max_rows: 1, ..LIMITS }).unwrap_err().to_string().contains("1 data rows"));
+    assert!(super::read(&bytes, &TableLimits { max_cells: 2, ..LIMITS }).unwrap_err().to_string().contains("2-cell"));
+    assert_eq!(super::read(&bytes, &TableLimits { max_rows: 2, max_columns: 1, max_cells: 3 }).unwrap().rows.len(), 2);
 }
 
 #[test]
@@ -129,7 +116,7 @@ fn truncated_and_random_bytes_never_panic() {
     let bytes = integers(ConvertedType::INT_64, &[1, 2], parquet::basic::Compression::SNAPPY);
     for end in 0..bytes.len() {
         assert!(read(&bytes[..end]).is_err());
-        assert!(super::read_owned(bytes[..end].to_vec()).is_err());
+        assert!(super::read_owned(bytes[..end].to_vec(), &LIMITS).is_err());
     }
     let mut seed = 1u64;
     for len in 0..256 {
@@ -153,9 +140,8 @@ fn nested_schema_is_rejected_before_decoder() {
 fn text_and_nonfinite_limits_are_explicit() {
     assert!(value(Field::Double(f64::NAN)).is_err());
     assert!(value(Field::Str("x".repeat(MAX_TEXT_BYTES + 1))).is_err());
-    let mut s = sheet();
-    s.set_value(CellRef::new(1, 0), Value::Text("x".repeat(MAX_TEXT_BYTES + 1).into()));
-    assert!(write(&s).is_err());
+    let long = "x".repeat(MAX_TEXT_BYTES + 1);
+    assert!(write("test", &NAMES, 1, |_, col| Ok(if col == 0 { Cell::Text(long.as_str()) } else { Cell::Empty })).is_err());
 }
 
 #[test]
@@ -166,31 +152,7 @@ fn mutated_real_envelopes_do_not_panic() {
         bytes[at] ^= 0x80;
         let result = std::panic::catch_unwind(|| read(&bytes));
         assert!(result.is_ok(), "panic at mutated byte {at}");
-        let owned = std::panic::catch_unwind(|| super::read_owned(bytes));
+        let owned = std::panic::catch_unwind(|| super::read_owned(bytes, &LIMITS));
         assert!(owned.is_ok(), "owned panic at mutated byte {at}");
     }
-}
-
-#[test]
-fn null_only_rows_have_an_explicit_import_notice() {
-    let schema = Arc::new(parse_message_type("message test { OPTIONAL INT64 value; }").unwrap());
-    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
-    let mut group = writer.next_row_group().unwrap();
-    let mut col = group.next_column().unwrap().unwrap();
-    col.typed::<Int64Type>().write_batch(&[], Some(&[0, 0]), None).unwrap();
-    col.close().unwrap();
-    group.close().unwrap();
-    let bytes = writer.into_inner().unwrap();
-    let (wb, report) = super::read(&bytes).unwrap();
-    assert_eq!(wb.sheet(0).unwrap().used_range().unwrap().a1(), "A1");
-    assert_eq!(report.warnings.len(), 1);
-    assert!(report.warnings[0].contains("2 trailing"));
-}
-
-#[test]
-fn invalid_model_coordinates_are_refused_before_arithmetic() {
-    let mut s = Sheet::new("Invalid");
-    s.set_value(CellRef::new(0, 0), Value::Text("Header".into()));
-    s.set_value(CellRef::new(u32::MAX, u32::MAX), Value::Text("Header".into()));
-    assert!(write(&s).unwrap_err().to_string().contains("worksheet dimensions"));
 }
