@@ -11,6 +11,7 @@ use craft_print::ui::{
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog as _, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, PanePager, Param, ParamKind};
+use craft_ui::patterns::presets::{NamedPresetEvent, PresetRow};
 use craft_ui::primitives::TextureCache;
 use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::testing::{Fixture, trial};
@@ -40,7 +41,7 @@ fn rig(paper: Vec2) -> (Fixture, Log) {
     let mut fixture = Fixture::new(move |ui| {
         let image = Rect::from_min_size(IMAGE_AT, IMAGE_SIZE);
         let sheet = PrintSheet::new(paper, image, picture(ui), "200 × 300 pt".into());
-        let out = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).ready(true).show(ui);
+        let out = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).ready(true).show(ui);
         seen.borrow_mut().extend(out.moved);
         // Every frame runs twice; the second pass has no new input, and a repeated move would show in the log.
         if ui.ctx().current_pass_index() == 0 {
@@ -127,6 +128,126 @@ fn the_json_form_adds_to_the_listing() {
     let listed = dialog.json_fields().expect("a listing");
     assert_eq!(listed["paper"], serde_json::json!([432.0, 792.0]));
     assert!(listed.get("copies").is_some(), "the settings keys stay");
+}
+
+/// A hosted print dialog on a three-sheet document, run through a `DialogHost`.
+fn hosted() -> (Fixture, Rc<RefCell<DialogHost>>) {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    host.borrow_mut().open(HostedPrint::new(State::default(), DialogFields::default(), Vec::new()));
+    let shared = host.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let image = Rect::from_min_size(IMAGE_AT, IMAGE_SIZE);
+        let sheet = PrintSheet::new(vec2(612.0, 792.0), image, picture(ui), "200 × 300 pt".into()).count(3);
+        let mut host = shared.borrow_mut();
+        if let Some(dialog) = host.get_mut::<HostedPrint>() {
+            dialog.set_sheet(Some(sheet));
+        }
+        host.run(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.settle();
+    (fixture, host)
+}
+
+fn shown_sheet(host: &Rc<RefCell<DialogHost>>) -> usize {
+    host.borrow().get::<HostedPrint>().expect("the dialog is open").sheet_index()
+}
+
+/// `choice: "done"` makes the next `confirm` answer Done once, any other choice is refused, and the sheet step moves the
+/// shown sheet by its buttons and by the `sheet` field, which clamps to the last sheet.
+#[trial]
+fn done_by_automation_and_the_sheet_step() {
+    let (mut fixture, host) = hosted();
+    let ctx = egui::Context::default();
+    assert_eq!(shown_sheet(&host), 0);
+    for expected in [1, 2, 2] {
+        let next = fixture.by_label("Next").expect("the step row has Next");
+        fixture.click(&next);
+        assert_eq!(shown_sheet(&host), expected, "Next steps to the next sheet and stops at the last");
+    }
+    let previous = fixture.by_label("Previous").expect("the step row has Previous");
+    fixture.click(&previous);
+    assert_eq!(shown_sheet(&host), 1);
+
+    let mut host = host.borrow_mut();
+    let dialog = host.get_mut::<HostedPrint>().expect("the dialog is open");
+    dialog.set_json_field(&ctx, "sheet", serde_json::json!(9)).expect("an index past the end is clamped");
+    assert_eq!(dialog.sheet_index(), 2);
+    assert!(dialog.set_json_field(&ctx, "sheet", serde_json::json!("two")).is_err());
+
+    assert!(dialog.set_json_field(&ctx, "choice", serde_json::json!("print")).is_err(), "only done is a choice");
+    let ready = State::default().ready();
+    dialog.set_json_field(&ctx, "choice", serde_json::json!("done")).expect("done is a choice");
+    assert_eq!(dialog.confirm(&ctx).map(|answer| answer.finish), Some(PrintFinish::Done), "Done answers even while a job cannot start");
+    assert_eq!(dialog.confirm(&ctx).map(|answer| answer.finish), ready.then_some(PrintFinish::Print), "the choice is used up");
+}
+
+/// A refused held OK keeps the dialog open with the reason, and a preset the row does not list is refused by name. A
+/// preset is named by its key or by its name in any case, and applies by its key.
+#[trial]
+fn a_refused_print_keeps_the_dialog_open_and_presets_are_named() {
+    let ctx = egui::Context::default();
+    let mut dialog = HostedPrint::new(State::default(), DialogFields::default(), Vec::new()).held_ok();
+    dialog.set_json_field(&ctx, "choice", serde_json::json!("done")).expect("done is a choice");
+    assert!(dialog.confirm(&ctx).is_none(), "a held OK files its answer");
+    assert!(matches!(dialog.held_state(), Some(HeldOk::Waiting)));
+    assert!(dialog.take_ok().is_some());
+    dialog.answer_ok(Err("No printer".into()));
+    assert!(matches!(dialog.held_state(), Some(HeldOk::Refused(_))), "the refusal keeps the dialog open");
+
+    dialog.set_presets(vec![PresetRow::item("proof".to_owned(), "Proof", 0)], None, Vec::new());
+    assert!(dialog.set_json_field(&ctx, "preset", serde_json::json!("missing")).is_err());
+    dialog.set_json_field(&ctx, "preset", serde_json::json!("proof")).expect("a listed preset applies");
+    assert_eq!(dialog.take_preset_events(), vec![NamedPresetEvent::Apply("proof".to_owned())]);
+    dialog.set_presets(vec![PresetRow::item("saved-7".to_owned(), "Proofs", 0)], None, Vec::new());
+    dialog.set_json_field(&ctx, "preset", serde_json::json!("proofs")).expect("a preset named in another case applies");
+    assert_eq!(dialog.take_preset_events(), vec![NamedPresetEvent::Apply("saved-7".to_owned())], "by its row's key");
+}
+
+/// The sections layout of a hosted print dialog shows its list of sections beside the shown section, and a click on
+/// another section shows that one. The list sat inside the dialog's scrolling body, where a collection may not.
+#[trial]
+fn the_sections_layout_shows_the_picked_section() {
+    use craft_print::ui::{PrintLayout, PrintSection};
+    use craft_ui::patterns::form_dialogs::{Param, ParamKind};
+    let options = || vec![("all".to_owned(), "All".into()), ("range".to_owned(), "Range".into())];
+    let general = vec![
+        Param::new("copies", "Copies", ParamKind::int(Some(1), Some(99), 1)),
+        Param::new("artboards", "Artboards", ParamKind::radio(options(), None)),
+        Param::section("Media"),
+        Param::new("size", "Size", ParamKind::choice(options(), None)),
+    ];
+    let sections = vec![
+        PrintSection::new("General", general),
+        PrintSection::new("Printing Marks", vec![Param::number("markWeight", "Mark weight", 0.25, 0.25, 2)]),
+    ];
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let header = vec![Param::number("pagesPerSheet", "Pages per sheet", 1.0, 1.0, 0)];
+    host.borrow_mut().open(HostedPrint::new(State::default(), DialogFields::default(), sections).layout(PrintLayout::Sections).header(header));
+    let shared = host.clone();
+    let mut fixture = Fixture::new(move |ui| shared.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 600.0)).settle();
+    assert!(fixture.by_label("Copies").is_some(), "the first section shows");
+    let marks = fixture.by_label("Printing Marks").expect("the list names the other section");
+    fixture.click(&marks).settle();
+    assert!(fixture.by_label("Mark weight").is_some(), "the picked section shows");
+    assert!(fixture.by_label("Copies").is_none(), "in place of the first");
+}
+
+/// In the sections layout the printer panel shows only the printer, so the app's own Copies row is the one automation
+/// sets and lists; the dialog's hidden copies setting keeps its value.
+#[trial]
+fn a_section_row_takes_a_printer_setting_set_by_automation_in_the_sections_layout() {
+    use craft_print::ui::{PrintLayout, PrintSection};
+    use craft_ui::patterns::form_dialogs::{Param, ParamKind};
+    let ctx = egui::Context::default();
+    let general = vec![Param::new("copies", "Copies", ParamKind::int(Some(1), Some(99), 1))];
+    let mut dialog =
+        HostedPrint::new(State::default(), DialogFields::default(), vec![PrintSection::new("General", general)]).layout(PrintLayout::Sections);
+    dialog.set_json_field(&ctx, "copies", serde_json::json!(4)).expect("the row takes the copies");
+    assert_eq!(dialog.fields().number("copies"), Some(4.0), "the app's row holds the value");
+    let listed = dialog.json_fields().expect("a listing");
+    assert_eq!(listed["copies"].as_f64(), Some(4.0), "the listing reports the row: {listed}");
 }
 
 /// The listing carries the preview pager's sheet and count, and the keys of the note rows the values show: a note
@@ -305,7 +426,8 @@ fn a_sheet_of_pages_places_each_page_inside_the_paper() {
         let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
         let pages = vec![SheetPage::new(turned, "1").picture(texture, whole), SheetPage::new(overhanging, "2")];
         let sheet = PrintSheet::pages(LETTER, pages, "Letter, 2 pages".into());
-        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+        let _ =
+            PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).layout(PrintLayout::Document).show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture.settle();
@@ -357,7 +479,8 @@ fn the_paper_of_a_sheet_is_white_in_a_dark_theme() {
     let page = |at: f32| SheetPage::new([pos2(at, 100.0), pos2(at + 200.0, 100.0), pos2(at + 200.0, 400.0), pos2(at, 400.0)], "1");
     let mut fixture = Fixture::new(move |ui| {
         let sheet = PrintSheet::pages(LETTER, vec![page(50.0), page(300.0)], "Letter".into());
-        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+        let _ =
+            PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).layout(PrintLayout::Document).show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture.theme(Mode::Dark, Contrast::Standard).settle();
@@ -383,7 +506,8 @@ fn a_message_in_place_of_the_sheet_is_in_the_access_tree() {
     let printers = vec![Printer::new("Office")];
     let mut fixture = Fixture::new(move |ui| {
         let sheet = PrintSheet::message(LETTER, WHY.into(), "No pages".into());
-        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+        let _ =
+            PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).layout(PrintLayout::Document).show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture.settle();
@@ -457,7 +581,8 @@ fn page_tint(settings: Settings) -> Color32 {
         let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
         let page = SheetPage::new([pos2(72.0, 72.0), pos2(300.0, 72.0), pos2(300.0, 400.0), pos2(72.0, 400.0)], "1").picture(texture, whole);
         let sheet = PrintSheet::pages(LETTER, vec![page], "Letter".into());
-        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+        let _ =
+            PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).layout(PrintLayout::Document).show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture.settle();
@@ -494,7 +619,8 @@ fn document_dialog() -> Fixture {
     let mut fixture = Fixture::new(move |ui| {
         let page = SheetPage::new([pos2(72.0, 72.0), pos2(300.0, 72.0), pos2(300.0, 400.0), pos2(72.0, 400.0)], "1");
         let sheet = PrintSheet::pages(LETTER, vec![page], "Letter".into());
-        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet)
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields))
+            .sheet(&sheet)
             .layout(PrintLayout::Document)
             .sections(&sections)
             .ready(true)
@@ -531,7 +657,8 @@ fn the_paper_stands_inset_in_the_preview_well() {
     let mut fixture = Fixture::new(move |ui| {
         let page = SheetPage::new([pos2(50.0, 100.0), pos2(250.0, 100.0), pos2(250.0, 400.0), pos2(50.0, 400.0)], "1");
         let sheet = PrintSheet::pages(LETTER, vec![page], "Letter".into());
-        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+        let _ =
+            PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).layout(PrintLayout::Document).show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture.theme(craft_theme::Mode::Dark, craft_theme::Contrast::Standard).settle();

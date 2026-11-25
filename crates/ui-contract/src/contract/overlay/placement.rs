@@ -54,8 +54,12 @@ pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Op
 
 /// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: a menu's layer (its key class
 /// is [`OwnerClass::Menu`]) hung at the pointer, at a point, or at the rect a context request named. No other overlay
-/// covers its anchor: a tooltip or a popover at the pointer stays off it. `stored` is the opening the layer decided.
+/// covers its anchor: a tooltip or a popover at the pointer stays off it, unless its place asks for it
+/// ([`Place::covering_anchor`]). `stored` is the opening the layer decided.
 pub(super) fn layer_covers_anchor(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> bool {
+    if matches!(overlay.place, Place::Anchored { covers: true, .. }) {
+        return true;
+    }
     if overlay.keys != OwnerClass::Menu {
         return false;
     }
@@ -88,6 +92,13 @@ fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PopupRegion(pub Option<Rect>);
+
+impl PopupRegion {
+    /// Popups contained in `region`; `None` lets them take the whole safe rect.
+    pub fn new(region: Option<Rect>) -> Self {
+        PopupRegion(region)
+    }
+}
 
 impl crate::runtime::env::EnvValue for PopupRegion {
     fn root() -> Self {
@@ -249,6 +260,8 @@ pub(super) struct Placed {
     pub(super) at: Pos2,
     /// The side of the anchor an anchored layer took by its size; `None` while its size is unknown.
     pub(super) side: Option<Side>,
+    /// The side the layer asked for when it took `side`.
+    pub(super) asked: Option<Side>,
     /// The most the body may take from `at`: what the viewport leaves, within the fit's cap.
     pub(super) room: egui::Vec2,
 }
@@ -256,7 +269,7 @@ pub(super) struct Placed {
 /// The pure placement of the anchored forms; the centre or the given position for floats, kept inside the safe rect
 /// within the overlay's bounds (`within_bounds`) by the keep rule moves follow. An anchored layer takes its side by its
 /// size: below its anchor, above when the room below is too short and the room above is larger, and keeps that side
-/// while it stays open and the content fits there or that side is the larger. A layer that `covers` its anchor
+/// while it stays open, asks for the same side, and the content fits there or that side is the larger. A layer that `covers` its anchor
 /// ([`layer_covers_anchor`]) and fits neither side keeps its height within the bounds and slides over the anchor.
 /// Before its size is known (a popup's first, hidden pass) it takes no side and its body is offered `content_room`, so
 /// the size it measures decides the side.
@@ -264,34 +277,37 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, covers: bool, size: Op
     let rtl = layer.env.direction.is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
-        Place::Anchored { side, align, flips_across, .. } => {
+        Place::Anchored { side, align, flips_across, offset, clear, .. } => {
             let kept = layer_bounds(layer, bounds);
             let Some(size) = size else {
                 let room = content_room(layer.overlay, covers, bounds, kept, anchor, rtl);
-                return Placed { at: anchor.left_bottom().clamp(kept.min, kept.max), side: None, room };
+                return Placed { at: anchor.left_bottom().clamp(kept.min, kept.max), side: None, asked: None, room };
             };
-            // The side taken in an earlier pass is the preferred one while the layer stays open: it stays while the
-            // content fits there or that side is the larger, so a size measured later (a body that grew) still flips it.
-            let taken = overlay::entry(ctx, layer.id).and_then(|entry| entry.side).unwrap_or(*side);
+            // The side taken in an earlier pass is the preferred one while the layer stays open and asks for the same side:
+            // it stays while the content fits there or that side is the larger, so a size measured later (a body that
+            // grew) still flips it. A host that asks for another side gets that side's placement.
+            let taken = overlay::entry(ctx, layer.id).filter(|entry| entry.asked == Some(*side)).and_then(|entry| entry.side).unwrap_or(*side);
             let request = PlaceRequest::new(anchor, size, kept)
                 .side(taken)
                 .align(*align)
                 .rtl(rtl)
                 .min_width(layer.overlay.min_width)
                 .flips_across(*flips_across)
-                .covers_anchor(covers);
+                .covers_anchor(covers)
+                .offset(*offset)
+                .clear(*clear);
             let placed = craft_behavior::overlay::place(&request);
             // The room is what the side the layer took leaves for a body as large as the cap, or for a layer that covers
             // its anchor, what the bounds leave.
             let room = craft_behavior::overlay::place(&request.kept(Some(placed.side)).size(cap)).rect.size();
-            Placed { at: placed.rect.min, side: Some(placed.side), room }
+            Placed { at: placed.rect.min, side: Some(placed.side), asked: Some(*side), room }
         }
         Place::Float(float) => {
             let kept = within_bounds(layer.overlay, bounds);
             let size = size.unwrap_or(egui::Vec2::ZERO);
             let min = float.top_left(size).unwrap_or_else(|| kept.center() - size / 2.0);
             let at = crate::contract::body::keep_inside(Rect::from_min_size(min, size), kept).min;
-            Placed { at, side: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
+            Placed { at, side: None, asked: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
         }
     }
 }

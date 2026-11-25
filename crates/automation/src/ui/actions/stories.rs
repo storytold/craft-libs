@@ -5,7 +5,7 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::mock::{FakeActionsHost, action, list_of, sample_list, step};
-use super::{ActionSelection, ActionsPanel, ActionsPanelState, ShortcutChoice};
+use super::{ActionSelection, ActionsPanel, ActionsPanelState, ShortcutChoice, StepCells};
 use crate::actions::{ActionColor, ActionList};
 
 /// The sample list with Sharpen open and selected, one step off, and a shortcut on it.
@@ -40,6 +40,33 @@ fn actions_panel_button_mode(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput 
     }
     let mut state = ActionsPanelState::default();
     state.settings.button_mode = true;
+    ActionsPanel::new(&mut state, &list).host(&FakeActionsHost::default()).show(ui).into()
+}
+
+/// The include variant: step rows without the dialog cell, and set rows with an include cell, one of them mixed.
+#[story(ActionsPanel<'static>, covers = [], drive = Drive::Never)]
+fn actions_panel_include_cells(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
+    let mut blur = action("Blur", Some("Effects"), &["blur", "mask"]);
+    blur.disabled.insert(1);
+    let list = list_of(vec![blur, action("Glow", Some("Effects"), &["glow"]), action("Levels", Some("Basics"), &["levels", "curves"])]);
+    let mut state = ActionsPanelState::default();
+    state.expanded.insert("Blur".to_owned());
+    ActionsPanel::new(&mut state, &list).host(&FakeActionsHost::default()).step_cells(StepCells::Include).show(ui).into()
+}
+
+/// A range of three sets selected, as a Shift-click from the first to the last leaves it.
+#[story(ActionsPanel<'static>, covers = [], drive = Drive::Never)]
+fn actions_panel_set_range(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
+    let list = list_of(vec![
+        action("Blur", Some("Effects"), &["blur"]),
+        action("Levels", Some("Basics"), &["levels"]),
+        action("Glow", Some("Finish"), &["glow"]),
+    ]);
+    let mut state = ActionsPanelState {
+        selected: Some(ActionSelection::Set("Finish".to_owned())),
+        selected_sets: ["Effects", "Basics", "Finish"].map(str::to_owned).to_vec(),
+        ..ActionsPanelState::default()
+    };
     ActionsPanel::new(&mut state, &list).host(&FakeActionsHost::default()).show(ui).into()
 }
 

@@ -16,8 +16,8 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::pointer;
 use crate::runtime::pointer::PassPointer;
 use craft_behavior::{
-    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerSample, PressMachine, PressPhase, PressPick, PressState, Sense,
-    Shape, Winner,
+    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerButton, PointerSample, PressMachine, PressPhase, PressPick,
+    PressStart, PressState, Sense, Shape, Winner,
 };
 use craft_keymap::Mods;
 use craft_theme::Flags;
@@ -173,6 +173,7 @@ pub(crate) struct MemberDecl {
     pub rect: Rect,
     pub sense: Sense,
     pub parts: SmallVec<[PartDecl; 4]>,
+    pub enabled: bool,
     /// The shapes lie in the body layer's space; `join` sets it.
     pub local: bool,
     /// The stack position of the member's `over` parts: just above the member until its body has run, then above
@@ -182,8 +183,8 @@ pub(crate) struct MemberDecl {
 
 impl MemberDecl {
     /// A member `id` over `rect` sensing `sense`, with `parts`.
-    pub(crate) fn new(id: Id, rect: Rect, sense: Sense, parts: &[PartDecl]) -> Self {
-        MemberDecl { id, rect, sense, parts: parts.iter().cloned().collect(), local: false, over_at: 0 }
+    pub(crate) fn new(id: Id, rect: Rect, sense: Sense, parts: &[PartDecl], enabled: bool) -> Self {
+        MemberDecl { id, rect, sense, parts: parts.iter().cloned().collect(), enabled, local: false, over_at: 0 }
     }
 }
 
@@ -243,6 +244,8 @@ impl Hovered {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Outcome {
     pass: u64,
+    /// The layer in which this outcome was actually resolved, even if an early result is later reused.
+    layer: Option<Layer>,
     pub hover: Hovered,
     /// A shape of the arena lies under the pointer, on top or not.
     pub contains: bool,
@@ -286,6 +289,9 @@ struct ArenaState {
     outcome: Option<Outcome>,
     /// The host asked to end the open press (`cancel_press_of`): the arena's next lifecycle run ends it.
     host_cancel: bool,
+    /// The part the open press was handed to (`hand_over_press`) and the pass that handed it: it reads the press in
+    /// that pass, though it was first declared then.
+    handed: Option<(PartRef, u64)>,
 }
 
 #[derive(Default)]
@@ -423,6 +429,59 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
             }
         }
     });
+}
+
+/// Gives the held primary press to the part `part` of the root `owner`, as a drag from `origin`: the move band of a
+/// window floated from a torn-off group carries on the press that tore it off (`Overlay::continue_move`). The arena
+/// that holds the press lets it go with no phase; when no arena holds a press, a plain egui widget holds the primary
+/// button (an app's own popup title), and the owner takes the press from egui's pointer state. The owner's next
+/// lifecycle run reports `DragStart`, and the runs after it the press's own `Drag`, `Release` or `Cancel` from their
+/// pass's input, so the handover turns no held button into an event. Nothing happens when the primary button is up,
+/// when another arena holds a press it cannot hand over, or when `owner` holds the press already, and so a rerun of
+/// the pass that asks again takes nothing. Call it before the owner's step 8 (in its parts step) for the press to show in
+/// the same pass.
+pub(crate) fn hand_over_press(ctx: &Context, owner: Id, part: PartRef, origin: Pos2) {
+    let read = PassRead::of(ctx);
+    let held = PerViewport::<Arenas>::with(ctx, read.viewport, |arenas| {
+        if !arenas.by_root.iter().any(|(root, state)| *root != owner && state.machine.button().is_some()) {
+            return Held::ByNoArena;
+        }
+        let Some((_, state)) = arenas
+            .by_root
+            .iter_mut()
+            .find(|(root, state)| **root != owner && state.machine.button() == Some(PointerButton::Primary) && !state.machine.release_held())
+        else {
+            return Held::Elsewhere;
+        };
+        let Some(start) = state.machine.start() else { return Held::Elsewhere };
+        state.machine = PressMachine::default();
+        state.host_cancel = false;
+        Held::Taken(start.time)
+    });
+    let time = match held {
+        Held::Taken(time) => time,
+        // An egui widget holds the press, or no button is down.
+        Held::ByNoArena => match ctx.input(|input| input.pointer.primary_down().then(|| input.pointer.press_start_time()).flatten()) {
+            Some(time) => time,
+            None => return,
+        },
+        Held::Elsewhere => return,
+    };
+    let target = Hit { owner, part: Some(part), sense: Sense::DRAG, local: false };
+    with_arena_in(ctx, read.viewport, ArenaId::new(owner), read.pass_nr, |state| {
+        state.machine.take_over(target, Sense::DRAG, PressStart::new(origin, PointerButton::Primary, time, 1));
+        state.handed = Some((part, read.pass_nr));
+    });
+}
+
+/// Where `hand_over_press` found the held press.
+enum Held {
+    /// An arena held the primary press and let it go; the press began at this time.
+    Taken(f64),
+    /// No arena but the owner's holds a press.
+    ByNoArena,
+    /// Another arena holds a press it cannot hand over: of another button, or released and waiting for its pass.
+    Elsewhere,
 }
 
 /// Records the transformed body's egui layer.
@@ -876,7 +935,7 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
         rotate(state, pass_nr);
         for spec in specs {
-            let decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
+            let decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts, spec.enabled);
             if recording {
                 recorded.push(decl.clone());
             }
@@ -903,6 +962,25 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
             }
         })
         .collect()
+}
+
+/// The `Response` of the arena member `id` in the running pass, as `sense_members` gives it: from its arena's latest
+/// registration of it, a replay's included, and the arena's outcome of the pass. `None` when no arena of the viewport
+/// holds `id`.
+pub(crate) fn member_response(ui: &Ui, id: Id) -> Option<Response> {
+    let ctx = ui.ctx();
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let pointer_pos = pointer::with_frame(ctx, |_, hover| hover);
+    let (decl, outcome) = PerViewport::<Arenas>::with(ctx, viewport, |arenas| {
+        arenas.by_root.values().find_map(|state| {
+            let find = |members: &[MemberDecl]| members.iter().find(|member| member.id == id).cloned();
+            // Until the arena's root runs in this pass, `members` holds last pass's registrations.
+            let decl = find(&state.members).or_else(|| (state.pass == pass_nr).then(|| find(&state.previous)).flatten())?;
+            Some((decl, state.outcome.filter(|outcome| outcome.pass == pass_nr).unwrap_or_default()))
+        })
+    })?;
+    Some(response::member(ui, id, decl.rect, decl.enabled, member_view(&outcome, id, decl.local, pointer_pos)))
 }
 
 fn member_view(outcome: &Outcome, id: Id, local: bool, pointer_pos: Option<Pos2>) -> MemberView {
@@ -1034,8 +1112,18 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             None if others_press => Hovered::default(),
             None => under,
         };
-        let outcome =
-            Outcome { pass: pass_nr, hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, aside, xf };
+        let outcome = Outcome {
+            pass: pass_nr,
+            layer: Some(layer),
+            hover,
+            contains,
+            target: step.target,
+            phase: step.phase,
+            dragging,
+            activated: step.activated,
+            aside,
+            xf,
+        };
         state.outcome = Some(outcome);
         outcome
     });
@@ -1075,8 +1163,8 @@ fn sweep_undrawn(ctx: &Context) {
     }
 }
 
-fn any_press_open(ctx: &Context) -> bool {
-    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
+fn any_press_open(ctx: &Context, viewport: ViewportId) -> bool {
+    PerViewport::<Arenas>::with(ctx, viewport, |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
 }
 
 /// The begin hook's note of the parts holding a press as the pass starts, which `pointer::active_part` reads for the
@@ -1086,6 +1174,25 @@ fn note_pressed_parts(ctx: &Context) {
         arenas.by_root.values().filter_map(|state| state.machine.target().and_then(|hit| hit.part.map(|part| (hit.owner, part)))).collect()
     });
     crate::runtime::pointer::set_pressed_parts(ctx, parts);
+}
+
+/// Whether an actually captured press in exactly `layer` already ended by Escape in this pass. This observes
+/// the arena's existing outcome after its body ran; it neither delivers a key nor changes the press machine.
+pub(crate) fn escape_cancelled_in_layer(ctx: &Context, layer: Layer) -> bool {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Arenas>::with(ctx, viewport, |arenas| {
+        arenas.by_root.values().any(|state| {
+            state.pass == pass_nr
+                && state.machine.target().is_none()
+                && state.outcome.is_some_and(|outcome| {
+                    outcome.pass == pass_nr
+                        && outcome.layer == Some(layer)
+                        && outcome.target.is_some()
+                        && matches!(outcome.phase, Some(PressPhase::Cancel { reason: craft_behavior::PressCancel::Escape, .. }))
+                })
+        })
+    })
 }
 
 /// The arena's outcome of the running pass, idle when the root has not run yet.
@@ -1108,7 +1215,9 @@ fn known_in(state: &ArenaState, owner: Id) -> Vec<(PartKey, Option<u64>)> {
     } else {
         state.previous.iter().find(|member| member.id == owner).map_or(&[], |member| member.parts.as_slice())
     };
-    parts.iter().map(|part| (part.key, part.index)).collect()
+    let handed =
+        state.handed.filter(|(_, pass)| *pass == state.pass).map(|(part, _)| part).filter(|_| state.root.is_some_and(|root| root.id == owner));
+    parts.iter().map(|part| (part.key, part.index)).chain(handed.map(|part| (part.key, part.index))).collect()
 }
 
 /// The part results of one owner: a part reads the press phase when it is the press winner, `Hover` when it is

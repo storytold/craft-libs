@@ -12,6 +12,9 @@ use serde_json::{Value, json};
 
 use crate::protocol::Params;
 
+/// The most `fields` one `ui.dialog.set` call takes.
+pub const MAX_DIALOG_FIELDS: usize = 256;
+
 /// The open dialogs, the top one last: `{id, parent, key, fields}`, `null` for a missing parent, key or fields. Ids
 /// are 64-bit hashes, so they are listed as decimal strings, which every JSON reader keeps exact.
 pub fn inspect(host: &DialogHost) -> Value {
@@ -30,14 +33,15 @@ pub fn inspect(host: &DialogHost) -> Value {
 
 /// Runs a `ui.dialog.*` method on `host`; `None` when `method` is not one of them.
 ///
-/// - `ui.dialog.set {dialog, field, value}` sets one field ([`DialogHost::set_json_field`]).
+/// - `ui.dialog.set {dialog, field, value}` sets one field ([`DialogHost::set_json_field`]); `{dialog, fields: [{field,
+///   value?}]}` sets a list of at most [`MAX_DIALOG_FIELDS`], all or none ([`DialogHost::set_json_fields`]).
 /// - `ui.dialog.confirm {dialog, choice?}` answers OK, as the default button would, after setting the `choice` field
 ///   when one is given (which button of a prompt). A dialog that holds its OK files it for the app, which answers it.
 /// - `ui.dialog.cancel {dialog}` closes the dialog as Escape would: a standard prompt with a button for its Escape
 ///   answer gives that answer, with its tag; any other dialog closes with its children with Cancel.
 pub fn dialog_method(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value) -> Option<Result<Value, String>> {
     let fields: &[&str] = match method {
-        "ui.dialog.set" => &["dialog", "field", "value"],
+        "ui.dialog.set" => &["dialog", "field", "value", "fields"],
         "ui.dialog.confirm" => &["dialog", "choice"],
         "ui.dialog.cancel" => &["dialog"],
         _ => return None,
@@ -50,10 +54,18 @@ fn run(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value, field
     let read = Params(&params);
     let id = dialog_id(host, &params)?;
     match method {
-        "ui.dialog.set" => {
-            let field = read.str_field("field")?.ok_or("missing `field`")?;
-            host.set_json_field(ctx, id, field, params.get("value").cloned().unwrap_or(Value::Null))?;
-        }
+        "ui.dialog.set" => match params.get("fields") {
+            Some(list) => {
+                if params.get("field").is_some() || params.get("value").is_some() {
+                    return Err("`fields` takes the place of `field` and `value`".to_owned());
+                }
+                host.set_json_fields(ctx, id, &field_list(list)?)?;
+            }
+            None => {
+                let field = read.str_field("field")?.ok_or("missing `field`")?;
+                host.set_json_field(ctx, id, field, params.get("value").cloned().unwrap_or(Value::Null))?;
+            }
+        },
         "ui.dialog.confirm" => {
             if let Some(choice) = params.get("choice") {
                 host.set_json_field(ctx, id, "choice", choice.clone())?;
@@ -79,6 +91,21 @@ fn run(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value, field
         }
     }
     Ok(Value::Null)
+}
+
+/// The `(field, value)` pairs of a `fields` list, checked whole before anything is set; a missing `value` is `null`.
+fn field_list(list: &Value) -> Result<Vec<(String, Value)>, String> {
+    let items = list.as_array().ok_or("`fields` is not a list")?;
+    if items.len() > MAX_DIALOG_FIELDS {
+        return Err(format!("`fields` holds {} items; at most {MAX_DIALOG_FIELDS}", items.len()));
+    }
+    items
+        .iter()
+        .map(|item| {
+            let field = item.get("field").and_then(Value::as_str).ok_or("an item of `fields` has no string `field`")?;
+            Ok((field.to_owned(), item.get("value").cloned().unwrap_or(Value::Null)))
+        })
+        .collect()
 }
 
 /// The open dialog `params.dialog` names: the id `inspect` lists, as a decimal string or a number, or `"top"` for the

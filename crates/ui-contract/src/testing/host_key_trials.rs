@@ -1,15 +1,18 @@
 //! Trials of the keys and presses a host's own egui widgets keep while the runtime is installed on the whole window.
 
 use crate::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
-use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope, TypingRule};
+use crate::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, QuitCommand, Scope, TypingRule,
+};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::{Env, RootEnv};
 use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
+use crate::runtime::ime;
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
-use crate::testing::focus::{Stop, egui_focused, named_id, pop_scope, push_scope, register_stop, widget};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::sensing::{self, ProbeRoot};
@@ -44,8 +47,9 @@ fn seen(host: &RefCell<Host>) -> (Vec<Key>, usize) {
     (std::mem::take(&mut host.reached), std::mem::take(&mut host.cancels))
 }
 
+/// A press of `key` and its release, in one frame: a second press with no release between is a repeat.
 fn press_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key) {
-    frames.frame(vec![key_press(key, Modifiers::NONE)], &mut *show);
+    frames.frame(vec![key_press(key, Modifiers::NONE), key_release(key, Modifiers::NONE)], &mut *show);
 }
 
 #[trial]
@@ -91,7 +95,7 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
         register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
         host.rect = fixture::host_field(ui, field(), &mut host.text);
         if std::mem::take(&mut host.start_drag) {
-            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), None, DragPreview::None);
+            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), Vec::new(), DragPreview::None);
         }
         if with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
             host.cancels += 1;
@@ -169,8 +173,216 @@ fn a_focused_egui_field_takes_the_ime() {
     assert_eq!(host.borrow().text, "世", "the commit reaches the field");
 }
 
+fn host_editor_id() -> Id {
+    named_id("host editor")
+}
+
+/// A window with the app's own IME editor (`fixture::host_ime_editor`), and the text it holds.
+fn host_editor() -> (Rc<RefCell<String>>, impl FnMut(&mut Ui)) {
+    let text = Rc::new(RefCell::new(String::new()));
+    let held = Rc::clone(&text);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    (text, move |ui: &mut Ui| fixture::host_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut()))
+}
+
+/// A press during the app's own editor's composition interrupts it, in the editor's own IME context, and fences the
+/// composition's late deletion and commit, which the one-press rule holds for the next frame, until the reset
+/// completes; the events after the completion reach the editor.
 #[trial]
-fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
+fn a_press_during_an_app_editor_s_composition_fences_its_late_ime_events() {
+    let (editor, mut show) = host_editor();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("ab".to_owned()))], &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "z".to_owned(), active_range_chars: None })], &mut show);
+    let at = Pos2::new(150.0, 115.0);
+    let late = vec![
+        moved(at),
+        press(at),
+        Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+        Event::Ime(ImeEvent::Commit("Q".to_owned())),
+    ];
+    frames.frame(late, &mut show);
+    let ime = frames.ime();
+    assert!(ime.is_some(), "the editor writes the pass's IME output");
+    let Some(ime) = ime else { return };
+    assert!(ime.owner == host_editor_id() && ime.interrupt, "the press interrupts the editor's composition in its own context");
+    assert!(ime.reset.is_some(), "the interrupt asks for a reset");
+    let Some(reset) = ime.reset else { return };
+    frames.frame(vec![release(at)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(*editor.borrow(), "ab", "the composition's late deletion and commit never reach the editor");
+    frames.frame(vec![Event::ImeResetCompleted { request_id: reset }, Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(*editor.borrow(), "abX", "the commit after the completion reaches the editor");
+}
+
+/// The app's own resetting editor at its rect, the show closure that draws it, and the frames after two idle ones,
+/// a commit of "ab" and a preedit of "z": the editor composes. `in_output`: the editor writes its reset request into
+/// its IME output too, instead of leaving it to egui as EffectCraft's editor does.
+fn composing_resetting_editor(in_output: bool) -> (Rc<RefCell<fixture::ResettingEditor>>, impl FnMut(&mut Ui), Frames) {
+    let editor = Rc::new(RefCell::new(fixture::ResettingEditor { in_output, ..Default::default() }));
+    let held = Rc::clone(&editor);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    let mut show = move |ui: &mut Ui| fixture::host_resetting_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut());
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("ab".to_owned()))], &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "z".to_owned(), active_range_chars: None })], &mut show);
+    (editor, show, frames)
+}
+
+/// The press at `at` with the composition's late deletion and commit after it, in one frame.
+fn press_with_late_ime(at: Pos2) -> Vec<Event> {
+    vec![
+        moved(at),
+        press(at),
+        Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }),
+        Event::Ime(ImeEvent::Commit("Q".to_owned())),
+    ]
+}
+
+/// An app editor that asks for its own reset at the press that interrupts its composition keeps that request: the
+/// platform is asked to answer the app's id, the late events stay fenced, and the completion reaches the editor, which
+/// takes the events after it and composes again. The editor asks through egui alone, or writes the request into its
+/// output too.
+#[trial]
+fn an_app_editor_s_own_reset_at_the_press_reaches_it_and_it_composes_again() {
+    for in_output in [false, true] {
+        let (editor, mut show, mut frames) = composing_resetting_editor(in_output);
+        let at = Pos2::new(150.0, 115.0);
+        frames.frame(press_with_late_ime(at), &mut show);
+        let own = editor.borrow().reset;
+        assert!(own.is_some(), "the editor asked for its own reset at the press");
+        let reset = frames.ime().and_then(|ime| ime.interrupt.then_some(ime.reset).flatten());
+        assert_eq!(reset, own, "the interrupt asks the platform to answer the editor's own request (in_output {in_output})");
+        let Some(reset) = reset else { return };
+        frames.frame(vec![release(at)], &mut show);
+        frames.frame(Vec::new(), &mut show);
+        assert_eq!(editor.borrow().text, "ab", "the composition's late deletion and commit never reach the editor");
+        frames.frame(vec![Event::ImeResetCompleted { request_id: reset }, Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+        assert_eq!(editor.borrow().reset, None, "the completion of its own request reaches the editor");
+        assert_eq!(editor.borrow().text, "abX", "the commit after it reaches the editor");
+        frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "y".to_owned(), active_range_chars: None })], &mut show);
+        assert!(editor.borrow().composing, "the editor composes again");
+    }
+}
+
+/// A press outside the app's editor fences its composition with the framework's own reset request; a reset the app
+/// asks for in a later pass becomes the one the fence waits for. Its completion ends the fence, the commit after it
+/// reaches the editor, and the framework's request is never answered.
+#[trial]
+fn an_app_editor_s_later_reset_ends_the_fence() {
+    let (editor, mut show, mut frames) = composing_resetting_editor(false);
+    let outside = Pos2::new(500.0, 400.0);
+    frames.frame(press_with_late_ime(outside), &mut show);
+    let fence = frames.ime().and_then(|ime| ime.interrupt.then_some(ime.reset).flatten());
+    assert!(fence.is_some() && editor.borrow().reset.is_none(), "the framework fences with its own request; the editor asks nothing");
+    frames.frame(vec![release(outside)], &mut show);
+    editor.borrow_mut().ask = true;
+    frames.frame(Vec::new(), &mut show);
+    let later = editor.borrow().reset;
+    assert!(later.is_some() && later != fence, "the editor asks for its own reset later");
+    assert_eq!(frames.ime().and_then(|ime| ime.reset), later, "the pass publishes the editor's request");
+    let Some(later) = later else { return };
+    frames.frame(
+        vec![
+            Event::Ime(ImeEvent::Commit("Q".to_owned())),
+            Event::ImeResetCompleted { request_id: later },
+            Event::Ime(ImeEvent::Commit("X".to_owned())),
+        ],
+        &mut show,
+    );
+    assert_eq!(editor.borrow().reset, None, "the completion of its later request reaches the editor");
+    assert_eq!(editor.borrow().text, "abX", "the late commit is fenced and the commit after the completion reaches the editor");
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "y".to_owned(), active_range_chars: None })], &mut show);
+    assert!(editor.borrow().composing, "the editor composes again");
+}
+
+/// A framework text field of `id`, as a text component's part draws it: a text stop that takes the IME edits meant for
+/// it and notes its caret.
+fn framework_field(ui: &mut Ui, id: Id) {
+    let rect = widget(ui, id);
+    register_stop(ui.ctx(), Stop::new(id, KeyUse::of(Input::Text)).text());
+    let _ = ime::take(ui.ctx(), id, false);
+    ime::note_caret(ui.ctx(), id, rect, rect, false);
+}
+
+/// The framework field of `framework_field` and the app's resetting editor beside it at its rect, the show closure that
+/// draws both, and the frames after the field took the focus and composed "k".
+fn framework_field_composing_beside_an_app_editor() -> (Id, Rect, Rc<RefCell<fixture::ResettingEditor>>, impl FnMut(&mut Ui), Frames) {
+    let editor = Rc::new(RefCell::new(fixture::ResettingEditor::default()));
+    let held = Rc::clone(&editor);
+    let rect = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 30.0));
+    let framework = named_id("framework field");
+    let mut show = move |ui: &mut Ui| {
+        framework_field(ui, framework);
+        fixture::host_resetting_ime_editor(ui, host_editor_id(), rect, &mut held.borrow_mut());
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(framework));
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "k".to_owned(), active_range_chars: None })], &mut show);
+    assert_eq!(frames.ime().map(|ime| ime.owner), Some(framework), "the framework field composes");
+    (framework, rect, editor, show, frames)
+}
+
+/// A press on the app's editor takes the focus from a composing framework field, and the editor asks for its own reset
+/// in the pass the field loses the IME, as EffectCraft's editor does when its caret moves after the press. The interrupt
+/// of the field's composition publishes the editor's request, so the platform's answer in the next frame reaches the
+/// editor, the field's late commit stays fenced until then, and the commit after it reaches the editor.
+#[trial]
+fn an_app_editor_s_reset_asked_as_it_takes_the_focus_from_a_composing_framework_field_completes() {
+    let (framework, rect, editor, mut show, mut frames) = framework_field_composing_beside_an_app_editor();
+    let at = rect.center();
+    frames.frame(vec![moved(at), press(at)], &mut show);
+    assert!(!frames.ime().is_some_and(|ime| ime.interrupt), "the field keeps the IME through the press pass");
+    editor.borrow_mut().ask = true;
+    frames.frame(vec![release(at)], &mut show);
+    let own = editor.borrow().reset;
+    assert!(own.is_some(), "the editor asked for its own reset");
+    let ime = frames.ime().cloned();
+    assert!(ime.as_ref().is_some_and(|ime| ime.owner == framework && ime.interrupt), "the pass interrupts the field's composition");
+    assert_eq!(ime.and_then(|ime| ime.reset), own, "the interrupt publishes the editor's request, not a new one");
+    let Some(own) = own else { return };
+    frames.frame(
+        vec![
+            Event::Ime(ImeEvent::Commit("Q".to_owned())),
+            Event::ImeResetCompleted { request_id: own },
+            Event::Ime(ImeEvent::Commit("X".to_owned())),
+        ],
+        &mut show,
+    );
+    assert_eq!(editor.borrow().reset, None, "the completion of its request reaches the editor");
+    assert_eq!(editor.borrow().text, "X", "the field's late commit is fenced and the commit after the completion reaches the editor");
+}
+
+/// The app's editor asks for its own reset at the press that takes the focus from a composing framework field, while
+/// the field still owns the IME. egui publishes that request on the field's output as an interrupt; the engine takes it
+/// as its interrupt of the field and fences on it. The field loses the IME in the next pass with no second interrupt,
+/// the platform's answer in that frame reaches the editor, the field's late commit stays fenced, and the editor takes
+/// the commits after it.
+#[trial]
+fn an_app_editor_s_reset_asked_at_the_press_on_it_while_a_framework_field_composes_completes() {
+    let (framework, rect, editor, mut show, mut frames) = framework_field_composing_beside_an_app_editor();
+    let at = rect.center();
+    editor.borrow_mut().ask = true;
+    frames.frame(vec![moved(at), press(at)], &mut show);
+    let own = editor.borrow().reset;
+    assert!(own.is_some(), "the editor asked for its own reset at the press");
+    let ime = frames.ime().cloned();
+    assert!(ime.as_ref().is_some_and(|ime| ime.owner == framework && ime.interrupt), "the request interrupts the field's composition");
+    assert_eq!(ime.and_then(|ime| ime.reset), own, "the field's output carries the editor's request");
+    let Some(own) = own else { return };
+    frames.frame(vec![release(at), Event::Ime(ImeEvent::Commit("Q".to_owned())), Event::ImeResetCompleted { request_id: own }], &mut show);
+    assert!(!frames.ime().is_some_and(|ime| ime.interrupt), "the field loses the IME without a second interrupt");
+    assert_eq!(editor.borrow().reset, None, "the completion of its request reaches the editor");
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("X".to_owned()))], &mut show);
+    assert_eq!(editor.borrow().text, "X", "the field's late commit is fenced and the editor takes the commit after the completion");
+}
+
+#[trial]
+fn a_focused_egui_field_keeps_escape_and_the_clipboard_and_tabs_on_through_the_one_order() {
     let (host, mut show) = host_window();
     let mut frames = Frames::new();
     frames.frame(Vec::new(), &mut show);
@@ -181,13 +393,48 @@ fn a_focused_egui_field_keeps_tab_escape_and_the_clipboard() {
     frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
     assert_eq!(host.borrow().text, "x", "the paste reaches the focused field");
     press_key(&mut frames, &mut show, Key::Tab);
-    assert_eq!(seen(&host), (vec![Key::Tab], 0), "the field's Tab is egui's");
+    assert_eq!(seen(&host), (Vec::new(), 0), "a single-line field's Tab is the framework's move, never egui's");
     frames.frame(Vec::new(), &mut show);
-    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's Tab moves focus on to the next widget");
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "the field is the last stop: Tab wraps to the framework's button");
     fixture::host_focus(&frames.ctx, field());
     frames.frame(Vec::new(), &mut show);
     press_key(&mut frames, &mut show, Key::Escape);
     assert_eq!(seen(&host), (vec![Key::Escape], 0), "the field's Escape is egui's, and no window Cancel");
+}
+
+/// The Enter presses in egui's input and the window Submits taken after one Enter, with the host's field focused or
+/// nothing focused.
+fn enter_with(field_focused: bool) -> (usize, usize) {
+    let counts = Rc::new(Cell::new((0usize, 0usize)));
+    let counted = Rc::clone(&counts);
+    let (_host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        let enters = ui.input(|input| input.events.iter().filter(|event| matches!(event, Event::Key { key: Key::Enter, pressed: true, .. })).count());
+        let submit = with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Submit));
+        let (seen, taken) = counted.get();
+        counted.set((seen + enters, taken + usize::from(submit)));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if field_focused {
+        fixture::host_focus(&frames.ctx, field());
+        frames.frame(Vec::new(), &mut show);
+        assert_eq!(egui_focused(&frames.ctx), Some(field()), "the host's field holds egui focus");
+    }
+    counts.set((0, 0));
+    press_key(&mut frames, &mut show, Key::Enter);
+    frames.idle(2, &mut show);
+    counts.get()
+}
+
+/// An app's own focused widget keeps the plain Enter as it keeps Escape: it reads it from egui once, and no window
+/// Submit comes of it, so an app that turns the window's Submit back into an Enter does not get two. With nothing
+/// focused the plain Enter is the window's Submit and stays in egui's input too.
+#[trial]
+fn a_focused_egui_field_keeps_enter_and_the_window_gets_no_submit() {
+    assert_eq!(enter_with(true), (1, 0), "the field reads one Enter and the window takes no Submit");
+    assert_eq!(enter_with(false), (1, 1), "with nothing focused, Enter is the window's Submit and stays in egui");
 }
 
 #[trial]
@@ -230,8 +477,10 @@ fn escape_cancels_a_framework_drag_while_an_egui_field_has_focus() {
     frames.frame(vec![release(inside)], &mut show);
 }
 
+/// The app's own buttons drawn after the window's framework button and host field: egui's arrows move focus among
+/// them, and Tab and Shift+Tab move it through the window's one order, which holds them.
 #[trial]
-fn arrows_and_tab_move_egui_focus_among_host_buttons() {
+fn arrows_move_egui_focus_among_host_buttons_and_tab_moves_through_the_one_order() {
     let (left, right) = (named_id("host left"), named_id("host right"));
     let (_host, mut base) = host_window();
     let mut show = move |ui: &mut Ui| {
@@ -248,7 +497,7 @@ fn arrows_and_tab_move_egui_focus_among_host_buttons() {
     press_key(&mut frames, &mut show, Key::ArrowLeft);
     assert_eq!(egui_focused(&frames.ctx), Some(left), "ArrowLeft moves it back");
     press_key(&mut frames, &mut show, Key::Tab);
-    assert_eq!(egui_focused(&frames.ctx), Some(right), "Tab moves egui focus on");
+    assert_eq!(egui_focused(&frames.ctx), Some(right), "Tab moves focus on to the next stop");
     frames.frame(vec![key_press(Key::Tab, Modifiers::SHIFT)], &mut show);
     frames.frame(Vec::new(), &mut show);
     assert_eq!(egui_focused(&frames.ctx), Some(left), "Shift+Tab moves it back");
@@ -259,6 +508,27 @@ fn arrows_and_tab_move_egui_focus_among_host_buttons() {
     press_key(&mut frames, &mut show, Key::ArrowRight);
     frames.frame(Vec::new(), &mut show);
     assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's arrows leave a framework stop's focus alone");
+}
+
+/// Arrows from an entry of the app's own popup list stay in the list: the app's button under the list, a Tab stop as
+/// every focusable widget of the app is, is no arrow target while the list covers it, though it lies nearer below the
+/// first entry than the second entry does.
+#[trial]
+fn arrows_in_an_app_popup_list_skip_the_widget_it_covers() {
+    let (button, popup, first, second) = (named_id("host tool"), named_id("host popup"), named_id("host entry 1"), named_id("host entry 2"));
+    let mut show = move |ui: &mut Ui| {
+        fixture::host_button(ui, button, Rect::from_min_max(Pos2::new(228.0, 31.0), Pos2::new(254.0, 57.0)));
+        areas::host_popup_list(ui.ctx(), popup, Pos2::new(201.0, 18.0), &[first, second]);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    fixture::host_focus(&frames.ctx, first);
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(first));
+    press_key(&mut frames, &mut show, Key::ArrowDown);
+    assert_eq!(egui_focused(&frames.ctx), Some(second), "ArrowDown goes to the list's next entry, not to the button under it");
+    press_key(&mut frames, &mut show, Key::ArrowUp);
+    assert_eq!(egui_focused(&frames.ctx), Some(first), "ArrowUp comes back to the first entry");
 }
 
 /// What the window shows before the app's own egui buttons.
@@ -313,15 +583,271 @@ fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
     (egui_focused(&frames.ctx), reached)
 }
 
+/// Tab is the framework's move whatever the window holds: from nothing focused it reaches the app's own widgets as its
+/// stops, and never egui's input. A component's widget that registered no stop is no stop of the app's own.
 #[trial]
-fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
+fn tab_from_nothing_reaches_the_app_s_widgets_as_the_framework_s_move() {
     let (first, last) = (Some(named_id("host first")), Some(named_id("host last")));
-    assert_eq!(tab_from_nothing(Before::Nothing, false), (first, true), "Tab gives egui focus to the first host button");
-    assert_eq!(tab_from_nothing(Before::Nothing, true), (last, true), "Shift+Tab to the last");
-    assert_eq!(tab_from_nothing(Before::Stop, false), (Some(named_id("button")), false), "with a framework stop, Tab is the framework's move");
-    assert_eq!(tab_from_nothing(Before::Unstopped, false), (None, true), "egui's Tab gives no focus to a component's widget without a stop");
-    let (focused, reached) = tab_from_nothing(Before::FocusedUnstopped, false);
-    assert!(focused.is_some() && focused != first && !reached, "egui focus on that widget is focus: the Tab is not egui's and moves nothing");
+    assert_eq!(tab_from_nothing(Before::Nothing, false), (first, false), "Tab focuses the first host button");
+    assert_eq!(tab_from_nothing(Before::Nothing, true), (last, false), "Shift+Tab the last");
+    assert_eq!(tab_from_nothing(Before::Stop, false), (Some(named_id("button")), false), "the framework stop drawn first comes first");
+    assert_eq!(tab_from_nothing(Before::Unstopped, false), (first, false), "a component's widget without a stop gets no focus");
+    assert_eq!(tab_from_nothing(Before::FocusedUnstopped, false), (first, false), "from that widget holding focus, Tab goes to the first stop");
+}
+
+/// A window with a framework stop, two of the app's own buttons and the app's canvas, which keeps Tab, unfocused: Tab
+/// from nothing is the framework's move over its one order, which holds the app's buttons beside the framework's
+/// stop. The unfocused canvas does not keep the Tab; it is the last entry, and once Tab focuses it, it keeps Tab.
+#[trial]
+fn tab_from_nothing_goes_through_the_framework_order_with_the_app_s_widgets() {
+    let (stop, first, second, canvas) = (named_id("button"), named_id("host first"), named_id("host second"), named_id("host canvas"));
+    let reached = Rc::new(Cell::new(false));
+    let seen_tab = Rc::clone(&reached);
+    let mut show = move |ui: &mut Ui| {
+        seen_tab.set(seen_tab.get() || key_reached(ui.ctx(), Key::Tab));
+        widget(ui, stop);
+        register_stop(ui.ctx(), Stop::new(stop, KeyUse::of(Input::Pointer)));
+        for (id, x) in [(first, 300.0), (second, 420.0)] {
+            fixture::host_button(ui, id, Rect::from_min_size(Pos2::new(x, 300.0), egui::vec2(80.0, 30.0)));
+        }
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_keep(KeepKeys::Tab));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let mut tab = |frames: &mut Frames| {
+        reached.set(false);
+        press_key(frames, &mut show, Key::Tab);
+        frames.frame(Vec::new(), &mut show);
+        (egui_focused(&frames.ctx), reached.get())
+    };
+    assert_eq!(tab(&mut frames), (Some(stop), false), "Tab from nothing goes to the first stop, not to the unfocused canvas");
+    assert_eq!(tab(&mut frames), (Some(first), false), "then to the app's first button");
+    assert_eq!(tab(&mut frames), (Some(second), false), "and its second, in the order the pass registered them");
+    assert_eq!(tab(&mut frames), (Some(canvas), false), "then to the canvas");
+    assert_eq!(tab(&mut frames), (Some(canvas), true), "the focused canvas keeps Tab and reads it from egui");
+}
+
+/// A window of the app's own canvas between two of the app's own buttons, with no framework stop: a bare Tab moves
+/// focus through them in the order the pass drew them, from nothing focused and from the canvas alike, and never
+/// reaches egui; a canvas that keeps Tab keeps it.
+#[trial]
+fn tab_moves_through_the_app_s_widgets_and_canvas_in_a_window_without_framework_stops() {
+    let (first, canvas, last) = (named_id("host first"), named_id("host canvas"), named_id("host last"));
+    let keeps = Rc::new(Cell::new(false));
+    let reached = Rc::new(Cell::new(false));
+    let (keep, seen) = (Rc::clone(&keeps), Rc::clone(&reached));
+    let mut show = move |ui: &mut Ui| {
+        seen.set(seen.get() || key_reached(ui.ctx(), Key::Tab));
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)));
+        fixture::host_button(ui, canvas, Rect::from_min_size(Pos2::new(220.0, 300.0), egui::vec2(80.0, 30.0)));
+        host_canvas(ui.ctx(), canvas, if keep.get() { KeyUse::CANVAS.with_keep(KeepKeys::Tab) } else { KeyUse::CANVAS });
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(340.0, 300.0), egui::vec2(80.0, 30.0)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let tab = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
+        reached.set(false);
+        frames.frame(vec![key_press(Key::Tab, Modifiers::NONE), key_release(Key::Tab, Modifiers::NONE)], &mut *show);
+        frames.frame(Vec::new(), &mut *show);
+        (egui_focused(&frames.ctx), reached.get())
+    };
+    assert_eq!(tab(&mut frames, &mut show), (Some(first), false), "Tab from nothing focuses the first widget drawn");
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), false), "the next Tab reaches the canvas");
+    assert_eq!(tab(&mut frames, &mut show), (Some(last), false), "Tab from the canvas moves on");
+    keeps.set(true);
+    request(&frames.ctx, FocusTarget::Id(canvas));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas));
+    assert_eq!(tab(&mut frames, &mut show), (Some(canvas), true), "a canvas that keeps Tab gets it from egui and keeps the focus");
+}
+
+/// The window the one-order trials show: the app's own button, a framework stop, the app's own single-line text field
+/// inside a framework scope, a framework stop and the app's own button, in that order.
+const MIXED: [&str; 5] = ["app first", "framework one", "app field", "framework two", "app last"];
+
+fn mixed_window() -> impl FnMut(&mut Ui) {
+    let mut text = String::new();
+    move |ui: &mut Ui| {
+        let [first, one, field, two, last] = MIXED.map(named_id);
+        fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(20.0, 300.0), egui::vec2(80.0, 30.0)));
+        widget(ui, one);
+        register_stop(ui.ctx(), Stop::new(one, KeyUse::of(Input::Pointer)));
+        push_scope(ui.ctx(), named_id("group"), FocusPolicy::NONE, None);
+        fixture::host_field(ui, field, &mut text);
+        pop_scope(ui.ctx());
+        widget(ui, two);
+        register_stop(ui.ctx(), Stop::new(two, KeyUse::of(Input::Pointer)));
+        fixture::host_button(ui, last, Rect::from_min_size(Pos2::new(420.0, 300.0), egui::vec2(80.0, 30.0)));
+    }
+}
+
+/// A Tab press with `mods`, released in the same frame, and the frame after it: where egui focus is then.
+fn tab_with(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), mods: Modifiers) -> Option<Id> {
+    frames.frame(vec![key_press(Key::Tab, mods), key_release(Key::Tab, mods)], &mut *show);
+    frames.frame(Vec::new(), &mut *show);
+    egui_focused(&frames.ctx)
+}
+
+/// Every focusable egui widget the app draws is a Tab stop of the window's one order, where the pass drew it among the
+/// framework's stops, with no registration of its own: Tab from nothing visits the five in order and wraps, and
+/// Shift+Tab walks back.
+#[trial]
+fn tab_reaches_the_app_s_egui_widgets_beside_the_framework_stops_in_registration_order() {
+    let mut show = mixed_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let order = MIXED.map(|name| Some(named_id(name)));
+    let forward: Vec<Option<Id>> = (0..6).map(|_| tab_with(&mut frames, &mut show, Modifiers::NONE)).collect();
+    assert_eq!(forward, [&order[..], &order[..1]].concat(), "Tab visits the five in the order the pass drew them, then wraps");
+    let back: Vec<Option<Id>> = (0..5).map(|_| tab_with(&mut frames, &mut show, Modifiers::SHIFT)).collect();
+    let reversed: Vec<Option<Id>> = order.iter().rev().copied().collect();
+    assert_eq!(back, reversed, "Shift+Tab walks back from the first, wrapping to the last");
+}
+
+/// F6 lands on the app's own widget in a pane whose only content it is.
+#[trial]
+fn f6_lands_on_an_app_widget_in_a_pane() {
+    let button = named_id("app pane button");
+    let mut show = move |ui: &mut Ui| {
+        show_panes(ui);
+        push_scope(ui.ctx(), named_id("app pane"), FocusPolicy::PANE, Some(Arc::from("App")));
+        fixture::host_button(ui, button, Rect::from_min_size(Pos2::new(420.0, 300.0), egui::vec2(80.0, 30.0)));
+        pop_scope(ui.ctx());
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    focus_stop(&mut frames, &mut show, named_id("right"));
+    let (focused, said) = pane_key(&mut frames, &mut show, Modifiers::NONE);
+    assert_eq!(focused, Some(button), "F6 from the right pane goes to the app's pane and its button");
+    assert!(said.contains(&"App".to_owned()), "and announces the pane: {said:?}");
+}
+
+/// A focused multi-line text field of the app's own whose egui key filter keeps Tab (it locks focus) gets the Tab in
+/// egui and types it; a single-line field of the app's own moves on to the next stop.
+#[trial]
+fn an_app_field_that_keeps_tab_types_it_and_a_single_line_field_tabs_on() {
+    let (code, line, after) = (named_id("app code"), named_id("app line"), named_id("framework after"));
+    let texts = Rc::new(RefCell::new((String::new(), String::new())));
+    let shared = Rc::clone(&texts);
+    let mut show = move |ui: &mut Ui| {
+        let mut texts = shared.borrow_mut();
+        let (code_text, line_text) = &mut *texts;
+        fixture::host_code_field(ui, code, code_text);
+        fixture::host_field(ui, line, line_text);
+        widget(ui, after);
+        register_stop(ui.ctx(), Stop::new(after, KeyUse::of(Input::Pointer)));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    fixture::host_focus(&frames.ctx, code);
+    frames.idle(2, &mut show);
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(code), "the field that keeps Tab keeps the focus");
+    assert!(texts.borrow().0.contains('\t'), "and types the Tab: {:?}", texts.borrow().0);
+    fixture::host_focus(&frames.ctx, line);
+    frames.idle(2, &mut show);
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(after), "the single-line field's Tab moves on");
+    assert_eq!(texts.borrow().1, "", "and types nothing");
+}
+
+/// Where Tab reaches only text fields (the Mac's default), it reaches the app's own text field and skips the app's
+/// own buttons, as it skips the framework's.
+#[trial]
+fn tab_that_reaches_only_text_fields_reaches_the_app_s_field_and_skips_its_buttons() {
+    let mut show = mixed_window();
+    let mut frames = Frames::new();
+    crate::runtime::windows::set_os(&frames.ctx, craft_host::target::Os::Mac);
+    frames.root({
+        let mut root = RootEnv::default();
+        root.tab_all_controls = false;
+        root
+    });
+    frames.idle(2, &mut show);
+    let field = Some(named_id("app field"));
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), field, "Tab from nothing goes to the app's field");
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), field, "the field is the one entry: the next Tab stays on it");
+}
+
+/// While an app's own egui popup is open, Tab is egui's, as Escape is: the framework moves no focus with it.
+#[trial]
+fn an_open_app_popup_keeps_tab() {
+    let popup = named_id("host popup");
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        areas::host_popup(ui, popup, Pos2::ZERO);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    areas::open_host_popup(&frames.ctx, popup);
+    frames.frame(Vec::new(), &mut show);
+    assert!(areas::host_popup_open(&frames.ctx, popup));
+    seen(&host);
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert_eq!(seen(&host).0, vec![Key::Tab], "the popup's Tab is egui's");
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "the framework moved no focus");
+}
+
+/// The scan that makes the app's egui widgets Tab stops classifies each focus candidate of a pass once, however many
+/// registrations take candidates in between: the pass's lookups grow with its widgets, one per app widget.
+#[trial]
+fn each_focus_candidate_of_a_pass_is_classified_once() {
+    let lookups = |n: usize| {
+        let mut show = move |ui: &mut Ui| {
+            for at in 0..n {
+                fixture::host_button(
+                    ui,
+                    crate::runtime::egui::memory::unique(("app", at)),
+                    Rect::from_min_size(Pos2::new(10.0, 30.0 * at as f32), egui::vec2(60.0, 20.0)),
+                );
+                widget(ui, crate::runtime::egui::memory::unique(("framework", at)));
+                register_stop(ui.ctx(), Stop::new(crate::runtime::egui::memory::unique(("framework", at)), KeyUse::of(Input::Pointer)));
+            }
+        };
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show);
+        crate::runtime::pointer::made_lookups(&frames.ctx, ViewportId::ROOT) as usize
+    };
+    // The framework widget is the root of the stop registered after it, so only the app's widgets need a lookup.
+    let (small, large) = (lookups(8), lookups(16));
+    assert!(small >= 8, "every app widget is looked up: {small}");
+    assert_eq!(large - small, 8, "eight more app widgets cost one lookup each: {small} then {large}");
+}
+
+/// A Tab in a window with no stop and nothing focused moves no focus, so it stays in egui's input for the app's own
+/// binding (EffectCraft's Tab for the timeline's mini flowchart), from the window's first pass on. Once the app draws a
+/// focusable widget, that widget is a stop and the Tab is the framework's move to it.
+#[trial]
+fn an_unowned_tab_with_no_stops_reaches_the_app() {
+    let button = named_id("app button");
+    let (reached, draw) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(false)));
+    let mut show = {
+        let (reached, draw) = (Rc::clone(&reached), Rc::clone(&draw));
+        move |ui: &mut Ui| {
+            if key_reached(ui.ctx(), Key::Tab) {
+                reached.set(reached.get() + 1);
+            }
+            if draw.get() {
+                fixture::host_button(ui, button, Rect::from_min_size(Pos2::new(40.0, 40.0), egui::vec2(80.0, 30.0)));
+            }
+        }
+    };
+    let mut frames = Frames::new();
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert_eq!(reached.take(), 1, "the window's first pass has no stop: its Tab is the app's");
+    frames.idle(2, &mut show);
+    frames.frame(vec![key_press(Key::Tab, Modifiers::SHIFT), key_release(Key::Tab, Modifiers::SHIFT)], &mut show);
+    assert_eq!(reached.take(), 1, "with nothing drawn, Shift+Tab is the app's too");
+    assert_eq!(egui_focused(&frames.ctx), None);
+    draw.set(true);
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Tab);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(reached.take(), 0, "the app's button is a stop: the Tab is the framework's move");
+    assert_eq!(egui_focused(&frames.ctx), Some(button), "and the Tab moved focus to the button");
 }
 
 #[trial]
@@ -467,8 +993,8 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
     );
     assert_eq!(
         tab_with_canvas(Some(KeyUse::CANVAS.with_keep(KeepKeys::Tab)), false),
-        (Vec::new(), true),
-        "with nothing focused, a canvas that keeps Tab gets it from egui and nothing toggles"
+        (vec![(ViewportId::ROOT, ChromeToggle::Panels)], false),
+        "a canvas keeps Tab only while focused: with nothing focused, Tab toggles the panels"
     );
 }
 
@@ -508,6 +1034,138 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// What a host canvas with GridCraft's keys saw of a copy and an Escape while it held egui focus: whether the copy
+/// reached egui's input with no command fired, the keys that reached egui and the window cancels, and egui's focus
+/// after the Escape. `app_focus` gives it egui focus by the app's own request, else by the framework's `request`.
+fn focused_host_canvas_keys(app_focus: bool) -> (bool, (Vec<Key>, usize), Option<Id>) {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL);
+    let canvas = named_id("host canvas");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let seen_events = Rc::clone(&events);
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen_events.borrow_mut().extend(ui.input(|input| input.events.clone()));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KEYS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if app_focus {
+        fixture::host_focus(&frames.ctx, canvas);
+    } else {
+        request(&frames.ctx, FocusTarget::Id(canvas));
+    }
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas), "the canvas holds egui focus");
+    take_output(&frames.ctx);
+    seen(&host);
+    events.borrow_mut().clear();
+    frames.frame(vec![Event::Copy], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let copied = events.borrow().contains(&Event::Copy) && take_output(&frames.ctx).fired.is_empty();
+    press_key(&mut frames, &mut show, Key::Escape);
+    let escape = seen(&host);
+    frames.frame(Vec::new(), &mut show);
+    (copied, escape, egui_focused(&frames.ctx))
+}
+
+/// A host canvas holding egui focus is the app's own focused widget: its clipboard events and Escape stay in egui's
+/// input, and no window cancel comes of the Escape. With nothing focused, Escape is the window's cancel.
+#[trial]
+fn a_host_canvas_with_egui_focus_reads_escape_and_the_clipboard_from_egui() {
+    let canvas = named_id("host canvas");
+    let (copied, escape, focused) = focused_host_canvas_keys(false);
+    assert!(copied, "the copy of a canvas the framework focused stays in egui and fires nothing");
+    assert_eq!(escape, (vec![Key::Escape], 0), "its Escape is egui's, and no window cancel");
+    assert_eq!(focused, Some(canvas), "egui keeps the framework's focus on the canvas over its Escape");
+    let (copied, escape, _) = focused_host_canvas_keys(true);
+    assert!(copied, "the copy of a canvas the app focused stays in egui and fires nothing");
+    assert_eq!(escape, (vec![Key::Escape], 0), "and its Escape");
+    let (host, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL));
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(seen(&host), (Vec::new(), 1), "with nothing focused, Escape is the window's cancel");
+}
+
+/// Which of the arrow keys, Home and End reached egui's input, one press each, in a window whose host declares a canvas;
+/// with `focus_field` the host's text field has the focus; and whether Left moved the field's caret.
+fn navigation_keys_with_canvas(focus_field: bool) -> (Vec<Key>, bool) {
+    const KEYS: [Key; 6] = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End];
+    let canvas = named_id("host canvas");
+    let reached = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&reached);
+    let (host, mut base) = host_window();
+    host.borrow_mut().text = "abc".to_owned();
+    let mut show = move |ui: &mut Ui| {
+        seen.borrow_mut().extend(KEYS.into_iter().filter(|key| key_reached(ui.ctx(), *key)));
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    if focus_field {
+        fixture::host_focus(&frames.ctx, field());
+        frames.frame(Vec::new(), &mut show);
+        frames.frame(vec![key_press(Key::End, Modifiers::NONE), key_release(Key::End, Modifiers::NONE)], &mut show);
+    }
+    reached.borrow_mut().clear();
+    let caret = |frames: &Frames| {
+        // design: allow[contract/egui-widget](the trial reads the caret of the app's own egui TextEdit, which is what it checks)
+        egui::TextEdit::load_state(&frames.ctx, field()).and_then(|state| state.cursor.char_range()).map(|range| range.primary.index)
+    };
+    let at_end = caret(&frames);
+    let mut moved = false;
+    for key in KEYS {
+        press_key(&mut frames, &mut show, key);
+        if key == Key::ArrowLeft {
+            moved = caret(&frames) != at_end;
+        }
+    }
+    let mut reached = reached.take();
+    reached.dedup();
+    (reached, moved)
+}
+
+#[trial]
+fn a_host_canvas_leaves_navigation_keys_in_egui_for_the_app_s_widget() {
+    const KEYS: [Key; 6] = [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Home, Key::End];
+    let (reached, caret) = navigation_keys_with_canvas(true);
+    assert_eq!(reached, KEYS, "a focused app field reads the arrows, Home and End from egui");
+    assert!(caret, "the field's caret moved left from the end");
+    assert_eq!(navigation_keys_with_canvas(false).0, KEYS, "with nothing focused, the host canvas's own keys stay in egui");
+}
+
+/// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
+/// `textless_paste` reads it in that pass only.
+#[trial]
+fn a_paste_with_no_text_is_the_paste_chord_and_reads_as_textless() {
+    let picture = Event::PasteImage(Arc::new(crate::testing::pictures::sample_picture(1, [1, 1])));
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, picture.clone()).1.is_empty(), "the picture's paste fires the app's Paste");
+    let read = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&read);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen.set(crate::runtime::keys::textless_paste(ui.ctx()));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
+    assert!(!read.get(), "a paste with text");
+    frames.frame(vec![picture], &mut show);
+    assert!(read.get(), "a paste with no text");
+    frames.frame(Vec::new(), &mut show);
+    assert!(!read.get(), "the pass after it");
+}
+
 /// A pasted image is the same Paste as pasted text: in a window whose canvas does not take it, the app's Paste runs,
 /// and the app reads the image; a canvas that lists Paste reads it from egui, as it does text.
 #[trial]
@@ -521,17 +1179,22 @@ fn a_pasted_image_runs_the_paste_a_pasted_text_runs() {
 
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
-    let (host, mut show) = host_window();
+    let (host, show) = host_window();
+    f6_in(&host, show, overrides)
+}
+
+/// What an F6 press did under `overrides` in the window `show` draws, whose host records what reached egui in `host`.
+fn f6_in(host: &RefCell<Host>, mut show: impl FnMut(&mut Ui), overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let mut frames = Frames::new();
     if let Some(overrides) = overrides {
         frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
     }
     frames.frame(Vec::new(), &mut show);
     take_output(&frames.ctx);
-    seen(&host);
+    seen(host);
     press_key(&mut frames, &mut show, Key::F6);
     let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
-    (seen(&host).0.contains(&Key::F6), fired)
+    (seen(host).0.contains(&Key::F6), fired)
 }
 
 #[trial]
@@ -543,6 +1206,92 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     let mut unbound = craft_keymap::Overrides::default();
     unbound.insert(NavCommand::NextPane.id(), Vec::new());
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
+}
+
+/// What a ⌘Q (Ctrl+Q off the Mac) did in the host window under `overrides`: how many frames sent a close command, the
+/// app taking each frame's output before the next as `embed::before_input` does, and the ids of the commands it fired.
+fn quit_under(overrides: Option<craft_keymap::Overrides>) -> (usize, Vec<String>) {
+    let (_, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    let mut closes = usize::from(frames.frame_closing(vec![key_press(Key::Q, Modifiers::COMMAND)], &mut show));
+    let mut fired = Vec::new();
+    for _ in 0..3 {
+        fired.extend(take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id));
+        closes += usize::from(frames.frame_closing(Vec::new(), &mut show));
+    }
+    (closes, fired)
+}
+
+/// egui's own quit shortcut is cleared at install; the runtime's Quit command takes its place, through the root window's
+/// close path, and an app's own binding of the chord replaces it.
+#[trial]
+fn quit_asks_the_root_window_to_close_once_and_an_app_binding_replaces_it() {
+    assert_eq!(quit_under(None), (1, vec![QuitCommand::Quit.id().to_owned()]), "the quit chord asks the root window to close once");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Cmd+Q".to_owned()]);
+    assert_eq!(quit_under(Some(bound)), (0, vec![EditCommands::Delete.id().to_owned()]), "a command bound to the chord takes it");
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(QuitCommand::Quit.id(), Vec::new());
+    assert_eq!(quit_under(Some(unbound)), (0, Vec::new()), "with Quit unbound, nothing closes the window");
+}
+
+/// The Alt+digit chords the hosted canvas of `an_unbound_f6_reaches_a_host_canvas_with_claims` claims.
+const CANVAS_CLAIMS: [craft_keymap::Chord; 2] = [
+    craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num1),
+    craft_keymap::Chord::new(craft_keymap::Mods::ALT, craft_keymap::Key::Num2),
+];
+
+/// A hosted app whose own egui canvas is the window's key target, with Tab, the edit chords and Alt+digit claims kept
+/// (SoundCraft's session view), and whose shortcut table uses F6: with both pane moves unbound, F6 reaches egui.
+#[trial]
+fn an_unbound_f6_reaches_a_host_canvas_with_claims() {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL).with_claims(&CANVAS_CLAIMS);
+    let canvas = named_id("host canvas");
+    let (host, mut base) = host_window();
+    let show = move |ui: &mut Ui| {
+        base(ui);
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KEYS);
+    };
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(NavCommand::NextPane.id(), Vec::new());
+    unbound.insert(NavCommand::PreviousPane.id(), Vec::new());
+    assert_eq!(f6_in(&host, show, Some(unbound)), (true, Vec::new()), "the canvas's app reads F6 from egui");
+}
+
+/// What a press of Escape with `mods` did with nothing focused, under `overrides`: the window cancels it raised and the
+/// ids of the commands it fired.
+fn escape_under(overrides: Option<craft_keymap::Overrides>, mods: Modifiers) -> (usize, Vec<String>) {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    seen(&host);
+    frames.frame(vec![key_press(Key::Escape, mods), key_release(Key::Escape, mods)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (seen(&host).1, fired)
+}
+
+/// Tb-8 (3): Shift+Escape bound to a command runs it, as production's keymap ran it under a loaded place cursor; the
+/// key stage read every Escape without Cmd or Ctrl as the scope's escape, so the binding never fired. Plain Escape keeps
+/// its meaning, and an unbound Shift+Escape is still an escape.
+#[trial]
+fn a_command_bound_to_shift_escape_runs_and_plain_escape_still_cancels() {
+    let delete = EditCommands::Delete.id().to_owned();
+    assert_eq!(escape_under(None, Modifiers::SHIFT), (1, Vec::new()), "an unbound Shift+Escape is the window's Cancel");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Shift+Escape".to_owned()]);
+    assert_eq!(escape_under(Some(bound.clone()), Modifiers::SHIFT), (0, vec![delete]), "the bound Shift+Escape runs its command");
+    assert_eq!(escape_under(Some(bound), Modifiers::NONE), (1, Vec::new()), "a plain Escape is still the window's Cancel");
 }
 
 /// The panes the pane trials show, in order: the scope's name, its stop and its label.
@@ -679,7 +1428,7 @@ fn a_window_shortcut_runs_from_a_pane_title_and_not_from_a_modal_dialog_or_a_tex
     // The ids of the commands a press of the shortcut's key fired.
     let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| -> Vec<String> {
         take_output(&frames.ctx);
-        frames.frame(vec![key_press(Key::Q, Modifiers::NONE)], &mut *show);
+        frames.frame(vec![key_press(Key::Q, Modifiers::NONE), key_release(Key::Q, Modifiers::NONE)], &mut *show);
         frames.frame(Vec::new(), &mut *show);
         take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
     };

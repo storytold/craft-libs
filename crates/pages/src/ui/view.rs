@@ -24,7 +24,7 @@ use crate::layout::{
 };
 use craft_behavior::geometry::{SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
-use craft_behavior::{Axis, CanvasView, NavMove, PressPhase, ZoomLadder};
+use craft_behavior::{Axis, CanvasView, NavMove, PressPhase, ZoomScheme};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor,
@@ -247,12 +247,11 @@ impl PageViewState {
         self.turn = Some(forward);
     }
 
-    /// Zoom In / Zoom Out: the next rung of craft-ui's [`ZoomLadder`] above (or below) the shown zoom, within
-    /// [`ZOOM_RANGE`] (Photoshop's rungs, the suite's one zoom ladder); a fit ends. The zoom a fit showed is the
-    /// start.
-    pub fn zoom_step(&mut self, larger: bool) {
+    /// Zoom In / Zoom Out: the next rung of `scheme` above (or below) the shown zoom, within [`ZOOM_RANGE`]; a fit
+    /// ends. The zoom a fit showed is the start.
+    pub fn zoom_step(&mut self, larger: bool, scheme: &ZoomScheme) {
         self.fit = Fit::None;
-        self.zoom = ZoomLadder::step_in_range(self.zoom, if larger { 1 } else { -1 }, ZOOM_RANGE);
+        self.zoom = scheme.step_in_range(self.zoom, if larger { 1 } else { -1 }, ZOOM_RANGE);
     }
 
     /// The state as a pass reads it: the rotation one of the four quarter turns (rounded down), the zoom within
@@ -1200,6 +1199,10 @@ fn run_pass(
             Label::from(words.page_of.fill(&[("page", label.as_str()), ("count", total.as_str())]))
         };
         let bars = if count > 0 { bars.tip(&tip) } else { bars };
+        // Pages that fit the view's width can't scroll sideways, so there is no horizontal bar. The layout drawn
+        // decides, as the bars measure it.
+        let (x_lo, x_hi) = offset_range(drawn.doc.x0, drawn.doc.x1, vw);
+        let bars = if x_lo >= x_hi { bars.vertical_only() } else { bars };
         // Full screen's edge-to-edge view (`PageView::fill_screen`) has no scroll bars: nothing is drawn and nothing takes a press
         // along the window's edges.
         let bar_moved = if build.fill_screen {
@@ -1545,7 +1548,8 @@ impl KeyMoves {
     /// Page Up and Down a screen less a key line (a row when not continuous, and with Cmd), Home and End the first
     /// and last page, Up and Down a key line (not continuous, a turn once the row is at its edge that way), Left and
     /// Right a key line sideways while the current page or spread has more to show that way, else a turn of a page or
-    /// spread; Cmd with Left or Right turns at once. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
+    /// spread; Cmd with Left or Right turns at once. Home and End with Shift, or with Cmd off macOS (which gives Cmd
+    /// with them no move), and Page Up, Page Down, Up and
     /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift alone with the other keys,
     /// leave them to nothing.
     fn of(

@@ -1,10 +1,11 @@
 //! Stories of `RadioGroup` and `Radio`.
 
 use super::{Radio, RadioGroup};
+use crate::choice::ChoiceLook;
 use crate::contract::{FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
-use crate::runtime::env::Message;
+use crate::runtime::env::{Message, with_env};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Mixed};
 use egui::{Response, Ui};
@@ -111,16 +112,15 @@ fn radio_group_with_icons_and_counts(ui: &mut Ui, data: &mut StoryData) -> Story
         .into()
 }
 
-/// Rows with a description under the label: the `SideLabel`'s detail joins the radio's accessible description.
+/// Rows with a description after the label (`Radio::detail`): it joins the radio's accessible description.
 #[story(RadioGroup<'static, u8>, covers = [], drive = Drive::Never)]
 fn radio_group_with_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows =
         [(1u8, "Fast", "Lower quality, smaller file"), (2, "Balanced", "The default for most photos"), (3, "Best", "Full quality, largest file")];
     RadioGroup::new("Export", data.bind("export", 2u8))
-        .show(ui, |ui, cx| {
+        .show(ui, |ui, _| {
             for (value, label, description) in rows {
-                let side = SideLabel::new().layout(FieldLayout::After).detail(description);
-                cx.labelled(ui, value, label.into(), side, Radio::new(value));
+                Radio::new(value).label(label).detail(description).show(ui);
             }
         })
         .into()
@@ -153,4 +153,25 @@ fn radio(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         });
     });
     selected.map(StoryOutput::from).unwrap_or_default()
+}
+
+/// The radio buttons of an app that sets `ChoiceLook::Strong` at its root: the selected one fills with the strong
+/// accent under a white dot. Beside it a mixed group, which selects none, and a disabled group.
+#[story(RadioGroup<'static, u8>, covers = [], drive = Drive::Never, group = "Looks", title = "Strong")]
+fn radio_group_strong(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut output = StoryOutput::default();
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ChoiceLook::Strong);
+        },
+        |ui| {
+            Row::new().show(ui, |ui, _| {
+                output = column(ui, RadioGroup::new("Size", data.bind("size", 2u8)));
+                column(ui, RadioGroup::new("Mixed", data.bind_mixed("mixed", Mixed::Mixed)));
+                column(ui, RadioGroup::new("Disabled", data.bind("disabled", 2u8)).enabled(false));
+            })
+        },
+    );
+    output
 }

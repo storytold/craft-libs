@@ -49,6 +49,9 @@ pub enum TabKey {
     Reports,
 }
 
+/// Whether a pasted text is whole ([`TextOptions::whole_paste`]).
+type WholePaste = dyn Fn(&str) -> bool;
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
@@ -64,6 +67,10 @@ pub struct TextOptions {
     pub live: bool,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
+    /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
+    /// goes on to the enclosing scope. A live filter keeps its query this way. Ignored with `clear_on_escape`, and on a
+    /// disabled or read-only part.
+    pub keep_on_escape: bool,
     /// Monospace text.
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
@@ -119,9 +126,17 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// Set from the codec by `PartsCx::text`, never by hosts: a pasted text that this says is whole replaces all the
+    /// text instead of the selection. It gets the paste as copied; the codec trims it.
+    // PLAN: no `Send + Sync`: `Codec` and `PartsCx::text`'s codec are not `Send`.
+    pub whole_paste: Option<Arc<WholePaste>>,
     /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
     /// the line.
     pub submit_key: SubmitKey,
+    /// The text shown, and exposed as the part's accessible value, instead of the value's own text while the part has
+    /// neither focus nor a draft (a derived number in parentheses). Focus, and any typing, start from the value's own
+    /// text: this changes only what an idle part shows, never what the codec formats or parses.
+    pub resting: Option<String>,
 }
 
 /// Which Enter chord submits a multi-line text.
@@ -144,6 +159,7 @@ impl Default for TextOptions {
             mask: false,
             live: false,
             clear_on_escape: false,
+            keep_on_escape: false,
             mono: false,
             role: TypeRole::Body,
             ink: None,
@@ -166,7 +182,9 @@ impl Default for TextOptions {
             unparsed: None,
             own_menu: false,
             holds_drafts: false,
+            whole_paste: None,
             submit_key: SubmitKey::CommandEnter,
+            resting: None,
         }
     }
 }

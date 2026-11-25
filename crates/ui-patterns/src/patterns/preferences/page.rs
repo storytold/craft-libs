@@ -8,22 +8,20 @@ use super::rows::{RowsOut, ShownRow, reset_button, show_row};
 use super::search::{self, Listed};
 use super::window::PreferencesState;
 use super::words::PreferencesWords;
-use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, NoValue, Outcome, Pad, Pattern, Props, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    Sizing,
-};
-use crate::display::{Divider, Shade, Text};
+use crate::contract::{Bind, NoValue, Outcome, Pad, Pattern, Props, Scroll, Show as _, ShowContainer as _};
+use crate::display::{Shade, Text};
 use crate::form::FieldGroup;
 use crate::layout_components::{Row, Stack};
-use crate::list::{List, ListRow, RowInk};
+use crate::list::{ListRow, RowInk};
 use crate::notices::{Notice, NoticeLayout};
+use crate::patterns::form_dialogs::SectionList;
 use crate::runtime::env::{Env, Label, Units};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::requests::ColorRequest;
 use crate::sections::Section;
 use crate::style::{SurfaceKind, TypeRole};
 use crate::text::TextField;
-use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection, SelectionChange};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
@@ -296,36 +294,19 @@ fn show_body<H: PreferencesModel + ?Sized>(
         Notice::new(Tone::Info, words.no_matches.clone()).layout(NoticeLayout::Centred).show(ui);
         return;
     };
-    Row::new().fill().show(ui, |ui, _| {
-        let current = Selection::single(page.id.clone());
-        let source = Pages(&snap.list);
-        let listed = List::<String>::new(words.pages_label.clone())
-            .id(list_id)
-            .select(SelectMode::Single)
-            .activate(ActivateOn::Click)
-            .allow_empty(false)
-            .header(false)
-            .sizing(Sizing::Content)
-            .selection(Bind::given(current))
-            .show_items(ui, &source, &mut |key, _| {
-                let entry = snap.list.iter().find(|entry| entry.id == *key);
-                let row = ListRow::new(entry.map_or_else(Label::default, |entry| entry.title.clone()));
-                if entry.is_some_and(|entry| entry.dimmed) { row.ink(RowInk::Dimmed) } else { row }
-            });
-        for event in listed.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
-                && let Some(key) = keys.into_iter().last()
-            {
-                state.selected = key;
-            }
-        }
-        Divider::vertical().show(ui);
-        Stack::new()
-            .fill()
-            .scroll(Scroll::vertical())
-            .label(page.title.clone())
-            .show(ui, |ui, _| show_page(ui, host, page, snap.searching, words, units, out));
-    });
+    let source = Pages(&snap.list);
+    let picked = SectionList::new(words.pages_label.clone(), &source, page.id.clone()).id(list_id).body_label(page.title.clone()).show(
+        ui,
+        |key| {
+            let entry = snap.list.iter().find(|entry| entry.id == *key);
+            let row = ListRow::new(entry.map_or_else(Label::default, |entry| entry.title.clone()));
+            if entry.is_some_and(|entry| entry.dimmed) { row.ink(RowInk::Dimmed) } else { row }
+        },
+        |ui| show_page(ui, host, page, snap.searching, words, units, out),
+    );
+    if let Some(key) = picked {
+        state.selected = key;
+    }
 }
 
 /// The page's title, groups, footnote and Reset Section.

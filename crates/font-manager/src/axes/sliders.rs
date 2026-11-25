@@ -128,17 +128,21 @@ pub struct AxisSliders<'a> {
     /// Whether the style is italic: an unset `ital` axis then shows its maximum, once a weight is given.
     #[prop]
     italic: bool,
+    /// The axes (by tag) the selection mixes: each shows `Mixed` and is left out of the edit's held values.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w3): ty.X21a
+    mixed: &'a [[u8; 4]],
 }
 
 impl<'a> AxisSliders<'a> {
     /// Sliders named `label` over the `axes` of a face, editing the coordinates `values`.
     pub fn new(label: impl Into<Label>, axes: &'a [FontAxis], values: Bind<'a, AxisValues>) -> Self {
-        AxisSliders { label: label.into(), axes, values, instances: &[], weight: None, italic: false }
+        AxisSliders { label: label.into(), axes, values, instances: &[], weight: None, italic: false, mixed: &[] }
     }
 
     /// Draws the sliders (and the instance list, if any) and reports the edit made this pass.
     pub fn show(self, ui: &mut Ui) -> AxisSlidersOutput {
-        let AxisSliders { label, axes, mut values, instances, weight, italic } = self;
+        let AxisSliders { label, axes, mut values, instances, weight, italic, mixed: _ } = self;
         let drawn = Drawn { weight, italic };
         let env = Env::of(ui);
         let words = env.words::<AxisSlidersWords>();

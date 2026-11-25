@@ -108,6 +108,20 @@ pub enum CloseReason {
     AnchorGone,
 }
 
+/// What a layer is for, beyond its rank.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LayerRole {
+    /// An ordinary layer.
+    #[default]
+    Plain,
+    /// A progress window: `any_open` leaves it out, as it blocks nothing the user waits on.
+    Progress,
+    /// A field over its owner's own content that edits it in place (a page's rename field): it is part of the owner,
+    /// so the owner reports no open or expanded state and no popup it controls while it shows.
+    InPlaceEditor,
+}
+
 /// What `any_open` counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -132,6 +146,8 @@ pub struct OpenEntry {
     pub rank: Rank,
     /// Its key class.
     pub keys: OwnerClass,
+    /// What the layer is for.
+    pub role: LayerRole,
     /// The anchor in screen space.
     pub anchor: Option<Rect>,
     /// The rects in screen space of the other parts of the owner that open popups: a press on one is not outside,
@@ -141,6 +157,8 @@ pub struct OpenEntry {
     pub rect: Rect,
     /// The side of the anchor it took by its size; `None` for a float and while its size is unknown.
     pub side: Option<Side>,
+    /// The side its host asked for when it took `side`: a later pass keeps `side` only while the host asks for the same.
+    pub(crate) asked: Option<Side>,
     /// It is fading out: not `top`, not counted by `any_open`, taking no input.
     pub exiting: bool,
     /// The layer's egui id and the cover under it, listed in the order.
@@ -150,6 +168,8 @@ pub struct OpenEntry {
     pub(crate) scoped: bool,
     /// A press outside its family closes it and goes no further.
     pub(crate) absorbs: bool,
+    /// A command run from outside it closes it (`Dismiss::commands`).
+    pub(crate) closes_on_commands: bool,
     /// The entry is an OS window of the integration: it takes its place in the stack's order and facts, and no egui
     /// layer is shown for it.
     pub(crate) window: bool,
@@ -196,15 +216,18 @@ impl OpenEntry {
             parent: None,
             rank,
             keys,
+            role: LayerRole::default(),
             anchor: None,
             peers: Vec::new(),
             rect,
             side: None,
+            asked: None,
             exiting: false,
             layer,
             cover: None,
             scoped: false,
             absorbs: false,
+            closes_on_commands: true,
             window: false,
             popup: false,
             region: None,
@@ -251,6 +274,8 @@ pub(crate) struct Pass {
     pressed_outside: Vec<Id>,
     /// The popup a press that opened it ended on, and where, this pass.
     dragged_release: Option<(Id, Pos2)>,
+    /// The layers asked to come to the front this pass (`raise`).
+    raise: Vec<Id>,
     /// The dialog stack place of the layers recorded now, and the dialog they show for (`stack_place`).
     place: Option<usize>,
     dialog: Option<Id>,
@@ -267,7 +292,12 @@ pub(crate) struct TopModal {
 pub(crate) struct Persist {
     raised: IdMap<u64>,
     counter: u64,
-    modal: bool,
+    /// The viewport's place in the app's modal stack: the root frame its top live modal layer over the whole window
+    /// first showed in, as of its last finished pass, or `None` without one. A modal viewport blocks the viewports whose
+    /// top modal opened in an earlier frame and those with none (`modal_viewport`). Modals that open in the same frame
+    /// form one level and block none of each other: the screen picker opens a capture window over each monitor in one
+    /// pass, and each must take its click. When the top modal closes, the one under it keeps its own first frame.
+    modal: Option<u64>,
     /// The layers of the last pass, bottom to top, as `end_pass` handed them to egui.
     stack: Vec<Id>,
     /// A press the modal drop removed, for the window host to raise the modal's window.
@@ -285,6 +315,10 @@ pub(crate) struct Persist {
     held_open: IdSet,
     /// The root frame and pass each shown layer first ran its body in; gone with the layer's last entry.
     appeared: IdMap<(u64, u64)>,
+    /// The roots whose asked raise ran in a pass where a floating window (re)appeared: egui raises every layer that
+    /// shows again, and its area order keeps the old order among the layers raised in one pass, so the raise is asked
+    /// again in the next pass.
+    raise_again: Vec<Id>,
 }
 
 /// The closes queued and not yet taken, each with the root frame that queued it and whether it is carried: a carried
@@ -311,6 +345,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
             pass.claimed.clear();
             pass.pressed_outside.clear();
             pass.dragged_release = None;
+            pass.raise.clear();
             pass.place = None;
             pass.dialog = None;
         },
@@ -342,7 +377,8 @@ pub fn request_close(ctx: &Context, id: Id, why: CloseReason) {
     push_close(ctx, id, why, false);
 }
 
-/// Queues a close of every popup layer of the running viewport shown last frame: its menus, dropdowns and lists. The
+/// Queues a close of every popup layer of the running viewport shown last frame that a command closes
+/// (`Dismiss::commands`): its menus, dropdowns and lists, not a dock panel's flyout. The
 /// runtime's command dispatcher calls it when a key runs a command; an app whose own dispatcher runs a shortcut from the
 /// keys the runtime leaves in egui's input calls it when the shortcut runs. Either way the command closes the open
 /// popups as a menu pick does; modal layers, windows and toasts stay.
@@ -364,7 +400,11 @@ pub(crate) fn close_popups_outside(ctx: &Context, inside: &[Id]) {
                 at = pass.last.iter().find(|entry| entry.id == id).and_then(|entry| entry.parent);
             }
         }
-        pass.last.iter().filter(|entry| entry.rank == Rank::Popup && !entry.exiting && !kept.contains(&entry.id)).map(|entry| entry.id).collect()
+        pass.last
+            .iter()
+            .filter(|entry| entry.rank == Rank::Popup && entry.closes_on_commands && !entry.exiting && !kept.contains(&entry.id))
+            .map(|entry| entry.id)
+            .collect()
     });
     for id in popups {
         push_close(ctx, id, CloseReason::Requested, false);
@@ -401,7 +441,7 @@ pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| {
-        pass.last.iter().filter(|entry| !entry.exiting).any(|entry| match filter {
+        pass.last.iter().filter(|entry| !entry.exiting && entry.role != LayerRole::Progress).any(|entry| match filter {
             OpenFilter::Any => true,
             OpenFilter::Modal => entry.blocks_window(),
             OpenFilter::Keys => entry.takes_keys(),
@@ -463,6 +503,11 @@ pub(crate) fn open_entries(ctx: &Context) -> Vec<OpenEntry> {
 pub fn entry(ctx: &Context, id: Id) -> Option<OpenEntry> {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| pass.last.iter().find(|entry| entry.id == id).cloned())
+}
+
+/// The actual egui layer registered for `id` in this pass, never an old or exiting entry or an OS-window placeholder.
+pub(crate) fn current_egui_layer(ctx: &Context, id: Id) -> Option<Layer> {
+    with_pass(ctx, |pass| pass.current.iter().find(|entry| entry.id == id && !entry.exiting && !entry.window).map(|entry| entry.layer))
 }
 
 /// The side of its anchor the layer `id` was placed on in this pass, once its host placed it by a known size.
@@ -622,6 +667,13 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
     with_pass(ctx, |pass| pass.dragged_release.is_some_and(|(popup, at)| pass.drawing.iter().any(|(id, _)| *id == popup) && rect.contains(at)))
 }
 
+/// Brings the family of the open layer `id` in front of the other families of its class at the end of this pass, as a
+/// press on it does: a floating window goes to the top of egui's area order, which it shares with the app's own egui
+/// windows.
+pub fn raise(ctx: &Context, id: Id) {
+    with_pass(ctx, |pass| pass.raise.push(id));
+}
+
 /// Ends the body `begin_layer` started.
 pub(crate) fn end_layer(ctx: &Context) {
     with_pass(ctx, |pass| {
@@ -724,6 +776,13 @@ pub fn stack_place<R>(ctx: &Context, place: usize, dialog: Id, show: impl FnOnce
     out
 }
 
+/// The host's dialog whose `stack_place` runs now: a component inside it tells one dialog from the next one a host
+/// shows at the same place with the same ids.
+#[doc(hidden)]
+pub fn running_dialog(ctx: &Context) -> Option<Id> {
+    with_pass(ctx, |pass| pass.dialog)
+}
+
 /// A dialog host opened a dialog in this pass: it is the top layer from now on, so the Escape that arrived in this
 /// pass is its, and nothing beneath it gets a Cancel or a claimed Escape, wherever focus is now.
 #[doc(hidden)]
@@ -810,13 +869,17 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
-/// The end hook: raises the families that appeared or were pressed, hands egui the whole order, and records the
-/// open-modal fact.
+/// The end hook: raises the families that appeared, were pressed or were asked to (`raise`), hands egui the order of
+/// every layer above the floating windows (which keep egui's own area order, where an asked raise moves them to the
+/// top), and records the open-modal fact.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let (current, last_ids) = with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>()));
+    let (current, last_ids, raise) =
+        with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>(), pass.raise.clone()));
     let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
-    let order = with_persist(ctx, viewport, |persist| {
+    let now = pass::root_frame_nr(ctx);
+    let (order, to_top, floats, asked) = with_persist(ctx, viewport, |persist| {
+        let raise: Vec<Id> = std::mem::take(&mut persist.raise_again).into_iter().chain(raise).collect();
         let stamp = |id: Id, persist: &mut Persist| {
             persist.counter += 1;
             persist.raised.insert(id, persist.counter);
@@ -830,6 +893,17 @@ pub(crate) fn end_pass(ctx: &Context) {
         for root in &roots {
             if !last_ids.contains(root) {
                 stamp(*root, persist);
+            }
+        }
+        let mut asked: Vec<Id> = Vec::new();
+        for id in raise {
+            let mut at = current.iter().find(|entry| entry.id == id);
+            while let Some(parent) = at.and_then(|entry| entry.parent).and_then(|parent| current.iter().find(|other| other.id == parent)) {
+                at = Some(parent);
+            }
+            if let Some(root) = at {
+                stamp(root.id, persist);
+                asked.push(root.id);
             }
         }
         persist.raised.retain(|id, _| roots.contains(id));
@@ -846,19 +920,35 @@ pub(crate) fn end_pass(ctx: &Context) {
         }
         let families = families(&current, &persist.raised);
         let mut order: Vec<Layer> = Vec::new();
+        let mut listed: Vec<Id> = Vec::new();
+        let mut to_top: Vec<Layer> = Vec::new();
+        let mut floats: Vec<Layer> = Vec::new();
         persist.stack.clear();
         for members in &families {
             for member in members {
-                if !member.window {
+                // A floating window or panel (`Rank::Window`) is left to egui's own area order, which raises a layer
+                // when it first shows and when it is pressed: the app's own egui windows stack with it in that one
+                // order, so a dialog the app opens later shows above it. Listed layers would go above every unlisted
+                // layer of their egui order, so a float opened from a listed layer (a panel floated from a full-window
+                // container) is listed too, above its parent. An OS window has no egui layer here.
+                let over_listed = member.parent.is_some_and(|parent| listed.contains(&parent));
+                if !member.window && (member.rank != Rank::Window || over_listed) {
                     order.extend(member.cover);
                     order.push(member.layer);
+                    listed.push(member.id);
+                } else if !member.window {
+                    floats.push(member.layer);
+                    if members.first().is_some_and(|root| asked.contains(&root.id)) {
+                        // An asked raise of a layer left to egui's area order raises it there, as a press on it does.
+                        to_top.push(member.layer);
+                    }
                 }
                 persist.stack.push(member.id);
             }
         }
-        persist.modal = current.iter().any(|entry| entry.blocks_window() && !entry.exiting);
-        persist.top_modal =
-            current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting).map(|entry| TopModal { id: entry.id, cover: entry.cover });
+        let top = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
+        persist.modal = top.map(|entry| persist.appeared.get(&entry.id).map_or(now, |(frame, _)| *frame));
+        persist.top_modal = top.map(|entry| TopModal { id: entry.id, cover: entry.cover });
         persist.popup_over_modal = current.iter().filter(|entry| entry.rank == Rank::Popup && !entry.exiting).any(|popup| {
             let mut at = popup.parent;
             while let Some(parent) = at.and_then(|id| current.iter().find(|entry| entry.id == id)) {
@@ -878,11 +968,16 @@ pub(crate) fn end_pass(ctx: &Context) {
             .map(|(_, members)| {
                 members.iter().flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied())).collect()
             });
-        order
+        (order, to_top, floats, asked)
     });
     areas::set_layer_order(ctx, &order);
+    for layer in &to_top {
+        areas::move_to_top(ctx, *layer);
+    }
+    if !to_top.is_empty() && floats.iter().any(|layer| !areas::visible_last_frame(ctx, *layer)) {
+        with_persist(ctx, viewport, |persist| persist.raise_again = asked);
+    }
     // An owner takes a close in the frame after the request at the latest; one nobody took is for a layer that is not shown.
-    let now = pass::root_frame_nr(ctx);
     pass_state::with::<Closes, _>(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
     let top_modal = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
     if let Some(entry) = top_modal.filter(|entry| !entry.window) {
@@ -890,19 +985,15 @@ pub(crate) fn end_pass(ctx: &Context) {
     }
     let any = {
         let here = top_modal.is_some();
-        here || modal_in_other_viewports(ctx, viewport)
+        here || modal_elsewhere(ctx, viewport)
     };
     commands::set_modal_open(ctx, any, viewport, top_modal.map(|entry| entry.id));
 }
 
-fn modal_in_other_viewports(ctx: &Context, running: ViewportId) -> bool {
-    modal_viewport(ctx, running).is_some()
-}
-
-/// Whether a modal layer is open in a viewport other than `viewport`: the global open-modal fact the input hook
-/// reads (H3).
+/// Whether a modal layer in another viewport blocks `viewport` (`modal_viewport`): the app-modal fact the input hook
+/// (H3), key ownership and the command state read.
 pub(crate) fn modal_elsewhere(ctx: &Context, viewport: ViewportId) -> bool {
-    modal_in_other_viewports(ctx, viewport)
+    modal_viewport(ctx, viewport).is_some()
 }
 
 /// Records that the input hook dropped a press for `viewport` because a modal is open elsewhere.
@@ -948,7 +1039,7 @@ pub(crate) fn key_layer(ctx: &Context, scopes: &[Id], below: Option<Id>) -> Laye
         (_, None, None) => true,
         _ => false,
     });
-    if above || modal_in_other_viewports(ctx, viewport) {
+    if above || modal_elsewhere(ctx, viewport) {
         return LayerKeys::Blocked;
     }
     inside.map_or(LayerKeys::Window, |entry| LayerKeys::Class(entry.keys))
@@ -969,22 +1060,34 @@ pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
             .max_by_key(|(shown, _)| *shown)
             .map(|(_, id)| id)
     });
-    (root.is_some() || modal_in_other_viewports(ctx, viewport), root)
+    (root.is_some() || modal_elsewhere(ctx, viewport), root)
 }
 
-/// The live viewports with a modal layer open as of their last finished pass.
-fn modal_viewports(ctx: &Context) -> impl Iterator<Item = ViewportId> + '_ {
-    pass::live_viewports(ctx).into_iter().filter(|viewport| with_persist(ctx, *viewport, |persist| persist.modal))
+/// The live viewports with a modal open, each with its place in the modal stack: a modal layer as of their last
+/// finished pass (`Persist::modal`), or the app's own egui modal (`FrameInput::app_modal`), which blocks the app's other
+/// windows as a modal layer does. With both, the one that opened later is the window's top modal.
+fn modal_viewports(ctx: &Context) -> impl Iterator<Item = (ViewportId, u64)> + '_ {
+    let app_modal = crate::runtime::frame::app_modal(ctx);
+    pass::live_viewports(ctx).into_iter().filter_map(move |viewport| {
+        let layer = with_persist(ctx, viewport, |persist| persist.modal);
+        let app = app_modal.filter(|(shown, _)| *shown == viewport).map(|(_, since)| since);
+        layer.max(app).map(|opened| (viewport, opened))
+    })
 }
 
-/// A viewport other than `viewport` that has a modal layer open: the window a blocked press raises.
+/// The viewport whose modal blocks `viewport`: of the other viewports whose top modal opened in a later frame than
+/// `viewport`'s own (any, when it has none), the one that opened last, the window a blocked press raises.
 pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<ViewportId> {
-    modal_viewports(ctx).find(|other| *other != viewport)
+    let own = modal_viewports(ctx).find(|(shown, _)| *shown == viewport).map(|(_, opened)| opened);
+    modal_viewports(ctx)
+        .filter(|(other, opened)| *other != viewport && own.is_none_or(|own| *opened > own))
+        .max_by_key(|(_, opened)| *opened)
+        .map(|(other, _)| other)
 }
 
-/// A viewport that has a modal layer open: the window that blocks the app's other windows.
+/// The viewport at the top of the modal stack (`modal_viewports`): the window that blocks the app's other windows.
 pub(crate) fn app_modal_viewport(ctx: &Context) -> Option<ViewportId> {
-    modal_viewports(ctx).next()
+    modal_viewports(ctx).max_by_key(|(_, opened)| *opened).map(|(viewport, _)| viewport)
 }
 
 /// Whether a layer of key class `class` that is not fading out was shown last frame and the screen point `at` lies in

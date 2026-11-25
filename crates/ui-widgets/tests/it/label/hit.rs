@@ -81,6 +81,33 @@ fn a_click_on_a_radio_label_picks_it_in_that_pass() {
     assert_eq!(picked.get(), 2, "the release on Medium's label picks it in its own pass");
 }
 
+/// A radio's detail line follows its label and is part of its hit area: a click on it picks the radio.
+#[trial]
+fn a_radio_detail_follows_its_label_and_a_click_on_it_picks_the_radio() {
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, REGION, |ui| {
+            RadioGroup::new("Quality", Bind::bound(&mut value)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Radio::new(1u8).label("Fast").detail("Smaller file").show(ui);
+                    Radio::new(2u8).label("Best").detail("Largest file").show(ui);
+                });
+            })
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    let (label, detail) = (text_rect(&frames, "Best"), text_rect(&frames, "Largest file"));
+    let follows = detail.left() >= label.right() || detail.top() >= label.bottom();
+    assert!(follows, "the detail follows the label: {detail:?} after {label:?}");
+    for event in [moved(detail.center()), press(detail.center()), release(detail.center())] {
+        frames.frame(vec![event], &mut show);
+    }
+    assert_eq!(picked.get(), 2, "a click on the detail picks its radio");
+}
+
 #[trial]
 fn a_long_label_after_its_box_wraps_with_the_box_on_its_first_line() {
     const LONG: &str = "Show the transform controls on the selected layer whenever the move tool is active";

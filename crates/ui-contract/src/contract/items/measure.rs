@@ -152,7 +152,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 continue;
             }
             let row = RowMeasure::new(at, Rect::ZERO, cells.clone());
-            let (size, cells) = self.measure_row(comp, ui, (id, env.view(), &env), &mut memory, row, |measure| measure(Proposal::Ideal));
+            let (size, cells) = self.measure_row(comp, ui, (id, env.view(), &env), &mut memory, row, |measure, _, _| measure(Proposal::Ideal));
             largest = largest.max(size);
             run += size.x;
             for (column, width) in cells {
@@ -167,8 +167,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
 
     /// Builds the item of `row.at` as the collection `id` builds it, with the row state `row.state` and flags
     /// `row.flags`, under `installed` (`view` is what the item builder sees), and hands `measure` a measure of it that
-    /// does not allocate: its size at a proposal and the widths its column cells reported. The item is built once
-    /// however many proposals `measure` asks. Item memory goes to `memory`.
+    /// does not allocate: its size at a proposal and the widths its column cells reported, whether the item declared
+    /// a detail body, which the measure leaves out, and whether it is as wide as it measures (`rows::fits`). The item is
+    /// built once however many proposals `measure` asks. Item memory goes to `memory`.
     pub(super) fn measure_row<R>(
         &mut self,
         comp: &C,
@@ -176,7 +177,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         (id, view, installed): (Id, EnvView<'_>, &Env),
         memory: &mut MemoryStage,
         row: RowMeasure,
-        measure: impl FnOnce(&mut dyn FnMut(Proposal) -> (Vec2, Vec<(craft_behavior::ColumnKey, f32)>)) -> R,
+        measure: impl FnOnce(&mut dyn FnMut(Proposal) -> (Vec2, Vec<(craft_behavior::ColumnKey, f32)>), bool, bool) -> R,
     ) -> R {
         let ctx = ui.ctx().clone();
         let RowMeasure { at, rect, cells, state, flags, tree } = row;
@@ -201,6 +202,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             cells,
             grid: None,
             tip: None,
+            detail: None,
             openers: Vec::new(),
             item: item_id,
             memory,
@@ -208,7 +210,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_row_build(&ctx, item_id);
         let item = (self.item)(&key, &mut icx);
+        let detail = icx.detail.is_some();
         let mut item = Props::id(comp.dress(item, &state), item_id);
+        let fits = rows::fits(&item);
         let facts = ItemFacts {
             item: item_id,
             flags,
@@ -228,7 +232,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 scoped.item_facts = Some(std::sync::Arc::new(facts));
             }),
         );
-        let measured = measure(&mut |proposal| crate::runtime::measure::cell_widths(&ctx, || item.measure_in(ui, proposal)));
+        let measured = measure(&mut |proposal| crate::runtime::measure::cell_widths(&ctx, || item.measure_in(ui, proposal)), detail, fits);
         Env::restore(&ctx, env);
         measured
     }
@@ -306,27 +310,39 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 // It runs as a measure; the layout takes its results in the run that called it, so the run's own
                 // placement (a strip's report of its tabs) follows them.
                 let row_width = layout.rect(at, ScrollPos::default()).width();
-                let (widths, height) = layout_memory::boundary(&ctx, true, || {
+                let (widths, height, detail) = layout_memory::boundary(&ctx, true, || {
                     crate::contract::steps::measuring(&ctx, || {
-                        self.measure_row(comp, measuring.ui, installed, memory, row_measure, |measure| {
+                        self.measure_row(comp, measuring.ui, installed, memory, row_measure, |measure, detail, fits| {
                             // A row of auto widths takes its ideal width unless the fit over every row's widths shrinks it:
-                            // its height is measured there, and again only where the fit settles on another width.
+                            // its height is measured there, and again only where the fit settles on another width. A row
+                            // with a detail body is as high as its leaf and its body, which the shown row records. A row
+                            // sized to its content is as wide as it measures there.
                             let widths = wide.then(|| Vec2::new(measure(Proposal::Ideal).0.x, measure(Proposal::Min).0.x));
                             let row_width = widths.map_or(row_width, |widths| widths.x);
-                            let height = (high || wide).then(|| Vec2::new(row_width, measure(Proposal::Width(row_width)).0.y));
-                            (widths, height)
+                            let height = (!detail && (high || wide)).then(|| {
+                                let size = measure(Proposal::Width(row_width)).0;
+                                (Vec2::new(row_width, size.y), fits.then_some(size.x))
+                            });
+                            (widths, height, detail)
                         })
                     })
                 });
+                if detail && let Some((_, times)) = done.iter_mut().find(|(held, _)| *held == at) {
+                    // Its height stays unmeasured this pass: once is enough.
+                    *times = 2;
+                }
                 if let Some(widths) = widths {
                     rows::record_measure(&ctx, id, width_id, widths);
                     layout.set_width(at, widths.x, widths.y);
                 }
-                if let Some(height) = height {
+                if let Some((height, fit)) = height {
                     #[cfg(feature = "testing")]
                     crate::runtime::measure::count_row_measure(&ctx, height_id);
                     rows::record_measure(&ctx, id, height_id, height);
                     layout.set_height(at, height.y);
+                    if rows::keep_fit(&ctx, id, key_hash(&key), fit) {
+                        layout.set_fit(at, fit);
+                    }
                 }
             }
         }

@@ -63,28 +63,14 @@ pub(crate) fn text_event(text: &str) -> Event {
     Event::Text(text.to_owned())
 }
 
-/// The announcement of `modifiers`, none when no modifier is held.
-#[cfg(feature = "testing")]
-fn announced(modifiers: Modifiers) -> Option<Event> {
-    (modifiers != Modifiers::NONE).then(|| modifiers_changed(modifiers))
-}
-
-/// The frame that clears `modifiers`, none when none was held.
-#[cfg(feature = "testing")]
-fn cleared(modifiers: Modifiers) -> Option<Frame> {
-    announced(modifiers).map(|_| vec![modifiers_changed(Modifiers::NONE)])
-}
-
-/// A move to `pos` (with `modifiers` announced first), then `count` times a press and a release of `button`, one
-/// frame each; `modifiers` are cleared in a last frame when they were set.
+/// A move to `pos`, then `count` times a press and a release of `button` carrying the held `modifiers`, one frame each.
 #[cfg(feature = "testing")]
 pub(crate) fn click_frames(pos: Pos2, pressed_button: egui::PointerButton, count: u32, modifiers: Modifiers) -> Vec<Frame> {
-    let mut frames = vec![announced(modifiers).into_iter().chain([pointer_moved(pos)]).collect()];
+    let mut frames = vec![vec![pointer_moved(pos)]];
     for _ in 0..count {
         frames.push(vec![button(pos, pressed_button, true, modifiers)]);
         frames.push(vec![button(pos, pressed_button, false, modifiers)]);
     }
-    frames.extend(cleared(modifiers));
     frames
 }
 
@@ -93,9 +79,9 @@ pub(crate) fn text_frames(text: &str) -> Vec<Frame> {
     vec![vec![text_event(text)]]
 }
 
-/// A wheel turn of `delta` points with `modifiers`, as a mouse wheel reports it.
-pub(crate) fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
-    Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Wheel }
+/// A wheel turn of `delta` in `unit` with `modifiers`, as a mouse wheel reports it.
+pub(crate) fn wheel(unit: egui::MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event {
+    Event::MouseWheel { unit, delta, phase: egui::TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Wheel }
 }
 
 /// What injected input holds down in a viewport: the modifiers, buttons and keys, where the pointer is, and the keys
@@ -363,6 +349,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
     let (pass_nr, focused) = (pass::pass_nr(ctx, viewport), crate::runtime::focus::record(ctx, viewport).focused);
     let frame = pass::frame_nr(ctx, viewport);
     let blurred = input.events.iter().any(|event| matches!(event, Event::WindowFocused(false)));
+    let held = crate::runtime::frame::held_for(ctx, viewport, frame);
     let mut wake = None;
     let follow = Service::<Injected>::run(ctx, |injected| {
         if blurred {
@@ -394,13 +381,19 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
                 return false;
             }
         }
-        if let Some(flight) = &lane.flight {
+        if let Some(flight) = &mut lane.flight {
             if flight.pass < pass_nr {
                 if let (Some(until), Some(now)) = (flight.until, input.time)
                     && now < until
                 {
                     wake = Some(until - now);
                     return false;
+                }
+                // Events of the step that the frame it entered held back (behind a real press there, H0) arrive in this
+                // pass: the step's pass is this one too, so it acts for the client, and the next step waits for it.
+                if flight.step.events.iter().any(|event| held.contains(event)) {
+                    flight.pass = pass_nr;
+                    return !lane.queue.is_empty();
                 }
                 lane.flight = None;
             } else if flight.focus != focused {
@@ -500,15 +493,21 @@ pub(crate) fn inject_key(ctx: &Context, viewport: ViewportId, key: Key, mods: Mo
     });
 }
 
-/// Queues a move to `at`, then a wheel turn of `delta` points, with `mods` held; the modifiers stay held after it. A
+/// Queues a move to `at`, then a wheel turn of `delta` in `unit`, with `mods` held; the modifiers stay held after it. A
 /// non-finite `at` or `delta` queues nothing.
-pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
+pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta: Vec2, unit: egui::MouseWheelUnit, mods: Mods) {
     let Some(at) = finite(at).filter(|_| delta.is_finite()) else { return };
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| {
         request.move_to(at, mods, None);
-        request.step(mods, [wheel(delta, mods)]);
+        request.step(mods, [wheel(unit, delta, mods)]);
     });
+}
+
+/// Whether injected input holds `button` down in `viewport`, from the step that pressed it to the one that releases it
+/// (between steps no event carries the hold).
+pub(crate) fn held_button(ctx: &Context, viewport: ViewportId, button: egui::PointerButton) -> bool {
+    Service::<Injected>::run(ctx, |injected| injected.held.get(&viewport).is_some_and(|held| held.buttons.contains(&button)))
 }
 
 /// Queues the release of what `released` names, at `at` (a move there first) or where the pointer is. Releasing
@@ -577,6 +576,8 @@ pub enum InjectedPointer {
         mods: Mods,
         /// The pen's reading; `None` for a mouse.
         pen: Option<PointerSample>,
+        /// Seconds the pointer must rest at `at` before the step counts as processed; 0 for none.
+        rest: f64,
     },
     /// Every button injected input holds comes up at `at`, after a move there; the modifiers go with them when no
     /// button or key stays down. Nothing held queues nothing.
@@ -597,7 +598,13 @@ impl InjectedPointer {
 
     /// The pointer moves to `at` with `mods` held and the pen's reading `pen`.
     pub const fn move_to(at: Pos2, mods: Mods, pen: Option<PointerSample>) -> Self {
-        InjectedPointer::Move { at, mods, pen }
+        InjectedPointer::Move { at, mods, pen, rest: 0.0 }
+    }
+
+    /// The pointer moves to `at` with `mods` held and the pen's reading `pen`, and the step counts as processed once
+    /// the pointer has rested there `rest` seconds.
+    pub const fn move_resting(at: Pos2, mods: Mods, pen: Option<PointerSample>, rest: f64) -> Self {
+        InjectedPointer::Move { at, mods, pen, rest }
     }
 
     /// Every injected button comes up at `at` with `mods` held.
@@ -622,10 +629,14 @@ pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: Injected
                 request.step(mods, [self::button(at, pressed_button, true, mods)]).pen = pen;
             });
         }
-        InjectedPointer::Move { at, mods, pen } => {
+        InjectedPointer::Move { at, mods, pen, rest } => {
             let Some(at) = finite(at) else { return };
             let mods = platform_modifiers(ctx, mods);
-            queue(ctx, viewport, |request| request.step(mods, [pointer_moved(at)]).pen = pen);
+            queue(ctx, viewport, |request| {
+                let step = request.step(mods, [pointer_moved(at)]);
+                step.pen = pen;
+                step.rest = rest.max(0.0);
+            });
         }
         InjectedPointer::Up { at, mods } => {
             let mods = platform_modifiers(ctx, mods);

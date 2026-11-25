@@ -66,6 +66,8 @@ impl CommandSearch {
         FaceSpec {
             arrangement: Arrangement::Inline,
             label,
+            detail: None,
+            chord: None,
             role: Some(TypeRole::Body),
             lead: Some(&self.glyph),
             picture: None,

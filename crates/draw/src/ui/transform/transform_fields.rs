@@ -12,17 +12,18 @@ use super::session::Interpolation;
 use super::session_bar::TransformBarWords;
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::Rect;
-use craft_behavior::{ColumnWidth, EditEvent, EditEvents, GestureId, IconId, Mixed, RulerUnits};
+use craft_behavior::{ColumnWidth, EditEvent, EditEvents, GestureId, IconId, Mixed};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::canvas::RulerText;
+use craft_ui::canvas::CanvasRulers;
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, FieldLayout, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing,
+    Bind, BodyCx, Bracket, Entry, FieldLayout, GlyphLabel, LabelKind, LabelPress, NoValue, Outcome, Props as _, Show as _, ShowContainer as _,
+    SideLabel, Sizing,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::menu::Menu;
-use craft_ui::pickers::{Anchor9, ReferencePoint, Select};
+use craft_ui::pickers::{Anchor9, ReferencePoint, ReferencePointLook, Select};
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::text::{NumberField, link_toggle};
@@ -117,6 +118,28 @@ impl TransformField {
     }
 }
 
+/// The part of the row an event came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TransformSource {
+    /// This field.
+    Field(TransformField),
+    /// The reference point.
+    Reference,
+}
+
+/// How the panel form orders its fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FieldArrangement {
+    /// W, the link and H on the first row, then X and Y.
+    #[default]
+    SizeFirst,
+    /// X and W on the first row, Y and H on the second, the link beside them centred across the two rows: Tab runs X,
+    /// W, Y, H.
+    PositionFirst,
+}
+
 /// What the row edits and reports: the box and the V skew it reads with.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -134,14 +157,15 @@ impl TransformRow {
     }
 }
 
-/// What each field's running gesture began from, so every value it reports is made from that row.
+/// What each field's running gesture began from, so every value it reports is made from that row and is read against
+/// the start box of that moment: the row and the start box.
 #[derive(Clone, Debug, Default)]
-struct Bases([Option<(GestureId, TransformRow)>; 7]);
+struct Bases([Option<(GestureId, TransformRow, Rect)>; 7]);
 
 impl Bases {
     /// The row the gesture `id` of `field` began from; `fallback` when it has no record.
     fn origin(&self, field: TransformField, id: GestureId, fallback: &TransformRow) -> TransformRow {
-        self.0[field as usize].filter(|(of, _)| *of == id).map_or(*fallback, |(_, row)| row)
+        self.0[field as usize].filter(|(of, ..)| *of == id).map_or(*fallback, |(_, row, _)| row)
     }
 }
 
@@ -162,6 +186,13 @@ pub struct TransformFieldsOutput {
     pub interpolation: Option<Interpolation>,
     /// The relative-position toggle was set to this state.
     pub relative: Option<bool>,
+    /// The part each entry of `events` came from, at the same index.
+    pub sources: Vec<TransformSource>,
+    /// The field an Enter committed this pass, with that Enter's modifiers; `None` for a commit by blur, Tab, scrub or
+    /// click.
+    pub submitted: Option<(TransformField, craft_keymap::Mods)>,
+    /// A press on a link caption (see `TransformFields::caption_press`): its field.
+    pub link: Option<TransformField>,
 }
 
 impl Outcome for TransformFieldsOutput {
@@ -175,8 +206,8 @@ impl Outcome for TransformFieldsOutput {
 /// The fields of a transform box: the reference point, X and Y, W and H with the aspect link, the angle, and the
 /// horizontal and vertical skew.
 ///
-/// - **Fields** are number fields whose captions scrub them. X and Y are the reference point's position in the
-///   [rulers' units](Self::units) and move the box with it; W and H scale it about the reference point, as a
+/// - **Fields** are number fields whose captions scrub them. X and Y are the reference point's distance from the
+///   [rulers'](Self::rulers) zero in their units and move the box with it; W and H scale it about the reference point, as a
 ///   percentage of the box before the transform or as a length ([`size_unit`](Self::size_unit)); the angle and the two
 ///   skews turn and lean it about the reference point. A flipped box reads as a negative W or H and keeps its sign.
 ///   With [`relative`](Self::relative) on, X and Y are the reference point's offset instead of its position.
@@ -193,7 +224,9 @@ impl Outcome for TransformFieldsOutput {
 ///   opens a menu of the units; a pick is [`TransformFieldsOutput::unit_picked`].
 /// - **Panel form** (the default): two field columns that fill the width, the link's column between them: W, the
 ///   link and H on one row, X and Y on the next, the angle, then the H and V skews; the compact reference point, when
-///   shown, leads the first row. [`groups`](Self::groups) leaves out the rows of hidden groups.
+///   shown, leads the first row. [`groups`](Self::groups) leaves out the rows of hidden groups. With
+///   [`FieldArrangement::PositionFirst`] the grid is X and W, then Y and H, with the link beside it, centred across
+///   the two rows.
 /// - **Bar form** ([`bar`](Self::bar)): the compact reference point, then captioned fields in Photoshop's order with a
 ///   divider between the groups, the Δ toggle between X and Y, the interpolation select last.
 ///   [`groups`](Self::groups) narrows the strip.
@@ -205,8 +238,10 @@ pub struct TransformFields<'a> {
     start: Rect,
     linked: Bind<'a, bool>,
     size_unit: SizeUnit,
-    x: RulerText,
-    y: RulerText,
+    rulers: CanvasRulers,
+    reference_look: ReferencePointLook,
+    caption_press: LabelPress,
+    arrangement: FieldArrangement,
     bar: bool,
     groups: TransformGroups,
     interpolation: Option<Bind<'a, Interpolation>>,
@@ -219,15 +254,16 @@ pub struct TransformFields<'a> {
 impl<'a> TransformFields<'a> {
     /// The fields named `label` of `row`, a box that was `start` before the transform; `linked` is the aspect link.
     pub fn new(label: impl Into<Label>, row: Bind<'a, TransformRow>, start: Rect, linked: Bind<'a, bool>) -> Self {
-        let pixels = RulerText::new(RulerUnits::pixels(), UnitKind::Pixels);
         Self {
             label: label.into(),
             row,
             start,
             linked,
             size_unit: SizeUnit::default(),
-            x: pixels,
-            y: pixels,
+            rulers: CanvasRulers::default(),
+            reference_look: ReferencePointLook::default(),
+            caption_press: LabelPress::default(),
+            arrangement: FieldArrangement::default(),
             bar: false,
             groups: TransformGroups::ALL,
             interpolation: None,
@@ -238,10 +274,28 @@ impl<'a> TransformFields<'a> {
         }
     }
 
-    /// The units of X and Y (pixels by default).
-    pub fn units(mut self, x: RulerText, y: RulerText) -> Self {
-        self.x = x;
-        self.y = y;
+    /// The rulers X and Y read from: absolute X and Y are measured from the rulers' zero in their units (pixels from the
+    /// origin by default); relative X and Y ignore the zero.
+    pub fn rulers(mut self, rulers: CanvasRulers) -> Self {
+        self.rulers = rulers;
+        self
+    }
+
+    /// The look of the reference point the fields show.
+    pub fn reference_look(mut self, look: ReferencePointLook) -> Self {
+        self.reference_look = look;
+        self
+    }
+
+    /// The press rule of the X, Y, W, H and angle captions; a press on a link caption reports its field.
+    pub fn caption_press(mut self, press: LabelPress) -> Self {
+        self.caption_press = press;
+        self
+    }
+
+    /// The order of the panel form's fields; the bar form ignores it.
+    pub fn arrangement(mut self, arrangement: FieldArrangement) -> Self {
+        self.arrangement = arrangement;
         self
     }
 
@@ -295,8 +349,24 @@ impl<'a> TransformFields<'a> {
 
     /// Shows the fields.
     pub fn show(self, ui: &mut Ui) -> TransformFieldsOutput {
-        let TransformFields { label, row, start, linked, size_unit, x, y, bar, groups, interpolation, size_units, enabled, relative, document } =
-            self;
+        let TransformFields {
+            label,
+            row,
+            start,
+            linked,
+            size_unit,
+            rulers,
+            reference_look,
+            caption_press,
+            arrangement,
+            bar,
+            groups,
+            interpolation,
+            size_units,
+            enabled,
+            relative,
+            document,
+        } = self;
         let env = Env::of(ui);
         let mut cells = Cells {
             words: env.words::<TransformFieldWords>(),
@@ -309,8 +379,10 @@ impl<'a> TransformFields<'a> {
             size_units,
             start,
             size_unit,
-            x,
-            y,
+            rulers,
+            reference_look,
+            caption_press,
+            arrangement,
             groups,
             enabled,
             relative,
@@ -322,8 +394,8 @@ impl<'a> TransformFields<'a> {
         } else {
             FieldGroup::new(label).enabled(enabled).show(ui, |ui, cx| cells.rows(ui, cx)).output
         };
-        let Out { events, unit_picked, linked, interpolation, relative } = cells.out;
-        TransformFieldsOutput { response, events, unit_picked, linked, interpolation, relative }
+        let Out { events, sources, unit_picked, linked, interpolation, relative, submitted, link } = cells.out;
+        TransformFieldsOutput { response, events, unit_picked, linked, interpolation, relative, sources, submitted, link }
     }
 }
 
@@ -331,6 +403,9 @@ impl<'a> TransformFields<'a> {
 #[derive(Default)]
 struct Out {
     events: EditEvents<TransformRow>,
+    sources: Vec<TransformSource>,
+    submitted: Option<(TransformField, craft_keymap::Mods)>,
+    link: Option<TransformField>,
     unit_picked: Option<UnitKind>,
     linked: Option<bool>,
     interpolation: Option<Interpolation>,
@@ -349,8 +424,10 @@ struct Cells<'a> {
     size_units: Option<&'a [Entry<UnitKind>]>,
     start: Rect,
     size_unit: SizeUnit,
-    x: RulerText,
-    y: RulerText,
+    rulers: CanvasRulers,
+    reference_look: ReferencePointLook,
+    caption_press: LabelPress,
+    arrangement: FieldArrangement,
     groups: TransformGroups,
     enabled: bool,
     relative: Option<Bind<'a, bool>>,
@@ -362,6 +439,10 @@ struct Cells<'a> {
 const FIELD_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
 /// The panel form's columns with the reference point before them.
 const REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
+/// The position-first panel form's columns: two fields that share the width.
+const PAIR_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+/// The position-first panel form's columns with the reference point before them.
+const REFERENCE_PAIR_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
 /// Which form the cells show in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -392,26 +473,31 @@ struct Pass {
     before: TransformRow,
     conversion: Conversion,
     bases: Bases,
+    /// The row binding read no value: the fields show nothing, while gestures still start from the start box.
+    blank: bool,
 }
 
 impl Cells<'_> {
     fn pass(&mut self, cx: &mut BodyCx<'_>) -> Pass {
         let start = TransformRow { state: BoxState::from_rect(self.start), skew_v: 0.0 };
-        let before = match self.row.reborrow().read(cx) {
+        let read = self.row.reborrow().read(cx);
+        let blank = read.is_none();
+        let before = match read {
             Some(Mixed::Same(held)) => held,
             _ => start,
         };
         let linked = matches!(self.linked.reborrow().read(cx), Some(Mixed::Same(true)));
         let relative = self.relative.as_mut().is_some_and(|on| matches!(on.reborrow().read(cx), Some(Mixed::Same(true))));
         let conversion =
-            Conversion { rect: self.start, x: self.x, y: self.y, size: self.size_unit.clone(), linked, document: self.document, relative };
-        Pass { before, conversion, bases: cx.memory::<Bases>().clone() }
+            Conversion { rect: self.start, rulers: self.rulers, size: self.size_unit.clone(), linked, document: self.document, relative };
+        Pass { before, conversion, bases: cx.memory::<Bases>().clone(), blank }
     }
 
-    /// Writes `event` to the row and adds it to the pass's.
-    fn report(&mut self, cx: &mut BodyCx<'_>, event: EditEvent<TransformRow>) {
+    /// Writes `event` to the row and adds it, with the part it came from, to the pass's.
+    fn report(&mut self, cx: &mut BodyCx<'_>, event: EditEvent<TransformRow>, source: TransformSource) {
         let _ = self.row.reborrow().write(cx, &event);
         self.out.events.push(event);
+        self.out.sources.push(source);
     }
 
     /// The field's scrubbing glyph label and its name in `form`: every glyph beside its field, so in the panel form the
@@ -419,7 +505,7 @@ impl Cells<'_> {
     /// inside the field.
     fn side_and_name(&self, field: TransformField, form: Form) -> (SideLabel, Label) {
         let words = &self.words;
-        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone())));
+        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph.clone())));
         let (side, name) = match field {
             TransformField::X => (beside(&words.x_glyph), &words.x_name),
             TransformField::Y => (beside(&words.y_glyph), &words.y_name),
@@ -432,19 +518,26 @@ impl Cells<'_> {
             TransformField::SkewH => (beside(&words.skew_h_glyph), &words.skew_h_name),
             TransformField::SkewV => (beside(&words.skew_v_glyph), &words.skew_v_name),
         };
-        (side.scrub(true), name.clone())
+        let mut side = side.scrub(true);
+        if !matches!(field, TransformField::SkewH | TransformField::SkewV) {
+            side.press = self.caption_press;
+        }
+        (side, name.clone())
     }
 
     /// One captioned field of `form`. Returns the field's event lifted to the row.
     fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField, form: Form) {
         let (side, name) = self.side_and_name(field, form);
         let sizing = form.sizing();
-        let conversion = &pass.conversion;
+        // A running gesture of this field is shown the value it began from, read against the start box it began with:
+        // the host's write-back of the gesture's own values, or a start box it moves with them, must not look like the
+        // app changing the field under it.
+        let running = pass.bases.0[field as usize];
+        let began = running.map(|(.., rect)| Conversion { rect, ..pass.conversion.clone() });
+        let conversion = began.as_ref().unwrap_or(&pass.conversion);
         let (kind, decimals) = conversion.format(field);
         let bound = conversion.bound(field);
-        // A running gesture of this field is shown the value it began from: the host's write-back of the gesture's own
-        // values must not look like the app changing the field under it.
-        let basis = pass.bases.0[field as usize].map_or(pass.before, |(_, row)| row);
+        let basis = running.map_or(pass.before, |(_, row, _)| row);
         let current = conversion.shown(&basis.state, basis.skew_v, field);
         let codec = conversion.codec(&self.units, field);
         let unit = Label::from(self.units.symbol(kind));
@@ -452,8 +545,11 @@ impl Cells<'_> {
         let menu = self.size_units.filter(|_| matches!(field, TransformField::W | TransformField::H));
         let mut events = EditEvents::new();
         let mut picked = None;
+        let mut submit = None;
+        let mut link_pressed = false;
+        let shown_value = (!pass.blank).then_some(current);
         Field::new(name.clone()).id_salt(field.key()).enabled(self.enabled).side(side).sizing(sizing).show(ui, |ui, _| {
-            let mut number = NumberField::new(name.clone(), Bind::given(Some(current)))
+            let mut number = NumberField::new(name.clone(), Bind::given(shown_value))
                 .range(-bound..=bound)
                 .codec(codec.clone())
                 .unit(unit.clone())
@@ -467,17 +563,25 @@ impl Cells<'_> {
             }
             let shown = number.show(ui);
             events = shown.edit.events.clone();
+            submit = shown.edit.submitted.then_some(shown.edit.submit_mods);
+            link_pressed = shown.link;
             if let Some(entries) = menu {
                 let entries: Vec<Entry<UnitKind>> = entries.iter().map(|entry| entry.clone().checked(entry.value() == Some(&kind))).collect();
                 picked = Menu::context(name.clone(), &shown.edit.response).values().pick(ui, &entries).picked;
             }
         });
         self.out.unit_picked = self.out.unit_picked.or(picked);
+        if let Some(mods) = submit {
+            self.out.submitted = self.out.submitted.or(Some((field, mods)));
+        }
+        if link_pressed {
+            self.out.link = self.out.link.or(Some(field));
+        }
         let places = i32::try_from(decimals).unwrap_or(0);
         for event in events {
             let lifted = lift(&mut pass.bases, &pass.before, conversion, field, event, current, 0.5 * 10f64.powi(-places));
             if let Some(lifted) = lifted {
-                self.report(cx, lifted);
+                self.report(cx, lifted, TransformSource::Field(field));
             }
         }
     }
@@ -485,7 +589,7 @@ impl Cells<'_> {
     /// The reference point picker; a pick moves the reference point to that point of the box.
     fn reference(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &Pass, compact: bool) {
         let anchor = pass.before.state.anchor_of_pivot().unwrap_or(Anchor9::Centre);
-        let mut picker = ReferencePoint::new(self.words.reference.clone(), Bind::given(Some(anchor))).enabled(self.enabled);
+        let mut picker = ReferencePoint::new(self.words.reference.clone(), Bind::given(Some(anchor))).enabled(self.enabled).look(self.reference_look);
         if compact {
             picker = picker.compact();
         }
@@ -494,7 +598,7 @@ impl Cells<'_> {
         let before = pass.before;
         let state = BoxState::new(before.state.quad, before.state.point_at(picked));
         let event = EditEvent::set(Mixed::Same(before), TransformRow { state, skew_v: before.skew_v }, self.name.clone(), None);
-        self.report(cx, event);
+        self.report(cx, event, TransformSource::Reference);
     }
 
     /// The aspect link toggle between W and H.
@@ -544,40 +648,94 @@ impl Cells<'_> {
     /// in a column of its own. A row with nothing in a column shows an empty cell there.
     fn rows(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let mut pass = self.pass(cx);
+        match self.arrangement {
+            FieldArrangement::PositionFirst => self.position_first(ui, cx, &mut pass),
+            _ => self.size_first(ui, cx, &mut pass),
+        }
+        *cx.memory::<Bases>() = pass.bases;
+    }
+
+    /// The size-first grid of [`rows`](Self::rows).
+    fn size_first(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass) {
         let groups = self.groups;
         let columns: &'static [ColumnWidth] = if groups.reference { &REFERENCE_COLUMNS } else { &FIELD_COLUMNS };
         Grid::new(columns).id_salt("fields").fill_width().show(ui, |ui, _| {
             let mut first = true;
             if groups.size {
-                self.lead(ui, cx, &pass, &mut first);
-                self.field(ui, cx, &mut pass, TransformField::W, Form::Panel);
+                self.lead(ui, cx, pass, &mut first);
+                self.field(ui, cx, pass, TransformField::W, Form::Panel);
                 self.link(ui);
-                self.field(ui, cx, &mut pass, TransformField::H, Form::Panel);
+                self.field(ui, cx, pass, TransformField::H, Form::Panel);
             }
             if groups.position || (groups.reference && first) {
-                self.lead(ui, cx, &pass, &mut first);
+                self.lead(ui, cx, pass, &mut first);
                 if groups.position {
-                    self.field(ui, cx, &mut pass, TransformField::X, Form::Panel);
+                    self.field(ui, cx, pass, TransformField::X, Form::Panel);
                     empty(ui);
-                    self.field(ui, cx, &mut pass, TransformField::Y, Form::Panel);
+                    self.field(ui, cx, pass, TransformField::Y, Form::Panel);
                 } else {
                     (0..3).for_each(|_| empty(ui));
                 }
             }
             if groups.angle {
-                self.lead(ui, cx, &pass, &mut first);
-                self.field(ui, cx, &mut pass, TransformField::Angle, Form::Panel);
+                self.lead(ui, cx, pass, &mut first);
+                self.field(ui, cx, pass, TransformField::Angle, Form::Panel);
                 empty(ui);
                 empty(ui);
             }
             if groups.skew {
-                self.lead(ui, cx, &pass, &mut first);
-                self.field(ui, cx, &mut pass, TransformField::SkewH, Form::Panel);
+                self.lead(ui, cx, pass, &mut first);
+                self.field(ui, cx, pass, TransformField::SkewH, Form::Panel);
                 empty(ui);
-                self.field(ui, cx, &mut pass, TransformField::SkewV, Form::Panel);
+                self.field(ui, cx, pass, TransformField::SkewV, Form::Panel);
             }
         });
-        *cx.memory::<Bases>() = pass.bases;
+    }
+
+    /// The position-first form of [`rows`](Self::rows): X and W, then Y and H, in a grid beside the link, which stands
+    /// centred across their two rows; the reference point, when shown, leads the grid's first row in a column of its
+    /// own. The angle and the skews follow in a grid of their own.
+    fn position_first(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass) {
+        let groups = self.groups;
+        if groups.position || groups.size || groups.reference {
+            let columns: &'static [ColumnWidth] = if groups.reference { &REFERENCE_PAIR_COLUMNS } else { &PAIR_COLUMNS };
+            Row::new().bracket(Bracket::Unlinked).fill_width().show(ui, |ui, _| {
+                Grid::new(columns).id_salt("fields").fill_width().show(ui, |ui, _| {
+                    let mut first = true;
+                    let rows = if groups.position || groups.size { 2 } else { 1 };
+                    for row in [[TransformField::X, TransformField::W], [TransformField::Y, TransformField::H]].into_iter().take(rows) {
+                        self.lead(ui, cx, pass, &mut first);
+                        self.field_or_empty(ui, cx, pass, groups.position, row[0]);
+                        self.field_or_empty(ui, cx, pass, groups.size, row[1]);
+                    }
+                });
+                if groups.size {
+                    self.link(ui);
+                }
+            });
+        }
+        if !(groups.angle || groups.skew) {
+            return;
+        }
+        Grid::new(&PAIR_COLUMNS).id_salt("turns").fill_width().show(ui, |ui, _| {
+            if groups.angle {
+                self.field(ui, cx, pass, TransformField::Angle, Form::Panel);
+                empty(ui);
+            }
+            if groups.skew {
+                self.field(ui, cx, pass, TransformField::SkewH, Form::Panel);
+                self.field(ui, cx, pass, TransformField::SkewV, Form::Panel);
+            }
+        });
+    }
+
+    /// The panel field `field` when `shown`, else an empty cell.
+    fn field_or_empty(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, shown: bool, field: TransformField) {
+        if shown {
+            self.field(ui, cx, pass, field, Form::Panel);
+        } else {
+            empty(ui);
+        }
     }
 
     /// The panel form's leading cell of a row, while the reference point shows: the point on the first row, an empty
@@ -650,7 +808,7 @@ fn lift(
     let slot = field as usize;
     match event {
         EditEvent::Begin { id, label, doc_key, .. } => {
-            bases.0[slot] = Some((id, *before));
+            bases.0[slot] = Some((id, *before, conversion.rect));
             Some(EditEvent::begin(id, Mixed::Same(*before), label, doc_key))
         }
         EditEvent::Update { id, value: Some(value), .. } => {

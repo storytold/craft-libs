@@ -78,12 +78,14 @@ pub struct PressStart {
     pub time: f64,
     /// 1 for a single press, 2 for a double press, and so on.
     pub clicks: u32,
+    /// The press went down on another target, which handed it to this one ([`PressMachine::take_over`]).
+    pub handed: bool,
 }
 
 impl PressStart {
     /// A press of `button` at `origin`.
     pub const fn new(origin: Pos2, button: PointerButton, time: f64, clicks: u32) -> Self {
-        PressStart { origin, button, time, clicks }
+        PressStart { origin, button, time, clicks, handed: false }
     }
 }
 
@@ -99,12 +101,14 @@ pub struct PointerSample {
     pub rotation: f32,
     /// The eraser end of a pen.
     pub eraser: bool,
+    /// An airbrush pen's finger wheel, 0 to 1; `None` when the pen has none.
+    pub wheel: Option<f32>,
 }
 
 impl PointerSample {
     /// A sample with no tilt or rotation.
     pub const fn new(pressure: f32) -> Self {
-        PointerSample { pressure, tilt: [0.0, 0.0], rotation: 0.0, eraser: false }
+        PointerSample { pressure, tilt: [0.0, 0.0], rotation: 0.0, eraser: false, wheel: None }
     }
 
     /// The sample with every field in range: pressure within 0 to 1, tilt and rotation finite radians, a stray value
@@ -118,7 +122,8 @@ impl PointerSample {
         let quarter = std::f32::consts::FRAC_PI_2;
         let tilt = self.tilt.map(|tilt| if tilt.is_finite() { tilt.clamp(-quarter, quarter) } else { 0.0 });
         let rotation = if self.rotation.is_finite() { self.rotation } else { 0.0 };
-        PointerSample { pressure, tilt, rotation, eraser: self.eraser }
+        let wheel = self.wheel.filter(|wheel| wheel.is_finite()).map(|wheel| wheel.clamp(0.0, 1.0));
+        PointerSample { pressure, tilt, rotation, eraser: self.eraser, wheel }
     }
 }
 
@@ -157,6 +162,25 @@ pub enum PressCancel {
     Removed,
     /// The host ended what the press acted on (`primitives::cancel_press_of`).
     Host,
+    /// A second finger landed while a press was open.
+    Gesture,
+}
+
+/// Two or more fingers came down and all lifted within [`MULTI_TAP_TIME`] without moving past [`MULTI_TAP_SLOP`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MultiTap {
+    /// How many fingers tapped.
+    pub fingers: u8,
+    /// The centre of the fingers.
+    pub at: Pos2,
+}
+
+impl MultiTap {
+    /// A tap of `fingers` around `at`.
+    pub const fn new(fingers: u8, at: Pos2) -> Self {
+        MultiTap { fingers, at }
+    }
 }
 
 /// One part's press state in one pass.
@@ -340,6 +364,13 @@ impl Default for PressState {
 
 /// The longest gap between presses that still count as one multi-click, in seconds.
 pub const MULTI_CLICK_TIME: f64 = 0.3;
+
+/// The longest the fingers of a multi-finger tap may stay down, in seconds.
+pub const MULTI_TAP_TIME: f64 = 0.5;
+
+/// How far a finger of a multi-finger tap may move from where it landed, in points: fingers drift more than a
+/// pointer does while the others land.
+pub const MULTI_TAP_SLOP: f32 = 16.0;
 
 /// The click count of a press at `pos` and `time` with `mods` held, given the previous press `(pos, time, clicks,
 /// mods)`: one more when it follows within [`MULTI_CLICK_TIME`] and `slop` of the previous one with the same
@@ -592,6 +623,36 @@ impl<T: Copy> PressMachine<T> {
     /// Whether a drag holds the pointer.
     pub fn dragging(&self) -> bool {
         self.open.is_some_and(|open| open.dragging)
+    }
+
+    /// The press the open press began as.
+    pub fn start(&self) -> Option<PressStart> {
+        self.open.map(|open| open.start)
+    }
+
+    /// Takes over a press whose button is down and went down elsewhere, as a drag of `target` from `start`: the next
+    /// pass reports `DragStart`, and later ones the press's own `Drag`, `Release` or `Cancel` from their input, each
+    /// with a start that says it was handed over ([`PressStart::handed`]). A press this machine holds already stays as
+    /// it is.
+    // PLAN: the sheet's Files table has no row for this file; the handover of a held press (decision q346) needs the
+    // machine to open a press that did not begin on it, which only the machine can build.
+    pub fn take_over(&mut self, target: T, sense: Sense, start: PressStart) {
+        if self.open.is_some() {
+            return;
+        }
+        self.open = Some(Open {
+            target,
+            sense: sense - Sense::CLICK,
+            start: PressStart { handed: true, ..start },
+            dragging: true,
+            abandoned: false,
+            left: false,
+            reported: true,
+            drag_reported: false,
+            released_at: None,
+            passing: None,
+            silent: false,
+        });
     }
 
     /// Whether the button went up and the release waits for a later pass, which the caller must ask for: no input may
@@ -922,6 +983,22 @@ mod tests {
             up.phase
         );
         assert!(machine.target().is_none(), "the release ends the press");
+    }
+
+    /// A press taken over from another machine reports its drag's start first, then the held button's own drag and
+    /// release, which never clicks.
+    #[test]
+    fn a_press_taken_over_reports_its_drag_start_then_its_own_phases() {
+        let origin = pos2(10.0, 0.0);
+        let mut machine = PressMachine::new();
+        machine.take_over(1u8, Sense::DRAG | Sense::CLICK, PressStart::new(origin, PointerButton::Primary, 1.0, 1));
+        let first = pass(&mut machine, &[], Sense::DRAG);
+        assert!(matches!(first.phase, Some(PressPhase::DragStart { start, .. }) if start.origin == origin), "{:?}", first.phase);
+        let moved = pass(&mut machine, &[PointerEvent::moved(pos2(30.0, 0.0), None)], Sense::DRAG);
+        assert!(matches!(moved.phase, Some(PressPhase::Drag { pos, .. }) if pos == pos2(30.0, 0.0)), "{:?}", moved.phase);
+        let up = pass(&mut machine, &[PointerEvent::released(pos2(30.0, 0.0))], Sense::DRAG);
+        assert!(matches!(up.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", up.phase);
+        assert_eq!(up.activated, None, "a taken-over press is no click");
     }
 
     /// The pointer leaving the window (a press on a window's edge grip pulled outward) ends the press's click but not

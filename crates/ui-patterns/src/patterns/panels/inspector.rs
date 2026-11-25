@@ -22,6 +22,9 @@ pub(crate) mod stories;
 /// - No target: the body is replaced by a centred notice, `empty` or "No properties", and the header shows the label.
 /// - The body can hold a `SectionStack` for sections the user reorders.
 /// - Padding: none of its own. An inspector is a dock body, docked or floating, and the dock group insets it.
+/// - Title weight: a section heading's by default, as the headings of the sections under it;
+///   [`title_strength`](Inspector::title_strength) gives another, such as `Quiet` for a muted kind line over the
+///   sections, with no rule under it.
 #[derive(crate::contract::Pattern)]
 pub struct Inspector<'a> {
     label: Label,
@@ -30,6 +33,7 @@ pub struct Inspector<'a> {
     name: Option<Label>,
     kind: Option<Label>,
     empty: Option<Label>,
+    strength: HeaderStrength,
     actions: Vec<HeaderAction>,
     menu: Option<MenuRows<'a>>,
 }
@@ -37,7 +41,17 @@ pub struct Inspector<'a> {
 impl<'a> Inspector<'a> {
     /// An inspector named `label`; with no target it shows the empty notice.
     pub fn new(label: impl Into<Label>) -> Self {
-        Inspector { label: label.into(), target: None, icon: None, name: None, kind: None, empty: None, actions: Vec::new(), menu: None }
+        Inspector {
+            label: label.into(),
+            target: None,
+            icon: None,
+            name: None,
+            kind: None,
+            empty: None,
+            strength: HeaderStrength::Section,
+            actions: Vec::new(),
+            menu: None,
+        }
     }
 
     /// Inspects the target `target`: the body shows, and its ids follow the key.
@@ -68,6 +82,13 @@ impl<'a> Inspector<'a> {
         self
     }
 
+    /// The title's weight in place of `HeaderStrength::Section`.
+    #[must_use]
+    pub fn title_strength(mut self, strength: HeaderStrength) -> Self {
+        self.strength = strength;
+        self
+    }
+
     /// What the notice says when there is no target.
     #[must_use]
     pub fn empty(mut self, message: impl Into<Label>) -> Self {
@@ -91,11 +112,10 @@ impl<'a> Inspector<'a> {
 
     /// Shows the panel across the room offered and fills its body with `body`, or the empty notice.
     pub fn show(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) -> PanelOutput {
-        let Inspector { label, target, icon, name, kind, empty, actions, menu } = self;
+        let Inspector { label, target, icon, name, kind, empty, strength, actions, menu } = self;
         let shown = target.is_some();
         let title = if shown { name.unwrap_or(label) } else { label };
-        // The target's name carries a section heading's weight, as the headings of the sections under it do.
-        let mut panel = Panel::new(title).titled().strength(HeaderStrength::Section).actions(actions).labels(LabelScheme::Inspector).pad(Pad::None);
+        let mut panel = Panel::new(title).titled().strength(strength).actions(actions).labels(LabelScheme::Inspector).pad(Pad::None);
         if shown {
             if let Some(icon) = icon {
                 panel = panel.icon(icon);

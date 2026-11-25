@@ -273,6 +273,31 @@ fn edge_of(dx: i8, dy: i8) -> ResizeEdge {
     }
 }
 
+/// The move band and the resize grips the body step declared for a container this pass, for a host that names them
+/// (an automation interface that drives a window by its grips). Each comes with the id of its accessibility node, the
+/// id [`focused_node`](crate::runtime::access::focused_node) reports while it holds focus.
+impl<C: Container> Cx<'_, C> {
+    /// The band the container is moved by, `None` when it has none this pass (no header, not movable).
+    pub fn move_band(&self) -> Option<(Rect, Id)> {
+        let band = self.core.results.get(&(MOVE_BAND, None))?;
+        Some((band.rect, crate::runtime::access::sub_node_id(self.core.id, MOVE_BAND.into())))
+    }
+
+    /// The edge and corner grips the container is resized by, each with the edge or corner it moves; none when it does
+    /// not resize this pass (minimized, maximized, or a window the platform resizes from its own frame).
+    pub fn resize_grips(&self) -> Vec<(ResizeEdge, Rect, Id)> {
+        GRIPS
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, (dx, dy, _))| {
+                let part = GRIP.at(index as u64);
+                let grip = self.core.results.get(&(GRIP, Some(index as u64)))?;
+                Some((edge_of(dx, dy), grip.rect, crate::runtime::access::sub_node_id(self.core.id, part)))
+            })
+            .collect()
+    }
+}
+
 /// The arrow chords, with and without Shift, a window mode holds, with the direction each moves.
 const MODE_ARROWS: [(Key, [i8; 2]); 4] = [(Key::Left, [-1, 0]), (Key::Right, [1, 0]), (Key::Up, [0, -1]), (Key::Down, [0, 1])];
 
@@ -387,7 +412,7 @@ impl BodyHooks<'_> {
         let rtl = cx.core.env.direction().is_rtl();
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
-        let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard };
+        let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard, continued: false };
         let started = commands::take_for_instance(&ctx, Some(window), false, WindowCommand::from_ref).map(|(command, _)| command);
         let mut mode = self.mode.clone();
         if let Some(command) = started {
@@ -484,7 +509,7 @@ impl BodyHooks<'_> {
         };
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
-        let (origin, pos, gesture) = match phase {
+        let (start, pos, gesture) = match phase {
             PressPhase::Down { .. } => {
                 self.mode.pressed = Some(current.rect_over(rect));
                 return;
@@ -495,13 +520,14 @@ impl BodyHooks<'_> {
                 self.mode.began = Some(self.mode.pressed.unwrap_or_else(|| current.rect_over(rect)));
                 self.mode.restore = current.clone();
                 self.mode.held = grip;
-                (start.origin, Some(pos), GesturePhase::Begin)
+                (start, Some(pos), GesturePhase::Begin)
             }
-            PressPhase::Drag { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Update),
-            PressPhase::Release { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Commit),
-            PressPhase::Cancel { start, .. } => (start.origin, None, GesturePhase::Cancel),
+            PressPhase::Drag { start, pos, .. } => (start, Some(pos), GesturePhase::Update),
+            PressPhase::Release { start, pos, .. } => (start, Some(pos), GesturePhase::Commit),
+            PressPhase::Cancel { start, .. } => (start, None, GesturePhase::Cancel),
             _ => return,
         };
+        let origin = start.origin;
         if matches!(gesture, GesturePhase::Commit | GesturePhase::Cancel) {
             self.mode.pressed = None;
         }
@@ -513,7 +539,9 @@ impl BodyHooks<'_> {
             Some(pos) => limits.moved(began, pos - origin),
             None => began,
         };
-        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind };
+        // A move band press another component handed over (`Overlay::continue_move`) continues that component's drag.
+        let continued = grip.is_none() && start.handed;
+        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind, continued };
         if gesture == GesturePhase::Begin {
             self.reports.push(change(began, GesturePhase::Begin));
         }
@@ -575,7 +603,7 @@ impl BodyHooks<'_> {
         let phase = |index: usize| core.results.get(&(GRIP, Some(index as u64))).map(|result| result.press.phase);
         let change = |rect: Rect, phase: GesturePhase, grip: usize| {
             let (dx, dy, _) = GRIPS[grip];
-            PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Size(edge_of(dx, dy)) }
+            PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Size(edge_of(dx, dy)), continued: false }
         };
         let resized = |sizing: &WindowSize, desktop: Pos2| {
             let (dx, dy, _) = GRIPS[sizing.grip];
@@ -636,7 +664,7 @@ impl BodyHooks<'_> {
         let outer = facts.outer.unwrap_or(facts.inner);
         // Where the inner area lies in the outer rect.
         let inset = facts.inner.min - outer.min;
-        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Move };
+        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Move, continued: false };
         let pointer_of = |moving: &WindowMove| moving.at.min + inset + moving.grab;
         let Some(mut moving) = self.mode.moving else {
             let tracked = windows::shell_of(&ctx, viewport).caps.contains(Caps::OS_MOVES_TRACKED);
@@ -747,7 +775,7 @@ impl BodyHooks<'_> {
         if matches!(kind, PlacementKind::Size(_)) && overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller) {
             return;
         }
-        self.reports.push(PlacementChange { rect: now, phase: GesturePhase::Commit, pointer: None, kind });
+        self.reports.push(PlacementChange { rect: now, phase: GesturePhase::Commit, pointer: None, kind, continued: false });
     }
 
     /// The move band and the grips (16.3). A layer's move and resize the layer; those of an OS window (`os_window`)
@@ -767,11 +795,16 @@ impl BodyHooks<'_> {
         };
         let exclusive = |hit: WindowHit| os.is_some().then_some(hit);
         let moves_window = matches!(&props.mount, Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } if overlay.moves_window);
+        // A full-window container in an OS window of its own: its fallback layer covers the main window, so neither
+        // moves nor resizes, but the window is one the user moves by its title row and sizes by its edges, as any
+        // window. Without them a window the app frames had no band and no grips (photocraft#16905).
+        let own_full_window = os.is_some() && matches!(&props.mount, Mount::Viewport { fallback, .. } if fallback.is_full_window());
         // A layer moves when its overlay says so; other mounts follow the header's band.
         let movable = match &props.mount {
             // A band that moves the window below follows the rule of the window's own band (a title bar's); where the
             // platform answers the hit test, the sink reads it from the exclusive list.
             _ if moves_window => WindowParts::of(&ctx, pass::current_viewport(&ctx)).band,
+            _ if own_full_window => stands.band,
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.movable && stands.band,
             _ => props.header.is_some_and(|header| header.band == crate::contract::DragBand::Move) && stands.band,
         };
@@ -782,15 +815,23 @@ impl BodyHooks<'_> {
             // areas cover its ends and top edge, and a cursor set over them fights the OS's.
             let moved = os.or(moves_window.then(|| pass::current_viewport(&ctx)));
             let os_bar = moved.is_some_and(|viewport| windows::shell_of(&ctx, viewport).window.chrome == WindowChrome::Inset);
+            let hand = pcx.env.get::<crate::contract::MoveBandCursor>() == crate::contract::MoveBandCursor::Hand;
             let mut part = pcx.part(MOVE_BAND, band).sense(craft_behavior::Sense::DRAG).pointer_only(reason);
-            if !os_bar {
+            if !os_bar && hand {
                 part = part.cursor(CursorIcon::Grab).drag_cursor(CursorIcon::Grabbing);
             }
             if let Some(hit) = exclusive(WindowHit::Move).or(moves_window.then_some(WindowHit::Move)) {
                 part.exclusive(hit);
             }
+            // A layer that continues a press begun elsewhere takes it before step 8 reads this pass's presses, so its
+            // move begins in this pass from the window's own rect (`window_drag`). Only a layer can: the OS gives an
+            // OS window no press that went down in another window.
+            if let Some(grab) = overlay_of(props).and_then(|overlay| overlay.continue_move).filter(|_| os.is_none() && !moves_window) {
+                crate::primitives::sensing::hand_over_press(&ctx, pcx.id, MOVE_BAND.into(), rect.min + grab);
+            }
         }
         let edges = match &props.mount {
+            _ if own_full_window => ResizeEdges::ALL,
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.resize.edges,
             Mount::Window { resize } => resize.edges,
             _ => ResizeEdges::NONE,
@@ -808,6 +849,7 @@ impl BodyHooks<'_> {
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
         let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
+        let grip_name = props.resize_name.as_ref().map(|name| pcx.env.resolve(name).as_str().to_owned());
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
             if held != Some(index) && !grip_stands(edges, pinned, dx, dy) {
                 continue;
@@ -831,6 +873,10 @@ impl BodyHooks<'_> {
                 .pointer_only(reason)
                 .exact_hit()
                 .over();
+            let part = match &grip_name {
+                Some(name) => part.node(crate::runtime::access::Role::SPLITTER, name.as_str()),
+                None => part,
+            };
             // The grips of a window its caller sizes are the app's (`window_resize`), never the platform's.
             if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))).filter(|_| !caller_sizes) {
                 part.exclusive(hit);
