@@ -22,6 +22,7 @@
         "tab_large": 32.0,
         "title": 32.0
       },
+      "button": 24.0,
       "checker": 4.0,
       "control": {
         "md": 24.0,
@@ -69,6 +70,11 @@
         },
         "short": 96.0,
         "track": 128.0
+      },
+      "page": {
+        "action": 24.0,
+        "column": 820.0,
+        "margin": 40.0
       },
       "pane": {
         "least": 40.0

@@ -18,7 +18,10 @@ fn input_over_the_size_limit_is_refused() {
     for format in Format::ALL {
         assert_eq!(parse(&big, format), Err(Error::TooLarge(MAX_INPUT)), "{format:?}");
     }
-    assert!(parse(big.get(..MAX_INPUT).unwrap(), Format::Srt).is_ok());
+    // Reading 64 MiB at the limit takes seconds: nightly only.
+    if craft_testkit::hostile::divisor() == 1 {
+        assert!(parse(big.get(..MAX_INPUT).unwrap(), Format::Srt).is_ok());
+    }
 }
 
 /// TTML is read without entity expansion: a document type with entities defines nothing.

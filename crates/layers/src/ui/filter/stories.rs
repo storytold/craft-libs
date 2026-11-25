@@ -1,9 +1,10 @@
 //! Stories of `LayerFilterBar`: each filter type in one card, with the count of a document's layers it lets through.
 
-use super::{EffectKind, FilterBy, FilterKind, FilterObject, FilterState, LayerAttribute, LayerFilter, LayerFilterBar, SmartKind};
+use super::{EffectKind, FilterBy, FilterKind, FilterObject, FilterState, LayerAttribute, LayerFilter, LayerFilterBar, ObjectsSearch, SmartKind};
 use crate::ui::mock::FakeLayers;
 use crate::ui::tree::LayerTree as _;
 use craft_theme::LabelColor;
+use craft_ui::runtime::env::with_env;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
 use egui::Ui;
 
@@ -102,4 +103,18 @@ fn layer_filter_objects(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         LayerFilter { by: FilterBy::Objects, objects: vec![FilterObject::Paths], states: vec![FilterState::Locked], ..LayerFilter::default() },
     );
     show(ui, filter, filter_at)
+}
+
+/// The Objects filter in an app whose search field fills the bar (`ObjectsSearch::Fill`, VectorCraft's Layers panel):
+/// the Filter button at the end edge.
+#[story(LayerFilterBar<'static>, covers = [], drive = Drive::Never, group = "Types", title = "Filter by Objects, filling search")]
+fn layer_filter_objects_fill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Objects, ..LayerFilter::default() });
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ObjectsSearch::Fill);
+        },
+        |ui| show(ui, filter, filter_at),
+    )
 }

@@ -244,9 +244,11 @@ pub(crate) struct Entries {
     replaying: Vec<(Arc<Transcript>, Id, usize)>,
     /// The drafts open, innermost last.
     drafts: Vec<Draft>,
+    /// This pass asked for the frame's discard pass; the end hook requests it.
     ask: bool,
     /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
     asks: u64,
+    /// The frame whose one discard pass the end hook requested.
     asked: Option<u64>,
 }
 
@@ -1173,6 +1175,13 @@ pub(crate) fn ask_discard(ctx: &Context) {
     log::debug!(target: sizing::RERUN_LOG, "a discard asked at {}", std::panic::Location::caller());
     let moment = Moment::of(ctx);
     with(ctx, &moment, Entries::ask_discard);
+}
+
+/// Whether this pass asked for the frame's discard pass and the end hook will request it from egui: no earlier pass of
+/// the frame got it, and egui can still run this one again.
+pub(crate) fn discard_pending(ctx: &Context) -> bool {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.ask && memory.asked != Some(moment.frame)) && sizing::discardable(ctx)
 }
 
 /// Keeps the entries and kept transcripts of `ids` through this frame, for a replayed run that kept them

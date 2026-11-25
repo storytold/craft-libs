@@ -3,11 +3,12 @@
 
 use super::Numbered;
 use craft_behavior::Axis;
-use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Tracked};
+use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, SplitSize, StackEntry, Workspace};
+use craft_ui::contract::{Bind, BodyCx, Role, Tracked};
 use craft_ui::docking::{DividerKind, DockConfig, DockPanels, DockSource, HidePanels, PanelKey, SourceKind};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::env::{BodyMode, ShellCx, ShellEntry, WindowKey};
+use craft_ui::testing::access::NodeKey;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
@@ -146,4 +147,51 @@ fn a_panel_the_shell_hides_reports_no_source() {
     for hidden in [RIGHT, FLOATING] {
         assert!(sources.iter().all(|source| named(source) != Some(hidden)), "the hidden panel {hidden} reports no tab, bar or grip: {sources:#?}");
     }
+}
+
+/// Each section of a stack is a group of one panel whose header holds that panel's tab: an open section and a closed
+/// one each report it.
+#[trial]
+fn each_stack_section_reports_its_panels_tab() {
+    let mut closed = StackEntry::new(LOWER);
+    closed.open = false;
+    let layout = Layout::new(Some(Node::stack(vec![StackEntry::new(UPPER), closed])), Vec::new());
+    let reported: Rc<RefCell<Vec<DockSource<usize>>>> = Rc::default();
+    let seen = Rc::clone(&reported);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = Arc::new(Workspace::new(layout.clone()));
+        let specs = Tracked::new(Numbered);
+        *seen.borrow_mut() = DockArea::new("Stack", Bind::bound(&mut workspace), &specs, &mut Bodies, DockConfig::default()).show(ui).sources;
+    });
+    fixture.room(ROOM).settle();
+    let tabs = panels(&reported.borrow(), |kind| if let SourceKind::Tab(panel) = kind { Some(*panel) } else { None });
+    assert_eq!(tabs, [UPPER, LOWER], "{:?}", reported.borrow());
+}
+
+/// A group whose tabs do not fit reports its strip's overflow button, named by the group's first panel, under the id of
+/// the button's node and where a click opens the menu of the hidden tabs; groups whose tabs fit report none.
+#[trial]
+fn a_group_whose_tabs_do_not_fit_reports_its_overflow_button() {
+    const PANELS: [usize; 6] = [11, 12, 13, 14, 15, 16];
+    let reported: Rc<RefCell<Vec<DockSource<usize>>>> = Rc::default();
+    let seen = Rc::clone(&reported);
+    let mut narrow = Fixture::new(move |ui| {
+        let mut workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(PANELS.to_vec(), 0)), Vec::new())));
+        let specs = Tracked::new(Numbered);
+        let mut bodies = Bodies;
+        *seen.borrow_mut() = DockArea::new("Overflow", Bind::bound(&mut workspace), &specs, &mut bodies, DockConfig::default()).show(ui).sources;
+    });
+    narrow.room(Vec2::new(160.0, 300.0)).settle();
+    let overflow: Vec<DockSource<usize>> =
+        reported.borrow().iter().filter(|source| matches!(source.kind, SourceKind::Overflow(_))).cloned().collect();
+    let kinds: Vec<SourceKind<usize>> = overflow.iter().map(|source| source.kind.clone()).collect();
+    assert_eq!(kinds, vec![SourceKind::Overflow(PANELS[0])], "one overflow button, named by the group's first panel");
+    let more = narrow.by_label("More tabs").expect("the strip's overflow button shows");
+    assert_eq!(more.node, NodeKey::of(overflow[0].id), "the source's id is the button's node");
+    assert!(narrow.by_role(Role::MENU_ITEM).is_empty(), "no menu is open yet");
+    narrow.click_at(overflow[0].rect.center()).settle();
+    assert!(!narrow.by_role(Role::MENU_ITEM).is_empty(), "a click on the source's rect opens the menu of the hidden tabs");
+
+    let (_wide, wide) = fixture(None, None);
+    assert!(wide.borrow().iter().all(|source| !matches!(source.kind, SourceKind::Overflow(_))), "groups whose tabs fit report no overflow button");
 }

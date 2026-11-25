@@ -11,6 +11,7 @@ pub(crate) fn redirect_node(ctx: &Context, node: Id, owner: Id, part: PartRef) {
     // Journaled after the `register_node` it amends, so a settled view's replay leaves the row's node with the
     // collection, as a run does.
     crate::runtime::replay::journal(ctx, || (node, owner, part), |ctx, &(node, owner, part)| redirect_node(ctx, node, owner, part));
+    crate::runtime::replay::note_node_owner(ctx, owner);
     current(ctx, |stage| {
         if let Some(entry) = stage.nodes.get_mut(&node_key(node)) {
             entry.owner = owner;
@@ -37,6 +38,7 @@ pub(crate) fn register_node(ctx: &Context, node: Id, owner: Id, part: Option<Par
         || (node, owner, part, focusable),
         |ctx, &(node, owner, part, focusable)| register_node(ctx, node, owner, part, focusable),
     );
+    crate::runtime::replay::note_node_owner(ctx, owner);
     current(ctx, |stage| {
         stage.nodes.insert(node_key(node), Node { owner, part, focusable, expanded: None });
     });

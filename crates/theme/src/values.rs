@@ -197,6 +197,7 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::SurfaceBackground => Anchored(pick(2, 3)),
         T::SurfaceCanvas => Same(T::SurfaceBackground),
         T::SurfaceCanvasPattern => Same(T::SurfaceCanvas),
+        T::SurfacePage => Same(T::SurfaceCanvas),
         T::SurfacePanel => Neutral(panel_step(mode)),
         T::SurfaceChrome => Same(T::SurfacePanel),
         T::SurfaceRaised => Anchored(pick(4, 1)),

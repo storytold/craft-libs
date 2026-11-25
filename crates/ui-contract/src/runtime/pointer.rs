@@ -229,6 +229,9 @@ pub(crate) struct Shapes {
     /// the last, each with its component: such a widget takes its press itself.
     this_texts: IdMap<Id>,
     last_texts: IdMap<Id>,
+    /// Every id components registered or made in the running pass: the roots, their egui widgets and the widgets made
+    /// for their text and editor parts (`made_by_component`).
+    this_made: IdSet,
     /// The layers' own egui widgets (an overlay `Area`'s, which senses a click where nothing on the layer does) in the
     /// running pass and the last: such a widget lies under every widget and shape on its layer and stands for none.
     this_grounds: IdSet,
@@ -250,6 +253,9 @@ pub(crate) struct Shapes {
     /// The resolutions the running pass made (`find_under`), for the count trials.
     #[cfg(feature = "testing")]
     resolutions: u32,
+    /// The `made_by_component` lookups the running pass made, for the count trials.
+    #[cfg(feature = "testing")]
+    made_lookups: u32,
 }
 
 /// The begin hook (H5): converts the pass's pointer input.
@@ -373,6 +379,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         shapes.last = std::mem::take(&mut shapes.this);
         shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
         shapes.last_texts = std::mem::take(&mut shapes.this_texts);
+        shapes.this_made.clear();
         shapes.last_grounds = std::mem::take(&mut shapes.this_grounds);
         shapes.next = 0;
         shapes.hover = None;
@@ -381,6 +388,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         #[cfg(feature = "testing")]
         {
             shapes.resolutions = 0;
+            shapes.made_lookups = 0;
         }
     });
     // The pointer's hover is resolved once for the pass, over last pass's complete record, with the targets egui's hit
@@ -409,6 +417,13 @@ fn with_latched(held: Mods, latched: Mods) -> Mods {
 /// The running viewport's pass number.
 pub(crate) fn pass_of(ctx: &Context) -> u64 {
     pass::pass_nr(ctx, pass::current_viewport(ctx))
+}
+
+/// The primary press of this pass when it went down in `rect` on `layer` (`areas::lies_in`), whatever takes it. Read
+/// as the press step reads it, without noting a pointer input: the press engages the sensing of what it lands on.
+pub(crate) fn primary_press_in(ctx: &Context, layer: Layer, rect: egui::Rect) -> Option<PressStart> {
+    with_pass_raw(ctx, |pass| pass.frame.as_ref().and_then(|frame| frame.press))
+        .filter(|press| press.button == PointerButton::Primary && areas::lies_in(ctx, layer, rect, press.origin))
 }
 
 /// What the begin hook read of the running pass.
@@ -614,6 +629,7 @@ pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, r
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
+        record.this_made.insert(root);
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.shapes.extend(shapes);
         entry.placed.resize(entry.shapes.len(), Placed { order, clip });
@@ -621,11 +637,13 @@ pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, r
 }
 
 /// Records the egui widget `widget` that the component `owner` made for its own text (a field's text, a selection
-/// part): a press egui gives it is the widget's own and goes to no root, and the hover goes to `owner`.
+/// part, an editor part's focus widget): a press egui gives it is the widget's own and goes to no root, and the hover
+/// goes to `owner`.
 pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
     crate::runtime::replay::journal(ctx, || (widget, owner), |ctx, &(widget, owner)| record_text_widget(ctx, widget, owner));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_texts.insert(widget, owner);
+        record.this_made.insert(widget);
     });
 }
 
@@ -662,6 +680,8 @@ pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Laye
         |ctx, (layer, root, widgets, click)| record_widgets(ctx, *layer, *root, widgets, *click),
     );
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.this_made.insert(root);
+        record.this_made.extend(widgets.iter().copied());
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.widgets.extend_from_slice(widgets);
         entry.click |= click;
@@ -834,11 +854,22 @@ pub(crate) fn registered_widgets(ctx: &Context) -> std::collections::HashSet<Id>
     })
 }
 
-/// Whether `id` is a root or an egui widget that a component registered in the running pass of `viewport`.
+/// Whether `id` is a root, an egui widget that a component registered, or a widget a component made for its text or
+/// editor part, in the running pass of `viewport`.
 pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> bool {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
-        record.this.values().any(|roots| roots.contains_key(&id) || roots.values().any(|root| root.widgets.contains(&id)))
+        #[cfg(feature = "testing")]
+        {
+            record.made_lookups += 1;
+        }
+        record.this_made.contains(&id)
     })
+}
+
+/// How many `made_by_component` lookups the running pass of `viewport` made so far, for the count trials.
+#[cfg(feature = "testing")]
+pub(crate) fn made_lookups(ctx: &Context, viewport: ViewportId) -> u32 {
+    PerViewport::<Shapes>::with(ctx, viewport, |record| record.made_lookups)
 }
 
 /// The roots a press at a point goes to, each with the shape of it that wins it: its click's and its drag's (8.3, H7).

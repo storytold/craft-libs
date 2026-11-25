@@ -322,16 +322,16 @@ fn stacked_sizes<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, lines
         .collect()
 }
 
-/// The metrics of a button with a face: the control's, with the horizontal padding at least the corner radius plus
-/// the gap, so the label and icons of a capsule clear its round ends.
+/// The metrics of a button with a face: a button high (`StyleCx::button_height`), with the control's horizontal padding
+/// at least the corner radius plus the gap, so the label and icons of a capsule clear its round ends.
 pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
-    let control = cx.control();
-    let round = f32::from(parts.radius.nw).min(control.height / 2.0);
+    let (control, height) = (cx.control(), cx.button_height());
+    let round = f32::from(parts.radius.nw).min(height / 2.0);
     // The sides clear the corner round, so an edge never crosses the label. A ribbon's flat button has no edge at rest
     // (`ControlPlace::Ribbon`): its sides take the control's padding, as a ribbon's controls sit close.
     let side = if super::flat_in_ribbon(cx) { control.pad_x } else { control.pad_x.max(round + control.gap) };
-    // A ribbon look's row height (`RibbonLook::row`) stands in for the control's.
-    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, control.height))).gap(control.gap)
+    // A ribbon look's row height (`RibbonLook::row`) stands in for the button's.
+    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, height))).gap(control.gap)
 }
 
 /// The metrics of a stacked face: `metrics`, with the control's gap above and below the stack, so its height is the

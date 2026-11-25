@@ -56,7 +56,7 @@ impl ItemSource<usize> for Documents<'_> {}
 /// A strip of `count` tabs; a closed tab leaves the story's list.
 fn strip(ui: &mut Ui, data: &mut StoryData, strip: TabStrip<'_, usize>, titles: &'static [&'static str], count: usize, kind: TabKind) -> StoryOutput {
     let open = data.value("open", (0..count).collect::<Vec<usize>>());
-    let out = strip.kind(kind).show_items(ui, &Documents { open, titles }, &mut |key, _| Tab::new(titles[*key]).closable(true));
+    let out = strip.kind(kind).show_items(ui, &Documents { open, titles }, &mut |key, _| Tab::new(titles[*key]));
     open.retain(|key| !out.closed.contains(key));
     out.into()
 }
