@@ -75,11 +75,10 @@ impl Debug for LoaderOptions {
 pub enum LoadedPicture {
     /// The picture to upload.
     Image(ColorImage),
-    /// Replaces the part of the existing picture at `origin` with `image` in place (TextureStore::put_region).
+    /// Replaces the part of the existing picture at `origin` with `image` in place (`TextureStore::put_region_checked`).
     Region {
-        /// Expected baseline revision of the resident texture. When `Some`, rejected if the texture's revision
-        /// has changed.
-        baseline: Option<Revision>,
+        /// Expected baseline revision of the resident texture. Rejected if the texture's revision has changed.
+        baseline: Revision,
         /// Top-left texel [x, y] of the region to replace in the stored image.
         origin: [u32; 2],
         /// The new pixels for the region.
@@ -372,7 +371,7 @@ impl<K: TextureKey> TextureLoader<K> {
                         repaint::request(ctx);
                         break;
                     }
-                    if self.store.put_region_checked(ctx, &key, baseline, revision, origin, image).is_none() {
+                    if self.store.put_region_checked(ctx, &key, Some(baseline), revision, origin, image).is_none() {
                         self.store.mark_unpatchable(ctx, &key);
                         repaint::request(ctx);
                     }

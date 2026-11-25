@@ -258,7 +258,7 @@ fn a_region_update_patches_the_existing_texture_in_place_and_advances_revision()
     // Request region update to revision 2
     frame(&mut frames, || {
         loader.request(&ctx, &1, Revision::new(2), Priority::VISIBLE, || {
-            move |_| Ok(LoadedPicture::Region { baseline: Some(Revision::new(1)), origin: [0, 2], image: square(SMALL, shade(200)) })
+            move |_| Ok(LoadedPicture::Region { baseline: Revision::new(1), origin: [0, 2], image: square(SMALL, shade(200)) })
         });
     });
     jobs.run_all();
@@ -541,4 +541,69 @@ fn downsampled_texture_is_not_patchable() {
     store.put(&ctx, 1, Revision::new(1), big_image);
     assert!(store.has_texture(&ctx, &1), "has texture");
     assert!(!store.is_patchable(&ctx, &1), "downsampled texture (factor > 1) is not patchable");
+}
+
+#[trial]
+fn full_put_and_checked_patch_interleaving_preserves_consistent_revision_and_pixels() {
+    let frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let store = TextureStore::<u32>::in_context(&ctx, "test-put-patch-race", TextureStoreOptions::thumbnails());
+    let rev_a = Revision::new(1);
+    let rev_b = Revision::new(2);
+    let rev_c = Revision::new(3);
+
+    let initial = store.put(&ctx, 1, rev_a, square(LARGE, shade(10)));
+    let tex_id = initial.id;
+    ctx.tex_manager().write().take_delta().clear();
+    let mut pixels = vec![shade(10); LARGE * LARGE];
+
+    let apply_deltas = |pixels: &mut [Color32]| {
+        let mut delta = ctx.tex_manager().write().take_delta();
+        if let Some(deltas) = delta.set.get(&tex_id) {
+            for img_delta in deltas {
+                let egui::ImageData::Color(img) = &img_delta.image;
+                let [w, h] = img.size;
+                let [ox, oy] = img_delta.pos.unwrap_or([0, 0]);
+                for y in 0..h {
+                    for x in 0..w {
+                        pixels[(oy + y) * LARGE + (ox + x)] = img.pixels[y * w + x];
+                    }
+                }
+            }
+        }
+        delta.clear();
+    };
+
+    for _ in 0..24 {
+        let reset = store.put(&ctx, 1, rev_a, square(LARGE, shade(10)));
+        assert_eq!(reset.id, tex_id);
+        apply_deltas(&mut pixels);
+
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                barrier.wait();
+                store.put(&ctx, 1, rev_b, square(LARGE, shade(100)));
+            });
+            s.spawn(|| {
+                barrier.wait();
+                let _ = store.put_region_checked(&ctx, &1, Some(rev_a), rev_c, [0, 0], square(SMALL, shade(200)));
+            });
+        });
+
+        apply_deltas(&mut pixels);
+        let final_rev = store.texture_revision(&ctx, &1).expect("resident revision");
+        if final_rev == rev_b {
+            assert!(pixels.iter().all(|&p| p == shade(100)), "Ready(B) must have pure B pixels, no mixed patch pixels");
+        } else if final_rev == rev_c {
+            for y in 0..LARGE {
+                for x in 0..LARGE {
+                    let expected = if x < SMALL && y < SMALL { shade(200) } else { shade(10) };
+                    assert_eq!(pixels[y * LARGE + x], expected, "Ready(C) must have A + patch C pixels at ({x}, {y})");
+                }
+            }
+        } else {
+            panic!("unexpected final revision: {final_rev:?}");
+        }
+    }
 }

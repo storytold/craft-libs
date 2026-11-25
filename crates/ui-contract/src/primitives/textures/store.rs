@@ -528,28 +528,32 @@ impl<K: TextureKey> TextureStore<K> {
             Err(image) => image,
         };
         let size = texels(image.size);
-        let (existing, filter, name) = self.with(ctx, |inner| {
-            let existing = inner.handle_of(&key);
-            let name = existing.is_none().then(|| inner.next_texture_name());
-            (existing, inner.options.filter, name)
-        });
-        // The upload runs outside the service lock: it does not call back into the store.
-        let handle = match (existing, name) {
-            (Some(mut handle), _) => {
+        enum PutStep<K> {
+            Replaced(CachedTexture),
+            Load { key: K, image: ColorImage, filter: TextureOptions, name: String },
+        }
+        // Serialize resident-handle replacement with `put_region_checked` under `self.with` so
+        // pixels and revision advance atomically. When no handle exists yet, `textures::load`
+        // creates a fresh distinct handle outside the lock before publication.
+        let (key, image, filter, name) = match self.with(ctx, |inner| {
+            if let Some(mut handle) = inner.handle_of(&key) {
+                let filter = inner.options.filter;
                 textures::replace(&mut handle, image, filter);
-                handle
+                let texture = CachedTexture { id: handle.id(), size, origin: [0, 0], page: size };
+                inner.publish_texture(key, revision, handle, source, factor, frame);
+                PutStep::Replaced(texture)
+            } else {
+                let filter = inner.options.filter;
+                let name = inner.next_texture_name();
+                PutStep::Load { key, image, filter, name }
             }
-            (None, name) => textures::load(ctx, name.unwrap_or_default(), image, filter),
+        }) {
+            PutStep::Replaced(texture) => return texture,
+            PutStep::Load { key, image, filter, name } => (key, image, filter, name),
         };
+        let handle = textures::load(ctx, name, image, filter);
         let texture = CachedTexture { id: handle.id(), size, origin: [0, 0], page: size };
-        let bytes = byte_size(size);
-        self.with(ctx, |inner| {
-            inner.roll_uploads(frame);
-            inner.uploads += 1;
-            inner.upload_bytes += bytes;
-            inner.store(key, Entry { revision, picture: Picture::Texture { handle, source, factor }, seen: frame, patchable: true });
-            inner.evict(frame);
-        });
+        self.with(ctx, |inner| inner.publish_texture(key, revision, handle, source, factor, frame));
         texture
     }
 
@@ -632,9 +636,8 @@ impl<K: TextureKey> TextureStore<K> {
         let extent = texels(image.size);
         self.with(ctx, |inner| {
             if let Some(base) = baseline {
-                let entry = inner.entries.get_mut(key)?;
+                let entry = inner.entries.get(key)?;
                 if entry.revision != base {
-                    entry.patchable = false;
                     return None;
                 }
             }
@@ -920,6 +923,15 @@ impl<K: TextureKey> Inner<K> {
     fn next_texture_name(&mut self) -> String {
         self.next_name += 1;
         format!("{}/{}", self.name, self.next_name)
+    }
+
+    /// Records an uploaded texture at `revision`, updates frame upload counters, and evicts if over budget.
+    fn publish_texture(&mut self, key: K, revision: Revision, handle: TextureHandle, source: PixelSize, factor: u32, frame: u64) {
+        self.roll_uploads(frame);
+        self.uploads += 1;
+        self.upload_bytes += byte_size(texture_size(source, factor));
+        self.store(key, Entry { revision, picture: Picture::Texture { handle, source, factor }, seen: frame, patchable: true });
+        self.evict(frame);
     }
 
     /// Replaces `key`'s entry, keeping the byte count.
