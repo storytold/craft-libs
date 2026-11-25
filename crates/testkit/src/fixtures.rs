@@ -252,6 +252,13 @@ fn remove_temp_file(path: &Path) {
     }
 }
 
+/// Remove `tmp` as [`remove_temp_file`] does, then report whether `out` is still a complete file. An
+/// `out` that reached its file through `tmp` is then not complete.
+fn complete_after_removing(tmp: &Path, out: &Path) -> bool {
+    remove_temp_file(tmp);
+    complete_file(out)
+}
+
 /// Removes a claimed temporary file when generation ends without publishing it, including when the
 /// generator panics.
 struct OwnedTemp<'a> {
@@ -287,13 +294,15 @@ fn lock_publication(out: &Path) -> io::Result<File> {
 /// of `out` and does not open it: an empty regular `out` is replaced, a nonempty one is kept even when
 /// it cannot be read, and a directory at `out` is an error. `tmp` is removed on every path that does
 /// not rename it, unless it is a directory or names the same entry as `out`. A link at `tmp` is removed,
-/// not followed.
+/// not followed. `out` is checked again after `tmp` is removed, so an `out` that reached its file
+/// through `tmp` is not kept as complete.
 ///
 /// # Errors
 ///
 /// Returns [`io::ErrorKind::InvalidInput`] when `tmp` and `out` name the same entry or the file name of
 /// `out` ends with `.fixture-lock`, [`io::ErrorKind::InvalidData`] when `tmp` is not a nonempty regular
-/// file and `out` is not complete, and the error of locking or renaming otherwise.
+/// file and `out` is not complete, or when `out` reached its file through `tmp`, and the error of
+/// locking or renaming otherwise.
 pub fn publish(tmp: &Path, out: &Path) -> io::Result<()> {
     if same_entry(tmp, out) {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("temporary fixture and output are both {}", out.display())));
@@ -303,9 +312,7 @@ pub fn publish(tmp: &Path, out: &Path) -> io::Result<()> {
         return Err(e);
     }
     if !complete_temp(tmp) {
-        let winner = complete_file(out);
-        remove_temp_file(tmp);
-        return if winner {
+        return if complete_after_removing(tmp, out) {
             Ok(())
         } else {
             Err(io::Error::new(io::ErrorKind::InvalidData, format!("temporary fixture {} is not a nonempty regular file", tmp.display())))
@@ -321,15 +328,23 @@ pub fn publish(tmp: &Path, out: &Path) -> io::Result<()> {
     #[cfg(test)]
     tests::pause_inside_publication();
     let result = if complete_file(out) {
-        remove_temp_file(tmp);
-        Ok(())
+        if complete_after_removing(tmp, out) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("fixture {} reached its file through the temporary fixture {}", out.display(), tmp.display()),
+            ))
+        }
     } else {
         match std::fs::rename(tmp, out) {
             Ok(()) => Ok(()),
             Err(e) => {
-                let winner = complete_file(out);
-                remove_temp_file(tmp);
-                if winner { Ok(()) } else { Err(e) }
+                if complete_after_removing(tmp, out) {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
             }
         }
     };
@@ -925,6 +940,40 @@ mod tests {
         assert_eq!(result.as_deref(), Some(out.as_path()));
         assert_eq!(std::fs::read(&out).unwrap(), b"complete winner");
         assert!(std::fs::symlink_metadata(temporary.unwrap()).is_err(), "the temporary link was left behind");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_output_that_links_through_the_temporary_is_not_returned() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("fixture.bin");
+        let payload = dir.path().join("payload.bin");
+        std::fs::write(&payload, b"payload").unwrap();
+        let result = generate_with(&out, false, |tmp| {
+            std::fs::remove_file(tmp).unwrap();
+            std::os::unix::fs::symlink(&payload, tmp).unwrap();
+            std::os::unix::fs::symlink(tmp, &out).unwrap();
+            true
+        });
+        if let Some(path) = &result {
+            assert!(complete_file(path), "{} was returned without a complete file behind it", path.display());
+        }
+        assert_eq!(std::fs::read(&payload).unwrap(), b"payload");
+
+        let folder = dir.path().join("payloads");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("child.bin"), b"payload").unwrap();
+        let out = dir.path().join("second.bin");
+        let result = generate_with(&out, false, |tmp| {
+            std::fs::remove_file(tmp).unwrap();
+            std::os::unix::fs::symlink(&folder, tmp).unwrap();
+            std::os::unix::fs::symlink(tmp.join("child.bin"), &out).unwrap();
+            true
+        });
+        if let Some(path) = &result {
+            assert!(complete_file(path), "{} was returned without a complete file behind it", path.display());
+        }
+        assert_eq!(std::fs::read(folder.join("child.bin")).unwrap(), b"payload");
     }
 
     #[test]
