@@ -70,8 +70,9 @@ pub struct SliderFieldStyle {
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
 /// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field shows
 /// its own look's decimals (for a percent, its step's up to one) unless `field_decimals` asks for the step's or a fixed
-/// count, which leaves typing's snap to the step as it was. The field and then the slider are Tab stops. A log or power scale
-/// curves the slider's track only: the field, typing and steps stay linear.
+/// count, which leaves typing's snap to the step as it was; a scrub keeps the step's decimals either way, so a field
+/// showing whole numbers over a hundredth step still moves by hundredths. The field and then the slider are Tab stops.
+/// A log or power scale curves the slider's track only: the field, typing and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
     #[common]
