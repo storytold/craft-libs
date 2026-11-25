@@ -805,15 +805,19 @@ fn zoo() -> Vec<Vec<u8>> {
     v
 }
 
+fn fuzz_decode_options() -> DecodeOptions {
+    DecodeOptions { limits: Limits { max_alloc: 16 << 20, ..Limits::default() }, ..Default::default() }
+}
+
 fn poke(bytes: &[u8]) {
-    let _ = decode(bytes);
-    let _ = decode_with(bytes, &DecodeOptions { limits: Limits { max_alloc: 16 << 20, ..Limits::default() }, ..Default::default() });
+    let opts = fuzz_decode_options();
+    let _ = decode_with(bytes, &opts);
     let _ = exif_orientation(bytes);
     let _ = tiff_orientation(bytes);
     let _ = probe_size(bytes);
     if let Ok(info) = tiff_info(bytes) {
         for i in 0..info.pages.len().min(8) {
-            let _ = decode_tiff_page(bytes, i, &DecodeOptions::default());
+            let _ = decode_tiff_page(bytes, i, &opts);
         }
     }
 }
@@ -823,10 +827,13 @@ fn zoo_decodes_and_never_panics_when_cut_or_corrupted() {
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut and flip, from a different offset
     // for each file, and 1/N of the random rounds.
     let step = craft_media_testkit::hostile::divisor();
+    let fuzz_opts = fuzz_decode_options();
     for (k, f) in zoo().into_iter().enumerate() {
         let info = tiff_info(&f).unwrap();
         for i in 0..info.pages.len() {
             decode_tiff_page(&f, i, &DecodeOptions::default()).unwrap();
+            // The hostile budget must also accept the same valid pages.
+            decode_tiff_page(&f, i, &fuzz_opts).unwrap();
         }
         for cut in (0..f.len()).filter(|cut| (cut + k) % step == 0) {
             poke(&f[..cut]);

@@ -37,8 +37,11 @@ fn samples() -> Vec<(Format, Vec<u8>)> {
 }
 
 fn no_panic(f: Format, bytes: &[u8]) {
-    let _ = decode_with(bytes, &tight());
     let _ = decode_as_with(f, bytes, &tight());
+    // Matching detection dispatches to the same explicit decoder with the same options.
+    if detect(bytes) != Some(f) {
+        let _ = decode_with(bytes, &tight());
+    }
 }
 
 #[test]
