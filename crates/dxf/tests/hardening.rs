@@ -147,12 +147,41 @@ fn tag_f_non_finite_creates_invalid() {
     let nan_tag = Tag::f(10, f64::NAN);
     assert!(nan_tag.is_invalid());
     assert_eq!(nan_tag.f64(), 0.0);
+    assert_eq!(nan_tag.checked_f64(), None);
+    assert_eq!(nan_tag.checked_i64(), None);
     assert_eq!(nan_tag.invalid_str(), Some("NaN"));
 
     let inf_tag = Tag::f(20, f64::INFINITY);
     assert!(inf_tag.is_invalid());
     assert_eq!(inf_tag.f64(), 0.0);
+    assert_eq!(inf_tag.checked_f64(), None);
+    assert_eq!(inf_tag.checked_i64(), None);
     assert_eq!(inf_tag.invalid_str(), Some("inf"));
+}
+
+#[test]
+fn invalid_numbers_with_dxf_escapes_roundtrip_through_ascii_write_and_parse() {
+    let tags =
+        vec![Tag::invalid(10, "12.34\\U+0020xyz"), Tag::invalid(20, "bad\\U+005Cpath"), Tag::invalid(70, "corrupted\\U+0041"), Tag::s(0, "EOF")];
+    let ascii_out = write_ascii(&tags);
+    let back = parse(ascii_out.as_bytes()).unwrap();
+    assert_eq!(back[0], Tag::invalid(10, "12.34\\U+0020xyz"));
+    assert_eq!(back[1], Tag::invalid(20, "bad\\U+005Cpath"));
+    assert_eq!(back[2], Tag::invalid(70, "corrupted\\U+0041"));
+}
+
+#[test]
+fn binary_integer_writer_makes_invalid_loss_explicit() {
+    let invalid_int_tag = Tag::invalid(70, "corrupted");
+    assert!(invalid_int_tag.is_invalid());
+    assert_eq!(invalid_int_tag.checked_i64(), None);
+    assert_eq!(invalid_int_tag.i64(), 0);
+
+    // Binary DXF integer groups have no NaN marker, so invalid integers explicitly encode as 0
+    let bin = write_binary(&[invalid_int_tag, Tag::s(0, "EOF")], true);
+    let back = parse(&bin).unwrap();
+    assert_eq!(back[0], Tag::i(70, 0));
+    assert_eq!(back[0].checked_i64(), Some(0));
 }
 
 /// An unsigned value spelled as a float reads as the same spelled as an integer (#1026 review):

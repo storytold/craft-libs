@@ -86,6 +86,26 @@ impl Value {
             _ => 0,
         }
     }
+    /// Return the finite float value, or `None` if this value is non-finite or represents an invalid numeric group.
+    pub fn checked_f64(&self) -> Option<f64> {
+        match self {
+            Value::Real(r) if r.is_finite() => Some(*r),
+            Value::Int(i) => Some(*i as f64),
+            Value::Str(s) => s.trim().parse::<f64>().ok().filter(|v| v.is_finite()),
+            Value::Bool(b) => Some(f64::from(u8::from(*b))),
+            _ => None,
+        }
+    }
+    /// Return the integer value, or `None` if this value represents an invalid numeric group or cannot be converted to `i64`.
+    pub fn checked_i64(&self) -> Option<i64> {
+        match self {
+            Value::Int(i) => Some(*i),
+            Value::Real(r) if r.is_finite() => Some(*r as i64),
+            Value::Str(s) => s.trim().parse::<i64>().ok().or_else(|| s.trim().parse::<f64>().ok().filter(|f| f.is_finite()).map(|f| f as i64)),
+            Value::Bool(b) => Some(i64::from(*b)),
+            _ => None,
+        }
+    }
     /// Whether this value represents a malformed or non-finite numeric group.
     pub fn is_invalid(&self) -> bool {
         matches!(self, Value::Invalid(_))
@@ -136,6 +156,14 @@ impl Tag {
     }
     pub fn i64(&self) -> i64 {
         self.value.as_i64()
+    }
+    /// Return the finite float value, or `None` if this tag's value is non-finite or invalid.
+    pub fn checked_f64(&self) -> Option<f64> {
+        self.value.checked_f64()
+    }
+    /// Return the integer value, or `None` if this tag's value is invalid or cannot be converted to `i64`.
+    pub fn checked_i64(&self) -> Option<i64> {
+        self.value.checked_i64()
     }
     pub fn is_invalid(&self) -> bool {
         self.value.is_invalid()
@@ -231,8 +259,9 @@ pub use codepage::decode_code_page;
 ///
 /// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
 /// truncated binary data, or more group codes than the limit returned by [`max_tags()`], which is
-/// [`MAX_TAGS`] by default. For ASCII input, invalid numeric text becomes `0.0` for real values or
-/// `0` for integer values, and an EOF tag is not required.
+/// [`MAX_TAGS`] by default. For ASCII input, invalid numeric text is preserved as [`Value::Invalid`],
+/// and an EOF tag is not required. Numeric accessors ([`Tag::f64()`], [`Tag::i64()`]) return `0.0` or
+/// `0` for backward compatibility.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }
@@ -285,7 +314,8 @@ fn count_ascii_pairs(bytes: &[u8]) -> usize {
 ///
 /// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
 /// truncated binary data, or more than `max_tags` group codes. For ASCII input, invalid numeric
-/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
+/// text is preserved as [`Value::Invalid`], and an EOF tag is not required. Numeric accessors
+/// ([`Tag::f64()`], [`Tag::i64()`]) return `0.0` or `0` for backward compatibility.
 pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
         return parse_binary_with_limit(body, max_tags);
@@ -434,7 +464,8 @@ fn byte_lines(mut rest: &[u8]) -> impl Iterator<Item = &[u8]> {
 /// # Errors
 ///
 /// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
-/// or too many tags. Invalid numeric text becomes `0.0` for real values or `0` for integer values.
+/// or too many tags. Invalid numeric text is preserved as [`Value::Invalid`]. Numeric accessors
+/// ([`Tag::f64()`], [`Tag::i64()`]) return `0.0` or `0` for backward compatibility.
 /// A complete tag stream does not require an EOF tag.
 pub fn parse_ascii(text: &str) -> Result<Vec<Tag>> {
     parse_ascii_counted(text, max_tags(), 0)
@@ -480,6 +511,7 @@ fn ascii_tags(text: &str, max_tags: usize, expected: usize, recover: bool) -> Re
         let v = match typed(code, val) {
             // Only text with a backslash can hold an escape; the rest moves in as it is.
             Value::Str(s) => Value::Str(unescape_owned(s)),
+            Value::Invalid(s) => Value::Invalid(unescape_owned(s)),
             o => o,
         };
         let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
@@ -813,6 +845,10 @@ fn ascii(tags: &[Tag], strings: Strings) -> Vec<u8> {
 /// several groups of the same code). Strings are UTF-8 when `utf8` (R2007+), otherwise escaped as
 /// in [`write_ascii`]. A tag's value is converted to its code's kind, so a number written as text
 /// is stored as a number; a code outside the 16-bit range is skipped.
+///
+/// Invalid real values ([`Value::Invalid`]) are preserved across binary serialization using
+/// `f64::NAN`. Because binary integer representations have no non-finite sentinel, invalid
+/// integer groups are encoded as `0`.
 pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
     binary(tags, if utf8 { Strings::Utf8 } else { Strings::Escaped(None) })
 }
@@ -845,21 +881,26 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
                 out.extend_from_slice(&code_bytes);
                 let r = match &t.value {
                     Value::Invalid(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    _ => t.value.as_f64(),
+                    _ => t.value.checked_f64().unwrap_or(0.0),
                 };
                 out.extend_from_slice(&r.to_le_bytes());
             }
             Kind::Int16 => {
                 out.extend_from_slice(&code_bytes);
-                out.extend_from_slice(&wrap_i16(t.value.as_i64()));
+                // Binary DXF integer fields have no IEEE-754 non-finite / NaN marker.
+                // Value::Invalid explicitly loses invalidity and converts to 0 via checked_i64.
+                let i = t.value.checked_i64().unwrap_or(0);
+                out.extend_from_slice(&wrap_i16(i));
             }
             Kind::Int32 => {
                 out.extend_from_slice(&code_bytes);
-                out.extend_from_slice(&wrap_i32(t.value.as_i64()));
+                let i = t.value.checked_i64().unwrap_or(0);
+                out.extend_from_slice(&wrap_i32(i));
             }
             Kind::Int64 => {
                 out.extend_from_slice(&code_bytes);
-                out.extend_from_slice(&t.value.as_i64().to_le_bytes());
+                let i = t.value.checked_i64().unwrap_or(0);
+                out.extend_from_slice(&i.to_le_bytes());
             }
             Kind::Bool => {
                 out.extend_from_slice(&code_bytes);
