@@ -111,6 +111,9 @@ enum Ready {
 struct CompletedSweep {
     sweep: Sweep,
     path: Arc<Vec<Segment>>,
+    /// A sibling took the finished sweep's value after its owner asked in that pass, so the owner takes the value in the
+    /// next pass: the finished sweep waits for it there.
+    owner_late: bool,
 }
 
 #[derive(Default)]
@@ -122,7 +125,8 @@ struct Record {
     // initial path on the following pass. Visited ids keep the edit from applying twice. A sweep released
     // in the pass a sibling after its owner took the value is kept the same way, for the owner (`accept`).
     replay_first_path: bool,
-    // The replay survives opening another gesture in the same pass.
+    // The replay survives opening another gesture in the same pass, and one more pass for its owner when a sibling took
+    // it after the owner asked.
     completed: Option<CompletedSweep>,
     /// The toggles that asked in this pass: an owner among them read the sweep before a sibling took it, so it takes the
     /// value in the next pass.
@@ -137,7 +141,7 @@ impl Record {
             return;
         }
         self.asked.clear();
-        self.completed = None;
+        self.end_completed();
         if !self.replay_first_path {
             Arc::make_mut(&mut self.path).clear();
         }
@@ -145,6 +149,7 @@ impl Record {
         let previous = std::mem::replace(&mut self.pass, pass);
         if cancelled || previous.saturating_add(1) != pass {
             self.sweep = None;
+            self.completed = None;
             return;
         }
         if self.sweep.as_ref().is_some_and(|sweep| sweep.travel.released) {
@@ -172,19 +177,40 @@ impl Record {
 
     /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group and the
     /// owner takes the value too: only a toggle that takes the sweep in this pass counts as crossed. An owner that asked
-    /// in this pass before the sibling gets the value in the next pass; a sweep released in this pass is kept for it then.
-    /// Returns whether that next pass must run.
+    /// in this pass before the sibling gets the value in the next pass, which the caller repaints to run; a sweep released
+    /// before then is kept for the owner's check in that pass. Returns whether to repaint for that pass.
     fn accept(&mut self, sibling: Id) -> bool {
         let Some(sweep) = &mut self.sweep else { return false };
         sweep.visited.insert(sibling);
-        let late = !sweep.engaged && sweep.travel.released && self.asked.contains(&sweep.owner);
+        let late = !sweep.engaged && self.asked.contains(&sweep.owner);
         sweep.engaged = true;
-        self.replay_first_path |= late;
+        // A sweep still held keeps its path for the siblings it has yet to reach: only one released in this pass replays it.
+        self.replay_first_path |= late && sweep.travel.released;
+        late
+    }
+
+    /// A finished sweep a sibling took after its owner asked waits one pass for the owner; any other is done with when the
+    /// next pass starts.
+    fn end_completed(&mut self) {
+        let waiting = self.completed.as_mut().is_some_and(|finished| std::mem::take(&mut finished.owner_late));
+        if !waiting {
+            self.completed = None;
+        }
+    }
+
+    /// `sibling` took the finished sweep's value. An owner that asked in this pass before it takes the value in the next
+    /// pass, so the finished sweep waits for it there. Returns whether to repaint for that pass.
+    fn completed_taken(&mut self, sibling: Id) -> bool {
+        let Some(finished) = &mut self.completed else { return false };
+        finished.sweep.visited.insert(sibling);
+        finished.sweep.engaged = true;
+        let late = self.asked.contains(&finished.sweep.owner);
+        finished.owner_late |= late;
         late
     }
 
     fn finish(&mut self) {
-        self.completed = self.sweep.take().map(|sweep| CompletedSweep { sweep, path: std::mem::take(&mut self.path) });
+        self.completed = self.sweep.take().map(|sweep| CompletedSweep { sweep, path: std::mem::take(&mut self.path), owner_late: false });
     }
 
     fn start(&mut self, owner: Id, group: Id, press: PressStart, on: bool, input: &PassPointer) {
@@ -239,12 +265,9 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
             if !crosses_visible(ctx, layer, visible, &path) {
                 return None;
             }
-            PerViewport::<Record>::with(ctx, viewport, |record| {
-                if let Some(finished) = &mut record.completed {
-                    finished.sweep.visited.insert(id);
-                    finished.sweep.engaged = true;
-                }
-            });
+            if PerViewport::<Record>::with(ctx, viewport, |record| record.completed_taken(id)) {
+                ctx.request_repaint();
+            }
             Some(on)
         }
     });
