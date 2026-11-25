@@ -846,8 +846,10 @@ fn a_command_button_shows_its_chord_until_the_room_is_short() {
 /// the command's label.
 #[trial]
 fn a_command_search_chord_part_is_named_by_its_chord_spoken() {
+    // Not a Ctrl+Alt+F-key: Linux reserves those for its virtual consoles, so the keymap would drop the default and the
+    // opener would show no chord.
     let find = CommandDef::new(CommandRef::new("demo.find"), "Find", Scope::app())
-        .with_default(Binding::parse("Cmd+Alt+F9").expect("the trial's chord parses"));
+        .with_default(Binding::parse("Cmd+Alt+K").expect("the trial's chord parses"));
     let catalog = AppCatalog::new(vec![find], 1).expect("the trial's catalog is valid");
     let mut fixture = Fixture::new(|ui| {
         CommandSearch::new(CommandRef::new("demo.find"), "Search commands").show(ui);
@@ -855,7 +857,7 @@ fn a_command_search_chord_part_is_named_by_its_chord_spoken() {
     fixture.os(Os::Linux).commands(CommandInput::new().catalog(catalog));
     fixture.settle();
     let opener = fixture.by_label("Search commands").expect("the opener is named by its placeholder");
-    let chord = fixture.by_label("Ctrl+Alt+F9").expect("a node is named by the opener's chord spoken");
+    let chord = fixture.by_label("Ctrl+Alt+K").expect("a node is named by the opener's chord spoken");
     assert!(opener.rect.contains(chord.rect.center()), "the chord's node is the opener's chord part: {:?} in {:?}", chord.rect, opener.rect);
     assert!(fixture.by_label("Find").is_none(), "no node is named by the command's label");
 }

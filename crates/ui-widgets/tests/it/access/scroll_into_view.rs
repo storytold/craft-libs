@@ -39,7 +39,7 @@ fn shows(view: Rect, row: Rect) -> bool {
 /// anchor, so the list builds it, and reports its node, while it is scrolled out.
 #[trial]
 fn scroll_into_view_on_a_list_row_scrolls_the_list_to_it() {
-    let list_id = Id::new("rows");
+    let list_id = Id::NULL.with("rows");
     let mut fixture = Fixture::new(move |ui| {
         let keys: Vec<usize> = (0..200).collect();
         let source = keyed(&keys, |key: &usize| *key);
