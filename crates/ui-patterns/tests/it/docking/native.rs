@@ -1845,8 +1845,8 @@ fn a_context_menu_a_palette_opens_is_not_closed_by_the_press_that_opened_it() {
     assert!(!palette_menu_shows(&dock, &out, "First action"), "the first menu closed");
     // The double right-click on the first target: the press that begins it closes the second menu, its release opens the
     // first target's menu in the pass of the second press, which the pass records as an outside press.
-    out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![moved(first)]);
-    out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![secondary(first, true)]);
+    collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![moved(first)]);
+    collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![secondary(first, true)]);
     out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![secondary(first, false), secondary(first, true)]);
     // A menu a pass closes leaves the tree in the pass after it, while it fades; nothing presses again in these.
     for _ in 0..3 {

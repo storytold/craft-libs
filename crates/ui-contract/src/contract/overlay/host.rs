@@ -311,6 +311,11 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     let spec = WindowSpec::popup().takes_focus(!tooltip && (scope.is_some() || overlay.rank.takes_keys())).passes_pointer(tooltip);
     let known = measured.map(|size| Rect::from_min_size(unplaced.at, size));
     let open = PopupOpen { id: layer.id, spec: &spec, rect: known.map(|rect| rect.translate(popup.origin.to_vec2())) };
+    // The popup's pass runs nested in this one and its begin pass stamps a layer's first appearance with its own
+    // number: read that number before the pass runs, so this pass tells a layer appearing in it from one that appeared
+    // in an earlier pass of the frame.
+    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
+    let popup_pass = crate::runtime::egui::pass::pass_nr(ctx, viewport);
     let mut shown = None;
     windows::show_popup(ctx, &open, |ui| {
         let at = unplaced.at.to_vec2();
@@ -335,8 +340,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.window = true;
     entry.popup = true;
     overlay::record(ctx, entry);
-    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
-    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport, appears)) };
+    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport, popup_pass, appears)) };
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);
     LayerOut { dismissed }
