@@ -74,6 +74,8 @@ pub struct PreferencesPageOutput {
     /// The id of the page shown, `None` when the search lists no page. With [`PreferencesLayout::Cards`], the picked
     /// page while the search lists it, else the first card.
     pub page: Option<String>,
+    /// The ids of the pages the search lists, in order: the page list's rows, or the cards.
+    pub listed: Vec<String>,
 }
 
 impl Outcome for PreferencesPageOutput {
@@ -99,6 +101,7 @@ struct PageRun {
     work: PreferencesState,
     out: BodyOut,
     page: Option<String>,
+    listed: Vec<String>,
 }
 
 impl<'a> PreferencesPage<'a> {
@@ -127,20 +130,20 @@ impl<'a> PreferencesPage<'a> {
             }
             let matcher = Matcher::new(&env.folder(), work.search.trim());
             let mut out = BodyOut::default();
-            let page = match layout {
+            let (page, listed) = match layout {
                 PreferencesLayout::Paged => {
                     let snap = snapshot(&*host, &matcher, &work.selected);
                     show_body(ui, &mut *host, &snap, &mut work, &words, &units, &mut out);
-                    snap.shown.map(|page| page.id)
+                    (snap.shown.map(|page| page.id), snap.list.into_iter().map(|entry| entry.id).collect())
                 }
                 PreferencesLayout::Cards => {
                     let snap = cards_snapshot(&*host, &matcher);
                     show_cards(ui, &mut *host, &snap, &mut work, &words, &units, &mut out);
                     let shown = snap.shown.iter().find(|page| page.id == work.selected).or(snap.shown.first());
-                    shown.map(|page| page.id.clone())
+                    (shown.map(|page| page.id.clone()), snap.shown.into_iter().map(|page| page.id).collect())
                 }
             };
-            PageRun { before, work, out, page }
+            PageRun { before, work, out, page, listed }
         });
         let pick_color = shown
             .settle(|cx, run| {
@@ -161,8 +164,8 @@ impl<'a> PreferencesPage<'a> {
                 run.out.rows.pick_color.take()
             })
             .flatten();
-        let page = shown.inner.and_then(|run| run.page);
-        PreferencesPageOutput { response: shown.output, pick_color, page }
+        let (page, listed) = shown.inner.map_or((None, Vec::new()), |run| (run.page, run.listed));
+        PreferencesPageOutput { response: shown.output, pick_color, page, listed }
     }
 }
 
