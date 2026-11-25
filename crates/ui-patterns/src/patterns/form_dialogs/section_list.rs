@@ -76,8 +76,11 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
         let SectionList { label, source, shown, id, body_label, mut foot, framed } = self;
         let mut picked = None;
         // A framed list stands apart from the body; an unframed one has the divider between them.
-        let gap = if framed { Gap::Section } else { Gap::default() };
-        Row::new().fill().gap(gap).show(ui, |ui, _| {
+        let mut columns = Row::new().fill();
+        if framed {
+            columns = columns.gap(Gap::Section);
+        }
+        columns.show(ui, |ui, _| {
             let mut list = |ui: &mut Ui| {
                 let mut sections = List::<K>::new(label.clone())
                     .select(SelectMode::Single)
