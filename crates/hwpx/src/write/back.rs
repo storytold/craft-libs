@@ -1288,6 +1288,10 @@ impl Job<'_> {
             return Some(if self.pictures { self.table_pictures(xml, media) } else { xml });
         };
         let data = doc.media.get(media)?;
+        if crate::write::new::image_kind(data).is_none() {
+            self.report.skipped.push("a picture in a format other than PNG, JPEG, GIF, BMP, WMF, EMF, WebP or TIFF: not written".into());
+            return None;
+        }
         let item = format!("image{}", self.next_image);
         let (xml, ext, mime, left_out) = crate::write::new::picture_alone(doc, o, &item, 1000 + self.media.len())?;
         self.report.skipped.extend(left_out);

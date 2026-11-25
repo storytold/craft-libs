@@ -636,8 +636,8 @@ struct Member {
 }
 
 /// The image format of picture bytes: (extension, media type).
-pub(crate) fn image_kind(data: &[u8]) -> (&'static str, &'static str) {
-    if data.starts_with(b"\x89PNG") {
+pub(crate) fn image_kind(data: &[u8]) -> Option<(&'static str, &'static str)> {
+    Some(if data.starts_with(b"\x89PNG") {
         ("png", "image/png")
     } else if data.starts_with(&[0xFF, 0xD8]) {
         ("jpg", "image/jpeg")
@@ -645,15 +645,19 @@ pub(crate) fn image_kind(data: &[u8]) -> (&'static str, &'static str) {
         ("gif", "image/gif")
     } else if data.starts_with(b"BM") {
         ("bmp", "image/bmp")
-    } else if data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) || data.get(40..44) == Some(b" EMF") {
+    } else if data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) {
+        // a placeable metafile's key
+        ("wmf", "image/x-wmf")
+    } else if data.get(40..44) == Some(b" EMF") {
         ("emf", "image/x-emf")
     } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
         ("webp", "image/webp")
     } else if data.starts_with(b"II*\0") || data.starts_with(b"MM\0*") {
         ("tif", "image/tiff")
     } else {
-        ("png", "image/png")
-    }
+        // another format (SVG, say): not a picture this writer can name
+        return None;
+    })
 }
 
 /// A header's or footer's area on the page, points: Hancom places the objects in a header or
@@ -1137,7 +1141,10 @@ impl Builder<'_> {
                 let item = match self.media.iter().find(|m| m.0 == *media) {
                     Some(m) => m.1.clone(),
                     None => {
-                        let (ext, mime) = image_kind(data);
+                        let Some((ext, mime)) = image_kind(data) else {
+                            self.missing("pictures in a format other than PNG, JPEG, GIF, BMP, WMF, EMF, WebP or TIFF");
+                            return None;
+                        };
                         let n = self.media.len() + 1;
                         self.media.push((media.clone(), format!("image{n}"), format!("image{n}.{ext}"), mime));
                         format!("image{n}")
@@ -2043,7 +2050,7 @@ pub(crate) fn table_alone(doc: &Document, t: &Table, hangul_font: HangulFont) ->
 /// isn't written (for the save's report).
 pub(crate) fn picture_alone(doc: &Document, o: &InlineObject, item: &str, n: usize) -> Option<(String, &'static str, &'static str, Vec<String>)> {
     let InlineObject::Image { media, .. } = o else { return None };
-    let (ext, mime) = image_kind(doc.media.get(media)?);
+    let (ext, mime) = image_kind(doc.media.get(media)?)?;
     let mut bld = Builder {
         doc,
         t: Tables::default(),

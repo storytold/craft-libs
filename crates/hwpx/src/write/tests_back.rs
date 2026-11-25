@@ -266,14 +266,17 @@ fn single_quoted_attributes_are_read() {
     assert!(runs.iter().all(|r| r.contains("charPrIDRef=\"7\"") || r.contains("charPrIDRef='7'")), "{runs:?}");
 }
 
-/// A WebP or TIFF picture in a new HWPX (or one added on a save) is named and listed as what it
-/// is. Before, every unknown kind became a .png said to be image/png.
+/// A WebP, TIFF or WMF picture in a new HWPX (or one added on a save) is named and listed as
+/// what it is, and one in a format the writer doesn't know (SVG) isn't named a PNG. Before, every
+/// unknown kind became a .png said to be image/png, and a WMF an EMF.
 #[test]
 fn hwpx_pictures_are_named_by_what_they_hold() {
     let webp = [b"RIFF".as_slice(), &[0, 0, 0, 0], b"WEBPVP8 "].concat();
-    assert_eq!(crate::write::new::image_kind(&webp), ("webp", "image/webp"));
-    assert_eq!(crate::write::new::image_kind(b"II*\0rest"), ("tif", "image/tiff"));
-    assert_eq!(crate::write::new::image_kind(b"\x89PNG\r\n"), ("png", "image/png"));
+    assert_eq!(crate::write::new::image_kind(&webp), Some(("webp", "image/webp")));
+    assert_eq!(crate::write::new::image_kind(b"II*\0rest"), Some(("tif", "image/tiff")));
+    assert_eq!(crate::write::new::image_kind(b"\x89PNG\r\n"), Some(("png", "image/png")));
+    assert_eq!(crate::write::new::image_kind(&[0xD7, 0xCD, 0xC6, 0x9A, 0, 0]), Some(("wmf", "image/x-wmf")));
+    assert_eq!(crate::write::new::image_kind(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), None);
 }
 
 #[test]
@@ -712,4 +715,33 @@ fn write_back_binds_the_core_prefix_of_a_rebuilt_table() {
     assert!(sec.contains("<hc:"), "the picture's core elements: {sec}");
     let root = &sec[..sec.find('>').unwrap_or(0)];
     assert!(root.contains("xmlns:hc="), "bound at the root: {root}");
+}
+
+/// A picture in a format the writer can't name (SVG) added on a save is left out and said so,
+/// and a new package doesn't hold it either. Before, its bytes were stored as a .png.
+#[test]
+fn write_back_leaves_out_a_picture_it_cannot_name() {
+    let original = package_with_manifest(&format!(r#"<hs:sec {NS}><hp:p><hp:run><hp:t>글</hp:t></hp:run></hp:p></hs:sec>"#));
+    let mut doc = crate::read(&original).unwrap();
+    doc.media.insert("vector.svg".into(), Arc::new(br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#.to_vec()));
+    let svg = craft_wordmodel::InlineObject::Image {
+        media: "vector.svg".into(),
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    if let Some(Block::Para(p)) = doc.body.get_mut(0).map(Arc::make_mut) {
+        p.insert_object(0, svg, &CharProps::default()).unwrap();
+    }
+    let (out, report) = write_back(&original, &doc);
+    assert!(report.skipped.iter().any(|s| s.contains("format")), "{report:?}");
+    assert!(!zip_part(&out, "Contents/section0.xml").contains("<hp:pic"), "not written");
+    doc.passthrough.clear();
+    let (bytes, _) = super::new::from_document(&doc, None).unwrap();
+    let z = craft_zip::Archive::open(&bytes, craft_zip::Limits { max_entries: 1000, max_total_bytes: 1 << 20 }).unwrap();
+    assert!(z.names().all(|n| !n.starts_with("BinData/")), "no picture in the new package");
 }
