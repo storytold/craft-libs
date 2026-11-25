@@ -3,9 +3,9 @@
 //! reports the revision of the settings it wants a preview for and shows the answer the app gives back.
 
 use super::{
-    ExportAsAsset, ExportAsResult, ExportAsRowEstimate, ExportAsRowResult, ExportAsRows, ExportFormat, ExportFormatDefaults, ExportMetadata,
-    ExportOptions, ExportPreview, ExportProfile, ExportSize, ExportWords, Revisions, ScaleRow, ScaleSize, SizeEstimate, export_file_name,
-    size_error_label,
+    ExportAsAsset, ExportAsResult, ExportAsRow, ExportAsRowEstimate, ExportAsRowResult, ExportAsRows, ExportFormat, ExportFormatDefaults,
+    ExportMetadata, ExportOptions, ExportPreview, ExportProfile, ExportSize, ExportWords, Revisions, ScaleRow, ScaleSize, SizeEstimate,
+    export_file_name, size_error_label,
 };
 use crate::buttons::IconButton;
 use crate::contract::clicked;
@@ -51,6 +51,7 @@ use egui::{Pos2, Rect, Response, Ui};
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// The least and greatest scale, in percent.
@@ -59,6 +60,8 @@ const SCALE_RANGE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
 const QUALITY_RANGE: std::ops::RangeInclusive<f64> = 1.0..=100.0;
 /// The key of the save request the dialog files at Export.
 const SAVE_KEY: &str = "export";
+/// The most rows an asset list shows at once before it scrolls them in a well of its own.
+const DEFAULT_ASSET_ROWS: u16 = 10;
 
 /// The column of an asset row's tick box.
 const TICK: ColumnKey = ColumnKey::new("tick");
@@ -72,6 +75,17 @@ const ROW_SIZE: ColumnKey = ColumnKey::new("rowSize");
 const ROW_ESTIMATE: ColumnKey = ColumnKey::new("rowEstimate");
 /// The whole of a thumbnail's texture.
 const WHOLE: Rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+
+/// What one row of the asset list shows as text: the asset's name, and for an asset with pixels the name of the
+/// format its row exports with, the size those settings give that asset and the estimate the app answered for them.
+/// An asset with no pixels shows nothing beside its name.
+#[derive(Clone, Debug, Default, Hash)]
+struct RowText {
+    name: String,
+    format: String,
+    dimensions: String,
+    estimate: String,
+}
 
 /// What the dialog keeps while it is open besides the settings: the preview request it has numbered, the answer the app
 /// gave, the preview view and the scale edit the last pass refused.
@@ -202,7 +216,9 @@ pub struct ExportAsDialog<'a> {
     #[prop]
     remember: Option<SaveKey>,
     /// The settings the host opened the dialog with: what Reset restores, in place of the bound settings of the first
-    /// pass (a field edited before the dialog was first shown is not the Reset target).
+    /// pass (a field edited before the dialog was first shown is not the Reset target). With an
+    /// [`asset list`](ExportAsDialog::rows) the rows carry their own opening settings, and Reset restores the selected
+    /// row's.
     #[prop]
     opening: Option<ExportOptions>,
     /// Whether the app can write a folder of files, for more than one Scale All row; the default is true. A build
@@ -217,6 +233,10 @@ pub struct ExportAsDialog<'a> {
     /// which is how every caller of [`new`](ExportAsDialog::new) works today.
     #[prop]
     rows: Option<Bind<'a, ExportAsRows>>,
+    /// The most rows the asset list shows at once: past this it is as tall as its first rows and scrolls the rest in a
+    /// well of its own, so a long list stays in the dialog and its last row is reached by the wheel. Unset, ten rows.
+    #[prop]
+    max_rows: Option<u16>,
 }
 
 impl<'a> ExportAsDialog<'a> {
@@ -240,6 +260,7 @@ impl<'a> ExportAsDialog<'a> {
             folder_export: true,
             files: 1,
             rows: None,
+            max_rows: None,
         }
     }
 
@@ -263,6 +284,7 @@ impl<'a> ExportAsDialog<'a> {
             folder_export,
             files,
             mut rows,
+            max_rows,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
@@ -285,6 +307,7 @@ impl<'a> ExportAsDialog<'a> {
             events: &events,
             asked: &asked,
             list_id: ui.scope_id().with("export-as-rows"),
+            max_rows: max_rows.unwrap_or(DEFAULT_ASSET_ROWS),
         };
 
         let reset = ResetFooter::new(ui, None, true);
@@ -302,7 +325,18 @@ impl<'a> ExportAsDialog<'a> {
         }
         if let Some(opening) = opening {
             let last = remember.as_ref().and_then(|key| crate::runtime::memory::saved_value::<Option<ExportOptions>>(ui.ctx(), key));
-            dialog = dialog.opening(opened_options(opening, last, &formats, &methods, source));
+            // With an asset list the settings belong to the rows, so what Reset restores belongs to a row too: the
+            // settings the selected row opened with, fitted to that row's own asset. The caller's opening settings
+            // stand for a dialog over one file and for a list with no rows in it.
+            let row_opening = listed.as_ref().and_then(|cell| {
+                let held = cell.borrow();
+                held.rows.get(held.selected.min(held.rows.len().saturating_sub(1))).map(|row| (row.asset.options.clone(), row.asset.source))
+            });
+            let opening = match row_opening {
+                Some((options, asset)) => options.fitted(&formats, &methods, asset),
+                None => opened_options(opening, last, &formats, &methods, source),
+            };
+            dialog = dialog.opening(opening);
         }
         let shown = dialog.show(ui, |ui, form, values| {
             let first = form.first();
@@ -421,8 +455,10 @@ fn save_request(formats: &[ExportFormat], options: &ExportOptions, file_name: &s
 /// What Export answers with: the confirmed options, the chosen path, the output size, the rows of an asset-list
 /// export, and the options to remember when the dialog has a key. The rows are the ticked ones, in the list's order,
 /// each with the settings the user confirmed for it and its size from its own asset; an export over one file has none.
-fn answer_of(options: ExportOptions, source: PixelSize, path: PathBuf, remember: Option<SaveKey>, rows: Option<&ExportAsRows>) -> ExportAsResult {
-    let rows = rows.map_or_else(Vec::new, |rows| {
+/// The single-file size and outputs describe the row the settings edit — with an asset list that row's own asset, the
+/// same asset its entry in the rows is measured from — and the document's size only for a dialog over one file.
+fn answer_of(options: ExportOptions, source: PixelSize, path: PathBuf, remember: Option<SaveKey>, listed: Option<&ExportAsRows>) -> ExportAsResult {
+    let rows = listed.map_or_else(Vec::new, |rows| {
         rows.ticked()
             .map(|row| ExportAsRowResult {
                 id: row.asset.id.clone(),
@@ -432,6 +468,7 @@ fn answer_of(options: ExportOptions, source: PixelSize, path: PathBuf, remember:
             })
             .collect()
     });
+    let source = listed.and_then(|rows| rows.rows.get(rows.selected.min(rows.rows.len().saturating_sub(1)))).map_or(source, |row| row.asset.source);
     ExportAsResult {
         size: options.output_size(source),
         outputs: options.outputs(source),
@@ -487,6 +524,9 @@ pub struct HostedExportAs {
     files: usize,
     /// The asset list, as the user left it; `None` over one file.
     rows: Option<ExportAsRows>,
+    /// How many rows of that list the dialog shows at once before it scrolls them
+    /// ([`ExportAsDialog::max_rows`]).
+    max_rows: Option<u16>,
     /// The row estimates the app has not taken yet.
     estimates: Vec<ExportAsRowEstimate>,
     #[cfg(feature = "testing")]
@@ -545,6 +585,7 @@ impl HostedExportAs {
             folder_export: true,
             files: 1,
             rows: None,
+            max_rows: None,
             estimates: Vec::new(),
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
@@ -568,10 +609,23 @@ impl HostedExportAs {
     /// Opens with one row per asset ([`ExportAsRows`]) in a list on the dialog's left: the settings and the preview
     /// follow the selected row, a tick box decides which rows Export writes, and Export asks for a folder where more
     /// than one row is ticked. Each row starts ticked unless its asset has no pixels, and with the settings the asset
-    /// carries, fitted to that asset.
+    /// carries, fitted to that asset; holding Alt and pressing Reset puts those settings back into the row that is
+    /// selected, and into no other. The asset ids must be unique ([`ExportAsAsset::id`]): what an app calls its assets
+    /// may repeat — a layers panel holds layers of the same name — so the host passes ids its names do not share. The
+    /// list shows ten rows at a time and scrolls the rest in a well of its own; [`max_rows`](Self::max_rows) changes
+    /// that.
     #[must_use]
     pub fn assets(mut self, assets: impl IntoIterator<Item = ExportAsAsset>) -> Self {
         self.rows = Some(ExportAsRows::new(assets));
+        self
+    }
+
+    /// Shows at most `rows` of the asset list at once; past that the list is as tall as its first `rows` rows and
+    /// scrolls the rest itself ([`ExportAsDialog::max_rows`]). Without [`assets`](Self::assets) there is no list to
+    /// bound.
+    #[must_use]
+    pub fn max_rows(mut self, rows: u16) -> Self {
+        self.max_rows = Some(rows);
         self
     }
 
@@ -768,6 +822,7 @@ impl StackDialog for HostedExportAs {
             folder_export: self.folder_export,
             files: self.files,
             rows: self.rows.as_mut().map(Bind::bound),
+            max_rows: self.max_rows,
             ..ExportAsDialog::new(self.file_name.clone(), self.source, Bind::bound(&mut self.options))
         };
         let mut shown = dialog.show(ui);
@@ -840,6 +895,8 @@ struct Pass<'p> {
     asked: &'p RefCell<Vec<ExportAsRowEstimate>>,
     /// The id of the asset list, so the collection keeps its lead and its layout from pass to pass.
     list_id: egui::Id,
+    /// The most rows the asset list shows at once before it scrolls them in a well of its own.
+    max_rows: u16,
 }
 
 impl Pass<'_> {
@@ -849,16 +906,70 @@ impl Pass<'_> {
         rows.selected.min(rows.rows.len().saturating_sub(1))
     }
 
+    /// The text `row` shows: its asset's name, and for an asset with pixels the name of the format its settings pick,
+    /// the size those settings give that asset and the estimate the app answered for the settings the row holds.
+    /// `asked_by_id` holds the list's estimate entries, grouped by the asset id they belong to.
+    fn row_text(&self, row: &ExportAsRow, asked_by_id: &HashMap<&str, Vec<&ExportAsRowEstimate>>) -> RowText {
+        let words = self.words;
+        let asset = &row.asset;
+        if asset.empty {
+            return RowText { name: asset.name.clone(), ..RowText::default() };
+        }
+        let format = self
+            .formats
+            .iter()
+            .find(|format| format.id == row.options.format)
+            .or(self.formats.first())
+            .map_or_else(String::new, |format| format.name.to_uppercase());
+        let size = row.options.output_size(asset.source);
+        let dimensions = words.dimensions.fill(&[
+            ("width", self.units.number(f64::from(size.width), 0..=0).as_str()),
+            ("height", self.units.number(f64::from(size.height), 0..=0).as_str()),
+        ]);
+        let asked = asked_by_id.get(asset.id.as_str()).and_then(|entries| entries.iter().rev().find(|asked| asked.asked == row.options));
+        let estimate = match asked.and_then(|asked| asked.estimate) {
+            Some(SizeEstimate::Proxy(bytes)) => words.estimate.fill(&[("size", self.units.file_size(bytes).as_str())]),
+            Some(SizeEstimate::Exact(bytes)) => self.units.file_size(bytes),
+            // Asked for and not answered yet: the mark the footer note shows while it waits. An empty asset is asked
+            // for nothing, and its row shows no estimate at all.
+            None => words.estimating.as_str().to_owned(),
+        };
+        RowText { name: asset.name.clone(), format, dimensions, estimate }
+    }
+
     /// The asset list on the dialog's left: one row per asset, each with its tick box, picture, name, format, size and
     /// estimate. The arrow keys move which row is selected — the row the settings beside the list edit — and Space
     /// flips the selected row's tick box, as does a press on the box. A row that is not ticked carries a warning mark
     /// that says the image will not be exported; an asset with no pixels has no picture, format, size or estimate.
+    /// The list shows [`max_rows`](ExportAsDialog::max_rows) rows at a time and scrolls the rest in a well of its own.
     /// Each row whose settings have no estimate yet is asked of the app, once.
     fn row_list(&self, ui: &mut Ui, cell: &RefCell<ExportAsRows>) {
         let words = self.words;
         let (rows, estimates) = {
             let held = cell.borrow();
             (held.rows.clone(), held.estimates.clone())
+        };
+        // The id is the only handle a row, its estimate answer and its result share (`ExportAsAsset::id`), so the
+        // entries the app has been asked for are grouped by it: a panel of a few hundred layers asks for its
+        // estimates, keeps them and shows them in a pass over its rows, not one over every pair of row and entry.
+        let mut asked_by_id: HashMap<&str, Vec<&ExportAsRowEstimate>> = HashMap::new();
+        for asked in &estimates {
+            asked_by_id.entry(asked.id.as_str()).or_default().push(asked);
+        }
+        let texts: Vec<RowText> = rows.iter().map(|row| self.row_text(row, &asked_by_id)).collect();
+        // The list measures its Content columns from the text its rows hold and keeps that measure while its rows are
+        // the same set — so the text is what says the set is the same. An estimate the app answers after the dialog
+        // opened, a format the user picked while another row was selected and a unit the app switched to all change
+        // what a row holds, and the column holding it has to be measured again. A stamp that changes starts the lead
+        // over, which this list survives: its selection is bound below, and the lead comes back from that selection.
+        let stamp = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&rows.len(), &mut hasher);
+            for (row, text) in rows.iter().zip(&texts) {
+                std::hash::Hash::hash(&row.ticked, &mut hasher);
+                std::hash::Hash::hash(text, &mut hasher);
+            }
+            std::hash::Hasher::finish(&hasher)
         };
         let columns = vec![
             ColumnSpec::toggle(TICK, Label::Empty, ToggleColumn::sweepable()),
@@ -868,7 +979,7 @@ impl Pass<'_> {
             ColumnSpec::new(ROW_ESTIMATE, Label::Empty, ColumnWidth::Content),
         ];
         let order: Vec<usize> = (0..rows.len()).collect();
-        let names: Vec<String> = rows.iter().map(|row| row.asset.name.clone()).collect();
+        let names: Vec<String> = texts.iter().map(|text| text.name.clone()).collect();
         let ticked: Vec<bool> = rows.iter().map(|row| row.ticked).collect();
         let source = keyed(&order[..], |at: &usize| *at)
             .with_text(move |at: &usize| Cow::Owned(names[*at].clone()))
@@ -883,14 +994,15 @@ impl Pass<'_> {
             .header(false)
             .space(SpaceAction::ToggleCell)
             .sizing(Sizing::FillWidth)
-            .natural_height(true)
-            .rows_stamp(rows.len() as u64)
+            .max_rows(self.max_rows)
+            .rows_stamp(stamp)
             .columns(columns)
             .selection(Bind::bound(&mut selection))
             .show_items(ui, &source, &mut |at, icx| {
                 let row = &rows[*at];
+                let text = &texts[*at];
                 let asset = &row.asset;
-                let mut item = ListRow::new(asset.name.clone()).cells(icx.cells()).state(icx.row.clone()).toggle(ToggleCell::check(
+                let mut item = ListRow::new(text.name.clone()).cells(icx.cells()).state(icx.row.clone()).toggle(ToggleCell::check(
                     TICK,
                     ToggleState::of(row.ticked),
                     asset.name.clone(),
@@ -899,26 +1011,8 @@ impl Pass<'_> {
                     item = item.thumb(ThumbSize::Small, move |paint, rect| paint.picture(texture.id, rect, WHOLE, 0.0));
                 }
                 if !asset.empty {
-                    let format = self
-                        .formats
-                        .iter()
-                        .find(|format| format.id == row.options.format)
-                        .or(self.formats.first())
-                        .map_or_else(String::new, |format| format.name.to_uppercase());
-                    let size = row.options.output_size(asset.source);
-                    let dimensions = words.dimensions.fill(&[
-                        ("width", self.units.number(f64::from(size.width), 0..=0).as_str()),
-                        ("height", self.units.number(f64::from(size.height), 0..=0).as_str()),
-                    ]);
-                    let asked = estimates.iter().rev().find(|asked| asked.id == asset.id && asked.asked == row.options);
-                    let estimate = match asked.and_then(|asked| asked.estimate) {
-                        Some(SizeEstimate::Proxy(bytes)) => words.estimate.fill(&[("size", self.units.file_size(bytes).as_str())]),
-                        Some(SizeEstimate::Exact(bytes)) => self.units.file_size(bytes),
-                        // Asked for and not answered yet: the mark the footer note shows while it waits. An empty
-                        // asset is asked for nothing, and its row shows no estimate at all.
-                        None => words.estimating.as_str().to_owned(),
-                    };
-                    item = item.cell(ROW_FORMAT, format).cell(ROW_SIZE, dimensions).cell(ROW_ESTIMATE, estimate);
+                    item =
+                        item.cell(ROW_FORMAT, text.format.clone()).cell(ROW_SIZE, text.dimensions.clone()).cell(ROW_ESTIMATE, text.estimate.clone());
                 }
                 if !row.ticked {
                     item = item.trailing_icon(IconSpec::svg(IconId::new("warning")), words.row_not_exported.clone());
@@ -937,13 +1031,18 @@ impl Pass<'_> {
                 row.ticked = toggle.on;
             }
         }
-        let current: Vec<(String, ExportOptions)> = held.rows.iter().map(|row| (row.asset.id.clone(), row.options.clone())).collect();
-        held.estimates.retain(|asked| current.iter().any(|(id, options)| *id == asked.id && *options == asked.asked));
+        // An entry lives while the row of its id still holds the settings it was asked for; a row whose settings have
+        // no entry yet is asked for one, once. Both questions go by the id rather than across the other list.
+        let mut options_of: HashMap<&str, Vec<&ExportOptions>> = HashMap::new();
+        for row in &rows {
+            options_of.entry(row.asset.id.as_str()).or_default().push(&row.options);
+        }
+        held.estimates.retain(|asked| options_of.get(asked.id.as_str()).is_some_and(|options| options.contains(&&asked.asked)));
         let missing: Vec<(String, ExportOptions)> = held
             .rows
             .iter()
             .filter(|row| !row.asset.empty)
-            .filter(|row| !held.estimates.iter().any(|asked| asked.id == row.asset.id && asked.asked == row.options))
+            .filter(|row| !asked_by_id.get(row.asset.id.as_str()).is_some_and(|asked| asked.iter().any(|entry| entry.asked == row.options)))
             .map(|row| (row.asset.id.clone(), row.options.clone()))
             .collect();
         for (id, options) in missing {

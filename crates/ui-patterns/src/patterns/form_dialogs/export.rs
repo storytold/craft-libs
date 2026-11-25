@@ -517,7 +517,10 @@ impl ExportPreview {
 #[derive(Clone, Debug, PartialEq, crate::contract::Props)]
 #[non_exhaustive]
 pub struct ExportAsAsset {
-    /// The app's id for the asset; the row, its estimate answers and the result carry it.
+    /// The app's id for the asset; the row, its estimate answers and the result carry it. Ids must be unique: a row is
+    /// selected by its id, an estimate answer reaches the row of that id, and the answer names each row by its id, so
+    /// two rows carrying one id cannot be told apart. The name an app passes may repeat — a layers panel holds layers
+    /// of the same name — so the host makes the ids differ where its names do not.
     pub id: String,
     /// The name as the app passes it: the row's text, and the accessible name of the row and of its tick box.
     pub name: String,
@@ -619,10 +622,11 @@ pub struct ExportAsResult {
     pub options: ExportOptions,
     /// The file the user chose to write; the folder when the export writes more than one file.
     pub path: PathBuf,
-    /// The output size in pixels. With an asset list this is the selected row's.
+    /// The output size in pixels. With an asset list this is the selected row's, measured from that row's own asset;
+    /// the document's size only when the dialog was opened over one file.
     pub size: PixelSize,
-    /// The files to write ([`ExportOptions::outputs`]). With more than one, `path` is the folder the user chose and
-    /// the app names each file `<name><suffix>.<extension>`.
+    /// The files to write ([`ExportOptions::outputs`]), measured the way [`size`](Self::size) is. With more than one,
+    /// `path` is the folder the user chose and the app names each file `<name><suffix>.<extension>`.
     pub outputs: Vec<ExportOutput>,
     /// The rows to write when the dialog was opened with an asset list ([`ExportAsRows`]): the ticked rows, in the
     /// list's order, each with its own settings. Empty when the dialog was opened over one file, as
