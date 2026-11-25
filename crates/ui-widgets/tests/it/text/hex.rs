@@ -113,11 +113,8 @@ fn a_pasted_colour_replaces_the_digits_with_or_without_its_hash() {
     assert_eq!(*value.borrow(), start, "and the colour stays");
 }
 
-/// How far outside its editor egui clips an editor's text, in points, so the caret past the last letter shows whole.
-const EDITOR_CLIP_OUTSET: f32 = 1.0;
-
 /// A content-sized hex field is as wide as its digits in the monospace face it draws them in, not in the body face:
-/// all six digits of #336699 lie inside the field's text rect, and none is cut off.
+/// all six digits of #336699 and the caret past the last of them lie inside the field's text rect, and none is cut off.
 #[trial]
 fn a_content_sized_hex_field_shows_all_six_digits() {
     let mut fixture = Fixture::new(|ui| {
@@ -127,10 +124,14 @@ fn a_content_sized_hex_field_shows_all_six_digits() {
     });
     fixture.settle();
     let digits = fixture.texts().iter().find(|run| run.text == "336699").cloned().unwrap_or_else(|| panic!("the field shows its digits"));
-    let text_rect = digits.clip.shrink(EDITOR_CLIP_OUTSET);
+    // The run is clipped to the field's text rect: the editor clips its text to the text part, inside egui's own clip
+    // one point past it. The digits start at the rect's start edge, and the field measures the caret past the last
+    // digit (`MeasureCx::field_text`), so the right edge, which proves the width, leaves the caret's room.
+    let text_rect = digits.clip;
+    let caret = fixture.ctx().global_style().visuals.text_cursor.stroke.width;
     assert!(
-        digits.rect.min.x >= text_rect.min.x && digits.rect.max.x <= text_rect.max.x,
-        "the digits {:?} lie inside the field's text rect {text_rect:?}",
+        digits.rect.min.x >= text_rect.min.x && digits.rect.max.x + caret <= text_rect.max.x + 0.01,
+        "the digits {:?} and the caret past them lie inside the field's text rect {text_rect:?}",
         digits.rect
     );
 }
