@@ -1,15 +1,18 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
-//! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
-//! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
-//! pointer, the placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted
-//! window's Control-click and window-input policy.
+//! palette's level under a modal and its visibility while the main window is minimized, a layer shown in a popup
+//! window and what it remembers while it shows, injected keys across a focus loss, non-finite injected points, a
+//! repeated injected press, the window that has the keys, a wheel with no known pointer, the placement of a minimized
+//! window, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
+//! policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Dismiss, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
+};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::overlay::CloseReason;
@@ -1298,6 +1301,96 @@ fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_clo
     assert_eq!(builder_titled(&out, "second").1.visible, Some(false), "a palette opened meanwhile opens hidden");
     let back = (0..3).filter_map(|_| visibility(&frame(false, false))).reduce(|_, latest| latest);
     assert_eq!(back, Some(true), "the palette returns once the modal closed");
+}
+
+/// A layer mounted with `props`, its open state in the caller's binding, recording the closes it is given.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct Sheet<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    open: Bind<'a, bool>,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl Component for Sheet<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SheetStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Sheet<'_> {
+    fn open(&mut self) -> Option<BindMut<'_, bool>> {
+        Some(self.open.reborrow())
+    }
+
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
+}
+
+/// The palette window's rect, in desktop points: the room its layers may take.
+const PALETTE_AT: Rect = Rect { min: Pos2::new(200.0, 150.0), max: Pos2::new(500.0, 350.0) };
+
+/// One frame of the main window showing a palette-level window whose body shows `overlay`'s layer, the layer's open
+/// state carried back out to `open`.
+fn palette_layer_frame(windows: &Windows, overlay: &Overlay, open: &Cell<bool>, closed: &RefCell<Vec<CloseReason>>) -> Out {
+    let mut is_open = open.get();
+    let out = windows.frame(vec![], vec![], |ui| {
+        Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+            let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
+            Sheet { common: Common::new(), props, open: Bind::bound(&mut is_open), closed }.id_salt("sheet").show(ui, |_, _| {});
+        });
+    });
+    open.set(is_open);
+    out
+}
+
+/// A layer shown in a popup window of a palette window keeps what it remembered while it shows: its timed dismissal
+/// counts from the pass it appeared, not from the last pass, so it closes after its timeout with no input at all. The
+/// layer's body runs in the popup's pass, which stamps its appearance in that window's record; its host decides the
+/// window in the palette's pass, where the opener's record never holds the layer.
+#[trial]
+fn a_layer_in_a_popup_window_closes_after_its_timeout() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    // The palette's window: a tool window, whose layers show in popup windows of their own.
+    let palette = ViewportInfo {
+        focused: Some(true),
+        inner_rect: Some(PALETTE_AT),
+        outer_rect: Some(PALETTE_AT),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.child_info(palette);
+    // A menu that closes by itself a quarter second after it appears: fifteen frames at the kit's sixty a second.
+    const TIMEOUT: f32 = 0.25;
+    let overlay = Overlay::menu().dismiss(Dismiss::new().timeout(Some(TIMEOUT)));
+    let open = Cell::new(true);
+    let closed = RefCell::new(Vec::new());
+    let mut out = palette_layer_frame(&windows, &overlay, &open, &closed);
+    for _ in 0..2 {
+        out = palette_layer_frame(&windows, &overlay, &open, &closed);
+    }
+    let shown: Vec<ViewportId> = out.builders.iter().map(|(viewport, _)| *viewport).filter(|viewport| *viewport != ViewportId::ROOT).collect();
+    assert_eq!(shown.len(), 2, "the palette's window and the layer's own popup window: {shown:?}");
+    assert!(open.get(), "the layer is open early in its timeout: {:?}", closed.borrow());
+    // Well past a quarter second of frames, with no input at all.
+    for _ in 0..30 {
+        palette_layer_frame(&windows, &overlay, &open, &closed);
+    }
+    assert!(!open.get(), "the layer closes after its timeout");
+    assert_eq!(*closed.borrow(), [CloseReason::Timeout], "the timeout closed it, and no other rule did");
 }
 
 /// A key automation holds is in `keys::held` while it is held and not after its release.

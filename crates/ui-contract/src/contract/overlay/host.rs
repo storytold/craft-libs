@@ -284,7 +284,11 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
 /// laid out in the popup's pass first, in the room its unplaced form has, and placed by the size it took there.
 /// A popup that takes keys (a menu, a flyout) takes the OS focus; a tooltip takes none and lets the pointer through.
 fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
-    let appears = overlay::appears(ctx, layer.id, layer.exiting);
+    // The layer's body runs in the popup window's pass, which stamps the layer's appearance in that window's record:
+    // this pass, which decides the window, reads it there. The opener's own record never holds the layer, so a layer
+    // that appeared once would read as appearing in every pass.
+    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
+    let appears = overlay::appears_in(ctx, viewport, layer.id, layer.exiting);
     let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
@@ -335,7 +339,6 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.window = true;
     entry.popup = true;
     overlay::record(ctx, entry);
-    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
     let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport, appears)) };
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);
