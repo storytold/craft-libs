@@ -428,3 +428,54 @@ fn zero_indent_multi_paragraph_header_survives_model_export() {
         assert!(p.props.numbering.is_none());
     }
 }
+
+/// A sublist's header, written from the model, stays with the sublist's items in the item the
+/// sublist is in: alone or of several paragraphs, below another header, and before the item goes
+/// on after the sublist.
+#[test]
+fn a_sublists_header_written_from_the_model_stays_in_its_parent_item() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1"/><text:list-level-style-number text:level="2" style:num-format="a"/><text:list-level-style-number text:level="3" style:num-format="i"/></text:list-style></office:styles></office:document-styles>"#
+    );
+    // The lists of `xml`, without attributes.
+    let lists = |xml: &str| -> String {
+        let (from, to) = (xml.find("<text:list ").unwrap(), xml.rfind("</text:list>").unwrap());
+        let mut out = String::new();
+        for part in xml.get(from..to).unwrap().split('<').skip(1) {
+            let (tag, text) = part.split_once('>').unwrap();
+            out.push_str(&format!("<{}>{text}", tag.split(' ').next().unwrap()));
+        }
+        out + "</text:list>"
+    };
+    let head = "<text:list-header><text:p>Sub header</text:p></text:list-header>";
+    let sub = "<text:list-item><text:p>Sub</text:p></text:list-item>";
+    for inner in [
+        format!("<text:list>{head}{sub}<text:list-item><text:p>Sub two</text:p></text:list-item></text:list>"),
+        format!(
+            "<text:p>More</text:p><text:list><text:list-header><text:p>Sub header</text:p><text:p>Second line</text:p></text:list-header>{sub}</text:list>"
+        ),
+        format!("<text:list>{head}</text:list><text:p>Parent again</text:p>"),
+        "<text:list><text:list-header><text:p>Sub header</text:p><text:list><text:list-header><text:p>Deeper</text:p></text:list-header><text:list-item><text:p>Deepest</text:p></text:list-item></text:list></text:list-header></text:list>".to_string(),
+    ] {
+        let list = |parent: &str, attrs: &str| {
+            format!(
+                "<text:list{attrs}><text:list-item><text:p>{parent}</text:p>{inner}</text:list-item><text:list-item><text:p>Next</text:p></text:list-item></text:list>"
+            )
+        };
+        let content = format!(
+            "<office:document-content {NS_T}><office:body><office:text>{}</office:text></office:body></office:document-content>",
+            list("Parent", r#" text:style-name="L""#)
+        );
+        let mut d = import(&package(&content, Some(&styles))).unwrap();
+        // Edited, so the list is written from the model.
+        let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "Parent")).unwrap();
+        d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+        let out = export(&d).unwrap();
+        assert_eq!(lists(&crate::text::tests::content_of(&out)), list("Edited Parent", ""));
+        let rows = |d: &Document| {
+            let paras = d.body.iter().filter_map(|b| b.as_para());
+            paras.map(|p| (p.text.clone(), p.props.numbering.map(|n| n.level), p.props.list_item)).collect::<Vec<_>>()
+        };
+        assert_eq!(rows(&import(&out).unwrap()), rows(&d));
+    }
+}

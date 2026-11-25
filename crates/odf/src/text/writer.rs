@@ -107,16 +107,13 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
     let mut kinds = [first; 9];
     let mut seen = [false; 9];
     let mut i = start;
-    // The level of the last item: an item's further paragraph goes in an item still open.
-    let mut last = usize::from(p.item.unwrap_or(0).min(8));
     while let Some(FBlock::Para(q)) = blocks.get(i) {
         let Some(li) = q.list else {
             // A section it opens or closes ends the run, as an item's does.
             let wrap = q.wrap.as_deref().filter(|_| wraps);
-            match model::continues_list(blocks, i).map(usize::from) {
-                Some(lv) if lv <= last && (i == start || !wrap.is_some_and(|w| !w.0.is_empty())) => {
-                    // The items below it are closed.
-                    last = lv;
+            match model::continues_list(blocks, i) {
+                // (One below the last item is the header of a sublist in it.)
+                Some(_) if i == start || !wrap.is_some_and(|w| !w.0.is_empty()) => {
                     i += 1;
                     if wrap.is_some_and(|w| w.1 > 0) {
                         break;
@@ -127,7 +124,6 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
             }
         };
         let l = li.level.min(8) as usize;
-        last = l;
         let list_id = *id.get_or_insert(li.list);
         if li.list != list_id || (list_id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
             break;
@@ -150,21 +146,36 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
     (i.max(start + 1), kinds, id.unwrap_or(0))
 }
 
-/// Close nested items and lists down to the requested open depth.
-fn close_lists(out: &mut String, stack: &mut Vec<bool>, depth: usize) {
-    while stack.len() > depth {
-        if stack.pop() == Some(true) {
-            out.push_str("</text:list-item>");
-        }
-        out.push_str("</text:list>");
-    }
+/// What is open in a list being written.
+#[derive(Clone, Copy, PartialEq)]
+enum ListPart {
+    None,
+    Item,
+    Header,
 }
 
-/// Open or close the single leading header without splitting its consecutive paragraphs.
-fn list_header(out: &mut String, is_open: &mut bool, open: bool) {
-    if *is_open != open {
-        out.push_str(if open { "<text:list-header>" } else { "</text:list-header>" });
-        *is_open = open;
+/// Close the open part of the innermost list, then open `part`.
+fn list_part(out: &mut String, stack: &mut [ListPart], part: ListPart) {
+    let Some(top) = stack.last_mut() else { return };
+    out.push_str(match top {
+        ListPart::None => "",
+        ListPart::Item => "</text:list-item>",
+        ListPart::Header => "</text:list-header>",
+    });
+    out.push_str(match part {
+        ListPart::None => "",
+        ListPart::Item => "<text:list-item>",
+        ListPart::Header => "<text:list-header>",
+    });
+    *top = part;
+}
+
+/// Close nested items and lists down to the requested open depth.
+fn close_lists(out: &mut String, stack: &mut Vec<ListPart>, depth: usize) {
+    while stack.len() > depth {
+        list_part(out, stack, ListPart::None);
+        stack.pop();
+        out.push_str("</text:list>");
     }
 }
 
@@ -976,30 +987,15 @@ impl Writer {
                     self.list_styles.push(kinds);
                     let lname = format!("{}L{}", self.prefix, self.list_styles.len());
                     let id_of_list = id;
-                    // Open lists: per level, whether a list-item is open.
-                    let mut stack: Vec<bool> = Vec::new();
-                    let mut header_open = false;
+                    // Open lists: per level, what is open in it.
+                    let mut stack: Vec<ListPart> = Vec::new();
                     for (qi, q) in blocks.get(start..i).unwrap_or(&[]).iter().enumerate() {
                         let FBlock::Para(q) = q else { continue };
-                        if q.list.is_none() && stack.get(usize::from(q.item.unwrap_or(0).min(8))).copied() == Some(true) {
-                            // An item's further paragraph (`list_run` took it only below an open
-                            // item at its level): in that item, its sublists ended first.
-                            let lv = q.item.map_or(0, |l| l.min(8) as usize);
-                            close_lists(out, &mut stack, lv + 1);
-                            self.para_in(q, chain(start + qi), out);
-                            continue;
-                        }
-                        if q.list.is_some() {
-                            list_header(out, &mut header_open, false);
-                        }
                         let lv = usize::from(q.list.map(|l| l.level).or(q.item).unwrap_or(0).min(8));
                         close_lists(out, &mut stack, lv + 1);
                         while stack.len() < lv + 1 {
-                            if let Some(top) = stack.last_mut()
-                                && !*top
-                            {
-                                out.push_str("<text:list-item>");
-                                *top = true;
+                            if stack.last() == Some(&ListPart::None) {
+                                list_part(out, &mut stack, ListPart::Item);
                             }
                             if stack.is_empty() {
                                 let id = format!("{}lst{}", self.prefix, self.list_styles.len());
@@ -1026,25 +1022,18 @@ impl Writer {
                             } else {
                                 out.push_str("<text:list>");
                             }
-                            stack.push(false);
+                            stack.push(ListPart::None);
                         }
-                        // Leading unnumbered paragraphs belong to one list header, not to
-                        // the document body. Keep that membership when original markup is gone.
-                        if q.list.is_none() {
-                            list_header(out, &mut header_open, true);
-                            self.para_in(q, chain(start + qi), out);
-                            continue;
+                        // An unnumbered paragraph goes in the item or header open at its level (its
+                        // sublists ended first); a list's leading ones are its header's. Keep that
+                        // membership when original markup is gone.
+                        if q.list.is_some() {
+                            list_part(out, &mut stack, ListPart::Item);
+                        } else if stack.last() == Some(&ListPart::None) {
+                            list_part(out, &mut stack, ListPart::Header);
                         }
-                        if let Some(top) = stack.last_mut() {
-                            if *top {
-                                out.push_str("</text:list-item>");
-                            }
-                            *top = true;
-                        }
-                        out.push_str("<text:list-item>");
                         self.para_in(q, chain(start + qi), out);
                     }
-                    list_header(out, &mut header_open, false);
                     close_lists(out, &mut stack, 0);
                     self.close_wrap(closes.as_ref(), 0, out);
                     out.push('\n');
