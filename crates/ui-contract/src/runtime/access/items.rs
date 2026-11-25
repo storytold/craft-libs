@@ -20,8 +20,9 @@ pub(crate) struct HeaderCell<'a> {
     pub sort: Option<bool>,
 }
 
-/// The `ColumnHeader` sub-nodes of the collection `owner`. Every cell is a focus stop of the header's roving group.
-pub(crate) fn report_header(ctx: &Context, owner: Id, enabled: bool, cells: &[HeaderCell<'_>]) {
+/// The `ColumnHeader` sub-nodes of the collection `owner`, clamped into `clip`. Every cell is a focus stop of the
+/// header's roving group.
+pub(crate) fn report_header(ctx: &Context, owner: Id, (enabled, clip): (bool, Rect), cells: &[HeaderCell<'_>]) {
     for cell in cells {
         let mut node = SubNode::new(cell.part, Role::COLUMN_HEADER);
         node.name = Name::Text(cell.name.to_owned());
@@ -34,6 +35,7 @@ pub(crate) fn report_header(ctx: &Context, owner: Id, enabled: bool, cells: &[He
                 component: "Collection",
                 node: &node,
                 rect: cell.rect,
+                clip,
                 enabled,
                 focusable: enabled,
                 clickable: enabled && cell.clickable,

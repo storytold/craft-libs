@@ -98,6 +98,9 @@ pub struct CxCore<'a> {
     pub content_rect: Rect,
     /// The rect intersected with the clip rect.
     pub visible: Rect,
+    /// The clip rect of the `Ui` the component runs in, before a bar's view cuts the component: the access step clamps
+    /// the component's node and its parts' nodes into it.
+    pub(crate) clip: Rect,
     /// Start and end geometry of the rect.
     pub flow: Flow,
     /// The root widget's response.

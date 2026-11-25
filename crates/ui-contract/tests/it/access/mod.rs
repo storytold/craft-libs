@@ -8,6 +8,7 @@ pub(crate) mod focus;
 pub(crate) mod levels;
 pub(crate) mod nodes;
 pub(crate) mod scope;
+pub(crate) mod scrolled;
 pub(crate) mod static_text;
 pub(crate) mod sub_node_keys;
 pub(crate) mod viewports;

@@ -372,6 +372,7 @@ fn blank_core<'a>(
         rect,
         content_rect: rect,
         visible: rect,
+        clip: Rect::EVERYTHING,
         flow: Flow::new(rect, false),
         response,
         command,
@@ -1072,6 +1073,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     core.content_rect = content_rect;
     core.flow = flow;
     core.visible = rect.intersect(ui.clip_rect());
+    core.clip = ui.clip_rect();
     // A read-only component takes no activation: the response reports no click either.
     if !steps::takes_activation(resolved) {
         response.flags.remove(egui::response::Flags::CLICKED | egui::response::Flags::FAKE_PRIMARY_CLICKED);
