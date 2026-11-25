@@ -554,11 +554,35 @@ fn premultiply_rgba(rgba: &mut [u8]) {
 /// stay far below this.
 const MAX_DASHES_PER_STROKE: f64 = 250_000.0;
 
-/// PdfCraft patch: the dash pattern to stroke `path` with. Empty (a solid line) when the pattern
-/// is invalid, or when it could cut the path into more than [`MAX_DASHES_PER_STROKE`] pieces.
-/// ISO 32000-2 §8.4.3.6 requires nonnegative entries that are not all zero; a pattern whose
-/// period isn't positive (`[-1 -1] 0 d`) made kurbo's search for the starting dash loop for ever.
-fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
+/// PdfCraft patch: a dash pattern whose period is shorter than this many device pixels, in every
+/// direction, is drawn solid. Its dashes and gaps are a small fraction of a pixel, so stroke
+/// expansion would cut each pixel of the line into dozens of pieces only for the rasterizer to
+/// average them again: a plan with 157,000 short strokes dashed `[.001 .001] 0 d` (a period of
+/// 0.0027 px at 96 dpi) spent over 17 s on it. PDFium and MuPDF draw such a pattern solid
+/// (PDFium below about 0.1 px, MuPDF below about 0.5 px); at 0.1 px and above it is dashed as
+/// before.
+const SOLID_DASH_PERIOD_PX: f64 = 0.1;
+
+/// PdfCraft patch (35): the least `transform` lengthens any vector, its smallest singular value:
+/// `|det| / s` with `s` the largest, `sqrt((F + sqrt(F² - 4 det²)) / 2)` and `F` the sum of the
+/// squared coefficients of its linear part. 0 for a singular matrix, NaN or 0 when the
+/// coefficients overflow or one is NaN; the caller then keeps its 0.01 floor.
+fn smallest_stretch(transform: &Affine) -> f64 {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    let sum_sq = a * a + b * b + c * c + d * d;
+    let det = (a * d - b * c).abs();
+    let disc = (sum_sq * sum_sq - 4.0 * det * det).max(0.0);
+    let largest = ((sum_sq + disc.sqrt()) / 2.0).sqrt();
+    if largest > 0.0 { det / largest } else { 0.0 }
+}
+
+/// PdfCraft patch: the dash pattern to stroke `path` with under `transform` (user space to
+/// device pixels). Empty (a solid line) when the pattern is invalid, when its period is under
+/// [`SOLID_DASH_PERIOD_PX`] device pixels, or when it could cut the path into more than
+/// [`MAX_DASHES_PER_STROKE`] pieces. ISO 32000-2 §8.4.3.6 requires nonnegative entries that are
+/// not all zero; a pattern whose period isn't positive (`[-1 -1] 0 d`) made kurbo's search for
+/// the starting dash loop for ever.
+fn usable_dash_pattern(path: &BezPath, dashes: &[f32], transform: &Affine) -> Vec<f64> {
     if dashes.iter().any(|d| !d.is_finite() || *d < 0.0) {
         return Vec::new();
     }
@@ -572,6 +596,12 @@ fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
     if !period.is_finite() || period <= 0.0 {
         return Vec::new();
     }
+    // The longest a user-space period can be on the device, whatever the path's direction; a
+    // NaN (from a non-finite transform) fails the comparison and is drawn solid too.
+    let device_period = period * largest_stretch(transform);
+    if !(device_period >= SOLID_DASH_PERIOD_PX) {
+        return Vec::new();
+    }
     let (length, restarts) = control_polygon_length(path);
     // kurbo restarts the pattern at every subpath and after every `ClosePath`, so each restart
     // can begin up to a whole period of pieces however short its segment is.
@@ -580,6 +610,19 @@ fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
         return Vec::new();
     }
     dashes.iter().map(|d| f64::from(*d)).collect()
+}
+
+/// PdfCraft patch: the most `transform` lengthens any vector, its largest singular value:
+/// `sqrt((F + sqrt(F² - 4 det²)) / 2)` with `F` the sum of the squared coefficients of its linear
+/// part. Infinite when they overflow, NaN when one is NaN.
+fn largest_stretch(transform: &Affine) -> f64 {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    let sum_sq = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    // Rounding can leave the discriminant a hair below zero for a uniform scale; `max` also
+    // turns an `inf - inf` NaN into 0, leaving `sum_sq` (infinite) to decide.
+    let disc = (sum_sq * sum_sq - 4.0 * det * det).max(0.0);
+    ((sum_sq + disc.sqrt()) / 2.0).sqrt()
 }
 
 /// PdfCraft patch: the length of `path`'s control polygon, which a curve never exceeds, and how
@@ -661,6 +704,72 @@ pub fn offscreen_draws() -> OffscreenDraws {
     OFFSCREEN_DRAWS
         .try_with(std::cell::Cell::get)
         .unwrap_or_default()
+}
+
+thread_local! {
+    /// PdfCraft patch (34): see [`paths_drawn`].
+    static PATHS_DRAWN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (34): the paths (not glyphs) the renders on this thread were asked to fill or
+/// stroke, in every scene (the page, soft masks, tiling cells and the like), for tests that check
+/// how much of a page was drawn by counting rather than by timing it. The count only grows; a test takes
+/// the difference across a render.
+#[doc(hidden)]
+pub fn paths_drawn() -> u64 {
+    PATHS_DRAWN.try_with(std::cell::Cell::get).unwrap_or_default()
+}
+
+/// PdfCraft patch (34): coverage values a scene may hold however small its canvas. Every path's
+/// coverage stays in memory until the scene is rasterized, about three bytes a value with its
+/// strips and tile commands, so this keeps a scene to about 200 MB: forms that draw the next form
+/// twice, twenty deep (PDFBOX-5415), filled the 2^31 values a strip can index and peaked at
+/// 5.4 GB. Of 5,157 corpus pages (PDFBox issue attachments and pdf.js test files) rendered at
+/// 96 dpi, the most any used was 32.6 million, and half used under 44,000.
+pub(crate) const MIN_COVERAGE_BUDGET: usize = 1 << 26;
+
+/// PdfCraft patch (34): coverage values a scene may hold for each pixel of its canvas, when that
+/// is more than [`MIN_COVERAGE_BUDGET`]. The 5,157 pages used at most 17.9 a pixel (34 used
+/// over 2, half under 0.09), and each stayed under a third of its budget; the heaviest uses two
+/// fifths of it at 72 dpi. Coverage grows more slowly than the canvas: five of the heaviest a
+/// pixel, drawn again at 600 dpi, used at most 2.6.
+pub(crate) const COVERAGE_PER_PIXEL: usize = 16;
+
+/// PdfCraft patch (34): the coverage values a `width` × `height` scene may hold before later
+/// paths are left out (vello_cpu patch 1, never more than the 2^31 a strip indexes), and the
+/// interpreter stops drawing (`Device::out_of_room`, hayro-interpret patch 112).
+#[doc(hidden)]
+pub fn coverage_budget(width: u16, height: u16) -> usize {
+    usize::from(width)
+        .saturating_mul(usize::from(height))
+        .saturating_mul(COVERAGE_PER_PIXEL)
+        .max(min_coverage_budget())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The floor [`coverage_budget`] uses on this thread in place of [`MIN_COVERAGE_BUDGET`],
+    /// when set: tests lower it so that a page reaches its budget in a fraction of the paths an
+    /// unoptimised build would take minutes over.
+    pub(crate) static TEST_COVERAGE_FLOOR: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`MIN_COVERAGE_BUDGET`], or the floor a test set on this thread.
+fn min_coverage_budget() -> usize {
+    #[cfg(test)]
+    if let Some(floor) = TEST_COVERAGE_FLOOR.with(std::cell::Cell::get) {
+        return floor;
+    }
+    MIN_COVERAGE_BUDGET
+}
+
+/// PdfCraft patch (34): a render context for a `width` × `height` scene, kept to its
+/// [`coverage_budget`]. The page and every scene drawn apart from it (soft masks, image alpha
+/// masks, tiling cells, ink passes) are made here.
+fn budgeted_context(width: u16, height: u16, settings: RenderSettings) -> RenderContext {
+    let mut ctx = RenderContext::new_with(width, height, settings);
+    ctx.set_max_coverage(coverage_budget(width, height));
+    ctx
 }
 
 /// PdfCraft patch (30): a `width` × `height` pixmap to draw offscreen, counted in
@@ -750,6 +859,107 @@ fn may_paint_rect(rect: Rect, transform: Affine, width: u16, height: u16) -> boo
         .transform_rect_bbox(rect.inflate(DRAW_SLACK, DRAW_SLACK))
         .inflate(2.0, 2.0);
     paints_canvas(device, width, height)
+}
+
+/// PdfCraft patch (36): how far, in device pixels, a clip rectangle's edge may stray from a
+/// pixel boundary, or its sides from the device axes, and still count as on it: a 256th of a
+/// pixel, less than one step of 8-bit coverage, so treating it as on the boundary changes no
+/// pixel that anti-aliasing would have drawn, while rounding noise in the matrix (an edge at
+/// 100.000001) does not claim a whole extra row of pixels.
+const CLIP_EDGE_SLACK: f64 = 1.0 / 256.0;
+
+/// PdfCraft patch (36): the whole-pixel device rectangle a clip path that is an axis-aligned
+/// rectangle in device space clips to, or `None` for any other path (or non-finite geometry).
+/// ISO 32000-2 §10.7.4: "the clipping region consists of the set of pixels that would be included
+/// by a fill operation", and a fill includes "any pixel whose half-open square region intersects
+/// the shape, no matter how small the intersection is", so every pixel the rectangle reaches
+/// into is wholly inside the clip. With the clip's edge anti-aliased instead, what was painted
+/// inside was cut to a fraction of each edge pixel and what lay under it showed through: a photo
+/// set as strips, each under its own `re W n`, had a light line at every boundary between strips
+/// (coverages of 0.3 and 0.7 leave 0.21 of the paper), and a shading clipped to a box filled
+/// underneath left the fill's colour as a frame. Only rectangles snap: a turned or curved clip
+/// keeps its anti-aliased edge, as no set of whole pixels matches it.
+fn pixel_clip_rect(path: &BezPath) -> Option<Rect> {
+    let elements = path.elements();
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    for (i, el) in elements.iter().enumerate() {
+        match el {
+            kurbo::PathEl::MoveTo(p) if i == 0 => points.push(*p),
+            kurbo::PathEl::LineTo(p) if i > 0 => points.push(*p),
+            // Closing ends the path: anything after it is a second subpath.
+            kurbo::PathEl::ClosePath if i > 0 && i + 1 == elements.len() => {}
+            _ => return None,
+        }
+        if points.len() > 5 {
+            return None;
+        }
+    }
+    if !points.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let near = |a: f64, b: f64| (a - b).abs() <= CLIP_EDGE_SLACK;
+    // A fifth point back at the start closes the rectangle as `h` does.
+    if points.len() == 5 {
+        let (first, last) = (points.first()?, points.last()?);
+        if !(near(first.x, last.x) && near(first.y, last.y)) {
+            return None;
+        }
+        points.pop();
+    }
+    let corners: [Point; 4] = points.try_into().ok()?;
+    let bounds = path.bounding_box();
+    // A point encloses nothing and touches no pixel's interior: it keeps clipping everything
+    // away, as it did (and does in PDFium and MuPDF). A line is widened to an area before it
+    // gets here (hayro-interpret's `degenerate_fill_area`).
+    if bounds.width() == 0.0 && bounds.height() == 0.0 {
+        return None;
+    }
+    // Each side runs along an axis and each point sits on a corner of the bounding box: a
+    // different corner each, every side joining two neighbouring corners, so the four sides go
+    // round the box. Corners alone are not enough: `10 10 m 100 10 l 10 10 l 10 100 l h` sits on
+    // three of them and runs along the axes, but its two lines retrace themselves and enclose
+    // nothing, so it must not clip to its bounding box. Each point's corner is the bound it is
+    // nearer on each axis, which tells apart the sides of a rectangle thinner than the slack.
+    let corner = |p: &Point| {
+        let right = (p.x - bounds.x0).abs() > (p.x - bounds.x1).abs();
+        let top = (p.y - bounds.y0).abs() > (p.y - bounds.y1).abs();
+        u8::from(right) | (u8::from(top) << 1)
+    };
+    let mut seen = 0u8;
+    for (i, p) in corners.iter().enumerate() {
+        let q = corners.get((i + 1) % 4)?;
+        if !(near(p.x, q.x) || near(p.y, q.y)) {
+            return None;
+        }
+        let on_x = near(p.x, bounds.x0) || near(p.x, bounds.x1);
+        let on_y = near(p.y, bounds.y0) || near(p.y, bounds.y1);
+        if !(on_x && on_y) {
+            return None;
+        }
+        // Neighbouring corners differ on exactly one axis.
+        if (corner(p) ^ corner(q)).count_ones() != 1 {
+            return None;
+        }
+        seen |= 1 << corner(p);
+    }
+    if seen != 0b1111 {
+        return None;
+    }
+    // Every pixel the rectangle reaches into by more than the slack. A rectangle thinner than
+    // the slack still marks a pixel (§10.7.4, EXAMPLE): the one holding its middle, by the
+    // half-open rule, so a line on a pixel boundary marks the pixel after it.
+    let span = |lo: f64, hi: f64| {
+        let (a, b) = ((lo + CLIP_EDGE_SLACK).floor(), (hi - CLIP_EDGE_SLACK).ceil());
+        if b > a {
+            (a, b)
+        } else {
+            let c = (lo / 2.0 + hi / 2.0).floor();
+            (c, c + 1.0)
+        }
+    };
+    let (x0, x1) = span(bounds.x0, bounds.x1);
+    let (y0, y1) = span(bounds.y0, bounds.y1);
+    Some(Rect::new(x0, y0, x1, y1))
 }
 
 /// PdfCraft patch: how far, in device pixels, the terms [`snap_minified_image`] drops may move an
@@ -873,6 +1083,13 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// PdfCraft patch (32): this renderer, drawing a tiling cell, painted something outside every
+    /// transparency group with a blend mode other than Normal, so the cell has to be drawn over
+    /// its backdrop (see [`Renderer::draw_tiles_on_backdrop`]).
+    cell_blends: bool,
+    /// PdfCraft patch (32): the tiling pattern `paint_setup` just set up is one whose cell blends
+    /// (`cell_blends`); the fill or stroke that asked for it draws its tiles on the backdrop.
+    backdrop_tiles: bool,
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -882,7 +1099,9 @@ pub(crate) struct Renderer {
 /// one. A handful of entries covers a run of fills with one pattern, and bounds what the cache
 /// keeps besides what the scene holds anyway.
 #[derive(Default)]
-struct TilingCells(Vec<(TilingCellKey, Arc<Pixmap>)>);
+/// Each cell is kept with whether it blends (patch (32): `Renderer::cell_blends`), which a cell
+/// taken from here has no renderer left to tell.
+struct TilingCells(Vec<(TilingCellKey, Arc<Pixmap>, bool)>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TilingCellKey {
@@ -897,15 +1116,15 @@ struct TilingCellKey {
 impl TilingCells {
     const MAX_ENTRIES: usize = 8;
 
-    fn get(&self, key: &TilingCellKey) -> Option<Arc<Pixmap>> {
-        self.0.iter().find(|(k, _)| k == key).map(|(_, cell)| cell.clone())
+    fn get(&self, key: &TilingCellKey) -> Option<(Arc<Pixmap>, bool)> {
+        self.0.iter().find(|(k, _, _)| k == key).map(|(_, cell, blends)| (cell.clone(), *blends))
     }
 
-    fn insert(&mut self, key: TilingCellKey, cell: Arc<Pixmap>) {
+    fn insert(&mut self, key: TilingCellKey, cell: Arc<Pixmap>, blends: bool) {
         if self.0.len() >= Self::MAX_ENTRIES {
             self.0.remove(0);
         }
-        self.0.push((key, cell));
+        self.0.push((key, cell, blends));
     }
 }
 
@@ -998,7 +1217,7 @@ impl Renderer {
         preview: bool,
     ) -> Self {
         Self {
-            ctx: RenderContext::new_with(width, height, settings),
+            ctx: budgeted_context(width, height, settings),
             color_replacement,
             in_annotations: false,
             knockout: Vec::new(),
@@ -1015,6 +1234,8 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            cell_blends: false,
+            backdrop_tiles: false,
         }
     }
 
@@ -1031,13 +1252,27 @@ impl Renderer {
         // specification. If we are stroking text, we reduce the threshold as it will otherwise
         // lead to very bold-looking text at low resolutions.
         let min_factor = max_factor(self.ctx.transform());
-        let mut line_width = stroke_props.line_width.max(0.01);
-        let transformed_width = line_width * min_factor;
-
+        // PdfCraft patch (35): the minimum is applied in device space alone. Upstream first
+        // floored the width at 0.01 in user space, so under a large matrix a zero or tiny width
+        // came out far wider than a pixel (0.0012 under a 543× form matrix drew about 6 pt wide).
+        // ISO 32000-2 §8.4.3.2 gives the width in user space and makes 0 the thinnest line the
+        // device can draw. A NaN or negative width counts as 0. Where no device minimum applies
+        // (inside a pattern or a Type 3 glyph, or under a matrix that collapses or isn't finite),
+        // the 0.01 floor stays, so no stroke is drawn 0 or NaN wide. The minimum is taken along
+        // the direction the matrix shrinks most (`smallest_stretch`), so a thin stroke is at least
+        // the threshold across whichever way it runs: under `400 0 0 100 cm`, one along the larger
+        // scale only would have left a vertical zero-width line a quarter of a pixel wide.
+        let thinnest = (f64::from(threshold) / smallest_stretch(self.ctx.transform())) as f32;
         // Only enforce line width if not inside of pattern or type 3 glyph.
-        if transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph {
-            line_width /= transformed_width;
-            line_width *= threshold;
+        let device_minimum = !self.inside_pattern
+            && !self.in_type3_glyph
+            && thinnest.is_finite()
+            && thinnest > 0.0;
+        let mut line_width = stroke_props.line_width.max(0.0);
+        if !device_minimum {
+            line_width = line_width.max(0.01);
+        } else if line_width < thinnest {
+            line_width = thinnest;
         }
 
         // PdfCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
@@ -1055,7 +1290,12 @@ impl Renderer {
             start_cap: stroke_props.line_cap,
             end_cap: stroke_props.line_cap,
             // PdfCraft patch: see `usable_dash_pattern`.
-            dash_pattern: usable_dash_pattern(path, &stroke_props.dash_array).into(),
+            dash_pattern: usable_dash_pattern(
+                path,
+                &stroke_props.dash_array,
+                self.ctx.transform(),
+            )
+            .into(),
             dash_offset: if stroke_props.dash_offset.is_finite() {
                 stroke_props.dash_offset as f64
             } else {
@@ -1099,7 +1339,7 @@ impl Renderer {
                 alpha_data.interpolate = true;
             }
             let mut renderer = Self {
-                ctx: RenderContext::new_with(
+                ctx: budgeted_context(
                     self.ctx.width(),
                     self.ctx.height(),
                     derive_settings(self.ctx.render_settings()),
@@ -1122,6 +1362,8 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                cell_blends: false,
+                backdrop_tiles: false,
             };
             let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1631,6 +1873,7 @@ impl Renderer {
 
     /// PdfCraft patch (30): the cell pixmap of tiling pattern `t`, `size` pixels drawn at
     /// `initial_transform`; a cell with a `key` is drawn once and then taken from `tiling_cells`.
+    /// With it, whether the cell blends (patch (32): `cell_blends`), kept with a cached cell.
     fn tiling_cell(
         &mut self,
         t: &hayro_interpret::pattern::TilingPattern<'_>,
@@ -1638,12 +1881,12 @@ impl Renderer {
         size: (u16, u16),
         initial_transform: Affine,
         is_stroke: bool,
-    ) -> Arc<Pixmap> {
+    ) -> (Arc<Pixmap>, bool) {
         if let Some(cell) = key.and_then(|key| self.tiling_cells.get(&key)) {
             return cell;
         }
         let mut renderer = Self {
-            ctx: RenderContext::new_with(size.0, size.1, derive_settings(self.ctx.render_settings())),
+            ctx: budgeted_context(size.0, size.1, derive_settings(self.ctx.render_settings())),
             // PdfCraft patch: a pattern cell is painted as one artwork, so its content is never
             // remapped by the reading-colours setting.
             color_replacement: None,
@@ -1662,6 +1905,8 @@ impl Renderer {
             preview: self.preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            cell_blends: false,
+            backdrop_tiles: false,
         };
         t.interpret(&mut renderer, initial_transform, is_stroke);
         let mut pix = offscreen_pixmap(size.0, size.1, true);
@@ -1670,9 +1915,9 @@ impl Renderer {
         renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
         let pix = Arc::new(pix);
         if let Some(key) = key {
-            self.tiling_cells.insert(key, pix.clone());
+            self.tiling_cells.insert(key, pix.clone(), renderer.cell_blends);
         }
-        pix
+        (pix, renderer.cell_blends)
     }
 
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
@@ -1680,7 +1925,11 @@ impl Renderer {
 
         self.ctx.set_fill_rule(convert_fill_rule(fill));
         self.ctx.set_transform(Affine::IDENTITY);
-        self.ctx.push_clip_path(clip_path);
+        // PdfCraft patch (36): see `pixel_clip_rect`.
+        match pixel_clip_rect(clip_path) {
+            Some(rect) => self.ctx.push_clip_path(&rect.to_path(0.1)),
+            None => self.ctx.push_clip_path(clip_path),
+        }
 
         self.ctx.set_transform(old_transform);
     }
@@ -1715,7 +1964,7 @@ impl Renderer {
         height: u16,
     ) -> Option<Pixmap> {
         let mut renderer = Self {
-            ctx: RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings())),
+            ctx: budgeted_context(width, height, derive_settings(self.ctx.render_settings())),
             color_replacement: None,
             in_annotations: self.in_annotations,
             inside_pattern: self.inside_pattern,
@@ -1731,6 +1980,8 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            cell_blends: false,
+            backdrop_tiles: false,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
@@ -1837,6 +2088,8 @@ impl Renderer {
 
     #[must_use]
     fn set_paint(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool) -> PaintSetup {
+        // PdfCraft patch (32): set again by a tiling pattern whose cell blends.
+        self.backdrop_tiles = false;
         // PdfCraft patch (22): in a knockout erase pass every paint clears what is under its
         // shape (a transparent fill with `Compose::Copy`, weighted by coverage).
         let element_mode = self.knockout_pass().map(|pass| pass.element_mode);
@@ -1879,6 +2132,116 @@ impl Renderer {
             self.ctx.pop_clip_path();
         }
         self.ctx.set_blend_mode(knockout_blend_mode());
+    }
+
+    /// PdfCraft patch (32): whether a tiling pattern set up now may draw its cell over the
+    /// backdrop (`backdrop_tiles`). In a knockout group or its passes every element replaces
+    /// what is under it, so there the cell keeps the image paint.
+    fn may_draw_tiles_on_backdrop(&self) -> bool {
+        !self.erasing && !self.in_knockout() && self.knockout_passes.is_empty() && self.ink.pass.is_none()
+    }
+
+    /// PdfCraft patch (32): paints `shape` (in user space under `transform`; filled with
+    /// `fill_rule`, or stroked with the context's stroke when `is_stroke`) with tiling pattern
+    /// `paint` by drawing the pattern's cell again in every tile the shape reaches, straight over
+    /// what is under it. ISO 32000-2 §11.6.7 treats a tiling pattern's definition as a
+    /// non-isolated, non-knockout group, "as if the pattern definition were re-executed
+    /// independently for each tile, taking into account the colour of the backdrop" (NOTE 1),
+    /// so a blend mode inside the cell blends with the page. The cell pixmap, drawn on a
+    /// transparent canvas, is the isolated shortcut that NOTE 1 allows only for cells painted
+    /// entirely with Normal. When the fill or stroke itself composites with a blend mode or a
+    /// soft mask, the tiles are drawn in a layer carrying those.
+    ///
+    /// Returns `false`, having drawn nothing, when the paint isn't a tiling pattern, the
+    /// geometry is degenerate, or the shape reaches more than [`MAX_BACKDROP_TILES`] tiles; the
+    /// caller then paints the cell pixmap already set up.
+    fn draw_tiles_on_backdrop(&mut self, paint: &Paint<'_>, shape: &BezPath, transform: Affine, fill_rule: FillRule, is_stroke: bool) -> bool {
+        let Paint::Pattern(pattern) = paint else { return false };
+        let Pattern::Tiling(t) = pattern.as_ref() else { return false };
+        let (clip, clip_rule) = if is_stroke {
+            let scale = f64::from(max_factor(&transform));
+            if !scale.is_finite() || scale <= 0.0 {
+                return false;
+            }
+            let outline = kurbo::stroke(shape.iter(), self.ctx.stroke(), &kurbo::StrokeOpts::default(), 0.25 / scale);
+            (transform * outline, FillRule::NonZero)
+        } else {
+            (transform * shape.clone(), fill_rule)
+        };
+        let canvas = Rect::new(0.0, 0.0, f64::from(self.ctx.width()), f64::from(self.ctx.height()));
+        let area = clip.bounding_box().intersect(canvas);
+        if area.width() <= 0.0 || area.height() <= 0.0 {
+            // Nothing of the shape is on the canvas.
+            return true;
+        }
+        if !(t.matrix.determinant().abs() > 1e-12) {
+            return false;
+        }
+        // The area in pattern space, and the lattice indices of the tiles whose `/BBox` reaches
+        // it. A negative step gives the same lattice (ISO 32000-2 §8.7.3.1, Table 74).
+        let reach = t.matrix.inverse().transform_rect_bbox(area);
+        let (xs, ys) = (f64::from(t.x_step).abs(), f64::from(t.y_step).abs());
+        let bbox = t.bbox;
+        // Tile `i` spans `bbox.x0 + i xs ..= bbox.x1 + i xs`.
+        let i0 = ((reach.x0 - bbox.x1) / xs).ceil();
+        let i1 = ((reach.x1 - bbox.x0) / xs).floor();
+        let j0 = ((reach.y0 - bbox.y1) / ys).ceil();
+        let j1 = ((reach.y1 - bbox.y0) / ys).floor();
+        if i1 < i0 || j1 < j0 {
+            // No tile reaches the area.
+            return true;
+        }
+        let tiles = (i1 - i0 + 1.0) * (j1 - j0 + 1.0);
+        if !tiles.is_finite() || tiles > f64::from(MAX_BACKDROP_TILES) {
+            return false;
+        }
+        // An index past what `f64` holds exactly (a pattern matrix translated far away) would
+        // place the tiles wrongly, or saturate in the cast below and draw them off the canvas.
+        if [i0, i1, j0, j1].iter().any(|index| index.abs() > MAX_TILE_INDEX) {
+            return false;
+        }
+        // At most `MAX_BACKDROP_TILES` (checked above), so the cast is exact.
+        if !take_backdrop_tiles(tiles as u32) {
+            return false;
+        }
+
+        let outer = self.ctx.save_current_state();
+        let outer_mask = self.cur_mask.clone();
+        let (inside_pattern, color_replacement) = (self.inside_pattern, self.color_replacement);
+        let blend = self.ctx.blend_mode();
+        let layered = blend != peniko::BlendMode::default() || outer_mask.is_some();
+        self.push_clip_path_inner(&clip, clip_rule);
+        if layered {
+            self.ctx.push_layer(None, Some(blend), None, outer_mask.clone(), None);
+            self.ctx.reset_mask();
+            self.cur_mask = None;
+        }
+        // The cell starts from the default transparency parameters (§11.6.7).
+        self.ctx.set_blend_mode(peniko::BlendMode::default());
+        let cell_start = self.ctx.save_current_state();
+        self.inside_pattern = true;
+        // A pattern cell is painted as one artwork (see the cell pixmap's renderer).
+        self.color_replacement = None;
+        // Finite whole numbers within `MAX_TILE_INDEX`, at most `MAX_BACKDROP_TILES` apart each
+        // way (checked above).
+        let (i0, i1, j0, j1) = (i0 as i64, i1 as i64, j0 as i64, j1 as i64);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let offset = Affine::translate((i as f64 * xs, j as f64 * ys));
+                t.interpret(self, t.matrix * offset, is_stroke);
+                self.ctx.restore_state(cell_start.clone());
+                self.cur_mask = None;
+            }
+        }
+        if layered {
+            self.ctx.pop_layer();
+        }
+        self.ctx.pop_clip_path();
+        self.ctx.restore_state(outer);
+        self.cur_mask = outer_mask;
+        self.inside_pattern = inside_pattern;
+        self.color_replacement = color_replacement;
+        true
     }
 
     fn draw_shape(&mut self, path: &BezPath, is_stroke: bool) {
@@ -2036,7 +2399,9 @@ impl Renderer {
                                 pixels: (pix_width, pix_height),
                                 scale: (u64::from(xs.to_bits()), u64::from(ys.to_bits())),
                             });
-                            let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
+                            let (pix, blends) = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
+                            // PdfCraft patch (32): see `backdrop_tiles`.
+                            self.backdrop_tiles = blends && self.may_draw_tiles_on_backdrop();
                             paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
                             let image = Image {
                                 image: ImageSource::Pixmap(pix),
@@ -2079,7 +2444,9 @@ impl Renderer {
                             pixels: (pix_width, pix_height),
                             scale: (xs.to_bits(), ys.to_bits()),
                         });
-                        let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
+                        let (pix, blends) = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
+                        // PdfCraft patch (32): see `backdrop_tiles`.
+                        self.backdrop_tiles = blends && self.may_draw_tiles_on_backdrop();
 
                         // TODO: Fix these
                         if t.x_step < 0.0 {
@@ -2135,6 +2502,10 @@ impl Renderer {
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
         let PaintSetup::Clip(clip_path) = self.set_paint(&paint, path, true) else { return };
+        // PdfCraft patch (32): a tiling cell that blends is drawn over the backdrop.
+        if self.backdrop_tiles && self.draw_tiles_on_backdrop(&paint, path, transform, FillRule::NonZero, true) {
+            return;
+        }
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, FillRule::NonZero);
         }
@@ -2164,6 +2535,10 @@ impl Renderer {
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
         let PaintSetup::Clip(clip_path) = self.set_paint(&paint, path, false) else { return };
+        // PdfCraft patch (32): a tiling cell that blends is drawn over the backdrop.
+        if self.backdrop_tiles && self.draw_tiles_on_backdrop(&paint, path, transform, fill_rule, false) {
+            return;
+        }
         if let Some(clip_path) = clip_path.as_ref() {
             self.push_clip_path_inner(clip_path, fill_rule);
         }
@@ -2256,6 +2631,12 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    // PdfCraft patch (34): once a path was left out for want of coverage, every later one is
+    // too (`room_for_path` asks room for a whole canvas), so nothing more would show.
+    fn out_of_room(&self) -> bool {
+        self.ctx.coverage_full()
+    }
+
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -2536,6 +2917,11 @@ impl<'a> Device<'a> for Renderer {
             self.erase_groups += 1;
             return;
         }
+        // PdfCraft patch (32): a group composited with a blend mode other than Normal, outside
+        // every other group, blends with what is under the tiling cell (see `set_blend_mode`).
+        if blend_mode != BlendMode::Normal && self.image_transparency_stack.is_empty() {
+            self.cell_blends = true;
+        }
         // PdfCraft patch (26): an image or group of another pass than the current one clears
         // what is under its shape instead of painting: its layer, drawn at full opacity with no
         // soft mask, composites with `Compose::DestOut`. That clears the coverage of a masked
@@ -2710,6 +3096,8 @@ impl<'a> Device<'a> for Renderer {
         paint: &Paint<'_>,
         draw_mode: &PathDrawMode,
     ) {
+        // PdfCraft patch (34): counted for `paths_drawn`.
+        let _ = PATHS_DRAWN.try_with(|n| n.set(n.get().saturating_add(1)));
         match draw_mode {
             PathDrawMode::Fill(f) => {
                 Self::fill_path(self, path, transform, paint, *f, false);
@@ -2750,6 +3138,10 @@ impl<'a> Device<'a> for Renderer {
                 // PdfCraft patch: apply the reading-colours mapping before painting.
                 let paint = self.replaced(paint, false);
                 let PaintSetup::Clip(clip_path) = self.set_paint(&paint, &path, false) else { return };
+                // PdfCraft patch (32): a tiling cell that blends is drawn over the backdrop.
+                if self.backdrop_tiles && self.draw_tiles_on_backdrop(&paint, &path, transform, *fill_rule, false) {
+                    return;
+                }
                 if let Some(clip_path) = clip_path.as_ref() {
                     self.push_clip_path_inner(clip_path, *fill_rule);
                 }
@@ -2788,6 +3180,11 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        // PdfCraft patch (32): outside every group, a blend mode other than Normal blends with
+        // what is under the tiling cell this renderer may be drawing.
+        if blend_mode != BlendMode::Normal && self.image_transparency_stack.is_empty() {
+            self.cell_blends = true;
+        }
         // PdfCraft patch (26): the blend mode of the element about to paint, for its pass (an
         // erase pass paints nothing, and its content's modes are not the element's).
         if !self.erasing
@@ -2803,6 +3200,47 @@ impl<'a> Device<'a> for Renderer {
         };
         self.ctx.set_blend_mode(mode);
     }
+}
+
+/// PdfCraft patch (32): the most tiles a fill or stroke draws its tiling cell in, over the
+/// backdrop, when the cell blends (see `Renderer::draw_tiles_on_backdrop`); each one interprets
+/// the cell's content again. A shape reaching more tiles takes the cell pixmap, as if the cell
+/// were an isolated group.
+const MAX_BACKDROP_TILES: u32 = 256;
+
+/// PdfCraft patch (32): the most tiles one page draws over the backdrop, counted across every
+/// fill and stroke and every nesting level (a blending cell drawn inside another one's tile, or
+/// inside a cell pixmap, draws from the same allowance). Each tile interprets its cell again,
+/// rasterizing any pattern inside it, so the per-shape [`MAX_BACKDROP_TILES`] alone doesn't bound
+/// the page. A shape needing more tiles than are left takes the cell pixmap; a later one that
+/// fits what is left still draws from it.
+const MAX_PAGE_BACKDROP_TILES: u32 = 4096;
+
+/// PdfCraft patch (32): the largest tile index drawn over the backdrop: integers up to here are
+/// exact in `f64`, and well inside `i64`.
+const MAX_TILE_INDEX: f64 = 4_503_599_627_370_496.0; // 2^52
+
+thread_local! {
+    /// PdfCraft patch (32): what is left of [`MAX_PAGE_BACKDROP_TILES`] on this thread (a page
+    /// renders on one thread; [`reset_backdrop_tiles`] refills it for each one).
+    static BACKDROP_TILES_LEFT: std::cell::Cell<u32> = const { std::cell::Cell::new(MAX_PAGE_BACKDROP_TILES) };
+}
+
+/// PdfCraft patch (32): refill the page's allowance of tiles drawn over the backdrop.
+pub(crate) fn reset_backdrop_tiles() {
+    BACKDROP_TILES_LEFT.with(|left| left.set(MAX_PAGE_BACKDROP_TILES));
+}
+
+/// PdfCraft patch (32): take `tiles` from the page's allowance; `false`, taking nothing, when
+/// fewer are left.
+fn take_backdrop_tiles(tiles: u32) -> bool {
+    BACKDROP_TILES_LEFT.with(|left| match left.get().checked_sub(tiles) {
+        Some(rest) => {
+            left.set(rest);
+            true
+        }
+        None => false,
+    })
 }
 
 /// PdfCraft patch (backport of hayro 0.8): largest per-channel error allowed when approximating
@@ -2880,7 +3318,7 @@ fn render_shading_texture(
 
 fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Renderer {
     Renderer {
-        ctx: RenderContext::new_with(width, height, derive_settings(settings)),
+        ctx: budgeted_context(width, height, derive_settings(settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
         color_replacement: None,
@@ -2899,6 +3337,8 @@ fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, previe
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        cell_blends: false,
+        backdrop_tiles: false,
     }
 }
 
@@ -3401,5 +3841,66 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+}
+
+#[cfg(test)]
+mod dash_tests {
+    use super::{Affine, BezPath, Point, largest_stretch, usable_dash_pattern};
+
+    fn line(length: f64) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(length, 0.0));
+        path
+    }
+
+    /// The largest singular value: the scale of a uniform matrix, the larger axis of a
+    /// non-uniform one, and more than either column's length under a shear.
+    #[test]
+    fn largest_stretch_is_the_largest_singular_value() {
+        assert!((largest_stretch(&Affine::scale(4.0 / 3.0)) - 4.0 / 3.0).abs() < 1e-12);
+        assert!((largest_stretch(&Affine::scale_non_uniform(0.25, 3.0)) - 3.0).abs() < 1e-12);
+        assert!((largest_stretch(&Affine::rotate(0.7)) - 1.0).abs() < 1e-12);
+        // [1 1; 0 1]: singular values are the golden ratio and its inverse.
+        let shear = Affine::new([1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+        assert!((largest_stretch(&shear) - (1.0 + 5f64.sqrt()) / 2.0).abs() < 1e-12);
+        assert_eq!(largest_stretch(&Affine::scale(0.0)), 0.0);
+        assert_eq!(largest_stretch(&Affine::scale(1e300)), f64::INFINITY);
+        assert!(largest_stretch(&Affine::scale(f64::NAN)).is_nan());
+    }
+
+    /// ISO 32000-2 §8.4.3.6 gives dash lengths in user space; one whose period is under a tenth
+    /// of a device pixel is drawn solid, as PDFium and MuPDF draw it, instead of being cut into
+    /// pieces that only average out again. A period of a tenth of a pixel or more still dashes.
+    #[test]
+    fn a_period_under_a_tenth_of_a_device_pixel_is_drawn_solid() {
+        let path = line(20.0);
+        let at_96_dpi = Affine::scale(96.0 / 72.0);
+        // `[.001 .001]` at 96 dpi: a period of 0.0027 px.
+        assert!(usable_dash_pattern(&path, &[0.001, 0.001], &at_96_dpi).is_empty());
+        // An odd-length pattern repeats once: `[.03]` is a period of 0.06 user units, 0.08 px.
+        assert!(usable_dash_pattern(&path, &[0.03], &at_96_dpi).is_empty());
+        // 0.125 px (`[3/64 3/64]`) and an ordinary 4 pt dash keep their pattern.
+        assert_eq!(
+            usable_dash_pattern(&path, &[0.046875, 0.046875], &at_96_dpi),
+            vec![0.046875, 0.046875]
+        );
+        assert_eq!(
+            usable_dash_pattern(&path, &[4.0, 4.0], &at_96_dpi),
+            vec![4.0, 4.0]
+        );
+        // The same `[.001 .001]` enlarged 100 times is a 0.2 px period and dashes.
+        assert_eq!(usable_dash_pattern(&path, &[0.001, 0.001], &Affine::scale(100.0)).len(), 2);
+        // The period is measured along the device direction that stretches most, whatever the
+        // path's own direction, so a matrix that stretches one axis enough keeps the pattern.
+        let one_axis = Affine::scale_non_uniform(0.001, 100.0);
+        assert_eq!(
+            usable_dash_pattern(&path, &[0.001, 0.001], &one_axis).len(),
+            2
+        );
+        // A degenerate or NaN matrix draws solid rather than dashing by a meaningless length.
+        assert!(usable_dash_pattern(&path, &[4.0, 4.0], &Affine::scale(0.0)).is_empty());
+        assert!(usable_dash_pattern(&path, &[4.0, 4.0], &Affine::scale(f64::NAN)).is_empty());
     }
 }
