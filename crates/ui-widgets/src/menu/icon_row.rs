@@ -90,7 +90,7 @@ impl<'a> MenuIconRow<'a> {
     }
 
     fn register(&self, ctx: &Context, level: &MenuLevel, id: Id, label: &str, enabled: bool) {
-        level.register(ctx.cumulative_pass_nr(), Row { id, text: label.to_owned(), enabled: self.runs(enabled) });
+        level.register(ctx.cumulative_pass_nr(), Row { id, text: label.to_owned(), own: None, enabled: self.runs(enabled) });
     }
 }
 

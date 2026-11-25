@@ -49,6 +49,7 @@ use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily, FontProvider};
 
 pub(super) use chain::{EM_SQUARE_SCRIPTS, covers, is_cjk};
+pub(in crate::fonts) use install::record_facts;
 pub(crate) use install::{StackFacts, stack_facts};
 
 use super::FontRef;

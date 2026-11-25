@@ -122,8 +122,10 @@ fn present(fx: &Fixture, text: &str) -> bool {
     fx.by_label(text).is_some() || fx.texts().iter().any(|painted| painted.text == text)
 }
 
+/// A selection of several families leaves the family field empty, on screen and to assistive technology, as the
+/// reference applications do: no family name and no word stands in for it.
 #[trial]
-fn mixed_family_is_named_until_a_font_is_chosen() {
+fn a_mixed_family_shows_an_empty_field() {
     let catalog = catalog_of(&[INTER_REGULAR]);
     let mut family = craft_behavior::Mixed::<String>::Mixed;
     let mut fx = Fixture::new(move |ui| {
@@ -132,8 +134,14 @@ fn mixed_family_is_named_until_a_font_is_chosen() {
     fx.in_room(Room::Window);
     fx.settle();
     let field = fx.by_role(craft_ui::runtime::access::Role::COMBO_BOX).into_iter().next().expect("the family field");
-    let label = fx.tree().value_of(field.node).filter(|value| !value.is_empty()).expect("the mixed family has an accessible label");
-    assert!(present(&fx, label), "the accessible mixed label is also visible");
+    assert!(fx.tree().value_of(field.node).is_none_or(str::is_empty), "the mixed family has no accessible value");
+    let words: Vec<String> = fx
+        .texts()
+        .iter()
+        .filter(|painted| field.rect.contains_rect(painted.rect) && painted.text.chars().any(char::is_alphabetic))
+        .map(|painted| painted.text.clone())
+        .collect();
+    assert!(words.is_empty(), "the field paints no text: {words:?}");
 }
 
 #[trial]
@@ -798,6 +806,64 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
     );
 }
 
+/// Texture ids of textured meshes whose centre falls inside `rect`.
+fn mesh_textures(shapes: &[egui::Shape], rect: egui::Rect, out: &mut Vec<egui::TextureId>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => mesh_textures(inner, rect, out),
+            egui::Shape::Mesh(mesh) if rect.contains(mesh.calc_bounds().center()) => {
+                out.push(mesh.texture_id);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[trial]
+fn the_missing_font_warning_icon_is_a_filled_triangle() {
+    use std::cell::Cell;
+
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let seen = Rc::new(Cell::new(None));
+    let held = Rc::clone(&seen);
+    let mut family = "Gotham".to_owned();
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).shown_as("Inter").show(ui);
+        held.set(Some(out.edit.response.id));
+    });
+    fx.pixels_per_point(2.0);
+    fx.record_paint();
+    fx.in_room(Room::Window);
+    fx.settle();
+    let picker = seen.get().expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    let mut paint = fx.take_paint().expect("recorded paint output");
+    let mut textures = Vec::new();
+    for clipped in &paint.shapes {
+        mesh_textures(std::slice::from_ref(&clipped.shape), mark, &mut textures);
+    }
+    let texture = *textures.first().expect("the missing-font warning icon paints a texture");
+    let image = paint
+        .textures_delta
+        .set
+        .get(&texture)
+        .and_then(|deltas| deltas.last())
+        .map(|delta| match &delta.image {
+            egui::ImageData::Color(color) => color,
+        })
+        .expect("the warning icon texture was uploaded");
+    let [w, h] = image.size;
+    let alpha = |fx: f32, fy: f32| {
+        let x = ((w as f32 * fx) as usize).min(w - 1);
+        let y = ((h as f32 * fy) as usize).min(h - 1);
+        image.pixels[y * w + x].a()
+    };
+    let (left, right, center) = (alpha(0.34, 0.69), alpha(0.66, 0.69), alpha(0.50, 0.48));
+    paint.textures_delta.clear();
+    assert!(left > 128 && right > 128, "the triangle interior is filled, not an outline (left={left}, right={right}, size={w}x{h})");
+    assert!(center < 128, "the exclamation stem stays knocked out inside the filled triangle (center={center})");
+}
+
 /// The library picker's family and settings, as the last pass left them.
 struct Library {
     family: String,
@@ -1045,4 +1111,36 @@ fn the_list_loads_its_sample_faces_off_the_pass_and_once() {
     open(&mut fx);
     fx.frame(vec![]);
     assert_eq!(jobs.waiting(), 0, "the list opened again loads no face");
+}
+
+#[trial]
+fn the_closed_field_skips_building_stops_while_idle_and_steps_on_input() {
+    let all = listed(&three_faces(), &FontFilters::default(), &[]);
+    assert_eq!(all.len(), 3);
+
+    let (mut fx, seen) = rig(three_faces(), vec![]);
+    seen.borrow_mut().family = all[0].clone();
+    fx.frame(vec![]);
+    let before = craft_font_manager::picker::stop_builds(fx.ctx());
+    for _ in 0..5 {
+        fx.frame(vec![]);
+    }
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), before, "idle closed frames do not rebuild stops");
+
+    aim_at_field(&mut fx);
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), before, "focusing and hovering without stepping do not rebuild stops");
+
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(seen.borrow().family, all[1], "ArrowDown steps to the next family");
+    let after_key = craft_font_manager::picker::stop_builds(fx.ctx());
+    assert_eq!(after_key, before + 1, "one ArrowDown builds stops once");
+
+    fx.frame(vec![wheel_lines(-1.0)]);
+    assert_eq!(seen.borrow().family, all[2], "wheel down steps to the following family");
+    let after_wheel = craft_font_manager::picker::stop_builds(fx.ctx());
+    assert_eq!(after_wheel, after_key + 1, "one wheel tick builds stops once");
+
+    fx.advance(GESTURE_GAP * 2.0).idle(3);
+    assert_eq!(seen.borrow().picks.last().map(|(f, _)| f.as_str()), Some(all[2].as_str()), "wheel end commits the stepped family");
+    assert_eq!(craft_font_manager::picker::stop_builds(fx.ctx()), after_wheel, "wheel end and idle frames do not rebuild stops");
 }
