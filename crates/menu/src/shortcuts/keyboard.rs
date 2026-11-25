@@ -412,12 +412,11 @@ impl Component for KeyCaps {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         // The caps keep their proportions: 18.5 units go across the pane and 6.25 down it, so the pane is as tall as
         // the width it is given makes the keys, and a wider pane draws bigger keys rather than the same keys one
-        // control high. A pane narrower than the keys ask for, or one with no bounded room, keeps the least height:
-        // the keys are never smaller than a control.
+        // control high. A pane given less room than the keys ask for, or measured at its least, keeps the least height,
+        // so the keys are never smaller than a control; a pane measured in a column that offers it no room still learns
+        // the height it shows at, as `picture_size` has the column sweep again with the width the pane settles on.
         let step = cx.style.step;
-        let least = vec2(UNITS_W * step, UNITS_H * step);
-        let width = cx.room.filter(|room| room.is_finite()).map_or(least.x, |room| room.max(least.x));
-        vec2(least.x, width / UNITS_W * UNITS_H)
+        cx.picture_size(UNITS_W * step, f32::INFINITY, |width| width / UNITS_W * UNITS_H)
     }
 
     fn sense(&self) -> Sense {

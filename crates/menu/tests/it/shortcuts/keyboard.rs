@@ -55,6 +55,13 @@ fn the_keyboard_keeps_readable_keys_beside_the_key_list() {
 
 /// The keys keep their proportions in the room the app gives the pane: a wider pane is taller, so its keys stand above one
 /// control's height rather than staying one control high however wide the dialog is.
+///
+/// Both dialogs keep the pane's two columns beside each other, so the keys take the same share of the room in each and
+/// the wider one draws the taller keys. A `Grid` stacks its columns only when their least widths do not fit: the caps
+/// ask for 18.5 control heights (444 points at the compact preset's 24 point control) and the shortcut column for its
+/// hint's readable least, which a 700 point dialog's 684 points of room (its two 8 point pads taken off) leaves well
+/// inside. A stacked grid would give the caps the whole width instead, and they would come out wider, and so taller,
+/// in the narrower dialog.
 #[trial]
 fn a_wider_pane_is_taller_and_its_keys_stand_above_a_control() {
     let (control, narrow) = pane(700.0);
