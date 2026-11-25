@@ -1,7 +1,9 @@
 //! [`ShapeBar`]: the Shape tools' options bar cells.
 
-use super::panel::{Cells, ChipSetup, NumberCell, SIDES_RANGE, sides_change};
-use super::{LINE_WEIGHT_RANGE, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords, StrokeCells};
+use super::panel::{Cells, ChipSetup, NumberCell, SIDES_RANGE, sides_change, star_points_change};
+use super::{
+    LINE_WEIGHT_RANGE, RADIUS_RANGE, STAR_POINTS_RANGE, ShapeAppearance, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords, StrokeCells,
+};
 use crate::ui::shape_drag::ShapeKind;
 use craft_behavior::EditEvent;
 use craft_color_ui::ui::{PaintChip, PaintChipOutput, ScreenPickGesture};
@@ -35,7 +37,7 @@ pub struct ShapeBarOutput {
 
 /// The cells a Shape tool adds to the options bar, in PhotoCraft's order: the "Fill" check box and chip, the
 /// "Stroke" chip, the stroke width (0 to 288 px), the Stroke style button; then the kind's cell: Rectangle and
-/// Rounded Rectangle "Radius" (0 to 150,000), Polygon and Star "Sides" (3 to 100), Line "Weight" (1 to 10,000). A
+/// Rounded Rectangle "Radius" (0 to 150,000), Polygon "Sides" (3 to 100), Star "Sides" for its points (3 to 20), Line "Weight" (1 to 10,000). A
 /// pattern shown as children of a `Bar`.
 ///
 /// - The values are the selected shape layer's when one is selected, else the tool settings' (the app passes the
@@ -143,9 +145,14 @@ impl<'a> ShapeBar<'a> {
                     NumberCell::pixels(&units, pixels_per_inch, "radius", &words.radius, settings.corner_radius, RADIUS_RANGE),
                     ShapeChange::CornerRadius as fn(f64) -> ShapeChange,
                 )),
-                ShapeKind::Polygon | ShapeKind::Star => Some((
+                ShapeKind::Polygon => Some((
                     NumberCell::count(&units, "sides", &words.sides, f64::from(settings.sides), SIDES_RANGE),
                     sides_change as fn(f64) -> ShapeChange,
+                )),
+                // A star's points: 3 to 20, as Photoshop's bar (photocraft#16867).
+                ShapeKind::Star => Some((
+                    NumberCell::count(&units, "sides", &words.sides, f64::from(settings.sides), STAR_POINTS_RANGE),
+                    star_points_change as fn(f64) -> ShapeChange,
                 )),
                 ShapeKind::Line => Some((
                     NumberCell::pixels(&units, pixels_per_inch, "weight", &words.weight, settings.line_weight, LINE_WEIGHT_RANGE),

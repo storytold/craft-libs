@@ -83,6 +83,8 @@ impl Default for Arrowheads {
 pub const RADIUS_RANGE: RangeInclusive<f64> = 0.0..=150_000.0;
 /// The range of a line weight field, in document pixels.
 pub const LINE_WEIGHT_RANGE: RangeInclusive<f64> = 1.0..=10_000.0;
+/// The points a Star tool's next star may have: whole numbers 3 to 20 (Photoshop's options bar, photocraft#16867).
+pub const STAR_POINTS_RANGE: RangeInclusive<f64> = 3.0..=20.0;
 
 /// The selected shape layer's live shape, as the Shape section shows it: plain data the app
 /// converts to and from its document. Sizes in document pixels.

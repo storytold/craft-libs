@@ -535,6 +535,12 @@ pub(super) fn sides_change(sides: f64) -> ShapeChange {
     ShapeChange::Sides(sides.round().clamp(*SIDES_RANGE.start(), *SIDES_RANGE.end()) as u32)
 }
 
+/// The change a Star tool's points value makes: a whole number of points in [`STAR_POINTS_RANGE`](super::STAR_POINTS_RANGE).
+pub(super) fn star_points_change(points: f64) -> ShapeChange {
+    let range = super::STAR_POINTS_RANGE;
+    ShapeChange::Sides(points.round().clamp(*range.start(), *range.end()) as u32)
+}
+
 /// The range of a shape's width and height in whole pixels.
 const SIZE_RANGE: RangeInclusive<f64> = 1.0..=300_000.0;
 /// The number of sides of a polygon or points of a star.
