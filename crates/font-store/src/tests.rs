@@ -1626,6 +1626,21 @@ mod store {
     }
 
     #[test]
+    fn a_deleted_copy_is_pending_and_copied_again() {
+        let server = Server::start();
+        server.serve_fixture(&fixture());
+        let (store, dir, root, _shared) = shared_store(&server, "os-fonts-deleted");
+        let copies = store.make_available(GOOGLE_FONTS, "Test Sans").unwrap();
+        std::fs::remove_file(&copies[0]).unwrap();
+        assert_eq!(store.pending_files(GOOGLE_FONTS, "Test Sans").len(), 1);
+        assert_eq!(store.make_available(GOOGLE_FONTS, "Test Sans").unwrap(), copies);
+        assert!(copies.iter().all(|c| c.is_file()));
+        assert!(store.pending_files(GOOGLE_FONTS, "Test Sans").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn an_agent_never_changes_the_os_font_folder() {
         let server = Server::start();
         server.serve_fixture(&fixture());

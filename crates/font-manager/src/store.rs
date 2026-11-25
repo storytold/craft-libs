@@ -175,19 +175,42 @@ pub trait Installer: Send + Sync {
         (!self.available_to_all_supported()).then(|| NOT_HERE.to_owned())
     }
 
-    /// Whether the user keeps store fonts in Craft apps only (a setting of the font store, off by
-    /// default). While it is off, the interface makes every family it installs available to all
-    /// apps.
+    /// Whether the user keeps store fonts in Craft apps only by default (a setting of the font
+    /// store, off by default): what a plain Install does with a family that has no choice of its
+    /// own ([`Installer::available_to_all_choice`]).
     fn craft_apps_only(&self) -> bool {
         false
     }
 
-    /// Sets [`Installer::craft_apps_only`], as the user's own action, then withdraws every store
-    /// family's copies from the OS user font folder (on) or copies every installed family there
-    /// (off). Returns the families a conflict refused, with the conflicts. It blocks: call it on
-    /// a worker thread.
-    fn set_craft_apps_only(&self, _on: bool) -> Result<Vec<(String, Vec<Conflict>)>, StoreError> {
+    /// Sets [`Installer::craft_apps_only`], as the user's own action. Installed families keep
+    /// their choice and their copies.
+    fn set_craft_apps_only(&self, _on: bool) -> Result<(), StoreError> {
         Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// The installed store families, by name, each with its folder in the store (which tells
+    /// families of the same name from different sources apart, as `files` below).
+    fn store_families(&self) -> Vec<(String, Vec<PathBuf>)> {
+        Vec::new()
+    }
+
+    /// The user's choice for the store family `family`: available to all apps (`true`) or kept
+    /// in Craft apps only (`false`). `None` when none is recorded (installed before the choice
+    /// existed, or by an agent): [`Installer::craft_apps_only`] decides.
+    fn available_to_all_choice(&self, _family: &str, _files: &[PathBuf]) -> Option<bool> {
+        None
+    }
+
+    /// Records [`Installer::available_to_all_choice`], as the user's own action. It neither copies
+    /// nor withdraws the family.
+    fn set_available_to_all_choice(&self, _family: &str, _files: &[PathBuf], _on: bool) -> Result<(), StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
+
+    /// Whether the store family `family` belongs in the OS user font folder: its own choice, else
+    /// the default; never where families can't be copied there.
+    fn shares(&self, family: &str, files: &[PathBuf]) -> bool {
+        self.available_to_all_supported() && self.available_to_all_choice(family, files).unwrap_or(!self.craft_apps_only())
     }
 
     /// Whether the store family `family` (its name, and the files the catalog found for it in
@@ -254,14 +277,18 @@ impl SuiteStore {
     /// The store's source and name for the family `family` holding `files`, which can differ
     /// from the name in the fonts themselves.
     fn installed_name(&self, family: &str, files: &[PathBuf]) -> Option<(String, String)> {
+        self.installed_entry(family, files).map(|f| (f.source, f.family))
+    }
+
+    fn installed_entry(&self, family: &str, files: &[PathBuf]) -> Option<craft_font_store::InstalledFamily> {
         let dir = self.store.dir();
-        let installed = self.store.installed();
+        let mut installed = self.store.installed();
         let lower = family.to_lowercase();
-        installed
+        let pos = installed
             .iter()
-            .find(|f| files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
-            .or_else(|| installed.iter().find(|f| f.family.to_lowercase() == lower))
-            .map(|f| (f.source.clone(), f.family.clone()))
+            .position(|f| files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
+            .or_else(|| installed.iter().position(|f| f.family.to_lowercase() == lower))?;
+        Some(installed.swap_remove(pos))
     }
 
     fn found(&self, family: &str, files: &[PathBuf]) -> Result<(String, String), StoreError> {
@@ -394,21 +421,22 @@ impl Installer for SuiteStore {
         self.store.craft_apps_only()
     }
 
-    fn set_craft_apps_only(&self, on: bool) -> Result<Vec<(String, Vec<Conflict>)>, StoreError> {
-        self.store.set_craft_apps_only(on).map_err(err)?;
-        let mut refused = Vec::new();
-        for f in self.store.installed() {
-            if on {
-                self.store.withdraw(&f.source, &f.family).map_err(err)?;
-                continue;
-            }
-            match self.store.make_available(&f.source, &f.family) {
-                Ok(_) => {}
-                Err(craft_font_store::Error::Conflict(conflicts)) => refused.push((f.family, conflicts)),
-                Err(e) => return Err(err(e)),
-            }
-        }
-        Ok(refused)
+    fn set_craft_apps_only(&self, on: bool) -> Result<(), StoreError> {
+        self.store.set_craft_apps_only(on).map_err(err)
+    }
+
+    fn store_families(&self) -> Vec<(String, Vec<PathBuf>)> {
+        let dir = self.store.dir();
+        self.store.installed().into_iter().map(|f| (f.family, vec![dir.join(&f.dir)])).collect()
+    }
+
+    fn available_to_all_choice(&self, family: &str, files: &[PathBuf]) -> Option<bool> {
+        self.installed_entry(family, files)?.available_to_all
+    }
+
+    fn set_available_to_all_choice(&self, family: &str, files: &[PathBuf], on: bool) -> Result<(), StoreError> {
+        let (source, name) = self.found(family, files)?;
+        self.store.set_available_to_all_choice(&source, &name, on).map_err(err)
     }
 
     fn is_available_to_all(&self, family: &str, files: &[PathBuf]) -> bool {
@@ -502,6 +530,8 @@ pub struct FakeStore {
     /// Families made available to all apps, by name.
     available: Mutex<Vec<String>>,
     craft_apps_only: AtomicBool,
+    /// Families' recorded choices, by lower-case name.
+    choices: Mutex<HashMap<String, bool>>,
     /// What the next [`Installer::make_available`] refuses with.
     refusal: Mutex<Option<Vec<Conflict>>>,
 }
@@ -525,6 +555,7 @@ impl FakeStore {
             held: (Mutex::new(false), Condvar::new()),
             available: Mutex::new(Vec::new()),
             craft_apps_only: AtomicBool::new(false),
+            choices: Mutex::new(HashMap::new()),
             refusal: Mutex::new(None),
         }
     }
@@ -672,6 +703,7 @@ impl Installer for FakeStore {
         }
         if request.whole {
             self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(&request.family));
+            self.choices.lock().map_err(err)?.remove(&request.family.to_lowercase());
         }
         for file in &request.files {
             std::fs::remove_file(file).map_err(err)?;
@@ -796,20 +828,25 @@ impl Installer for FakeStore {
         self.craft_apps_only.load(Ordering::SeqCst)
     }
 
-    fn set_craft_apps_only(&self, on: bool) -> Result<Vec<(String, Vec<Conflict>)>, StoreError> {
+    fn set_craft_apps_only(&self, on: bool) -> Result<(), StoreError> {
         self.craft_apps_only.store(on, Ordering::SeqCst);
-        if on {
-            self.available.lock().map_err(err)?.clear();
-            return Ok(Vec::new());
-        }
-        let mut refused = Vec::new();
-        for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
-            let family = entry.file_name().to_string_lossy().into_owned();
-            if let MadeAvailable::Refused(conflicts) = self.make_available(&family, &[])? {
-                refused.push((family, conflicts));
-            }
-        }
-        Ok(refused)
+        Ok(())
+    }
+
+    /// The folders in its folder but the preview cache, as families.
+    fn store_families(&self) -> Vec<(String, Vec<PathBuf>)> {
+        let previews = self.preview_cache();
+        let dirs = std::fs::read_dir(&self.dir).into_iter().flatten().flatten().filter(|e| e.path().is_dir() && Some(e.path()) != previews);
+        dirs.map(|e| (e.file_name().to_string_lossy().into_owned(), vec![e.path()])).collect()
+    }
+
+    fn available_to_all_choice(&self, family: &str, _files: &[PathBuf]) -> Option<bool> {
+        self.choices.lock().ok()?.get(&family.to_lowercase()).copied()
+    }
+
+    fn set_available_to_all_choice(&self, family: &str, _files: &[PathBuf], on: bool) -> Result<(), StoreError> {
+        self.choices.lock().map_err(err)?.insert(family.to_lowercase(), on);
+        Ok(())
     }
 
     fn make_available(&self, family: &str, _files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {

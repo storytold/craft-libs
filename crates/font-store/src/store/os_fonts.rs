@@ -517,8 +517,8 @@ impl FontStore {
 
     /// The store files of an available family that have no copy in the OS folder yet, by their
     /// names in its folder: styles installed since (an agent's install doesn't copy them), or
-    /// files whose copy is older than the store's, or whose identical system file is gone. Empty
-    /// for a family that isn't available.
+    /// files whose copy is older than the store's, or whose copy or identical system file is gone
+    /// (the user deleted it, say). Empty for a family that isn't available.
     pub fn pending_files(&self, source: &str, name: &str) -> Vec<String> {
         let Some(ledger) = self.cached_ledger() else { return Vec::new() };
         let Some(listed) = ledger.family(source, name) else { return Vec::new() };
@@ -526,12 +526,7 @@ impl FontStore {
         family
             .files
             .iter()
-            .filter(|f| {
-                !listed
-                    .files
-                    .iter()
-                    .any(|x| x.store_file == f.name && x.sha256 == f.sha256 && (x.mechanism == Mechanism::Copy || std::fs::metadata(&x.path).is_ok()))
-            })
+            .filter(|f| !listed.files.iter().any(|x| x.store_file == f.name && x.sha256 == f.sha256 && std::fs::metadata(&x.path).is_ok()))
             .map(|f| f.name.clone())
             .collect()
     }
