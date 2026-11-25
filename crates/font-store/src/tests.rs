@@ -1422,6 +1422,28 @@ mod store {
     }
 
     #[test]
+    fn read_only_store_files_are_made_available() {
+        let server = Server::start();
+        server.serve_fixture(&fixture());
+        let (store, dir, root, shared) = shared_store(&server, "os-fonts-read-only");
+        let set_read_only = |read_only: bool| {
+            for name in entries(&dir.join("testsans")) {
+                let path = dir.join("testsans").join(name);
+                let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+                permissions.set_readonly(read_only);
+                std::fs::set_permissions(&path, permissions).unwrap();
+            }
+        };
+        set_read_only(true);
+        let copies = store.make_available(GOOGLE_FONTS, "Test Sans");
+        set_read_only(false);
+        assert_eq!(copies.unwrap().len(), 3, "a read-only store file still copies");
+        assert!(entries(&shared.join("testsans")).iter().all(|name| !name.starts_with('.')), "no copy is left aside");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_family_made_available_to_all_apps_is_withdrawn_exactly() {
         let server = Server::start();
         server.serve_fixture(&fixture());
