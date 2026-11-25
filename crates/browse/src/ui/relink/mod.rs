@@ -16,10 +16,10 @@
 //! ```
 
 mod badge;
-mod dialog;
-mod list;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod dialog;
+pub(crate) mod list;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use badge::StatusBadge;
 pub use dialog::{CandidateChecker, RelinkCriterion, RelinkDialog, RelinkLayout, RelinkOptions, RelinkOutcome, RelinkRow, RelinkWords};

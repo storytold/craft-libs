@@ -872,8 +872,8 @@ pub struct TopStripStyle {
     metrics: Metrics,
 }
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The model of the pattern's registration probe: no tracks.
 struct EmptySequence(crate::time::TimeView);

@@ -29,7 +29,10 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      # Pull requests restore the cache but never save one (a 1.1 GB entry per open PR otherwise).
       - uses: step-security/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # A lib build selects no dev-dependency, so craft-ui's `testing` stays off as in an app's
       # build: warnings that show only without it fail here.
       - name: Facade as an app builds it

@@ -193,7 +193,7 @@ name = "Document"
 old = ""
 new = "craft_ui_gallery::mock::Document"
 status = "replaced"
-note = "The open document of the mock: title, dirty flag, size, layers (top first), the layer selection whose lead is the current layer, the canvas view (a never-shown view opens fitted; the canvas sets its rect), ruler zero and unit, guides, the Marquee selection and drag, and the rulers flag, which the canvas's `show_rulers` follows. `resize(PixelSize)` applies the Image Size answer."
+note = "The open document of the mock: title, dirty flag, size, layers (top first), the layer selection whose lead is the current layer, the canvas view (a never-shown view opens fitted; the canvas sets its rect), ruler zero and unit, guides, the Marquee selection and drag, and the rulers flag. `resize(PixelSize)` applies the Image Size answer."
 
 [[type]]
 name = "Layer"

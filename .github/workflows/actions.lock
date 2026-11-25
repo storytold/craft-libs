@@ -8,7 +8,6 @@ workflows:
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/atomic.yml':
-        - 'actions/checkout@v4.4.0'
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -19,7 +18,7 @@ workflows:
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/cms.yml':
-        - 'actions/checkout@v4.4.0'
+        - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
     '.github/workflows/crw.yml':
         - 'actions/cache@v6.1.0'
@@ -50,6 +49,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
         - 'step-security/harden-runner@v2.22.4'
+    '.github/workflows/full-validation.yml': []
     '.github/workflows/house-rules.yml': []
     '.github/workflows/jpeg.yml':
         - 'actions/checkout@v7.0.1'
@@ -69,7 +69,8 @@ workflows:
     '.github/workflows/menu.yml':
         - 'actions/checkout@v7.0.1'
         - 'dtolnay/rust-toolchain@stable'
-    '.github/workflows/nightly.yml': []
+    '.github/workflows/nightly.yml':
+        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/pcraft-format.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
@@ -114,18 +115,16 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
-    '.github/workflows/workspace.yml': []
+    '.github/workflows/workspace.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'step-security/harden-runner@v2.22.4'
+        - 'storytold/craft-common-actions@0bef64f155fcea81edbd9542381777358bfbdcf4'
 dependencies:
     'actions/cache@v6.1.0':
         ref: 'v6.1.0'
         commit: 'sha1-55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
         owner_id: 44036562
         repo_id: 215566462
-    'actions/checkout@v4.4.0':
-        ref: 'v4.4.0'
-        commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
-        owner_id: 44036562
-        repo_id: 197814629
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -161,8 +160,8 @@ dependencies:
         commit: 'sha1-76747d22a7567cc4438546a84f11bdf18e670ab8'
         owner_id: 88700172
         repo_id: 1382753260
-    'swatinem/rust-cache@v2.9.3':
-        ref: 'v2.9.3'
-        commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
-        owner_id: 580492
-        repo_id: 298565987
+    'storytold/craft-common-actions@0bef64f155fcea81edbd9542381777358bfbdcf4':
+        ref: 'main'
+        commit: 'sha1-0bef64f155fcea81edbd9542381777358bfbdcf4'
+        owner_id: 76897702
+        repo_id: 1414429108

@@ -33,7 +33,7 @@ use craft_ui::style::TypeRole;
 use egui::{Rect, Response, Ui, pos2};
 
 /// The columns of the statistics grid: label and value, twice.
-static STATISTICS_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
+const STATISTICS_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
 
 /// Runs `content` in a block that resolves the dark mode when `dark`, else in the flow.
 fn themed<R>(ui: &mut Ui, dark: bool, mut content: impl FnMut(&mut Ui) -> R) -> Option<R> {

@@ -12,6 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use craft_keymap::CommandRef;
+use craft_ui::contract::MemoProps;
 
 use crate::driver::Gate;
 use crate::model::{Builtin, Item};
@@ -36,7 +37,7 @@ pub type PendingRule = Arc<dyn Fn(&CommandRef) -> bool + Send + Sync>;
 /// assert!(gate.allows_under(&rules, &"view.zoomIn".into()));
 /// assert!(!gate.allows_under(&rules, &"image.crop".into()));
 /// ```
-#[derive(Clone, Default)]
+#[derive(Clone, Default, MemoProps)]
 #[non_exhaustive]
 pub struct ModalRules {
     /// Commands that still run while [`Gate::modal`] is set (a dialog or prompt is open), by
@@ -47,9 +48,11 @@ pub struct ModalRules {
     pub workspace: bool,
     /// A pending operation is open (an uncommitted crop): only the commands this returns true for
     /// run. `None`: no pending operation.
+    #[memo_props(covered_by = "revision", reason = "the caller moves the revision with every rule change")]
     pub pending: Option<PendingRule>,
     /// The caller's count of rule changes. A rule holds a closure and cannot be compared, so the
-    /// caller says when the rules changed; the menu skips the resync while it stays the same.
+    /// caller says when the rules changed; the menu skips the resync, and the runtime's command gate keeps its answers,
+    /// while it stays the same.
     pub revision: u64,
 }
 

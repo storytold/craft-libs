@@ -286,11 +286,11 @@ impl FamilyCard {
         ends
     }
 
-    /// The face the sample is drawn in: the card's own, or the interface face when there is none.
+    /// The face the sample is drawn in: the card's own, or none.
     fn face(&self) -> SampleFace<'_> {
         match &self.data.face {
             Some((owner, face, catalog)) => SampleFace::Face { catalog, owner: *owner, face },
-            None => SampleFace::Interface,
+            None => SampleFace::Missing,
         }
     }
 

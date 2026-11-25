@@ -2,21 +2,26 @@
 //! family's [`PresetBrowser`]: the browser owns the grid, the list, the roving focus, the keys and the accessible tree;
 //! the palette supplies the rows and paints each preset's thumbnail as a gradient ramp.
 
+use craft_behavior::Selection;
+use craft_theme::Srgba;
 use craft_ui::contract::{Bind, NoValue, Outcome, Pattern};
-use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetRow, PresetState, PresetTiles};
+use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetTiles, ThumbInfo};
+use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Env, Label};
-use egui::{Response, Ui};
+use egui::{Rect, Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
+
+use super::GradientTile;
 
 /// The presets take their content height up to this many small control heights, then scroll.
 const MAX_ROWS: f32 = 6.0;
 
 /// A named group of gradient presets.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct GradientGroup {
     /// The group's heading.
@@ -33,25 +38,34 @@ impl GradientGroup {
 }
 
 /// A named gradient preset.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct GradientItem {
     /// The preset's name.
     pub name: String,
     /// The preset's stops.
     pub stops: GradientStops,
+    /// How the preset's cell is drawn: the ramp chip, or a square tile.
+    pub tile: GradientTile,
 }
 
 impl GradientItem {
     /// A preset called `name` with `stops`.
     pub fn new(name: impl Into<String>, stops: GradientStops) -> Self {
-        Self { name: name.into(), stops }
+        Self { name: name.into(), stops, tile: GradientTile::default() }
+    }
+
+    /// Draws the preset's cell as `tile`.
+    #[must_use]
+    pub fn tile(mut self, tile: GradientTile) -> Self {
+        self.tile = tile;
+        self
     }
 }
 
 /// The preset a pick names: a recent gradient by its place in the list the host passed, or an
 /// item of a group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum GradientRef {
     /// Place in the Recent list.
@@ -152,9 +166,10 @@ pub struct GradientPalette<'a> {
     /// The row layout the ramps are sampled with.
     #[prop]
     rows: StopRows,
-    /// Samples a ramp; the default sampler of the rows by default.
+    /// Samples a ramp; the default sampler of the rows by default. A `fn`, which captures nothing, so the palette's
+    /// presets key it by its address.
     #[prop]
-    sampler: Option<&'a Sampler>,
+    sampler: Option<RampSampler>,
     /// The selected preset.
     #[prop]
     selected: Option<GradientRef>,
@@ -175,47 +190,19 @@ impl<'a> GradientPalette<'a> {
         }
     }
 
-    /// The rows of the groups: the header of each group, then its presets. A header's key names no preset
-    /// (`item == usize::MAX`).
-    fn preset_rows(&self) -> Vec<PresetRow<GradientRef>> {
-        let mut rows = Vec::new();
-        if !self.recent.is_empty() {
-            rows.push(PresetRow::group(GradientRef::Recent(usize::MAX), self.recent_label.clone(), 0));
-            for i in 0..self.recent.len() {
-                rows.push(PresetRow::item(GradientRef::Recent(i), format!("{} {}", self.recent_label, i + 1), 1));
-            }
-        }
-        for (group, g) in self.groups.iter().enumerate() {
-            rows.push(PresetRow::group(GradientRef::Item { group, item: usize::MAX }, g.name.clone(), 0));
-            for (item, preset) in g.items.iter().enumerate() {
-                rows.push(PresetRow::item(GradientRef::Item { group, item }, preset.name.clone(), 1));
-            }
-        }
-        rows
-    }
-
     /// Shows the palette across the available width.
     pub fn show(self, ui: &mut Ui) -> GradientPaletteOutput {
-        let rows = self.preset_rows();
-        let default = default_sampler(self.rows);
-        let sampler: &Sampler = self.sampler.unwrap_or(&default);
         let (groups, recent) = (self.groups, self.recent);
-        let thumb =
-            move |cx: &craft_ui::primitives::ContentPainterCx, rect: egui::Rect, info: craft_ui::patterns::presets::ThumbInfo<'_, GradientRef>| {
-                if let Some(stops) = stops_of(groups, recent, *info.key) {
-                    let (radius, edge) = GradientRamp::chip_look(&cx.style_cx());
-                    GradientRamp::paint_chip(cx, rect, radius, &GradientRamp::colors(stops, sampler), edge);
-                }
-            };
         let (wide, high) = GradientRamp::CHIP_ASPECT;
+        // The browser has one cell shape for the grid and the list, so any tile makes every cell square.
+        let square = groups.iter().flat_map(|g| &g.items).any(|item| item.tile != GradientTile::Ramp);
+        let inputs = PaletteInputs { groups, recent, recent_label: self.recent_label, rows: self.rows, sampler: self.sampler, square };
+        let source = PresetSource::new(inputs, PresetFns::new(preset_rows).thumb(paint_thumb));
         let most = Env::of(ui).tokens.size.control.sm * MAX_ROWS;
-        let mut browser = PresetBrowser::new(self.label, self.state, &rows)
-            .cell_shape(CellShape::ratio(wide, high))
-            .tiles(PresetTiles::Chips)
-            .room_height(most)
-            .thumb(thumb);
+        let shape = if square { CellShape::Square } else { CellShape::ratio(wide, high) };
+        let mut browser = PresetBrowser::new(self.label, self.state, &source).cell_shape(shape).tiles(PresetTiles::Chips).room_height(most);
         if let Some(selected) = self.selected {
-            browser = browser.selected(selected);
+            browser = browser.selection(Bind::given(Selection::single(selected)));
         }
         let out = browser.show(ui);
         let mut picked = None;
@@ -230,10 +217,76 @@ impl<'a> GradientPalette<'a> {
     }
 }
 
+/// Samples a gradient's ramp at a location 0..=1.
+pub type RampSampler = fn(&GradientStops, f32) -> Srgba;
+
+/// What the palette's presets are built from.
+#[derive(craft_ui::contract::MemoProps)]
+struct PaletteInputs<'a> {
+    groups: &'a [GradientGroup],
+    recent: &'a [GradientStops],
+    recent_label: String,
+    rows: StopRows,
+    #[memo_props(hash = "a fn pointer: its address names the code, which captures nothing")]
+    sampler: Option<RampSampler>,
+    /// Whether every cell is square: some preset has a tile other than the ramp.
+    square: bool,
+}
+
+/// The rows of the groups: the header of each group, then its presets. A header's key names no preset
+/// (`item == usize::MAX`).
+fn preset_rows(inputs: &PaletteInputs<'_>, _: &Env) -> Vec<PresetRow<GradientRef>> {
+    let mut rows = Vec::new();
+    if !inputs.recent.is_empty() {
+        rows.push(PresetRow::group(GradientRef::Recent(usize::MAX), inputs.recent_label.clone(), 0));
+        for i in 0..inputs.recent.len() {
+            rows.push(PresetRow::item(GradientRef::Recent(i), format!("{} {}", inputs.recent_label, i + 1), 1));
+        }
+    }
+    for (group, g) in inputs.groups.iter().enumerate() {
+        rows.push(PresetRow::group(GradientRef::Item { group, item: usize::MAX }, g.name.clone(), 0));
+        for (item, preset) in g.items.iter().enumerate() {
+            rows.push(PresetRow::item(GradientRef::Item { group, item }, preset.name.clone(), 1));
+        }
+    }
+    rows
+}
+
+/// Paints a preset's thumbnail: its tile, or its ramp chip, which keeps the chip's aspect in a square cell.
+fn paint_thumb(inputs: &PaletteInputs<'_>, cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, GradientRef>) {
+    let Some(stops) = stops_of(inputs.groups, inputs.recent, *info.key) else { return };
+    let (radius, edge) = GradientRamp::chip_look(&cx.style_cx());
+    let default = default_sampler(inputs.rows);
+    let sampler: &Sampler = match &inputs.sampler {
+        Some(sampler) => sampler,
+        None => &default,
+    };
+    let tile = item_of(inputs.groups, *info.key).map_or(GradientTile::Ramp, |item| item.tile);
+    if tile != GradientTile::Ramp {
+        tile.paint(cx, rect, radius, stops, sampler, edge);
+        return;
+    }
+    let (wide, high) = GradientRamp::CHIP_ASPECT;
+    let chip = if inputs.square {
+        Rect::from_center_size(rect.center(), egui::vec2(rect.width(), rect.width() * f32::from(high) / f32::from(wide)))
+    } else {
+        rect
+    };
+    GradientRamp::paint_chip(cx, chip, radius, &GradientRamp::colors(stops, sampler), edge);
+}
+
 /// The stops of the preset `key` names; none for a group header.
 pub(super) fn stops_of<'a>(groups: &'a [GradientGroup], recent: &'a [GradientStops], key: GradientRef) -> Option<&'a GradientStops> {
     match key {
         GradientRef::Recent(i) => recent.get(i),
-        GradientRef::Item { group, item } => groups.get(group)?.items.get(item).map(|preset| &preset.stops),
+        GradientRef::Item { .. } => item_of(groups, key).map(|preset| &preset.stops),
+    }
+}
+
+/// The group item `key` names; none for a recent gradient (which has stops only) or a group header.
+pub(super) fn item_of(groups: &[GradientGroup], key: GradientRef) -> Option<&GradientItem> {
+    match key {
+        GradientRef::Recent(_) => None,
+        GradientRef::Item { group, item } => groups.get(group)?.items.get(item),
     }
 }

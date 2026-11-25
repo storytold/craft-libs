@@ -1,6 +1,7 @@
 //! The tick rule of a ruler: which values carry a tick and which of them are labelled.
 
 use crate::primitives::TickRank;
+use crate::runtime::env::UnitKind;
 use craft_behavior::RulerUnits;
 use std::ops::RangeInclusive;
 
@@ -77,6 +78,13 @@ pub enum TickRule<'a> {
     /// A time unit's own table: the units are frames (or ticks of the unit the ladder counts), and the labelled step
     /// and subdivisions come from the [`StepLadder`].
     Steps(StepLadder),
+}
+
+impl TickRule<'static> {
+    /// The rule for a ruler counting `kind`: Word's sixteenths for inches, `Metric` otherwise.
+    pub fn of_unit(kind: UnitKind) -> TickRule<'static> {
+        if kind == UnitKind::Inches { TickRule::Inches(&INCH_SIXTEENTHS) } else { TickRule::Metric }
+    }
 }
 
 /// One tick of `ticks`.

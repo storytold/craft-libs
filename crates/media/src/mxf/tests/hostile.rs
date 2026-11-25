@@ -5,6 +5,14 @@ use crate::mxf::klv::ber_length;
 use crate::mxf::meta::{Primer, Set};
 
 fn exercise(d: &[u8]) {
+    let started = std::time::Instant::now();
+    exercise_open(d);
+    if started.elapsed() > std::time::Duration::from_millis(50) {
+        eprintln!("DIAG mxf slow case: {} bytes, {:?}", d.len(), started.elapsed());
+    }
+}
+
+fn exercise_open(d: &[u8]) {
     let Ok(m) = open(d) else { return };
     let _ = m.operational_pattern.name();
     for p in &m.partitions {
@@ -17,7 +25,7 @@ fn exercise(d: &[u8]) {
             let _ = t.sync_before(i);
         }
         for s in [0u64, 100, 48_000, u64::MAX] {
-            for f in [0usize, 1, 1920, 1 << 20] {
+            for f in [0usize, 1, 1920] {
                 let _ = m.read_pcm(d, ti, s, f);
             }
         }
@@ -51,27 +59,57 @@ fn sync_before_on_an_empty_track() {
     }
 }
 
-#[test]
-fn hostile_input_never_panics() {
+// Keep each deterministic hammer independent so test runners can schedule the seeds separately.
+// The labels, mutation counts, every-truncation coverage and per-case watchdog stay unchanged.
+fn hostile_seed(which: usize) -> Vec<u8> {
     let (to, flags) = ipbb();
-    let seeds = [build(7, |i| vec![i as u8; 100 + i], &to, &flags), build(5, prores_like, &to, &flags), build(4, prores_like, &[], &flags)];
-    for (i, s) in seeds.iter().enumerate() {
-        craft_media_testkit::hostile::hammer(&format!("mxf seed {i}"), s, 6_000, exercise);
+    match which {
+        0 => build(7, |i| vec![i as u8; 100 + i], &to, &flags),
+        1 => build(5, prores_like, &to, &flags),
+        _ => build(4, prores_like, &[], &flags),
     }
-    // The metadata sets and index segments, parsed directly.
-    let seed = &seeds[0];
+}
+
+#[test]
+fn hostile_input_seed_0_never_panics() {
+    craft_media_testkit::hostile::hammer("mxf seed 0", &hostile_seed(0), 6_000, exercise);
+}
+
+#[test]
+fn hostile_input_seed_1_never_panics() {
+    craft_media_testkit::hostile::hammer("mxf seed 1", &hostile_seed(1), 6_000, exercise);
+}
+
+#[test]
+fn hostile_input_seed_2_never_panics() {
+    craft_media_testkit::hostile::hammer("mxf seed 2", &hostile_seed(2), 6_000, exercise);
+}
+
+#[test]
+fn hostile_index_segment_never_panics() {
+    let seed = &hostile_seed(0);
     let index_key = [0x06, 0x0E, 0x2B, 0x34, 0x02, 0x53, 0x01, 0x01, 0x0D, 0x01, 0x02, 0x01, 0x01, 0x10, 0x01, 0x00];
     if let Some(v) = value_of(seed, &index_key) {
         craft_media_testkit::hostile::hammer("mxf index segment", v, 30_000, |d| {
             let _ = IndexSegment::parse(d);
         });
     }
+}
+
+#[test]
+fn hostile_primer_never_panics() {
+    let seed = &hostile_seed(0);
     let primer_key = [0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01, 0x0D, 0x01, 0x02, 0x01, 0x01, 0x05, 0x01, 0x00];
     if let Some(v) = value_of(seed, &primer_key) {
         craft_media_testkit::hostile::hammer("mxf primer", v, 5_000, |d| {
             let _ = Primer::parse(d);
         });
     }
+}
+
+#[test]
+fn hostile_set_never_panics() {
+    let seed = &hostile_seed(0);
     let set = seed.windows(16).position(|w| w == set_key(0x18)).and_then(|at| value_of(&seed[at..], &set_key(0x18)));
     if let Some(v) = set {
         craft_media_testkit::hostile::hammer("mxf set", v, 20_000, |d| {

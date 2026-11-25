@@ -9,6 +9,15 @@ mod audio;
 #[cfg(all(feature = "decode", feature = "encode"))]
 #[path = "codecs/main.rs"]
 mod codecs;
+#[cfg(feature = "dsd")]
+#[path = "dsd_bounds.rs"]
+mod dsd_bounds;
+#[cfg(feature = "dsd")]
+#[path = "dsd_metadata.rs"]
+mod dsd_metadata;
+#[cfg(feature = "dsd")]
+#[path = "dsd_oracle.rs"]
+mod dsd_oracle;
 #[cfg(all(feature = "flac-decode", feature = "flac-encode"))]
 #[path = "flac_decode.rs"]
 mod flac_decode;

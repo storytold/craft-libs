@@ -30,17 +30,99 @@ pub enum TickEdge {
     Right,
 }
 
+impl TickEdge {
+    /// Whether positions run along x (a top or bottom edge).
+    pub const fn horizontal(self) -> bool {
+        matches!(self, TickEdge::Bottom | TickEdge::Top)
+    }
+}
+
+/// How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
+/// component set ([`RulerFace::of`]); the face changes the arrangement only, every value still comes from the same
+/// tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RulerFace {
+    /// Marks rise from the strip's inner edge, a major one across the strip's depth, and each number sits beside its
+    /// major mark.
+    #[default]
+    Edge,
+    /// A bar inset in the strip by `BAR_INSET` carries the marks centred on it, and a number stands in place of
+    /// each major mark; a major mark shows only where its number is dropped.
+    Centred,
+}
+
+impl RulerFace {
+    /// The face the component set `set` shows: the creative set the edge face, the productivity set the centred one.
+    pub const fn of(set: craft_theme::ComponentSet) -> Self {
+        match set {
+            craft_theme::ComponentSet::Creative => RulerFace::Edge,
+            craft_theme::ComponentSet::Productivity => RulerFace::Centred,
+        }
+    }
+
+    /// Where the marks of a strip along `edge` sit: the whole strip for the edge face, the strip inset across its
+    /// depth by `BAR_INSET` on each side for the centred face.
+    pub fn bar(self, strip: Rect, edge: TickEdge) -> Rect {
+        match self {
+            RulerFace::Edge => strip,
+            RulerFace::Centred => {
+                if edge.horizontal() {
+                    strip.shrink2(Vec2::new(0.0, BAR_INSET))
+                } else {
+                    strip.shrink2(Vec2::new(BAR_INSET, 0.0))
+                }
+            }
+        }
+    }
+
+    /// The marks of `marks` this face shows beside the numbers in `numbers` (screen boxes): the edge face shows every
+    /// mark, the centred face leaves out each one whose position lies inside a number widened by `pad` along `edge`'s
+    /// axis, so a number stands in place of its own mark and no mark runs through one. `origin` is the screen position
+    /// the marks' `at` counts from.
+    pub fn beside_numbers(self, edge: TickEdge, origin: f32, marks: Vec<Tick>, numbers: &[Rect], pad: f32) -> Vec<Tick> {
+        match self {
+            RulerFace::Edge => marks,
+            RulerFace::Centred => marks
+                .into_iter()
+                .filter(|mark| {
+                    let at = origin + mark.at;
+                    !numbers.iter().any(|number| {
+                        let along = if edge.horizontal() { number.x_range() } else { number.y_range() };
+                        (along.min - pad..=along.max + pad).contains(&at)
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    /// The box a centred number of `size` takes for the mark at `at` (a screen position along `edge`'s axis): centred
+    /// on the mark and on the bar.
+    pub fn centred_number(bar: Rect, edge: TickEdge, at: f32, size: Vec2) -> Rect {
+        let centre = if edge.horizontal() { pos2(at, bar.center().y) } else { pos2(bar.center().x, at) };
+        Rect::from_center_size(centre, size)
+    }
+}
+
 /// How long a tick is: the rank it has among its neighbours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TickRank {
-    /// The shortest, `size.ruler.tick.minor`.
+    /// The shortest, `TICK_MINOR` long.
     Minor,
-    /// Halfway between two major ticks, `size.ruler.tick.mid`.
+    /// Halfway between two major ticks, `TICK_MID` long.
     Mid,
-    /// The longest, `space.gap.inline`.
+    /// The longest: across the depth of the rect the marks are painted in.
     Major,
 }
+
+/// The length of a minor tick, in points. The same in every density, as in the apps' rulers.
+const TICK_MINOR: f32 = 3.0;
+
+/// The length of the tick halfway between two major ticks, in points, in every density.
+const TICK_MID: f32 = 6.0;
+
+/// How far the centred face's bar sits inside the ruler strip on each side across its depth.
+const BAR_INSET: f32 = 2.0;
 
 /// One tick: where it sits along its edge and how long it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -94,13 +176,30 @@ impl Checker {
         self
     }
 
-    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
-    /// with its top-left corner at `origin`. A painter's clip cuts it.
-    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+    /// The texture of the two colours and the side of a cell.
+    fn texture(&self, ctx: &Context, tokens: &UiTokens) -> (TextureId, f32) {
         let side = self.size.unwrap_or(tokens.size.checker).max(f32::EPSILON);
         let light = self.light.map_or_else(|| rgba_color(tokens.color.overlay.checker_light), |color| color.0);
         let dark = self.dark.map_or_else(|| rgba_color(tokens.color.overlay.checker_dark), |color| color.0);
-        let texture = checker_texture(ctx, light, dark);
+        (checker_texture(ctx, light, dark), side)
+    }
+
+    /// The checkerboard over the convex polygon `corners` as one textured mesh, a light cell with its top-left corner at
+    /// `origin`: the cells follow the polygon's edge, which a rect's clip cannot.
+    pub fn polygon_shape(&self, ctx: &Context, tokens: &UiTokens, corners: &[Pos2], origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
+        let mut mesh = fill_polygon(corners, UNTINTED, 0.0);
+        mesh.texture_id = texture;
+        for vertex in &mut mesh.vertices {
+            vertex.uv = ((vertex.pos - origin) / (2.0 * side)).to_pos2();
+        }
+        Shape::mesh(mesh)
+    }
+
+    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
+    /// with its top-left corner at `origin`. A painter's clip cuts it.
+    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
         // One texel per cell; the texture repeats every two cells.
         let uv = |p: Pos2| ((p - origin) / (2.0 * side)).to_pos2();
         match area {
@@ -291,6 +390,32 @@ pub fn ramp(rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: 
     vec![Shape::mesh(mesh)]
 }
 
+/// `mesh` with every vertex that lies outside a rounded corner of `rect` moved onto the arc, towards the corner's
+/// centre, keeping its colour. A square corner moves nothing.
+fn rounded_mesh(mut mesh: Mesh, rect: Rect, radius: CornerRadius) -> Vec<Shape> {
+    let most = rect.width().min(rect.height()) / 2.0;
+    let r = |corner: u8| f32::from(corner).min(most);
+    let corners = [
+        (r(radius.nw), rect.left_top(), egui::vec2(1.0, 1.0)),
+        (r(radius.ne), rect.right_top(), egui::vec2(-1.0, 1.0)),
+        (r(radius.sw), rect.left_bottom(), egui::vec2(1.0, -1.0)),
+        (r(radius.se), rect.right_bottom(), egui::vec2(-1.0, -1.0)),
+    ];
+    for vertex in &mut mesh.vertices {
+        for &(r, corner, toward) in &corners {
+            if r <= 0.0 {
+                continue;
+            }
+            let centre = corner + toward * r;
+            let d = vertex.pos - centre;
+            if d.x * toward.x < 0.0 && d.y * toward.y < 0.0 && d.length() > r {
+                vertex.pos = centre + d * (r / d.length());
+            }
+        }
+    }
+    vec![Shape::mesh(mesh)]
+}
+
 /// The columns of a rounded ramp: the places of `marks` (sorted) and of samples along each corner of `corners` (its
 /// radius, and whether it is at the start of the strip), each with its colour.
 fn rounded_columns(marks: &[(f32, Color32)], corners: &[(f32, bool)], length: f32) -> Vec<(f32, Color32)> {
@@ -341,8 +466,19 @@ const CROSSING_MIN: f64 = 8.0;
 /// Minor lines' share of the major colour's alpha.
 const MINOR_SHARE: f32 = 0.45;
 
-/// The radius of a dot, in screen points.
-const DOT_RADIUS: f32 = 0.6;
+/// How many times a thinned grid doubles its step before it gives up.
+const MAX_DOUBLINGS: u32 = 32;
+
+/// What a grid does when its lines come closer than the minimum step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GridCrowding {
+    /// Draws nothing for an axis whose lines are too close.
+    #[default]
+    Hide,
+    /// Doubles the step, at most 32 times, until the lines fit.
+    Thin,
+}
 
 /// The lines of one axis: positions along it, in the grid's space.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -354,14 +490,33 @@ pub struct GridAxis {
     pub major: Vec<f64>,
 }
 
+/// The major step an axis draws at `zoom`: `step` when it is at least [`MIN_STEP`] screen points; else, for `Thin`, the
+/// step doubled (at most 32 times) until it is; `None` when the axis draws nothing. Lines and crossings both read it, so
+/// crossings follow what is drawn.
+fn fitted_step(step: f64, zoom: f64, crowding: GridCrowding) -> Option<f64> {
+    if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    let mut step = step;
+    if crowding == GridCrowding::Thin {
+        for _ in 0..MAX_DOUBLINGS {
+            if step * zoom >= MIN_STEP || !step.is_finite() {
+                break;
+            }
+            step *= 2.0;
+        }
+    }
+    (step.is_finite() && step * zoom >= MIN_STEP).then_some(step)
+}
+
 impl GridAxis {
     /// The lines of one axis between `lo` and `hi`: majors every `step` from `origin`, minors between them when the
     /// minor step is at least [`MIN_STEP`] screen points at `zoom`. An axis whose major step is under `MIN_STEP`
     /// draws nothing; at most [`MAX_LINES`] lines are given.
-    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64) -> GridAxis {
-        if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) || step * zoom < MIN_STEP {
+    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64, crowding: GridCrowding) -> GridAxis {
+        let Some(step) = fitted_step(step, zoom, crowding) else {
             return GridAxis::default();
-        }
+        };
         let subdivided = subdivisions > 1 && step / f64::from(subdivisions) * zoom >= MIN_STEP;
         let pitch = if subdivided { step / f64::from(subdivisions) } else { step };
         let every = if subdivided { i64::from(subdivisions) } else { 1 };
@@ -398,11 +553,19 @@ pub struct GridLines {
 impl GridLines {
     /// The lines of a grid in document units: majors every `spacing` from `origin`, `subdivisions` steps to a major
     /// (1 or 0 is no minor lines), across `extent` as `view` shows it.
-    pub fn document(view: &CanvasView, extent: kurbo::Rect, spacing: kurbo::Vec2, origin: kurbo::Point, subdivisions: u32) -> Self {
+    pub fn document(
+        view: &CanvasView,
+        extent: kurbo::Rect,
+        spacing: kurbo::Vec2,
+        origin: kurbo::Point,
+        subdivisions: u32,
+        crowding: GridCrowding,
+    ) -> Self {
         let subdivisions = subdivisions.max(1);
-        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x());
-        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom);
-        let crossings = spacing.x * view.zoom_x() >= CROSSING_MIN && spacing.y * view.zoom >= CROSSING_MIN;
+        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x(), crowding);
+        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom, crowding);
+        let wide = |step: f64, zoom: f64| fitted_step(step, zoom, crowding).is_some_and(|fitted| fitted * zoom >= CROSSING_MIN);
+        let crossings = wide(spacing.x, view.zoom_x()) && wide(spacing.y, view.zoom);
         GridLines { x, y, extent: Some(extent), crossings, view: Some(*view) }
     }
 
@@ -527,35 +690,45 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
             match ink.stroke {
                 GridStroke::Solid => shapes.extend(Rule::shapes(&RuleLook { color, width: look.width }, a, b, pixels_per_point)),
                 GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width.points(pixels_per_point), color)),
-                GridStroke::Dots => shapes.extend(Shape::dotted_line(&[a, b], color, look.gap, DOT_RADIUS)),
+                GridStroke::Dots => shapes.extend(Rule::dotted(&RuleLook { color, width: look.width }, a, b, look.gap, pixels_per_point)),
             }
         }
     }
     shapes
 }
 
-/// The tick marks of `ticks` on one edge of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
-/// `size.ruler.tick.minor` long, mid ones `size.ruler.tick.mid`, major ones across the whole depth of `rect`, beside their labels.
-pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
+/// The tick marks of `ticks` along `edge` of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
+/// `TICK_MINOR` long, mid ones `TICK_MID`, major ones across the whole depth of `rect`. The edge
+/// face hangs them from `edge`; the centred face centres them on `rect`'s middle line (`rect` is then the face's bar).
+pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, face: RulerFace, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
     let look = RuleLook { color: rgba_color(tokens.color.text.faint), width: RuleWidth::Points(tokens.stroke.thin) };
     let depth = match edge {
         TickEdge::Bottom | TickEdge::Top => rect.height(),
         TickEdge::Left | TickEdge::Right => rect.width(),
     };
-    let (minor, mid, major) = (tokens.size.ruler.tick.minor, tokens.size.ruler.tick.mid, depth);
     ticks
         .iter()
         .filter_map(|tick| {
             let length = match tick.rank {
-                TickRank::Minor => minor,
-                TickRank::Mid => mid,
-                TickRank::Major => major,
+                TickRank::Minor => TICK_MINOR,
+                TickRank::Mid => TICK_MID,
+                TickRank::Major => depth,
             };
-            let (from, to) = match edge {
-                TickEdge::Bottom => (pos2(rect.left() + tick.at, rect.bottom()), pos2(rect.left() + tick.at, rect.bottom() - length)),
-                TickEdge::Top => (pos2(rect.left() + tick.at, rect.top()), pos2(rect.left() + tick.at, rect.top() + length)),
-                TickEdge::Left => (pos2(rect.left(), rect.top() + tick.at), pos2(rect.left() + length, rect.top() + tick.at)),
-                TickEdge::Right => (pos2(rect.right(), rect.top() + tick.at), pos2(rect.right() - length, rect.top() + tick.at)),
+            let (from, to) = match (face, edge) {
+                (RulerFace::Edge, TickEdge::Bottom) => {
+                    (pos2(rect.left() + tick.at, rect.bottom()), pos2(rect.left() + tick.at, rect.bottom() - length))
+                }
+                (RulerFace::Edge, TickEdge::Top) => (pos2(rect.left() + tick.at, rect.top()), pos2(rect.left() + tick.at, rect.top() + length)),
+                (RulerFace::Edge, TickEdge::Left) => (pos2(rect.left(), rect.top() + tick.at), pos2(rect.left() + length, rect.top() + tick.at)),
+                (RulerFace::Edge, TickEdge::Right) => (pos2(rect.right(), rect.top() + tick.at), pos2(rect.right() - length, rect.top() + tick.at)),
+                (RulerFace::Centred, TickEdge::Bottom | TickEdge::Top) => {
+                    let (x, y) = (rect.left() + tick.at, rect.center().y);
+                    (pos2(x, y - length / 2.0), pos2(x, y + length / 2.0))
+                }
+                (RulerFace::Centred, TickEdge::Left | TickEdge::Right) => {
+                    let (x, y) = (rect.center().x, rect.top() + tick.at);
+                    (pos2(x - length / 2.0, y), pos2(x + length / 2.0, y))
+                }
             };
             clip.intersects(Rect::from_two_pos(from, to)).then(|| Rule::shapes(&look, from, to, pixels_per_point))
         })
@@ -571,8 +744,12 @@ pub fn outline(tokens: &UiTokens, shape: &PaintShape) -> Vec<Shape> {
 /// The outline of [`outline`] with the line in `line`, a colour the user picked (a Navigator proxy colour), over the
 /// overlay halo. Every halo is drawn under every line, so the edges of one mark that meet or cross stay unbroken.
 pub fn outline_in(tokens: &UiTokens, shapes: &[PaintShape], line: Color32) -> Vec<Shape> {
-    let halo = Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo));
-    let line = Stroke::new(tokens.stroke.medium, line);
+    outline_with(Stroke::new(tokens.stroke.thick, rgba_color(tokens.color.overlay.halo)), Stroke::new(tokens.stroke.medium, line), shapes)
+}
+
+/// The outline of `shapes` with the strokes given: the halo under the line. For a component that keeps shapes built in
+/// `update`, where only `style` has read the tokens.
+pub fn outline_with(halo: Stroke, line: Stroke, shapes: &[PaintShape]) -> Vec<Shape> {
     let halos = shapes.iter().flat_map(|shape| stroked(shape, halo));
     halos.chain(shapes.iter().flat_map(|shape| stroked(shape, line))).collect()
 }
@@ -759,6 +936,16 @@ pub fn ellipse(center: Pos2, axes: [Vec2; 2]) -> Vec<Pos2> {
         .collect()
 }
 
+/// A line `width` points wide along `points`, with round dots at every point, in the theme's text-selection fill
+/// (translucent, so the content under it shows): the swath a rubbing tool leaves.
+pub fn swath(tokens: &UiTokens, points: &[Pos2], width: f32) -> Vec<Shape> {
+    let color = rgba_color(tokens.color.state.text_selection);
+    let mut shapes = vec![Shape::line(points.to_vec(), Stroke::new(width, color))];
+    // A line has butt ends and no joins: a dot at each point keeps the swath's width at the ends and corners.
+    shapes.extend(points.iter().map(|&p| Shape::circle_filled(p, width / 2.0, color)));
+    shapes
+}
+
 fn stroked(shape: &PaintShape, stroke: Stroke) -> Vec<Shape> {
     match shape {
         PaintShape::Rect(rect, radius) => vec![Shape::rect_stroke(*rect, *radius, stroke, egui::StrokeKind::Middle)],
@@ -799,6 +986,12 @@ impl ContentPainterCx<'_> {
         self.data_shapes(ramp(rect, radius, stops, axis));
     }
 
+    /// Paints a colour `mesh` laid over `rect`, as data, with its vertices pulled inside the outline of corners of
+    /// `radius`, so a gradient keeps inside the rounded ring of the well it fills.
+    pub fn mesh_in(&self, rect: Rect, radius: CornerRadius, mesh: Mesh) {
+        self.data_shapes(rounded_mesh(mesh, rect, radius));
+    }
+
     /// Paints the well of a plot over `rect` and returns the rect inside its edge, where the plot draws.
     pub fn plot_frame(&self, rect: Rect) -> Rect {
         let style = surface_style(self.tokens, SurfaceKind::Well);
@@ -833,9 +1026,14 @@ impl ContentPainterCx<'_> {
         super::draw::data_checker(&self.painter, self.tokens, self.data, checker, rect, radius);
     }
 
-    /// Paints tick marks on one edge of `rect`.
-    pub fn ticks(&self, rect: Rect, edge: TickEdge, marks: &[Tick]) {
-        self.painter.extend(ticks(self.tokens, rect, edge, marks, self.painter.clip_rect(), self.ppp()));
+    /// Where the marks of a ruler strip along `edge` sit in `face`; see [`RulerFace::bar`].
+    pub fn ruler_bar(&self, strip: Rect, edge: TickEdge, face: RulerFace) -> Rect {
+        face.bar(strip, edge)
+    }
+
+    /// Paints tick marks along `edge` of `rect` in `face`; see [`ticks`].
+    pub fn ticks(&self, rect: Rect, edge: TickEdge, face: RulerFace, marks: &[Tick]) {
+        self.painter.extend(ticks(self.tokens, rect, edge, face, marks, self.painter.clip_rect(), self.ppp()));
     }
 
     /// Paints a halo-and-line outline of `shape`.
@@ -861,6 +1059,11 @@ impl ContentPainterCx<'_> {
     /// The device pixels per point of the surface being painted.
     pub fn pixels_per_point(&self) -> f32 {
         self.ppp()
+    }
+
+    /// Paints a swath `width` points wide along `points` in the text-selection fill; see [`swath`].
+    pub fn swath(&self, points: &[Pos2], width: f32) {
+        self.painter.extend(swath(self.tokens, points, width));
     }
 
     /// Paints the insertion mark of a drop.

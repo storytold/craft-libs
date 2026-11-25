@@ -93,49 +93,90 @@ pub struct ImeSeen {
     pub reset: Option<egui::ImeResetId>,
     /// Where the candidate window opens.
     pub caret: Rect,
+
+    /// The IME context the output belongs to; it changes with the owner, its epoch, its focus or its purpose.
+    pub generation: u64,
+    /// The bounded committed text around the caret, or `Unavailable`.
+    pub surrounding: egui::output::IMESurroundingText,
+    /// Whether the input method made the change to `surrounding`.
+    pub cause: egui::output::ImeChangeCause,
 }
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
+/// `read` are pathless files dropped in the frame whose bytes the page reads after it, by name with the bytes the read
+/// gives. `given` are files dropped in the frame by a relative name with their bytes at hand, as a browser hands them over.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OsFiles {
     pub hovered: Vec<(String, String)>,
     pub dropped: Vec<String>,
+    pub read: Vec<(String, Vec<u8>)>,
+    pub given: Vec<(String, Vec<u8>)>,
 }
 
-/// A dropped file that exists only as a path.
-#[derive(Debug)]
-struct DroppedPath(std::path::PathBuf);
-
-impl egui::DroppedFile for DroppedPath {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        std::fs::read(&self.0).map_err(|error| error.to_string())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
-        Box::pin(std::future::ready(Err("there is no file system on the web".to_owned())))
-    }
-}
-
-/// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
-/// reports both, and the fact stays until the next such event. Before any event the focus is unknown.
-fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: Option<f32>) -> egui::ViewportIdMap<egui::ViewportInfo> {
+/// The viewport facts a frame reports: the root window's inner rect when the frame is the root's (`inner`), and its
+/// focus: a window-focus event also sets the root viewport's focus fact, as a host reports both, and the fact stays
+/// until the next such event. Before any event the focus is unknown. The root's input
+/// reports the same focus (`RawInput::focused`), a window with focus while it is unknown.
+fn window_facts(
+    ctx: &Context,
+    events: &[Event],
+    native_pixels_per_point: Option<f32>,
+    inner: Option<Rect>,
+) -> egui::ViewportIdMap<egui::ViewportInfo> {
     let last = events.iter().rev().find_map(|event| if let Event::WindowFocused(focused) = event { Some(*focused) } else { None });
     let focused = Service::<WindowFocus>::run(ctx, |state| {
         state.0 = last.or(state.0);
         state.0
     });
-    std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { focused, native_pixels_per_point, ..egui::ViewportInfo::default() })).collect()
+    std::iter::once((
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { focused, native_pixels_per_point, inner_rect: inner, ..egui::ViewportInfo::default() },
+    ))
+    .collect()
 }
 
 /// The focus the fixture's window last reported; unset before any focus event.
 #[derive(Default)]
 struct WindowFocus(Option<bool>);
+
+/// The child windows of the root that are open: each opens with its first frame and stays listed in every frame's
+/// viewports, as eframe lists every open viewport, until a test closes it ([`close_viewport`]) or the app sends it
+/// `ViewportCommand::Close`.
+#[derive(Default)]
+struct OpenChildren(Vec<egui::ViewportId>);
+
+/// The open child windows, with `viewport` opened first when it is a child.
+fn open_children(ctx: &Context, viewport: egui::ViewportId) -> Vec<egui::ViewportId> {
+    Service::<OpenChildren>::run(ctx, |open| {
+        if viewport != egui::ViewportId::ROOT && !open.0.contains(&viewport) {
+            open.0.push(viewport);
+        }
+        open.0.clone()
+    })
+}
+
+/// One run of `ui` on `input`; a root pass declares the open `children` after it, as an eframe app shows each of its
+/// windows every frame: egui keeps a child viewport only while its parent's passes show it. Each child's content runs
+/// in its own frames, so the declaration shows nothing.
+fn run_ui(ctx: &Context, input: RawInput, children: &[egui::ViewportId], mut ui: impl FnMut(&mut Ui)) -> egui::FullOutput {
+    let root = input.viewport_id == egui::ViewportId::ROOT;
+    ctx.run_ui(input, |top| {
+        ui(top);
+        if root && !children.is_empty() {
+            let embedded = ctx.embed_viewports();
+            ctx.set_embed_viewports(false);
+            for child in children {
+                ctx.show_viewport_deferred(*child, egui::ViewportBuilder::default(), |_, _| {});
+            }
+            ctx.set_embed_viewports(embedded);
+        }
+    })
+}
+
+/// Closes the child window `viewport`: later frames no longer list it.
+pub(crate) fn close_viewport(ctx: &Context, viewport: egui::ViewportId) {
+    Service::<OpenChildren>::run(ctx, |open| open.0.retain(|held| *held != viewport));
+}
 
 /// The fixture's reset bridge, as egui-winit keeps one per window: the reset request it holds for each viewport, and
 /// the requests it dropped, which the next frame reports as `Event::ImeResetRetired`.
@@ -187,7 +228,8 @@ impl ImeResets {
 }
 
 /// Runs one pass of `viewport` at `time` seconds with `events` and `files`, on a window of `native_pixels_per_point`
-/// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live.
+/// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live; the
+/// child stays open in every later frame, the root's included, until it is closed.
 #[expect(clippy::too_many_arguments, reason = "the arguments are the facts of one frame, and every caller passes them all")]
 pub(crate) fn run_frame(
     ctx: &Context,
@@ -201,25 +243,43 @@ pub(crate) fn run_frame(
 ) -> FrameResult {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
-    let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+    let dropped_files = files
+        .dropped
+        .iter()
+        .map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle)
+        .chain(
+            files.given.into_iter().map(|(name, bytes)| Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle),
+        )
+        .collect();
+    // The web drop of a pathless file: its reads open in the pass of the drop, and their bytes arrive after it.
+    if !files.read.is_empty() {
+        super::files::open_reads(ctx, viewport, files.read.len());
+    }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
-    let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
-    if viewport != egui::ViewportId::ROOT {
+    let mut viewports = window_facts(ctx, &events, native_pixels_per_point, (viewport == egui::ViewportId::ROOT).then_some(screen));
+    let focused = viewport != egui::ViewportId::ROOT || viewports.get(&egui::ViewportId::ROOT).and_then(|info| info.focused).unwrap_or(true);
+    let children = open_children(ctx, viewport);
+    for child in &children {
         viewports
-            .insert(viewport, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), native_pixels_per_point, ..egui::ViewportInfo::default() });
+            .insert(*child, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), native_pixels_per_point, ..egui::ViewportInfo::default() });
     }
     let input = RawInput {
         screen_rect: Some(screen),
         time: Some(time),
         viewport_id: viewport,
+        focused,
         events,
         hovered_files,
         dropped_files,
         viewports,
         ..RawInput::default()
     };
-    let mut output = drive(|| ctx.run_ui(input, ui));
+    let mut output = drive(|| run_ui(ctx, input, &children, ui));
     Service::<ImeResets>::run(ctx, |resets| resets.output(viewport, &output.platform_output));
+    for (name, bytes) in files.read {
+        let file = crate::runtime::drag::OsFile { name, path: None, mime: String::new(), bytes: Some(bytes.into()) };
+        super::files::post(ctx, viewport, Some(file));
+    }
     let mut flat = Vec::new();
     for clipped in &output.shapes {
         let mut shapes = Vec::new();
@@ -257,6 +317,15 @@ pub(crate) fn run_frame(
         })
         .collect();
     let closed = output.viewport_output.values().any(|viewport| viewport.commands.iter().any(|command| matches!(command, ViewportCommand::Close)));
+    let closing: Vec<egui::ViewportId> = output
+        .viewport_output
+        .iter()
+        .filter(|(id, out)| **id != egui::ViewportId::ROOT && out.commands.iter().any(|command| matches!(command, ViewportCommand::Close)))
+        .map(|(id, _)| *id)
+        .collect();
+    for child in closing {
+        close_viewport(ctx, child);
+    }
     let repaint_delay = output.viewport_output.get(&egui::ViewportId::ROOT).map_or(std::time::Duration::MAX, |viewport| viewport.repaint_delay);
     let copied = output
         .platform_output
@@ -286,6 +355,9 @@ pub(crate) fn run_frame(
             interrupt: ime.should_interrupt_composition,
             reset: ime.reset_request,
             caret: ime.cursor_rect,
+            generation: ime.context_generation,
+            surrounding: ime.surrounding_text.clone(),
+            cause: ime.change_cause,
         }),
         textures: std::mem::take(&mut output.textures_delta),
         shapes: output.shapes,
@@ -305,6 +377,7 @@ pub(crate) fn allow_zoom_keys(ctx: &Context) {
 
 /// Sets egui's click options, as an app does for its own widgets: the longest movement and the longest press that
 /// still count as a click.
+#[cfg(feature = "suite")]
 pub(crate) fn set_click_options(ctx: &Context, distance: f32, seconds: f64) {
     ctx.options_mut(|options| {
         options.input_options.max_click_dist = distance;
@@ -314,17 +387,20 @@ pub(crate) fn set_click_options(ctx: &Context, distance: f32, seconds: f64) {
 
 /// Sets egui's surrender option, the app's rule for its own focused widgets: with `never`, a click elsewhere leaves
 /// their focus; otherwise egui's default, which surrenders it on a click elsewhere.
+#[cfg(feature = "suite")]
 pub(crate) fn set_app_surrender(ctx: &Context, never: bool) {
     let rule = if never { egui::SurrenderFocusOn::Never } else { egui::SurrenderFocusOn::Clicks };
     ctx.options_mut(|options| options.input_options.surrender_focus_on = rule);
 }
 
 /// Whether egui's surrender option is egui's default, a click elsewhere.
+#[cfg(feature = "suite")]
 pub(crate) fn app_surrenders_on_click(ctx: &Context) -> bool {
     ctx.options(|options| options.input_options.surrender_focus_on == egui::SurrenderFocusOn::Clicks)
 }
 
 /// egui's click options: the longest movement and the longest press that still count as a click.
+#[cfg(feature = "suite")]
 pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
     ctx.options(|options| (options.input_options.max_click_dist, options.input_options.max_click_duration))
 }
@@ -332,7 +408,7 @@ pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
 /// A fresh context with no plugin and AccessKit on.
 pub(crate) fn bare_context() -> Context {
     let ctx = Context::default();
-    ctx.set_fonts(test_fonts());
+    super::fonts::set_definitions(&ctx, test_fonts());
     ctx.enable_accesskit();
     ctx
 }
@@ -366,8 +442,14 @@ pub(crate) fn reordered_fonts() -> egui::FontDefinitions {
 /// Runs one frame like `run_frame` and returns the shapes it painted, nested shapes flattened.
 pub(crate) fn run_frame_shapes(ctx: &Context, time: f64, screen: Vec2, ui: impl FnMut(&mut Ui)) -> Vec<Shape> {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
-    let input = RawInput { screen_rect: Some(screen), time: Some(time), ..RawInput::default() };
-    let mut output = drive(|| ctx.run_ui(input, ui));
+    let children = open_children(ctx, egui::ViewportId::ROOT);
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo::default());
+    for child in &children {
+        viewports.insert(*child, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), ..egui::ViewportInfo::default() });
+    }
+    let input = RawInput { screen_rect: Some(screen), time: Some(time), viewports, ..RawInput::default() };
+    let mut output = drive(|| run_ui(ctx, input, &children, ui));
     output.textures_delta.clear();
     let mut flat = Vec::new();
     for clipped in output.shapes {
@@ -416,29 +498,98 @@ pub(crate) fn focusable_widget(ui: &mut Ui, id: egui::Id) -> Rect {
 
 /// A host's own single-line egui text field of `id` over `text`, as an app that keeps its own widgets beside the
 /// framework's draws it; returns its rect.
+#[cfg(feature = "suite")]
 pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
 }
 
+/// A host's own text editor of `id` at `rect`, as a canvas text tool draws it: it reads the IME events from egui's
+/// input into `text` (a commit appends, a deletion before the caret removes characters from its end) and writes the
+/// pass's IME output, context generation 1.
+#[cfg(feature = "suite")]
+pub(crate) fn host_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, text: &mut String) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::Ime(egui::ImeEvent::Commit(committed)) => text.push_str(&committed),
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect)));
+}
+
+/// What [`host_resetting_ime_editor`] holds between passes.
+#[cfg(feature = "suite")]
+#[derive(Default)]
+pub(crate) struct ResettingEditor {
+    pub(crate) text: String,
+    pub(crate) composing: bool,
+    /// The reset the editor asked for at a press during its composition, until its completion arrives; the editor
+    /// takes no IME event meanwhile.
+    pub(crate) reset: Option<egui::ImeResetId>,
+}
+
+/// A host's own text editor of `id` at `rect` that fences its own interrupted composition, as EffectCraft's viewer text
+/// editor does: a primary press while it composes ends the composition and asks the platform for a reset in its own IME
+/// output, and the editor ignores IME events until that reset's completion. Otherwise as [`host_ime_editor`].
+#[cfg(feature = "suite")]
+pub(crate) fn host_resetting_ime_editor(ui: &Ui, id: egui::Id, rect: Rect, editor: &mut ResettingEditor) {
+    let _ = ui.interact(rect, id, egui::Sense::click());
+    for event in ui.input(|input| input.events.clone()) {
+        match event {
+            Event::ImeResetCompleted { request_id } if editor.reset == Some(request_id) => editor.reset = None,
+            _ if editor.reset.is_some() => {}
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) => editor.composing = !text.is_empty(),
+            Event::Ime(egui::ImeEvent::Commit(committed)) => {
+                editor.text.push_str(&committed);
+                editor.composing = false;
+            }
+            Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, .. }) => {
+                for _ in 0..before_chars {
+                    editor.text.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ime = egui::output::IMEOutput::new(id, 1, egui::IMEPurpose::Normal, rect, rect);
+    if editor.composing && ui.input(|input| input.pointer.primary_pressed()) {
+        editor.composing = false;
+        editor.reset = ui.ctx().request_ime_reset(ui.ctx().viewport_id());
+        ime.should_interrupt_composition = true;
+        ime.reset_request = editor.reset;
+    }
+    ui.ctx().output_mut(|output| output.ime = Some(ime));
+}
+
 /// Gives the host's own egui widget `id` key focus, as the host's code does.
+#[cfg(feature = "suite")]
 pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
     ctx.memory_mut(|memory| memory.request_focus(id));
 }
 
 /// A host's own clickable egui widget `id` at `rect`, a focus stop for egui's own focus moves; returns whether egui
 /// reports a click on it, by egui's click options.
+#[cfg(feature = "suite")]
 pub(crate) fn host_button(ui: &Ui, id: egui::Id, rect: Rect) -> bool {
     ui.interact(rect, id, egui::Sense::click()).clicked()
 }
 
 /// A host's own egui drag area `id` at `rect`; returns whether egui reports it dragged and whether its drag stopped
 /// this pass.
+#[cfg(feature = "suite")]
 pub(crate) fn host_drag_area(ui: &Ui, id: egui::Id, rect: Rect) -> (bool, bool) {
     let response = ui.interact(rect, id, egui::Sense::drag());
     (response.dragged(), response.drag_stopped())
 }
 
 /// A host's own selectable egui label of `text`; returns its rect.
+#[cfg(feature = "suite")]
 pub(crate) fn host_label(ui: &mut Ui, text: &str) -> Rect {
     ui.add(egui::Label::new(text).selectable(true)).rect
 }

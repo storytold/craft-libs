@@ -18,12 +18,20 @@ pub struct AppIcons {
     pub stroke_width: Option<f32>,
     /// Each icon's name and SVG document.
     pub icons: &'static [(&'static str, &'static [u8])],
+    /// For each icon name, an SVG document drawn under the icon in a fixed sRGBA colour; the icon itself stays tinted.
+    pub fills: &'static [(&'static str, &'static [u8], [u8; 4])],
 }
 
 impl AppIcons {
     /// The set `name` of `icons`, each an icon name and its SVG document, drawn with `stroke_width` when it is `Some`.
     pub const fn new(name: &'static str, stroke_width: Option<f32>, icons: &'static [(&'static str, &'static [u8])]) -> Self {
-        Self { name, stroke_width, icons }
+        Self { name, stroke_width, icons, fills: &[] }
+    }
+
+    /// The set with `fills`: for each icon name, an SVG drawn under the icon in a fixed sRGBA colour.
+    pub const fn with_fills(mut self, fills: &'static [(&'static str, &'static [u8], [u8; 4])]) -> Self {
+        self.fills = fills;
+        self
     }
 }
 
@@ -91,6 +99,22 @@ fn app_icon(set: usize, icon: usize) -> (&'static str, &'static [u8], Option<f32
     (name, svg, set.stroke_width)
 }
 
+/// The fill drawn under an app icon: its SVG document and fixed sRGBA colour. `None` for a catalog entry and for an icon
+/// its set gives no fill.
+pub(crate) fn fill_of(entry: Entry) -> Option<(&'static [u8], [u8; 4])> {
+    let Entry::App { set, icon } = entry else { return None };
+    let registry = APPS.read().unwrap_or_else(PoisonError::into_inner);
+    let set = registry.sets[set];
+    let name = set.icons[icon].0;
+    set.fills.iter().find(|(fill, ..)| *fill == name).map(|&(_, svg, color)| (svg, color))
+}
+
+/// A fill document in white at `px` x `px` physical pixels, drawn as drawn and never mirrored: no app icon is
+/// directional.
+pub(crate) fn rasterise_fill(svg: &[u8], px: u32) -> ColorImage {
+    image(draw(svg, None, None, px, 0.0, false), px, false, || "app icon fill".to_owned())
+}
+
 /// The position of the icon called `name` in the catalog.
 pub(crate) fn find(name: &str) -> Option<usize> {
     NAMES.binary_search(&name).ok()
@@ -117,22 +141,56 @@ pub(crate) fn entry_stroke_width(entry: Entry, set: IconSet) -> Option<f32> {
     }
 }
 
-/// `entry` in white at `px` x `px` physical pixels; a catalog entry as [`rasterise`], an app entry through the same
-/// drawing with its set's stroke width.
-pub(crate) fn rasterise_entry(entry: Entry, set: IconSet, px: u32, stroke_px: f32, mirrored: bool) -> ColorImage {
-    match entry {
-        Entry::Catalog(index) => rasterise(index, set, px, stroke_px, mirrored),
-        Entry::App { set: s, icon } => {
-            let (name, svg, own) = app_icon(s, icon);
-            image(draw(svg, own, px, stroke_px, mirrored), px, || format!("app icon {name}"))
+/// One class set of an icon's drawing. An app icon's parts marked `class="accent"` read in the accent ink and those
+/// marked `class="fixed"` keep their own colours; every other part reads in the icon's ink.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Layer {
+    /// The parts outside both classes, in white.
+    Ink,
+    /// The `accent` parts, in white.
+    Accent,
+    /// The `fixed` parts in their own colours.
+    Fixed,
+    /// The `fixed` parts in white, for an icon that paints every layer in one ink (disabled).
+    FixedMask,
+}
+
+impl Layer {
+    /// The style sheet that hides every part outside the layer; the SVG engine applies it, so the class is matched
+    /// by its own selectors.
+    fn style_sheet(self) -> &'static str {
+        match self {
+            Layer::Ink => ".accent, .accent *, .fixed, .fixed * { visibility: hidden }",
+            Layer::Accent => "* { visibility: hidden } .accent, .accent * { visibility: visible }",
+            Layer::Fixed | Layer::FixedMask => "* { visibility: hidden } .fixed, .fixed * { visibility: visible }",
         }
     }
 }
 
-/// The white image of a drawn pixmap; a failed drawing gives a transparent image and a log line.
-fn image(drawn: Result<tiny_skia::Pixmap, String>, px: u32, label: impl FnOnce() -> String) -> ColorImage {
+/// The `layer` of `entry` at `px` x `px` physical pixels, in white or, for [`Layer::Fixed`], as drawn. A catalog entry
+/// has only an ink layer, drawn as [`rasterise`]; its other layers are transparent. An app entry is drawn with its
+/// set's stroke width, the layer's parts only.
+pub(crate) fn rasterise_entry(entry: Entry, set: IconSet, px: u32, stroke_px: f32, mirrored: bool, layer: Layer) -> ColorImage {
+    match (entry, layer) {
+        (Entry::Catalog(index), Layer::Ink) => rasterise(index, set, px, stroke_px, mirrored),
+        (Entry::Catalog(_), _) => ColorImage::filled([px as usize; 2], Color32::TRANSPARENT),
+        (Entry::App { set: s, icon }, layer) => {
+            let (name, svg, own) = app_icon(s, icon);
+            let drawn = draw(svg, Some(layer.style_sheet()), own, px, stroke_px, mirrored);
+            image(drawn, px, layer == Layer::Fixed, || format!("app icon {name}"))
+        }
+    }
+}
+
+/// The image of a drawn pixmap, in white with the drawing's alpha or, when `as_drawn`, in its own colours; a failed
+/// drawing gives a transparent image and a log line.
+fn image(drawn: Result<tiny_skia::Pixmap, String>, px: u32, as_drawn: bool, label: impl FnOnce() -> String) -> ColorImage {
     let size = [px as usize; 2];
     match drawn {
+        // Both tiny-skia's pixels and egui's colours are premultiplied.
+        Ok(pixmap) if as_drawn => {
+            ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_rgba_premultiplied(p.red(), p.green(), p.blue(), p.alpha())).collect())
+        }
         Ok(pixmap) => ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_white_alpha(p.alpha())).collect()),
         Err(error) => {
             log::error!("{}: {error}", label());
@@ -146,18 +204,20 @@ fn image(drawn: Result<tiny_skia::Pixmap, String>, px: u32, label: impl FnOnce()
 /// A document drawn with strokes is drawn `stroke_px` physical pixels wide, one drawn with fills as drawn. `mirrored`
 /// flips the drawing horizontally. A document that fails to parse gives a transparent image and a log line.
 pub(crate) fn rasterise(index: usize, set: IconSet, px: u32, stroke_px: f32, mirrored: bool) -> ColorImage {
-    image(draw(svg(index, set), stroke_width(index, set), px, stroke_px, mirrored), px, || format!("icon {} in {}", NAMES[index], set.id()))
+    let drawn = draw(svg(index, set), None, stroke_width(index, set), px, stroke_px, mirrored);
+    image(drawn, px, false, || format!("icon {} in {}", NAMES[index], set.id()))
 }
 
-/// `own` is the document's own stroke width in view-box units; a document without one is drawn as it is.
-fn draw(svg: &[u8], own: Option<f32>, px: u32, stroke_px: f32, mirrored: bool) -> Result<tiny_skia::Pixmap, String> {
-    let mut tree = svg_tree::parse(svg)?;
+/// `svg` under `style_sheet` (one class set, see [`Layer`]); `own` is the document's own stroke width in view-box
+/// units; a document without one is drawn as it is.
+fn draw(svg: &[u8], style_sheet: Option<&str>, own: Option<f32>, px: u32, stroke_px: f32, mirrored: bool) -> Result<tiny_skia::Pixmap, String> {
+    let mut tree = svg_tree::parse_styled(svg, style_sheet)?;
     let view = tree.size();
     if let Some(own) = own {
         // Every `stroke-width` scales by the same factor, so a set's thinner details stay thinner.
         let units = stroke_px * view.width() / px as f32;
         let text = std::str::from_utf8(svg).map_err(|e| e.to_string())?;
-        tree = svg_tree::parse(scale_stroke_widths(text, units / own).as_bytes())?;
+        tree = svg_tree::parse_styled(scale_stroke_widths(text, units / own).as_bytes(), style_sheet)?;
     }
     let (sx, sy) = (px as f32 / view.width(), px as f32 / view.height());
     let transform =

@@ -87,7 +87,7 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
 
 #[cfg(test)]
 #[cfg(unix)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[craft_ui::testing::trial]

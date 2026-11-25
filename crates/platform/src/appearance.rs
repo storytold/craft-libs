@@ -1,5 +1,6 @@
-//! Desktop colour, contrast and motion preferences and GNOME's window-button layout through the
-//! XDG Settings portal, plus the browser's contrast and motion media queries on the web.
+//! Desktop colour, contrast, motion and text-scale preferences and GNOME's window-button layout
+//! through the XDG Settings portal, the system's animation setting on Windows and macOS, plus the
+//! browser's contrast and motion media queries on the web.
 //!
 //! Derived from PdfCraft's activation-safe subscription and GNOME schema fallback,
 //! CADCraft's BSD support, and ArtCraft Launcher's ReadOne/Read compatibility.
@@ -9,7 +10,7 @@ pub use reader::{Reading, SystemReader};
 use std::{
     sync::{
         Arc, Condvar, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -38,7 +39,10 @@ struct Shared {
     contrast: AtomicU8,
     /// 0 unknown, 1 animations allowed, 2 reduced motion.
     motion: AtomicU8,
-    /// Raised each time the theme, contrast or reduced motion changes; layout and icon changes leave it.
+    /// The text scale's `f32` bits; 0 unknown (no usable scale is 0.0).
+    text_scale: AtomicU32,
+    /// Raised each time the theme, contrast, reduced motion or text scale changes; layout and icon
+    /// changes leave it.
     generation: AtomicU64,
     active: AtomicBool,
     /// True once the source has answered, found no answer, or been cancelled.
@@ -51,10 +55,28 @@ struct Shared {
     /// `XDG_CURRENT_DESKTOP` names GNOME; read once when the watcher starts.
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     gnome: bool,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     wake: Box<dyn Fn() + Send + Sync>,
 }
 impl Shared {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new(active: bool, wake: Box<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            value: AtomicU8::new(0),
+            contrast: AtomicU8::new(0),
+            motion: AtomicU8::new(0),
+            text_scale: AtomicU32::new(0),
+            generation: AtomicU64::new(0),
+            active: AtomicBool::new(active),
+            settled: Mutex::new(false),
+            settled_changed: Condvar::new(),
+            layout: Mutex::new(None),
+            icons: Mutex::new(None),
+            #[cfg(all(unix, not(target_os = "macos")))]
+            gnome: is_gnome_session(&|k| std::env::var(k).ok()),
+            wake,
+        }
+    }
     fn get(&self) -> Option<Theme> {
         match self.value.load(Ordering::Acquire) {
             1 => Some(Theme::Dark),
@@ -62,7 +84,7 @@ impl Shared {
             _ => None,
         }
     }
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     fn settle(&self) {
         *self.settled.lock().unwrap_or_else(PoisonError::into_inner) = true;
         self.settled_changed.notify_all();
@@ -83,11 +105,15 @@ impl Shared {
             (self.wake)();
         }
     }
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     fn publish_code(&self, slot: &AtomicU8, code: u8) {
-        if slot.swap(code, Ordering::AcqRel) == code {
-            return;
+        if slot.swap(code, Ordering::AcqRel) != code {
+            self.changed();
         }
+    }
+    /// Raises the generation for a value just stored, then wakes an active host.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn changed(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         if self.active.load(Ordering::Acquire) {
             (self.wake)();
@@ -103,9 +129,17 @@ impl Shared {
             },
         );
     }
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     fn publish_motion(&self, reduced: bool) {
         self.publish_code(&self.motion, if reduced { 2 } else { 1 });
+    }
+    /// `None` is no scaling: the desktop's value is out of range, or there is none.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn publish_text_scale(&self, scale: Option<f32>) {
+        let bits = scale.map_or(0, f32::to_bits);
+        if self.text_scale.swap(bits, Ordering::AcqRel) != bits {
+            self.changed();
+        }
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn publish_layout(&self, layout: String) {
@@ -139,12 +173,18 @@ impl Shared {
 /// Cache reads never block the UI; callers should keep wake callbacks nonblocking.
 pub struct Watcher {
     shared: Arc<Shared>,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-    stop: async_channel::Sender<()>,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-    worker: Option<std::thread::JoinHandle<()>>,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-    finished: std::sync::mpsc::Receiver<()>,
+    #[cfg(not(target_arch = "wasm32"))]
+    worker: Worker,
+}
+/// The thread that feeds a [`Watcher`], and how to stop it.
+#[cfg(not(target_arch = "wasm32"))]
+enum Worker {
+    /// Linux and the BSDs: the portal subscription, raced against `stop` on its own executor.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    Portal { stop: async_channel::Sender<()>, worker: Option<std::thread::JoinHandle<()>>, finished: std::sync::mpsc::Receiver<()> },
+    /// Windows and macOS: the polling loop of `native`, which waits on `stop` between reads.
+    #[cfg(any(windows, target_os = "macos"))]
+    Native { stop: std::sync::mpsc::Sender<()>, finished: std::sync::mpsc::Receiver<()>, thread: Option<std::thread::JoinHandle<()>> },
 }
 impl Watcher {
     /// Start an active subscription, or return `None` on unsupported targets or worker failure.
@@ -155,12 +195,22 @@ impl Watcher {
     /// Start observing with explicit control over wake notifications.
     /// An inactive subscription still updates its cache. Unsupported targets and worker
     /// startup failure return `None`; browser targets never start a desktop watcher.
+    ///
+    /// Linux and the BSDs subscribe to the XDG Settings portal. Windows and macOS start a worker
+    /// that reads the system's animation setting once a second and answers
+    /// [`reduced_motion`](Self::reduced_motion) only: theme and contrast stay `None` there.
     pub fn start_active(active: bool, wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
         {
             Self::spawn(active, wake, portal::watch)
         }
-        #[cfg(not(all(unix, not(target_os = "macos"), not(target_arch = "wasm32"))))]
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let shared = Arc::new(Shared::new(active, Box::new(wake)));
+            let (stop, finished, thread) = native::spawn(Arc::clone(&shared))?;
+            Some(Self { shared, worker: Worker::Native { stop, finished, thread: Some(thread) } })
+        }
+        #[cfg(not(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows, target_os = "macos")))]
         {
             let _ = (active, wake);
             None
@@ -170,9 +220,10 @@ impl Watcher {
     pub fn current(&self) -> Option<Theme> {
         self.shared.get()
     }
-    /// Rises each time the theme, [`Watcher::contrast`] or [`Watcher::reduced_motion`] changes, before the wake
-    /// callback runs; a layout or icon theme change leaves it. Read the preferences again when it moved,
-    /// after reading this: a value is stored before the generation rises.
+    /// Rises each time the theme, [`Watcher::contrast`], [`Watcher::reduced_motion`] or
+    /// [`Watcher::text_scale`] changes, before the wake callback runs; a layout or icon theme
+    /// change leaves it. Read the preferences again when it moved, after reading this: a value is
+    /// stored before the generation rises.
     pub fn generation(&self) -> u64 {
         self.shared.generation.load(Ordering::Acquire)
     }
@@ -204,9 +255,8 @@ impl Watcher {
     /// without a desktop watcher.
     ///
     /// It comes over the same connection as the theme, a change runs the same wake callback, and
-    /// [`Watcher::wait_first`] returns after the first read of it. macOS and Windows have no
-    /// watcher: reading their settings needs platform bindings, and this crate forbids `unsafe`.
-    /// On the web use `browser_contrast`.
+    /// [`Watcher::wait_first`] returns after the first read of it. Always `None` on Windows and
+    /// macOS, whose watcher reads the animation setting only. On the web use `browser_contrast`.
     pub fn contrast(&self) -> Option<Contrast> {
         match self.shared.contrast.load(Ordering::Acquire) {
             1 => Some(Contrast::Standard),
@@ -214,12 +264,21 @@ impl Watcher {
             _ => None,
         }
     }
-    /// Whether the desktop asks for reduced motion, from the portal's `org.freedesktop.appearance`
-    /// `reduced-motion`, or GNOME's `org.gnome.desktop.interface` `enable-animations` (inverted)
-    /// when the portal has no `reduced-motion` key. `None` until one answers, when neither key
-    /// exists, and on targets without a desktop watcher.
+    /// Whether the system asks for reduced motion.
     ///
-    /// Wake and [`Watcher::wait_first`] behave as for [`Watcher::contrast`]. On the web use
+    /// - Linux and the BSDs: three portal keys, combined so that any one asking for reduced
+    ///   motion wins: `org.freedesktop.appearance` `reduced-motion` (1), GNOME's
+    ///   `org.gnome.desktop.interface` `enable-animations` (false) and KDE's
+    ///   `org.kde.kdeglobals.KDE` `AnimationDurationFactor` (0). With no session bus, or when the
+    ///   portal has none of the three, the user's `kdeglobals` and GTK `settings.ini` files under
+    ///   `$XDG_CONFIG_HOME` (or `~/.config`) answer instead, read once.
+    /// - Windows: Settings › Accessibility › Visual effects › Animation effects (off), through
+    ///   `UISettings`; nothing when the Windows Runtime can't be asked.
+    /// - macOS: System Settings › Accessibility › Display › Reduce motion, through `NSWorkspace`.
+    ///
+    /// Windows and macOS are read once a second, so a change shows within a second. `None` until
+    /// an answer arrives, when nothing answers, and on targets without a desktop watcher. Wake and
+    /// [`Watcher::wait_first`] behave as for [`Watcher::contrast`]. On the web use
     /// `browser_reduced_motion`.
     pub fn reduced_motion(&self) -> Option<bool> {
         match self.shared.motion.load(Ordering::Acquire) {
@@ -228,10 +287,23 @@ impl Watcher {
             _ => None,
         }
     }
+    /// GNOME's `org.gnome.desktop.interface` `text-scaling-factor` (Settings ▸ Accessibility ▸
+    /// Large Text sets 1.25) through the portal, or the `gsettings` fallback when the portal has no
+    /// such key. A finite value within 0.5..=3.0 is the scale; one outside that range or one that
+    /// doesn't parse is no scaling and gives `None`, never a clamped value. A change raises the
+    /// generation and wakes, as the other appearance values do.
+    ///
+    /// `None` where the platform does not say: other Linux desktops, macOS, Windows and the web,
+    /// which scale the whole display instead.
+    pub fn text_scale(&self) -> Option<f32> {
+        let bits = self.shared.text_scale.load(Ordering::Acquire);
+        (bits != 0).then(|| f32::from_bits(bits))
+    }
     /// Block until the first answer is known, then return it; at most `timeout`.
     ///
     /// Returns early, with `current()`, when the portal is absent and the `gsettings` fallback
-    /// found nothing, or when the desktop reports no preference. Call it once while building the
+    /// found nothing, or when the desktop reports no preference; on Windows and macOS after the
+    /// first read of the animation setting, always with `None`. Call it once while building the
     /// first frame so a light desktop does not flash dark:
     ///
     /// ```ignore
@@ -253,20 +325,7 @@ impl Watcher {
         wake: impl Fn() + Send + Sync + 'static,
         source: impl FnOnce(Arc<Shared>) -> F + Send + 'static,
     ) -> Option<Self> {
-        let gnome = is_gnome_session(&|k| std::env::var(k).ok());
-        let shared = Arc::new(Shared {
-            value: AtomicU8::new(0),
-            contrast: AtomicU8::new(0),
-            motion: AtomicU8::new(0),
-            generation: AtomicU64::new(0),
-            active: AtomicBool::new(active),
-            settled: Mutex::new(false),
-            settled_changed: Condvar::new(),
-            layout: Mutex::new(None),
-            icons: Mutex::new(None),
-            gnome,
-            wake: Box::new(wake),
-        });
+        let shared = Arc::new(Shared::new(active, Box::new(wake)));
         let worker_shared = Arc::clone(&shared);
         let (stop, stopped) = async_channel::bounded::<()>(1);
         let (done, finished) = std::sync::mpsc::channel();
@@ -283,22 +342,39 @@ impl Watcher {
                 let _ = done.send(());
             })
             .ok()?;
-        Some(Self { shared, stop, worker: Some(worker), finished })
+        Some(Self { shared, worker: Worker::Portal { stop, worker: Some(worker), finished } })
     }
 }
 impl Drop for Watcher {
     fn drop(&mut self) {
         self.set_active(false);
-        #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             self.shared.settle();
-            self.stop.close();
-            if let Some(worker) = self.worker.take() {
-                let _ = self.finished.recv_timeout(std::time::Duration::from_millis(100));
-                // Acknowledgement precedes thread-local destructors. They can block too, so
-                // never join solely on the acknowledgement (or channel disconnection).
-                if worker.is_finished() {
-                    let _ = worker.join();
+            match &mut self.worker {
+                #[cfg(all(unix, not(target_os = "macos")))]
+                Worker::Portal { stop, worker, finished } => {
+                    stop.close();
+                    if let Some(worker) = worker.take() {
+                        let _ = finished.recv_timeout(std::time::Duration::from_millis(100));
+                        // Acknowledgement precedes thread-local destructors. They can block too, so
+                        // never join solely on the acknowledgement (or channel disconnection).
+                        if worker.is_finished() {
+                            let _ = worker.join();
+                        }
+                    }
+                }
+                #[cfg(any(windows, target_os = "macos"))]
+                Worker::Native { stop, finished, thread } => {
+                    // The worker's wait between reads ends at once; a read already in an OS call
+                    // can block, so after a bounded wait an unfinished worker is detached.
+                    let _ = stop.send(());
+                    if let Some(thread) = thread.take() {
+                        let _ = finished.recv_timeout(std::time::Duration::from_millis(100));
+                        if thread.is_finished() {
+                            let _ = thread.join();
+                        }
+                    }
                 }
             }
         }
@@ -343,5 +419,9 @@ fn is_gnome_session(var: &dyn Fn(&str) -> Option<String>) -> bool {
     var("KDE_FULL_SESSION").is_none() && var("GNOME_DESKTOP_SESSION_ID").is_some()
 }
 
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod files;
+#[cfg(any(windows, target_os = "macos"))]
+mod native;
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod portal;

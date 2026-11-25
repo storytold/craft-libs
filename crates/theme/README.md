@@ -20,17 +20,15 @@ let resolved = resolve(theme, appearance, None);
 
 ## Tokens
 
-Three layers, each derived from the one before:
+Two layers, the second derived from the first:
 
 1. **Primitives**: sRGB and OKLCH colour, WCAG contrast, 12-step colour ramps, fixed scales
    (space, radius, stroke, opacity, duration, easing, elevation).
 2. **Semantic tokens**: surface, text, line, state, accent, status, overlay, data and caption
    colours; shape, size, space, motion and type tokens. Seeds (neutral, accent, four status
    colours) generate ramps, and ramps fill the tokens.
-3. **Component tokens**: one struct per component family (button, badge, check box, radio button and switch, text and number field, guide, handle, icon button, kbd, list box, marquee, progress bar, readout, ruler, segmented control, slider, swatch, toggle button, tooltip), with curated overrides.
 
-A theme sets **seeds** and may **pin** any colour token (`"surface.panel": "#F0F0F0"`), or a
-component field, per mode. Pins win over derivation. Apps can pin per app (`apps.<id>`).
+A theme sets **seeds** and may **pin** any colour token (`"surface.panel": "#F0F0F0"`) per mode. Pins win over derivation. Apps can pin per app (`apps.<id>`).
 
 ## Contrast
 

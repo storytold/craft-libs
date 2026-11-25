@@ -86,20 +86,20 @@ pub use ramp::{Mode, Ramp, RampKind};
 pub use resolve::{Resolved, resolve, resolve_sized};
 pub use scale::{Duration, Easing, Elevation, Opacity, Radius, Space, Stroke};
 pub use selection::{
-    AppChoice, AppDefaults, ContrastChoice, Fallback, ModeChoice, MotionChoice, Selection, Shown, SuiteChoice, SystemAppearance, ThemePair,
-    resolve_selection,
+    AppChoice, AppDefaults, ComponentSet, ContrastChoice, Fallback, ModeChoice, MotionChoice, Selection, Shown, SuiteChoice, SystemAppearance,
+    ThemePair, resolve_selection,
 };
 pub use stateful::{FlagMask, Flags, Mix, Resolve, StateMix, Stateful};
 pub use theme::{
-    AppOverrides, Appearance, Contrast, ContrastIntent, EdgeSeed, InterfaceFont, ModePins, ModeSeeds, PinLayer, Pins, RadiusOffset, SeedOverrides,
-    Seeds, ShapeSeed, Size, TextSize, TextSizeSteps, ThemeDef, Variants,
+    AppOverrides, Appearance, Contrast, ContrastIntent, EdgeSeed, GripSeed, InterfaceFont, LocatorSeed, ModePins, ModeSeeds, PinLayer, Pins,
+    RadiusOffset, SeedOverrides, Seeds, ShapeSeed, Size, TextSize, TextSizeSteps, ThemeDef, Variants,
 };
 pub use token_group::{GroupValues, TokenGroup};
 pub use tokens::{
     AccentColors, BarSizes, CaptionColors, ColorToken, ColorTokens, ControlSizes, DataColors, DialogSizes, DockColumnSizes, Edge, EdgeColors,
-    ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LineColors, Motion, MotionTokens,
-    NoticeSizes, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes, RulerSizes, RulerTickSizes, ShapeTokens,
-    SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StorySizes, StrokeTokens, SurfaceColors, TextColors, ThumbSamples,
+    ElevationTokens, FloatSizes, FontSlot, Gaps, GripMark, GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LetterCase,
+    LineColors, LocatorShape, Motion, MotionTokens, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes,
+    ShapeTokens, SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors, ThumbSamples,
     ThumbSizes, Tokens, TypeRole, TypeStyle, TypeTokens, WellShape, WindowSizes,
 };
 pub use values::ColorSource;

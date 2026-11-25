@@ -5,6 +5,7 @@ use crate::contract::{Bind, CollectionEvent, ColumnEvent, ColumnKind, ColumnSort
 use crate::list::{ListRow, ToggleCell};
 use crate::testing::pointer::{moved, secondary};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use crate::text::TextField;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource, Selection};
 use craft_i18n::{AgeStyle, FileSize, SizeUnit};
 use egui::Ui;
@@ -119,7 +120,7 @@ fn table(
         .striped(striped)
         .sort(sort)
         .empty("No files")
-        .selection(Bind::bound(data.value("selection", selected)))
+        .selection(data.bind("selection", selected))
         .show_items(ui, &Files(&rows), &mut |key, icx| {
             let file = &rows[*key];
             let (units, format) = (icx.env.units(), icx.env.format());
@@ -171,6 +172,27 @@ fn table_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Table<'static, usize>, covers = [Empty], drive = Drive::Never)]
 fn table_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     table(ui, data, Vec::new(), None, false, false, Selection::default())
+}
+
+/// A grid whose header titles and cells are text fields, with a remove control on each column.
+#[story(Table<'static, usize>, covers = [], drive = Drive::Never)]
+fn table_editable_grid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let rows = files(4);
+    let columns = vec![
+        ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(10.0)).removable("Remove Name column", true),
+        ColumnSpec::new(PAGES, "Pages", ColumnWidth::Controls(8.0)).removable("Remove Pages column", false),
+    ];
+    Table::<usize>::new("Grid", columns)
+        .header_field(NAME, TextField::new("Name title", Bind::kept()), |_| {})
+        .header_field(PAGES, TextField::new("Pages title", Bind::kept()), |_| {})
+        .show_items(ui, &Files(&rows), &mut |key, icx| {
+            ListRow::new(rows[*key].name.clone()).cells(icx.cells()).cell_field(NAME, TextField::new("Name", Bind::kept()), |_| {}).cell_field(
+                PAGES,
+                TextField::new("Pages", Bind::kept()),
+                |_| {},
+            )
+        })
+        .into()
 }
 
 #[story(Table<'static, usize>, covers = [], drive = Drive::Never)]

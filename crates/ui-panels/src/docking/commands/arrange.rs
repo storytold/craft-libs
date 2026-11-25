@@ -1,7 +1,7 @@
 //! The Window › Arrange commands and how they place the document windows.
 
 use crate::runtime::commands::CommandState;
-use craft_behavior::dock::{Arrangement, DocumentWindows, arrange_rects};
+use craft_behavior::dock::{Arrangement, DocumentWindows};
 use craft_behavior::placement::cascade_rects;
 use egui::{Rect, Vec2};
 use std::hash::Hash;
@@ -11,10 +11,10 @@ use std::hash::Hash;
 #[command(prefix = "arrange")]
 #[non_exhaustive]
 pub enum ArrangeCommands {
-    /// Tile every document window across the document area, side by side.
+    /// Every document in its own cell of the document area, side by side, floating windows docked first.
     #[command(label = "Tile All Vertically")]
     TileAllVertically,
-    /// Tile every document window across the document area, stacked.
+    /// Every document in its own cell of the document area, stacked, floating windows docked first.
     #[command(label = "Tile All Horizontally")]
     TileAllHorizontally,
     /// Two document groups, side by side.
@@ -154,7 +154,7 @@ impl<D> ArrangeSpace<D> {
 #[non_exhaustive]
 pub enum Arranged {
     /// The document windows changed: the host applies `DocumentWindows::to_actions`, and lays the docked groups out
-    /// with `arrange_rects` for an n-up or Tile arrangement.
+    /// with `arrange_rects` for an n-up, Tile All or Tile arrangement.
     Windows,
     /// Every document view takes the active view's zoom, location and rotation, as flagged.
     #[non_exhaustive]
@@ -174,11 +174,7 @@ pub fn arrange<D: Clone + Eq + Hash>(windows: &mut DocumentWindows<D>, command: 
     let ArrangeSpace { area, size, step, active } = space;
     let next_slot = |windows: &DocumentWindows<D>| cascade_rects(*area, *size, windows.floating.len() + 1, *step).pop();
     match arrangement {
-        Arrangement::TileAllVertically | Arrangement::TileAllHorizontally => {
-            windows.float_all(*area, *size, *step);
-            tile_floating(windows, arrangement, *area);
-        }
-        Arrangement::Tile => {
+        Arrangement::TileAllVertically | Arrangement::TileAllHorizontally | Arrangement::Tile => {
             windows.consolidate(active.as_ref());
             let documents = windows.docked.first().map_or(0, |group| group.documents.len());
             windows.split_into(documents);
@@ -220,11 +216,4 @@ pub fn arrange<D: Clone + Eq + Hash>(windows: &mut DocumentWindows<D>, command: 
         _ => {}
     }
     Arranged::Windows
-}
-
-fn tile_floating<D: Clone + Eq + Hash>(windows: &mut DocumentWindows<D>, arrangement: Arrangement, area: Rect) {
-    let Some(rects) = arrange_rects(arrangement, area, windows.floating.len()) else { return };
-    for ((_, rect), tiled) in windows.floating.iter_mut().zip(rects) {
-        *rect = tiled;
-    }
 }

@@ -19,6 +19,9 @@ craft-xml = { workspace = true }
 egui = { workspace = true, optional = true }
 craft-i18n = { workspace = true }
 craft-host = { workspace = true }
+# Chords and command refs are held in `Tracked` models.
+craft-tracked = { workspace = true }
+craft-ui-macros = { workspace = true }
 
 [dev-dependencies]
 # `serde` for setting `RawInput` fields only the suite's egui fork has.

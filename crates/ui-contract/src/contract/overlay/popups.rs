@@ -202,11 +202,17 @@ pub trait Overlays {
     fn popup(&mut self, name: &'static str) -> PopupHandle;
 }
 
+impl Overlays for CxCore<'_> {
+    fn popup(&mut self, name: &'static str) -> PopupHandle {
+        let handle = PopupHandle::new(self.id, name);
+        handle.registered(self);
+        handle
+    }
+}
+
 impl<C: Component> Overlays for Cx<'_, C> {
     fn popup(&mut self, name: &'static str) -> PopupHandle {
-        let handle = PopupHandle::new(self.core.id, name);
-        register(&self.core.ctx, self.core.id, handle.id);
-        handle
+        self.core.popup(name)
     }
 }
 
@@ -218,6 +224,9 @@ impl PopupHandle {
         let core = &mut cx.core;
         let ctx = core.ctx.clone();
         let resting = core.response.hovered() || core.focus.visible;
+        if trigger == Trigger::Context {
+            crate::runtime::egui::access::offer_context_menu(&ctx, core.id);
+        }
         let toggled = match trigger {
             Trigger::Click => core.activation.is_some(),
             Trigger::Press => {

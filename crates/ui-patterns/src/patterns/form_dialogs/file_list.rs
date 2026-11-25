@@ -20,8 +20,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The list shows this many rows, then scrolls.
 const LIST_ROWS: u16 = 6;

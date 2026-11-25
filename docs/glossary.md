@@ -49,7 +49,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `CommandGate` | The one gate that can disable commands (dialog open, workspace, recorder, pending operation) | `craft_ui::runtime::commands` | 11.3 |
 | `Commands` | The context trait on `Cx`, `BodyCx` and `ItemCx` for commands and the clipboard | `craft_ui::runtime::commands` | 11.3 |
 | `CommandSet` | A typed set of commands with one scope, written by `#[derive(CommandSet)]` and read with `take_command::<S>()` | craft-keymap (trait), `craft_ui::runtime::commands` (board) | 11.2, 11.3 |
-| `CommandState`, `CommandInput` | A command's state this frame, and the app-scope states in `FrameInput.commands` | `craft_ui::runtime::commands` | 11.3 |
+| `CommandState`, `CommandStates`, `CommandInput` | A command's state, the app-scope states an app holds in a `Tracked`, and the frame's command input in `FrameInput.commands` | `craft_ui::runtime::commands` | 11.3 |
 | `Common` | The props every component has, with no public fields | `craft_ui::contract` | 3.1 |
 | Component | Any type implementing the core trait | `craft_ui::contract` | 1.2 |
 | `ComponentStyle` | The trait every `type Style` implements, usually with `#[derive(ComponentStyle)]` | `craft_ui::style` | 4.3 |

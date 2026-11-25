@@ -11,8 +11,8 @@ use egui::{Response, Ui};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What a [`PresetFooter`] reports. A browser's footer reports these as `PresetEvent::Footer`, in order with its
 /// other events.

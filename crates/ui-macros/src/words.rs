@@ -291,6 +291,10 @@ pub(crate) fn expand_words(input: TokenStream) -> syn::Result<TokenStream> {
         #[derive(Clone, Debug)]
         #vis struct #name {
             #(#fields,)*
+            /// The generation of the `Words` the set was localized in (`Words::generation`; English is 0): what a
+            /// memoized view's key takes for the set.
+            #[doc(hidden)]
+            pub __words: u64,
         }
 
         impl #env::WordSet for #name {
@@ -298,15 +302,21 @@ pub(crate) fn expand_words(input: TokenStream) -> syn::Result<TokenStream> {
             const COUNTS: &'static [#env::Counted] = &[#(#counts),*];
 
             fn english() -> Self {
-                Self { #(#english),* }
+                Self { #(#english,)* __words: 0 }
             }
 
             fn localized_in(self, words: &#env::Words) -> Self {
-                Self { #(#localized),* }
+                Self { #(#localized,)* __words: words.generation() }
             }
 
             fn rows(&self) -> #env::WordRows {
                 #env::WordRows::new() #(#set_rows)*
+            }
+        }
+
+        impl #k::contract::MemoProps for #name {
+            fn key(&self, key: &mut #k::contract::MemoKey) {
+                #k::contract::MemoProps::key(&self.__words, key);
             }
         }
 

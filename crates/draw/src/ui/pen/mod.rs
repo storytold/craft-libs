@@ -8,8 +8,8 @@ mod auto;
 pub(crate) mod bezier;
 mod curvature_mode;
 mod mode;
-mod options;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod options;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;
@@ -20,6 +20,6 @@ pub use bezier::{
     HandlesShown, HitMark, Knot, KnotRef, MAX_ANCHORS, PathEdit, PathSelection, SegmentMark,
 };
 pub use mode::{PathMode, PathTool, PenMode};
-pub use options::{PATH_OPTIONS_COLOR_KEY, PathOptionsOutput, PathOptionsPopover, PathOptionsSettings, PathOptionsWords};
+pub use options::{HandleStyle, PATH_OPTIONS_COLOR_KEY, PathOptionsOutput, PathOptionsPopover, PathOptionsSettings, PathOptionsWords};
 pub use tool::{PenDraft, PenEnd, PenEvent, PenStyle, PenTool};
 pub use words::PenWords;

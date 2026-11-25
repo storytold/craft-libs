@@ -14,8 +14,9 @@ pub(crate) struct PartsStep {
 }
 
 /// Whether step 7 declared no parts, no roving group, no scroll part and no text, editor or selection part.
+#[cfg(feature = "testing")]
 pub(crate) fn declares_none(parts: &PartsStep) -> bool {
-    parts.decls.is_empty()
+    parts.decls.parts().is_empty()
         && parts.rovings.is_empty()
         && parts.scrolls.is_empty()
         && parts.text.decl.is_none()

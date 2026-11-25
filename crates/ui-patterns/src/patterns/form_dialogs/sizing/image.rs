@@ -1,13 +1,13 @@
 //! `ImageSize`: the Image Size dialog.
 
-use super::{Hold, Kit, LENGTH_UNITS, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
+use super::{Kit, LENGTH_UNITS, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use crate::form::Field;
+use crate::layout_components::Row;
 use crate::pickers::Select;
 use crate::runtime::env::{ColumnSize, Label, UnitKind};
-use crate::runtime::overlay::CloseReason;
 use crate::runtime::{keys, overlay};
 use craft_behavior::PixelSize;
 use craft_keymap::{Chord, Mods};
@@ -218,27 +218,27 @@ pub struct ImageSize<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
-    /// The methods the list offers, in the order of [`Resample::ALL`]; all of them when empty.
+    /// The methods the list offers, in the order given; all of them when empty.
     #[prop]
     methods: Vec<Resample>,
     /// The bytes one pixel of the flat image takes, for the file size readout: the mode's colour channels at the
     /// document's depth, no alpha (1/8 for Bitmap, 1 for Indexed).
     #[prop(quantity = "bytes per pixel")]
     bytes_per_pixel: f64,
-    /// The held OK of a hosted dialog ([`Hold`]).
-    #[prop(name = "hold_ok", vis = "pub(crate)")]
-    hold: Hold<ImageSizeValues>,
+    /// OK files the values in `held` and the dialog stays open until the host answers.
+    #[prop(vis = "pub(crate)")]
+    held: Option<&'a mut HeldAnswer<ImageSizeValues>>,
 }
 
 impl<'a> ImageSize<'a> {
     /// The dialog over `values`.
     pub fn new(values: Bind<'a, ImageSizeValues>) -> Self {
-        ImageSize { values, open: None, methods: Vec::new(), bytes_per_pixel: 4.0, hold: Hold::default() }
+        ImageSize { values, open: None, methods: Vec::new(), bytes_per_pixel: 4.0, held: None }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ImageSizeOutput {
-        let ImageSize { values, open, methods, bytes_per_pixel, hold } = self;
+        let ImageSize { values, open, methods, bytes_per_pixel, held } = self;
         let kit = Kit::new(ui).resample_off_greys_pixels();
         let entries = Resample::entries(kit.words(), &methods);
         let first_method = entries.first().and_then(|entry| entry.value().copied());
@@ -250,7 +250,7 @@ impl<'a> ImageSize<'a> {
             title,
             open,
             values,
-            hold,
+            held,
             |ui, state| {
                 if let (false, Some(first)) = (entries.iter().any(|entry| entry.value() == Some(&state.method)), first_method) {
                     state.method = first;
@@ -285,17 +285,20 @@ impl<'a> ImageSize<'a> {
                         }
                     }
                 }
-                let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
-                if let Some(on) = on.value().copied() {
-                    state.size.check_resampling(on, state.physical.get());
-                }
-                // Greyed, not hidden, while Resample is off: it keeps the method it returns to.
-                let resampling = state.size.is_resampling();
-                Field::new(words.resample_method.clone()).id_salt("method").enabled(resampling).show(ui, |ui, _| {
-                    let picked = Select::new(words.resample_method.clone(), Bind::given(state.method), &entries).show(ui);
-                    if let (true, Some(method)) = (resampling, picked.value().copied()) {
-                        state.method = method;
+                // Resample and its method share a row that starts in the control column.
+                Row::new().id_salt("resample-row").show(ui, |ui, _| {
+                    let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
+                    if let Some(on) = on.value().copied() {
+                        state.size.check_resampling(on, state.physical.get());
                     }
+                    // Greyed, not hidden, while Resample is off: it keeps the method it returns to.
+                    let resampling = state.size.is_resampling();
+                    Field::new(words.resample_method.clone()).id_salt("method").enabled(resampling).show(ui, |ui, _| {
+                        let picked = Select::new(words.resample_method.clone(), Bind::given(state.method), &entries).show(ui);
+                        if let (true, Some(method)) = (resampling, picked.value().copied()) {
+                            state.method = method;
+                        }
+                    });
                 });
                 let styles = Checkbox::new(Bind::given(state.scale_styles))
                     .label(words.scale_styles.clone())
@@ -331,9 +334,7 @@ pub struct HostedImageSize {
     /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedImageSize::held_ok)).
     hold: bool,
     /// The OK the host holds back until it answers `answer_ok`.
-    held: HeldAnswer<ImageSizeResult>,
-    /// The values the host refused the held OK for: the refusal shows until they change.
-    refused_at: Option<ImageSizeValues>,
+    held: HeldAnswer<ImageSizeValues>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -351,7 +352,6 @@ impl HostedImageSize {
             build: Box::new(build),
             hold: false,
             held: HeldAnswer::new(),
-            refused_at: None,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -377,15 +377,12 @@ impl HostedImageSize {
 
     /// The OK filed by a held dialog, once.
     pub fn take_ok(&mut self) -> Option<ImageSizeResult> {
-        self.held.take()
+        self.held.take().map(|values| values.result())
     }
 
     /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
     /// OK again and shows the label under the rows until a value changes. Without a held OK it does nothing.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        if answer.is_err() {
-            self.refused_at = Some(self.values.clone());
-        }
         self.held.answer(answer);
     }
 }
@@ -397,17 +394,19 @@ impl StackDialog for HostedImageSize {
     /// host, as its button does, and answers none; once the host accepted the held answer, it answers that.
     fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
         if self.held.is_accepted() {
-            return self.held.finish();
+            return self.held.finish().map(|values| values.result());
         }
         if self.held.is_waiting() {
             return None;
         }
-        let result = size_valid(self.values.pixels()).then(|| self.values.result())?;
-        if self.hold {
-            self.held.file(result);
+        if !size_valid(self.values.pixels()) {
             return None;
         }
-        Some(result)
+        if self.hold {
+            self.held.file(self.values.clone());
+            return None;
+        }
+        Some(self.values.result())
     }
 
     fn held_state(&self) -> Option<HeldOk> {
@@ -481,28 +480,12 @@ impl StackDialog for HostedImageSize {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ImageSizeResult>> {
-        let finish = self.held.is_accepted();
-        let hold = Hold {
-            on: self.hold,
-            finish,
-            waiting: self.held.is_waiting(),
-            refusal: self.held.refusal().zip(self.refused_at.as_ref()).map(|((reason, _), at)| (reason.clone(), at.clone())),
-        };
-        let mut shown = (self.build)(Bind::bound(&mut self.values)).hold_ok(hold).opened(Bind::bound(&mut self.open)).show(ui);
+        let dialog = (self.build)(Bind::bound(&mut self.values)).opened(Bind::bound(&mut self.open));
+        let dialog = if self.hold { dialog.held(&mut self.held) } else { dialog };
+        let shown = dialog.show(ui);
         #[cfg(feature = "testing")]
         {
             self.facts = crate::contract::Outcome::story_facts(&shown);
-        }
-        if let Some(result) = shown.held.take() {
-            self.held.file(result);
-        }
-        if self.refused_at.as_ref().is_some_and(|at| *at != self.values) {
-            self.refused_at = None;
-            self.held.clear_refusal();
-        }
-        // The host accepted the held answer: the pass that closes the dialog answers it.
-        if finish && shown.result.is_none() && matches!(shown.closed, Some(CloseReason::Activated)) {
-            return Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok));
         }
         shown.hosted()
     }

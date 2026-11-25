@@ -17,6 +17,16 @@ pub struct ItemOpener {
 }
 
 /// What the item closure reads for one item: a view over the pipeline's memory stage keyed by the item.
+///
+/// The row-hook contract. The collection measures an auto row (auto height or auto widths) at step 5, before it
+/// places its rows, from the item this closure and `Collection::dress` make with the row state known before the pass
+/// senses input: the `RowState` fields marked "measured" as step 4 read them, the depth and the set position, under
+/// the collection's env. The size of an auto row depends only on those. It must not depend on app values the body
+/// adds at step 13, the surface, focus, or the pointer and gesture state (`hovered`, `pointer_over`, `pressed`,
+/// `dragging`, `drop_target`, `menu_open`, `activated_by_key`): only the build that shows the row has them. A row
+/// whose measured state this pass's input changes (a click that selects it, a press that starts its rename) is
+/// measured again when it is built; a size other than the one the pass placed it by makes the pass run again, so
+/// the frame shows the row at its new size.
 #[non_exhaustive]
 pub struct ItemCx<'a, 'r, K> {
     /// The item's key.
@@ -43,6 +53,7 @@ pub struct ItemCx<'a, 'r, K> {
     pub(crate) id: Id,
     pub(crate) memory: &'a mut MemoryStage,
     pub(crate) tip: Option<ItemTip<'r>>,
+    pub(crate) detail: Option<ItemTip<'r>>,
     pub(crate) openers: Vec<ItemOpener>,
     pub(crate) item: Id,
     pub(crate) cells: Vec<(craft_behavior::ColumnKey, Rect)>,
@@ -73,6 +84,19 @@ impl<'r, K> ItemCx<'_, 'r, K> {
     /// Rich tooltip content for the item; it may borrow app data.
     pub fn tip(&mut self, tip: impl FnOnce(&mut Ui) + 'r) {
         self.tip = Some(Box::new(tip));
+    }
+
+    /// Shows `body` under the item, across the content width, in a child `Ui` with id `sub(item_id, "detail")`. It adds
+    /// its height to the item's slot, which keeps its last shown height out of view.
+    pub fn detail(&mut self, body: impl FnOnce(&mut Ui) + 'r) {
+        self.detail = Some(Box::new(body));
+    }
+
+    /// The detail body the item gave, for a row that takes it: one of auto height (`auto`).
+    pub(crate) fn take_detail(&mut self, auto: bool) -> Option<ItemTip<'r>> {
+        let detail = self.detail.take();
+        debug_assert!(detail.is_none() || auto, "an item's detail needs an auto-height row; a grid and a fixed-height row ignore it");
+        detail.filter(|_| auto)
     }
 
     /// The opener for the item's part `part`: after the collection is shown, `CollectionResponse::opener` gives the

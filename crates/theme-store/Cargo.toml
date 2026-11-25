@@ -14,6 +14,7 @@ autotests = false
 harness = false
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # `craft_theme_store::ui`: the Preferences appearance page and its theme chips.
 ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
@@ -33,7 +34,7 @@ craft-atomic = { workspace = true }
 dirs = "7"
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 tempfile = "3"
 
 [lints]

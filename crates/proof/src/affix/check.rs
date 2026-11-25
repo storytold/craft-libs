@@ -520,6 +520,38 @@ impl AffixDict {
         self.check_except(w, self.excluded(true))
     }
 
+    /// Validate a collected suggestion in its displayed case, before OCONV. Only identity,
+    /// first-letter and uppercase variants are allowed (including uppercase that keeps sharp s).
+    /// An exact target excluded from suggestions cannot be rescued by a lowercase fallback.
+    /// This preserves the checker's homonym, compound and CHECKSHARPS rules without scanning
+    /// stems or changing which words the spelling checker accepts.
+    pub(crate) fn can_suggest_cased(&self, original: &str, changed: &str) -> bool {
+        if original.len() > MAX_INPUT_BYTES || changed.len() > MAX_INPUT_BYTES {
+            return false;
+        }
+        if changed != original
+            && changed != capitalize(original)
+            && changed != original.to_uppercase()
+            && changed != original.split('ß').map(str::to_uppercase).collect::<Vec<_>>().join("ß")
+        {
+            return false;
+        }
+        let target = self.normalize(changed);
+        if self.is_forbidden(&target) {
+            return false;
+        }
+        // The exact simple-word path includes affixes; asking with no exclusions detects a
+        // target that may carry NOSUGGEST, SUBSTANDARD or FORBIDDENWORD. An eligible exact
+        // compound derivation still counts, but a lowercase fallback must not rescue it. Spend
+        // the same shared suggestion budget as the normal checker, and abstain if it runs out.
+        match self.simple_word_budgeted(&target, Excluded::default(), true) {
+            None => return false,
+            Some(true) if !self.contains_except(&target, self.excluded(true)) => return false,
+            _ => {}
+        }
+        self.can_suggest(changed)
+    }
+
     /// Whether `w` is a word only through a `KEEPCASE` stem, so it is correct in this letter case
     /// alone (`km` from `km/K`, which `Km` and `KM` are not).
     pub(crate) fn case_locked(&self, w: &str) -> bool {

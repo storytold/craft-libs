@@ -141,9 +141,9 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | When | eframe method | Call |
 | --- | --- | --- |
 | Once, when the app is created | with the `CreationContext` | `embed::install(ctx, InstallSpec, &UiFonts)`: the runtime, then the app's fonts. Returns the font `Stack`. |
-| Each frame | `raw_input_hook` | `embed::before_input(ctx, \|output\| { ...; input })`: the closure receives the `FrameOutput` of the frame before (fired commands, announcements, chrome toggles) and returns the `FrameInput` for this frame (`RootEnv`, command states, the `Host`). |
+| Each frame | `raw_input_hook` | `embed::before_input(ctx, \|output\| { ...; input })`: the closure receives the `FrameOutput` of the frame before (fired commands, announcements, chrome toggles) and returns the `FrameInput` for this frame (`RootEnv`, command states, the `Host`). eframe runs the hook for the main window only: an app that drops the window system's input there (an agent-driven session) sets `FrameInput::window_input(WindowInput::Dropped)` too, and the runtime drops it in every other OS window it hosts, before injected input joins. macOS Control+Click is the runtime's in every window; the app does not map it. |
 | Each frame | `logic`, after the app's own logic | `embed::logic(ctx, \|\| decision)`: the root window's close path. The closure runs only when the root window was asked to close, and returns `CloseDecision::Close` or `Hold`. |
-| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the native window on Windows, and fits the root window to its monitor once. Needs `ui-app`. |
+| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the root's native window (eframe's `Frame`, or any `raw_window_handle::HasWindowHandle`) on Windows, where the runtime answers the window's hit test (resize edges, the title bar's move area, snap layouts on the maximize button), and fits the root window to its monitor once. Native only; it needs no eframe feature of the facade. |
 | Each pass | `ui`, where the app draws its own document canvas | Optional: `ui::runtime::focus::host_canvas(ctx, id, KeyUse::CANVAS)` declares it as the window's canvas (Tab row below). |
 | Each pass | `ui`, last | Optional: `ui::runtime::keys::with_window_intents(ctx, rtl, \|intents\| ...)` reads the keys no component took (below). |
 
@@ -151,19 +151,22 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 
 | What | Effect on the app's own egui code |
 | --- | --- |
-| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below), or nothing has the focus in a window that registered no focus stop: egui then moves its own focus into the app's widgets. A window with stops but no Tab entry (on the Mac, where Tab reaches only text fields by default) keeps the Tab from egui, which would otherwise focus framework controls the platform's rule skips. With `RootEnv::tab_toggles_chrome`, Tab toggles the chrome in a window that shows a document canvas, with nothing focused or the canvas focused, and arrives in `FrameOutput::chrome_toggles`. The canvas is a framework canvas, or the app's own egui canvas declared each pass with `ui::runtime::focus::host_canvas`. With nothing focused, the canvas is the key target: a canvas that keeps Tab (`KeyUse::CANVAS.with_keep(KeepKeys::Tab)`) gets the press in egui's input, as when it is focused, and nothing toggles. |
-| F6 | F6 and Shift+F6 move between panes and never reach egui. They are the defaults of the commands `window.nextPane` and `window.previousPane` (`NavCommand`): a default chord that another command binds is that command's, and the overrides move or unbind them (`CommandInput::overrides`). An app whose own shortcut table keeps F6 unbinds them there. |
-| Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. It reaches egui only while an app's own widget has the focus (below). An Escape the runtime takes outside a captured framework press also ends egui's own drag in that pass, as egui's Escape does. |
-| F10, Alt+letter | Taken while a framework menu bar is registered: F10 (`window.focusMenuBar`, bound and yielded as F6 is) focuses the bar, Alt+letter opens a menu (not on macOS). |
+| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below), or nothing has the focus in a window that registered no focus stop: egui then moves its own focus into the app's widgets. A window with stops but no Tab entry (on the Mac, where Tab reaches only text fields by default) keeps the Tab from egui, which would otherwise focus framework controls the platform's rule skips. With `RootEnv::tab_toggles_chrome`, Tab toggles the chrome in a window that shows a document canvas, with nothing focused or the canvas focused, and arrives in `FrameOutput::chrome_toggles`. The canvas is a framework canvas, or the app's own egui canvas declared each pass with `ui::runtime::focus::host_canvas`. With nothing focused, the canvas is the key target: a canvas that keeps Tab (`KeyUse::CANVAS.with_keep(KeepKeys::Tab)`) gets the press in egui's input, as when it is focused, and nothing toggles. A focused canvas whose editor part keeps Tab reads Shift+Tab as `Intent::BackTab` (`EditorInput::BackTab`); no other stop gets it as an intent, and a text field keeps Shift+Tab as a focus move. |
+| F6 | F6 and Shift+F6 move between panes and never reach egui. They are the defaults of the commands `NavCommand::NextPane` and `NavCommand::PreviousPane` (ids `window.next_pane` and `window.previous_pane`; name them by `NavCommand::NextPane.id()` in code): a default chord that another command binds is that command's, and the overrides move or unbind them (`CommandInput::overrides`). An app whose own shortcut table keeps F6 unbinds them there. |
+| Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. A held Escape cancels once: its repeats raise no `Cancel`. It reaches egui only while an app's own widget has the focus (below). An Escape the runtime takes outside a captured framework press also ends egui's own drag in that pass, as egui's Escape does. |
+| F10, Alt+letter | Taken while a framework menu bar is registered: F10 (`NavCommand::FocusMenuBar`, id `window.focus_menu_bar`, bound and yielded as F6 is) focuses the bar, Alt+letter opens a menu (not on macOS) unless the keymap binds it to an enabled command, which runs instead. |
+| Claimed chords | The chords the app's canvas claims (`KeyUse::CANVAS.with_claims(..)` in `host_canvas`) stay in egui's input for it while it has the focus and, with nothing focused, while it is the window's key target; no command fires with them. On Windows and Linux, Alt+numpad code entry takes every other Alt+digit (egui reports keypad and top-row digits alike), so an app's Alt+digit shortcut works only when its canvas claims the chord. |
 | Edit chords | Taken while a framework editor is focused. With nothing focused, the edit chords and egui's copy, cut and paste events of the commands in the window canvas's edit set (`KeyUse::edits`, `host_canvas`) stay in egui's input for it, and no command fires with them. Otherwise egui's copy, cut and paste events become the ⌘C/X/V chord for the app's commands, unless an app's own widget has the focus (below). While egui holds a label text selection, copy and cut stay egui's, and egui copies the selection. |
 | IME | Taken while a framework editor owns the IME: its events and `PlatformOutput.ime` are the runtime's. Otherwise they stay egui's, for the app's own `TextEdit` or IME code. |
 | An app's own focused widget | While egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or drag is captured, Tab, Shift+Tab, Escape and egui's clipboard events stay in egui's input for it, and the runtime routes nothing for them. While egui focus is on such a widget, the arrows and Tab move egui focus among the app's widgets as egui does; while a framework stop has the focus, egui's arrow moves are off. |
 | Releases | The release of every key the runtime took is taken too. |
 | Focus surrender | The runtime moves its own focus on press (8.3): a press a framework component takes moves focus to it; a press no component takes drops the framework's focus. egui's click-away never takes the framework's focus. egui's surrender option (`InputOptions::surrender_focus_on`) stays the app's and governs the focus of the app's own widgets, as in egui alone: a press no component takes leaves that focus to egui's rule. |
 | Clicks | egui's click options (`InputOptions::max_click_dist`, `max_click_duration`) stay the app's, for its own widgets. A framework component clicks and drags by the framework's press lifecycle: a release within the slop (`HitSizes::slop`), whatever its duration. Read a component's click with `contract::clicked(&response)` or its output's `clicked()`; egui's `Response::clicked()` on a component's response also needs a click by egui's options. |
-| Zoom keys | egui's keyboard zoom is off. The interface scale is `RootEnv::scale`. |
-| Quit shortcuts | egui's quit shortcuts are cleared. Quit goes through the close path. |
+| Zoom keys | egui's keyboard zoom is off and nothing takes its place: the interface scale is `RootEnv::scale`, and an app whose ⌘= and ⌘- changed it binds them itself. |
+| Quit | egui's quit shortcuts are cleared. ⌘Q (Ctrl+Q on Windows and Linux) is the default of the command `QuitCommand::Quit` (id `window.quit`), which the runtime runs from any source: it asks the root window to close through the close path below, so the app's close decision asks about unsaved work. It fires with a modal open; the close path then refuses under an app-modal layer. Its default is bound and yielded as F6 is; an app whose own shortcut table reads its quit key from egui unbinds it there. |
 | Close path | The runtime's window host owns the root window's close request. `embed::logic` asks the app through its closure, then hands the close to the platform quit where there is one (macOS). |
+| Wheel | `RootEnv::wheel_speed` scales each wheel delta once; a Ctrl or Cmd wheel keeps the device's distance. The install's `WheelModifiers` set egui's zoom and sideways modifiers. On Windows and Linux, a Ctrl+wheel in fractions of a notch (a point-unit one on Linux) is a touchpad pinch and arrives as `Event::Zoom`, at egui's Ctrl-scroll zoom speed: Windows hands a precision touchpad's pinch to apps only that way. Whole notches stay wheel events, except within 0.25 s of a pinch step. An app whose Ctrl+wheel does something else, or zooms at its own rate, sets `RootEnv::ctrl_wheel_pinch(false)` and reads the wheel events itself. |
+| App modals | A modal the app draws with its own egui code blocks nothing outside egui by itself. While one shows, the app names its window each frame with `FrameInput::app_modal(Some(viewport))`: the app's other windows, panels floated into windows of their own among them, are then blocked as under a framework app-modal layer (their presses, keys, wheel and text are dropped, a press there brings the modal's window forward, and they refuse to close). |
 | Input pacing | One press per pass: extra presses in one frame wait for the next passes. A press outside an open framework menu closes the menu and goes no further. After an OS resize of the window, the held pointer is released. |
 
 The window's keys are the ones the runtime routes to no component: an Escape or a plain Enter while no framework stop is focused, and the arrows' nudge. `with_window_intents` offers them to its closure while nothing has framework focus. The closure takes what it handles (`Intents::take(Intent::Cancel)`; `Intent` and the other types `Intents` reads are in `ui::runtime::keys`) and returns whether it took anything; the rest stays for later readers. A framework scope that ran earlier in the pass takes them first (an open dialog takes the Escape that closes it), so the app reads them last in its UI to see what no component took. App code that read `Key::Escape`, `Key::Tab`, F6 or F10 from egui while none of its own widgets had focus reads these intents and `FrameOutput::chrome_toggles` instead; its own focused widgets and popups keep reading Tab and Escape from egui.
@@ -306,7 +309,7 @@ match event {
 
 **Interrupted gesture.** Besides Esc, other events end a gesture with `Cancel`; the `CancelReason` says which: `Refused`, `Dismissed`, `Escape`, `Blur`, `Removed`, `HostChanged`, `UndoDuringGesture`. For `HostChanged` and `UndoDuringGesture`, `reason.document_moved()` is true: the document changed under the gesture, so the app keeps it as it is, because a restore would also take back that change. The handler above covers all of them.
 
-**Error.** A failing service call returns a typed error, and the feature shows it in its own UI without an edit. File calls return `Result<_, FileError>`. A dismissed picker answers `Picked::Cancelled`, not an error; a picker that cannot open answers `Picked::Unavailable(cause)`.
+**Error.** A failing service call returns a typed error, and the feature shows it in its own UI without an edit. File calls return `Result<_, FileError>`. A dismissed picker answers `Picked::Cancelled`, not an error; a picker that cannot open answers `Picked::Unavailable(cause)`; a save whose write failed answers `Picked::Failed(message)`.
 
 **Async job.** Work runs on the host's `Jobs`, never on a thread a feature starts. `JobQueue` adds priorities, one job per key, replacement and cancellation. Dropping a key sets the job's cancel flag, and a cancelled job's result is never delivered.
 
@@ -319,9 +322,13 @@ while let Some(Finished { key, result }) = queue.try_recv() { show(key, result) 
 
 A pass shows the whole UI once. egui may repeat a pass within a frame (a discard pass); only the frame's last pass is painted. Within a pass, a container's contents run twice: a measuring run, then the real run. Both runs of a pass give the same result.
 
+Host code that does work once per shown frame (a frame count, a screenshot's settle count) skips it while `runtime::frame::will_rerun` is true. egui's `Context::will_discard` is not enough: layout memory requests its discard pass from egui at the end of the pass, so during the app's UI `will_discard` is still false in a pass that a changed size runs again.
+
 Content runs in every pass, and its sizes come from this pass. Layouts also read some state earlier passes left, for example a scroll area's offset and its last view and extent (step 4 and the scroll bars read them) and the sizes layout memory keeps (`runtime::layout_memory`; a changed size asks for a discard pass). The one exception to running in every pass is out-of-view content.
 
 **Layout memory.** A record of layout memory holds a measure or a text. A body whose inputs did not change takes its kept measurement instead of running a measuring run. A text that a measuring run found for content outside the body (a value readout beside a story, for example) is kept with the measurement: `layout_memory::emit_text` hands it forward, `layout_memory::text` reads it, and a body that takes its kept measurement gives the text its measuring run found. A real run that finds another text marks the kept transcript as changed.
+
+**Memoized views.** A memoized view (`MemoView::new(id, props, show).show(ui)`) runs only when one of its inputs changed, and otherwise adds its last real run to the pass again: its paint, widgets, accessibility nodes, focus stops and the other per-pass registrations, and the value its run returned. Its content is a `fn` that captures nothing, and its props (`#[derive(MemoProps)]`) hold every app input it reads, so the compiler checks that the framework sees them; large app data goes in a `Tracked<T>`, which keys by revision. The view runs when its props key differs from its last run's, when its place or environment differs (room, clip, layer, scale, theme, density, language, the scope's inherited values), when a framework input it read moved (modifiers, pointer, keymap, focus, a bound value, a command state), when it is engaged (the pointer over it, focus in it, a press or drag in it, an intent routed to it), and while something in it still moves (an animation, a loading texture, a repaint asked in its run with `frame::request_repaint`, a wake time). Input elsewhere in the window and repaint requests outside every view run no view: what changed reaches a view through its props. Content outside every memoized view runs in every pass.
 
 **Out-of-view content.** Content inside a scroll area that is out of view this pass does not run. It keeps what it last showed: the extent it had in the last pass that showed it, which changes only in a pass that shows the content, and the stops it registered there. One mechanism (`runtime::lazy`, one store) serves every use:
 
@@ -353,7 +360,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 - `Context::set_layer_order`, which moves unlisted sublayers with their listed parent
 - OpenType features per text section (epaint)
 - `IdTypeMap::insert_temp_boxed` keeps the allocation of a value taken out, and `Context::ptr_eq`
-- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled region replays its last pass's records
+- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled memoized view replays its last run's records
 - `Event::SystemTheme` reports the OS's light or dark preference
 - `egui_kittest`'s eframe harness runs `App::raw_input_hook` before each pass, as eframe does, so an app's `embed::before_input` runs in its tests
 
@@ -440,11 +447,10 @@ An app has one layout in every theme and size. A theme never changes the layout.
 Use the first step that works.
 
 1. **Density.** Compact or Comfortable.
-2. **Size overrides.** The app ships a `sizes.json` that overrides base sizes (for example `size.control.md`). A base override carries to every size derived from it. To change one component, pin that component's token. Overrides stay within the validator's limits.
-3. **Component tokens.** One named value changes a component app-wide.
-4. **Builder options.** Options cover structural differences. A new need gets a new option, not a new component.
-5. **Per-app colour overrides.** A theme file can carry a section per app. Values are theme roles or literal colours, so themes, dark mode and high contrast keep working.
-6. **One-off app components.** A last resort, built from shared pieces. Allowed and not policed.
+2. **Size overrides.** The app ships a `sizes.json` that overrides base sizes (for example `size.control.md`). A base override carries to every size derived from it. Overrides stay within the validator's limits.
+3. **Builder options.** Options cover structural differences. A new need gets a new option, not a new component.
+4. **Per-app colour overrides.** A theme file can carry a section per app. Values are theme roles or literal colours, so themes, dark mode and high contrast keep working.
+5. **One-off app components.** A last resort, built from shared pieces. Allowed and not policed.
 
 ### 4.7 Themes
 
@@ -501,9 +507,9 @@ Sizes are runtime tokens. The rule runs from the general to the specific:
 
 1. A **scale** holds the allowed values: spacing 0, 2, 4, 6, 8, 12, 16, 20, 24, 32; radius 0, 2, 3, 4, 6, 8, 12 and full; strokes hairline, 1, 1.5, 2, 3.
 2. **Semantic role tokens** pick from the scale by meaning: control height, icon size, gap, padding, radius, bar height.
-3. **Components** derive their own dimensions from the role tokens in their style: a role, or a role times a ratio named in the component's style with the rule it comes from. There are no component-specific theme values.
+3. **Components** take their layout sizes (heights, widths, padding, gaps between parts) from role tokens. A dimension that belongs to one component's own drawing, such as tick lengths, glyph geometry, a notch or an inset inside its art, is a named constant in the component's file with a doc comment (a ruler's `TICK_MINOR`), never a literal at the draw site. When it must follow density, the constant is a ratio of a role token (a story stage is 15 control heights tall). No theme or size-preset token exists for one component.
 
-Components name semantic tokens and never a pixel value or shape of their own. [Appendix A](#appendix-a-component-tokens) says which component takes which role. Only drawing details (stroke widths, chevron geometry, dash lengths) stay constants.
+[Appendix A](#appendix-a-component-tokens) says which component takes which role.
 
 **Semantic role tokens (pt).**
 
@@ -686,6 +692,7 @@ How to run each locally, and which of them CI runs, is in [development.md](devel
 ### 8.3 Design lint
 
 - Rules: `literal-size/*`, `raw-colour/const`, `style-mutation`, `tooltip/stock`, `clippy/inner-allow`.
+- `literal-size/*` flags literal sizes at a call site and names of consts with literal values, except a module- or impl-level `const` with a doc comment: that is a component constant ([5.4](#54-dimensions)), and its initializer is its definition.
 - Exemption marker: `// design: allow(reason)`. Empty, invalid and unused markers are findings.
 - Baselines and `--deny-unused` are supported.
 - Exit 0 clean, 1 findings, 2 error.
@@ -893,7 +900,7 @@ The library replaces upstream's `craft-ui` crate, and changes public items in `c
 
 ## Appendix A. Component tokens
 
-Maintainer reference. The rule is in [5.4 Dimensions](#54-dimensions): components name semantic tokens, and semantic tokens pick from the scale. This page lists which role each component takes.
+Maintainer reference. The rule is in [5.4 Dimensions](#54-dimensions): components take their layout sizes from semantic tokens, semantic tokens pick from the scale, and a dimension of one component's own drawing is a constant in its file. This page lists which role each component takes.
 
 ### Semantic colour tokens
 
@@ -987,10 +994,9 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.control.sm`, `size.control.md` | Controls, fields, buttons |
 | `size.icon.sm`, `size.icon.md`, `size.icon.lg` | Icons; `md` is the glyph of a tool strip and of a panel footer's actions (`GlyphRole::Tool`), `lg` of a tool rail (`GlyphRole::ToolRail`). A stroke-set icon draws its line `stroke.icon` of its side |
 | `size.icon.glyph_sm`, `size.icon.glyph_md` | The glyph in an icon-only button (`GlyphRole::Control`, the default; a container sets another with `ContainerProps::child_glyphs`) |
-| `size.bar.title`, `size.bar.tab`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow` | Title bar, document tab bar, status bar, options bar |
+| `size.bar.title`, `size.bar.tab`, `size.bar.tab_large`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow` | Title bar, document tab bar, document tab bar with large tabs, status bar, options bar |
 | `size.panel_header` | Panel headers |
 | `size.popup_min` | Least width of a popup surface (menus only; popup lists such as Select and ComboBox take their anchor's width) |
-| `size.scroll_fade` | Length of the fade at an edge of a scroll region past which its content continues |
 | `size.groove` | Groove of a value track |
 | `size.ramp.bar` | Colour band: a gradient ramp drawn as a bar of its own (levels output bar, gradient thumb row) or as the face of a triangle-pointer channel slider |
 | `size.ramp.groove` | Gradient drawn as the groove of a value track (faced sliders) and the span between two thumbs of a gradient's thumb row |
@@ -999,10 +1005,8 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
 | `size.length.track`, `size.length.short` | Value track, short field |
 | `size.row.text` | A row that shows text only: one body line and `space.gap.tight`; read-only display tables take it, lists the user picks from keep control-high rows |
-| `size.notice.width` | Width of a toast card where the room allows |
 | `size.dialog.least`, `size.dialog.wrap` | A dialog's content: the least width it opens at, and the line length its paragraphs wrap at (`LeastWidth::Dialog`, `WrapWidth::Dialog`); content that cannot wrap widens it past that |
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
-| `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
 | `size.hit.edge` | The band inside the edge of a canvas's view in which a tool that autoscrolls on hover scrolls the view (a Polygonal Lasso's rubber band), at most a quarter of the view's shorter side |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
@@ -1123,7 +1127,7 @@ Control channel, screenshot queue, profiler and recorded actions for tests and s
 | `protocol` | JSON-lines wire format and parameter validators | exists |
 | `security` | Tokens, the authentication handshake (challenge or one-frame token) and transport limits | exists |
 | `server` | Loopback JSON-lines TCP transport (native): `listen`, `serve`, stopped by dropping its `Listening` | exists |
-| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file, the link host and the Agents page of Preferences | exists |
+| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file and the CLI's live client (re-exported from `craft-control`), the link host and the Agents page of Preferences | exists |
 | `client` | JSON-lines client for tests and command-line tools (native) | exists |
 | `synthetic` | Synthetic pointer and keyboard input: `ui.click`, `ui.move`, `ui.key`, `ui.type` | exists |
 | `dialogs` | `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` over a `DialogHost` | exists |
@@ -1631,7 +1635,6 @@ The theme model: colour, scale and token primitives, semantic tokens, contrast r
 | `app_sizes` | An app's size overrides (`sizes.json`) | exists |
 | `builtins` | The ten built-in themes | exists |
 | `color`, `color_model` | sRGB, OKLab and OKLCH with gamut mapping; colour models a picker edits in; hex helpers | exists |
-| `components` | Component tokens, one struct per family | exists |
 | `contrast` | WCAG contrast and repair | exists |
 | `derive`, `ramp` | Seeds to ramps to tokens; 12-step ramps | exists |
 | `dump`, `explain`, `report` | Token text dump, why each colour has its value, contrast sweep | exists |

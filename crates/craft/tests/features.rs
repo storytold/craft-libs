@@ -8,7 +8,7 @@ use common::{Member, members};
 use std::collections::BTreeMap;
 
 /// Crate features forwarded by their own rule, not as `<crate>-<feature>`.
-const SHARED: &[&str] = &["ui", "screen-testing"];
+const SHARED: &[&str] = &["ui", "screen-testing", "suite"];
 
 /// Facade features that do not build for `wasm32-unknown-unknown`, noted on their line.
 const NATIVE_ONLY: &[(&str, &str)] = &[
@@ -64,6 +64,11 @@ fn expected(members: &[Member]) -> String {
     let mut testing = vec!["ui".to_owned(), "craft-ui/testing".to_owned()];
     testing.extend(forwarded_to_all(members, "screen-testing"));
     out += &line("screen-testing", &testing, None);
+    out += "\n";
+
+    let mut suite = vec!["screen-testing".to_owned(), "craft-ui/suite".to_owned()];
+    suite.extend(forwarded_to_all(members, "suite").into_iter().filter(|entry| entry != "craft-ui?/suite"));
+    out += &line("suite", &suite, None);
     out += "\n";
 
     let mut seen: BTreeMap<String, String> = BTreeMap::new();

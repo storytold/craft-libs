@@ -1,9 +1,11 @@
-mod backdrop;
+pub(crate) mod backdrop;
 
-mod painters;
+pub(crate) mod draw_place;
 
-mod surround;
+pub(crate) mod painters;
 
-mod text_place;
+pub(crate) mod surround;
 
-mod texture_store;
+pub(crate) mod text_place;
+
+pub(crate) mod texture_store;

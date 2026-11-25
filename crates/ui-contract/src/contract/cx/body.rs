@@ -28,6 +28,7 @@ pub struct BodyCx<'a> {
     gate: Option<&'a mut bool>,
     gate_mixed: bool,
     close: Option<CloseReason>,
+    exiting: bool,
     field_message: Option<(Message, craft_theme::variant::Tone)>,
     owner: Option<BodyOwner<'a>>,
 }
@@ -47,7 +48,7 @@ impl<'a> BodyCx<'a> {
         memory.claim(id);
         let (gate_mixed, field_message, owner) =
             shared.map_or((false, None, None), |shared| (shared.gate_mixed, shared.field_message, Some(shared.owner)));
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, field_message, owner }
+        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, exiting: false, field_message, owner }
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set: the opener
@@ -65,11 +66,29 @@ impl<'a> BodyCx<'a> {
         self.env.host()?.files().take_answer(ticket)
     }
 
+    pub(crate) fn with_exiting(mut self, exiting: bool) -> Self {
+        self.exiting = exiting;
+        self
+    }
+
+    /// Whether the container has closed and its body only stays on screen while it fades out. `is_open` reads true
+    /// then; a region that belongs to the open container (a companion layer) is not shown.
+    pub fn is_exiting(&self) -> bool {
+        self.exiting
+    }
+
     /// The validity message of the first control in the container's label scope, recorded last frame, with the
     /// tone it shows in: a container whose footer declares `FooterRegion::status` shows it as its status text. `None`
     /// when the container has no label or no control reported one.
     pub fn field_message(&self) -> Option<(Message, craft_theme::variant::Tone)> {
         self.field_message.clone()
+    }
+
+    /// Whether a drag of the container's move band (`DragBand::Move`) moves its layer in this pass, from the pass the
+    /// drag starts to the one before its release: a grip in the body shows the move.
+    pub fn moving(&self) -> bool {
+        let band = crate::primitives::sensing::part_press(self.memory.ctx(), self.resolved.id, crate::contract::MOVE_BAND.into());
+        matches!(band.press.phase, craft_behavior::PressPhase::DragStart { .. } | craft_behavior::PressPhase::Drag { .. })
     }
 
     /// Whether the body is open.
@@ -191,6 +210,12 @@ impl<'a> BodyCx<'a> {
 }
 
 impl BodyCx<'_> {
+    /// The value this body derives from `key`: kept while `key` is unchanged, else built by `build`
+    /// ([`runtime::derived`](crate::runtime::derived::derived), under the body's id).
+    pub fn derived<K: crate::contract::MemoProps, V: Send + Sync + 'static>(&self, key: &K, build: impl FnOnce() -> V) -> std::sync::Arc<V> {
+        crate::runtime::derived::derived(self.memory.ctx(), self.id, key, build)
+    }
+
     /// Takes the Escape of this pass that no component took: a field that clears on Escape passes it on once it
     /// is empty. `true` once per Escape; the enclosing scope (a dialog, a popover) then does not act on it.
     /// Components shown earlier in the body have run by the time the body asks.

@@ -16,8 +16,9 @@ workspace = true
 
 # UI-only: egui and craft-ui are plain dependencies, so there is no `ui` feature.
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
-# The stories, `mock` and the integration tests (`tests/it`).
+# The test kit and `mock` helpers.
 screen-testing = ["craft-ui/testing"]
 
 [dependencies]
@@ -37,4 +38,4 @@ serde_json = { workspace = true }
 name = "it"
 path = "tests/it/main.rs"
 harness = false
-required-features = ["screen-testing"]
+required-features = ["suite"]

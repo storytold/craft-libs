@@ -5,6 +5,7 @@ mod collection;
 mod container;
 mod cx;
 pub(crate) mod editor;
+pub use editor::{EditorHandle, EditorStep};
 mod entry;
 mod faces;
 pub(crate) mod footer_slot;
@@ -12,14 +13,16 @@ pub mod ghost;
 mod group;
 mod held;
 mod hosted;
-mod items;
-mod label;
+pub(crate) mod items;
+pub(crate) mod label;
 mod lazy;
-#[cfg(feature = "testing")]
-mod level;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
+pub(crate) mod level;
+#[cfg(feature = "suite")]
 mod level_table;
 mod looks;
+mod memo;
+mod memo_view;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -38,6 +41,7 @@ pub mod toast;
 pub mod tooltip;
 mod values;
 
+pub use crate::bind_tracked;
 pub use crate::layout::{BodyLayout, RowAlign};
 pub use crate::primitives::FacesCx;
 pub use crate::runtime::access::{Access, FieldLabel, GridPlace, Name, Numeric, Politeness, PopupKind, Role, SetPosition, SubNode, announce};
@@ -49,24 +53,27 @@ pub use crate::runtime::pending::{Job, Pending, Progress};
 #[doc(hidden)]
 pub use body::REORDER_BAND;
 #[doc(hidden)]
+pub use body::grip_band;
 pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
-    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRequest, ColumnSort,
-    ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest, ItemKeys, LeadOnOpen,
-    LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState, SelectMode, ShownRow,
-    SpaceAction, ToggleColumn, ToggleEdit,
+    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
+    ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DeleteTarget, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress,
+    HeaderMenuRequest, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight,
+    RowPressed, RowPreview, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
 #[doc(hidden)]
 pub use container::InMenu;
 pub use container::{
-    BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
-    Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
+    BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
+    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, SectionRhythm, ShellPane,
+    Sizing, ThemeScope, WrapWidth,
 };
-pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
+pub use craft_tracked::{PlainData, Revision, Tracked};
+pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
 #[doc(hidden)]
 pub use cx::THUMB;
 pub use cx::{
@@ -78,51 +85,57 @@ pub use footer_slot::FooterSlot;
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
 pub use hosted::{Hosted, HostedKey, Hosting};
+pub use items::item_node;
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
 pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_rename, section_part};
+pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
-pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
+pub use label::{
+    CaptionColumn, CaptionInk, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme,
+    LinkLabelInk, Scrub, SideLabel,
+};
 pub use lazy::Lazy;
 #[doc(hidden)]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
+pub use memo::{MemoKey, MemoProps, Stateless};
+pub use memo_view::{MemoView, Outbox};
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
 pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
 #[doc(hidden)]
-#[cfg(feature = "testing")]
-pub use registry::registrations;
-#[doc(hidden)]
 pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, PatternKind, PatternProbe, Probe, Registration, ShowEntry};
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindMut, EditResponse, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed, response_of};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Flags, StyleCx, StyleKey};
 pub use craft_behavior::Input;
 use craft_behavior::{CellSpace, ItemLayout, ItemSource, Proposal, ScrollPos, SelectionModel, Sense};
-use egui::{Id, IdSalt, Rect, Ui, Vec2};
+use egui::{Id, IdSalt, Pos2, Rect, Ui, Vec2};
 use run::ShowAt;
 use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "testing")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
+pub use craft_behavior::MiddleButton;
+pub use craft_behavior::ReorderKeys;
 pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
 pub(crate) use steps::queue_reveal;
+pub use steps::scroll_step;
 pub(crate) use steps::{child_reveal, peek_reveal, queue_child_reveal, take_reveal};
 pub(crate) use steps::{draft, keeping_ids};
 
@@ -348,6 +361,17 @@ pub trait Component: Meta + Sized {
     /// Whether the component or its parts can take key focus: `false` skips the stop registration of step 7, except
     /// for the roving group of a body the shape declares.
     const STOPS: bool = true;
+    /// The focus scope a leaf runs in, as `ContainerProps::focus` gives a container's: the leaf's own stop and its
+    /// parts lie inside it, and `FocusPolicy::NONE` (the default) opens none. A scope that restores
+    /// (`FocusPolicy::TAB_LAYER`) makes the stop focus came from its opener, so focus goes back there when the leaf
+    /// goes away with focus inside (a canvas text editor hands it back to the canvas). Containers and collections take
+    /// their scope from their props, not from this.
+    const FOCUS_SCOPE: crate::runtime::focus::FocusPolicy = crate::runtime::focus::FocusPolicy::NONE;
+    /// The focus scope this instance runs in. The default is `FOCUS_SCOPE`; a component whose scope is a choice of its
+    /// caller (an editor that hands focus back to where it came from, or not) overrides it.
+    fn focus_scope(&self) -> crate::runtime::focus::FocusPolicy {
+        Self::FOCUS_SCOPE
+    }
     /// Keys the focused component keeps from egui and the shortcut dispatcher.
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(Self::INPUT);
     /// The keys this instance keeps in its current state. The default is `KEYS`; a component whose key use depends
@@ -357,7 +381,8 @@ pub trait Component: Meta + Sized {
     }
     /// Whether the component paints its label as visible text. `false` for a face that shows only an icon or a
     /// glyph: with no tooltip set, its label is then its tooltip, since the label is the only visible name the
-    /// pointer can reach. A component whose answer varies per instance overrides `shows_label`.
+    /// pointer can reach. A component whose answer varies per instance overrides `shows_label`. A canvas control's
+    /// label is never its tooltip, whatever this says: its rect is the canvas, and its parts name themselves.
     const SHOWS_LABEL: bool = true;
     /// Whether the control draws only its mark and its text is the label step's, placed after it: a check box, a
     /// radio button or a switch. `Show::show` then runs the label step for an instance that carries a label and sits
@@ -390,10 +415,22 @@ pub trait Component: Meta + Sized {
         Self::SHOWS_LABEL
     }
 
+    /// The muted line a `LABELLED_AFTER` control's label shows after its text (`SideLabel::detail`), as a radio's
+    /// `detail`; none by default. It reads props only.
+    fn label_detail(&self) -> Option<crate::runtime::env::Label> {
+        None
+    }
+
     /// How far the component paints outside its rect by design, in points (a graph node's ports sit on its edge).
     /// Steps 13 and 14 clip to the rect grown by this much; the paint-bounds suite case reads it.
     fn paint_outset(_tokens: &crate::style::UiTokens) -> f32 {
         0.0
+    }
+
+    /// The variant an instance that asks for none takes in `env`; `None` takes the style's first. A variant the caller
+    /// asks for always stands. Read only `#[env(style)]` values, which the style cache keys on.
+    fn default_variant(_env: &crate::runtime::env::Env) -> Option<craft_theme::Variant> {
+        None
     }
 
     /// Pure function of the resolved context and the key.
@@ -538,6 +575,9 @@ pub trait Container: Component + HasProps + Meta<Shape = shape::Body> {
     /// Fills the footer region.
     fn footer(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
+    /// Fills the region under the body and above the footer, whatever the footer's place.
+    fn body_end(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
     /// Fills the end region, after the body.
     fn end(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
@@ -631,17 +671,25 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     }
 
     /// The width the collection asks for when it takes its width from its content, over its widest row: a grid of
-    /// cards asks for its declared number of columns. 0 asks for nothing. `item` is as `item_layout_from` gets it.
-    fn ideal_width(&self, _item: Option<Vec2>, _cx: &StyleCx<'_>) -> f32 {
+    /// cards asks for its declared number of columns. 0 asks for nothing. `item` is as `item_layout_from` gets it;
+    /// `rows` is the number of rows the source holds, for a collection whose rows stand side by side.
+    fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, _cx: &StyleCx<'_>) -> f32 {
         0.0
     }
 
-    /// A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is.
-    fn filtered<'s>(&self, _source: &'s dyn ItemSource<Self::Key>, _env: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
+    /// A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is. `kept` is the
+    /// item whose rename runs: the view keeps it whether or not it matches, so it is named in place.
+    fn filtered<'s>(
+        &self,
+        _source: &'s dyn ItemSource<Self::Key>,
+        _env: &crate::runtime::env::Env,
+        _kept: Option<&Self::Key>,
+    ) -> Option<Box<dyn ItemSource<Self::Key> + 's>> {
         None
     }
 
-    /// Adjusts the item the closure built for a row, from the row's state.
+    /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
+    /// makes, under the row-hook contract on `ItemCx`.
     fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r> {
         item
     }
@@ -651,6 +699,17 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     fn rename_editor(&mut self, _ui: &mut Ui, _draft: Bind<'_, String>, _label: Rect, _name: &str) -> Option<EditResponse<String>> {
         None
     }
+
+    /// Whether the collection hosts a component in the header cell of `column`: the header then calls `header_cell`
+    /// for it and paints no label.
+    fn hosts_header(&self, _column: &ColumnKey) -> bool {
+        false
+    }
+
+    /// Hosts a component in the header cell of `column`, in `rect`, measured and shown under `key` (the column's index
+    /// among the declared columns, so a move or a hide keeps it). Called only for a column `hosts_header` answers
+    /// `true` for.
+    fn header_cell(&mut self, _ui: &mut PaintUi<'_>, _column: &ColumnKey, _key: HostedKey, _rect: Rect) {}
 
     /// The text the rename field of the item `key` opens with; `None` for the item's own text.
     fn rename_draft(&self, _key: &Self::Key) -> Option<String> {
@@ -685,11 +744,22 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): it reports
-    /// `CollectionEvent::Zoom` and the app sets its zoom and, through `Component::scroll`, the scroll position that
-    /// keeps the content under the pointer fixed.
+    /// Whether the collection takes the zoom share of the wheel (Ctrl or Cmd with the wheel): the items step reports
+    /// it as `CollectionEvent::Zoom`. A collection that leaves the zoom to the app reports the event and the app sets
+    /// its zoom and, through `Component::scroll`, the scroll position. A collection that applies the zoom itself takes
+    /// the event and names the point to keep in place through [`Collection::zoom_anchor`], so the step keeps the row
+    /// under it where it is.
     fn zooms(&self) -> bool {
         false
+    }
+
+    /// The point whose row stays in place across a zoom step this collection takes in the current pass, in screen
+    /// points. `wheel` is the point of the `CollectionEvent::Zoom` the items step reported in this pass, `None` when
+    /// it reported none; a collection that also takes zoom keys answers the pointer it read with them. Read by the
+    /// items step in `content` of the same pass, against the layout the zoom changes from. `None` by default: the
+    /// step keeps its usual anchor.
+    fn zoom_anchor(&self, _wheel: Option<Pos2>) -> Option<Pos2> {
+        None
     }
 
     /// The height of the empty state at `width`: a `Sizing::Content` collection with no rows is this tall. The
@@ -739,31 +809,31 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 /// Shows a container with its body.
 pub trait ShowContainer: Container + sealed::ShowContainer {
     /// Shows the container in the flow of `ui`.
-    fn show<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, None)
+    fn show<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, &mut body, None)
     }
 
     /// Shows the container at `rect`, with no allocation: a frame over a split or a layer the parent places.
-    fn show_at<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, None)
+    fn show_at<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), &mut body, None)
     }
 
     /// Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies
     /// past it, as after [`show`](Self::show).
-    fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container_taking(&mut Some(self), ui, rect, body)
+    fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
+        run::show_container_taking(&mut Some(self), ui, rect, &mut body)
     }
 
     /// Measures the container with `body` without allocating: steps 1 to 5 under the id `show` would use next, with
     /// the body, header, footer and end regions run once in an invisible sizing pass, laid out as `show` lays them
     /// out. The size comes from this pass's content alone; along an axis the body scrolls on it is at most the room.
-    fn measure_in<R>(&mut self, ui: &Ui, proposal: Proposal, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Vec2 {
-        run::measure_container(self, ui, proposal, body)
+    fn measure_in<R>(&mut self, ui: &Ui, proposal: Proposal, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Vec2 {
+        run::measure_container(self, ui, proposal, &mut body)
     }
 
     /// Shows the container with rich tooltip content.
-    fn show_with_tip<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, Some(Box::new(tip)))
+    fn show_with_tip<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, &mut body, Some(Box::new(tip)))
     }
 
     /// Shows the container at `rect` with rich tooltip content.
@@ -771,10 +841,10 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
         self,
         ui: &mut Ui,
         rect: Rect,
-        body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+        mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
         tip: impl FnOnce(&mut Ui),
     ) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, Some(Box::new(tip)))
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), &mut body, Some(Box::new(tip)))
     }
 }
 

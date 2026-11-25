@@ -9,8 +9,8 @@ use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::{
-    BorderEdges, CellAlign, CellSelectionOverlay, EdgeKey, EdgePicker, RowHeight, TableGeometry, TableProperties, TableSizePicker, TableValues,
-    TextDirection,
+    BorderEdges, CellAlign, CellSelectionOverlay, EdgeKey, EdgeLook, EdgePicker, RowHeight, SampleArea, TableGeometry, TableProperties,
+    TableSizePicker, TableValues, TextDirection,
 };
 
 fn mixed_edges() -> BorderEdges {
@@ -60,19 +60,41 @@ fn edge_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(EdgePicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn edge_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    EdgePicker::new("Borders", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).into()
+    EdgePicker::new("Borders", data.bind_mixed("mixed", Mixed::Mixed)).show(ui).into()
 }
 
 #[story(EdgePicker<'static>, covers = [Invalid], drive = Drive::Never)]
 fn edge_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_none =
         |edges: &BorderEdges| if *edges == BorderEdges::default() { Validity::Refuse(Message::new("Choose a line")) } else { Validity::Ok };
-    EdgePicker::new("Borders", Bind::bound(data.value("none", BorderEdges::default())).check(refuse_none)).show(ui).into()
+    EdgePicker::new("Borders", data.bind("none", BorderEdges::default()).check(refuse_none)).show(ui).into()
 }
 
 #[story(EdgePicker<'static>, covers = [], drive = Drive::Never)]
 fn edge_picker_paragraph(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    EdgePicker::new("Paragraph borders", Bind::bound(data.value("paragraph", mixed_edges()))).paragraph().show(ui).into()
+    EdgePicker::new("Paragraph borders", data.bind("paragraph", mixed_edges())).paragraph().show(ui).into()
+}
+
+/// The borders drawn as a sample on a text run, a paragraph (with a fill) and a page.
+#[story(EdgePicker<'static>, covers = [], drive = Drive::Never)]
+fn edge_picker_sample(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (mut text, mut paragraph, mut page) = *data.value("sample", (outer_edges(), mixed_edges(), outer_edges()));
+    let tint = craft_theme::Srgba { r: 1.0, g: 0.95, b: 0.7, a: 1.0 };
+    let shown = Row::new()
+        .show(ui, |ui, _| {
+            let first =
+                EdgePicker::new("Text borders", Bind::bound(&mut text)).look(EdgeLook::Sample { area: SampleArea::Text, fill: None }).show(ui);
+            EdgePicker::new("Paragraph borders", Bind::bound(&mut paragraph))
+                .paragraph()
+                .look(EdgeLook::Sample { area: SampleArea::Paragraph, fill: Some(tint) })
+                .show(ui);
+            EdgePicker::new("Page borders", Bind::bound(&mut page)).look(EdgeLook::Sample { area: SampleArea::Page, fill: None }).show(ui);
+            StoryOutput::from(first)
+        })
+        .inner
+        .unwrap_or_default();
+    *data.value("sample", (outer_edges(), mixed_edges(), outer_edges())) = (text, paragraph, page);
+    shown
 }
 
 #[story(TableSizePicker, covers = [Default], drive = Drive::Never)]

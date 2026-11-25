@@ -114,10 +114,11 @@ fn measure(library: &dyn Library, mut scene: Box<dyn Scene>) -> Measurement {
     )
 }
 
-/// Measures every scenario of [`SCENARIOS`] on `library`.
-pub fn run_all(library: &dyn Library) -> Report {
+/// Measures every scenario of [`SCENARIOS`] on `library`, or only the one called `only`.
+pub fn run_all(library: &dyn Library, only: Option<&str>) -> Report {
     let scenarios = SCENARIOS
         .iter()
+        .filter(|scenario| only.is_none_or(|name| scenario.name == name))
         .map(|scenario| {
             eprintln!("{}: {}", library.name(), scenario.name);
             let (equivalent, missing, measurement) = match library.build(scenario.name) {

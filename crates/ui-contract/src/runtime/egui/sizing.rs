@@ -83,10 +83,12 @@ pub(crate) fn discardable(ctx: &Context) -> bool {
     ctx.current_pass_index() + 1 < ctx.options(|options| options.max_passes.get())
 }
 
-/// Runs `f` in an invisible sizing pass `width` wide, from the parent's cursor, and returns what it took.
+/// Runs `f` in an invisible sizing pass `width` wide, at the start of the rest of the parent's region, and returns
+/// what it took.
 /// The parent allocates nothing.
 pub(crate) fn run_sized<R>(ui: &mut Ui, width: f32, layout: Layout, f: impl FnOnce(&mut Ui) -> R) -> (R, Vec2) {
-    let room = Rect::from_min_size(ui.cursor().min, Vec2::new(width, f32::INFINITY));
+    // The rest of the parent's region, not its cursor: a right-to-left cursor starts at negative infinity.
+    let room = Rect::from_min_size(ui.available_rect_before_wrap().min, Vec2::new(width, f32::INFINITY));
     let mut child = ui.new_child(UiBuilder::new().max_rect(room).layout(layout).sizing_pass().invisible());
     let inner = f(&mut child);
     (inner, child.min_rect().size())

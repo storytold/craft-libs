@@ -52,10 +52,6 @@ impl Decls {
         &self.parts
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.parts.is_empty()
-    }
-
     pub(crate) fn iter(&self) -> std::iter::Zip<std::slice::Iter<'_, PartDecl>, std::slice::Iter<'_, PartExtras>> {
         self.parts.iter().zip(&self.extras)
     }
@@ -93,9 +89,18 @@ pub(crate) struct PartExtras {
     pub toggles: Option<crate::contract::overlay::ToggleDecl>,
     /// A header part at the end edge: its stop registers after the header's children.
     pub after_header: bool,
+    /// The part reports an access node of this role and name though no face is painted for it.
+    pub node: Option<(crate::runtime::access::Role, String)>,
 }
 
 impl PartBuilder<'_> {
+    /// Send a passed drag to the enclosing arena root or one of its draggable parts, retaining clicks on this part.
+    /// Declare `CLICK | PASSES_DRAG` as the part's sense.
+    pub fn drag_to_root(self) -> Self {
+        self.decl.drag_to_root = true;
+        self
+    }
+
     /// What the part senses; hover only by default.
     pub fn sense(self, sense: Sense) -> Self {
         self.decl.sense = sense;
@@ -105,6 +110,12 @@ impl PartBuilder<'_> {
     /// The part's level and sub-level in the resolve order.
     pub fn priority(self, priority: HitPriority) -> Self {
         self.decl.priority = priority;
+        self
+    }
+
+    /// The part's stacking order: stacked parts of one priority rank by it before the nearest centre, the higher winning.
+    pub fn stacking(self, order: u32) -> Self {
+        self.decl.stacking = order;
         self
     }
 
@@ -191,6 +202,14 @@ impl PartBuilder<'_> {
         self
     }
 
+    /// The part's hit area is its shape as declared, never grown to the pointer's target size (`size.hit.target`): a
+    /// frame's resize grip, whose band is sized as its reach and whose neighbours (a title row, the content) own every
+    /// point beside it.
+    pub fn exact_hit(self) -> Self {
+        self.decl.exact = true;
+        self
+    }
+
     /// The part's look is the plain state layer: the paint step fills its rect with `StyleCx::state_layer` in the
     /// part's state, under the component's paint, with control corners.
     pub fn state_layer(self) -> Self {
@@ -225,6 +244,12 @@ impl PartBuilder<'_> {
     #[doc(hidden)]
     pub fn access_click(self, on: bool) -> Self {
         self.declared.no_access_click = !on;
+        self
+    }
+
+    /// The part reports an access node of `role`, named `name`, for a part the component paints no face for.
+    pub fn node(self, role: crate::runtime::access::Role, name: impl Into<String>) -> Self {
+        self.declared.node = Some((role, name.into()));
         self
     }
 
@@ -397,18 +422,20 @@ impl<C: Component> PartsCx<'_, C> {
 
     /// Declares one axis's scroll bar: the track as part `key` and the thumb as part `key.at(THUMB)`, inside
     /// `rect`. The pipeline runs thumb drag, end drag when the span resizes its ends, and page press on the
-    /// track; `Pointer::scroll_moved(key)` reads the range the part moved to.
+    /// track; `Pointer::scroll_moved(key)` reads the range the part moved to. Both parts take a secondary press
+    /// (`Sense::CONTEXT_CLICK`), which pages nothing: a right-click on a bar is its component's, not the content's
+    /// beneath it.
     pub fn scroll(&mut self, key: PartKey, rect: Rect, axis: Axis, span: ScrollSpan) {
         let rtl = self.flow.is_rtl();
         let min_thumb = crate::style::min_thumb(self.measure.tokens);
         let thumb = crate::primitives::ScrollBar::thumb(min_thumb, rect, axis, rtl, &span);
         self.part(key, rect)
-            .sense(Sense::CLICK)
+            .sense(Sense::CLICK | Sense::CONTEXT_CLICK)
             .access_click(!thumb_covers_centre(rect, thumb, axis))
             .priority(HitPriority::new(HitLevel::Body, 0))
             .pointer_only("Page Up and Page Down scroll the region");
         self.part(key.at(THUMB), thumb)
-            .sense(Sense::DRAG)
+            .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
             .priority(HitPriority::new(HitLevel::Body, 1))
             .pointer_only("Page Up and Page Down scroll the region");
         self.scrolls.push(ScrollDecl { key, axis, rtl, track: rect, thumb, span, min_thumb });

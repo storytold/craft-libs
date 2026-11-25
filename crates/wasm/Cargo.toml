@@ -13,3 +13,5 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 wasmparser = { version = "0.261", default-features = false, features = ["std", "validate", "features", "component-model", "simd"] }
 wasmprinter = { version = "0.261", default-features = false, features = ["component-model"] }
+[dev-dependencies]
+craft-testkit = { workspace = true }

@@ -1,11 +1,13 @@
 //! Stories of the menu bar, the edit menu and the panel menu.
 
-use super::{MenuBar, MenuHelp, MenuTitle};
+use super::{MenuBar, MenuHelp, MenuTitle, MenuTitlePad};
 use crate::buttons::{IconButton, PopupMark};
-use crate::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::contract::{Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
+use crate::list::CommandHighlight;
 use crate::menu::{EditMenu, GroupItem, HelpEntry, Menu, MenuItem, PanelMenu, PanelRow};
 use crate::runtime::commands::EditCommands;
+use crate::runtime::env::with_env;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use craft_theme::ControlSize;
@@ -87,6 +89,34 @@ fn menu_bar_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     MenuBar::new("Main menu", titles()).show(ui).into()
 }
 
+/// Titles set closer (`MenuTitlePad::Control`), as an app sets it at its root for a bar whose menus share the line with
+/// many controls.
+#[story(MenuBar<'static>, covers = [], drive = Drive::Never)]
+fn menu_bar_close_titles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(MenuTitlePad::Control);
+        },
+        |ui| MenuBar::new("Main menu", titles()).show(ui),
+    )
+    .into()
+}
+
+/// The open File menu under `CommandHighlight::Hover`: the open title and the active row show the hover tint with
+/// their own ink, as an app sets it at its root for a quiet command highlight.
+#[story(MenuBar<'static>, covers = [], drive = Drive::Custom(open_file))]
+fn menu_bar_hover_highlight(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(CommandHighlight::Hover);
+        },
+        |ui| MenuBar::new("Main menu", titles()).show(ui),
+    )
+    .into()
+}
+
 #[story(MenuBar<'static>, covers = [], drive = Drive::Never)]
 fn menu_bar_with_help_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let entries = || HELP.clone();
@@ -95,7 +125,7 @@ fn menu_bar_with_help_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(EditMenu, covers = [Default], drive = Drive::Never)]
 fn edit_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    StoryOutput::from(Menu::new("Edit").open(Bind::bound(data.value("open", true))).show(ui, |ui, _| EditMenu.show(ui)).output)
+    StoryOutput::from(Menu::new("Edit").open(data.bind("open", true)).show(ui, |ui, _| EditMenu.show(ui)).output)
 }
 
 #[story(PanelMenu, covers = [Default], drive = Drive::Never)]
@@ -110,10 +140,8 @@ fn panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).popup_mark(PopupMark::Menu).label("Panel menu").show(ui);
     let mut picked = None;
-    let shown = Menu::new("Panel menu")
-        .open(Bind::bound(data.value("open", false)))
-        .opened_by(&opener, Trigger::Click)
-        .show(ui, |ui, _| picked = panel().show(ui).picked);
+    let shown =
+        Menu::new("Panel menu").open(data.bind("open", false)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| picked = panel().show(ui).picked);
     let chosen = data.note("chosen", None::<GroupItem>);
     if picked.is_some() {
         *chosen = picked;

@@ -16,7 +16,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnSpec, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::list::ListRow;
@@ -28,10 +28,13 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::table::Table;
 use egui::Ui;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+/// The OK footer button's index, in the order the buttons are given.
+const OK: usize = 0;
 
 const POSITION: ColumnKey = ColumnKey::new("position");
 const ALIGNMENT: ColumnKey = ColumnKey::new("alignment");
@@ -59,6 +62,8 @@ craft_ui::words! {
         clear: "tabs.clear" = "Clear";
         clear_all: "tabs.clearAll" = "Clear All";
         to_be_cleared: "tabs.toBeCleared" = "Tab stops to be cleared:";
+        /// The empty tab stop list's text.
+        no_stops: "tabStops.none" = "(none)";
     }
 }
 
@@ -94,6 +99,8 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 #[derive(craft_ui::contract::Pattern)]
 pub struct TabStopsDialog {
     stops: Vec<TabStop>,
+    /// The positions the paragraph's stops began at: one that no stop holds any more is cleared in the result.
+    basis: Vec<f32>,
     cleared: Vec<f32>,
     default_interval: f32,
     selected: Option<usize>,
@@ -103,6 +110,9 @@ pub struct TabStopsDialog {
     draft: Option<(usize, f32)>,
     /// The selected row's Position field takes the focus the next time it shows: Set moves into the new stop.
     to_edit: bool,
+    /// Whether OK files its result for the app to judge instead of closing.
+    hold: bool,
+    held: HeldAnswer<TabStopsResult>,
 }
 
 impl TabStopsDialog {
@@ -111,6 +121,7 @@ impl TabStopsDialog {
         stops.retain(|stop| stop.position.is_finite());
         stops.truncate(MAX_STOPS);
         TabStopsDialog {
+            basis: stops.iter().map(|stop| stop.position).collect(),
             stops,
             cleared: Vec::new(),
             default_interval,
@@ -119,6 +130,8 @@ impl TabStopsDialog {
             unit: DocUnit::default(),
             draft: None,
             to_edit: false,
+            hold: false,
+            held: HeldAnswer::new(),
         }
     }
 
@@ -213,7 +226,20 @@ impl TabStopsDialog {
     /// What OK returns: the stops normalized, the cleared positions and the default interval.
     pub fn result(&mut self) -> TabStopsResult {
         self.normalize();
-        TabStopsResult { stops: self.stops.clone(), cleared: self.cleared.clone(), default_interval: self.default_interval }
+        TabStopsResult { stops: self.stops.clone(), cleared: self.cleared_positions(), default_interval: self.default_interval }
+    }
+
+    /// The positions to clear: the ones cleared here, and the ones a stop began at that no stop holds now (a moved
+    /// stop clears its old position).
+    fn cleared_positions(&self) -> Vec<f32> {
+        let mut cleared = self.cleared.clone();
+        for at in &self.basis {
+            let held = |position: f32| (position - at).abs() < SAME_POSITION;
+            if !self.stops.iter().any(|stop| held(stop.position)) && !cleared.iter().any(|gone| held(*gone)) {
+                cleared.push(*at);
+            }
+        }
+        cleared
     }
 }
 
@@ -243,6 +269,41 @@ impl DisplayOrder<usize> for Stops<'_> {
 
 impl ItemSource<usize> for Stops<'_> {}
 
+impl TabStopsDialog {
+    /// OK files its result for the app to accept or refuse before the dialog closes.
+    #[must_use]
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
+    }
+
+    /// The result OK filed, once, for the app to judge.
+    pub fn take_ok(&mut self) -> Option<TabStopsResult> {
+        self.held.take()
+    }
+
+    /// The app's answer to the filed result: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
+    pub fn answer_ok(&mut self, answer: Result<(), craft_ui::runtime::env::Label>) {
+        self.held.answer(answer);
+    }
+
+    /// Files `result` and keeps the dialog open when OK is held; a plain dialog closes with it.
+    fn settle(&mut self, result: TabStopsResult) -> Option<TabStopsResult> {
+        if !self.hold {
+            return Some(result);
+        }
+        if !self.held.is_waiting() {
+            self.held.file(result);
+        }
+        None
+    }
+
+    /// Whether the stops, the cleared positions and the interval are those of `result`.
+    fn matches(&self, result: &TabStopsResult) -> bool {
+        self.stops == result.stops && self.cleared_positions() == result.cleared && self.default_interval == result.default_interval
+    }
+}
+
 impl StackDialog for TabStopsDialog {
     type Result = TabStopsResult;
 
@@ -251,13 +312,58 @@ impl StackDialog for TabStopsDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<TabStopsResult>> {
+        if let Some(result) = self.held.finish() {
+            return Some(DialogResult::Ok(result));
+        }
         let env = Env::of(ui);
         let words = env.words::<TabStopsWords>();
         let common = env.words::<CommonWords>();
         let units = env.units();
-        let buttons = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
-        let shown = Dialog::new(words.title.clone()).buttons(buttons).show(ui, |ui, _| self.body(ui, &words, &units));
-        shown.output.result(|| self.result())
+        let waiting = self.held.is_waiting();
+        let refused = self.held.refusal().map(|(reason, result)| (reason.clone(), result.clone()));
+        let unchanged = Cell::new(true);
+        let buttons = [
+            FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
+            FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
+        ];
+        let shown = Dialog::new(words.title.clone())
+            .buttons(buttons)
+            .settle_buttons(|_, buttons| {
+                if let Some(ok) = buttons.first_mut() {
+                    ok.set_enabled(!waiting);
+                }
+            })
+            .refusal(|| refused.as_ref().filter(|_| unchanged.get()).map(|(reason, _)| reason.clone()))
+            .show(ui, |ui, _| {
+                self.body(ui, &words, &units);
+                if let Some((_, result)) = &refused {
+                    unchanged.set(self.matches(result));
+                }
+            });
+        if refused.is_some() && !unchanged.get() {
+            self.held.clear_refusal();
+        }
+        // A held OK stays open: its pick files the answer, and only Cancel closes.
+        if self.hold && shown.output.picked == Some(OK) {
+            let result = self.result();
+            return self.settle(result).map(DialogResult::Ok);
+        }
+        match shown.output.result(|| self.result()) {
+            Some(DialogResult::Ok(result)) => self.settle(result).map(DialogResult::Ok),
+            other => other,
+        }
+    }
+
+    fn confirm(&mut self, _: &egui::Context) -> Option<TabStopsResult> {
+        if let Some(result) = self.held.finish() {
+            return Some(result);
+        }
+        let result = self.result();
+        self.settle(result)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
     }
 }
 
@@ -323,6 +429,7 @@ impl TabStopsDialog {
         let edits: RefCell<Vec<(usize, CellEdit)>> = RefCell::new(Vec::new());
         let position_ids: RefCell<Vec<(usize, egui::Id)>> = RefCell::new(Vec::new());
         let out = Table::<usize>::new(words.title.clone(), columns.clone())
+            .empty(words.no_stops.clone())
             .select(SelectMode::Single)
             .min_rows(1)
             .max_rows(6)
@@ -363,7 +470,7 @@ impl TabStopsDialog {
             }
         }
         for event in out.events {
-            if let CollectionEvent::Selection(change) = event {
+            if let CollectionEvent::Selection { change, .. } = event {
                 match change {
                     SelectionChange::Set(keys) => self.select(keys.last().copied()),
                     SelectionChange::Clear => self.select(None),

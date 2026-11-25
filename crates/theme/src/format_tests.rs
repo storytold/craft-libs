@@ -97,6 +97,27 @@ fn round_trip_keeps_values_and_unknown_keys() {
     assert_eq!(format::write(&again).unwrap(), text, "writing is stable");
 }
 
+/// An app's own `shape` replaces the theme's for that app only (WordCraft's rounded-rectangle buttons under
+/// ArtCraft's capsules), and it is written back.
+#[test]
+fn an_apps_own_shape_replaces_the_themes_for_that_app() {
+    let mut v = full();
+    v["apps"]["photocraft"]["shape"] = json!({ "button_radius": 4 });
+    let file = parse_value(&v).unwrap();
+    let id = AppId::parse("photocraft").unwrap();
+    assert_eq!(file.theme.apps.get(&id).and_then(|app| app.shape).and_then(|shape| shape.button_radius), Some(4.0));
+    let appearance = super::semantic_tests::app(Mode::Light, Contrast::Standard);
+    let own = crate::resolve(&file.theme, appearance, Some(&id)).tokens.shape.radius.button;
+    let theirs = crate::resolve(&file.theme, appearance, None).tokens.shape.radius.button;
+    assert_eq!(own, 4.0, "the app's buttons take its own radius");
+    assert_ne!(theirs, 4.0, "other apps keep the theme's");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/apps/photocraft/shape/button_radius"), Some(&json!(4.0)));
+    let mut bad = full();
+    bad["apps"]["photocraft"]["shape"] = json!({ "button_radius": -1 });
+    assert!(!errors(&bad).is_empty(), "an app's shape is checked as a theme's");
+}
+
 /// A pack set on a file without one is written; clearing it removes the key and keeps the file's unknown keys; a
 /// value that is not a well-formed pack id is an error at its key.
 #[test]
@@ -163,4 +184,72 @@ fn reference_cycles_are_errors() {
     );
     let e = errors(&with_light(json!({ "text.muted": "{text.muted}" })));
     assert_eq!(e.len(), 1, "{e:?}");
+}
+
+/// `shape.locator` sets the reference point's squares: left out, a value is the Size preset's handle size; set, the
+/// tokens take it and the file writes it back; a value of the wrong kind or out of range is an error at its key.
+#[test]
+fn the_locator_shape_is_read_resolved_written_and_checked() {
+    let appearance = super::semantic_tests::app(Mode::Dark, Contrast::Standard);
+    let plain = crate::resolve(&parse_value(&full()).unwrap().theme, appearance, None).tokens;
+    let handle = plain.size.handle;
+    assert_eq!((plain.shape.locator.cell, plain.shape.locator.square), (handle.md, handle.sm), "no locator: the preset's handles");
+
+    let mut v = full();
+    v["shape"]["locator"] = json!({ "square": 5 });
+    let file = parse_value(&v).unwrap();
+    let locator = crate::resolve(&file.theme, appearance, None).tokens.shape.locator;
+    assert_eq!((locator.cell, locator.square), (handle.md, 5.0), "a set value over the preset's");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/shape/locator/square"), Some(&json!(5.0)));
+    assert_eq!(written.pointer("/shape/locator/cell"), None, "an unset value is not written");
+
+    for (key, bad) in [("cell", json!(0)), ("cell", json!(33)), ("square", json!("small")), ("square", json!(17))] {
+        let mut v = full();
+        v["shape"]["locator"] = json!({ key: bad });
+        let found = errors(&v);
+        assert!(found.iter().any(|e| e.contains(&format!("shape.locator.{key}"))), "{key} = {bad}: {found:?}");
+    }
+}
+
+/// photocraft#16426: `shape.grip` sets the dock grips' marks. Each value is optional and keeps the default's when
+/// left out; the theme's tokens take them, the file writes them back, and a value of the wrong kind or out of range
+/// is an error at its key.
+#[test]
+fn the_grip_shape_is_read_resolved_written_and_checked() {
+    let appearance = super::semantic_tests::app(Mode::Dark, Contrast::Standard);
+    let plain = parse_value(&full()).unwrap();
+    assert_eq!(crate::resolve(&plain.theme, appearance, None).tokens.shape.grip, GripShape::DEFAULT, "no grip: the default");
+    assert_eq!(
+        GripShape::DEFAULT,
+        GripShape { mark: GripMark::Ticks, count: 11, length: 5.0, width: 1.0, gap: 1.0 },
+        "eleven ticks, five points tall: apart from the reference application's ten of four"
+    );
+
+    let mut v = full();
+    v["shape"]["grip"] = json!({ "mark": "dots", "count": 6, "width": 2, "gap": 3, "x_grip": 1 });
+    let file = parse_value(&v).unwrap();
+    let grip = crate::resolve(&file.theme, appearance, None).tokens.shape.grip;
+    assert_eq!(grip, GripShape { mark: GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 }, "set values over the default");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/shape/grip/mark"), Some(&json!("dots")));
+    assert_eq!(written.pointer("/shape/grip/count"), Some(&json!(6)));
+    assert_eq!(written.pointer("/shape/grip/length"), None, "an unset value is not written");
+    assert_eq!(written.pointer("/shape/grip/x_grip"), Some(&json!(1)), "unknown keys stay");
+    assert_eq!(format::parse(format::write(&file).unwrap().as_bytes()).unwrap().theme, file.theme);
+
+    for (key, bad) in [
+        ("mark", json!("stripes")),
+        ("count", json!(0)),
+        ("count", json!(2.5)),
+        ("count", json!(33)),
+        ("length", json!(-1)),
+        ("width", json!("thin")),
+        ("gap", json!(100)),
+    ] {
+        let mut v = full();
+        v["shape"]["grip"] = json!({ key: bad });
+        let found = errors(&v);
+        assert!(found.iter().any(|e| e.contains(&format!("shape.grip.{key}")) || e.contains(key)), "{key} = {bad}: {found:?}");
+    }
 }

@@ -2,8 +2,10 @@
 
 use craft_behavior::{DisplayOrder, ItemSource};
 use craft_ui::contract::{Bind, ShowCollection as _, ShowContainer as _};
+use craft_ui::contract::{Scroll, Show as _};
 use craft_ui::dialog::Dialog;
-use craft_ui::layout_components::Row;
+use craft_ui::display::Text;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::testing::{Fixture, trial};
@@ -52,4 +54,29 @@ fn a_dialog_with_a_filling_body_keeps_its_footer_below_the_body_and_inside_the_s
         assert!(screen.contains_rect(button.rect), "{label} is inside the screen: {:?} in {screen:?}", button.rect);
         assert!(craft_ui::testing::relations::above(body, button.rect), "{label} is below the body: {:?} under {body:?}", button.rect);
     }
+}
+
+/// photocraft#16326: a dialog whose body holds a scrolling stack that fills, under a line of other content, keeps to
+/// its share of the screen with the footer as its last row: the body leaves the footer its height instead of taking
+/// the whole room and pushing the footer past it.
+#[trial]
+fn a_dialog_with_a_filling_scroll_body_keeps_to_its_room_with_the_footer_last() {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut open = true;
+        Dialog::new("Pick").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+            Text::new("Pick a row").show(ui);
+            Stack::new().scroll(Scroll::vertical()).fill().show(ui, |ui, _| {
+                for at in 0..ROWS {
+                    Text::new(format!("Row {at}")).show(ui);
+                }
+            });
+        });
+    });
+    fixture.room(egui::Vec2::new(1200.0, 700.0)).settle();
+    let screen = fixture.ctx().content_rect();
+    let dialog = fixture.by_role(craft_ui::contract::Role::DIALOG).first().expect("the dialog shows").rect;
+    let ok = fixture.by_label("OK").expect("the footer's OK").rect;
+    assert!(screen.contains_rect(dialog), "the dialog is inside the screen: {dialog:?} in {screen:?}");
+    assert!(dialog.height() <= 0.9 * screen.height() + 1.0, "the dialog keeps to its share of the screen: {dialog:?} in {screen:?}");
+    assert!(dialog.bottom() - ok.bottom() < 20.0, "OK is the dialog's last row: {ok:?} in {dialog:?}");
 }

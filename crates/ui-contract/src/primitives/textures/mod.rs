@@ -8,7 +8,7 @@ mod words;
 
 pub use limits::{MAX_TEXTURE, fit_image, reduce_image, texture_factor, texture_side};
 pub use loader::{LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, TextureLoader};
-pub use store::{CachedTexture, Revision, TextureBudget, TextureKey, TextureState, TextureStatistics, TextureStore, TextureStoreOptions};
+pub use store::{CachedTexture, Revision, Serials, TextureBudget, TextureKey, TextureState, TextureStatistics, TextureStore, TextureStoreOptions};
 pub use words::TextureWords;
 
 /// The tint that leaves a texture's own colours as they are: every texel is multiplied by white.
@@ -20,7 +20,9 @@ mod thumbnails;
 pub use thumbnails::FakeThumbSource;
 #[cfg(feature = "testing")]
 pub(crate) use thumbnails::fake_thumb_image;
-pub use thumbnails::{ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_rect, thumb_image};
+pub use thumbnails::{
+    StateLook, ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_rect, thumb_image,
+};
 
 use crate::runtime::egui::{memory, pass, textures};
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureId, TextureOptions};
@@ -30,7 +32,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// One cached texture and the frame that last asked for it.
 struct Entry {
-    handle: TextureHandle,
+    /// `None` for a key whose image had nothing to draw.
+    handle: Option<TextureHandle>,
     used: u64,
 }
 
@@ -75,6 +78,17 @@ impl TextureCache {
     /// The texture for `key` sampled with `options` (a repeating pattern, nearest filtering); see [`Self::texture`].
     /// The options are part of the key.
     pub fn texture_with<K: Hash + 'static>(ctx: &Context, key: K, options: TextureOptions, image: impl FnOnce() -> ColorImage) -> TextureId {
+        // The image is always made, so the lookup always answers.
+        Self::lookup(ctx, key, options, || Some(image())).unwrap_or_default()
+    }
+
+    /// The texture for `key`, or `None` when `image` has nothing to draw; the answer is kept like a texture, so
+    /// `image` runs once per key. An icon layer with no part is not painted.
+    pub fn texture_if<K: Hash + 'static>(ctx: &Context, key: K, image: impl FnOnce() -> Option<ColorImage>) -> Option<TextureId> {
+        Self::lookup(ctx, key, TextureOptions::LINEAR, image)
+    }
+
+    fn lookup<K: Hash + 'static>(ctx: &Context, key: K, options: TextureOptions, image: impl FnOnce() -> Option<ColorImage>) -> Option<TextureId> {
         let mut hasher = DefaultHasher::new();
         TypeId::of::<K>().hash(&mut hasher);
         key.hash(&mut hasher);
@@ -84,16 +98,16 @@ impl TextureCache {
         let known = memory::with(ctx, |loaded: &mut Loaded| {
             loaded.handles.get_mut(&hash).map(|entry| {
                 entry.used = frame;
-                entry.handle.id()
+                entry.handle.as_ref().map(TextureHandle::id)
             })
         });
         if let Some(id) = known {
             return id;
         }
         // The image is built and uploaded outside the service lock: neither calls back into the cache.
-        let handle = textures::load(ctx, format!("craft_ui/{hash:016x}"), image(), options);
+        let handle = image().map(|image| textures::load(ctx, format!("craft_ui/{hash:016x}"), image, options));
         memory::with(ctx, |loaded: &mut Loaded| {
-            let id = loaded.handles.entry(hash).or_insert(Entry { handle, used: frame }).handle.id();
+            let id = loaded.handles.entry(hash).or_insert(Entry { handle, used: frame }).handle.as_ref().map(TextureHandle::id);
             loaded.evict(frame);
             id
         })

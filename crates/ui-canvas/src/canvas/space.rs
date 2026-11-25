@@ -11,7 +11,7 @@ use crate::primitives::PaintSlot;
 use crate::runtime::env::{AppValues, EnvValue, EnvView, UnitKind, Units};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks};
+use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks, ZoomScheme};
 use craft_keymap::Mods;
 use egui::{Pos2, Vec2};
 use std::ops::RangeInclusive;
@@ -37,9 +37,12 @@ pub struct CanvasSpace {
     canvas: Option<egui::Id>,
     pasteboard: PasteboardColor,
     precise: bool,
+    zoom_scheme: ZoomScheme,
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
+    wheel: Option<craft_behavior::Wheel>,
+    zoom_anchor: Option<Pos2>,
 }
 
 impl CanvasSpace {
@@ -59,8 +62,23 @@ impl CanvasSpace {
             canvas: None,
             pasteboard: PasteboardColor::Default,
             precise: false,
+            zoom_scheme: ZoomScheme::PHOTOSHOP,
             picture: None,
+            wheel: None,
+            zoom_anchor: None,
         }
+    }
+
+    /// The wheel share the canvas read this pass, for a body that pages by wheel to read once.
+    pub fn wheel(&self) -> Option<craft_behavior::Wheel> {
+        self.wheel
+    }
+
+    /// This space with the wheel share the canvas read this pass.
+    #[must_use]
+    pub fn with_wheel(mut self, wheel: Option<craft_behavior::Wheel>) -> Self {
+        self.wheel = wheel;
+        self
     }
 
     /// This space for a pass in which the app's tool moves the view with the pointer
@@ -156,6 +174,18 @@ impl CanvasSpace {
         }
     }
 
+    /// The zoom scheme of the root env, published for the body and the tool: the rungs, range and 100 % they zoom by.
+    pub fn zoom_scheme(&self) -> ZoomScheme {
+        self.zoom_scheme
+    }
+
+    /// This space with the root env's zoom `scheme`.
+    #[must_use]
+    pub(crate) fn with_zoom_scheme(mut self, scheme: ZoomScheme) -> Self {
+        self.zoom_scheme = scheme;
+        self
+    }
+
     /// This space with the canvas's picture slot of this pass.
     #[must_use]
     pub(crate) fn with_picture(mut self, slot: PaintSlot) -> Self {
@@ -211,9 +241,44 @@ impl CanvasSpace {
         self.easing
     }
 
-    /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
+    /// The screen point the wheel or a pinch zoomed about in this pass, in the canvas root's screen space; `None` when
+    /// neither zoomed (a view command zooms about the centre). A body that keeps its own view state anchors its zoom
+    /// here: the canvas clamps the zoomed view to the document after, which can move the centre (a document no wider
+    /// than the view stays centred), so the change of centre no longer tells which point stayed still.
+    pub fn zoom_anchor(&self) -> Option<Pos2> {
+        self.zoom_anchor
+    }
+
+    /// This space with the point a zoom of this pass kept still ([`zoom_anchor`](Self::zoom_anchor)).
+    #[must_use]
+    pub fn with_zoom_anchor(mut self, anchor: Option<Pos2>) -> Self {
+        self.zoom_anchor = anchor;
+        self
+    }
+
+    /// The page keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
     pub fn keys(&self) -> BodyKeys {
         self.keys
+    }
+
+    /// Takes this pass's arrow that nothing in the canvas's body took: the one routed to the focused canvas, or, with
+    /// nothing in the window focused, the window's. A body that pages its document itself
+    /// ([`Canvas::keys_to_body`](super::Canvas)) runs its tool host and controls first, which take the arrows a tool
+    /// or a session claims, and moves its view with what is left in the same pass. `None` when the arrow was taken,
+    /// or there was none; a measuring run reads it without taking it.
+    pub fn take_nudge(&self, ctx: &egui::Context) -> Option<(Vec2, Mods)> {
+        let canvas = self.canvas?;
+        let mut own = crate::runtime::keys::intents_of(ctx, Some(canvas), false);
+        if let Some(nudge) = own.take_nudge() {
+            crate::runtime::keys::settle(ctx, Some(canvas), &own);
+            return Some(nudge);
+        }
+        let mut nudge = None;
+        crate::runtime::keys::with_canvas_window_intents(ctx, false, |window| {
+            nudge = window.take_nudge();
+            nudge.is_some()
+        });
+        nudge
     }
 
     /// Device pixels per document unit (1 is 100 %) of the view at this scale.
@@ -299,15 +364,14 @@ pub struct BackgroundPress {
     pub context_key: bool,
 }
 
-/// The keys a canvas that leaves them to its body took in a pass, one of each kind: a key held down repeats over
-/// passes, not within one.
+/// The page keys a canvas that leaves them to its body took in a pass: a key held down repeats over passes, not
+/// within one. The arrows stay with the body's tool host and controls first; the body takes what they left with
+/// [`CanvasSpace::take_nudge`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct BodyKeys {
     /// Page Up, Page Down, Home or End, with the modifiers held.
     pub page: Option<(NavMove, MoveMods)>,
-    /// An arrow: a unit direction on screen and the modifiers held.
-    pub nudge: Option<(Vec2, Mods)>,
 }
 
 impl BackgroundPress {
@@ -323,12 +387,13 @@ impl BackgroundPress {
 }
 
 /// Where `press` is the release of a secondary press: the one reading of a context press from a part's press. The press
-/// machine captures a secondary press only for a part that senses a drag or a `CONTEXT_CLICK`, so the release is the
-/// request whether or not the pointer moved.
+/// machine gives a secondary press only to a part that senses `CONTEXT_CLICK`, so the release is the request whether
+/// or not the pointer moved. A secondary press made during another open press (a right-click during a drag) comes up
+/// beside that press's phase, as `PressState::context`, and is the request too.
 pub fn context_click(press: &PressState) -> Option<Pos2> {
     match press.phase {
         PressPhase::Release { start, pos, .. } if start.button == PointerButton::Secondary => Some(pos),
-        _ => None,
+        _ => press.context,
     }
 }
 
@@ -347,13 +412,37 @@ pub(crate) fn context_menu<C: Component>(cx: &mut Cx<'_, C>, part: impl Into<Par
 
 /// The env value that carries the space of the innermost canvas; `None` outside a canvas and inside a canvas that
 /// has no view.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InCanvas(Option<CanvasSpace>);
 
 impl EnvValue for InCanvas {
     fn root() -> Self {
         InCanvas(None)
     }
+}
+
+/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass: a view under the
+/// canvas runs in every pass of the drag (`GuideDrag` keys in every pass), and replays when no drag is placing one.
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+struct InRulerGuide(Option<super::GuideDrag>);
+
+impl EnvValue for InRulerGuide {
+    fn root() -> Self {
+        InRulerGuide(None)
+    }
+}
+
+/// Publishes the ruler guide of this pass (or none) to a canvas's body.
+pub(super) fn publish_ruler_guide(values: &mut AppValues, guide: Option<super::GuideDrag>) {
+    values.set(InRulerGuide(guide));
+}
+
+/// The guide a drag out of the rulers of the innermost `Canvas` around the component is placing in this pass, as the
+/// rulers report it ([`RulersOutput::guide`](super::RulersOutput::guide)); `Guides` shows and commits it. `None`
+/// outside a canvas, when the canvas shows no rulers, and while no drag runs.
+pub fn ruler_guide(env: &EnvView<'_>) -> Option<super::GuideDrag> {
+    env.get::<InRulerGuide>().0
 }
 
 /// Publishes `space` (or none) to a canvas's body.
@@ -370,6 +459,17 @@ pub(super) fn publish(values: &mut AppValues, space: Option<CanvasSpace>) {
 /// a control that registers in screen space must not also read through it.
 pub fn canvas_space(env: &EnvView<'_>) -> Option<CanvasSpace> {
     env.get::<InCanvas>().0
+}
+
+/// Runs `body` with `space` as the canvas space inherited by its controls.
+pub fn with_canvas_space<R>(ui: &mut egui::Ui, space: CanvasSpace, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(InCanvas(Some(space)));
+        },
+        body,
+    )
 }
 
 /// The text of one axis' ruler units: its tick maths with the unit kind it is written in, over `Units` (the one
@@ -390,7 +490,7 @@ impl PartialEq for RulerText {
             (Ticks::Custom(a), Ticks::Custom(b)) => std::ptr::fn_addr_eq(a, b),
             _ => false,
         };
-        self.kind == other.kind && self.units.per_doc == other.units.per_doc && same_ticks
+        self.kind == other.kind && self.units.per_doc == other.units.per_doc && same_ticks && self.units.labels == other.units.labels
     }
 }
 
@@ -414,10 +514,9 @@ impl RulerText {
     }
 
     /// The number a ruler prints at the tick `value` (ruler units from the zero point) of labelled step `step`, with
-    /// no unit.
+    /// no unit, as the units' [`TickLabels`](craft_behavior::TickLabels) write it.
     pub fn tick_label(&self, numbers: &Units, value: f64, step: f64) -> String {
-        let digits = self.units.label_decimals(step);
-        numbers.number_ungrouped(self.units.label_value(value, step), digits..=digits)
+        numbers.number_ungrouped(self.units.label_value(value, step), self.units.label_decimals(step))
     }
 
     /// The unit's short name: `px`.
