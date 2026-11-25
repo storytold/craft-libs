@@ -1025,8 +1025,8 @@ fn a_command_the_app_runs_itself_shows_its_chord_and_its_key_fires_nothing() {
     assert!(texts.iter().any(|(text, _)| text == "J"), "a bound command shows its chord too: {texts:?}");
     assert_eq!(fired, ["trial.mark"], "the same key fires the command when the keymap runs it");
     // This case's press stays in egui's input as the app's does: the key stage leaves every press a shortcut may match
-    // to egui, and routing withdraws only a focused component's held ones. `kept` therefore tells the two cases apart
-    // in neither, and the fired list is what does.
+    // to egui, and routing withdraws only a focused component's held ones. So `kept` separates the two cases not at
+    // all; the fired list does.
 }
 
 #[trial]
