@@ -231,11 +231,10 @@ impl State {
 
     /// Whether `id`, holding egui focus, is an app's own widget: as `made` says, no widget a component made
     /// (`pointer::made_by_component`), and the root of no stop but the one every focusable egui widget of the app has
-    /// (`Stop::host` with default keys). The app's canvas (`host_canvas`, `KeyUse::chrome_key`) is none: its declared
+    /// (`Stop::automatic`). The app's canvas (`host_canvas`, `KeyUse::chrome_key`) is none: its declared
     /// keys route as a framework stop's do, so egui's arrows and Tab never move focus off it.
     pub(super) fn app_widget(&self, id: Id, made: bool) -> bool {
-        let automatic = |rec: &StopRec| rec.stop.host && !rec.stop.keys.chrome_key;
-        !made && !self.stops.iter().chain(&self.last_stops).any(|rec| !automatic(rec) && (rec.stop.root == id || rec.stop.key() == (id, None)))
+        !made && !self.stops.iter().chain(&self.last_stops).any(|rec| !rec.stop.automatic() && (rec.stop.root == id || rec.stop.key() == (id, None)))
     }
 
     /// Moves focus to `rec` and asks the enclosing scroll owner to reveal it: the egui widget is its root, and the stop
