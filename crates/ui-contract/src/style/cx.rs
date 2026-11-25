@@ -289,6 +289,19 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::non_text_contrast_min(self.contrast())))
+    }
+
     /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
     /// needs: the inverse of [`ink_on`](Self::ink_on).
     pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
@@ -402,6 +415,24 @@ impl<'a> StyleCx<'a> {
         match self.size {
             ControlSize::Sm => self.control().height,
             ControlSize::Md => grown(self.tokens, self.tokens.size.button, self.line_ratio),
+        }
+    }
+
+    /// The height of a dialog's footer button at the ambient size: `size.dialog.button_height` at the medium size, grown
+    /// as a control's height is; a small button stands a small control high.
+    pub fn dialog_button_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.dialog.button_height, self.line_ratio),
+        }
+    }
+
+    /// The height of a menu row at the ambient size: `size.row.menu` at the medium size, grown as a control's height
+    /// is; a small row stands a small control high.
+    pub fn menu_row_height(&self) -> f32 {
+        match self.size {
+            ControlSize::Sm => self.control().height,
+            ControlSize::Md => grown(self.tokens, self.tokens.size.row.menu, self.line_ratio),
         }
     }
 

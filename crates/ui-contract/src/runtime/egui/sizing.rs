@@ -69,7 +69,7 @@ pub(crate) fn request_discard(ctx: &Context, rerun: Rerun) {
 /// Why the running pass runs again: `None` in a frame's first pass, else the reasons the discarded pass asked for
 /// (empty when egui discarded it on its own).
 pub(crate) fn rerun_reasons(ctx: &Context) -> Option<Vec<Rerun>> {
-    if ctx.current_pass_index() == 0 {
+    if super::pass::first_of_frame(ctx) {
         return None;
     }
     let (id, pass) = (asked_id(ctx), running_pass(ctx));
