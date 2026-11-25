@@ -104,6 +104,7 @@ The host handles these `DockEvent`s:
 | `title_bar_docks` | on | Dragging a floating window's title bar onto a target docks the whole window. |
 | `close_menu_items`, `close_button` | on | Built-in Close items, and the close action on floating windows. |
 | `tab_close_buttons` | off | Close buttons on tabs (middle click closes too), for tabs that act as documents. |
+| `tab_shrink` | `PanelTabShrink::FirstLetters` | How far panel tabs shrink before they overflow: to their first letters, clipped at the tab's edge, or with `PanelTabShrink::Ellipsis` each to a readable prefix ending in "…" (`TextRun::READABLE_CHARACTERS` characters), the shown tab too, the tabs that do not fit at that width going to the strip's overflow menu. |
 | `panel_menu_always` | off | Every group shows its panel menu button, with the dock's own rows when the shown panel has none. Off: only a panel with rows of its own (`DockPanels::panel_rows`) gets the button. |
 | `panel_menu_icon` | `more` | The panel menu button's icon; `menu` gives the three-line mark. |
 | `native_windows` | on | Floating windows open as OS windows where the window host opens them and reports their positions (not on Wayland) and `PanelSpec::allow_native` allows. |

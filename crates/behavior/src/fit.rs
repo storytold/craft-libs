@@ -1,6 +1,7 @@
-//! The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
-//! [`fit_whole`] assign tab widths (tabs shrink before they overflow, or keep their width); [`fit_items`] shortens
-//! items that have a short form, then drops command items and titles from the end. All of them read no egui types.
+//! The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`],
+//! [`fit_to_least`] and [`fit_whole`] assign tab widths (tabs shrink before they overflow, or keep their width);
+//! [`fit_items`] shortens items that have a short form, then drops command items and titles from the end. All of them
+//! read no egui types.
 
 /// Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -175,10 +176,61 @@ pub fn fit_whole(natural: &[f32], selected: usize, kept: &[bool], available: f32
     TabFit { shown, overflow, overflow_width }
 }
 
+/// Fit tab widths into `available` points, each tab shrinking to its own `least` before any tab overflows.
+/// Every tab shrinks, the selected one too: the widest tabs shrink first to a common cap, and each keeps at least
+/// `min(natural, least)` of its own. Only when the tabs do not all fit at their least is an overflow button
+/// `overflow_width` wide reserved; the selected tab stays, the others follow in order while their least widths fit
+/// beside it, and the rest overflow, the last ones first. A selected tab whose least alone is wider than the strip
+/// less the button takes the room left. A tab past the end of `least` keeps its natural width as its least.
+///
+/// Dimensions are sanitized as in [`fit`], and the shown widths plus `overflow_width` never exceed the sanitized
+/// available width. Work and storage are linear in the input count (with at most 32 fitting passes).
+pub fn fit_to_least(natural: &[f32], least: &[f32], selected: usize, available: f32, overflow_width: f32) -> TabFit {
+    let available = tab_extent(available);
+    let natural: Vec<f32> = natural.iter().map(|&w| tab_extent(w)).collect();
+    let floors: Vec<f32> = natural.iter().enumerate().map(|(i, &w)| least.get(i).map_or(w, |&least| w.min(tab_extent(least)))).collect();
+    let all: Vec<usize> = (0..natural.len()).collect();
+    let total = |widths: &[f32]| widths.iter().map(|&w| f64::from(w)).sum::<f64>();
+    if total(natural.as_slice()) <= f64::from(available) {
+        return TabFit { shown: all.into_iter().zip(natural).collect(), ..Default::default() };
+    }
+    // One tab has nowhere to overflow; all available space belongs to it.
+    if natural.len() == 1 {
+        return TabFit { shown: vec![(0, available)], ..Default::default() };
+    }
+    let floor = |i: usize| floors.get(i).copied().unwrap_or(0.0);
+    if total(floors.as_slice()) <= f64::from(available) {
+        return TabFit { shown: squeeze_floored(&natural, &all, available, 0.0, floor), ..Default::default() };
+    }
+    let overflow_width = tab_extent(overflow_width).min(available);
+    let budget = available - overflow_width;
+    let selected = selected.min(natural.len().saturating_sub(1));
+    let mut used = f64::from(floor(selected));
+    let mut open = true;
+    let (shown, overflow): (Vec<usize>, Vec<usize>) = all.into_iter().partition(|&i| {
+        if i == selected {
+            return true;
+        }
+        open = open && used + f64::from(floor(i)) <= f64::from(budget);
+        if open {
+            used += f64::from(floor(i));
+        }
+        open
+    });
+    let shown = squeeze_floored(&natural, &shown, budget, 0.0, floor);
+    TabFit { shown, overflow, overflow_width }
+}
+
 fn squeeze(natural: &[f32], indices: &[usize], total: f32, minimum: f32) -> Vec<(usize, f32)> {
+    squeeze_floored(natural, indices, total, minimum, |i| natural.get(i).copied().unwrap_or(0.0).min(minimum))
+}
+
+/// Shrinks the tabs at `indices` into `total` to a common cap, found between `start` and the widest natural width,
+/// each tab keeping at least its `floor`.
+fn squeeze_floored(natural: &[f32], indices: &[usize], total: f32, start: f32, floor: impl Fn(usize) -> f32) -> Vec<(usize, f32)> {
     let width = |i: usize| natural.get(i).copied().unwrap_or(0.0);
-    let sum_at = |cap: f32| indices.iter().map(|&i| f64::from(width(i).min(cap.max(width(i).min(minimum))))).sum::<f64>();
-    let (mut lo, mut hi) = (minimum, indices.iter().map(|&i| width(i)).fold(minimum, f32::max));
+    let sum_at = |cap: f32| indices.iter().map(|&i| f64::from(width(i).min(cap.max(floor(i))))).sum::<f64>();
+    let (mut lo, mut hi) = (start, indices.iter().map(|&i| width(i)).fold(start, f32::max));
     if sum_at(hi) > f64::from(total) {
         for _ in 0..32 {
             let mid = lo + (hi - lo) * 0.5;
@@ -198,7 +250,7 @@ fn squeeze(natural: &[f32], indices: &[usize], total: f32, minimum: f32) -> Vec<
             let natural = width(i);
             // Also handles a selected tab whose minimum alone exceeds the budget, and prevents
             // accumulated floating-point rounding from placing the overflow button past the end.
-            let width = natural.min(lo.max(natural.min(minimum))).min(remaining);
+            let width = natural.min(lo.max(floor(i))).min(remaining);
             remaining = (remaining - width).max(0.0);
             (i, width)
         })

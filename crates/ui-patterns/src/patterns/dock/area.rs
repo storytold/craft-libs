@@ -1198,6 +1198,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .panel_menu_shown(*hosted || scene.config.panel_menu_always)
                 .panel_menu_icon(scene.config.panel_menu_icon.clone())
                 .tab_look(scene.config.tab_look)
+                .tab_shrink(scene.config.tab_shrink)
                 .command_states(states.clone());
             if look.in_window {
                 group = group.in_window();
