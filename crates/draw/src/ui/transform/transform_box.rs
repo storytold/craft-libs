@@ -678,6 +678,7 @@ impl<'a> TransformBox<'a> {
     /// - The reference point snaps to the nine points of the box at the press (corners, edge midpoints, centre) and
     ///   to nothing else, with or without the canvas's snap, the Control key held or not.
     /// - In [`TransformMode::Distort`] only the corners snap, and to guides only. The outside (rotating) never snaps.
+    /// - In [`TransformMode::Perspective`] a corner snaps to guides only; its sides and its inside snap as elsewhere.
     /// - The canvas's suspend key (Control by default) suspends the snapping unless the drag reads it
     ///   ([`reads_suspend_key`](Self::reads_suspend_key)). The snap reads the keys as held; the drag acts on them as
     ///   [`drag_mods`] leaves them, so with Alt as the suspend key Alt only suspends.
@@ -688,7 +689,11 @@ impl<'a> TransformBox<'a> {
         let kind = self.rules.drag_kind(grip.part, acting);
         let distort_mode = self.rules.effective_mode() == TransformMode::Distort;
         let kinds = if distort_mode { SnapKinds::only(SnapKind::Guide) } else { SnapKinds::ALL };
-        let gesture = GestureSnap::default().reads_suspend_key(self.reads_suspend_key(grip.part, acting, suspend)).kinds(kinds);
+        // A Perspective mode corner snaps as a Distort corner does, to guides only: the reference application leaves it
+        // where the drag puts it next to the document's centre lines and edges.
+        let perspective_corner = self.rules.effective_mode() == TransformMode::Perspective && matches!(grip.part, BoxPart::Corner(_));
+        let point_kinds = if perspective_corner { SnapKinds::only(SnapKind::Guide) } else { kinds };
+        let gesture = GestureSnap::default().reads_suspend_key(self.reads_suspend_key(grip.part, acting, suspend)).kinds(point_kinds);
         let grabbed = handle_point(&grip.start, grip.part);
         let (to, mut lines) = match (grip.part, snap, grabbed) {
             (BoxPart::Pivot, _, Some(grabbed)) if !distort_mode => {

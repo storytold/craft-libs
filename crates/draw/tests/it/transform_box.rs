@@ -1305,6 +1305,28 @@ fn a_distort_corner_snaps_to_guides_only_past_the_diagonal_too() {
     assert_eq!(h.host.borrow().snapped, 2, "both guide lines");
 }
 
+/// A Perspective mode corner snaps to guides only: next to the document's centre line or edge it stays where the drag
+/// puts it, as a Distort corner does (the reference application, 2026-11-25: a corner dragged to
+/// 3 px from the document's centre line, and one to 3 px from its top edge with its partner 1 px from the bottom edge,
+/// stayed where the drag put them).
+#[trial]
+fn a_perspective_corner_snaps_to_guides_only() {
+    for (kind, y) in [(SnapKind::Center, 227.0), (SnapKind::Bounds, 227.0), (SnapKind::Guide, 230.0)] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.rules = BoxRules::in_mode(TransformMode::Perspective);
+            config.targets = vec![SnapTarget::new(craft_behavior::Axis::X, 230.0, kind)];
+        });
+        let from = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(0.0, 4.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(0.0, 7.0))]);
+        let corner = h.state().quad[2];
+        assert!((corner.y - y).abs() < 1e-6 && (corner.x - 300.0).abs() < 1e-6, "{kind:?}: {corner:?}");
+    }
+}
+
 /// Off macOS Control is ⌘: on an explicit Distort corner it keeps the snapping, in Skew and Perspective it suspends it.
 #[trial]
 fn control_keeps_snapping_on_an_explicit_distort_corner_only() {
