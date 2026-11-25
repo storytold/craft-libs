@@ -507,6 +507,82 @@ fn hosted_fields_take_their_own_height_up_to_the_row() {
     }
 }
 
+/// A hosted component with no node of its own that shows a button from `paint`, beside a side label when `labelled`.
+#[derive(craft_ui::contract::Component)]
+struct Cells {
+    #[common]
+    common: craft_ui::contract::Common,
+    button: String,
+    labelled: bool,
+}
+
+impl craft_ui::contract::Component for Cells {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::None;
+    const SHOWS_LABEL: bool = false;
+    type Style = super::label::kit::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: CellsStyleKey) -> super::label::kit::PlainStyle {
+        super::label::kit::PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(60.0, 20.0)
+    }
+
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut craft_ui::contract::PaintUi<'_>, cx: &craft_ui::contract::Cx<'_, Self>) {
+        let text = std::mem::take(&mut self.button);
+        let label = format!("Side of {text}");
+        let button = craft_ui::buttons::Button::new(text);
+        if self.labelled {
+            let side = craft_ui::contract::SideLabel::new().role(craft_ui::contract::FieldLabelRole::Describes);
+            ui.labelled("button", cx.content_rect, label.into(), side, button);
+        } else {
+            ui.child("button", cx.content_rect, button);
+        }
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// A button that a row's hosted component without a node shows from its `paint`, alone or with a side label, sits
+/// under that row's node with the label, as a hosted button does.
+#[trial]
+fn a_button_painted_by_a_hosted_component_without_a_node_sits_under_its_row() {
+    use craft_ui::buttons::Button;
+    let row = |key: usize| {
+        let cells = |button: String, labelled| Cells { common: craft_ui::contract::Common::new(), button, labelled };
+        ListRow::new(NAMES[key])
+            .trailing_field(Button::new(format!("Plain {key}")), |_| {})
+            .trailing_field(cells(format!("Painted {key}"), false), |_| {})
+            .trailing_field(cells(format!("Labelled {key}"), true), |_| {})
+    };
+    let (fixture, _) = rows_rig(Vec2::new(800.0, 200.0), row);
+    let tree = fixture.tree();
+    let above = |name: &str| {
+        let mut nodes = Vec::new();
+        let mut at = fixture.by_label(name).unwrap_or_else(|| panic!("{name} shows")).node;
+        while let Some(parent) = tree.parent_of_key(at) {
+            nodes.push(parent);
+            at = parent;
+        }
+        nodes
+    };
+    for (key, row) in NAMES.iter().enumerate() {
+        let row = fixture.by_label(row).expect("the row shows").node;
+        for name in [format!("Plain {key}"), format!("Painted {key}"), format!("Labelled {key}"), format!("Side of Labelled {key}")] {
+            let nodes = above(&name);
+            assert!(nodes.contains(&row), "{name} is under row {key}: {nodes:?}");
+        }
+    }
+}
+
 /// A list sized to its content makes room for each row's optional item and shows its label whole, whether the label
 /// is shorter or longer than its least width.
 #[trial]
