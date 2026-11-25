@@ -302,6 +302,25 @@ pub(in crate::docking) fn viewport_id(area: Id, window: u64, n: usize) -> Viewpo
     }
 }
 
+/// Where the native window `window` of the dock area `area` is, as the area takes it when it
+/// next draws. See [`crate::docking::native_place`].
+pub(in crate::docking) fn native_place<P>(ctx: &Context, area: Id, window: &Floating<P>) -> Option<[f32; 4]> {
+    let viewport = viewport_id(area, window.id, 0);
+    let place = ctx.data(|d| d.get_temp::<Place>(area.with(("native-place", viewport))))?;
+    let moving = ctx.data(|d| d.get_temp::<WindowDrag>(area.with("window-drag"))).is_some_and(|d| d.window == window.id);
+    // The application changed the window's place since the area last drew: it moves there.
+    if let Some(native) = window.native.filter(|native| !moving && differs(*native, place.known)) {
+        return Some(native);
+    }
+    let now = ctx.input(|i| i.time);
+    if moving || place.pending.is_some_and(|until| now < until) {
+        return Some(place.known);
+    }
+    // The collapsed height a minimized window reports is not the size to keep.
+    let reported = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(placed));
+    Some(reported.map_or(place.known, |[x, y, w, h]| [x, y, w, if place.collapsed.is_some() { place.known[3] } else { h }]))
+}
+
 /// The desktop rect of a native viewport's content. None when the backend reports no
 /// positions.
 fn placed(info: &ViewportInfo) -> Option<[f32; 4]> {

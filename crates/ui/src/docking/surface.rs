@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use egui::{Color32, Context, FontId, Id, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
-use super::{Action, DockError, DropTarget, Layout, Monitor, Permissions, render::Renderer, resize::AnchoredResize};
+use super::{Action, DockError, DropTarget, Floating, Layout, Monitor, Permissions, render::Renderer, resize::AnchoredResize};
 
 /// Horizontal room around a tab's label, both when measuring its natural width and when cutting it.
 pub(super) const TAB_PADDING: f32 = 24.0;
@@ -828,6 +828,24 @@ pub fn send_keys(ctx: &Context, viewport: egui::ViewportId, events: Vec<egui::Ev
     super::render::send_keys(ctx, viewport, events);
     #[cfg(not(feature = "native-windows"))]
     let _ = (ctx, viewport, events);
+}
+
+/// The desktop rect of the native window `window`'s content, as the dock area `area_id` takes
+/// it when it next draws (feature `native-windows`; elsewhere `None`): a place the application
+/// gave [`Floating::native`] since the area last drew, else the rect of a move the area
+/// commanded that has not landed yet, else the rect the window system last reported, with the
+/// expanded height while the window is minimized. A report reaches [`Floating::native`] only
+/// through the area's actions of the frame that reads it, so a command that changes part of a
+/// native window's place before the area draws takes the rest from here. `None` when the area
+/// has not shown the window in an OS window of its own.
+pub fn native_place<P>(ctx: &Context, area_id: Id, window: &Floating<P>) -> Option<[f32; 4]> {
+    #[cfg(feature = "native-windows")]
+    return super::render::native_place(ctx, area_id, window);
+    #[cfg(not(feature = "native-windows"))]
+    {
+        let _ = (ctx, area_id, window);
+        None
+    }
 }
 
 /// One mutable application adapter owns bodies, menus, shaped text and per-panel policy,
