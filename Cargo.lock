@@ -3058,7 +3058,7 @@ dependencies = [
  "hayro-jpeg2000",
  "image",
  "image-webp",
- "jpeg-encoder 0.6.1",
+ "jpeg-encoder 0.7.1",
  "jxl-oxide",
  "png 0.18.1",
  "proptest",
