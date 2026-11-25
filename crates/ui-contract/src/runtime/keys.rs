@@ -354,6 +354,11 @@ pub(crate) struct Stage {
     /// `fired_down` before this pass's events. A press of a held key that is no repeat ends the hold where the press
     /// is, so the pass's events before it stay the command's.
     fired_before: Vec<Key>,
+    /// The keys whose hold ended at a fresh press in this pass, each with the place among the events the strip left where
+    /// the press came (`Batch::egui_events`): `leftover_events` ends the hold there, so the events before the press stay
+    /// the command's. A press is fresh as the platform sends it, even where egui reads it as a repeat because the key's
+    /// release went to another window.
+    hold_ends: Vec<(Key, usize)>,
     /// The paste the focused component reads through its clipboard handle.
     pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.

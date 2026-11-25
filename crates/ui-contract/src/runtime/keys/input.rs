@@ -662,6 +662,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             stage.stirred = false;
             stage.textless_paste = false;
             stage.fired_before.clone_from(&stage.fired_down);
+            stage.hold_ends.clear();
         });
         return (removed || trimmed, Vec::new());
     }
@@ -723,6 +724,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.stirred = false;
         stage.textless_paste = false;
         stage.fired_before.clone_from(&stage.fired_down);
+        stage.hold_ends.clear();
         let mut place = 0;
         let ime_presses = std::mem::take(&mut stage.ime_presses);
         let press_next: Vec<bool> = (0..events.len())
@@ -765,7 +767,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
-            note_fired_up(&mut stage.fired_down, &read);
+            note_fired_up(&mut stage.fired_down, &mut stage.hold_ends, batch.egui_events, &read);
             if batch.focus_lost {
                 // The releases of the keys held now go to another window.
                 stage.fired_down.clear();
@@ -878,15 +880,21 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 
 /// Ends the hold of a key a command fired for (`Stage::fired_down`) at any release of the key, whatever has focus, and
 /// at a press of it that is no repeat, as the release of the earlier press went to another window: the next release
-/// of that key is no command's. The events before that press stay the command's: `leftover_events` ends the hold where
-/// the press is, in `Stage::fired_before`'s reading of this pass.
-fn note_fired_up(fired_down: &mut Vec<Key>, event: &KeyEvent) {
-    let ends = match event {
-        KeyEvent::Press { input, repeat: false, .. } | KeyEvent::Release { input } => input.physical.or(input.typed),
-        _ => None,
-    };
-    if let Some(key) = ends {
-        fired_down.retain(|held| *held != key);
+/// of that key is no command's. A fresh press ends the hold at its place among the pass's events too
+/// (`Stage::hold_ends`, `at`), so the events before it stay the command's. What ends the hold is the platform's reading
+/// of the press: egui reads a press as a repeat while the viewport still has the key down, which a release in another
+/// window leaves it.
+fn note_fired_up(fired_down: &mut Vec<Key>, hold_ends: &mut Vec<(Key, usize)>, at: usize, event: &KeyEvent) {
+    match event {
+        KeyEvent::Press { input, repeat: false, .. } => {
+            let Some(key) = input.physical.or(input.typed) else { return };
+            if fired_down.contains(&key) {
+                hold_ends.push((key, at));
+            }
+            fired_down.retain(|held| *held != key);
+        }
+        KeyEvent::Release { input } => fired_down.retain(|key| Some(*key) != input.physical.or(input.typed)),
+        _ => {}
     }
 }
 
