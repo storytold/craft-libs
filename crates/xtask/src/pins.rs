@@ -1670,6 +1670,10 @@ mod tests {
             }
         }
 
+        /// Unix only: on Windows a child inherits every inheritable handle of the process that starts it,
+        /// so the `linger` child also holds the command's standard output and the call ends with
+        /// [`Error::Read`].
+        #[cfg(unix)]
         #[test]
         fn a_failing_command_returns_while_another_process_holds_its_stderr() {
             match orphaned("orphan-err") {
