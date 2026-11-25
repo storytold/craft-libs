@@ -53,3 +53,22 @@ fn a_dropdown_box_fills_under_the_pointer_and_while_open() {
         assert_eq!(open, hover, "an open box keeps the hover fill");
     });
 }
+
+#[trial]
+fn a_quiet_field_takes_the_bar_fill_and_a_lighter_edge_at_rest_and_keeps_the_focus_edge() {
+    let ctx = egui::Context::default();
+    let tokens = tokens(Mode::Light, Contrast::Standard);
+    with_cx(&ctx, &tokens, Variant::SECONDARY, ControlSize::Md, |cx| {
+        let (plain, quiet) = (cx.field(), cx.quiet_field());
+        let (plain_edge, quiet_edge) = (plain.border.as_ref().expect("a field draws an edge"), quiet.border.as_ref().expect("so does a quiet one"));
+        let at = |state: State, flags: Flags| StateSet::new(state, flags, StateMix::REST);
+        let rest = at(State::Rest, Flags::empty());
+        let hover = StateSet::new(State::Hover, Flags::empty(), StateMix::new(1.0, 0.0, 0.0));
+        assert_ne!(rest.resolve(&quiet.fill), rest.resolve(&plain.fill), "at rest the field takes the bar's fill, not the field fill");
+        assert_eq!(hover.resolve(&quiet.fill), rest.resolve(&plain.fill), "under the pointer it takes the field fill");
+        assert_eq!(at(State::Rest, Flags::FOCUSED).resolve(&quiet.fill), rest.resolve(&plain.fill), "so does a focused one");
+        assert_ne!(rest.resolve(quiet_edge), rest.resolve(plain_edge), "the rest edge is quieter than the control edge");
+        let focused = at(State::Rest, Flags::FOCUSED);
+        assert_eq!(focused.resolve(quiet_edge), focused.resolve(plain_edge), "the focus edge is the field's own");
+    });
+}

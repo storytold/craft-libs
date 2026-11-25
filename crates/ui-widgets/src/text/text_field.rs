@@ -66,6 +66,10 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// (a find bar's): Escape still clears it.
     #[prop]
     clear_button: bool,
+    /// The look of a field in a bar: the bar's own fill and a quiet edge at rest ([`StyleCx::quiet_field`]).
+    #[prop]
+    #[style_key]
+    quiet: bool,
     /// The adornments before the text, in reading order.
     leading: Vec<Adornment>,
     /// The field reserves and paints a chevron at the end, for the host's popup.
@@ -129,6 +133,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             empty: None,
             search: false,
             clear_button: true,
+            quiet: false,
             leading: Vec::new(),
             arrow: false,
             drives: None,
@@ -352,6 +357,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             style = style.held_at(FieldStyle::chars_width(cx, chars));
         }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
+        if key.quiet {
+            style.surface = cx.quiet_field();
+        }
         style
     }
 

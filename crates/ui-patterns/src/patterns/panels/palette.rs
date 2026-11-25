@@ -153,6 +153,10 @@ pub struct CommandPalette<'a> {
     /// Where the search shows: a centred box or in place.
     #[prop]
     face: PaletteFace,
+    /// The in-place face in the look of a bar's own field: the bar's fill and a light edge at rest, the field fill
+    /// under the pointer and while open. The field is still named, and shows its search glyph and hint.
+    #[prop]
+    quiet: bool,
     /// The hint the in-place search box shows while it is closed.
     #[prop(into)]
     placeholder: Option<Label>,
@@ -176,6 +180,7 @@ impl<'a> CommandPalette<'a> {
             uses: None,
             recents: Bind::kept(),
             face: PaletteFace::default(),
+            quiet: false,
             placeholder: None,
             suggested: None,
             fallback: None,
@@ -276,7 +281,7 @@ impl<'a> CommandPalette<'a> {
     }
 
     fn show_in_place(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, index, mut open, uses, mut recents, placeholder, suggested, fallback, .. } = self;
+        let CommandPalette { label, entries, index, mut open, uses, mut recents, quiet, placeholder, suggested, fallback, .. } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -295,7 +300,12 @@ impl<'a> CommandPalette<'a> {
             // The closed face is the search field's own look at its own size, so what sits beside it does not shift on open.
             let closed_face = !is_open
                 && clicked(
-                    &TextField::search(label.clone(), Bind::given(String::new())).placeholder(face_hint.clone()).id(field_id).show(ui).response,
+                    &TextField::search(label.clone(), Bind::given(String::new()))
+                        .quiet(quiet)
+                        .placeholder(face_hint.clone())
+                        .id(field_id)
+                        .show(ui)
+                        .response,
                 );
             if closed_face {
                 let name: Arc<str> = Arc::from(label.as_str());
@@ -316,8 +326,12 @@ impl<'a> CommandPalette<'a> {
                     focus::request(&ctx, FocusTarget::Id(field_id));
                 }
                 let session = inner.memory::<Session>();
-                let field =
-                    TextField::search(label.clone(), Bind::bound(&mut session.query)).placeholder(face_hint.clone()).id(field_id).show(ui).response;
+                let field = TextField::search(label.clone(), Bind::bound(&mut session.query))
+                    .quiet(quiet)
+                    .placeholder(face_hint.clone())
+                    .id(field_id)
+                    .show(ui)
+                    .response;
                 let popup = PopupList::new(label.clone(), open.reborrowed()).opened_by(&field).list(list_id).show(ui, |ui, popup| {
                     let recent = recent_of(&mut recents, popup);
                     let input = RowsInput {
