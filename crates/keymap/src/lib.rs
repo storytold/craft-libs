@@ -62,6 +62,10 @@
 //! assert_eq!(press("M", &editing), Lookup::None, "plain keys go to the text field");
 //! ```
 //!
+//! A command whose keys the app runs itself keeps its bindings and shows their chords, and the keymap matches none of
+//! them: `CommandDef::new(..).with_dispatch(Dispatch::App)` tells the surfaces what to show for a command whose keys
+//! the app's own key handling takes (a canvas's tool keys), so the menus and the shortcut editor still read the catalog.
+//!
 //! # Storing overrides
 //!
 //! [`Overrides`] is a field of the app's craft-settings type, marked
@@ -158,8 +162,8 @@ pub use import::{
     ContextRule, DecodedCode, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportPlan, ImportReport, NoneDefined, NotRead, Start, plan,
 };
 pub use keymap::{
-    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DeleteKeys, DropReason, Holder, Keymap, Lookup,
-    MAX_BINDING_TEXT, MAX_BINDINGS, MAX_COMMANDS, MAX_CONFLICTS, ModalRule, Overrides, Policy, Problem, TypingRule, text_editing_chords,
+    AssignError, Assigned, Binding, BindingError, CommandDef, CommandKind, Conflict, ConflictKind, DeleteKeys, Dispatch, DropReason, Holder, Keymap,
+    Lookup, MAX_BINDING_TEXT, MAX_BINDINGS, MAX_COMMANDS, MAX_CONFLICTS, ModalRule, Overrides, Policy, Problem, TypingRule, text_editing_chords,
 };
 pub use layout::{COMMON_SYMBOLS, KeyInput, Layout, SYMBOL_TABLE, SymbolLayout};
 pub use matcher::{Hit, Matcher, Press};
