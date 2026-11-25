@@ -511,6 +511,14 @@ impl<W: TransformWarp> TransformSession<W> {
         self.revision
     }
 
+    /// Takes the draft as it is now as at rest without recording an undo step: what an app did to keep its mode across
+    /// an [`undo`](Self::undo) or [`redo`](Self::redo) (Warp entered again on the box the step restored, or left) is
+    /// part of that step, not a step of its own, and leaves the redo steps as they are.
+    pub fn rest_unrecorded(&mut self) {
+        self.rested = self.draft.clone();
+        self.changed = false;
+    }
+
     /// Whether [`undo`](Self::undo) has a step to take back.
     pub fn can_undo(&self) -> bool {
         self.history.can_undo()
