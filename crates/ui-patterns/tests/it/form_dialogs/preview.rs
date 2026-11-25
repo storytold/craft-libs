@@ -83,3 +83,29 @@ fn a_click_reports_the_picture_point_under_it() {
     let (kept, moved) = click(8.0, false, vec2(16.0, 8.0));
     assert!(near(kept, pos2(PICTURE.x / 2.0 + 2.0, PICTURE.y / 2.0 + 1.0)) && !moved, "{kept:?} {moved}");
 }
+
+/// The zoom text the row shows for `scale`, with the option applied or not.
+fn shown_zoom(scale: f32, whole: bool) -> Vec<String> {
+    let view = PreviewView::new(CanvasTransform::new(scale, Vec2::ZERO));
+    let mut fixture = Fixture::new(move |ui| {
+        let zoom = PreviewZoom::new(&view);
+        if whole { zoom.whole_percent() } else { zoom }.show(ui);
+    });
+    fixture.settle();
+    fixture.texts().iter().map(|run| run.text.clone()).collect()
+}
+
+/// With `whole_percent`, a fractional zoom shows with no decimals.
+#[trial]
+fn a_whole_percent_preview_zoom_shows_no_decimals() {
+    let shown = shown_zoom(0.9415, true);
+    assert!(shown.iter().any(|text| text == "94"), "the zoom shows as 94: {shown:?}");
+    assert!(!shown.iter().any(|text| text.contains('.') || text.contains(',')), "no decimals shown: {shown:?}");
+}
+
+/// Without it, a fractional zoom step keeps its decimals, as image apps need.
+#[trial]
+fn a_default_preview_zoom_keeps_a_fractional_step() {
+    let shown = shown_zoom(0.125, false);
+    assert!(shown.iter().any(|text| text.starts_with("12") && text.len() > 2), "the zoom keeps its decimals: {shown:?}");
+}
