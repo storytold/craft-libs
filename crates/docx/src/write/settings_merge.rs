@@ -239,8 +239,18 @@ fn mode_span(s: &str) -> Option<(usize, usize)> {
     if s.get(start..open_end)?.ends_with("/>") {
         return Some((start, open_end));
     }
-    // CT_CompatSetting has no content, so the next end tag is this element's.
-    let close = open_end + s.get(open_end..)?.find("</w:compatSetting")?;
+    // CT_CompatSetting has no content, so the next end tag is this element's — unless a
+    // comment comes first: comment text can spell the end tag without being one, and
+    // ending the span there would leave the comment's tail behind as an unmatched tag.
+    let mut i = open_end;
+    let close = loop {
+        let tail = s.get(i..)?;
+        let end = tail.find("</w:compatSetting")?;
+        match tail.find("<!--") {
+            Some(c) if c < end => i += c + tail.get(c..)?.find("-->")? + 3,
+            _ => break i + end,
+        }
+    };
     Some((start, close + tag_end(s.get(close..)?)? + 1))
 }
 
@@ -419,6 +429,18 @@ mod tests {
         let quoted = orig.replace(r#"w:uri="u" w:val="14""#, r#"w:uri="a>b" w:val="14""#);
         let out = String::from_utf8(merge(quoted.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
         assert!(!out.contains("a>b") && out.matches("</w:compatSetting").count() == 1, "{out}");
+    }
+
+    #[test]
+    fn a_comment_inside_an_expanded_compat_mode_does_not_truncate_it() {
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"><!-- </w:compatSetting> --></w:compatSetting><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(
+            out.contains(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"/><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat>"#),
+            "{out}"
+        );
+        assert!(!out.contains("-->"), "{out}");
+        assert_eq!(out.matches("</w:compatSetting").count(), 0, "{out}");
     }
 
     #[test]
