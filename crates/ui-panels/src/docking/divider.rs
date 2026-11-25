@@ -2,7 +2,7 @@
 //! its accessibility node. A container describes each divider as a [`Divider`] in reading order and applies the
 //! coordinate the drag or the keys ask for; this module owns everything that is the same for all of them, including
 //! the mirroring for right-to-left. A component that draws its own dividers (a column bar, a margin handle) calls
-//! [`declare`] in its parts, `pointer` and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
+//! [`declare_focusing`] in its parts, `pointer` and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
 
 use crate::contract::{Access, Component, Cx, Focus as _, Name, Numeric, PartBuilder, PartsCx, Pointer as _, Role};
 use craft_behavior::dock::DockEdge;
@@ -105,6 +105,12 @@ pub fn declare<'a, C: Component>(cx: &'a mut PartsCx<'_, C>, rect: Rect, key: Pa
         .cursor(divider.cursor())
         .focusable()
         .over()
+}
+
+/// [`declare`] for a value control drawn with dividers (a column bar, a margin handle) rather than a splitter between
+/// panes: a press on the divider takes key focus, so the arrow keys after a click step it.
+pub fn declare_focusing<'a, C: Component>(cx: &'a mut PartsCx<'_, C>, rect: Rect, key: PartKey, index: u64, divider: &Divider) -> PartBuilder<'a> {
+    declare(cx, rect, key, index, divider).sense(Sense::DRAG | Sense::TAKE_FOCUS)
 }
 
 /// What the pointer did to the divider `key.at(index)` this pass.
