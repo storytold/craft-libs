@@ -362,11 +362,15 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
                     let op = StyleOp::Param { id, key: aa_key.to_owned(), value: StyleValue::Bool(on) };
                     push_edit(&mut out.edit, set_edit(input.style, &op, label.as_str()));
                 }
-                out.edit_contour = field.edit_contour.map(|mut asked| {
+                // A page can hold two contour fields (Bevel & Emboss: Gloss Contour and Contour): only the field that
+                // asked sets the request, so the next one does not clear it.
+                if let Some(mut asked) = field.edit_contour {
                     asked.key = format!("{}/{key}", id.key());
-                    asked
-                });
-                out.contour_action = field.action;
+                    out.edit_contour = Some(asked);
+                }
+                if field.action.is_some() {
+                    out.contour_action = field.action;
+                }
             }
         }
         FieldKind::Check => {
