@@ -87,6 +87,10 @@ struct Bar {
     after: Option<f32>,
     /// The viewport commands the bar sent.
     sent: Vec<egui::ViewportCommand>,
+    /// The bar's look; `BarStyle::from_style` when `None`.
+    style: Option<BarStyle>,
+    /// What the last frame painted.
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Bar {
@@ -113,6 +117,8 @@ impl Bar {
             fit: None,
             after: None,
             sent: Vec::new(),
+            style: None,
+            shapes: Vec::new(),
         };
         b.run(3);
         b
@@ -127,11 +133,15 @@ impl Bar {
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
-        let (bar, gate, target, english, preferred, fit) = (&self.bar, self.gate, self.target, self.english, &self.preferred, self.fit);
+        let (bar, gate, target, english, preferred, fit, style) =
+            (&self.bar, self.gate, self.target, self.english, &self.preferred, self.fit, &self.style);
         let mut out = Vec::new();
         let mut after = None;
         let mut full = self.ctx.run_ui(raw, |ui| {
             let mut ui_bar = MenuBarUi::new(bar).gate(gate).target(target).mnemonics(preferred);
+            if let Some(style) = style {
+                ui_bar = ui_bar.style(style.clone());
+            }
             if let Some(english) = &english {
                 ui_bar = ui_bar.english(english);
             }
@@ -146,6 +156,7 @@ impl Bar {
             }
         });
         full.textures_delta.clear();
+        self.shapes = full.shapes;
         self.after = after;
         if let Some(root) = full.viewport_output.remove(&egui::ViewportId::ROOT) {
             self.sent.extend(root.commands);
@@ -318,6 +329,76 @@ fn disabled_and_gate_forbidden_items_return_nothing() {
     b.click("File");
     b.click("New");
     assert_eq!(b.take(), vec![CommandRef::new("file.new")], "a text field having the keys doesn't stop a click");
+}
+
+/// Whether the last frame painted a rectangle `hit` accepts across the middle of `label`'s row.
+fn row_painted(b: &Bar, label: &str, hit: impl Fn(&egui::epaint::RectShape) -> bool) -> bool {
+    fn any(shape: &egui::Shape, hit: &dyn Fn(&egui::epaint::RectShape) -> bool) -> bool {
+        match shape {
+            egui::Shape::Rect(r) => hit(r),
+            egui::Shape::Vec(v) => v.iter().any(|s| any(s, hit)),
+            _ => false,
+        }
+    }
+    let center = b.rect(label).center();
+    let hit = |r: &egui::epaint::RectShape| r.rect.contains(center) && hit(r);
+    b.shapes.iter().any(|c| any(&c.shape, &hit))
+}
+
+/// Whether the last frame filled `label`'s row with `fill`.
+fn row_filled(b: &Bar, label: &str, fill: egui::Color32) -> bool {
+    row_painted(b, label, |r| r.fill == fill)
+}
+
+/// Whether the last frame outlined `label`'s row with `stroke`.
+fn row_outlined(b: &Bar, label: &str, stroke: egui::Stroke) -> bool {
+    row_painted(b, label, |r| r.stroke == stroke)
+}
+
+#[test]
+fn checked_rows_are_highlighted_only_when_the_style_asks() {
+    let mut b = wide();
+    let selection = b.ctx.style_of(b.ctx.theme()).visuals.selection.bg_fill;
+    // Past the menu's fade-in, which paints the fill translucent.
+    b.click("View");
+    b.run(60);
+    for label in ["Grid", "Light", "Rulers", "Dark"] {
+        assert!(!row_filled(&b, label, selection), "{label} is highlighted by default");
+    }
+
+    let mut b = wide();
+    b.style = Some(BarStyle { highlight_checked: true, ..BarStyle::default() });
+    b.click("View");
+    b.run(60);
+    assert!(row_filled(&b, "Grid", selection), "a checked item is highlighted");
+    assert!(row_filled(&b, "Light", selection), "the selected radio item is highlighted");
+    assert!(!row_filled(&b, "Rulers", selection), "an unchecked item is not");
+    assert!(!row_filled(&b, "Dark", selection), "an unselected radio item is not");
+    assert_eq!(b.node("Grid").and_then(|n| n.toggled()), Some(Toggled::True), "the row keeps its checked state");
+}
+
+#[test]
+fn the_keyboard_highlight_stays_visible_on_highlighted_rows() {
+    let mut b = wide();
+    let selection = b.ctx.style_of(b.ctx.theme()).visuals.selection;
+    b.style = Some(BarStyle { highlight_checked: true, ..BarStyle::default() });
+    b.click("View");
+    b.run(60);
+    assert!(!row_outlined(&b, "Grid", selection.stroke) && !row_outlined(&b, "Light", selection.stroke), "no row is lit yet");
+
+    b.key(Key::ArrowDown);
+    assert!(row_outlined(&b, "Grid", selection.stroke), "the lit checked row is outlined");
+    assert!(row_filled(&b, "Grid", selection.bg_fill), "and keeps its selection fill");
+    assert!(!row_outlined(&b, "Light", selection.stroke), "the unlit selected row is not outlined");
+
+    b.key(Key::ArrowDown);
+    assert_eq!(b.nav().highlighted(0), Some(1), "↓ moves to Rulers");
+    assert!(!row_outlined(&b, "Grid", selection.stroke) && !row_outlined(&b, "Light", selection.stroke), "the outline follows the highlight");
+
+    b.key(Key::ArrowDown);
+    assert!(row_outlined(&b, "Light", selection.stroke), "the lit selected radio row is outlined");
+    assert!(!row_outlined(&b, "Grid", selection.stroke), "the checked row it left is not");
+    assert!(row_filled(&b, "Grid", selection.bg_fill) && row_filled(&b, "Light", selection.bg_fill), "both keep their fill");
 }
 
 #[test]

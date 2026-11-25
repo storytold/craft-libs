@@ -97,6 +97,9 @@ pub(crate) struct Nav {
     /// A held submenu of this level let go: the row under the pointer takes the highlight even
     /// if the pointer rests.
     follow: Option<usize>,
+    /// While [`Nav::row`] draws a row: whether that row is lit (highlighted by the keyboard or
+    /// the pointer).
+    pub lit: bool,
 }
 
 fn open_id() -> Id {
@@ -181,7 +184,9 @@ impl Nav {
         }
         let root = self.roots.get(level).copied().filter(|_| command.is_none());
         let open = root.and_then(|root| MenuState::from_id(ui.ctx(), root, |s| s.open_item));
+        self.lit = lit;
         let (r, out) = add(ui, self);
+        self.lit = false;
         (ui.visuals_mut().widgets.inactive, ui.visuals_mut().widgets.hovered) = saved;
         if let Some(root) = root {
             self.aim(level, i, root, open, &r);
