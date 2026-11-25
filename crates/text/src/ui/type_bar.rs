@@ -13,6 +13,7 @@ use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::HostRequests;
 use craft_ui::pickers::Select;
+use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Env;
 use egui::{Response, Ui};
 
@@ -113,6 +114,14 @@ pub struct TypeBar<'a> {
     /// Warp Text is available.
     #[prop]
     can_warp: bool,
+    /// The orientation toggle is available: the host has a text layer whose orientation can change. Default `true`,
+    /// which is how the toggle has always been shown.
+    #[prop]
+    can_orient: bool,
+    /// The orientation toggle's icon while the target is vertical, in place of the suite's `text_cursor`, which a
+    /// horizontal target keeps and a host that names no icon of its own gets in both states.
+    #[prop(into)]
+    vertical_orientation_icon: Option<IconSpec<'a>>,
     /// The family field is craft-font-manager's font picker over `source`.
     #[cfg(feature = "font-picker")]
     #[prop(name = "font_picker")]
@@ -132,6 +141,8 @@ impl<'a> TypeBar<'a> {
             anti_alias: None,
             anti_alias_methods: &TextAntiAlias::BAR,
             can_warp: false,
+            can_orient: true,
+            vertical_orientation_icon: None,
             #[cfg(feature = "font-picker")]
             picker: None,
         }
@@ -143,7 +154,9 @@ impl<'a> TypeBar<'a> {
         let character = self.character;
         let paragraph = self.paragraph;
         let (families, styles, unit) = (self.families, self.styles, self.unit);
-        let (orientation, anti_alias, methods, can_warp) = (self.orientation, self.anti_alias, self.anti_alias_methods, self.can_warp);
+        let (orientation, anti_alias, methods, can_warp, can_orient) =
+            (self.orientation, self.anti_alias, self.anti_alias_methods, self.can_warp, self.can_orient);
+        let vertical_icon = self.vertical_orientation_icon;
         #[cfg(feature = "font-picker")]
         let mut picker = self.picker;
         let env = Env::of(ui);
@@ -170,8 +183,11 @@ impl<'a> TypeBar<'a> {
 
         let row = Row::new().gap(Gap::Item).show(ui, |ui, _| {
             let shown_vertical = orientation.map(|o| o == TextOrientation::Vertical);
+            let cursor = IconSpec::svg(IconId::new("text_cursor"));
             let toggle = ToggleButton::new(bar_words.orientation.clone(), Bind::given(mixed(shown_vertical)))
-                .icon(IconId::new("text_cursor"))
+                .icon(cursor.clone())
+                .on_icon(vertical_icon.clone().unwrap_or_else(|| cursor.clone()))
+                .enabled(can_orient)
                 .icon_only()
                 .show(ui);
             edits
