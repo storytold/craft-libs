@@ -60,6 +60,6 @@ fn fonts_panel_no_results(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn fonts_panel_consent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show(ui, data, Tab::Catalogue, |panel| {
         let _ = panel.set_downloads_allowed(false);
-        panel.asking = Some(Pending::Install(0));
+        panel.asking = Some(Pending::Install(0, None));
     })
 }
