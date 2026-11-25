@@ -7,9 +7,9 @@
 //!
 //! - blocks whose [`fingerprint`] is the same as one read, in the same order, are that block
 //!   (unchanged);
-//! - the blocks between two of those are paired with the ones read between the same two, as many
-//!   as can be, the most alike first ([`similarity`]): an edited paragraph is the one it was
-//!   edited from, the rest are new or deleted;
+//! - the blocks between two of those are paired with the ones read between the same two, in
+//!   order, each pair counting for itself and for how alike its two blocks are ([`similarity`]):
+//!   an edited paragraph is the one it was edited from, the rest are new or deleted;
 //! - an unchanged block that is out of order (moved) is still the one it was;
 //! - a paragraph read that is gone while its text starts or ends the paragraph its neighbour
 //!   became was merged into it: that paragraph is both.
@@ -295,8 +295,10 @@ fn increasing(pairs: &[(usize, usize)]) -> Vec<(usize, usize)> {
     run
 }
 
-/// Pair the blocks of a stretch between unchanged ones: as many as can be (a block with one of
-/// its kind), the most alike when not all can.
+/// Pair the blocks of a stretch between unchanged ones (a block with one of its kind, in order),
+/// for the most pairs and likeness together: two pairs of nearly the same text outweigh three of
+/// unrelated text, so a deleted paragraph doesn't shift every edited one after it onto its
+/// neighbour.
 fn pair(before: &[Item], after: &[Item], b: (usize, usize), a: (usize, usize), out: &mut [Option<usize>]) {
     let (nb, na) = (b.1 - b.0, a.1 - a.0);
     let fits = |i: usize, k: usize| before.get(i).zip(after.get(k)).is_some_and(|(x, y)| x.kind() == y.kind());
@@ -313,7 +315,7 @@ fn pair(before: &[Item], after: &[Item], b: (usize, usize), a: (usize, usize), o
         return;
     }
     // score[i][k]: the best for before[b.0 + i..] and after[a.0 + k..]; a pair counts 1000 and
-    // its likeness, so pairing more always wins
+    // its likeness (0 to 1000)
     let w = na + 1;
     let mut score = vec![0u64; (nb + 1) * w];
     let at = |i: usize, k: usize| i * w + k;

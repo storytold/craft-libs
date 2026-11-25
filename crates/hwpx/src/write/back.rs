@@ -1344,6 +1344,8 @@ impl Job<'_> {
         let pairs: Vec<(Option<usize>, Option<usize>)> =
             if before.len() == after.len() { (0..before.len()).map(|k| (Some(k), Some(k))).collect() } else { match_pictures(&before, &after) };
         let mut edits: Vec<Edit> = Vec::new();
+        // pictures opening an empty paragraph at its start, ahead of edits made before
+        let mut front: Vec<Edit> = Vec::new();
         let mut moved = false;
         // the last picture kept: where it ends, and the text before it now
         let mut kept: Option<(usize, usize)> = None;
@@ -1383,6 +1385,8 @@ impl Job<'_> {
                     let (at, cpr) = new_run_place(sec, p, at_start);
                     let run = format!("<{pfx}:run charPrIDRef=\"{cpr}\">{}</{pfx}:run>", sec.fragment(&xml), pfx = sec.pfx);
                     match open_empty(sec, p) {
+                        // (one at the start goes before the paragraph's new text: see `merge_opened_tags`)
+                        Some((s, close)) if at_start => front.push((s, s + 2, format!(">{run}{close}"))),
                         Some((s, close)) => edits.push((s, s + 2, format!(">{run}{close}"))),
                         None => edits.push((at, at, run)),
                     }
@@ -1394,12 +1398,13 @@ impl Job<'_> {
             self.skip(m, "a picture added inside a line was put at the end of its paragraph");
         }
         let Some(sec) = self.sections.get(m.1) else { return };
-        if !edits.is_empty()
+        if (!edits.is_empty() || !front.is_empty())
             && let Some(seg) = sec.kids(p, Some("linesegarray")).first().and_then(|&s| sec.node(s))
         {
             edits.push((seg.start, seg.end, String::new())); // Hancom lays the lines out again
         }
         if let Some(e) = self.edits.get_mut(m.1) {
+            e.splice(0..0, front);
             e.extend(edits);
         }
     }
@@ -1601,6 +1606,61 @@ pub(crate) fn apply(text: &str, edits: &[Edit]) -> String {
     out
 }
 
+/// `doc` with each block that appears more than once in it (a block copied by sharing it, as
+/// `Arc::clone` does) made a block of its own; `None` when no block is shared. Paragraphs are
+/// known by their address while lined up with the file ([`crate::write::marks`]), so a shared
+/// copy read as the block it was copied from, and was neither matched nor written.
+fn unshared(doc: &Document) -> Option<Document> {
+    use craft_wordmodel::{Block, Blocks};
+    use std::sync::Arc;
+    const DEPTH: usize = 32;
+    fn shares(blocks: &Blocks, seen: &mut HashSet<*const Block>, depth: usize) -> bool {
+        let mut any = false;
+        for b in blocks {
+            any |= !seen.insert(Arc::as_ptr(b));
+            if let Block::Table(t) = &**b
+                && depth < DEPTH
+            {
+                for c in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                    any |= shares(&c.blocks, seen, depth + 1);
+                }
+            }
+        }
+        any
+    }
+    fn unshare(blocks: &mut Blocks, seen: &mut HashSet<*const Block>, depth: usize) {
+        for b in blocks.iter_mut() {
+            if !seen.insert(Arc::as_ptr(b)) {
+                *b = Arc::new((**b).clone());
+                seen.insert(Arc::as_ptr(b));
+            }
+            if matches!(&**b, Block::Table(_))
+                && depth < DEPTH
+                && let Block::Table(t) = Arc::make_mut(b)
+            {
+                for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    unshare(&mut c.blocks, seen, depth + 1);
+                }
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut any = shares(&doc.body, &mut seen, 0);
+    for p in doc.parts.values() {
+        any |= shares(&p.blocks, &mut seen, 0);
+    }
+    if !any {
+        return None;
+    }
+    let mut copy = doc.clone();
+    let mut seen = HashSet::new();
+    unshare(&mut copy.body, &mut seen, 0);
+    for p in copy.parts.values_mut() {
+        unshare(&mut p.blocks, &mut seen, 0);
+    }
+    Some(copy)
+}
+
 /// The document read again from the original and the edited one, with their marks.
 pub(crate) struct Docs<'d> {
     pub before: &'d Document,
@@ -1622,6 +1682,8 @@ pub(crate) fn write_back(original: &[u8], doc: &Document, hangul_font: HangulFon
     }
     let header = pkg.header_name.as_deref().and_then(|h| pkg.read(h)).map(|h| String::from_utf8_lossy(h).into_owned());
     let (before, origins) = crate::read::read_with_origins(&pkg)?;
+    let owned = unshared(doc);
+    let doc = owned.as_ref().unwrap_or(doc);
     let (before_marks, after_marks) = crate::write::marks::mark(&before, &origins, doc);
     let docs = Docs { before: &before, before_marks: &before_marks, after: doc, after_marks: &after_marks, hangul_font };
     let mut plan = plan(&pkg, texts.clone(), header, &docs, true, true, true)?;
@@ -1946,9 +2008,48 @@ fn finish_sections(secs: &[Section], edits: &[Vec<Edit>], report: &mut SaveRepor
                 }
             }
         }
-        sections.push(Some(apply(&sec.text, &edits)));
+        merge_opened_tags(&sec.text, &mut edits);
+        sections.push(Some(crate::write::bind_prefixes(apply(&sec.text, &edits), &[("hc", C_NS)])));
     }
     sections
+}
+
+/// Edits that each open the same empty paragraph tag (its "/>" becoming ">" + content + its end
+/// tag: new text, an added picture) become one, their contents in the order made, and a new start
+/// tag for that paragraph (another shape) stops before its "/>". Apart, `apply` kept the first
+/// and dropped the others, and their text or pictures were lost.
+fn merge_opened_tags(text: &str, edits: &mut Vec<Edit>) {
+    let opens = |e: &Edit| e.1 == e.0 + 2 && text.get(e.0..e.1) == Some("/>") && e.2.starts_with('>') && e.2.contains("</");
+    let starts: Vec<usize> = edits.iter().filter(|e| opens(e)).map(|e| e.0).collect();
+    if starts.is_empty() {
+        return;
+    }
+    let mut merged: Vec<Edit> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for &at in &starts {
+        if !seen.insert(at) {
+            continue;
+        }
+        let mut close = String::new();
+        let mut body = String::new();
+        for e in edits.iter().filter(|e| e.0 == at && opens(e)) {
+            let cut = e.2.rfind("</").unwrap_or(e.2.len());
+            body.push_str(e.2.get(1..cut).unwrap_or(""));
+            close = e.2.get(cut..).unwrap_or("").to_string();
+        }
+        merged.push((at, at + 2, format!(">{body}{close}")));
+    }
+    edits.retain(|e| !opens(e));
+    for e in edits.iter_mut() {
+        // a start tag rewritten whole up to the "/>" of a tag being opened
+        if seen.contains(&e.1.wrapping_sub(2)) && e.0 < e.1 - 2 && e.2.ends_with("/>") {
+            e.1 -= 2;
+            e.2.truncate(e.2.len() - 2);
+            let trimmed = e.2.trim_end().len();
+            e.2.truncate(trimmed);
+        }
+    }
+    edits.extend(merged);
 }
 
 /// The paragraphs of comments deleted whole (none of their paragraphs is in the edited

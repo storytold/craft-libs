@@ -34,7 +34,40 @@ impl SaveReport {
     }
 }
 
-/// XML text escaping (`&`, `<`, `>`).
+/// `xml` with each prefix of `prefixes` that it uses (`<pfx:`) and its root element doesn't
+/// bind given its namespace there. Written parts copy a source part's root as it was; the
+/// elements made for them use the usual prefixes, which a source written with others (or with a
+/// default namespace) doesn't declare.
+pub(crate) fn bind_prefixes(xml: String, prefixes: &[(&str, &str)]) -> String {
+    let mut at = 0;
+    // the root start tag: past the declaration, instructions and comments
+    while let Some(i) = xml.get(at..).and_then(|r| r.find('<')) {
+        let rest = xml.get(at + i + 1..).unwrap_or("");
+        if rest.starts_with('?') || rest.starts_with('!') {
+            at += i + 1;
+            continue;
+        }
+        at += i;
+        break;
+    }
+    let Some(end) = xml.get(at..).and_then(|r| r.find('>')).map(|e| at + e) else { return xml };
+    let root = xml.get(at..end).unwrap_or("");
+    let name_end = root.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(root.len());
+    let mut add = String::new();
+    for (pfx, uri) in prefixes {
+        if xml.contains(&format!("<{pfx}:")) && !root.contains(&format!("xmlns:{pfx}=")) {
+            add.push_str(&format!(" xmlns:{pfx}=\"{uri}\""));
+        }
+    }
+    if add.is_empty() {
+        return xml;
+    }
+    let mut out = xml;
+    out.insert_str(at + name_end, &add);
+    out
+}
+
+/// XML text escaping (`&`, `<`, `>`); characters XML 1.0 can't hold are left out.
 pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -42,6 +75,10 @@ pub(crate) fn esc(s: &str) -> String {
             '&' => o.push_str("&amp;"),
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
+            // characters XML 1.0 has no place for (U+0000, other C0 controls, U+FFFE, U+FFFF):
+            // written, they leave the part unreadable
+            '\t' | '\n' | '\r' => o.push(c),
+            c if c < ' ' || c == '\u{FFFE}' || c == '\u{FFFF}' => {}
             _ => o.push(c),
         }
     }

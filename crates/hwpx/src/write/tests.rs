@@ -515,3 +515,18 @@ fn new_hwpx_writes_offsets_before_their_anchor_as_hancom_does() {
     });
     assert!(f.as_ref().is_some_and(|f| (f.x + 20.0).abs() < 0.01 && (f.y + 30.0).abs() < 0.01), "read back where it was: {f:?}");
 }
+
+/// Characters XML 1.0 has no place for (U+0000 in a title, other C0 controls in text) are left
+/// out of the parts. Before, a NUL in the title went into `content.hpf`, which then didn't parse.
+#[test]
+fn new_hwpx_leaves_out_characters_xml_cannot_hold() {
+    let mut doc = craft_wordmodel::Document::from_text("가\u{1}나");
+    doc.core.title = "제목\u{0}".into();
+    let (bytes, _) = new_hwpx(&doc).unwrap();
+    for part in ["Contents/content.hpf", "Contents/section0.xml"] {
+        let xml = zip_part(&bytes, part);
+        assert!(!xml.chars().any(|c| c < ' ' && !matches!(c, '\t' | '\n' | '\r')), "{part}");
+        assert!(xml::parse(xml.as_bytes(), false).is_ok(), "{part} parses");
+    }
+    assert!(crate::read(&bytes).unwrap().core.title.starts_with("제목"));
+}

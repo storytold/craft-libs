@@ -564,3 +564,152 @@ fn write_back_keeps_a_resized_turned_picture_in_the_box_around_it() {
     assert!((sides[0] - 2000).abs() <= 1 && (sides[1] - 5000).abs() <= 1, "resized on both axes: {:?}", (fw, fh));
     assert!((fw - ch).abs() <= 1 && (fh - cw).abs() <= 1, "the box around the turned picture: {:?}", ((fw, fh), (cw, ch)));
 }
+
+/// A package with a manifest (for new pictures' items) and a header with one paragraph shape.
+fn package_with_manifest(sec: &str) -> Vec<u8> {
+    let head = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:refList><hh:paraProperties itemCnt="1"><hh:paraPr id="0"><hh:align horizontal="LEFT"/></hh:paraPr></hh:paraProperties></hh:refList></hh:head>"#;
+    let hpf = br#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="s" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="s"/></opf:spine></opf:package>"#;
+    let mut z = craft_zip::Writer::new();
+    let _ = z.add("mimetype", b"application/hwp+zip", craft_zip::Compression::Stored);
+    let _ = z.add("Contents/content.hpf", hpf, craft_zip::Compression::Deflated);
+    let _ = z.add("Contents/header.xml", head.as_bytes(), craft_zip::Compression::Deflated);
+    let _ = z.add("Contents/section0.xml", sec.as_bytes(), craft_zip::Compression::Deflated);
+    z.finish().unwrap()
+}
+
+/// A 1 x 1 picture in `doc`'s media, as a model object.
+fn new_picture(doc: &mut Document) -> craft_wordmodel::InlineObject {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend(1u32.to_be_bytes());
+    png.extend(1u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0]);
+    doc.media.insert("new.png".into(), Arc::new(png));
+    craft_wordmodel::InlineObject::Image {
+        media: "new.png".into(),
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    }
+}
+
+/// A paragraph read, then an empty one written as an empty tag (`<hp:p/>`), with `edit` made to
+/// the empty one; the section written back.
+fn edit_empty_paragraph(edit: impl FnOnce(&mut Document)) -> String {
+    let original = package_with_manifest(&format!(
+        r#"<hs:sec {NS}><hp:p paraPrIDRef="0"><hp:run><hp:t>첫째</hp:t></hp:run></hp:p><hp:p paraPrIDRef="0"/></hs:sec>"#
+    ));
+    let mut doc = crate::read(&original).unwrap();
+    edit(&mut doc);
+    zip_part(&write_back(&original, &doc).0, "Contents/section0.xml")
+}
+
+fn second_paragraph(doc: &mut Document) -> &mut Paragraph {
+    match doc.body.get_mut(1).map(Arc::make_mut) {
+        Some(Block::Para(p)) => p,
+        _ => panic!("no second paragraph"),
+    }
+}
+
+/// Text typed into an empty paragraph tag and a new shape for it are both written. Before, the
+/// new start tag and the opened tag overlapped, and the text was dropped.
+#[test]
+fn write_back_opens_an_empty_paragraph_for_its_text_and_shape() {
+    let sec = edit_empty_paragraph(|doc| {
+        let p = second_paragraph(doc);
+        p.insert_text(0, "새 글", &CharProps::default()).unwrap();
+        p.props.align = Some(craft_wordmodel::props::Align::Center);
+    });
+    let root = crate::xml::parse(sec.as_bytes(), false).unwrap();
+    let p = root.children.iter().filter(|c| c.tag == "hp:p").nth(1).expect("the second paragraph");
+    assert!(p.iter("hp:t").any(|t| t.text.contains("새 글")), "the text: {sec}");
+    assert_ne!(p.get("paraPrIDRef"), Some("0"), "and its new shape: {sec}");
+}
+
+/// Two pictures added to an empty paragraph tag are both written. Before, each opened the tag,
+/// and the second was dropped.
+#[test]
+fn write_back_opens_an_empty_paragraph_for_every_new_picture() {
+    let sec = edit_empty_paragraph(|doc| {
+        let pic = new_picture(doc);
+        let p = second_paragraph(doc);
+        p.insert_object(0, pic.clone(), &CharProps::default()).unwrap();
+        p.insert_object(0, pic, &CharProps::default()).unwrap();
+    });
+    assert_eq!(sec.matches("<hp:pic").count(), 2, "{sec}");
+}
+
+/// Text and a picture added to an empty paragraph tag are both written, the picture first as in
+/// the paragraph. Before, the picture was dropped.
+#[test]
+fn write_back_opens_an_empty_paragraph_for_text_and_a_picture() {
+    let sec = edit_empty_paragraph(|doc| {
+        let pic = new_picture(doc);
+        let p = second_paragraph(doc);
+        p.insert_text(0, "새 글", &CharProps::default()).unwrap();
+        p.insert_object(0, pic, &CharProps::default()).unwrap();
+    });
+    let (pic, text) = (sec.find("<hp:pic"), sec.find("새 글"));
+    assert!(pic.is_some() && text.is_some(), "both: {sec}");
+    assert!(pic < text, "the picture first: {sec}");
+}
+
+/// A paragraph copied by sharing its block (`Arc::clone`) is written as a new paragraph. Before,
+/// the copy read as the paragraph it was copied from and was left out without a word.
+#[test]
+fn write_back_writes_a_copy_sharing_its_block() {
+    let original = package_with_manifest(&format!(
+        r#"<hs:sec {NS}><hp:p paraPrIDRef="0"><hp:run><hp:t>하나</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>둘</hp:t></hp:run></hp:p></hs:sec>"#
+    ));
+    let mut doc = crate::read(&original).unwrap();
+    let first = doc.body[0].clone();
+    doc.body.push(first);
+    let (out, report) = write_back(&original, &doc);
+    assert_eq!(report.inserted, 1, "{report:?}");
+    assert_eq!(body_texts(&crate::read(&out).unwrap()), ["하나", "둘", "하나"]);
+}
+
+/// A header written with the head namespace as its default (no `hh` prefix) is given the prefix
+/// the new shapes are written with. Before, `<hh:bold/>` went in unbound.
+#[test]
+fn write_back_binds_the_head_prefix_it_writes() {
+    let head = r#"<head xmlns="http://www.hancom.co.kr/hwpml/2011/head"><refList><charProperties itemCnt="1"><charPr id="0" height="1000"/></charProperties></refList></head>"#;
+    let original =
+        crate::read::tests::hwpx_with(head, &format!(r#"<hs:sec {NS}><hp:p><hp:run charPrIDRef="0"><hp:t>글자</hp:t></hp:run></hp:p></hs:sec>"#));
+    let mut doc = crate::read(&original).unwrap();
+    if let Some(Block::Para(p)) = doc.body.get_mut(0).map(Arc::make_mut) {
+        let n = p.text.len();
+        p.format(0, n, &|c: &mut CharProps| c.bold = Some(true)).unwrap();
+    }
+    let (out, _) = write_back(&original, &doc);
+    let h = zip_part(&out, "Contents/header.xml");
+    assert!(h.contains("<hh:bold"), "the new shape: {h}");
+    assert!(h.contains("xmlns:hh=\"http://www.hancom.co.kr/hwpml/2011/head\""), "binds hh: {h}");
+    let back = crate::read(&out).unwrap();
+    assert!(back.body.iter().filter_map(|b| b.as_para()).any(|p| p.runs.iter().any(|r| r.props.bold == Some(true))), "reads back bold");
+}
+
+/// A table written again with a picture in it, into a section whose root doesn't bind the core
+/// prefix, binds it. Before, the picture's `hc:` elements went in unbound.
+#[test]
+fn write_back_binds_the_core_prefix_of_a_rebuilt_table() {
+    let tbl = r#"<hp:tbl rowCnt="1" colCnt="1"><hp:sz width="10000" height="2000"/><hp:pos treatAsChar="1"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="10000" height="2000"/></hp:tc></hp:tr></hp:tbl>"#;
+    let original =
+        package_with_manifest(&format!(r#"<hs:sec {NS}><hp:p><hp:run>{tbl}</hp:run></hp:p><hp:p><hp:run><hp:t>뒤</hp:t></hp:run></hp:p></hs:sec>"#));
+    let mut doc = crate::read(&original).unwrap();
+    let pic = new_picture(&mut doc);
+    for b in doc.body.iter_mut() {
+        if let Block::Table(t) = Arc::make_mut(b)
+            && let Some(Block::Para(p)) = t.rows[0].cells[0].blocks.get_mut(0).map(Arc::make_mut)
+        {
+            p.insert_object(0, pic.clone(), &CharProps::default()).unwrap();
+        }
+    }
+    let sec = zip_part(&write_back(&original, &doc).0, "Contents/section0.xml");
+    assert!(sec.contains("<hc:"), "the picture's core elements: {sec}");
+    let root = &sec[..sec.find('>').unwrap_or(0)];
+    assert!(root.contains("xmlns:hc="), "bound at the root: {root}");
+}

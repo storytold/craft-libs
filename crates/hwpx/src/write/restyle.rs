@@ -784,7 +784,11 @@ impl HeaderEdit {
         if !made.is_empty() {
             self.place_lists(&mut made, &mut edits);
         }
-        Some(apply(&self.text, &edits))
+        let out = apply(&self.text, &edits);
+        Some(crate::write::bind_prefixes(
+            out,
+            &[(self.hh.as_str(), "http://www.hancom.co.kr/hwpml/2011/head"), ("hc", "http://www.hancom.co.kr/hwpml/2011/core")],
+        ))
     }
 
     /// Lists `made` put into the header's refList, each before the first list the format gives
