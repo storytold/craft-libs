@@ -66,8 +66,13 @@ checked before it is used. There is no writer
 (`craft_xls::testing` builds small fixtures for tests; another crate's tests get it through the
 `test-support` feature).
 
-A formula that cannot be put back into text (a link to another workbook, a macro command, an
-unknown token) leaves its cell with the saved result, and `Warning::FormulaKept` says why.
+A formula that cannot be put back into text (a link to another workbook, a macro command, a
+call to a VBA or XLM macro function, an unknown token) leaves its cell with the saved result,
+and `Warning::FormulaKept` says why.
+A defined name is skipped with `Warning::NameSkipped` when its formula cannot be put back into
+text or it uses a name that is not returned (a skipped, macro or built-in name, a name without a
+formula, or one scoped to a sheet that is not read), through any chain of names; cells that use
+such a name keep their saved results.
 Formulas are legacy (pre-dynamic-array) ones and are returned as stored: a caller whose formula
 language has dynamic arrays adds Excel's implicit intersection itself.
 
