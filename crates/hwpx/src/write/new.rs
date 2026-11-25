@@ -1192,7 +1192,22 @@ impl Builder<'_> {
                 self.missing("charts or diagrams");
                 None
             }
-            InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } => self.group((*w, *h), (*ch_w, *ch_h), children, float, width),
+            InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } => {
+                // A turned group is written upright, and said so: written turned as a picture is,
+                // Hancom's viewer turned its frame and stretched its members into it unturned
+                // (2026-11-25), and how Hancom writes one isn't known.
+                let upright;
+                let float = if float.rot.is_finite() && float.rot.round().rem_euclid(360.0) != 0.0 {
+                    self.missing("turned groups (written upright)");
+                    let mut f = float.clone();
+                    f.set_spin(craft_wordmodel::geom::Spin::new(0.0, float.flip_h, float.flip_v));
+                    upright = f;
+                    &upright
+                } else {
+                    float
+                };
+                self.group((*w, *h), (*ch_w, *ch_h), children, float, width)
+            }
             InlineObject::CommentStart { id } => self.memo(*id),
             InlineObject::CommentEnd { id } => {
                 let i = self.memos.open.iter().position(|m| m.0 == *id)?;

@@ -590,3 +590,49 @@ fn new_hwpx_mirrors_a_picture_in_its_matrices() {
     });
     assert!(flipped.is_some(), "read back");
 }
+
+/// A turned group is written upright and reported. Written turned (as a picture is), Hancom's
+/// viewer turned its frame but stretched its members into it unturned (2026-11-25).
+#[test]
+fn new_hwpx_writes_a_turned_group_upright_and_says_so() {
+    use craft_wordmodel::{
+        CharProps, InlineObject, Paragraph,
+        para::{Float, GroupChild, ShapeKind, Wrap},
+        para_block,
+    };
+    let rect = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 40.0,
+        h: 20.0,
+        fill: None,
+        stroke: Some(craft_wordmodel::props::Rgb(0, 0, 0)),
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut float = Float { wrap: Wrap::InFrontOfText, ..Float::default() };
+    float.set_spin(craft_wordmodel::geom::Spin::new(90.0, false, false));
+    let group = InlineObject::Group {
+        w: 80.0,
+        h: 20.0,
+        float,
+        ch_w: 80.0,
+        ch_h: 20.0,
+        children: vec![GroupChild { x: 0.0, y: 0.0, obj: rect.clone() }, GroupChild { x: 40.0, y: 0.0, obj: rect }],
+        canvas: None,
+    };
+    let mut doc = craft_wordmodel::Document::from_text("");
+    let mut p = Paragraph::with_text("x", CharProps::default());
+    p.insert_object(0, group, &CharProps::default()).unwrap();
+    doc.body = vec![para_block(p)];
+    let (bytes, report) = new_hwpx(&doc).unwrap();
+    assert!(report.skipped.iter().any(|s| s.contains("turned groups")), "{report:?}");
+    let sec = xml::parse(zip_part(&bytes, "Contents/section0.xml").as_bytes(), false).unwrap();
+    let c = sec.iter("hp:container").next().expect("the group");
+    assert_eq!(c.find("hp:rotationInfo").and_then(|r| r.get("angle")), Some("0"), "upright");
+    let sz = c.find("hp:sz").expect("its size");
+    assert_eq!((sz.get("width"), sz.get("height")), (Some("8000"), Some("2000")), "its own size, not a turned box");
+}
