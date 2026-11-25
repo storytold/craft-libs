@@ -10,7 +10,7 @@
 //!
 //! Clipping is decided per sample, before averaging. [`RawImage::develop_binned_masked`] keeps every
 //! channel the mean of its samples and says, per output pixel, which colours had a sample at or above
-//! `clip` (for [`crate::highlight::reconstruct_masked`], which rebuilds them with the mean as a lower
+//! `clip` (for `crate::highlight::reconstruct_masked`, which rebuilds them with the mean as a lower
 //! bound). A specular point that clips one green sample of the 32 in an 8 × 8 block thus counts as
 //! partly clipped without the block's green jumping to the clip level, which would read as a green
 //! speckle once reconstructed. [`RawImage::develop_binned`] instead gives such a channel the block's

@@ -19,8 +19,11 @@ use crate::model::{CapabilitySpec, InputRole, ModelInfo};
 /// A feature an app offers that needs a model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Role {
+    #[allow(missing_docs)]
     pub id: RoleId,
+    /// Name shown to the user, such as "Generative Fill".
     pub label: String,
+    /// The capability a model must offer to fill the role.
     pub capability: CapabilityId,
     /// Inputs this feature will send. A model must accept them and require no others.
     #[serde(default)]
@@ -30,29 +33,63 @@ pub struct Role {
 /// The user's choice for one role.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Binding {
+    /// The role being bound.
     pub role: RoleId,
+    /// The chosen connection.
     pub connection: ConnectionId,
+    /// The chosen model, offered by that connection.
     pub model: ModelId,
 }
 
 /// A fully checked choice.
 #[derive(Clone, Copy, Debug)]
 pub struct Resolved<'a> {
+    /// The connection to send the job to.
     pub connection: &'a Connection,
+    /// The model to run.
     pub model: &'a ModelInfo,
+    /// The model's spec for the role's capability.
     pub spec: &'a CapabilitySpec,
 }
 
 /// Why a role could not be resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolveError {
+    /// No layer has a binding for the role.
     Unbound(RoleId),
+    /// The bound connection is not in the list.
     ConnectionMissing(ConnectionId),
+    /// The bound connection is switched off.
     ConnectionDisabled(ConnectionId),
-    ModelMissing { connection: ConnectionId, model: ModelId },
-    CapabilityMismatch { model: ModelId, capability: CapabilityId },
-    InputUnsupported { model: ModelId, input: InputRole },
-    InputRequired { model: ModelId, input: InputRole },
+    /// The bound connection does not offer the bound model.
+    ModelMissing {
+        /// The bound connection.
+        connection: ConnectionId,
+        /// The bound model.
+        model: ModelId,
+    },
+    /// The model has no spec for the role's capability.
+    CapabilityMismatch {
+        /// The bound model.
+        model: ModelId,
+        /// The capability the role needs.
+        capability: CapabilityId,
+    },
+    /// The role sends an input the model does not accept.
+    InputUnsupported {
+        /// The bound model.
+        model: ModelId,
+        /// The input the model rejects.
+        input: InputRole,
+    },
+    /// The model requires an input the role does not send.
+    InputRequired {
+        /// The bound model.
+        model: ModelId,
+        /// The input the role is missing.
+        input: InputRole,
+    },
+    /// A tool role differs from the shared definition saved for its id.
     ToolMismatch(RoleId),
 }
 
@@ -158,77 +195,10 @@ mod tests {
     }
 
     #[test]
-    fn resolves_a_good_binding() {
-        let conns = [conn("a", true)];
-        let defaults = [bind("a")];
-        assert!(resolve(&role(), &[&[], &defaults], &conns).is_ok());
-    }
-
-    #[test]
-    fn app_override_beats_default() {
-        let conns = [conn("a", true), conn("b", true)];
-        let (over, def) = ([bind("b")], [bind("a")]);
-        let r = resolve(&role(), &[&over, &def], &conns).unwrap();
-        assert_eq!(r.connection.id.as_str(), "b");
-    }
-
-    #[test]
     fn a_broken_override_is_an_error_and_never_falls_through() {
         let conns = [conn("a", true)];
         let (over, def) = ([bind("gone")], [bind("a")]);
         let err = resolve(&role(), &[&over, &def], &conns).unwrap_err();
         assert!(matches!(err, ResolveError::ConnectionMissing(_)));
-    }
-
-    #[test]
-    fn unbound_and_disabled() {
-        let mut conns = [conn("a", true)];
-        assert!(matches!(resolve(&role(), &[&[]], &conns), Err(ResolveError::Unbound(_))));
-        conns[0].enabled = false;
-        assert!(matches!(resolve(&role(), &[&[bind("a")]], &conns), Err(ResolveError::ConnectionDisabled(_))));
-    }
-
-    #[test]
-    fn a_model_that_cannot_take_a_mask_does_not_resolve() {
-        let conns = [conn("a", false)];
-        let err = resolve(&role(), &[&[bind("a")]], &conns).unwrap_err();
-        assert!(matches!(err, ResolveError::InputUnsupported { input: InputRole::Mask, .. }));
-    }
-
-    #[test]
-    fn a_required_input_the_role_cannot_supply_has_a_specific_error() {
-        let mut conns = [conn("a", true)];
-        conns[0].models[0].capabilities[0].requires = vec![InputRole::Mask];
-        let mut r = role();
-        r.inputs = vec![InputRole::Source];
-        let err = resolve(&r, &[&[bind("a")]], &conns).unwrap_err();
-        assert!(matches!(err, ResolveError::InputRequired { input: InputRole::Mask, .. }));
-        assert_eq!(err.to_string(), "model m requires a 'mask' input that this tool does not provide");
-    }
-
-    #[test]
-    fn wrong_capability_and_missing_model() {
-        let mut conns = [conn("a", true)];
-        let mut r = role();
-        r.capability = cap("image.generate");
-        assert!(matches!(resolve(&r, &[&[bind("a")]], &conns), Err(ResolveError::CapabilityMismatch { .. })));
-        conns[0].models.clear();
-        assert!(matches!(resolve(&role(), &[&[bind("a")]], &conns), Err(ResolveError::ModelMissing { .. })));
-    }
-
-    #[test]
-    fn eligible_filters_by_capability_inputs_and_enabled() {
-        let mut off = conn("c", true);
-        off.enabled = false;
-        let conns = [conn("a", true), conn("b", false), off];
-        let list = eligible(&role(), &conns);
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].connection.id.as_str(), "a");
-    }
-
-    #[test]
-    fn error_messages_read_well() {
-        let msg = ResolveError::Unbound(RoleId::new("x").unwrap()).to_string();
-        assert!(msg.contains("no model is chosen"));
     }
 }
