@@ -1,6 +1,6 @@
 //! The pure rules of a tab strip: what each kind of strip does, and which side a tab's close button is on.
 
-use craft_behavior::fit::{TabFit, fit, fit_to_least, fit_whole};
+use craft_behavior::fit::{TabFit, fit, fit_whole};
 use craft_host::target::Os;
 
 /// The look of document tabs ([`TabKind::Document`]) app-wide. An app sets it once at its root (`RootEnv::values`);
@@ -51,22 +51,6 @@ pub enum PanelTabLook {
     Block,
 }
 
-/// How far panel tabs ([`TabKind::Panel`]) shrink before they overflow, and how a label too long for its tab ends: a
-/// strip's choice ([`TabStrip::panel_shrink`](super::TabStrip)), which a dock makes for its groups' tabs.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
-#[non_exhaustive]
-pub enum PanelTabShrink {
-    /// Tabs shrink to their title's first letters, the label clipped at the tab's edge with no ellipsis.
-    #[default]
-    FirstLetters,
-    /// Tabs shrink no further than their label's readable least, its first
-    /// [`TextRun::READABLE_CHARACTERS`](crate::primitives::TextRun::READABLE_CHARACTERS) characters and an ellipsis (a
-    /// title at most one character longer stays whole), and a cut label ends in "…". Every tab shrinks, the shown one
-    /// too, the widest first; only the tabs that do not fit at their least go to the overflow menu, the last ones
-    /// first ([`FitMode::ShrinkToLeast`]).
-    Ellipsis,
-}
-
 /// The kind of a strip. It sets the defaults below; the host picks one per strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -99,22 +83,16 @@ pub enum FitMode {
         /// Whether the selected tab keeps its natural width.
         keep_selected: bool,
     },
-    /// Every tab shrinks towards its own least width, the selected one too, the widest first; only the tabs that do
-    /// not fit at their least overflow, the last ones first (`fit_to_least`). Panel tabs under
-    /// [`PanelTabShrink::Ellipsis`].
-    ShrinkToLeast,
 }
 
 impl FitMode {
     /// Fits tabs of the `natural` widths into `available`, keeping the `selected` tab. Whole widths give the tabs
     /// marked in `kept` the room before the other tabs (`fit_whole`); shrinking tabs have no kept tabs. `minimum` is
-    /// the narrowest a shrinking tab becomes and `overflow` the width of the overflow button; [`FitMode::ShrinkToLeast`]
-    /// takes it as every tab's least (a strip passes each tab's own to `fit_to_least`).
+    /// the narrowest a shrinking tab becomes and `overflow` the width of the overflow button.
     pub fn fit(self, natural: &[f32], selected: usize, kept: &[bool], available: f32, minimum: f32, overflow: f32) -> TabFit {
         match self {
             FitMode::Whole => fit_whole(natural, selected, kept, available, overflow),
             FitMode::Shrink { keep_selected } => fit(natural, selected, available, minimum, overflow, keep_selected),
-            FitMode::ShrinkToLeast => fit_to_least(natural, &vec![minimum; natural.len()], selected, available, overflow),
         }
     }
 }
@@ -154,20 +132,12 @@ impl TabKind {
         if self.shrinks_in(look) { FitMode::Shrink { keep_selected: self.keeps_active_width() } } else { self.fit_mode() }
     }
 
-    /// How tab widths are fitted under the app's document tab look and the strip's panel shrink: panel tabs under
-    /// [`PanelTabShrink::Ellipsis`] all shrink to their own readable least, the shown tab too, before any overflows
-    /// ([`FitMode::ShrinkToLeast`]); every other kind and shrink is [`TabKind::fit_mode_in`].
-    pub fn fit_mode_for(self, look: DocumentTabLook, shrink: PanelTabShrink) -> FitMode {
-        if self == Self::Panel && shrink == PanelTabShrink::Ellipsis { FitMode::ShrinkToLeast } else { self.fit_mode_in(look) }
-    }
-
     /// Whether these are document tabs under [`DocumentTabLook::Shrinking`].
     pub fn shrinks_in(self, look: DocumentTabLook) -> bool {
         self == Self::Document && look == DocumentTabLook::Shrinking
     }
 
-    /// Whether the shown tab keeps its whole title while the other tabs shrink: panel tabs that shrink to their first
-    /// letters (under [`PanelTabShrink::Ellipsis`] the shown tab shrinks with the others, [`TabKind::fit_mode_for`]).
+    /// Whether the shown tab keeps its whole title while the other tabs shrink: panel tabs.
     pub fn keeps_active_width(self) -> bool {
         self == Self::Panel
     }
@@ -176,13 +146,6 @@ impl TabKind {
     /// letters) instead of ending in an ellipsis.
     pub fn clips_label(self) -> bool {
         self == Self::Panel
-    }
-
-    /// Whether a label too long for its tab is clipped at the tab's edge under the strip's `shrink`: panel tabs that
-    /// shrink to their first letters ([`PanelTabShrink::FirstLetters`]); under [`PanelTabShrink::Ellipsis`] they end
-    /// in an ellipsis as the other kinds do.
-    pub fn clips_label_in(self, shrink: PanelTabShrink) -> bool {
-        self.clips_label() && shrink == PanelTabShrink::FirstLetters
     }
 
     /// Where the overflow button sits: at the strip's end for document and text tabs, after the last tab for panel

@@ -715,7 +715,6 @@ The fit rules: which tabs, bar items or titles stay in a strip and which go to a
 - `craft_behavior::fit::TabFit`: `pub struct TabFit { pub shown: Vec<(usize, f32)>, pub overflow: Vec<usize>, pub overflow_width: f32 }`. Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 - `craft_behavior::fit::fit`: `pub fn fit(natural: &[f32], selected: usize, available: f32, minimum_width: f32, overflow_width: f32, keep_selected: bool) -> TabFit`. Fit tab widths into `available` points, shrinking the widest tabs first to a common cap.
 - `craft_behavior::fit::fit_items`: `pub fn fit_items(items: &[FitItem], available: f32, gap: f32, section_gap: f32, overflow_extent: f32) -> Fit`. Decides which items stay in a strip `available` long. Everything fits and no item is `Menu`: all items show.
-- `craft_behavior::fit::fit_to_least`: `pub fn fit_to_least(natural: &[f32], least: &[f32], selected: usize, available: f32, overflow_width: f32) -> TabFit`. Fit tab widths into `available` points, each tab shrinking to its own `least` before any tab overflows.
 - `craft_behavior::fit::fit_whole`: `pub fn fit_whole(natural: &[f32], selected: usize, kept: &[bool], available: f32, overflow_width: f32) -> TabFit`. Fit tabs at their natural widths; the tabs that do not fit go to an overflow menu.
 - `craft_behavior::fit::run_extent`: `pub fn run_extent(items: &[FitItem], shown: &[bool], gap: f64, section_gap: f64) -> f64`. The length of the items marked in `shown`, with `gap` between neighbours of a section and `section_gap` between
 

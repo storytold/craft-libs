@@ -3,7 +3,7 @@
 
 use super::targets::ZoneRule;
 use super::{ColumnCards, IconicMode};
-use crate::tabs::{PanelTabLook, PanelTabShrink};
+use crate::tabs::PanelTabLook;
 use craft_behavior::{DockSide, IconId};
 
 /// A set of the sides of the layout's outer edge or of a group.
@@ -109,10 +109,6 @@ pub struct DockConfig {
     /// filled rounded pill ([`PanelTabLook::Pill`]), or a square filled block on a canvas strip
     /// ([`PanelTabLook::Block`]).
     pub tab_look: PanelTabLook,
-    /// How far the groups' panel tabs shrink before they overflow: to their first letters, clipped
-    /// ([`PanelTabShrink::FirstLetters`]), or each to a readable prefix ending in "…", the shown tab too
-    /// ([`PanelTabShrink::Ellipsis`]), the tabs that do not fit at that width going to the strip's overflow menu.
-    pub tab_shrink: PanelTabShrink,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
     /// with this off, it shows in the app window. A window that takes over a held press (`DockArea::continue_move`)
@@ -150,7 +146,6 @@ impl Default for DockConfig {
             titled_headers: false,
             wheel_selects_tabs: false,
             tab_look: PanelTabLook::Plain,
-            tab_shrink: PanelTabShrink::FirstLetters,
             native_windows: true,
             group_order_items: false,
             panel_menu_always: false,
@@ -277,13 +272,6 @@ impl DockConfig {
     #[must_use]
     pub fn tab_look(mut self, look: PanelTabLook) -> Self {
         self.tab_look = look;
-        self
-    }
-
-    /// How far the groups' panel tabs shrink ([`tab_shrink`](Self::tab_shrink)).
-    #[must_use]
-    pub fn tab_shrink(mut self, shrink: PanelTabShrink) -> Self {
-        self.tab_shrink = shrink;
         self
     }
 
