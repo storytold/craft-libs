@@ -395,6 +395,9 @@ const TEXT_BGS: &[Bg] = &[
 ];
 const SELECTED_BGS: &[Bg] = &[Token(T::StateSelected), Token(T::StateSelectedHover)];
 const CONTROL_BGS: &[Bg] = &[Token(T::SurfacePanel), Token(T::SurfaceRaised), Token(T::SurfaceSunken)];
+/// Link text stands on the control surfaces, and on the page and the background where a start page draws its links.
+const LINK_BGS: &[Bg] =
+    &[Token(T::SurfacePanel), Token(T::SurfaceRaised), Token(T::SurfaceSunken), Token(T::SurfacePage), Token(T::SurfaceBackground)];
 /// The focus line also marks focus on the title bars and tab strips, which sit on the background.
 const FOCUS_BGS: &[Bg] =
     &[Token(T::SurfaceBackground), Token(T::SurfacePanel), Token(T::SurfaceChrome), Token(T::SurfaceRaised), Token(T::SurfaceSunken)];
@@ -418,7 +421,7 @@ pub(super) const RULES: &[PairRule] = &[
     rule(&[T::TextFaint, T::TextMuted], &[Token(T::SurfaceChrome)], CONTROL_EDGE_MIN.0, CONTROL_EDGE_MIN.1),
     rule(&[T::TextOnSelected], SELECTED_BGS, TEXT_MIN.0, TEXT_MIN.1),
     rule(&[T::TextOnInverse], &[Token(T::SurfaceInverse)], TEXT_MIN.0, TEXT_MIN.1),
-    rule(&[T::AccentText], CONTROL_BGS, TEXT_MIN.0, TEXT_MIN.1),
+    rule(&[T::AccentText], LINK_BGS, TEXT_MIN.0, TEXT_MIN.1),
     // After `accent.text`, which it starts from.
     rule(&[T::AccentOnSoft], &[Token(T::AccentSoft)], TEXT_MIN.0, TEXT_MIN.1),
     // High contrast only: where the text reaches no further than white, the soft fill moves.

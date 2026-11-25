@@ -117,7 +117,7 @@ pub(super) fn over(fg: Rgba, bg: Rgba) -> Rgba {
 
 const TEXT_BGS: [T; 7] =
     [T::SurfaceBackground, T::SurfacePanel, T::SurfaceChrome, T::SurfaceRaised, T::SurfaceSunken, T::StateHover, T::StatePressed];
-const CONTROL_BGS: [T; 3] = [T::SurfacePanel, T::SurfaceRaised, T::SurfaceSunken];
+const LINK_BGS: [T; 5] = [T::SurfacePanel, T::SurfaceRaised, T::SurfaceSunken, T::SurfacePage, T::SurfaceBackground];
 
 /// The §3 pairs, written out independently of the pass's own table: (fg, bg, standard, high).
 fn spec_pairs() -> Vec<(T, T, f64, f64)> {
@@ -127,7 +127,7 @@ fn spec_pairs() -> Vec<(T, T, f64, f64)> {
     }
     p.extend([T::StateSelected, T::StateSelectedHover].map(|bg| (T::TextOnSelected, bg, 4.5, 7.0)));
     p.push((T::TextOnInverse, T::SurfaceInverse, 4.5, 7.0));
-    p.extend(CONTROL_BGS.map(|bg| (T::AccentText, bg, 4.5, 7.0)));
+    p.extend(LINK_BGS.map(|bg| (T::AccentText, bg, 4.5, 7.0)));
     p.push((T::AccentOnSoft, T::AccentSoft, 4.5, 7.0));
     p.extend([T::AccentSolid, T::AccentHover, T::AccentPressed].map(|bg| (T::TextOnAccent, bg, 4.5, 7.0)));
     p.extend([T::AccentStrong, T::AccentStrongHover, T::AccentStrongPressed].map(|bg| (T::TextOnStrong, bg, 4.5, 7.0)));

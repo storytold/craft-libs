@@ -20,7 +20,7 @@
   "light": {
     "accent.soft": "#d6d6d6",
     "accent.solid": "#378ef0",
-    "accent.text": "#1062c4",
+    "accent.text": "#025abc",
     "caption.close_hover": "#c42b1c",
     "caption.close_text": "#ffffff",
     "line.border": "#d6d6d6",
@@ -143,7 +143,7 @@
     "deckcraft": {
       "light": {
         "accent.solid": "#d95a1a",
-        "accent.text": "#b54b16",
+        "accent.text": "#a43b00",
         "text.on_accent": "#ffffff"
       },
       "dark": {
@@ -155,7 +155,7 @@
     "soundcraft": {
       "light": {
         "accent.solid": "#3e74b4",
-        "accent.text": "#3b6eab",
+        "accent.text": "#2c5f9a",
         "text.on_accent": "#ffffff"
       },
       "dark": {

@@ -62,5 +62,10 @@
     "text.normal": "#000000",
     "text.on_selected": "{text.on_accent}",
     "text.on_strong": "#000000"
+  },
+  "high_contrast": {
+    "light": {
+      "surface.page": "{surface.background}"
+    }
   }
 }
