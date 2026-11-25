@@ -15,7 +15,8 @@ use craft_theme::{ColorModel as _, HsbModel, Srgba};
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::testing::focus::AccessActionKind;
@@ -252,6 +253,36 @@ fn the_fill_stroke_spectrums_tooltip_names_the_shown_mode_and_shift_click_cycles
     fixture.hold(Modifiers::NONE).settle();
     assert_eq!(state.borrow().mode, ColorPanelMode::HsbSliders.fill_stroke_next(), "the next mode of the shown one");
     assert!(edits.borrow().is_empty(), "a Shift click picks nothing: {:?}", edits.borrow());
+}
+
+/// In a host sized by its content (a floating Color panel) the FillStroke spectrum is as tall as its end boxes stacked,
+/// each at least as tall as it is wide, not a thin band; in a short group it keeps that height and the body scrolls.
+#[trial]
+fn a_fill_stroke_spectrum_keeps_its_end_boxes_square_in_a_content_sized_host() {
+    for (room, content_sized) in [(COLOR_ROOM, true), (Vec2::new(280.0, 96.0), false)] {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut state = ColorPanelState::default();
+            let show = |ui: &mut egui::Ui, state: &mut ColorPanelState| {
+                let _ = ColorPanel::new(Bind::bound(state), [RED, BLUE]).layout(ColorPanelLayout::FillStroke).show(ui);
+            };
+            if content_sized {
+                let _ = Stack::new().show(ui, |ui, _| show(ui, &mut state));
+            } else {
+                show(ui, &mut state);
+            }
+        });
+        fixture.room(room).settle();
+        let bar = fixture.by_label("Color Ramp").expect("the spectrum").rect;
+        let ends: Vec<_> = fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .filter(|button| button.rect.left() >= bar.right() - 0.5 && button.rect.y_range().intersects(bar.y_range()))
+            .collect();
+        assert_eq!(ends.len(), 2, "{room:?}: the white and black boxes beside the bar ({bar:?})");
+        for end in ends {
+            assert!(end.rect.height() >= end.rect.width() - 0.5, "{room:?}: an end box at least square ({:?} beside {bar:?})", end.rect);
+        }
+    }
 }
 
 const SWATCHES: [(&str, [f32; 3]); 6] = [
