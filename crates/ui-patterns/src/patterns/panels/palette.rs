@@ -153,9 +153,9 @@ pub struct CommandPalette<'a> {
     /// Where the search shows: a centred box or in place.
     #[prop]
     face: PaletteFace,
-    /// The in-place face's field look: [`FieldLook::Quiet`] is a bar's own field, with the bar's fill and a light edge
-    /// at rest, the field fill under the pointer and while open. The field is still named, and shows its search
-    /// glyph and hint.
+    /// The in-place face's field look: [`FieldLook::Quiet`] is a bar's own field, with the window background
+    /// (`surface.background`) and a light edge at rest, the field fill under the pointer and while open. The field is
+    /// still named, and shows its search glyph and hint.
     #[prop]
     look: FieldLook,
     /// The hint the in-place search box shows while it is closed.

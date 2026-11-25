@@ -54,7 +54,8 @@ pub enum FieldLook {
     #[default]
     Normal,
     /// A field in a bar (a title bar's search box): [`StyleCx::quiet_field`](crate::style::StyleCx::quiet_field)'s
-    /// fill and edge, and the muted placeholder, which reads on the bar's fill where the faint one does not.
+    /// fill and edge, and the muted placeholder, which reads on the window background (`surface.background`) where
+    /// the faint one does not.
     Quiet,
 }
 
