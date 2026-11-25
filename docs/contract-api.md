@@ -2823,7 +2823,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub const fn on_activate(mut self, on: bool) -> Self`. Closes when a component inside is activated, except an opener toggling its popup.
   - `pub const fn commands(mut self, on: bool) -> Self`. Closes when a key, a native menu pick or the palette runs a command from outside it; off for a layer its host
   - `pub const fn timeout(mut self, seconds: Option<f32>) -> Self`. Closes after `seconds`.
-- `craft_ui::contract::overlay::DragBounds`: `pub enum DragBounds { Inside, TitleVisible }`. How much of a floating layer stays inside the window when the user moves it, or when it is placed at a position:
+- `craft_ui::contract::overlay::DragBounds`: `pub enum DragBounds { Inside, TitleVisible }`. How much of a floating layer stays inside the window when the user moves it, when it is placed at a position, and when it shows at the placement a pass stored:
 - `craft_ui::contract::overlay::FloatPlace`: `pub struct FloatPlace { pub pos: Option<Pos2>, pub corner: Align2 }`. Where a floating layer sits.
   - `pub const fn centred() -> Self`. Centred in the viewport.
   - `pub const fn at(pos: Pos2) -> Self`. With its left-top at `pos`.
