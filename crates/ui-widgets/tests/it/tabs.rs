@@ -947,6 +947,68 @@ fn panel_tabs_shrinking_to_an_ellipsis_keep_a_readable_prefix_and_overflow_the_r
     assert!(labels.iter().any(|(_, clipped)| *clipped), "in {room}: the default strip clips a label at its tab's edge: {plain:?}");
 }
 
+/// A colour group of three short panels, as DesignCraft's dock lists Stroke, Color and Swatches.
+const COLOUR_GROUP: [&str; 3] = ["Stroke", "Color", "Swatches"];
+
+/// A panel strip `room` wide of `COLOUR_GROUP` under `PanelTabShrink::Ellipsis`, the last one, Swatches, shown.
+fn colour_group(room: f32) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&COLOUR_GROUP, |title: &&'static str| *title).with_text(|title| std::borrow::Cow::Borrowed(*title));
+        let strip = TabStrip::new("Panels").kind(TabKind::Panel).panel_shrink(PanelTabShrink::Ellipsis).shown(COLOUR_GROUP[2]);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(*key));
+    });
+    fixture.room(egui::vec2(room, 100.0)).settle();
+    fixture
+}
+
+/// Under `PanelTabShrink::Ellipsis` every panel tab shrinks to its readable least before any tab overflows, the shown
+/// tab too: in the narrowest room that shows Stroke, Color and Swatches, Swatches shown, nothing is in the overflow
+/// menu, so no overflow button shows, and the shown Swatches tab reads its first characters and "…" like the others;
+/// a point narrower a tab other than the shown one goes to the overflow menu.
+#[trial]
+fn panel_tabs_shrinking_to_an_ellipsis_all_reach_their_least_before_any_overflows() {
+    use craft_ui::primitives::TextRun;
+    let all_shown = |room: f32| shown_labels(&mut colour_group(room)).len() == COLOUR_GROUP.len();
+    let (mut narrow, mut wide) = (40.0_f32, 400.0_f32);
+    assert!(!all_shown(narrow) && all_shown(wide), "the group overflows in {narrow} and fits whole in {wide}");
+    while wide - narrow > 1.0 {
+        let middle = ((narrow + wide) / 2.0).floor();
+        if all_shown(middle) {
+            wide = middle;
+        } else {
+            narrow = middle;
+        }
+    }
+
+    let mut fixture = colour_group(wide);
+    assert!(fixture.by_label("More tabs").is_none(), "in {wide}, the narrowest room that shows every tab, nothing overflows");
+    let shown = shown_labels(&mut fixture);
+    for (title, label) in &shown {
+        let (text, clipped) = label.as_ref().unwrap_or_else(|| panic!("in {wide}: the {title} tab paints its label"));
+        assert!(!clipped, "in {wide}: the {title} tab's label is not clipped at its edge: {text:?}");
+        if text == title {
+            continue;
+        }
+        let kept = text.strip_suffix('…').unwrap_or_else(|| panic!("in {wide}: the {title} tab's cut label ends in an ellipsis: {text:?}"));
+        let readable: String = title.chars().take(TextRun::READABLE_CHARACTERS).collect();
+        assert!(
+            title.starts_with(kept) && kept.starts_with(&readable),
+            "in {wide}: the {title} tab keeps {readable:?} before its ellipsis: {text:?}"
+        );
+    }
+    let swatches = shown.iter().find_map(|(title, label)| (*title == COLOUR_GROUP[2]).then_some(label.as_ref())).flatten();
+    assert!(
+        swatches.is_some_and(|(text, _)| text.ends_with('…')),
+        "in {wide}: the shown Swatches tab shrinks with the others before any tab overflows: {shown:?}"
+    );
+
+    let mut fixture = colour_group(narrow);
+    let fewer = shown_labels(&mut fixture);
+    assert!(fewer.len() < COLOUR_GROUP.len(), "in {narrow}, a point narrower, a tab overflows: {fewer:?}");
+    assert!(fewer.iter().any(|(title, _)| *title == COLOUR_GROUP[2]), "in {narrow}: the shown tab stays: {fewer:?}");
+    assert!(fixture.by_label("More tabs").is_some(), "in {narrow}: the overflow button shows");
+}
+
 /// A strip places its tabs by their measure in its first frame: a panel strip too narrow for its tabs fits them by
 /// their measured widths and takes their measured height, in a frame that runs once and measures each tab's height
 /// at most twice (at its ideal width, and at the width the fit shrinks it to), and the strip and every tab have the

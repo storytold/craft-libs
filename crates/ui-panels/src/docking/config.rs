@@ -102,8 +102,8 @@ pub struct DockConfig {
     /// filled rounded pill ([`PanelTabLook::Pill`]).
     pub tab_look: PanelTabLook,
     /// How far the groups' panel tabs shrink before they overflow: to their first letters, clipped
-    /// ([`PanelTabShrink::FirstLetters`]), or to a readable prefix ending in "…" ([`PanelTabShrink::Ellipsis`]), the
-    /// tabs that do not fit at that width going to the strip's overflow menu.
+    /// ([`PanelTabShrink::FirstLetters`]), or each to a readable prefix ending in "…", the shown tab too
+    /// ([`PanelTabShrink::Ellipsis`]), the tabs that do not fit at that width going to the strip's overflow menu.
     pub tab_shrink: PanelTabShrink,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
