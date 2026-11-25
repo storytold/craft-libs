@@ -163,7 +163,9 @@ impl Outcome for ExportAsOutput {
 ///   Constrain Proportions, Resample) and Scale All: rows of a size and a file-name suffix, + adding the next size
 ///   ([`ScaleRow::next`]) and each row's trash button removing it while more than one is left.
 /// - Keys: Tab walks the fields and Escape cancels; Enter does not export, only the Export button does. Holding Alt
-///   turns Cancel into Reset, which restores the settings the dialog opened with. Export asks the app for a file
+///   turns Cancel into Reset, which restores the selected row's own opening settings when the dialog draws an
+///   [`asset list`](ExportAsDialog::rows) and the value the dialog opened with when it draws none. Export asks the app
+///   for a file
 ///   to write (`ExportAsOutput::requests`), or a folder with more than one Scale All row, and the dialog stays open
 ///   until the app answers with the path. Without [`folder_export`](ExportAsDialog::folder_export), more than one row
 ///   refuses Export with a note. An export of several files ([`files`](ExportAsDialog::files)) asks for a folder
@@ -234,7 +236,8 @@ pub struct ExportAsDialog<'a> {
     #[prop]
     rows: Option<Bind<'a, ExportAsRows>>,
     /// The most rows the asset list shows at once: past this it is as tall as its first rows and scrolls the rest in a
-    /// well of its own, so a long list stays in the dialog and its last row is reached by the wheel. Unset, ten rows.
+    /// well of its own, so a long list stays in the dialog and its last row is reached by the wheel. A list of no rows
+    /// is not a shape this dialog has: unset, or a count below one, ten rows.
     #[prop]
     max_rows: Option<u16>,
 }
@@ -307,7 +310,7 @@ impl<'a> ExportAsDialog<'a> {
             events: &events,
             asked: &asked,
             list_id: ui.scope_id().with("export-as-rows"),
-            max_rows: max_rows.unwrap_or(DEFAULT_ASSET_ROWS),
+            max_rows: max_rows.filter(|rows| *rows > 0).unwrap_or(DEFAULT_ASSET_ROWS),
         };
 
         let reset = ResetFooter::new(ui, None, true);
@@ -621,8 +624,8 @@ impl HostedExportAs {
     }
 
     /// Shows at most `rows` of the asset list at once; past that the list is as tall as its first `rows` rows and
-    /// scrolls the rest itself ([`ExportAsDialog::max_rows`]). Without [`assets`](Self::assets) there is no list to
-    /// bound.
+    /// scrolls the rest itself ([`ExportAsDialog::max_rows`]). A count below one reads as the default of ten, and
+    /// without [`assets`](Self::assets) there is no list to bound.
     #[must_use]
     pub fn max_rows(mut self, rows: u16) -> Self {
         self.max_rows = Some(rows);

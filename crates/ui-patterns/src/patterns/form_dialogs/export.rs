@@ -623,7 +623,7 @@ pub struct ExportAsResult {
     /// The file the user chose to write; the folder when the export writes more than one file.
     pub path: PathBuf,
     /// The output size in pixels. With an asset list this is the selected row's, measured from that row's own asset;
-    /// the document's size only when the dialog was opened over one file.
+    /// the document's size only when the dialog was opened over one file, or over a list with no rows in it.
     pub size: PixelSize,
     /// The files to write ([`ExportOptions::outputs`]), measured the way [`size`](Self::size) is. With more than one,
     /// `path` is the folder the user chose and the app names each file `<name><suffix>.<extension>`.
