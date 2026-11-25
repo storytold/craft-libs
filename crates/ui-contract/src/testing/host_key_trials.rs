@@ -714,9 +714,13 @@ fn each_focus_candidate_of_a_pass_is_classified_once() {
     let lookups = |n: usize| {
         let mut show = move |ui: &mut Ui| {
             for at in 0..n {
-                fixture::host_button(ui, Id::new(("app", at)), Rect::from_min_size(Pos2::new(10.0, 30.0 * at as f32), egui::vec2(60.0, 20.0)));
-                widget(ui, Id::new(("framework", at)));
-                register_stop(ui.ctx(), Stop::new(Id::new(("framework", at)), KeyUse::of(Input::Pointer)));
+                fixture::host_button(
+                    ui,
+                    crate::runtime::egui::memory::unique(("app", at)),
+                    Rect::from_min_size(Pos2::new(10.0, 30.0 * at as f32), egui::vec2(60.0, 20.0)),
+                );
+                widget(ui, crate::runtime::egui::memory::unique(("framework", at)));
+                register_stop(ui.ctx(), Stop::new(crate::runtime::egui::memory::unique(("framework", at)), KeyUse::of(Input::Pointer)));
             }
         };
         let mut frames = Frames::new();

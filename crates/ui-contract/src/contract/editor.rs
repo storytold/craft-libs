@@ -72,7 +72,8 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
     }
     let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
     let widget = ImeSurface::of(id, decl.key).widget();
-    let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false));
+    let focusable = super::steps::takes_focus(cx.core.resolved);
+    let focused = egui_editor::show(ui, widget, decl.rect, egui_focus::event_filter(keys.keep, false), focusable);
     // The focus widget is the component's, enabled or not: it is never one of the app's own widgets (`take_app_widgets`).
     crate::runtime::pointer::record_text_widget(&ctx, widget, id);
     let read_only = cx.core.resolved.read_only || !cx.core.resolved.enabled;
