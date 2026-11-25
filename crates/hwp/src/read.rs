@@ -21,7 +21,7 @@ const LANGS: [&str; 7] = ["hangul", "latin", "hanja", "japanese", "other", "symb
 const FONT_LANGS: [&str; 7] = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
 
 /// A binary item the header lists: its id, its stream, and "stored" when the stream isn't
-/// compressed even in a compressed document.
+/// compressed even in a compressed document, "compressed" when it is even in one that isn't.
 #[derive(Clone, Debug)]
 struct Item {
     id: String,
@@ -546,7 +546,7 @@ pub(crate) fn open(bytes: &[u8]) -> Result<Rebuilt> {
             continue;
         }
         let raw = read(&it.href)?;
-        let data = if compressed && it.media_type != "stored" {
+        let data = if (compressed && it.media_type != "stored") || it.media_type == "compressed" {
             match inflate(&raw) {
                 Ok(d) => {
                     grow(&d)?;
@@ -661,7 +661,13 @@ fn bin_data(r: &Records, recs: &[usize], items: &mut Vec<Item>) {
         // BinaryData%d).
         let id = format!("BIN{sid:04X}");
         let href = format!("BinData/{id}.{ext}");
-        let media_type = if attr & 0x30 == 0x20 { "stored" } else { "" }.to_string();
+        // bits 4-5: the document's compression, always compressed (0x10) or never (0x20)
+        let media_type = match attr & 0x30 {
+            0x10 => "compressed",
+            0x20 => "stored",
+            _ => "",
+        }
+        .to_string();
         set_item(items, &mut at, Item { id: id.clone(), href: href.clone(), media_type: media_type.clone() });
         set_item(items, &mut at, Item { id: (i + 1).to_string(), href, media_type });
     }
@@ -1470,6 +1476,10 @@ impl Body<'_, '_> {
             let d = r.data(x);
             let mut o = 4usize;
             for _ in 0..i16_(d, 2).max(0) {
+                // the count is the record's word: items past its end aren't there
+                if o + 4 > d.len() {
+                    break;
+                }
                 let kind = u16_(d, o + 2);
                 o += 4;
                 if kind == 1 {

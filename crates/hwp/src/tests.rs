@@ -197,6 +197,27 @@ fn hwp5_many_picture_records_open() {
     assert!(binary(&rebuilt, "2").is_none(), "listed, but no stream holds it");
 }
 
+/// A picture item marked always compressed (BIN_DATA 0x10) is inflated in a document that isn't
+/// compressed. Before, only the document's flag counted, and its deflated bytes were taken as the
+/// picture.
+#[test]
+fn a_picture_compressed_in_an_uncompressed_document_is_inflated() {
+    let mut d = Vec::new();
+    d.extend((1u16 | 0x10).to_le_bytes()); // embedded, always compressed
+    d.extend(1u16.to_le_bytes());
+    d.extend(3u16.to_le_bytes());
+    d.extend("png".encode_utf16().flat_map(u16::to_le_bytes));
+    let deflated = miniz_oxide::deflate::compress_to_vec(b"picture", 6);
+    let bytes = compound(&[
+        ("FileHeader", &file_header(0)),
+        ("DocInfo", &record(BIN_DATA, 0, &d)),
+        ("BodyText/Section0", &record(PARA_HEADER, 0, &[0; 24])),
+        ("BinData/BIN0001.png", &deflated),
+    ]);
+    let rebuilt = read::open(&bytes).unwrap();
+    assert_eq!(binary(&rebuilt, "BIN0001"), Some(&b"picture"[..]));
+}
+
 /// An HWP 5.0 file of 20,000 picture streams and their BIN_DATA records opens, each picture
 /// read with its own bytes. Before, every stream read went through the whole stream list.
 #[test]
