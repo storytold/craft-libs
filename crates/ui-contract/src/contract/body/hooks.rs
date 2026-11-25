@@ -640,6 +640,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 self.end_unfit = Some(short);
             }
             self.after_body(ui, env, &mut plan);
+            if plan.real {
+                crate::runtime::focus::end_body(&plan.ctx, plan.id);
+            }
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
             }
@@ -647,6 +650,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             // A collapsed body keeps its last full size in layout memory, so opening it again places by that size
             // and asks for no discard pass.
             self.body_size = if props.collapse.is_some() { None } else { Some(Vec2::ZERO) };
+            if plan.real {
+                crate::runtime::focus::end_body(&plan.ctx, plan.id);
+            }
         }
         self.close_label(&mut plan);
         // B4 footer: under the control column of a label-scoped container, which starts where the label step put
@@ -1294,7 +1300,7 @@ impl BodyHooks<'_> {
             plan.footer_env = plan.region_env.derive_local(|scoped| scoped.content_column = true);
         }
         if plan.real {
-            crate::runtime::focus::begin_body(&plan.ctx);
+            crate::runtime::focus::begin_body(&plan.ctx, plan.id);
         }
         // A stack is a content column where its width comes from its content: a content-sized stack in flow, or a
         // held fill-width container. A stack given its width (a rect it is shown at, or a column's width it passes
