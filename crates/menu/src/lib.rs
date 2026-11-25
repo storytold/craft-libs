@@ -83,6 +83,7 @@ mod driver;
 mod keymap;
 mod layout;
 mod model;
+pub mod rtl;
 
 #[cfg(target_os = "macos")]
 pub mod mac;

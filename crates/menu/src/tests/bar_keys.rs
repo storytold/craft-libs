@@ -9,29 +9,29 @@ use crate::bar::keys::{Keys, assign, is_command_key, key_char, localized};
 use crate::bar::{Labeled, is_focused, leave_for_shortcut};
 
 impl Bar {
-    fn keys(&self) -> Keys {
+    pub(super) fn keys(&self) -> Keys {
         Keys::current(&self.ctx, Id::unique("craft-menu-bar").with("keys"))
     }
 
-    fn focus(&self) -> Option<usize> {
+    pub(super) fn focus(&self) -> Option<usize> {
         self.keys().focus
     }
 
-    fn alt(&mut self, pressed: bool) {
+    pub(super) fn alt(&mut self, pressed: bool) {
         let modifiers = if pressed { Modifiers::ALT } else { Modifiers::NONE };
         self.events.push(Event::Key { key: Key::AltLeft, physical_key: None, pressed, repeat: false, modifiers });
         self.run(2);
     }
 
     /// A tap on Alt: down, then up with nothing else pressed between.
-    fn alt_tap(&mut self) {
+    pub(super) fn alt_tap(&mut self) {
         self.alt(true);
         self.alt(false);
         self.run(1);
     }
 
     /// `key` pressed and released with Alt held.
-    fn alt_key(&mut self, key: Key) {
+    pub(super) fn alt_key(&mut self, key: Key) {
         for pressed in [true, false] {
             self.events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::ALT });
         }
@@ -39,7 +39,7 @@ impl Bar {
     }
 
     /// A letter typed: its key and the text it types.
-    fn letter(&mut self, c: char) {
+    pub(super) fn letter(&mut self, c: char) {
         let key = Key::from_name(&c.to_ascii_uppercase().to_string()).unwrap();
         self.events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
         self.events.push(Event::Text(c.to_ascii_lowercase().to_string()));
@@ -47,7 +47,7 @@ impl Bar {
         self.run(3);
     }
 
-    fn mnemonic(&self, level: usize, command: &str) -> Option<char> {
+    pub(super) fn mnemonic(&self, level: usize, command: &str) -> Option<char> {
         self.nav().rows.get(level)?.iter().find(|r| r.command.as_ref().is_some_and(|c| c.id == command))?.mnemonic
     }
 }
@@ -92,26 +92,26 @@ fn key_chars_are_plain_letters_and_digits_and_command_keys_leave_the_bar() {
 #[test]
 fn labels_without_latin_letters_show_their_english_key() {
     let en = |v: &[&str]| v.iter().map(|s| Some((*s).to_owned())).collect::<Vec<_>>();
-    let (shown, keys) = localized(&["文件", "编辑", "Image", "图层"], &en(&["File", "Edit", "Image", "Layer"]), &[]);
+    let (shown, keys) = localized(&["文件", "编辑", "Image", "图层"], &en(&["File", "Edit", "Image", "Layer"]), &[], false);
     assert_eq!(shown, ["文件(F)", "编辑(E)", "Image", "图层(L)"]);
     assert_eq!(keys, chars("FEIL"));
     // Rows: the key goes before the ellipsis; a clash takes the next letter of the shown label.
-    let (shown, keys) = localized(&["新建…", "打开...", "关闭"], &en(&["New…", "Open...", "Close"]), &[]);
+    let (shown, keys) = localized(&["新建…", "打开...", "关闭"], &en(&["New…", "Open...", "Close"]), &[], false);
     assert_eq!(shown, ["新建(N)…", "打开(O)...", "关闭(C)"]);
     assert_eq!(keys, chars("NOC"));
-    let (shown, keys) = localized(&["关闭", "复制"], &en(&["Close", "Copy"]), &[]);
+    let (shown, keys) = localized(&["关闭", "复制"], &en(&["Close", "Copy"]), &[], false);
     assert_eq!(shown, ["关闭(C)", "复制(O)"]);
     assert_eq!(keys, chars("CO"));
     // A shown "(C)" keeps its key even when a label with letters of its own comes first.
-    let (shown, keys) = localized(&["Copy", "关闭"], &en(&["Open", "Close"]), &[]);
+    let (shown, keys) = localized(&["Copy", "关闭"], &en(&["Open", "Close"]), &[], false);
     assert_eq!(shown, ["Copy", "关闭(C)"]);
     assert_eq!(keys, chars("OC"));
     // Without an English label, no suffix and no key.
-    let (shown, keys) = localized(&["文件", "Edit"], &[None, None], &[]);
+    let (shown, keys) = localized(&["文件", "Edit"], &[None, None], &[], false);
     assert_eq!(shown, ["文件", "Edit"]);
     assert_eq!(keys, [None, Some('E')]);
     // An English UI is unchanged.
-    assert_eq!(localized(&["File", "Edit"], &en(&["File", "Edit"]), &[]).0, ["File", "Edit"]);
+    assert_eq!(localized(&["File", "Edit"], &en(&["File", "Edit"]), &[], false).0, ["File", "Edit"]);
 }
 
 #[test]

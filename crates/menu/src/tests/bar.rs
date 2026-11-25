@@ -9,6 +9,32 @@ use crate::bar::nav::{ARROW, Nav, heading, is_open};
 
 #[path = "bar_keys.rs"]
 mod keys;
+#[path = "rtl.rs"]
+mod rtl;
+
+/// A text painted in the last frame: its galley and where the galley's origin sits on screen.
+struct Painted {
+    text: String,
+    galley: std::sync::Arc<egui::text::Galley>,
+    pos: Pos2,
+}
+
+impl std::fmt::Debug for Painted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Painted").field("text", &self.text).field("rect", &self.rect()).finish()
+    }
+}
+
+impl Painted {
+    fn rect(&self) -> Rect {
+        self.galley.rect.translate(self.pos.to_vec2())
+    }
+
+    /// The screen rect of the galley's first character (its reading-start end).
+    fn first_char_rect(&self) -> Rect {
+        self.galley.pos_from_cursor(self.galley.begin()).translate(self.pos.to_vec2())
+    }
+}
 
 #[test]
 fn rows_from_an_earlier_frame_are_never_activated() {
@@ -87,6 +113,10 @@ struct Bar {
     after: Option<f32>,
     /// The viewport commands the bar sent.
     sent: Vec<egui::ViewportCommand>,
+    /// The interface direction, applied to the context every frame.
+    dir: craft_ui::direction::Direction,
+    /// The text galleys painted in the last frame, popups included.
+    texts: Vec<Painted>,
 }
 
 impl Bar {
@@ -113,6 +143,8 @@ impl Bar {
             fit: None,
             after: None,
             sent: Vec::new(),
+            dir: craft_ui::direction::Direction::Ltr,
+            texts: Vec::new(),
         };
         b.run(3);
         b
@@ -127,10 +159,12 @@ impl Bar {
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
-        let (bar, gate, target, english, preferred, fit) = (&self.bar, self.gate, self.target, self.english, &self.preferred, self.fit);
+        let (bar, gate, target, english, preferred, fit, dir) =
+            (&self.bar, self.gate, self.target, self.english, &self.preferred, self.fit, self.dir);
         let mut out = Vec::new();
         let mut after = None;
         let mut full = self.ctx.run_ui(raw, |ui| {
+            craft_ui::direction::apply(ui.ctx(), dir);
             let mut ui_bar = MenuBarUi::new(bar).gate(gate).target(target).mnemonics(preferred);
             if let Some(english) = &english {
                 ui_bar = ui_bar.english(english);
@@ -145,6 +179,14 @@ impl Bar {
                 None => out = ui_bar.show(ui),
             }
         });
+        self.texts = full
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) => Some(Painted { text: ts.galley.text().to_string(), galley: ts.galley.clone(), pos: ts.pos }),
+                _ => None,
+            })
+            .collect();
         full.textures_delta.clear();
         self.after = after;
         if let Some(root) = full.viewport_output.remove(&egui::ViewportId::ROOT) {
