@@ -597,8 +597,9 @@ pub struct Literal {
 /// Test-only code is the code under `#[cfg(test)]` and the rest of a module that starts with
 /// `#![cfg(test)]`. Under `#[cfg(test)]`, a `const`, `static` or `let` runs up to its `;`, another
 /// item up to its closing `}` or its `;`, and a field, argument, arm or statement up to its `,` or
-/// `;`; a `,` in generic arguments (`f::<A, B>`, `<Pair<A, B> as Fixture>::LABEL`, or a field's
-/// `field: Pair<A, B>`) or in the parameters of a closure that starts the expression (after any
+/// `;`; a `,` in generic arguments (`f::<A, B>`, `<Pair<A, B> as Fixture>::LABEL`, a field's
+/// `field: Pair<A, B>`, a parameter's `mut p: Pair<A, B>`, or a cast's `ptr as *const Pair<A, B>`)
+/// or in the parameters of a closure that starts the expression (after any
 /// `move` or `&`) does not end it. A raw identifier (`r#let`) is never a keyword. A block expression (a block, a macro's braces, a
 /// labeled block, or `if`, `match`, `loop`, `while`, `for`, `unsafe`, `async` or `const`), as the
 /// whole statement or as an arm's expression after `=>`, ends at its `}`, or at the last `}` of an

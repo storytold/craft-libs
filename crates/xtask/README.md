@@ -107,8 +107,9 @@ fn production_display_names_stay_neutral() {
   So is the code under `#[cfg(test)]`, comments in the attribute included: a `const`, `static` or
   `let` up to its `;`, another item up to the `}` that closes it or the `;` that ends it, and a
   field, argument, arm or statement up to its `,` or `;`. A `,` in an expression's generic
-  arguments (`f::<A, B>`) or in the parameters of a closure that starts the expression does not
-  end it. An item keyword counts only when nothing
+  arguments (`f::<A, B>`), in the type of a field, a parameter (after its name or pattern) or a
+  cast (`mut p: Pair<A, B>`, `ptr as *const Pair<A, B>`), or in the parameters of a closure that
+  starts the expression does not end it. An item keyword counts only when nothing
   but qualifiers (`pub`, `unsafe`, `extern "C"` and the like) comes before it, so the `fn` in
   `f::<fn()>(…)` or in a field's type does not start an item, and the braces of a macro in an
   item's header (`-> ty! { u8 }`) are not its body. A block expression (a block, a macro's braces, a labeled block, or
@@ -128,7 +129,8 @@ fn production_display_names_stay_neutral() {
 - `scan` identifies a file by its input path joined to the base folder, and joins a relative base
   folder to the current folder before it lists any input (on Windows, a drive-relative base such as
   `C:src` to the current folder of its drive), so a relative and an absolute input for one file are
-  read once; `..` and links are not resolved.
+  read once; `..` and links are not resolved. A drive-relative input is joined to the current
+  folder of its drive once, before it is listed, and its files are opened under that path.
 - `scan` reads each file once, in path order, and returns the findings in path order, then source
   order, then the order of `banned`. A `Finding` has the path, the first line of the literal or
   description, the word, the decoded text or text line and the kind; its `Display` text is
