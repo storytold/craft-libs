@@ -307,14 +307,15 @@ pub struct TileStyle {
 /// The paper of a page picture (`Tile::page`): a document's blank page, which is data, not a theme surface.
 const PAPER: DataColor = DataColor::new(Color32::WHITE);
 
-/// A `width` by `height` page centred in `picture` on the popup surface's shadow: the page with its shadow fills as
-/// much of the picture as its shape allows.
+/// A `width` by `height` page centred in `picture` on the knob's shadow, the theme's short hard shadow of a part lifted
+/// just off the surface under it. The page's longer side spans the largest square the picture holds with the shadow,
+/// so pages of every shape stand at one scale of size.
 fn paint_page(cx: &ContentPainterCx<'_>, picture: Rect, width: f64, height: f64) {
-    let shadow = cx.style_cx().surface(SurfaceKind::Popup).shadow;
+    let shadow = cx.style_cx().surface(SurfaceKind::Knob).shadow;
     let reach = shadow.map(|shadow| shadow.margin()).unwrap_or_default();
     let room = Rect::from_min_max(picture.min + Vec2::new(reach.left, reach.top), picture.max - Vec2::new(reach.right, reach.bottom));
     let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
-    let scale = (room.width() / width).min(room.height() / height).max(0.0);
+    let scale = (room.width().min(room.height()) / width.max(height)).max(0.0);
     let page = Rect::from_center_size(room.center(), Vec2::new(width * scale, height * scale));
     cx.with_draw(|draw| {
         draw.surface_styled(page, &SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow });
@@ -549,8 +550,9 @@ impl<'a> Tile<'a> {
     }
 
     /// The picture is a page `width` by `height` (in any one unit: only the shape counts): blank paper lifted on the
-    /// popup surface's soft shadow, as large as the picture holds with its shadow, drawn flat on the tile. A preset or
-    /// template that stands for a document size shows it this way (New Document's presets, a start page's templates).
+    /// knob's short shadow, as large as the picture holds with its shadow, drawn flat on the tile. A preset or template
+    /// that stands for a document size shows it this way (New Document's presets in `PresetCardLook::Page`, a start
+    /// page's page templates).
     #[must_use]
     pub fn page(self, width: f64, height: f64) -> Self {
         self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
