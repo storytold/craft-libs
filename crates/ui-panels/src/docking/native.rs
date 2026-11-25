@@ -53,9 +53,11 @@ pub fn pixels_per_point(ctx: &Context, viewport: ViewportId) -> Option<f32> {
 }
 
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool
-/// window (a palette level, no taskbar entry).
+/// window (a palette level, no taskbar entry). An Escape nothing in it takes is the Cancel of the window the dock is in.
 pub fn spec_for(specs: &[PanelSpec]) -> WindowSpec {
-    if specs.iter().any(|spec| spec.window_kind == WindowKind::Document) { WindowSpec::document() } else { WindowSpec::tool() }
+    let document = specs.iter().any(|spec| spec.window_kind == WindowKind::Document);
+    let spec = if document { WindowSpec::document() } else { WindowSpec::tool() };
+    spec.hands_on_cancel(true)
 }
 
 /// The rect in the main window's points of `desktop`, a rect in desktop points: where a window at `desktop` would sit

@@ -1606,6 +1606,101 @@ fn enter_and_escape_in_a_native_palettes_field_stay_the_fields() {
     }
 }
 
+/// What panel 1's body holds that takes an Escape pressed in its window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Taker {
+    Nothing,
+    /// A field, which a click focuses.
+    Field,
+    /// A button whose context menu a secondary click opens.
+    Menu,
+    /// App code that reads the window's leftover Escape.
+    App,
+}
+
+/// Panels of which panel 1 holds `taker`.
+struct EscapePalette {
+    taker: Taker,
+    opacity: Option<f64>,
+}
+
+impl DockPanels<u32> for EscapePalette {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        match self.taker {
+            _ if *panel != 1 => {}
+            Taker::Nothing => {}
+            Taker::Field => {
+                NumberField::new("Opacity", Bind::bound(&mut self.opacity)).show(ui);
+            }
+            Taker::Menu => {
+                let target = Button::new("Target").show(ui);
+                let _ = Menu::context("Target menu", &target).show(ui, |ui, _| {
+                    MenuItem::new("Row").show(ui);
+                });
+            }
+            Taker::App => {
+                keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Cancel));
+            }
+        }
+    }
+}
+
+/// An Escape pressed in a native palette that holds `taker`, with the field focused or the menu open: how many of the
+/// main window's Cancels two readers found that the app runs before its dock, one after the other.
+fn main_window_cancels(taker: Taker) -> (usize, usize) {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    let palette = dock.palette.expect("the palette's window opened");
+    let mut panels = EscapePalette { taker, opacity: Some(50.0) };
+    let mut read = (0, 0);
+    let mut frame = |child: Vec<Event>| {
+        dock.windows.frame(vec![], child, |ui| {
+            let cancel = |ui: &Ui| usize::from(keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Cancel)));
+            read.0 += cancel(ui);
+            read.1 += cancel(ui);
+            let _ = DockArea::new("Native dock", Bind::bound(&mut dock.workspace), &dock.specs, &mut panels, DockConfig::default()).show(ui);
+        })
+    };
+    frame(vec![]);
+    let out = frame(vec![]);
+    let at = |name: &str| {
+        let tree = tree_of_viewport(&out, palette);
+        let part = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(name) && tree.role_of(*key) != Some(Role::LABEL));
+        part.and_then(|key| tree.bounds_of(key)).expect("the palette shows it").center()
+    };
+    let opened = match taker {
+        Taker::Field => {
+            let field = at("Opacity");
+            vec![vec![moved(field), press(field)], vec![release(field)]]
+        }
+        Taker::Menu => {
+            let target = at("Target");
+            vec![vec![moved(target)], vec![secondary(target, true)], vec![secondary(target, false)]]
+        }
+        Taker::Nothing | Taker::App => vec![],
+    };
+    let escape = [vec![key_press(Key::Escape, Modifiers::NONE)], vec![key_release(Key::Escape, Modifiers::NONE)], vec![], vec![]];
+    for events in opened.into_iter().chain([vec![], vec![]]).chain(escape) {
+        frame(events);
+    }
+    read
+}
+
+/// An Escape that nothing in a native palette takes is the main window's Cancel, once: the app reads it where it reads
+/// the main window's own, and the read takes it.
+#[trial]
+fn an_escape_nothing_in_a_native_palette_takes_is_the_main_windows_cancel_once() {
+    assert_eq!(main_window_cancels(Taker::Nothing), (1, 0), "the first read finds the Escape, the second nothing");
+}
+
+/// An Escape in a native palette that a focused field, an open menu or the app's own code there takes or keeps never
+/// reaches the main window.
+#[trial]
+fn an_escape_taken_in_a_native_palette_never_reaches_the_main_window() {
+    for taker in [Taker::Field, Taker::Menu, Taker::App] {
+        assert_eq!(main_window_cancels(taker), (0, 0), "{taker:?}: the Escape stays in the palette's window");
+    }
+}
+
 /// A palette float made in the app window.
 fn float() -> Floating<u32> {
     Floating::single(104, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)))
