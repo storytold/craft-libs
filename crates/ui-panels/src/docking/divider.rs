@@ -66,12 +66,24 @@ impl Divider {
 /// What the pointer did to a divider this pass.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
-    /// The drag started.
-    Start,
+    /// The drag started: the press moved past slop, and the pointer is at this coordinate along the divider's axis,
+    /// in reading order. The container begins its gesture and moves the divider to the coordinate in the same pass,
+    /// as it does for [`To`](Self::To), so the move that starts the drag shows in the pass it happens.
+    Start(f32),
     /// The pointer is at this coordinate along the divider's axis, in reading order.
     To(f32),
     /// The pointer was released.
     Release,
+}
+
+impl Drag {
+    /// The coordinate the divider is dragged to this pass: the start's and each later move's; `None` for a release.
+    pub fn coord(self) -> Option<f32> {
+        match self {
+            Drag::Start(coord) | Drag::To(coord) => Some(coord),
+            Drag::Release => None,
+        }
+    }
 }
 
 /// `x` as a coordinate from the start edge of `rect`: unchanged for left-to-right, mirrored for right-to-left.
@@ -121,9 +133,10 @@ pub fn pointer<C: Component>(cx: &Cx<'_, C>, key: PartKey, index: u64, divider: 
 /// What the press phase of a divider's part says the pointer did to `divider`, for a container `rect` that is
 /// mirrored for right-to-left. A body reads the phase from `BodyCx::part_press`.
 pub fn drag(phase: PressPhase, rect: Rect, rtl: bool, divider: &Divider) -> Option<Drag> {
+    let along = |pos: Pos2| if divider.axis == Axis::X { logical_x(rect, rtl, pos.x) } else { pos.y };
     match phase {
-        PressPhase::DragStart { .. } => Some(Drag::Start),
-        PressPhase::Drag { pos, .. } => Some(Drag::To(if divider.axis == Axis::X { logical_x(rect, rtl, pos.x) } else { pos.y })),
+        PressPhase::DragStart { pos, .. } => Some(Drag::Start(along(pos))),
+        PressPhase::Drag { pos, .. } => Some(Drag::To(along(pos))),
         PressPhase::Release { .. } => Some(Drag::Release),
         _ => None,
     }

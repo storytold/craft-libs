@@ -546,7 +546,7 @@ name = "Drag"
 old = ""
 new = "craft_ui::docking::divider::Drag"
 status = "replaced"
-note = "What the pointer did to a divider this pass (`divider::pointer`): `Start`, `To(coordinate in reading order)`, `Release`."
+note = "What the pointer did to a divider this pass (`divider::pointer`): `Start(coordinate in reading order)`, `To(coordinate in reading order)`, `Release`. A container begins its gesture on `Start` and moves the divider to its coordinate in the same pass; `Drag::coord` gives the coordinate of either."
 
 # One entry per renamed, removed or reshaped setter or constructor.
 # [[setter]]

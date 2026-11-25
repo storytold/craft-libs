@@ -401,7 +401,7 @@ fn body_plan<P>(
     let open = (0..group_sizes.len()).filter(|at| !group_sizes[*at].minimized).collect();
     let mut plan = Plan { bar, body, groups, heights, mins: group_sizes.iter().map(|size| size.min).collect(), open };
     for (key, index, divider) in plan.dividers(body, sizes.reach) {
-        if let Some(Drag::To(coord)) = drags(key, &divider) {
+        if let Some(coord) = drags(key, &divider).and_then(Drag::coord) {
             plan.move_divider(index, coord - divider.at);
         }
     }
@@ -521,7 +521,7 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
         }
         if own {
             let edge = self.edge_divider(rect, &sizes);
-            if let Some(Drag::To(coord)) = divider::pointer(cx, EDGE, 0, &edge) {
+            if let Some(coord) = divider::pointer(cx, EDGE, 0, &edge).and_then(Drag::coord) {
                 self.move_edge(rect, &edge, coord);
             }
             if let Some((_, coord)) = divider::keys(cx, EDGE, &[(0, edge)], sizes.step, sizes.jump) {
