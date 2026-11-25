@@ -144,6 +144,18 @@ fn switch_keeps_the_known_case() {
     assert_eq!(root.iter("hp:p").next().unwrap().get(crate::xml::ORDINAL), Some("0"));
 }
 
+/// A switch inside the branch read is resolved too, and the text after a switch is kept.
+/// Before, the inner switch stayed (its text unread), and the text after a switch was lost.
+#[test]
+fn switches_in_branches_and_the_text_after_them_are_read() {
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:switch><hp:default><hp:switch><hp:default><hp:t>안쪽</hp:t></hp:default></hp:switch></hp:default></hp:switch><hp:t>앞<hp:switch><hp:default><hp:tab/></hp:default></hp:switch>뒤</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let text = body_text(&read_bytes(&hwpx(&sec)).unwrap());
+    assert!(text.contains("안쪽"), "the inner switch's branch: {text:?}");
+    assert!(text.contains('뒤'), "the text after the switch: {text:?}");
+}
+
 #[test]
 fn package_finds_sections() {
     let bytes = hwpx(&format!(r#"<hs:sec {NS}><hp:p/></hs:sec>"#));

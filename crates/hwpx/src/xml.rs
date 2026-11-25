@@ -242,13 +242,26 @@ fn resolve_switches(el: &mut Element, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
-    if el.children.iter().any(|c| c.tag == "hp:switch") {
+    // A branch may hold a switch of its own, which then comes up among these children: resolved
+    // in turn (each round goes a level deeper into the file, so the depth bounds the rounds).
+    let mut rounds = 0;
+    while rounds <= MAX_DEPTH && el.children.iter().any(|c| c.tag == "hp:switch") {
+        rounds += 1;
         let mut out = Vec::with_capacity(el.children.len());
         for c in std::mem::take(&mut el.children) {
             if c.tag != "hp:switch" {
                 out.push(c);
-            } else if let Some(b) = branch(&c) {
+                continue;
+            }
+            if let Some(b) = branch(&c) {
                 out.extend(b.children.iter().cloned());
+            }
+            // the text after the switch stays where it was
+            if !c.tail.is_empty() {
+                match out.last_mut() {
+                    Some(last) => last.tail.push_str(&c.tail),
+                    None => el.text.push_str(&c.tail),
+                }
             }
         }
         el.children = out;
