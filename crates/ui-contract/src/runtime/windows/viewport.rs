@@ -54,6 +54,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
     let spec = open.spec;
+    let cancel_to = spec.hands_on_cancel.then(|| crate::runtime::egui::pass::current_viewport(ctx));
     let state = shared(ctx, |shared| shared.app);
     let os = os_of(ctx);
     let (chrome, captions) = frame_of_spec(ctx, spec);
@@ -64,6 +65,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         record.resizable = Some(open.resizable);
         record.min_size = open.limits.0;
         record.moved_by_app = open.moved_by_app;
+        record.cancel_to = cancel_to;
         record.awaiting_first_paint |= spec.shown_after_first_paint && record.facts.is_none();
         if record.title.as_deref() != Some(open.title) {
             record.title = Some(open.title.to_owned());
