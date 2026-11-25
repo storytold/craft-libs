@@ -61,3 +61,31 @@ fn a_character_range_wider_than_the_text_deletes_what_there_is() {
     fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 0, after_chars: 5 })]).settle();
     assert_eq!(*text.borrow(), "", "and five asked after it");
 }
+
+/// A delete before marked text moves the caret the text part keeps with it: a composition that then ends without a
+/// commit (Escape, an empty pre-edit) leaves the caret where the marked text was, not that many characters further
+/// right.
+#[trial]
+fn a_delete_before_marked_text_moves_the_caret_it_leaves_behind() {
+    let text = Rc::new(RefCell::new("abcd".to_owned()));
+    let field = Rc::new(std::cell::Cell::new(egui::Id::NULL));
+    let (held, seen) = (text.clone(), field.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        seen.set(TextField::new("Name", Bind::bound(&mut *held.borrow_mut())).show(ui).response.id);
+    });
+    fixture.settle();
+    let name = fixture.by_label("Name").expect("the field");
+    fixture.click(&name).settle();
+    fixture.key(Key::End, Modifiers::NONE).settle();
+    fixture.key(Key::ArrowLeft, Modifiers::NONE).settle();
+    // The input method marks "XY" after the caret's "abc", deletes the "c" before it, then ends with nothing committed.
+    fixture.frame(vec![Event::Ime(ImeEvent::Preedit { text: "XY".to_owned(), active_range_chars: None })]).settle();
+    fixture.frame(vec![Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 })]).settle();
+    fixture.frame(vec![Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None })]).settle();
+    let widget = craft_ui::testing::text::widget_id(field.get(), craft_behavior::PartKey::new("text"));
+    let caret =
+        egui::text_edit::TextEditState::load(fixture.ctx(), widget).and_then(|state| state.cursor.char_range()).map(|range| range.primary.index.0);
+    assert_eq!(caret, Some(2), "the caret sits where the marked text was, after \"ab\"");
+    fixture.type_text("Z").settle();
+    assert_eq!(*text.borrow(), "abZd", "typing then goes in between \"ab\" and \"d\"");
+}

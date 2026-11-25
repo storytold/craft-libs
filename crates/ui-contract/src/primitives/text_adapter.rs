@@ -375,10 +375,12 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
                 text.replace_range(hi_byte..end, "");
                 let start = byte_of(text, lo - gone_before);
                 text.replace_range(start..lo_byte, "");
-                match &mut state.preedit {
-                    Some(preedit) => preedit.at -= gone_before,
-                    None => text_edit::select(ctx, widget, anchor - gone_before, caret - gone_before),
+                // The marked text, and the selection the text part keeps for it, move with the deletion: a composition
+                // that ends without a commit (Escape, an empty pre-edit) leaves the caret where the marked text was.
+                if let Some(preedit) = &mut state.preedit {
+                    preedit.at = preedit.at.saturating_sub(gone_before);
                 }
+                text_edit::select(ctx, widget, anchor.saturating_sub(gone_before), caret.saturating_sub(gone_before));
                 changed = true;
             }
             _ => {}
