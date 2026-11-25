@@ -1135,14 +1135,14 @@ impl Body<'_> {
     /// An edit of channel `channel` of `current` from a row whose other channels can follow it. While `together`
     /// (Shift or Command held), a drag moves them with it, from the values when the modifier went down
     /// ([`tandem_values`]); after the modifier goes up the channel moves alone again. A drag that moved them reports
-    /// the gesture's `start` as the before of its commit or cancel. A drag that never did, a typed value and a key step
-    /// move the channel alone.
+    /// the gesture's `start` as the before of its commit or cancel. Only a drag with the pointer `pressed` starts moving
+    /// them; a drag that never did, a wheel turn, a typed value and a key step move the channel alone.
     fn tandem_event(
         &mut self,
         model: &dyn ColorModel,
         (current, start): (ModelValues, ModelValues),
         channel: usize,
-        together: bool,
+        (together, pressed): (bool, bool),
         web: bool,
         event: EditEvent<f64>,
     ) {
@@ -1158,17 +1158,18 @@ impl Body<'_> {
             }
         };
         let event = match event {
-            EditEvent::Update { id, value, .. } if together || kept.is_some() => {
+            EditEvent::Update { id, value, .. } if (together && pressed) || kept.is_some() => {
                 self.kept.tandem = Some(Tandem { slot, anchor });
                 EditEvent::update(id, moved(value))
             }
-            EditEvent::Commit { id, after, .. } if together || kept.is_some() => {
+            EditEvent::Commit { id, after, .. } if (together && pressed) || kept.is_some() => {
                 self.kept.tandem = None;
                 EditEvent::commit(id, Mixed::Same(start), moved(after))
             }
-            EditEvent::Cancel { id, reason, .. } if kept.is_some() => {
+            // A cancel that moved the document (a host change) carries no before; one that did not restores the start.
+            EditEvent::Cancel { id, reason, before, .. } if kept.is_some() => {
                 self.kept.tandem = None;
-                EditEvent::cancel(id, reason, Some(Mixed::Same(start)))
+                EditEvent::cancel(id, reason, before.map(|_| Mixed::Same(start)))
             }
             event => {
                 self.kept.tandem = None;
@@ -1194,6 +1195,12 @@ impl Body<'_> {
             self.kept.tandem = None;
         }
         let together = tandem && ui.input(|input| input.modifiers.shift || input.modifiers.command);
+        // Only a pointer drag starts moving the channels together: a Shift wheel turn moves its channel alone.
+        let pressed = ui.input(|input| input.pointer.primary_down());
+        if !together && let Some(kept) = self.kept.tandem.as_mut() {
+            // The modifier went up: the next press anchors on the colour then, even if the pointer has not moved.
+            kept.anchor = None;
+        }
         for (i, ch) in model.channels().iter().enumerate() {
             let mut rule = ChannelRule::of(ch);
             if web {
@@ -1220,7 +1227,7 @@ impl Body<'_> {
             let shown = (f64::from(current.values[i]) * scale * places).round() / places;
             let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track).show(ui);
             for event in row.into_iter().flat_map(|row| row.events) {
-                self.tandem_event(model, (current, start), i, together, web, event.map(|x| x / scale));
+                self.tandem_event(model, (current, start), i, (together, pressed), web, event.map(|x| x / scale));
             }
         }
     }

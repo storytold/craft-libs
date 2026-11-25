@@ -399,6 +399,30 @@ fn a_shift_key_step_or_typed_value_moves_one_channel() {
     rig.fixture.access(AccessActionKind::Focus, &field).settle();
     rig.fixture.hold(Modifiers::SHIFT).key(Key::A, Modifiers::COMMAND).type_text("200").key(Key::Enter, Modifiers::NONE).settle();
     kept(&rig, "a value typed with Shift held");
+
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.access(AccessActionKind::Focus, &red).settle();
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![moved(red.center())]);
+    rig.fixture.frame(vec![craft_ui::testing::pointer::wheel(-40.0)]).settle();
+    kept(&rig, "a wheel turn with Shift held");
+}
+
+/// A Shift drag the host's colour change cancels reports no before: the document moved, so there is nothing to undo to.
+#[trial]
+fn a_shift_drag_cancelled_by_the_host_reports_no_before() {
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([Srgba::rgb(0.6, 0.4, 0.2), BLUE]);
+    let red = slider(&rig, 0);
+    rig.fixture.hold(Modifiers::SHIFT).drag_hold_at(red.center(), Vec2::new(-30.0, 0.0));
+    rig.set_colors([Srgba::rgb(0.1, 0.8, 0.3), BLUE]);
+    let edits = rig.edits.borrow();
+    let cancel = edits.iter().rev().find_map(|(_, edit)| match edit {
+        EditEvent::Cancel { reason, before, .. } => Some((reason.document_moved(), before.is_some())),
+        _ => None,
+    });
+    assert_eq!(cancel, Some((true, false)), "the host change cancels the drag with no before");
 }
 
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
