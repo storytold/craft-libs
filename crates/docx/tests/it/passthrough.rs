@@ -338,6 +338,26 @@ fn kept_extensions_carry_the_namespaces_their_own_ignorable_lists() {
     assert!(written.contains(r#"xmlns:zz="urn:zz""#), "{written}");
 }
 
+/// A prefix the file marks ignorable outside kept markup stays ignorable in it when the markup
+/// declares it again with the same namespace, and not when it binds it to another one.
+#[test]
+fn kept_extensions_keep_an_outer_ignorable_prefix_they_declare_again_alike() {
+    let kept = |uri: &str| {
+        let cex = format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst xmlns:q="{uri}"><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        );
+        let doc = comments_with_cex(&cex);
+        let markup = doc.comments.values().find_map(|c| c.extensions.clone()).unwrap();
+        let ext = craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap();
+        let ignorable = ext.attrs.iter().find(|(k, _)| k.ends_with(":Ignorable")).map(|(_, v)| v.clone());
+        (ignorable.is_some_and(|v| v.split_whitespace().any(|t| t == "q")), markup)
+    };
+    let (same, markup) = kept("urn:q");
+    assert!(same, "{markup}");
+    let (other, markup) = kept("urn:other");
+    assert!(!other, "{markup}");
+}
+
 /// The namespace `prefix` names on the first element called `name` in `root`, by the
 /// declarations on the way down.
 fn binding_at(root: &craft_xml::El, name: &str, prefix: &str) -> Option<String> {

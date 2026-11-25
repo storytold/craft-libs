@@ -414,8 +414,9 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
         return None;
     }
     let own: Vec<&str> = ext.ns_decls().map(|(p, _)| p).collect();
-    // A prefix `ext` declares again is no longer the one the parents mark.
-    ignorable.retain(|t| !own.contains(t));
+    // A prefix `ext` binds to another namespace is no longer the one the parents mark; one it
+    // declares again with the same namespace still is.
+    ignorable.retain(|t| ext.ns_decls().all(|(p, u)| p != *t || scope.contains(&(p, u))));
     let mut el = ext.clone();
     let mut ext_scope = scope.clone();
     declare(&mut ext_scope, ext);
