@@ -476,3 +476,55 @@ fn idle_key_bytes(count: u8) -> usize {
 fn a_tool_rails_idle_key_bytes_do_not_grow_with_its_slots() {
     assert_eq!(idle_key_bytes(10), idle_key_bytes(100), "the key follows revisions, not the slots, the hidden or the remembered tools");
 }
+
+/// A tool's own icon replaces its command's: the app's glyph paints the rail button that shows the tool and the tool's
+/// row in the flyout, and a tool without one keeps its command's icon.
+#[trial]
+fn a_tools_own_icon_paints_its_button_and_its_flyout_row() {
+    use crate::primitives::{Glyph, IconSpec};
+    use crate::style::UiTokens;
+
+    // An app's tool artwork: one ellipse across its rect, a shape nothing else on the rail paints, so the frame's
+    // shapes say where the glyph painted.
+    #[derive(crate::contract::MemoProps)]
+    struct Artwork;
+    impl Glyph for Artwork {
+        fn paint(&self, painter: &egui::Painter, _: &UiTokens, rect: Rect, color: egui::Color32, _: bool) {
+            painter.add(egui::Shape::ellipse_filled(rect.center(), rect.size() / 2.0, color));
+        }
+    }
+    // Where the glyph painted in the fixture's next frame. A frame that replays a memoized view repeats its shapes, so
+    // the shapes of one frame show every place the glyph is on screen.
+    let painted = |fixture: &mut Fixture| -> Vec<Rect> {
+        fixture
+            .frame_shapes()
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Ellipse(ellipse) => Some(Rect::from_center_size(ellipse.center, ellipse.radius * 2.0)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let mut group = tools(&[1, 2]);
+    group[0] = group[0].clone().icon(IconSpec::glyph(&Artwork));
+    let (slots, last) = (Tracked::new(vec![ToolSlot::new(0, group)]), Tracked::new(LastUsed::default()));
+    let mut fixture = Fixture::new(move |ui| {
+        ToolRail::new("Tools", &slots, &1, &last).show_rail(ui, |_, _| {});
+    });
+    fixture.room(Vec2::new(200.0, 400.0)).settle();
+    let button = rect(&fixture, "Brush");
+    let face = painted(&mut fixture);
+    assert!(!face.is_empty() && face.iter().all(|at| button.contains_rect(*at)), "the glyph paints the Brush button: {face:?} in {button:?}");
+
+    // With the flyout open the glyph paints the Brush row too, and the Pencil row keeps its command's icon.
+    fixture.frame(vec![secondary(button.center(), true), secondary(button.center(), false)]);
+    fixture.settle();
+    let pencil = rect(&fixture, "Pencil");
+    let shown = painted(&mut fixture);
+    assert!(
+        shown.iter().any(|at| !button.intersects(*at) && !pencil.contains(at.center())),
+        "the open flyout's Brush row paints the glyph too: {shown:?}, button {button:?}, Pencil row {pencil:?}"
+    );
+    assert!(shown.iter().all(|at| !pencil.contains_rect(*at)), "the Pencil row keeps its command's icon: {shown:?} in {pencil:?}");
+}

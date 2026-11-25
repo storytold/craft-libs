@@ -432,6 +432,11 @@ pub(crate) fn move_to_top(ctx: &Context, layer: LayerId) {
     ctx.move_to_top(layer);
 }
 
+/// Whether egui showed `layer` in the last pass.
+pub(crate) fn visible_last_frame(ctx: &Context, layer: LayerId) -> bool {
+    ctx.memory(|memory| memory.areas().visible_last_frame(&layer))
+}
+
 /// Makes `layer` the modal layer of the running pass: layers below it take no input.
 pub(crate) fn set_modal_layer(ctx: &Context, layer: LayerId) {
     ctx.memory_mut(|memory| memory.set_modal_layer(layer));
@@ -544,6 +549,12 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
 #[cfg(feature = "suite")]
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
+}
+
+/// A host's own egui window `id` around `body`: its first pass is a sizing pass, in an invisible `Ui`.
+#[cfg(feature = "suite")]
+pub(crate) fn host_egui_window(ctx: &Context, id: Id, body: impl FnOnce(&mut Ui)) {
+    egui::Window::new("host").id(id).show(ctx, body);
 }
 
 /// The size of one entry of [`host_popup_list`], as an app's popup list entry.

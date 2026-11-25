@@ -130,15 +130,26 @@ pub enum RowPressed {
 /// takes a box wider than its line, a select fits its widest entry up to a field length, a rule shows only with the
 /// member after it, and a row too long for its room narrows its last units first. A layer or pane opened from the bar
 /// starts without it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InBar(pub bool);
 
 impl EnvValue for InBar {
+    const AFFECTS_STYLE: bool = true;
+
     fn root() -> Self {
         InBar(false)
     }
+
+    fn style_hash(&self) -> Option<u64> {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        Some(hasher.finish())
+    }
 }
+
+impl super::StyleValue for InBar {}
 
 /// The component set: an app sets it on its root (`RootEnv::set`) and a container may set another for its subtree
 /// (`Overrides::values`); every window, layer and popup opened inside takes the scope's. A component with variants
