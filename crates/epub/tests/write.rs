@@ -295,3 +295,58 @@ fn an_ncx_is_written_on_request_and_reads_back() {
     taken.resources[0].path = "TOC.ncx".into();
     assert!(matches!(write(&taken), Err(Error::Invalid(m)) if m.contains("used twice")));
 }
+
+#[test]
+fn preserving_title_keeps_long_unicode_in_package_and_navigation() {
+    let mut b = book();
+    b.ncx = true;
+    b.metadata.title = format!("{} & end", "é".repeat(MAX_TITLE_CHARS + 1));
+    let bytes = craft_epub::write_preserving_title(&b).unwrap();
+    let escaped = b.metadata.title.replace('&', "&amp;");
+    for name in ["OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx"] {
+        assert!(text(&bytes, name).contains(&escaped), "{name} loses the title");
+    }
+    assert_eq!(Epub::open(&bytes).unwrap().package.title, b.metadata.title);
+    b.metadata.title = "x".repeat(craft_epub::MAX_PRESERVED_TITLE_CHARS);
+    let at_limit = craft_epub::write_preserving_title(&b).unwrap();
+    assert_eq!(Epub::open(&at_limit).unwrap().package.title, b.metadata.title);
+    b.metadata.title.push('x');
+    assert!(craft_epub::write_preserving_title(&b).is_err());
+}
+
+#[test]
+fn optional_doctype_keeps_default_and_allows_strict_xml_consumers() {
+    use craft_epub::{WriteOptions, write_with_options, xhtml_with_options};
+    let options = WriteOptions { include_doctype: false };
+    let chapter = xhtml_with_options("en", "Title", "", "", "<p>Content</p>", &options);
+    assert!(!chapter.contains("<!DOCTYPE"));
+    let mut b = book();
+    b.resources[1].data = chapter.into_bytes().into();
+    let bytes = write_with_options(&b, &options).unwrap();
+    for name in ["OEBPS/nav.xhtml", "OEBPS/content.xhtml"] {
+        let content = text(&bytes, name);
+        assert!(!content.contains("<!DOCTYPE"));
+        let mut xml = craft_xml::Options::local().strict();
+        xml.doctype = craft_xml::Doctype::Reject;
+        xml.parse(content.as_bytes()).unwrap();
+    }
+    assert!(text(&write(&book()).unwrap(), "OEBPS/nav.xhtml").contains("<!DOCTYPE html>"));
+}
+
+#[test]
+fn preserving_title_composes_with_navigation_options() {
+    let mut b = book();
+    b.ncx = true;
+    b.metadata.title = format!("{} & end", "é".repeat(MAX_TITLE_CHARS + 1));
+    let options = craft_epub::WriteOptions { include_doctype: false };
+    let bytes = craft_epub::write_preserving_title_with_options(&b, &options).unwrap();
+    assert_eq!(Epub::open(&bytes).unwrap().package.title, b.metadata.title);
+    let escaped = b.metadata.title.replace('&', "&amp;");
+    for name in ["OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx"] {
+        assert!(text(&bytes, name).contains(&escaped), "title lost in {name}");
+    }
+    assert!(!text(&bytes, "OEBPS/nav.xhtml").contains("<!DOCTYPE"));
+    assert!(text(&craft_epub::write_preserving_title(&b).unwrap(), "OEBPS/nav.xhtml").contains("<!DOCTYPE html>"));
+    b.metadata.title = "x".repeat(craft_epub::MAX_PRESERVED_TITLE_CHARS + 1);
+    assert!(matches!(craft_epub::write_preserving_title_with_options(&b, &options), Err(Error::Invalid(_))));
+}
