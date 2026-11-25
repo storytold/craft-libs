@@ -399,15 +399,52 @@ impl State {
             let rec = owner.unwrap_or(rec);
             self.anchored_layer(rec.scope).and_then(|opener| self.find_stop(opener)).unwrap_or(rec)
         });
+        // Tab out of a menu that lets it leave (`Menu::tab_exits`) goes on from the menu's opener, either way, as if the
+        // menu were part of it: the menu's own rows are no entries, so Shift+Tab reaches the stop before the opener.
+        let exits = current.as_ref().and_then(|rec| self.tab_exit_menu(rec.scope));
+        let current = exits.and_then(|menu| self.return_stop(menu)).or(current);
         let trap = self.trap_of(current.as_ref());
         let in_dialog = trap.and_then(|id| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Dialog);
         let fields = in_dialog && dialog_tab == TabReach::Fields;
         let mut entries = self.entries(trap, all_controls && !fields);
-        entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none() && (!fields || entry.arrival().stop.text));
+        // A layer playing its exit takes no focus (`exiting`): an Escape that closed a menu leaves it no Tab entry for the
+        // fade's frames, so the next Tab does not land in it and have the closed menu hand the focus back to its opener.
+        entries.retain(|entry| {
+            let scope = entry.arrival().scope;
+            self.anchored_layer(scope).is_none()
+                && !self.exiting(scope)
+                && exits.is_none_or(|menu| !self.within(scope, menu))
+                && (!fields || entry.arrival().stop.text)
+        });
         let top = current.as_ref().and_then(|rec| rec.stop.group).map(|group| self.last().outermost(group));
         let Some(next) = cycle(&entries, current.as_ref(), top, forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
         self.focus_stop(arrival)
+    }
+
+    /// The menu around `scope` that Tab leaves (`Menu::tab_exits`): a menu scope that traps nothing.
+    fn tab_exit_menu(&self, scope: Option<Id>) -> Option<Id> {
+        let mut at = scope;
+        while let Some(id) = at {
+            let rec = self.last_scopes.get(&id)?;
+            if rec.policy.kind == ScopeKind::Menu && !rec.policy.trap {
+                return Some(id);
+            }
+            at = rec.parent;
+        }
+        None
+    }
+
+    /// Whether the scope `scope`, or one around it, is a layer playing its exit, by this pass's record or else the last.
+    fn exiting(&self, scope: Option<Id>) -> bool {
+        let mut at = scope;
+        while let Some(rec) = at.and_then(|id| self.scopes.get(&id).or_else(|| self.last_scopes.get(&id))) {
+            if rec.closing {
+                return true;
+            }
+            at = rec.parent;
+        }
+        false
     }
 
     /// F6: the first stop of the next pane, with its label as the announcement. Inside a trapping scope (a modal
