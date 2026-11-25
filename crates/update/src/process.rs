@@ -7,7 +7,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// A `Command` that won't flash a console window on Windows, and clears AppImage-injected
-/// environment variables that corrupt system helper binaries and external applications.
+/// environment variables that corrupt system helper binaries and external applications. It also
+/// clears this copy's package manager setting ([`crate::distribution`]): a Craft App started
+/// through it gets that from its own wrapper.
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
@@ -19,6 +21,7 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     }
     #[cfg(unix)]
     clean_appimage_env(&mut cmd);
+    cmd.env_remove(crate::distribution::MANAGED_BY_VAR).env_remove(crate::distribution::MANAGED_HINT_VAR);
     cmd
 }
 

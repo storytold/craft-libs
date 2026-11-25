@@ -5,6 +5,7 @@
 pub mod app;
 pub mod desktop_entry;
 pub mod detect;
+pub mod distribution;
 pub mod distro;
 mod folders;
 pub mod http;
@@ -38,6 +39,7 @@ pub mod dialog;
 pub mod updater;
 
 pub use app::App;
+pub use distribution::{Distribution, distribution};
 pub use http::{Http, Stop};
 pub use paths::Paths;
 pub use platform::{Arch, Os, PackageKind, Platform, pick_asset};

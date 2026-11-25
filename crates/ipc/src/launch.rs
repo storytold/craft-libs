@@ -64,6 +64,10 @@ pub fn launch_at(
     trust::check_executable(bin)?;
     let mut cmd = Command::new(bin);
     cmd.args(args);
+    // The launched app gets its package manager setting from its own wrapper, not from this
+    // process: craft_update::distribution's MANAGED_BY_VAR and MANAGED_HINT_VAR (craft-ipc
+    // doesn't depend on craft-update). `extra_env` can still set them.
+    cmd.env_remove("CRAFT_UPDATE_MANAGED_BY").env_remove("CRAFT_UPDATE_MANAGED_HINT");
     for (key, value) in extra_env {
         cmd.env(key, value);
     }

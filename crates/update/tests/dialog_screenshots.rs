@@ -40,13 +40,16 @@ fn dialog_screenshots() {
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     let long_error = "couldn't reach https://api.github.com/repos/storytold/photocraft/releases/latest: \
         connection timed out after 30 seconds (os error 110); check the network or proxy settings";
-    let states: [(&str, Option<Status>); 4] = [
-        ("checking", Some(Status::Checking)),
-        ("up-to-date", Some(Status::UpToDate)),
-        ("failed", Some(Status::Failed(long_error.into()))),
-        ("startup-prompt", None),
+    let nix = craft_update::Distribution { manager: "Nix".into(), hint: "Update your Nix sources and rebuild to get the new version.".into() };
+    // A status for the result dialog, else the startup prompt, managed by a package manager or not.
+    let states: [(&str, Option<Status>, Option<craft_update::Distribution>); 5] = [
+        ("checking", Some(Status::Checking), None),
+        ("up-to-date", Some(Status::UpToDate), None),
+        ("failed", Some(Status::Failed(long_error.into())), None),
+        ("startup-prompt", None, None),
+        ("startup-prompt-managed", None, Some(nix)),
     ];
-    for (name, status) in states {
+    for (name, status, distribution) in states {
         for (theme_name, theme) in [("light", Theme::Light), ("dark", Theme::Dark)] {
             let dialog = CheckResultDialog::new(&APP, "0.1.0");
             let mut prompt = StartupPrompt::new(
@@ -55,6 +58,7 @@ fn dialog_screenshots() {
                 "0.1.0",
             );
             prompt.is_self_updating = false;
+            prompt.distribution = distribution.clone();
             let mut h = Harness::builder()
                 .with_size(egui::vec2(560.0, 360.0))
                 .with_pixels_per_point(1.5)

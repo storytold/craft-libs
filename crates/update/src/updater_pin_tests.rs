@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::tests::{newer, offer_now, settle, settle_offer};
+use super::tests::{newer, nix, offer_now, settle, settle_offer};
 use super::*;
 use crate::suite::PHOTOCRAFT;
 
@@ -177,4 +177,26 @@ fn every_answer_after_a_pin_made_mid_check_reports_the_launchers_choice() {
         assert_eq!(u.status(), &Status::Managed);
         assert_eq!(u.managed(), Some(&Choice::Managed(crate::pins::VersionTrack::Nightly)));
     }
+}
+
+#[test]
+fn the_launchers_pin_wins_over_a_package_manager() {
+    let ctx = egui::Context::default();
+    let dir = pins_with(crate::pins::VersionTrack::Pinned("v0.13.0".into()));
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&asked);
+    let mut u = Updater::new(&PHOTOCRAFT, "0.13.0")
+        .with_source(Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(newer()))
+        }))
+        .with_pins_path(dir.path().join("versions.json"))
+        .with_distribution(nix());
+    u.check_at_start(&ctx);
+    settle(&mut u, &ctx);
+    assert!(!u.prompt_open(), "no prompt, not even the package manager's");
+    u.check_now(&ctx);
+    settle(&mut u, &ctx);
+    assert_eq!(u.status(), &Status::Managed);
+    assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0, "the pin is read before any release lookup");
 }
