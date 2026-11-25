@@ -187,6 +187,67 @@ fn a_footer_bar_too_narrow_for_its_actions_keeps_them_inside_it() {
     }
 }
 
+/// The slider's rect and the rects of three actions of a footer bar whose leading control is a thumbnail slider, in a
+/// room `width` wide.
+fn slider_footer(width: f32) -> (Rect, Vec<Rect>) {
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut zoom = 1.0;
+        let actions = ["trash", "plus", "new_folder"].map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let (output, slider) = FooterBar::actions(actions)
+            .show_footer_leading(ui, |ui, _| ThumbnailSlider::new("Size", Bind::bound(&mut zoom), TileZoom::Ladder).show(ui).response.rect);
+        *out.borrow_mut() = (slider.unwrap_or(Rect::NOTHING), output.responses.iter().map(|response| response.rect).collect());
+    });
+    fixture.room(Vec2::new(width, 200.0)).settle();
+    seen.borrow().clone()
+}
+
+/// Beside a leading slider, the slider narrows before the actions continue on a new line: a bar with room for the
+/// actions and half the slider keeps the actions on one line at its end edge.
+#[trial]
+fn a_footer_bar_narrows_its_leading_slider_before_its_actions_wrap() {
+    let (wide, actions) = slider_footer(900.0);
+    let span =
+        actions.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max) - actions.iter().map(|rect| rect.min.x).fold(f32::INFINITY, f32::min);
+    let width = (wide.width() / 2.0 + span + 32.0).ceil();
+    let (slider, actions) = slider_footer(width);
+    assert_eq!(actions.len(), 3);
+    assert!(actions.iter().all(|rect| (rect.min.y - actions[0].min.y).abs() < 0.5), "the actions stay on one line: {actions:?}");
+    assert!(actions.iter().all(|rect| rect.max.x <= width + 0.5), "the actions end inside the {width}-point bar: {actions:?}");
+    assert!(slider.width() < wide.width() - 0.5, "the slider kept its width {} in a narrow bar", slider.width());
+}
+
+/// A bar whose actions wrapped beside a leading slider puts them back on one line, narrowing the slider, once fewer of
+/// them fit there.
+#[trial]
+fn a_footer_bar_whose_wrapped_actions_shorten_puts_them_back_on_one_line() {
+    let (wide, three) = slider_footer(900.0);
+    let span =
+        three.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max) - three.iter().map(|rect| rect.min.x).fold(f32::INFINITY, f32::min);
+    let width = (wide.width() / 2.0 + span + 32.0).ceil();
+    let count = Rc::new(std::cell::Cell::new(8));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (asked, out) = (Rc::clone(&count), Rc::clone(&seen));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut zoom = 1.0;
+        let icons = ["trash", "plus", "new_folder", "ban", "check", "copy", "more", "list"];
+        let actions = icons.into_iter().take(asked.get()).map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let (output, _) = FooterBar::actions(actions)
+            .show_footer_leading(ui, |ui, _| ThumbnailSlider::new("Size", Bind::bound(&mut zoom), TileZoom::Ladder).show(ui));
+        *out.borrow_mut() = output.responses.iter().map(|response| response.rect).collect::<Vec<_>>();
+    });
+    fixture.room(Vec2::new(width, 200.0)).settle();
+    let eight = seen.borrow().clone();
+    assert!(eight.iter().any(|rect| (rect.min.y - eight[0].min.y).abs() >= 0.5), "eight actions take more lines: {eight:?}");
+    count.set(3);
+    fixture.settle();
+    let three = seen.borrow().clone();
+    assert_eq!(three.len(), 3);
+    assert!(three.iter().all(|rect| (rect.min.y - three[0].min.y).abs() < 0.5), "three actions share one line: {three:?}");
+    assert!(three.iter().all(|rect| rect.max.x <= width + 0.5), "the three actions end inside the bar: {three:?}");
+}
+
 const DIALOG_BUTTONS: [&str; 4] = ["Reset", "Don't Save", "Cancel", "OK"];
 
 /// The rect of a bar of four dialog buttons and the rect of each button, in a room `width` wide; `leading` puts a

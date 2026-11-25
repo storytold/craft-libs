@@ -705,9 +705,14 @@ impl FooterBar {
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls are units of the bar's row, so they narrow to leave the actions their
                     // width; the end group fills the rest.
+                    let room = ui.max_rect();
                     led = Some(leading(ui, bar));
                     show_actions(ui, actions, 0..start, &mut shown);
-                    Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                    show_end_group(ui, bar, room, |ui| {
+                        let from = shown.responses.len();
+                        show_actions(ui, actions, from_end(), &mut shown);
+                        line_length(ui, shown.responses[from..].iter().map(|(_, response)| response.rect))
+                    });
                 } else if start == 0 {
                     show_actions(ui, actions, from_end(), &mut shown);
                 } else {
@@ -730,7 +735,9 @@ impl FooterBar {
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.live(armed_for));
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let look = Env::of(ui).get::<DialogButtonLook>();
+                // Shows the buttons and returns their line length.
                 let place = |ui: &mut Ui, shown: &mut Shown| {
+                    let mut rects = Vec::with_capacity(buttons.len());
                     for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
@@ -759,7 +766,9 @@ impl FooterBar {
                         if default_at == Some(at) {
                             widget = widget.default_stop();
                         }
-                        let clicked = crate::contract::clicked(&widget.show(ui));
+                        let output = widget.show(ui);
+                        rects.push(output.response.rect);
+                        let clicked = crate::contract::clicked(&output);
                         if live && clicked {
                             shown.picked = Some(at);
                         }
@@ -780,12 +789,15 @@ impl FooterBar {
                             }
                         }
                     }
+                    line_length(ui, rects.into_iter())
                 };
                 if let Some(leading) = leading.as_mut() {
                     // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest, sit at
-                    // the end edge and continue on a new line when they do not fit beside each other.
+                    // the end edge and continue on a new line when they do not fit beside the leading controls at their
+                    // least.
+                    let room = ui.max_rect();
                     led = Some(leading(ui, bar));
-                    Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| place(ui, &mut shown));
+                    show_end_group(ui, bar, room, |ui| place(ui, &mut shown));
                 } else {
                     place(ui, &mut shown);
                 }
@@ -811,6 +823,61 @@ impl FooterBar {
         };
         (output, led)
     }
+}
+
+/// A bar with leading controls whose end group, on one line, ran past the bar's edge in a pass: the bar's width, the
+/// width the leading controls took and the end group's line length then.
+#[derive(Clone, Copy, Debug, Default)]
+struct EndRanPast(Option<RanPast>);
+
+#[derive(Clone, Copy, Debug)]
+struct RanPast {
+    width: f32,
+    leading: f32,
+    line: f32,
+}
+
+/// Shows the end group of a bar with leading controls, `body`, at the end edge of `room`, the bar's line; `body`
+/// returns the group's line length. The group stays on one line while the leading controls can narrow to leave it its
+/// width. After that line ran past the bar's edge, the group continues on a new line instead, until the bar widens, the
+/// leading controls take less or the group's line shortens: then it tries one line again.
+fn show_end_group(ui: &mut Ui, bar: &mut BodyCx<'_>, room: Rect, mut body: impl FnMut(&mut Ui) -> f32) {
+    let leading = ui.min_rect().width();
+    let ran_past = bar.memory_at::<EndRanPast>("end_ran_past");
+    // Half a point: less than a pixel shows at any scale the box runs.
+    if ran_past.0.is_some_and(|past| room.width() > past.width + 0.5 || leading < past.leading - 0.5) {
+        ran_past.0 = None;
+    }
+    let wraps = ran_past.0.is_some();
+    let shown = Row::new()
+        .fill_width()
+        .align(RowAlign::End)
+        .wrap(wraps)
+        .show(ui, |ui, _| {
+            let line = body(ui);
+            (ui.min_rect(), line)
+        })
+        .inner;
+    let ctx = ui.ctx().clone();
+    let Some((members, line)) = shown else { return };
+    if !room.width().is_finite() || crate::runtime::measure::active(&ctx) {
+        return;
+    }
+    let ran_past = bar.memory_at::<EndRanPast>("end_ran_past");
+    if ran_past.0.is_some_and(|past| line < past.line - 0.5) {
+        // The group shortened: the next pass tries one line again.
+        ran_past.0 = None;
+        ctx.request_repaint();
+    } else if !wraps && (members.left() < room.left() - 0.5 || members.right() > room.right() + 0.5) {
+        ran_past.0 = Some(RanPast { width: room.width(), leading, line });
+        ctx.request_repaint();
+    }
+}
+
+/// The length of a line of members at `rects`, with the gap of `ui` between each two.
+fn line_length(ui: &Ui, rects: impl Iterator<Item = Rect>) -> f32 {
+    let (sum, count) = rects.fold((0.0, 0u16), |(sum, count), rect| (sum + rect.width(), count.saturating_add(1)));
+    sum + ui.spacing().item_spacing.x * f32::from(count.saturating_sub(1))
 }
 
 /// Shows the bar's `actions` at the indexes `order`, in display order, and collects what happened to them.
