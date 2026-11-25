@@ -1742,7 +1742,10 @@ impl Lexer<'_> {
         }
         self.at += 1;
         let depth = self.delims.len();
-        self.declares.retain(|declares| declares.level <= depth);
+        // `declares` is in ascending order of level, so the ones out of scope are at its end.
+        while self.declares.last().is_some_and(|declares| declares.level > depth) {
+            self.declares.pop();
+        }
         let ends = match self.test {
             Some(TestRegion::Item { level, opened, item, semi, block, .. }) => {
                 let block_end = opened && depth == level && c == '}';
@@ -1790,7 +1793,9 @@ impl Lexer<'_> {
         // A unit struct (`struct S;`) declares no fields.
         if !comma {
             let level = self.delims.len();
-            self.declares.retain(|declares| declares.level < level);
+            while self.declares.last().is_some_and(|declares| declares.level >= level) {
+                self.declares.pop();
+            }
         }
         // A `,` among an enum's variants ends a discriminant.
         if let Some((_, _, fields @ Fields::Discriminant)) = self.delims.last_mut()
@@ -2516,6 +2521,15 @@ fn by_ref(#[cfg(test)] ref mut p: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ 
 fn paths(#[cfg(test)] m::P(x): Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "six".len() }>) {}
 "#;
         assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six"]);
+    }
+
+    #[test]
+    fn closing_delimiters_keep_pending_declarations_in_linear_time() {
+        // 200,000 pending `fn`s and 200,000 `[]` groups: scanning every pending declaration at
+        // each `]` makes 4 * 10^10 comparisons, which takes minutes.
+        let count = 200_000;
+        let source = format!("m! {{ {}{}}} \"done\"", "fn ".repeat(count), "[] ".repeat(count));
+        assert_eq!(literals(&source), ["done"]);
     }
 
     #[test]
