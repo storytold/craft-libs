@@ -16,8 +16,8 @@ use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
-    Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, PressKind,
-    Problem, Scopes, Trigger, TypingRule,
+    Active, Chord, CommandDef, CommandKind, CommandRef, Dispatch, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press,
+    PressKind, Problem, Scopes, Trigger, TypingRule,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -972,7 +972,8 @@ pub fn keymap_builds() -> u64 {
 /// The keymap of `registry` and the app catalog `app` on `platform` under `overrides`, and the chords it binds to the
 /// edit commands and to the window's keys. A catalog command whose id the registry has keeps the registry's
 /// definition, and the catalog's default bindings join the registry's after them (an app's alternate keys, such as
-/// F2/F3/F4 for Cut/Copy/Paste).
+/// F2/F3/F4 for Cut/Copy/Paste), with its [`Dispatch`]: an app that runs a linked set's command from its own key
+/// handling says so on its def for the id, and the set's chord then shows without the key stage taking it.
 ///
 /// A yielding library command's default chord (a window shortcut's, Quit's: `yields_default`) that another command also
 /// binds is that command's: the library command loses it, so the app's binding beats the framework's default. One the
@@ -998,7 +999,7 @@ fn build_keymap(
     }
     let app_defs: Vec<CommandDef> =
         app.map(|app| app.defs().iter().filter(|def| registry.get(&def.command.id).is_none()).cloned().collect()).unwrap_or_default();
-    // The window-shortcut yield and the edit chords below read the registry's definitions only.
+    // The window-shortcut yield below reads the registry's definitions only.
     let joined = |defs: &[CommandDef]| -> Vec<CommandDef> { defs.iter().chain(&app_defs).cloned().collect() };
     let mut defs = registry.defs_for(platform);
     if let Some(app) = app {
@@ -1010,6 +1011,9 @@ fn build_keymap(
         }
         for extra in app.defs() {
             if let Some(def) = defs.iter_mut().find(|def| def.command == extra.command) {
+                // An app that runs the set's command itself says so on its def for the id: the set's def follows, so the
+                // chord shows and the key stage leaves the key alone.
+                def.dispatch = extra.dispatch;
                 for binding in &extra.defaults {
                     if !def.defaults.contains(binding) {
                         def.defaults.push(binding.clone());
@@ -1042,9 +1046,11 @@ fn build_keymap(
             log::warn!("shortcut override `{key}` names no command and binds nothing");
         }
     }
-    let window_shortcuts = registry
-        .defs()
+    let window_shortcuts = keymap
+        .catalog()
         .iter()
+        // A command the app runs itself has no key of the window's: the input hook leaves its chords in the raw input.
+        .filter(|def| def.dispatch != Dispatch::App)
         .filter_map(|def| WindowShortcut::of(&def.command).map(|key| (key, &def.command)))
         .flat_map(|(key, command)| {
             keymap
@@ -1054,9 +1060,10 @@ fn build_keymap(
                 .map(move |binding| (key, binding.trigger.chord))
         })
         .collect();
-    let edit_chords = registry
-        .defs()
+    let edit_chords = keymap
+        .catalog()
         .iter()
+        .filter(|def| def.dispatch != Dispatch::App)
         .filter_map(|def| registry.edit_of(&def.command.id).map(|edit| (edit, &def.command)))
         // Delete's keys (Delete, Backspace) stay a focused text part's own deletion, which also deletes one character.
         .filter(|(edit, _)| *edit != EditCommand::Delete)
