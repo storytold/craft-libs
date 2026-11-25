@@ -769,7 +769,7 @@ Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, the Escape order and the f
 The step of one pass of motion: a Hand glide, a held Zoom press and an autoscroll integrate over it.
 
 - `craft_behavior::frame_step::FRAME_STEP_MAX`: `pub const FRAME_STEP_MAX: f64`. The longest step motion integrates, in seconds, so a stalled pass never jumps the view.
-- `craft_behavior::frame_step::frame_step`: `pub fn frame_step(dt: f64) -> f64`. The step of a pass that came `dt` seconds after the previous one, `dt` being the time between two readings of the
+- `craft_behavior::frame_step::frame_step`: `pub fn frame_step(dt: f64) -> f64`. The step of a pass that came `dt` seconds after the previous one, kept within `0..=FRAME_STEP_MAX`.
 
 ## `craft_behavior::geometry`
 
@@ -4330,7 +4330,7 @@ The key stage (spec 9.1, 9.2, 9.3, 9.7): the input hook strips the keys the runt
 - `craft_ui::runtime::keys::escape_mods`: `pub fn escape_mods(ctx: &Context) -> Option<Mods>`. The Alt and Shift held at the press of the pass's last Escape that became a `Cancel`; `None` when the pass had none.
 - `craft_ui::runtime::keys::focus_holds`: `pub fn focus_holds(ctx: &Context, chord: Chord) -> bool`. Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:
 - `craft_ui::runtime::keys::held`: `pub fn held(ctx: &Context) -> Vec<Key>`. The keys down in the running viewport this pass: the key stage's `down` (withheld presses included), plus each key
-- `craft_ui::runtime::keys::leftover_events`: `pub fn leftover_events(ctx: &Context) -> Vec<Event>`. The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the running pass that
+- `craft_ui::runtime::keys::leftover_events`: `pub fn leftover_events(ctx: &Context) -> Vec<Event>`. The key, text and clipboard events of the running pass that nothing took, in the order they arrived.
 - `craft_ui::runtime::keys::textless_paste`: `pub fn textless_paste(ctx: &Context) -> bool`. Whether the running viewport's input hook read a paste with no text in this pass: the paste chord came while the
 - `craft_ui::runtime::keys::with_canvas_window_intents`: `pub fn with_canvas_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool`. Offers window intents to a canvas while the canvas or one of its controls has focus, or nothing has focus.
 - `craft_ui::runtime::keys::with_window_intents`: `pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool`. Offers the window's intents and the focused framework stop's unused Escape to `take`, and writes back what it
