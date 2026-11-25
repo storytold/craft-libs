@@ -88,11 +88,13 @@ than exposing a partial page list. These changes do not imply full equivalence t
 the vendor notes record the boundaries. Existing consumers remain on their immutable
 revision until they explicitly adopt a new one.
 
-Consumers pin `craft-pdf` and their required root `[patch.crates-io]` entries to the same full
-`https://github.com/storytold/craft-libs` revision. Cargo ignores dependency-local patches.
-Reader consumers patch `hayro-syntax`, `hayro-interpret` and `hayro-jbig2`; raster consumers
-also patch `hayro`. Writer consumers patch `krilla`. A plain `write` consumer does not need
-reader patches. Keep unrelated craft-ui/craft-print versions unchanged when adopting PDF.
+Consumers pin `craft-pdf` to a full `https://github.com/storytold/craft-libs` revision. This
+repository names its vendored crates by path, so every feature uses them without patches
+except two, which reach a vendored crate through a crates.io crate. Cargo ignores
+dependency-local patches, so a consumer that enables one of the two adds root
+`[patch.crates-io]` entries at the same revision: `write-pdf` (and `craft-prepress/flatten`)
+patches `hayro-syntax`, which `hayro-write` uses; `write-svg` patches `krilla`, which
+`krilla-svg` uses. Keep unrelated craft-ui/craft-print versions unchanged when adopting PDF.
 A pinned commit must be available remotely before a fresh public checkout can resolve it.
 
 Synthetic native and WASM contracts cover opening, caller limits, alpha, geometry, settings,
@@ -325,18 +327,38 @@ application error preservation, embedded pages, and native-only panic recovery.
 
 ## Source pinning and local development
 
-Consumers pin both the facade and patched writer to the same full commit:
+Consumers pin the facade to a full commit. It names the patched writer by path, so a `write`
+consumer needs nothing more:
 
 ```toml
 [workspace.dependencies]
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "<full-commit-id>", version = "=0.1.0", default-features = false, features = ["write"] }
+```
 
+`krilla-svg` comes from crates.io, so a consumer that enables `write-svg` also patches Krilla
+to the same commit:
+
+```toml
 [patch.crates-io]
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "<full-commit-id>", version = "=0.8.2" }
 ```
 
-Choose `write-pdf` only when embedding PDF pages. Cargo ignores dependency workspaces'
-root patches; copy the Krilla patch into the consuming workspace. A compile-time marker
+Choose `write-pdf` only when embedding PDF pages. `hayro-write` comes from crates.io, so a
+consumer that enables `write-pdf` (or `craft-prepress/flatten`) patches `hayro-syntax` to the
+same commit:
+
+```toml
+[patch.crates-io]
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "<full-commit-id>", version = "=0.7.2" }
+```
+
+`craft-pdf` re-exports the crate as `craft_pdf::syntax`, and `open` returns
+`craft_pdf::syntax::Pdf`; use that path for its types. A consumer that also depends on
+`hayro-syntax` directly and patches it to anything other than this repository at the same
+commit gets a second `hayro-syntax`, whose types do not match `craft-pdf`'s.
+
+Cargo ignores dependency workspaces' root patches, so these go in the consuming workspace.
+A compile-time marker
 rejects unpatched Krilla. Check the normal dependency graph separately from the test graph
 and ensure there is one Krilla source, including uses through `krilla-svg`. This writer
 migration does not change an application's reader backend or its other craft-libs pins.

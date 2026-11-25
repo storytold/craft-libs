@@ -146,6 +146,7 @@ version = "1.1.9"
 optional = true
 
 [dependencies.vello_common]
+path = "../vello_common"
 version = "0.0.8"
 default-features = false
 

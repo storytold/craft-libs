@@ -39,14 +39,10 @@ do not compile from the published package.
 
 ## Using it
 
-The directory is excluded from the workspace. With the root manifest's `[patch.crates-io]` entry,
-`craft-prepress` builds its `flatten` feature against this copy. Cargo ignores a dependency's patches,
-so a consuming workspace adds its own entry:
-
-```toml
-[patch.crates-io]
-linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
-```
+The directory is excluded from the workspace. `craft-prepress` names it by path, so its `flatten`
+feature builds against this copy in this workspace and in a workspace that uses `craft-prepress`
+by `git`, with no `linesweeper` patch entry. `flatten` also enables `craft-pdf/write-pdf`, which
+needs the `hayro-syntax` patch, at the same revision, described in the `craft-pdf` README.
 
 ## Tests
 
