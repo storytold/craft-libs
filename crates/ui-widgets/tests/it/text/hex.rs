@@ -124,14 +124,24 @@ fn a_content_sized_hex_field_shows_all_six_digits() {
     });
     fixture.settle();
     let digits = fixture.texts().iter().find(|run| run.text == "336699").cloned().unwrap_or_else(|| panic!("the field shows its digits"));
-    // The run is clipped to the field's text rect: the editor clips its text to the text part, inside egui's own clip
-    // one point past it. The digits start at the rect's start edge, and the field measures the caret past the last
-    // digit (`MeasureCx::field_text`), so the right edge, which proves the width, leaves the caret's room.
-    let text_rect = digits.clip;
+    // The run's clip is egui's own: its editor clips the text to the laid-out text one point outset (the room of a
+    // two-point caret centred on the text's end), cut to the field's text part. So the clip shows that no digit is
+    // cut, but its end edge follows the text, not the field, and cannot prove the field's width.
+    let clip = digits.clip;
+    assert!(
+        digits.rect.min.x >= clip.min.x && digits.rect.max.x <= clip.max.x,
+        "the digits {:?} are not cut by the clip they are painted under {clip:?}",
+        digits.rect
+    );
+    // The field's box proves it: its text part is the box less the field's padding, the same on both sides, and the
+    // digits start at the part's start edge. The field measures the whole caret width past the last digit
+    // (`MeasureCx::field_text`), at least the half of it egui paints past the text's end.
+    let field = fixture.by_label("Hex").unwrap_or_else(|| panic!("the hex field")).rect;
+    let text_end = field.max.x - (digits.rect.min.x - field.min.x);
     let caret = fixture.ctx().global_style().visuals.text_cursor.stroke.width;
     assert!(
-        digits.rect.min.x >= text_rect.min.x && digits.rect.max.x + caret <= text_rect.max.x + 0.01,
-        "the digits {:?} and the caret past them lie inside the field's text rect {text_rect:?}",
+        digits.rect.max.x + caret <= text_end + 0.01,
+        "the digits {:?} and the caret past them lie inside the field's text part, which ends at {text_end} in the field {field:?}",
         digits.rect
     );
 }
