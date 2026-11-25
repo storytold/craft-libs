@@ -398,3 +398,28 @@ fn the_open_submenu_parent_keeps_the_accent_when_the_pointer_enters_its_child() 
         assert_eq!(fills_in(&shapes, parent), accent, "the parent keeps its accent while its child is active at {scale}×");
     }
 }
+
+/// A menu row stands `size.row.menu` high (VectorCraft's 29-point rows), and an app that sets only the control height
+/// keeps its rows a control high.
+#[trial]
+fn a_menu_row_stands_a_menu_row_high() {
+    let row = |overrides: &[(&str, f32)]| {
+        let mut sizes = craft_theme::AppSizes::default();
+        for (path, value) in overrides {
+            sizes.all.insert((*path).to_owned(), craft_theme::SizeValue::Number(*value));
+        }
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.sizes = Arc::new(sizes);
+        let mut fixture = Fixture::new(|ui| {
+            Menu::inline("File").show(ui, |ui, _| {
+                MenuItem::new("Open").show(ui);
+                MenuItem::new("Save").show(ui);
+            });
+        });
+        fixture.root(root).settle();
+        fixture.by_label("Save").expect("the row is shown").rect.height()
+    };
+    let (standard, menu, control) = (row(&[]), row(&[("size.row.menu", 44.0)]), row(&[("size.control.md", 44.0)]));
+    assert!(menu > standard + 10.0, "a taller menu row raises the row: {standard} then {menu}");
+    assert!((control - menu).abs() < 0.5, "a row follows the control height when the app sets no menu row: {control} and {menu}");
+}
