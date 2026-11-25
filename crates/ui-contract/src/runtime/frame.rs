@@ -34,9 +34,10 @@ pub struct FrameInput {
     pub latched: Mods,
     /// The window in which the app's own egui code shows a modal this frame (a dialog the app draws itself, not a
     /// framework layer). It blocks the app's other windows as a framework app-modal layer open in it does: their
-    /// presses, keys, wheel and text go nowhere, a press there brings the modal's window forward, and they refuse to
-    /// close. A panel floated into a window of its own is one of them. `None` (the default) when the app shows no such
-    /// modal; set every frame from the app's own state.
+    /// presses, keys, wheel and text go nowhere, a press there brings the modal's window forward, they refuse to close,
+    /// and the modal's window takes the keyboard if one of them has it when the modal opens. A panel floated into a
+    /// window of its own is one of them. `None` (the default) when the app shows no such modal; set every frame from
+    /// the app's own state.
     pub app_modal: Option<ViewportId>,
     /// Whether the window system's input reaches the OS windows the runtime hosts.
     pub window_input: WindowInput,

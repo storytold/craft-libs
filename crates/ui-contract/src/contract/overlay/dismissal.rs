@@ -78,21 +78,15 @@ pub(super) fn dismissal(
 /// own pass decides: a layer that closes on outside presses closes on one in the opener outside it and its anchor
 /// (absorbed or not, as its rule says), and on one in any other window of the app; a popup also closes once the app
 /// has no focus. An absorbing layer can't keep a press in another OS window from reaching that window.
-pub(super) fn popup_dismissal(
-    ctx: &Context,
-    layer: &Layer<'_>,
-    rect: Rect,
-    anchor: Rect,
-    popup: egui::ViewportId,
-    appears: bool,
-) -> Option<CloseReason> {
+pub(super) fn popup_dismissal(ctx: &Context, layer: &Layer<'_>, rect: Rect, anchor: Rect, popup: egui::ViewportId) -> Option<CloseReason> {
     let here = match layer.overlay.dismiss.outside {
         Outside::Keep => return None,
         Outside::Absorb => overlay::absorbed_press(ctx).is_some(),
         Outside::Close => press_outside(ctx, layer, rect, anchor),
     };
     let away = layer.overlay.rank == Rank::Popup && crate::runtime::windows::app_away(ctx);
-    (here || away || crate::runtime::windows::pressed_elsewhere(ctx, popup, appears)).then_some(CloseReason::Outside)
+    let appeared = overlay::appeared_this_frame(ctx, layer.id);
+    (here || away || crate::runtime::windows::pressed_elsewhere(ctx, popup, appeared)).then_some(CloseReason::Outside)
 }
 
 /// Whether a primary press landed outside the layer, its anchor and the layers opened from inside it. A press the
