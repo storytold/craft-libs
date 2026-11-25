@@ -19,6 +19,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Commands as _, Dispatch, Scope};
 use craft_ui::runtime::env::{Env, InBar, in_room, with_env};
 use craft_ui::runtime::frame::take_output;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pictures::sample_picture;
