@@ -182,6 +182,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   and filters over the Google Fonts index, installed fonts by family, the font store interface,
   and (`ui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
   and the standalone app.
+- [`craft-font-os-windows`](crates/font-os-windows/src/lib.rs): the Win32 calls `craft-font-store`
+  needs on Windows to make a font available to every app of the user (the per-user font
+  registry, `AddFontResourceW`, `WM_FONTCHANGE`), behind a safe API.
 - [`craft-font-store`](crates/font-store/README.md): the suite's font store: the pinned Google
   Fonts and Noto indexes plus indexes the user adds (never curated), exact lookup by family and
   style or PostScript name, and installs from each source's URLs (jsDelivr, then raw GitHub)
@@ -476,7 +479,7 @@ architecture: [docs/craft-framework.md](docs/craft-framework.md).
 - [`craft-theme`](crates/theme/README.md) and [`craft-theme-store`](crates/theme-store/README.md): the token model,
   the built-in themes and the suite's theme selection ([docs/suite-themes.md](docs/suite-themes.md)).
 - [`craft-host`](crates/host/README.md): the services an app installs once and every feature reads.
-- `craft-win32`: the Win32 calls that need `unsafe`, behind a safe API; the one crate that allows `unsafe`.
+- `craft-win32`: the window-procedure and window-handle Win32 calls that need `unsafe`, behind a safe API.
 - Tools, not shipped in apps: `craft-ui-gallery` (the story viewer), `story-render` (one component's stories to
   PNG files), [`craft-design-lint`](crates/design-lint/README.md), `craft-ui-bench`, `craft-ui-test-kit`.
 
