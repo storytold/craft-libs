@@ -2040,6 +2040,7 @@ name = "craft-appkit"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
 ]
@@ -2410,6 +2411,7 @@ name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-browse",
