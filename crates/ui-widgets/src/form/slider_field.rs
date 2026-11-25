@@ -54,7 +54,8 @@ pub struct SliderFieldStyle {
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
 /// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
 /// the slider are Tab stops in the order they are read: the field and then the slider when stacked, the slider and then
-/// the field when inline. A log or power scale curves the
+/// the field when inline. A click on the row's label focuses the number field in either layout. A log or power scale
+/// curves the
 /// slider's track only: the field, typing and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
@@ -429,7 +430,15 @@ impl Component for SliderField<'_> {
                     Some(tooltip) => slider.tooltip(tooltip.clone()),
                     None => slider,
                 };
+                // The number field the label focuses shows the tooltip too while enabled. Disabled, the slider alone
+                // carries the reason and stays the one Tab stop.
+                let field_view = match cx.resolved.tooltip {
+                    Some(tooltip) if cx.resolved.enabled => field_view.tooltip(tooltip.clone()),
+                    _ => field_view,
+                };
                 let dragged = ui.child("slider", place(track), slider);
+                // A click on the enclosing field's label focuses the number field, the part that takes typing.
+                ui.label_target("field");
                 (ui.child("field", place(field), field_view), dragged)
             }
         };

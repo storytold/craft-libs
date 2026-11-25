@@ -515,14 +515,16 @@ pub(crate) fn has_reachable_stop(ctx: &Context, id: Id) -> bool {
 }
 
 /// Where a request for the component `id` goes when it has no stop of its own: the first stop registered since
-/// `from` (a `stop_count`), which a component inside it holds.
-pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<FocusTarget> {
+/// `from` (a `stop_count`) that the component `prefer` holds, else the first stop registered since `from`, which a
+/// component inside it holds.
+pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize, prefer: Option<Id>) -> Option<FocusTarget> {
     take_app_widgets(ctx, None);
     with(ctx, |state| {
         if state.stop_ids.contains(&id) {
             return None;
         }
-        state.stops.get(from..)?.first().map(target_of)
+        let stops = state.stops.get(from..)?;
+        prefer.and_then(|child| stops.iter().find(|rec| rec.stop.id == child)).or_else(|| stops.first()).map(target_of)
     })
 }
 

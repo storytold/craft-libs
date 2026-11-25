@@ -1,10 +1,11 @@
 //! `SliderField`: Tab visits its slider and its number field in the order a reader meets them on the row.
 
 use craft_ui::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _, TooltipSpec};
-use craft_ui::form::{SliderField, SliderFieldLayout};
+use craft_ui::form::{Field, SliderField, SliderFieldLayout};
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::Direction;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::{Fixture, Target, trial};
 use craft_ui::text::NumberField;
 use egui::{Key, Modifiers};
 
@@ -81,6 +82,61 @@ fn tab_visits_a_slider_fields_parts_in_reading_order() {
             assert_eq!(forward, order, "Tab order of a {layout:?} slider field under {direction:?}");
             assert_eq!(back, reversed, "Shift-Tab order of a {layout:?} slider field under {direction:?}");
         }
+    }
+}
+
+/// A slider field laid out as `layout` under `direction`: inline in a `Field` row that labels it, stacked under its own
+/// caption.
+fn labelled(layout: SliderFieldLayout, direction: Direction) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut size = 20.0;
+        if matches!(layout, SliderFieldLayout::Inline) {
+            Field::new("Size").show(ui, |ui, _| SliderField::new("Size", Bind::bound(&mut size), 0.0..=100.0).layout(layout).show(ui));
+        } else {
+            SliderField::new("Size", Bind::bound(&mut size), 0.0..=100.0).layout(layout).show(ui);
+        }
+    });
+    fixture.direction(direction).settle();
+    fixture
+}
+
+/// The label that names the slider field: the "Size" label node.
+fn label(fixture: &Fixture) -> Target {
+    let tree = fixture.tree();
+    let key = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some("Size") && tree.role_of(*key) == Some(Role::LABEL));
+    key.and_then(|key| fixture.target(key)).unwrap_or_else(|| panic!("no label names the slider field"))
+}
+
+/// A click on the label of a slider field focuses its number field, the part that takes typing, whichever part Tab
+/// reaches first: inline, where the slider is the first stop, and stacked, under its own caption, in both directions.
+/// A pointer click and an accessibility click both go there.
+#[trial]
+fn a_click_on_a_slider_fields_label_focuses_its_number_field() {
+    for layout in [SliderFieldLayout::Inline, SliderFieldLayout::Stacked] {
+        for direction in [Direction::Ltr, Direction::Rtl] {
+            let mut fixture = labelled(layout, direction);
+            let caption = label(&fixture);
+            fixture.click(&caption).settle();
+            assert_eq!(focused(&fixture), size(Role::SPIN_BUTTON), "a click on a {layout:?} slider field's label under {direction:?}");
+
+            let mut fixture = labelled(layout, direction);
+            let caption = label(&fixture);
+            fixture.access(AccessActionKind::Click, &caption).settle();
+            assert_eq!(focused(&fixture), size(Role::SPIN_BUTTON), "an access click on a {layout:?} slider field's label under {direction:?}");
+        }
+    }
+}
+
+/// An enabled inline slider field's tooltip describes both its parts: the slider Tab reaches first and the number field
+/// a click on the row's label focuses.
+#[trial]
+fn an_inline_slider_fields_tooltip_describes_both_its_parts() {
+    let fixture = row(SliderFieldLayout::Inline, Direction::Ltr, true);
+    let tree = fixture.tree();
+    for role in [Role::SLIDER, Role::SPIN_BUTTON] {
+        let part = tree.with_role(role).into_iter().find(|key| tree.name_of(*key) == Some("Size"));
+        let description = part.and_then(|key| tree.description_of(key));
+        assert_eq!(description, Some("The brush size"), "the {role:?} of an inline slider field");
     }
 }
 
