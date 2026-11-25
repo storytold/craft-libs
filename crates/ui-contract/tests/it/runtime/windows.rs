@@ -629,8 +629,14 @@ fn a_second_right_click_hangs_a_menu_in_a_popup_window_at_the_new_pointer() {
     }
     assert!(closed.borrow().is_empty(), "the right-click opened the menu and closed nothing: {:?}", closed.borrow());
     let opened = menu_window(&out);
+    // The pointer moves over the opener with no press: a menu that shows keeps the place its opener hung it at.
+    let out = frame(vec![moved(second)]);
+    let stayed = menu_window(&out);
+    assert!(
+        (stayed.min - opened.min).length() < 1.0,
+        "the menu stays where it opened while the pointer moves over its opener: it stood at {opened:?}, stands at {stayed:?}"
+    );
     // A second right-click on the same opener, while the menu is open, hangs the menu at the new pointer.
-    frame(vec![moved(second)]);
     frame(vec![secondary(second, true)]);
     let mut out = frame(vec![secondary(second, false)]);
     for _ in 0..2 {
