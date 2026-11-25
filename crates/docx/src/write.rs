@@ -106,31 +106,55 @@ pub(crate) fn stacking(doc: &Document) -> (u32, BTreeMap<u32, u32>) {
 }
 
 /// The annotations' `w:id`s (ISO/IEC 29500-1 §17.13.4–§17.13.6), one number space for every kind.
-/// Comments and editable ranges keep the model's own ids. Revisions, move ranges and bookmarks get
-/// fresh ids from the numbers those leave free, so no two annotations of different kinds share an
-/// id (#3307).
+/// Comments keep the model's own ids, and so do editable ranges unless a comment has the same one.
+/// Revisions, move ranges, bookmarks and those editable ranges get fresh ids from the numbers left
+/// free, so no two annotations of different kinds share an id (#3307).
 pub(crate) struct AnnotationIds {
     /// The ids the document's comments and editable ranges keep.
     kept: BTreeSet<u32>,
     /// The lowest number a fresh id may take; past `u32::MAX` when none is left.
     next: u64,
+    /// Editable ranges' fresh ids, by model id, for those whose id a comment has.
+    perms: BTreeMap<u32, u32>,
 }
 
 impl AnnotationIds {
     pub(crate) fn new(doc: &Document) -> Self {
-        let mut kept: BTreeSet<u32> = doc.comments.keys().copied().collect();
-        let stories = std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks));
+        let comments: BTreeSet<u32> = doc.comments.keys().copied().collect();
+        let mut kept = comments.clone();
+        // Every story the writer writes: the body, the parts (headers, notes, comments, text
+        // boxes), the note separators and the building blocks.
+        let separators = [&doc.footnote_separators, &doc.endnote_separators]
+            .into_iter()
+            .flat_map(|s| [&s.separator, &s.continuation_separator, &s.continuation_notice])
+            .flatten();
+        let stories =
+            std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks)).chain(separators).chain(doc.glossary.iter().map(|e| &e.blocks));
+        let mut perms = BTreeSet::new();
         for b in stories.flat_map(|blocks| blocks.iter()) {
             craft_wordmodel::walk::each_para(b, 0, &mut |p| {
                 for o in &p.objects {
                     if let InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } = o {
-                        kept.insert(*id);
+                        perms.insert(*id);
                     }
                 }
             });
         }
+        kept.extend(perms.iter().copied());
         // Fresh ids start at 1, where revisions were numbered before #3307.
-        Self { kept, next: 1 }
+        let mut ids = Self { kept, next: 1, perms: BTreeMap::new() };
+        // Kept above, so no fresh id takes the number either kind has.
+        let clashing: Vec<u32> = ids.kept.iter().copied().filter(|id| comments.contains(id) && perms.contains(id)).collect();
+        for id in clashing {
+            let fresh = ids.fresh();
+            ids.perms.insert(id, fresh);
+        }
+        ids
+    }
+
+    /// The `w:id` an editable range is written with.
+    pub(crate) fn perm(&self, id: u32) -> u32 {
+        self.perms.get(&id).copied().unwrap_or(id)
     }
 
     /// A fresh id: the lowest number from 1 that no comment, editable range or earlier fresh id has. In the

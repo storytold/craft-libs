@@ -27,18 +27,36 @@ const STARTS: &[&str] = &[
 
 /// One paragraph with a bookmark, an editable range, a comment and an insertion, ids as given.
 fn docx(bookmark: u32, perm: u32, comment: u32, ins: u32) -> Vec<u8> {
+    docx_with(bookmark, perm, comment, ins, &[])
+}
+
+/// [`docx`] with more parts `(file in word/, relationship type, xml)`.
+fn docx_with(bookmark: u32, perm: u32, comment: u32, ins: u32, more: &[(&str, &str, String)]) -> Vec<u8> {
     let doc = format!(
         r#"<w:document {W_NS}><w:body><w:p><w:bookmarkStart w:id="{bookmark}" w:name="Mark"/><w:permStart w:id="{perm}" w:edGrp="everyone"/><w:commentRangeStart w:id="{comment}"/><w:r><w:t xml:space="preserve">Kept </w:t></w:r><w:ins w:id="{ins}" w:author="Ann" w:date="2026-01-02T03:04:05Z"><w:r><w:t>added</w:t></w:r></w:ins><w:commentRangeEnd w:id="{comment}"/><w:r><w:commentReference w:id="{comment}"/></w:r><w:permEnd w:id="{perm}"/><w:bookmarkEnd w:id="{bookmark}"/></w:p></w:body></w:document>"#
     );
     let comments = format!(
         r#"<w:comments {W_NS}><w:comment w:id="{comment}" w:author="Bob" w:initials="B"><w:p><w:r><w:t>A note</w:t></w:r></w:p></w:comment></w:comments>"#
     );
-    zip(&[
+    let extra: String = more
+        .iter()
+        .enumerate()
+        .map(|(i, (name, kind, _))| {
+            format!(
+                r#"<Relationship Id="rIdMore{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{name}"/>"#
+            )
+        })
+        .collect();
+    let rels = DOC_RELS.replace("</Relationships>", &format!("{extra}</Relationships>"));
+    let names: Vec<String> = more.iter().map(|(name, ..)| format!("word/{name}")).collect();
+    let mut parts = vec![
         ("_rels/.rels", ROOT_RELS.as_bytes()),
         ("word/document.xml", doc.as_bytes()),
-        ("word/_rels/document.xml.rels", DOC_RELS.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
         ("word/comments.xml", comments.as_bytes()),
-    ])
+    ];
+    parts.extend(names.iter().zip(more).map(|(name, (.., xml))| (name.as_str(), xml.as_bytes())));
+    zip(&parts)
 }
 
 /// The `w:id` of each annotation start element, by element name.
@@ -116,4 +134,26 @@ fn an_editable_range_at_the_last_id_keeps_it_and_nothing_wraps_onto_it() {
     }
     let written = check_distinct(&d);
     assert_eq!(written["w:permStart"], [u32::MAX.to_string()], "the editable range keeps its id");
+}
+
+#[test]
+fn an_editable_range_in_a_note_separator_keeps_its_id_apart_from_body_annotations() {
+    // Several editable ranges, so whatever ids the reader gives them, low ids a body bookmark or
+    // insertion could be given are among them.
+    let ranges: String =
+        (2..5).map(|i| format!(r#"<w:permStart w:id="{i}" w:edGrp="everyone"/><w:r><w:t>Line</w:t></w:r><w:permEnd w:id="{i}"/>"#)).collect();
+    for (file, kind, root, note) in
+        [("footnotes.xml", "footnotes", "w:footnotes", "w:footnote"), ("endnotes.xml", "endnotes", "w:endnotes", "w:endnote")]
+    {
+        for (slot, nid) in [("separator", -1), ("continuationSeparator", 0), ("continuationNotice", 1)] {
+            let notes = format!(r#"<{root} {W_NS}><{note} w:type="{slot}" w:id="{nid}"><w:p>{ranges}</w:p></{note}></{root}>"#);
+            let d = craft_docx::read(&docx_with(10, 20, 1, 30, &[(file, kind, notes)])).unwrap();
+            let mut all = check_distinct(&d);
+            let saved = saved_part(&d, &format!("word/{file}"));
+            let in_notes = ids(&saved).remove("w:permStart").unwrap_or_default();
+            assert_eq!(in_notes.len(), 3, "the {slot}'s editable ranges are written back: {saved}");
+            all.entry("w:permStart").or_default().extend(in_notes);
+            assert_eq!(shared_across_kinds(&all), Vec::<String>::new(), "the {slot} in {file} shares an id with the body: {saved}");
+        }
+    }
 }
