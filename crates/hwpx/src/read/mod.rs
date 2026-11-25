@@ -835,6 +835,7 @@ impl Converter<'_> {
                         header: truthy(c.get("hideHeader")),
                         footer: truthy(c.get("hideFooter")),
                         pagenum: truthy(c.get("hidePageNum")),
+                        master: truthy(c.get("hideMasterPage")),
                     });
                 }
                 _ => self.missing(tag),

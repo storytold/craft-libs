@@ -2,7 +2,7 @@
 //!
 //! 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use craft_wordmodel::props::{Align, Borders, ParaProps};
 use craft_wordmodel::section::{Columns, SectionStart};
@@ -66,6 +66,7 @@ pub(crate) struct HideFirst {
     pub header: bool,
     pub footer: bool,
     pub pagenum: bool,
+    pub master: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -89,8 +90,6 @@ pub(crate) struct Section {
     /// Page of the current paragraph (Hancom's layout).
     pub page_index: i64,
     pub hide_first: Option<HideFirst>,
-    /// The kind (header/footer) the page number paragraph went to.
-    pub page_num_kind: Option<&'static str>,
     pub page_border: Option<PageBorder>,
     /// The master page (Hancom: 바탕쪽): its paragraphs.
     pub master: Option<Element>,
@@ -115,7 +114,6 @@ impl Default for Section {
             title_pg: false,
             page_index: 0,
             hide_first: None,
-            page_num_kind: None,
             page_border: None,
             master: None,
         }
@@ -135,6 +133,15 @@ pub(crate) struct Carry {
     pub inherited_hf: HashMap<(&'static str, &'static str), (String, Vec<Blk>)>,
     /// The part each story name was made into.
     pub parts: HashMap<String, u32>,
+    /// Headers that carry their section's master page or page background: a later section that
+    /// would inherit one takes a plain copy instead (Hancom draws both in their own section
+    /// only).
+    pub decorated: HashSet<String>,
+    /// The page number (pos, formatType, sideChar) each kind's inherited story shows.
+    pub page_num_of: HashMap<&'static str, (String, String, String)>,
+    /// Master page parts read so far, by manifest id: sections naming the same one don't read
+    /// it again.
+    pub masters: HashMap<String, Option<Element>>,
 }
 
 fn set_ref(refs: &mut Vec<((&'static str, &'static str), String)>, key: (&'static str, &'static str), name: String) {
@@ -180,8 +187,22 @@ impl Converter<'_> {
                 }
             }
         }
-        if let Some(sub) = el.findall("hp:masterPage").find(|x| x.get("type").unwrap_or("BOTH") == "BOTH").and_then(|mp| mp.find("hp:subList")) {
-            self.sec.master = Some(sub.clone());
+        // A master page is a part of its own that the section names (`hp:masterPage idRef`,
+        // Hancom's files; the viewer opens no other form), or, as craft-hwp rebuilds HWP 5.0,
+        // a paragraph list in the section definition.
+        for mp in el.findall("hp:masterPage") {
+            let part = match mp.find("hp:subList") {
+                Some(_) => None,
+                None => mp.get("idRef").and_then(|id| self.master_part(id).cloned()),
+            };
+            let page = part.as_ref().unwrap_or(mp);
+            let kind = page.get("type").or(mp.get("type")).unwrap_or("BOTH");
+            if kind == "BOTH"
+                && let Some(sub) = page.find("hp:subList")
+            {
+                self.sec.master = Some(sub.clone());
+                break;
+            }
         }
         if let Some(pbf) = el.findall("hp:pageBorderFill").find(|x| x.get("type").unwrap_or("BOTH") == "BOTH")
             && let Some(bf) = self.h.border_fills.get(&num(pbf.get("borderFillIDRef")))
@@ -205,6 +226,19 @@ impl Converter<'_> {
         }
     }
 
+    /// The master page part a section names by its manifest id (read once).
+    fn master_part(&mut self, id: &str) -> Option<&Element> {
+        if !self.carry.masters.contains_key(id) {
+            let href = match self.pkg.item(id) {
+                Some(it) => it.href.clone(),
+                None => format!("Contents/{id}.xml"),
+            };
+            let part = self.pkg.xml(&href).ok();
+            self.carry.masters.insert(id.to_string(), part);
+        }
+        self.carry.masters.get(id).and_then(Option::as_ref)
+    }
+
     /// Twips of the text column (the cell's, inside a table).
     pub(crate) fn line_width(&self) -> i64 {
         if let Some(w) = self.text_width {
@@ -224,21 +258,30 @@ impl Converter<'_> {
     }
 
     pub(crate) fn finish_section(&mut self) {
+        // A master page or page background is drawn in its own section only, on every page of it
+        // whichever header the page shows (viewer, 2026-11-25).
+        let decorated = self.has_background() || self.sec.master.is_some();
+        if !decorated {
+            self.plain_inherited_headers();
+        }
         if self.sec.page_num.as_ref().is_some_and(|(pos, _, _)| !matches!(pos.as_str(), "NONE" | "")) {
             self.add_page_number();
         }
-        self.sec.title_pg = self.sec.hide_first.is_some_and(|h| h.header || h.footer || h.pagenum);
-        self.background_header();
+        let has_master = self.sec.master.is_some();
+        self.sec.title_pg = self.sec.hide_first.is_some_and(|h| h.header || h.footer || h.pagenum || (h.master && has_master));
+        if decorated {
+            self.background_header();
+        }
         // this section's own headers and footers, as later sections may inherit them
         for h in &self.sec.hf {
             if let Some(blocks) = &h.blocks {
                 self.carry.inherited_hf.insert((h.kind, h.which), (h.name.clone(), blocks.clone()));
             }
         }
-        self.master_page();
         if self.sec.title_pg {
             self.first_page_parts();
         }
+        self.master_page();
         self.backgrounds_in_headers();
         let hf = std::mem::take(&mut self.sec.hf);
         for h in hf.iter() {
@@ -246,6 +289,9 @@ impl Converter<'_> {
                 let kind = if h.kind == "header" { PartKind::Header } else { PartKind::Footer };
                 let id = self.doc.add_part(kind, super::blocks(blocks.clone(), true, &mut self.origins));
                 self.carry.parts.insert(h.name.clone(), id);
+                if decorated && h.kind == "header" && h.which != "first" {
+                    self.carry.decorated.insert(h.name.clone());
+                }
             }
             set_ref(&mut self.sec.refs, (h.kind, h.which), h.name.clone());
         }
@@ -282,31 +328,56 @@ impl Converter<'_> {
             items.push(Item::Text(format!(" {side}"), props.clone()));
         }
         let para = P { props: ParaProps { align: Some(align), ..ParaProps::default() }, items, page_num: true, ..P::default() };
-        self.sec.page_num_kind = Some(kind);
+        let number = (pos, fmt, side);
         for h in self.sec.hf.iter_mut() {
             if h.kind == kind && h.which == "default" {
                 if let Some(b) = h.blocks.as_mut() {
+                    b.retain(|b| !matches!(b, Blk::P(p) if p.page_num));
                     b.push(Blk::P(Box::new(para)));
                 }
+                self.carry.page_num_of.insert(kind, number);
                 return;
             }
         }
         if self.carry.inherited_refs.iter().any(|(k, _)| *k == (kind, "default")) {
-            // An earlier section's header/footer continues here. If it shows a page number it
-            // does here too; if not (text only), this section takes a copy of its own to add
-            // the number to.
-            let Some((_, mut blocks)) = self.carry.inherited_hf.get(&(kind, "default")).cloned() else { return };
-            if blocks.iter().any(|b| matches!(b, Blk::P(p) if p.page_num)) {
+            // An earlier section's header/footer continues here. If it shows this page number
+            // it does here too; if not (text only, or another number: the viewer shows this
+            // section's number in its place), this section takes a copy of its own with the
+            // number.
+            let Some((_, blocks)) = self.carry.inherited_hf.get(&(kind, "default")).cloned() else { return };
+            let shows = blocks.iter().any(|b| matches!(b, Blk::P(p) if p.page_num));
+            if shows && self.carry.page_num_of.get(kind) == Some(&number) {
                 return;
             }
+            let mut blocks: Vec<Blk> = blocks.into_iter().filter(|b| !matches!(b, Blk::P(p) if p.page_num)).collect();
             blocks.push(Blk::P(Box::new(para)));
+            self.carry.page_num_of.insert(kind, number);
             self.carry.hf_n += 1;
             let name = format!("{kind}{}", self.carry.hf_n);
             self.sec.hf.push(Hf { kind, which: "default", name, blocks: Some(blocks) });
             return;
         }
+        self.carry.page_num_of.insert(kind, number);
         self.carry.hf_n += 1;
         self.sec.hf.push(Hf { kind, which: "default", name: format!("{kind}{}", self.carry.hf_n), blocks: Some(vec![Blk::P(Box::new(para))]) });
+    }
+
+    /// A section without a master page or background that would inherit an earlier section's
+    /// header carrying one takes a plain copy of that header instead.
+    fn plain_inherited_headers(&mut self) {
+        for which in ["default", "even"] {
+            if self.sec.hf.iter().any(|h| h.kind == "header" && h.which == which) {
+                continue;
+            }
+            let Some((_, name)) = self.carry.inherited_refs.iter().find(|(k, _)| *k == ("header", which)) else { continue };
+            if !self.carry.decorated.contains(name) {
+                continue;
+            }
+            let Some((_, blocks)) = self.carry.inherited_hf.get(&("header", which)).cloned() else { continue };
+            self.carry.hf_n += 1;
+            let name = format!("header{}", self.carry.hf_n);
+            self.sec.hf.push(Hf { kind: "header", which, name, blocks: Some(blocks) });
+        }
     }
 
     /// First-page header/footer for hp:pageHiding: empty where hidden, else the default.
@@ -324,11 +395,12 @@ impl Converter<'_> {
                     .then(|| self.carry.inherited_hf.get(&(kind, "default")).cloned().map(|(name, blocks)| (name, Some(blocks))))
                     .flatten()
             });
-            let has_pn = self.sec.page_num_kind == Some(kind);
+            // the story shown, own or inherited, has a page number to hide
+            let has_pn = shown.as_ref().and_then(|(_, b)| b.as_ref()).is_some_and(|b| b.iter().any(|b| matches!(b, Blk::P(p) if p.page_num)));
             let hidden = if kind == "header" { hide.header } else { hide.footer };
             let blocks = if hidden {
                 vec![]
-            } else if hide.pagenum && has_pn && shown.is_some() {
+            } else if hide.pagenum && has_pn {
                 shown
                     .as_ref()
                     .and_then(|(_, b)| b.clone())
@@ -336,6 +408,9 @@ impl Converter<'_> {
                     .into_iter()
                     .filter(|b| !matches!(b, Blk::P(p) if p.page_num))
                     .collect()
+            } else if kind == "header" && hide.master && self.sec.master.is_some() {
+                // the first page hides the master page only: a header of its own, without it
+                shown.as_ref().and_then(|(_, b)| b.clone()).unwrap_or_default()
             } else if let Some((name, _)) = default {
                 self.sec.hf.push(Hf { kind, which: "first", name, blocks: None });
                 continue;

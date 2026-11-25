@@ -70,40 +70,45 @@ impl Converter<'_> {
         filled || frame_border(&self.sec).is_some()
     }
 
-    /// A section with a master page or background needs a default header to carry it: its own,
-    /// a copy of the one it inherits, or a new empty one.
+    /// A section with a master page or background needs headers of its own to carry it: a
+    /// default header (its own, a copy of the one it inherits, or a new empty one) and, where
+    /// even pages show an inherited header of their own, a copy of that.
     pub(crate) fn background_header(&mut self) {
-        let has_default_header = self.sec.hf.iter().any(|h| h.kind == "header" && h.which == "default");
-        if !(self.has_background() || self.sec.master.is_some()) || has_default_header {
-            return;
-        }
-        let inherits = self.carry.inherited_refs.iter().any(|(k, _)| *k == ("header", "default"));
-        match self.carry.inherited_hf.get(&("header", "default")).cloned() {
-            // the earlier section's header continues here: this section takes a copy of its own
-            // to add its master page to
-            Some((_, blocks)) if inherits => {
-                self.carry.hf_n += 1;
-                let name = format!("header{}", self.carry.hf_n);
-                self.sec.hf.push(Hf { kind: "header", which: "default", name, blocks: Some(blocks) });
+        for which in ["default", "even"] {
+            if self.sec.hf.iter().any(|h| h.kind == "header" && h.which == which) {
+                continue;
             }
-            _ if inherits => self.missing("master pages or backgrounds not shown (inherited header)"),
-            _ => {
-                self.carry.hf_n += 1;
-                let name = format!("header{}", self.carry.hf_n);
-                self.sec.hf.push(Hf { kind: "header", which: "default", name, blocks: Some(vec![]) });
+            let inherits = self.carry.inherited_refs.iter().any(|(k, _)| *k == ("header", which));
+            match self.carry.inherited_hf.get(&("header", which)).cloned() {
+                // the earlier section's header continues here: this section takes a copy of its
+                // own to add its master page to
+                Some((_, blocks)) if inherits => {
+                    self.carry.hf_n += 1;
+                    let name = format!("header{}", self.carry.hf_n);
+                    self.sec.hf.push(Hf { kind: "header", which, name, blocks: Some(blocks) });
+                }
+                _ if inherits => self.missing("master pages or backgrounds not shown (inherited header)"),
+                _ if which == "default" => {
+                    self.carry.hf_n += 1;
+                    let name = format!("header{}", self.carry.hf_n);
+                    self.sec.hf.push(Hf { kind: "header", which: "default", name, blocks: Some(vec![]) });
+                }
+                _ => {}
             }
         }
     }
 
-    /// The master page's objects at the start of the default header: behind everything, taking
-    /// no room.
+    /// The master page's objects at the start of every header of the section, whichever one a
+    /// page shows (viewer: also on even pages and on a first page whose header is hidden):
+    /// behind everything, taking no room. A first page that hides the master page goes without.
     pub(crate) fn master_page(&mut self) {
         let Some(mut master) = self.sec.master.take() else { return };
         set_paper_positions(&mut master, 0);
+        let hide_first = self.sec.hide_first.is_some_and(|h| h.master);
         let mut hf = std::mem::take(&mut self.sec.hf);
         for h in hf.iter_mut() {
             if h.kind == "header"
-                && h.which == "default"
+                && !(h.which == "first" && hide_first)
                 && let Some(blocks) = h.blocks.as_mut()
             {
                 let mut made = self.blocks(master.findall("hp:p"), true);

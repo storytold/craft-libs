@@ -831,3 +831,147 @@ fn an_object_in_a_cell_aligns_to_the_cells_column() {
     let cell_w = cell.props.width.unwrap_or(100.0);
     assert!(x > 0.0 && x < cell_w, "the object starts inside its {cell_w} pt cell: {x}");
 }
+
+/// The section properties of a document, in order (each section's last paragraph, then the
+/// document's last section).
+fn sections(doc: &Document) -> Vec<craft_wordmodel::SectionProps> {
+    let mut out: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_deref().cloned()).collect();
+    out.push(doc.last_section.clone());
+    out
+}
+
+/// The floating objects of part `id` (a master page or a page background drawn behind the text).
+fn part_floats(doc: &Document, id: Option<u32>) -> usize {
+    let Some(p) = id.and_then(|id| doc.parts.get(&id)) else { return 0 };
+    p.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).filter(|o| o.is_floating()).count()
+}
+
+/// The PAGE fields of part `id`.
+fn part_page_fields(doc: &Document, id: Option<u32>) -> Vec<String> {
+    let Some(p) = id.and_then(|id| doc.parts.get(&id)) else { return vec![] };
+    p.blocks
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            InlineObject::Field { instr, .. } if instr.starts_with("PAGE") => Some(instr.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+const FILL_HEAD: &str = r##"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hh:refList><hh:borderFills><hh:borderFill id="2"><hc:fillBrush><hc:winBrush faceColor="#FFEEDD"/></hc:fillBrush></hh:borderFill></hh:borderFills></hh:refList></hh:head>"##;
+
+/// A page background is drawn in its own section only (viewer, 2026-11-25): a later section
+/// without one, which shows the earlier section's header text, shows no background. Before, it
+/// inherited the header the background rode in, and the background with it.
+#[test]
+fn a_page_background_stays_in_its_section() {
+    let first = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr><hp:pageBorderFill type="BOTH" borderFillIDRef="2" textBorder="PAPER" fillArea="PAPER"/></hp:secPr><hp:ctrl><hp:header applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>머리말</hp:t></hp:run></hp:p></hp:subList></hp:header></hp:ctrl><hp:t>첫 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let second = format!(r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:t>둘째 구역</hp:t></hp:run></hp:p></hs:sec>"#);
+    let bytes = package(&[
+        ("Contents/header.xml", FILL_HEAD.as_bytes()),
+        ("Contents/section0.xml", first.as_bytes()),
+        ("Contents/section1.xml", second.as_bytes()),
+    ]);
+    let doc = read_bytes(&bytes).unwrap();
+    let secs = sections(&doc);
+    assert!(part_floats(&doc, secs[0].headers.default) > 0, "the first section shows its background");
+    let later = secs[1].headers.default;
+    assert!(later.is_some() && later != secs[0].headers.default, "the second section has a header of its own: {secs:?}");
+    assert_eq!(part_floats(&doc, later), 0, "without the background");
+    assert!(
+        doc.parts.get(&later.unwrap_or(0)).is_some_and(|p| p.blocks.iter().filter_map(|b| b.as_para()).any(|p| p.text == "머리말")),
+        "but with the header text"
+    );
+}
+
+/// A master page is drawn on every page of its section, whichever header the page shows
+/// (viewer, 2026-11-25): even pages with a header of their own, and a first page whose header
+/// is hidden. A first page that hides the master page goes without it.
+#[test]
+fn the_master_page_is_behind_every_header_of_its_section() {
+    let master = r#"<hp:masterPage type="BOTH"><hp:subList><hp:p><hp:run><hp:rect textWrap="IN_FRONT_OF_TEXT"><hp:sz width="7200" height="7200"/><hp:pos treatAsChar="0" vertRelTo="PAPER" horzRelTo="PAPER"/></hp:rect></hp:run></hp:p></hp:subList></hp:masterPage>"#;
+    let headers = r#"<hp:ctrl><hp:header applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>양쪽</hp:t></hp:run></hp:p></hp:subList></hp:header></hp:ctrl><hp:ctrl><hp:header applyPageType="EVEN"><hp:subList><hp:p><hp:run><hp:t>짝수</hp:t></hp:run></hp:p></hp:subList></hp:header></hp:ctrl>"#;
+    let read = |hide: &str| {
+        let sec = format!(
+            r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr>{master}</hp:secPr>{headers}<hp:ctrl><hp:pageHiding hideHeader="1" hideFooter="0" hidePageNum="0" hideMasterPage="{hide}"/></hp:ctrl><hp:t>본문</hp:t></hp:run></hp:p></hs:sec>"#
+        );
+        let doc = read_bytes(&hwpx(&sec)).unwrap();
+        let s = doc.last_section.clone();
+        (part_floats(&doc, s.headers.default), part_floats(&doc, s.headers.even), part_floats(&doc, s.headers.first))
+    };
+    let (default, even, first) = read("0");
+    assert!(default > 0 && even > 0 && first > 0, "default {default}, even {even}, first {first}");
+    let (default, even, first) = read("1");
+    assert!(default > 0 && even > 0 && first == 0, "hidden on the first page: default {default}, even {even}, first {first}");
+}
+
+/// A master page kept as a part of its own, which the section names by its manifest id (the
+/// form Hancom writes and its viewer opens), is read. Before, only a master page inside the
+/// section definition was, which Hancom's viewer doesn't open.
+#[test]
+fn a_master_page_part_is_read() {
+    let hpf = br#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/><opf:item id="masterpage0" href="Contents/masterpage0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="section0"/></opf:spine></opf:package>"#;
+    let master = format!(
+        r#"<masterPage {NS} id="masterpage0" type="BOTH"><hp:subList><hp:p><hp:run><hp:rect textWrap="IN_FRONT_OF_TEXT"><hp:sz width="7200" height="7200"/><hp:pos treatAsChar="0" vertRelTo="PAPER" horzRelTo="PAPER"/></hp:rect></hp:run></hp:p></hp:subList></masterPage>"#
+    );
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr masterPageCnt="1"><hp:masterPage idRef="masterpage0"/></hp:secPr><hp:t>본문</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let bytes = package(&[
+        ("Contents/content.hpf", hpf),
+        ("Contents/header.xml", EMPTY_HEAD),
+        ("Contents/section0.xml", sec.as_bytes()),
+        ("Contents/masterpage0.xml", master.as_bytes()),
+    ]);
+    let doc = read_bytes(&bytes).unwrap();
+    assert!(part_floats(&doc, doc.last_section.headers.default) > 0, "the master page's shape is behind the text");
+}
+
+/// A section asking for another page number than the footer it inherits shows its own number
+/// in that footer's place (viewer, 2026-11-25: roman at the right, the earlier centre number
+/// gone, the footer's text kept). Before, the inherited footer kept its number.
+#[test]
+fn an_inherited_footer_shows_the_sections_own_page_number() {
+    let first = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:footer applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>꼬리말 글</hp:t></hp:run></hp:p></hp:subList></hp:footer></hp:ctrl><hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar=""/></hp:ctrl><hp:t>첫 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let second = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:pageNum pos="BOTTOM_RIGHT" formatType="ROMAN_SMALL" sideChar=""/></hp:ctrl><hp:t>둘째 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let bytes =
+        package(&[("Contents/header.xml", EMPTY_HEAD), ("Contents/section0.xml", first.as_bytes()), ("Contents/section1.xml", second.as_bytes())]);
+    let doc = read_bytes(&bytes).unwrap();
+    let secs = sections(&doc);
+    assert_eq!(part_page_fields(&doc, secs[0].footers.default), ["PAGE"]);
+    let footer = secs[1].footers.default;
+    assert_eq!(part_page_fields(&doc, footer), ["PAGE \\* roman"], "one number, the section's own");
+    assert!(stories(&doc, PartKind::Footer).iter().filter(|(t, _)| t.contains("꼬리말 글")).count() >= 2, "the footer's text in both");
+}
+
+/// A section that hides the page number on its first page, inheriting a numbered footer without
+/// asking for a number of its own, shows that footer there without the number (viewer,
+/// 2026-11-25). Before, the number was hidden only when the section asked for one itself.
+#[test]
+fn a_hidden_first_page_number_hides_an_inherited_one() {
+    let first = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:footer applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>꼬리말 글</hp:t></hp:run></hp:p></hp:subList></hp:footer></hp:ctrl><hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar=""/></hp:ctrl><hp:t>첫 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let second = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:pageHiding hideHeader="0" hideFooter="0" hidePageNum="1"/></hp:ctrl><hp:t>둘째 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let bytes =
+        package(&[("Contents/header.xml", EMPTY_HEAD), ("Contents/section0.xml", first.as_bytes()), ("Contents/section1.xml", second.as_bytes())]);
+    let doc = read_bytes(&bytes).unwrap();
+    let secs = sections(&doc);
+    assert!(secs[1].title_page, "the first page is set apart");
+    let first_page = secs[1].footers.first;
+    assert!(part_page_fields(&doc, first_page).is_empty(), "no number on the first page");
+    assert!(
+        doc.parts.get(&first_page.unwrap_or(0)).is_some_and(|p| p.blocks.iter().filter_map(|b| b.as_para()).any(|p| p.text == "꼬리말 글")),
+        "the text stays"
+    );
+}

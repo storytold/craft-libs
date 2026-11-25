@@ -24,8 +24,9 @@ assert!(craft_hwpx::read(b"not a package").is_err());
   bookmarks, input fields, tracked deletions, tables (merged cells, borders and fills, cell
   margins, captions, repeated header rows), pictures (cropped, turned), shapes (rectangles,
   ellipses, lines, polygons and curves, with fills, gradients, dashes and arrowheads), text in
-  shapes, groups, form objects (as boxes showing their caption), the master page and page
-  background (in the headers, behind the text), and page borders.
+  shapes, groups, form objects (as boxes showing their caption), the master page (a part of
+  its own) and page background (in every header of their section, behind the text), and page
+  borders.
 - Korean words wrap whole where a paragraph says so (`ParaProps::keep_hangul_words`).
 - Where Hancom lays out differently from the model, the reader keeps what the file's layout cache
   says (line heights, a table's last row on its page); each such rule says in the source what it
