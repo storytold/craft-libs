@@ -9,7 +9,8 @@
 //! | `apv` | [`apv`] | APV (RFC 9924): decoder (`apv-decode`) and encoder (`apv-encode`) |
 //! | `vp8` | [`vp8`] | VP8 (RFC 6386): decoder (`vp8-decode`) and key-frame encoder (`vp8-encode`) |
 //! | `mpeg2` | [`mpeg2`] | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder with CBR / VBR (`mpeg2-encode`) |
-//! | `mpeg4` | [`mpeg4`] | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): Simple profile encoder (`mpeg4-encode`) |
+//! | `h263` | [`h263`] | H.263 video (ITU-T H.263): decoder (`h263-decode`) and encoder (`h263-encode`) |
+//! | `mpeg4` | [`mpeg4`] | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): decoder (`mpeg4-decode`) and Simple profile encoder (`mpeg4-encode`) |
 //! | `ffv1` | [`ffv1`] | FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder |
 //! | `hap` | [`hap`] | Vidvox Hap, Hap Alpha, Hap Q, Hap Q Alpha, Hap Alpha-Only: decoder and encoder |
 //! | `mjpeg` | [`mjpeg`] | Motion JPEG: frame-level decoder and baseline encoder over `craft-jpeg` |
@@ -47,6 +48,7 @@ pub use error::VideoError;
     feature = "vp9-decode",
     feature = "av1-decode",
     feature = "mpeg2-decode",
+    feature = "mpeg4-decode",
     feature = "prores",
     feature = "dnx",
     feature = "apv-decode",
@@ -61,6 +63,7 @@ mod track;
     feature = "vp9-decode",
     feature = "av1-decode",
     feature = "mpeg2-decode",
+    feature = "mpeg4-decode",
     feature = "prores",
     feature = "dnx",
     feature = "apv-decode",
@@ -82,8 +85,11 @@ pub mod vp8;
 #[cfg(feature = "mpeg2-decode")]
 pub mod mpeg2;
 
-#[cfg(feature = "mpeg4-encode")]
+#[cfg(any(feature = "mpeg4-decode", feature = "mpeg4-encode"))]
 pub mod mpeg4;
+
+#[cfg(any(feature = "h263-decode", feature = "h263-encode"))]
+pub mod h263;
 
 #[cfg(feature = "ffv1")]
 pub mod ffv1;

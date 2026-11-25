@@ -21,7 +21,7 @@ fn basis() -> &'static [[f64; 8]; 8] {
 }
 
 /// Forward DCT of 64 samples (raster order) into rounded coefficients.
-pub(super) fn fdct(px: &[i32; 64], out: &mut [i32; 64]) {
+pub(crate) fn fdct(px: &[i32; 64], out: &mut [i32; 64]) {
     let m = basis();
     // rows: tmp[y][u] = Σ_x M[x][u] f[y][x]
     let mut tmp = [[0f64; 8]; 8];
@@ -39,7 +39,7 @@ pub(super) fn fdct(px: &[i32; 64], out: &mut [i32; 64]) {
 }
 
 /// In-place inverse DCT of dequantised coefficients (raster order), saturated to [-256, 255].
-pub(super) fn idct(blk: &mut [i32; 64]) {
+pub(crate) fn idct(blk: &mut [i32; 64]) {
     if blk[1..].iter().all(|&c| c == 0) {
         // F[0][0]/8 everywhere, rounded half away from zero.
         let d = blk[0];

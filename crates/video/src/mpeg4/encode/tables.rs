@@ -4,11 +4,11 @@
 use std::sync::OnceLock;
 
 /// Table B-6, `mcbpc` of an I-VOP macroblock, indexed by `(mb_type - 3) * 4 + cbpc`.
-pub(super) const MCBPC_INTRA: [(u16, u8); 8] = [(1, 1), (1, 3), (2, 3), (3, 3), (1, 4), (1, 6), (2, 6), (3, 6)];
+pub(crate) const MCBPC_INTRA: [(u16, u8); 8] = [(1, 1), (1, 3), (2, 3), (3, 3), (1, 4), (1, 6), (2, 6), (3, 6)];
 
 /// Table B-7, `mcbpc` of a P-VOP macroblock, indexed by `mb_type * 4 + cbpc`
 /// (`mb_type` 0 inter, 1 inter+q, 2 inter4v, 3 intra, 4 intra+q).
-pub(super) const MCBPC_INTER: [(u16, u8); 20] = [
+pub(crate) const MCBPC_INTER: [(u16, u8); 20] = [
     (1, 1),
     (3, 4),
     (2, 4),
@@ -33,11 +33,11 @@ pub(super) const MCBPC_INTER: [(u16, u8); 20] = [
 
 /// Table B-8, `cbpy` indexed by the coded block pattern of an intra macroblock (block 0 in the
 /// most significant of the four bits). An inter macroblock sends the code of the inverted pattern.
-pub(super) const CBPY: [(u16, u8); 16] =
+pub(crate) const CBPY: [(u16, u8); 16] =
     [(3, 4), (5, 5), (4, 5), (9, 4), (3, 5), (7, 4), (2, 6), (11, 4), (2, 5), (3, 6), (5, 4), (10, 4), (4, 4), (8, 4), (6, 4), (3, 2)];
 
 /// Table B-12, `motion_code` by magnitude 0–32; a sign bit (1 = negative) follows every code but 0.
-pub(super) const MVD: [(u16, u8); 33] = [
+pub(crate) const MVD: [(u16, u8); 33] = [
     (1, 1),
     (1, 2),
     (1, 3),
@@ -74,15 +74,15 @@ pub(super) const MVD: [(u16, u8); 33] = [
 ];
 
 /// Table B-13, `dct_dc_size_luminance` 0–12.
-pub(super) const DC_SIZE_LUMA: [(u16, u8); 13] =
+pub(crate) const DC_SIZE_LUMA: [(u16, u8); 13] =
     [(3, 3), (3, 2), (2, 2), (2, 3), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11)];
 
 /// Table B-14, `dct_dc_size_chrominance` 0–12.
-pub(super) const DC_SIZE_CHROMA: [(u16, u8); 13] =
+pub(crate) const DC_SIZE_CHROMA: [(u16, u8); 13] =
     [(3, 2), (2, 2), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 7), (1, 8), (1, 9), (1, 10), (1, 11), (1, 12)];
 
 /// The TCOEF escape code (`0000 011`), shared by both coefficient tables.
-pub(super) const ESCAPE: (u16, u8) = (3, 7);
+pub(crate) const ESCAPE: (u16, u8) = (3, 7);
 
 /// Table B-16, intra TCOEF codes, ordered by `last`, then `run`, then `level` (as
 /// [`INTRA_LMAX`] lays them out).
@@ -327,7 +327,7 @@ const INTER_LMAX: [&[u8]; 2] = [
 ];
 
 /// A TCOEF table indexed by `(last, run, level)`, with the `LMAX` and `RMAX` of the escape modes.
-pub(super) struct Tcoef {
+pub(crate) struct Tcoef {
     /// `code << 8 | length`, 0 where the table has no code; `[last][run][level]`.
     codes: [[[u32; 28]; 64]; 2],
     /// The largest level of a run (`LMAX`, 0 = none): `[last][run]`.
@@ -354,38 +354,38 @@ impl Tcoef {
     }
 
     /// The code of `(last, run, level)` (`level` ≥ 1), if the table has one.
-    pub(super) fn code(&self, last: bool, run: usize, level: u32) -> Option<(u32, u32)> {
+    pub(crate) fn code(&self, last: bool, run: usize, level: u32) -> Option<(u32, u32)> {
         let row = self.codes[usize::from(last)].get(run)?;
         let c = *row.get(level as usize)?;
         (c != 0).then_some((c >> 8, c & 0xFF))
     }
 
     /// `LMAX(last, run)`, 0 when the table has no such run.
-    pub(super) fn lmax(&self, last: bool, run: usize) -> u32 {
+    pub(crate) fn lmax(&self, last: bool, run: usize) -> u32 {
         self.lmax[usize::from(last)].get(run).map_or(0, |&m| u32::from(m))
     }
 
     /// `RMAX(last, level)`, `None` when the table has no such level.
-    pub(super) fn rmax(&self, last: bool, level: u32) -> Option<usize> {
+    pub(crate) fn rmax(&self, last: bool, level: u32) -> Option<usize> {
         let r = *self.rmax[usize::from(last)].get(level as usize)?;
         usize::try_from(r).ok()
     }
 }
 
 /// The intra (B-16) table.
-pub(super) fn intra() -> &'static Tcoef {
+pub(crate) fn intra() -> &'static Tcoef {
     static T: OnceLock<Tcoef> = OnceLock::new();
     T.get_or_init(|| Tcoef::build(&INTRA_VLC, INTRA_LMAX))
 }
 
 /// The inter (B-17) table.
-pub(super) fn inter() -> &'static Tcoef {
+pub(crate) fn inter() -> &'static Tcoef {
     static T: OnceLock<Tcoef> = OnceLock::new();
     T.get_or_init(|| Tcoef::build(&INTER_VLC, INTER_LMAX))
 }
 
 /// The zigzag scan: `ZIGZAG[i]` is the raster position of the `i`-th coefficient.
-pub(super) const ZIGZAG: [usize; 64] = [
+pub(crate) const ZIGZAG: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43,
     36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];

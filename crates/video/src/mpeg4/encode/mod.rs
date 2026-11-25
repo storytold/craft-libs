@@ -22,10 +22,10 @@
 
 #![allow(clippy::needless_range_loop)]
 
-mod dct;
+pub(crate) mod dct;
 mod headers;
-mod picture;
-mod tables;
+pub(crate) mod picture;
+pub(crate) mod tables;
 
 #[cfg(test)]
 mod tests;
@@ -33,11 +33,9 @@ mod tests;
 use craft_media::bitstream::BitWriter;
 use craft_media::{CodecId, CodecParams};
 
+use super::MAX_SIDE;
 use headers::{Sequence, Timing, VopHeader};
 use picture::{Frame, PictureCoder, Plane};
-
-/// Largest width or height (the VOL stores 13 bits; sizes are even).
-pub const MAX_SIDE: u32 = 8190;
 
 /// Encoder errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -140,11 +138,43 @@ fn simple_level(mbs: usize) -> u8 {
     }
 }
 
+/// `frame` cropped from its macroblock-aligned size to `width`×`height` (4:2:0).
+pub(crate) fn crop(frame: &Frame, width: u32, height: u32) -> Option<Reconstruction> {
+    let (w, h) = (width as usize, height as usize);
+    let crop = |p: &Plane, w: usize, h: usize| (0..h).flat_map(|y| p.data[y * p.w..][..w].iter().copied()).collect();
+    Some(Reconstruction { width, height, y: crop(&frame.y, w, h), u: crop(&frame.u, w / 2, h / 2), v: crop(&frame.v, w / 2, h / 2) })
+}
+
+/// Copy an input picture into macroblock-aligned planes, repeating the last column and row;
+/// `None` when its planes are too small for `w`×`h`.
+pub(crate) fn load_frame(f: &YuvFrame, w: usize, h: usize, mb_w: usize, mb_h: usize) -> Option<Frame> {
+    let fits = |p: &[u8], stride: usize, w: usize, h: usize| {
+        stride >= w && (h - 1).checked_mul(stride).and_then(|n| n.checked_add(w)).is_some_and(|n| n <= p.len())
+    };
+    if !fits(f.y, f.y_stride, w, h) || !fits(f.u, f.uv_stride, w / 2, h / 2) || !fits(f.v, f.uv_stride, w / 2, h / 2) {
+        return None;
+    }
+    let mut out = Frame::new(mb_w, mb_h);
+    let fill = |dst: &mut Plane, src: &[u8], stride: usize, w: usize, h: usize| {
+        for y in 0..dst.h {
+            let row = &src[y.min(h - 1) * stride..][..w];
+            let d = &mut dst.data[y * dst.w..][..dst.w];
+            d[..w].copy_from_slice(row);
+            let edge = row[w - 1];
+            d[w..].fill(edge);
+        }
+    };
+    fill(&mut out.y, f.y, f.y_stride, w, h);
+    fill(&mut out.u, f.u, f.uv_stride, w / 2, h / 2);
+    fill(&mut out.v, f.v, f.uv_stride, w / 2, h / 2);
+    Some(out)
+}
+
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
 
-struct RateState {
+pub(crate) struct RateState {
     /// Bits a frame at the target rate.
     per_frame: f64,
     /// Bits sent minus bits budgeted so far.
@@ -155,7 +185,12 @@ struct RateState {
 }
 
 impl RateState {
-    fn qp(&self, intra: bool) -> u8 {
+    /// A 1-pass average-bitrate controller that budgets `per_frame` bits a picture.
+    pub(crate) fn new(per_frame: f64) -> RateState {
+        RateState { per_frame, fullness: 0.0, complexity: [None; 2], last_qp: [8; 2] }
+    }
+
+    pub(crate) fn qp(&self, intra: bool) -> u8 {
         let k = usize::from(!intra);
         let share = if intra { 4.0 } else { 1.0 };
         let target = (share * self.per_frame - self.fullness / 25.0).max(0.25 * share * self.per_frame);
@@ -168,7 +203,7 @@ impl RateState {
         if self.complexity[k].is_some() { q.clamp(last.saturating_sub(4).max(2), (last + 4).min(31)) } else { q }
     }
 
-    fn update(&mut self, intra: bool, bits: usize, qp: u8) {
+    pub(crate) fn update(&mut self, intra: bool, bits: usize, qp: u8) {
         let k = usize::from(!intra);
         let c = bits as f64 * f64::from(qp);
         self.complexity[k] = Some(self.complexity[k].map_or(c, |old| 0.5 * old + 0.5 * c));
@@ -218,12 +253,9 @@ impl Encoder {
             RateControl::Quant(q) if (1..=31).contains(&q) => None,
             RateControl::Quant(q) => return Err(Error::InvalidConfig(format!("quantiser {q} is outside 1–31"))),
             RateControl::Bitrate { kbps: 0 } => return Err(Error::InvalidConfig("bitrate must be non-zero".into())),
-            RateControl::Bitrate { kbps } => Some(RateState {
-                per_frame: f64::from(kbps) * 1000.0 * f64::from(timing.increment) / f64::from(timing.resolution),
-                fullness: 0.0,
-                complexity: [None; 2],
-                last_qp: [8; 2],
-            }),
+            RateControl::Bitrate { kbps } => {
+                Some(RateState::new(f64::from(kbps) * 1000.0 * f64::from(timing.increment) / f64::from(timing.resolution)))
+            }
         };
         let (mb_w, mb_h) = (w.div_ceil(16) as usize, h.div_ceil(16) as usize);
         let headers = headers::sequence_headers(&Sequence {
@@ -269,41 +301,12 @@ impl Encoder {
 
     /// The decoder's picture for the last packet, cropped to the configured size.
     pub fn reconstruction(&self) -> Option<Reconstruction> {
-        let r = self.reference.as_ref()?;
-        let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
-        let crop = |p: &Plane, w: usize, h: usize| (0..h).flat_map(|y| p.data[y * p.w..][..w].iter().copied()).collect();
-        Some(Reconstruction {
-            width: self.cfg.width,
-            height: self.cfg.height,
-            y: crop(&r.y, w, h),
-            u: crop(&r.u, w / 2, h / 2),
-            v: crop(&r.v, w / 2, h / 2),
-        })
+        crop(self.reference.as_ref()?, self.cfg.width, self.cfg.height)
     }
 
     /// Copy the input into macroblock-aligned planes, repeating the last column and row.
     fn load(&self, f: &YuvFrame) -> Result<Frame, Error> {
-        let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
-        let fits = |p: &[u8], stride: usize, w: usize, h: usize| {
-            stride >= w && (h - 1).checked_mul(stride).and_then(|n| n.checked_add(w)).is_some_and(|n| n <= p.len())
-        };
-        if !fits(f.y, f.y_stride, w, h) || !fits(f.u, f.uv_stride, w / 2, h / 2) || !fits(f.v, f.uv_stride, w / 2, h / 2) {
-            return Err(Error::BadFrame);
-        }
-        let mut out = Frame::new(self.mb_w, self.mb_h);
-        let fill = |dst: &mut Plane, src: &[u8], stride: usize, w: usize, h: usize| {
-            for y in 0..dst.h {
-                let row = &src[y.min(h - 1) * stride..][..w];
-                let d = &mut dst.data[y * dst.w..][..dst.w];
-                d[..w].copy_from_slice(row);
-                let edge = row[w - 1];
-                d[w..].fill(edge);
-            }
-        };
-        fill(&mut out.y, f.y, f.y_stride, w, h);
-        fill(&mut out.u, f.u, f.uv_stride, w / 2, h / 2);
-        fill(&mut out.v, f.v, f.uv_stride, w / 2, h / 2);
-        Ok(out)
+        load_frame(f, self.cfg.width as usize, self.cfg.height as usize, self.mb_w, self.mb_h).ok_or(Error::BadFrame)
     }
 
     /// Encode one picture.

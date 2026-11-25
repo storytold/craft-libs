@@ -1,12 +1,18 @@
-# MPEG-4 Part 2 video encoder (`craft_video::mpeg4`, feature `mpeg4`)
+# MPEG-4 Part 2 video (`craft_video::mpeg4`, features `mpeg4`, `mpeg4-decode`, `mpeg4-encode`)
 
-Clean-room MPEG-4 Visual (ISO/IEC 14496-2) encoder in pure Rust: the format Xvid and DivX write.
-It writes Simple profile streams. Depends on `craft-media` (`bitstream`, `CodecParams`) and
-`thiserror`. No `unsafe`, no panics. No Xvid, DivX, FFmpeg or other MPEG-4 implementation was
-read. ffmpeg and ffprobe are used only as external decoders in the tests.
+Clean-room MPEG-4 Visual (ISO/IEC 14496-2) decoder and encoder in pure Rust: the format Xvid and
+DivX write. Depends on `craft-media` (`bitstream`, `CodecParams`) and `thiserror`. No `unsafe`, no
+panics. No Xvid, DivX, FFmpeg or other MPEG-4 implementation was read. `ffmpeg` and `ffprobe` are
+used only as external black-box subprocess oracles in the tests.
 
-There is no MPEG-4 Part 2 decoder in this crate. `craft-media` names the stream (`CodecId::Mpeg4Video`)
-in MP4, Matroska, AVI and MXF.
+- `mpeg4-decode`: Simple and Advanced Simple profile decoder (`Decoder`, `Picture`), including
+  I-, P-, B-, S(GMC)- and N-VOPs, 1MV and 4MV motion vectors, half-sample and quarter-sample
+  motion compensation, adaptive intra DC and AC prediction with alternate horizontal/vertical
+  scans, H.263 and MPEG quantisation matrices (with mismatch control), video packet resync markers,
+  H.263 short video headers, display-order B-VOP reordering, packed-bitstream unpacking,
+  `VideoFrame::try_from`, and `TrackDecoder` integration (`CodecId::Mpeg4Video`).
+- `mpeg4-encode`: Simple profile encoder (`Encoder`, `EncoderConfig`, `RateControl`, `YuvFrame`).
+- `mpeg4`: enables both `mpeg4-decode` and `mpeg4-encode`.
 
 ## Specifications
 
