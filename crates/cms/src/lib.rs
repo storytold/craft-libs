@@ -16,7 +16,7 @@
 //! * [`GpuMatrixShaper`] preserves near-black precision for separable RGB display transforms.
 //!
 //! Implemented from the public ICC.1:2010 (v4.3) and ICC.1:2001-04 (v2) specifications,
-//! CIE 15, and Adobe's published black point compensation paper.
+//! CIE 15, and the ISO 18619 black point compensation standard.
 #![forbid(unsafe_code)]
 
 pub mod black;
@@ -52,7 +52,10 @@ pub use math::Mat3;
 pub use named::{NamedColor, NamedColors};
 pub use normalize::normalize_for_embedding;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
-pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
+pub use transform::{
+    CacheLimits, CacheStats, SampleKind, Transform, TransformCache, TransformOptions, black_point, cache_limits, cache_stats, cached, clear_cache,
+    set_cache_limits,
+};
 pub use write::profile_id;
 
 /// ICC rendering intent.

@@ -80,6 +80,11 @@ impl Clut {
         self.data.len() / self.outputs
     }
 
+    /// Returns the approximate memory footprint in bytes of the lookup table data and grid metadata.
+    pub fn table_bytes(&self) -> usize {
+        self.data.len() * std::mem::size_of::<f32>() + (self.grid.len() + self.strides.len()) * std::mem::size_of::<usize>()
+    }
+
     /// Builds a table by sampling `f` at every node (inputs normalised to `[0, 1]`); the
     /// dimensions are checked as in [`Clut::new`].
     pub fn sample(grid: Vec<usize>, outputs: usize, mut f: impl FnMut(&[f32], &mut [f32])) -> Result<Self, CmsError> {

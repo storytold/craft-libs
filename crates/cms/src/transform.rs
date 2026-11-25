@@ -1,7 +1,7 @@
 //! Colour transforms between profiles through the PCS, with rendering intents, black point
 //! compensation, soft-proofing chains, and fast lookup-table evaluation of pixel buffers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::clut::{Clut, MAX_CHANNELS};
@@ -280,6 +280,38 @@ impl Transform {
     }
     pub fn outputs(&self) -> usize {
         self.outputs
+    }
+    /// Returns the approximate memory footprint in bytes of the precomputed lookup tables, grids, and exact pipeline.
+    pub fn table_bytes(&self) -> usize {
+        let mut bytes = self.pipeline.table_bytes() + self.exact8.len() * std::mem::size_of::<[f32; 256]>();
+        match &self.core {
+            Core::Shaper { curves8, curves, matrix } => {
+                bytes += curves8.len() * 256 * std::mem::size_of::<f32>();
+                for c in curves {
+                    bytes += c.len() * std::mem::size_of::<f32>();
+                }
+                if let Some((_, _, m, b)) = matrix {
+                    bytes += (m.len() + b.len()) * std::mem::size_of::<f32>();
+                }
+            }
+            Core::Grid(clut) => {
+                bytes += clut.table_bytes();
+            }
+            Core::Exact => {}
+        }
+        if let Some(post) = &self.post {
+            for t in &post.tables {
+                bytes += t.len() * std::mem::size_of::<f32>();
+            }
+        }
+        bytes += self.grid8.len() * 256 * std::mem::size_of::<(u32, f32)>();
+        if let Some(white) = &self.white {
+            bytes += (white.src.len() + white.dst.len()) * std::mem::size_of::<f32>();
+            if let Some(src8) = &white.src8 {
+                bytes += src8.len();
+            }
+        }
+        bytes
     }
     pub fn options(&self) -> TransformOptions {
         self.opts
@@ -939,37 +971,225 @@ pub fn black_point(p: &Profile, intent: Intent, _input: bool) -> Result<f64, Cms
 
 // ------------------------------------------------------------ cache
 
+/// Limits for a transform cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheLimits {
+    /// Maximum number of transform entries in the cache.
+    pub max_entries: usize,
+    /// Maximum total bytes charged for cached transform tables and ICC profile bytes.
+    pub max_bytes: usize,
+}
+
+impl Default for CacheLimits {
+    fn default() -> Self {
+        Self { max_entries: 64, max_bytes: 64 * 1024 * 1024 }
+    }
+}
+
+/// Statistics for a transform cache.
+///
+/// `total_bytes` charges cached transform tables and ICC profile bytes per entry.
+/// Callers holding `Arc<Transform>` handles after eviction are outside the budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct CacheStats {
+    /// Current number of transform entries in the cache.
+    pub entries: usize,
+    /// Total bytes charged for the current cache entries.
+    pub total_bytes: usize,
+}
+
 type Key = (u64, u64, TransformOptions);
 
-/// A cached transform with the ICC bytes of the profiles it was built from.
-struct Entry {
+struct CacheEntry {
     src: Arc<Vec<u8>>,
     dst: Arc<Vec<u8>>,
     transform: Arc<Transform>,
+    bytes: usize,
 }
 
-/// Process-wide cache of transforms keyed by profile content and options. The key is the
-/// profiles' 64-bit hashes, which a crafted profile can share with another, so a hit counts only
-/// when the bytes match too; a colliding pair gets its own, uncached transform.
+impl CacheEntry {
+    fn matches(&self, src: &[u8], dst: &[u8]) -> bool {
+        self.src.as_slice() == src && self.dst.as_slice() == dst
+    }
+}
+
+struct CacheState {
+    entries: HashMap<Key, CacheEntry>,
+    order: VecDeque<Key>,
+    total_bytes: usize,
+    limits: CacheLimits,
+}
+
+impl CacheState {
+    fn new(limits: CacheLimits) -> Self {
+        Self { entries: HashMap::new(), order: VecDeque::new(), total_bytes: 0, limits }
+    }
+
+    fn touch(&mut self, key: &Key) {
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            self.order.remove(pos);
+            self.order.push_back(*key);
+        }
+    }
+
+    fn insert(&mut self, key: Key, entry: CacheEntry) {
+        if entry.bytes > self.limits.max_bytes {
+            return;
+        }
+        self.total_bytes = self.total_bytes.saturating_add(entry.bytes);
+        self.entries.insert(key, entry);
+        self.order.push_back(key);
+        self.evict();
+    }
+
+    fn evict(&mut self) {
+        while self.entries.len() > self.limits.max_entries || (self.total_bytes > self.limits.max_bytes && !self.entries.is_empty()) {
+            if let Some(oldest) = self.order.pop_front() {
+                if let Some(removed) = self.entries.remove(&oldest) {
+                    self.total_bytes = self.total_bytes.saturating_sub(removed.bytes);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn set_limits(&mut self, limits: CacheLimits) {
+        self.limits = limits;
+        self.evict();
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.total_bytes = 0;
+    }
+
+    fn stats(&self) -> CacheStats {
+        CacheStats { entries: self.entries.len(), total_bytes: self.total_bytes }
+    }
+}
+
+/// A bounded LRU cache of colour transforms.
+///
+/// May be instantiated locally by applications to isolate specific workloads (e.g. background
+/// exports or tile pipelines), or accessed through the shared process-wide instance via
+/// [`TransformCache::global`] or [`cached`].
+pub struct TransformCache {
+    state: Mutex<CacheState>,
+}
+
+impl Default for TransformCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TransformCache {
+    /// Creates a new transform cache with default limits (64 entries, 64 MiB).
+    pub fn new() -> Self {
+        Self::with_limits(CacheLimits::default())
+    }
+
+    /// Creates a new transform cache with custom entry and byte limits.
+    pub fn with_limits(limits: CacheLimits) -> Self {
+        Self { state: Mutex::new(CacheState::new(limits)) }
+    }
+
+    /// Accesses the process-wide global transform cache.
+    pub fn global() -> &'static Self {
+        static GLOBAL: OnceLock<TransformCache> = OnceLock::new();
+        GLOBAL.get_or_init(Self::new)
+    }
+
+    /// Retrieves an existing transform or computes and caches a new one.
+    ///
+    /// Transform compilation happens outside the cache lock to avoid blocking concurrent lookups.
+    /// If multiple threads concurrently request the same uncached transform, each may compile it;
+    /// the first completion is cached, subsequent completions return the cached transform, and all callers
+    /// receive valid transforms.
+    pub fn get(&self, src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
+        let key = (src.content_hash(), dst.content_hash(), opts);
+        let (src_bytes, dst_bytes) = (src.to_bytes(), dst.to_bytes());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = state.entries.get(&key) {
+            if entry.matches(&src_bytes, &dst_bytes) {
+                let transform = entry.transform.clone();
+                state.touch(&key);
+                return Ok(transform);
+            }
+            drop(state);
+            return Transform::with_options(src, dst, opts).map(Arc::new);
+        }
+        drop(state);
+
+        let transform = Arc::new(Transform::with_options(src, dst, opts)?);
+        let bytes = transform.table_bytes().saturating_add(src_bytes.len()).saturating_add(dst_bytes.len());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        match state.entries.get(&key) {
+            Some(entry) if entry.matches(&src_bytes, &dst_bytes) => {
+                let transform = entry.transform.clone();
+                state.touch(&key);
+                return Ok(transform);
+            }
+            Some(_) => {}
+            None => state.insert(key, CacheEntry { src: src_bytes, dst: dst_bytes, transform: transform.clone(), bytes }),
+        }
+        Ok(transform)
+    }
+
+    /// Sets entry and byte limits, evicting least recently used entries if needed.
+    pub fn set_limits(&self, limits: CacheLimits) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.set_limits(limits);
+    }
+
+    /// Returns the current cache limits.
+    pub fn limits(&self) -> CacheLimits {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.limits
+    }
+
+    /// Returns the current entry count and total bytes charged to the cache.
+    pub fn stats(&self) -> CacheStats {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.stats()
+    }
+
+    /// Clears all entries from the cache.
+    pub fn clear(&self) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.clear();
+    }
+}
+
+/// Sets the limits for the process-wide transform cache and evicts least recently used entries if needed.
+pub fn set_cache_limits(limits: CacheLimits) {
+    TransformCache::global().set_limits(limits);
+}
+
+/// Returns the current limits of the process-wide transform cache.
+pub fn cache_limits() -> CacheLimits {
+    TransformCache::global().limits()
+}
+
+/// Returns current statistics of the process-wide transform cache.
+pub fn cache_stats() -> CacheStats {
+    TransformCache::global().stats()
+}
+
+/// Clears all entries from the process-wide transform cache.
+pub fn clear_cache() {
+    TransformCache::global().clear();
+}
+
+/// Process-wide cache of transforms keyed by profile content and options.
+///
+/// Retrieves an existing transform or precomputes and caches a new one, evicting
+/// least recently used entries when limits are exceeded. Profile bytes are compared
+/// on a hash hit, and a colliding pair gets its own uncached transform.
 pub fn cached(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
-    static CACHE: OnceLock<Mutex<HashMap<Key, Entry>>> = OnceLock::new();
-    let key = (src.content_hash(), dst.content_hash(), opts);
-    let (src_bytes, dst_bytes) = (src.to_bytes(), dst.to_bytes());
-    let cache = CACHE.get_or_init(Default::default);
-    let hit =
-        cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key).map(|e| (e.src == src_bytes && e.dst == dst_bytes).then(|| e.transform.clone()));
-    match hit {
-        Some(Some(t)) => return Ok(t),
-        Some(None) => return Ok(Arc::new(Transform::with_options(src, dst, opts)?)),
-        None => {}
-    }
-    let t = Arc::new(Transform::with_options(src, dst, opts)?);
-    let mut c = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    if c.len() > 64 {
-        c.clear();
-    }
-    c.insert(key, Entry { src: src_bytes, dst: dst_bytes, transform: t.clone() });
-    Ok(t)
+    TransformCache::global().get(src, dst, opts)
 }
 
 impl Clut {
