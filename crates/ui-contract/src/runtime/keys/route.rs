@@ -615,18 +615,18 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     let mut clips = clips.into_iter().peekable();
     let events = ctx.input(|input| input.events.clone());
     let mut left = Vec::with_capacity(events.len());
-    // The place in `passed` after the last event found there.
-    let mut from = 0;
-    for event in events {
-        // A clip goes back before the first event the strip left after it. Where an event stood is found among the
-        // events the strip left, as a widget may have taken earlier ones from egui's input since.
-        let place = match passed.get(from..).and_then(|rest| rest.iter().position(|passed| *passed == event)) {
-            Some(found) => {
-                from += found + 1;
-                from - 1
-            }
-            None => from,
-        };
+    // Where each event the input still holds stood among the events the strip left, found from the end: a widget that
+    // takes an event from egui's input reads it in order and takes the first it meets, so where events are equal the
+    // one still here is the last of them, and each event takes its own entry.
+    let mut places = vec![0; events.len()];
+    let mut from = passed.len();
+    for (index, event) in events.iter().enumerate().rev() {
+        from = passed.get(..from).and_then(|kept| kept.iter().rposition(|kept| kept == event)).unwrap_or(from);
+        places[index] = from;
+    }
+    for (index, event) in events.into_iter().enumerate() {
+        // A clip goes back before the first event the strip left after it.
+        let place = places[index];
         while let Some(clip) = clips.next_if(|clip| clip.at <= place) {
             leave_clip(clip, took, &mut down, &mut left);
         }

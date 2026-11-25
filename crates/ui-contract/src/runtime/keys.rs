@@ -184,7 +184,8 @@ struct Batch {
     /// How many events the strip has left in egui's input so far.
     egui_events: usize,
     /// The events the strip left in egui's input, kept only in a pass with `left_clips`: `leftover_events` puts each
-    /// clip back among them where it was, though a widget may have taken some of them since.
+    /// clip back among them where it was, though a widget may have taken some of them since. Each event egui still holds
+    /// takes its own entry, counted from the end, so equal events keep their places apart.
     passed: Vec<Event>,
     access: Vec<Action>,
     escapes: Vec<EscapePress>,

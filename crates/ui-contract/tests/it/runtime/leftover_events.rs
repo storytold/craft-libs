@@ -99,3 +99,38 @@ fn a_fresh_press_ends_a_fired_key_hold_after_the_events_before_it() {
         "the repeat and release before the fresh press stay the command's, and the fresh press and its release are left over"
     );
 }
+
+/// An event a widget took from egui's input does not pull a clip too late: the events the input still holds take their
+/// own places among the pass's, equal ones apart.
+#[trial]
+fn a_clip_keeps_its_place_beside_equal_events_a_widget_took() {
+    let mut frames = Frames::new();
+    let left = RefCell::new(Vec::new());
+    // A widget of the app's own takes the first of the two texts in the one frame below, as a widget that reads an
+    // event takes the first match it meets.
+    let take = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        if take.replace(false) {
+            ui.ctx().input_mut(|input| {
+                let mut taken = false;
+                input.events.retain(|event| {
+                    let mine = !taken && matches!(event, Event::Text(typed) if typed == "x");
+                    taken |= mine;
+                    !mine
+                });
+            });
+        }
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+
+    take.set(true);
+    frames.frame(vec![text("x"), Event::Paste("p".to_owned()), text("x")], &mut show);
+    let events = left.take();
+    assert!(
+        matches!(events.as_slice(), [Event::Paste(pasted), Event::Text(typed)] if pasted == "p" && typed == "x"),
+        "the paste stays before the text that followed it: {events:?}"
+    );
+}
