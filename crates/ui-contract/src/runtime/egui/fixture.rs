@@ -115,7 +115,8 @@ pub(crate) struct OsFiles {
 
 /// The viewport facts a frame reports: the root window's inner rect when the frame is the root's (`inner`), and its
 /// focus: a window-focus event also sets the root viewport's focus fact, as a host reports both, and the fact stays
-/// until the next such event. Before any event the focus is unknown.
+/// until the next such event. Before any event the focus is unknown. The root's input
+/// reports the same focus (`RawInput::focused`), a window with focus while it is unknown.
 fn window_facts(
     ctx: &Context,
     events: &[Event],
@@ -256,6 +257,7 @@ pub(crate) fn run_frame(
     }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
     let mut viewports = window_facts(ctx, &events, native_pixels_per_point, (viewport == egui::ViewportId::ROOT).then_some(screen));
+    let focused = viewport != egui::ViewportId::ROOT || viewports.get(&egui::ViewportId::ROOT).and_then(|info| info.focused).unwrap_or(true);
     let children = open_children(ctx, viewport);
     for child in &children {
         viewports
@@ -265,6 +267,7 @@ pub(crate) fn run_frame(
         screen_rect: Some(screen),
         time: Some(time),
         viewport_id: viewport,
+        focused,
         events,
         hovered_files,
         dropped_files,

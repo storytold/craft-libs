@@ -105,6 +105,10 @@ pub struct SliderField<'a> {
     /// a short field and the number, as production's Opacity, not the room it is offered.
     #[prop]
     short: bool,
+    /// The number field selects its whole value when it takes focus, so typing replaces it
+    /// ([`NumberField::select_on_focus`]): a click on the value selects it, a drag across it keeps the range.
+    #[prop(flag)]
+    select_on_focus: bool,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -163,6 +167,7 @@ impl<'a> SliderField<'a> {
             field_sizing: None,
             marks: None,
             short: false,
+            select_on_focus: false,
             field_width: 0.0,
             out_of_range: None,
         }
@@ -200,6 +205,7 @@ impl<'a> SliderField<'a> {
             field_sizing: self.field_sizing,
             marks: self.marks.clone(),
             short: self.short,
+            select_on_focus: self.select_on_focus,
         }
     }
 }
@@ -230,6 +236,7 @@ struct Look {
     field_sizing: Option<Sizing>,
     marks: Option<FieldMarks>,
     short: bool,
+    select_on_focus: bool,
 }
 
 /// The composite's check, which its children check their values with.
@@ -306,6 +313,7 @@ impl Look {
             Some(decimals) => field.max_decimals(decimals),
             None => field,
         };
+        let field = if self.select_on_focus { field.select_on_focus() } else { field };
         let field = match self.unit_kind {
             Some(kind) => field.unit_kind(kind),
             None => field,
