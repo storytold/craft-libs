@@ -23,7 +23,7 @@ Source-level platform regression guards and verification utilities for the Craft
 Each type has `new(seed) -> Result<Self, SeedError>`, which returns `SeedError::ZeroSeed` for a seed of 0, and these methods:
 
 - `next()` advances the state and returns one draw.
-- `below(n)` returns one draw modulo `n`. A bound of 0 returns 0 and still takes a draw. The modulo is slightly biased toward small values when `n` does not divide 2^64.
+- `below(n)` returns one draw modulo `n`. A bound of 0 returns 0 and still takes a draw. A draw is never 0, so it is one of the 2^64 - 1 values from 1 to 2^64 - 1. When `n` divides 2^64 - 1, every result is equally likely: `below(3)` is unbiased over all nonzero states. For any other `n`, the results from 1 to (2^64 - 1) mod `n` each come from one more state than the other results, and the bias can be large: on a 64-bit target, `below(2^63 + 1)` returns 1 twice as often as 0.
 - `byte()` returns the low 8 bits of one draw.
 - `fill(out)` sets each byte of `out` to one `byte()`, in index order. An empty slice takes no draw.
 

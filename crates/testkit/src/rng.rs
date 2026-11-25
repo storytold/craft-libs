@@ -7,8 +7,12 @@
 //! Both generators take a nonzero seed: with a zero state, either recurrence returns zero forever, so
 //! [`XorShift64::new`] and [`XorShift64Star::new`] return [`SeedError::ZeroSeed`] for it.
 //!
-//! [`below`](XorShift64::below) reduces one draw modulo the bound. The result is slightly biased toward
-//! small values for a bound that does not divide 2^64, and a bound of 0 returns 0 after one draw.
+//! [`below`](XorShift64::below) reduces one draw modulo the bound, and a bound of 0 returns 0 after one
+//! draw. A draw is never 0, so it is one of the 2^64 - 1 values from 1 to 2^64 - 1. When the bound
+//! divides 2^64 - 1, every result is equally likely: `below(3)` is unbiased over all nonzero states.
+//! For any other bound, the results from 1 to (2^64 - 1) mod the bound each come from one more state
+//! than the other results, and the bias can be large: on a 64-bit target, `below(2^63 + 1)` returns 1
+//! twice as often as 0.
 //! [`byte`](XorShift64::byte) returns the low 8 bits of one draw, and [`fill`](XorShift64::fill) sets
 //! each byte of a slice to one [`byte`](XorShift64::byte) in index order.
 
