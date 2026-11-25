@@ -11,7 +11,7 @@ use crate::contract::{
 use crate::display::TargetMark;
 use crate::layout_components::Row;
 use crate::menu::{self, Menu, MenuItem};
-use crate::primitives::{PaintShape, StrokeWidth};
+use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, GlyphRole, StyleColor, StyleCx};
@@ -200,7 +200,11 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
     /// enabled state, marked dot).
     /// The button itself runs the command, so the face only wears it, and the button's selected state with it.
     fn face(&self, laid: &Laid, selected: bool, glyphs: GlyphRole) -> IconButton<'static> {
-        let icon = self.lead(laid).and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from);
+        // The shown tool's own icon, when it has one and the face stands for it, else its command's.
+        let own = if self.click.is_none() { self.tools.get(laid.shown).and_then(|tool| tool.icon.clone()) } else { None };
+        let icon = own.unwrap_or_else(|| {
+            IconSpec::svg(self.lead(laid).and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from))
+        });
         let command = self.click.clone().or_else(|| self.tools.get(laid.shown).map(|tool| tool.command.clone()));
         let face = match command {
             Some(command) => IconButton::command(icon, command),
@@ -381,7 +385,10 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
                     let rows = Menu::inline(name.clone()).show(ui, |ui, _| {
                         let mut ran = None;
                         for (at, tool) in tools.iter().enumerate() {
-                            let item = MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown);
+                            let mut item = MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown);
+                            if let Some(icon) = &tool.icon {
+                                item = item.icon(icon.clone());
+                            }
                             let row = match tips.filter(|tips| tips.has(&tool.id)) {
                                 Some(tips) => item.show_with_tip(ui, |ui| tips.show(&tool.id, ui)),
                                 None => item.show(ui),
