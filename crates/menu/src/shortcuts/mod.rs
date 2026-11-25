@@ -312,6 +312,10 @@ pub struct Options {
     pub area_tabs: bool,
     /// The app's own Show entries.
     pub areas: Vec<Area>,
+    /// false: Show lists All Commands, each menu, Tools, each panel and Other before the app's own
+    /// [`areas`](Self::areas); true: it lists only the app's own entries (and Fixed Keys), and the
+    /// dialog opens on the first of them.
+    pub own_areas: bool,
     /// `None`: every catalog entry is listed. Otherwise the table, its Show entries and search
     /// list only the entries it returns true for; the others keep their bindings and still count
     /// in conflicts.
@@ -348,6 +352,7 @@ impl Default for Options {
             sort_by_label: false,
             area_tabs: false,
             areas: Vec::new(),
+            own_areas: false,
             visible: None,
             keyboard: false,
             fixed: Vec::new(),
