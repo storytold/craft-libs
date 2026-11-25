@@ -117,7 +117,7 @@ fn saved(path: impl AsRef<Path>) -> Option<DialogResult<Answer>> {
 // `a_selected_folder_never_replaces_the_typed_save_name` and `a_removed_selected_file_keeps_its_exact_save_path`, with
 // `~` and "not found". The extension is the service's policy now, so the chooser answers the name as typed.
 #[trial]
-fn the_chooser_lists_and_accepts_like_a_file_panel() {
+fn a_typed_folder_is_entered_and_a_new_name_is_saved_as_typed() {
     // A typed folder is entered and its name used up; a new name is answered as typed.
     let mut save = Chooser::open(PickRequest::save("document").directory("/d"));
     save.type_name("drafts");
@@ -126,7 +126,10 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     save.type_name("chapter");
     save.click("Save");
     assert_eq!(save.answer(), saved("/d/drafts/chapter"), "a new name is saved to as typed");
+}
 
+#[trial]
+fn a_listed_file_is_replaced_only_after_the_question() {
     // A listed file is replaced only after the question, asked once.
     let mut replace = Chooser::open(PickRequest::save("document").directory("/d/drafts"));
     replace.type_name("old.docx");
@@ -134,7 +137,10 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     assert_eq!(replace.answer(), None, "the chooser asks before replacing");
     replace.click("Replace");
     assert_eq!(replace.answer(), saved("/d/drafts/old.docx"));
+}
 
+#[trial]
+fn a_selected_file_keeps_its_exact_name_for_open_and_for_the_save_question() {
     // A selected file keeps its exact name, leading space and all, for Open and for Save's question.
     let mut open = Chooser::open(PickRequest::open("document").directory("/d"));
     open.click(" report.docx");
@@ -147,7 +153,10 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     assert_eq!(save.answer(), None, "Save asks before replacing the selected file");
     save.click("Replace");
     assert_eq!(save.answer(), saved("/d/ report.docx"));
+}
 
+#[trial]
+fn a_removed_selected_file_keeps_its_exact_save_path() {
     // A selected file removed meanwhile still names the exact path, and nothing is asked.
     let mut removed = Chooser::open(PickRequest::save("document").file_name("Draft.docx").directory("/d"));
     removed.click(" report.docx");
@@ -155,7 +164,10 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     removed.refocus();
     removed.click("Save");
     assert_eq!(removed.answer(), saved("/d/ report.docx"), "the removed selection keeps its path, not `report.docx`");
+}
 
+#[trial]
+fn a_selected_folder_is_entered_and_never_becomes_the_save_name() {
     // A selected folder is entered and never becomes the save name; once it is gone, the typed name is saved to.
     let mut folder = Chooser::open(PickRequest::save("document").file_name("chapter.docx").directory("/d"));
     folder.click("Chapters");
@@ -168,13 +180,19 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     gone.refocus();
     gone.click("Save");
     assert_eq!(gone.answer(), saved("/d/chapter.docx"), "the removed folder is not saved over as `Chapters.docx`");
+}
 
+#[trial]
+fn the_home_root_and_a_typed_path_elsewhere_open() {
     // `~` is the Home root; a typed path elsewhere is listed, then opened.
     let mut home = Chooser::open(PickRequest::open("document").directory("/d"));
     home.type_name("~/Letters/aunt.txt");
     home.click("Open");
     assert_eq!(home.answer(), picked("/home/u/Letters/aunt.txt"));
+}
 
+#[trial]
+fn a_missing_name_on_open_is_refused_and_said() {
     // A missing name on Open is refused and said.
     let mut missing = Chooser::open(PickRequest::open("document").directory("/d"));
     missing.type_name("missing.docx");

@@ -975,14 +975,22 @@ impl<'a> CharacterControls<'a> {
         let columns = if ui.available_width() < pair_width { &TWO_COLUMNS[..1] } else { &TWO_COLUMNS };
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
-            let family = family_field_keyed(ui, &words, values, families, Some(keys::FAMILY), None, picker.as_mut());
+            let family = family_field_keyed(ui, &words, values, families, Some(keys::FAMILY), None, Some(Sizing::FillWidth), picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field_keyed(ui, &words, values, families, Some(keys::FAMILY), None);
+            let family = family_field_keyed(ui, &words, values, families, Some(keys::FAMILY), None, Some(Sizing::FillWidth));
             preview_family = family.preview;
             rested_family = family.rested;
             picker_id = family.picker;
             edits.extend(family.edits);
-            edits.extend(select_row(ui, &words.style, hidden_side(), mixed(values.style.clone()), &style_entries, CharacterChange::Style));
+            edits.extend(select_row(
+                ui,
+                &words.style,
+                hidden_side(),
+                mixed(values.style.clone()),
+                &style_entries,
+                Some(Sizing::FillWidth),
+                CharacterChange::Style,
+            ));
             #[cfg(feature = "font-picker")]
             if let Some(axes) = axes {
                 let held = values.axes.clone().unwrap_or_default();
@@ -1061,6 +1069,7 @@ impl<'a> CharacterControls<'a> {
                             hidden_side(),
                             mixed(values.font_height),
                             &entries,
+                            Some(Sizing::FillWidth),
                             CharacterChange::FontHeight,
                         ));
                     }
@@ -1070,7 +1079,7 @@ impl<'a> CharacterControls<'a> {
                         let event = lengths.kerning(
                             ui,
                             words.kerning.clone(),
-                            mark(GlyphLabel::icon(IconId::new("text_cursor")), Some(words.kerning_hint.clone()), FieldLayout::Beside),
+                            mark(GlyphLabel::icon(IconId::new("text_cursor")), Some(words.kerning_hint.clone()), FieldLayout::Inside),
                             kerning_shown,
                             &kerning_presets,
                             Some(keys::KERNING),
@@ -1122,6 +1131,7 @@ impl<'a> CharacterControls<'a> {
                             hidden_side(),
                             mixed(values.anti_alias),
                             &entries,
+                            Some(Sizing::FillWidth),
                             CharacterChange::AntiAlias,
                         ));
                     }
@@ -1211,7 +1221,15 @@ impl<'a> CharacterControls<'a> {
             }
 
             if let Some(entries) = &language_entries {
-                edits.extend(select_row(ui, &words.language, hidden_side(), mixed(values.language.clone()), entries, CharacterChange::Language));
+                edits.extend(select_row(
+                    ui,
+                    &words.language,
+                    hidden_side(),
+                    mixed(values.language.clone()),
+                    entries,
+                    Some(Sizing::FillWidth),
+                    CharacterChange::Language,
+                ));
             }
         });
         CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family, requests, picker: picker_id }

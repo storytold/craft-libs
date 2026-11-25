@@ -15,6 +15,7 @@
     },
     "size": {
       "bar": {
+        "column": 24.0,
         "options": 42.0,
         "options_narrow": 36.0,
         "status": 30.0,
@@ -22,6 +23,7 @@
         "tab_large": 38.0,
         "title": 38.0
       },
+      "button": 30.0,
       "checker": 4.0,
       "control": {
         "md": 30.0,
@@ -69,6 +71,11 @@
         },
         "short": 120.0,
         "track": 144.0
+      },
+      "page": {
+        "action": 30.0,
+        "column": 820.0,
+        "margin": 50.0
       },
       "pane": {
         "least": 50.0

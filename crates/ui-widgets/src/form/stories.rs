@@ -5,7 +5,8 @@ use super::{Field, FieldGroup};
 use crate::buttons::Link;
 use crate::choice::Swatch;
 use crate::contract::{
-    FieldLayout, GlyphColon, GlyphLabel, LabelKind, LabelScheme, LinkLabelInk, Props as _, Show as _, ShowContainer as _, SideLabel, Validity,
+    CaptionInk, FieldLayout, GlyphColon, GlyphLabel, LabelKind, LabelScheme, LinkLabelInk, Props as _, Show as _, ShowContainer as _, SideLabel,
+    Validity,
 };
 use crate::layout_components::{Row, Stack};
 use crate::runtime::env::{Message, with_env};
@@ -70,7 +71,7 @@ fn field_link_label_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 }
                 .show(ui);
                 // The field the label names reports the link click; the story is its host.
-                field.inner.as_ref().is_some_and(|field| field.link) || link.clicked()
+                field.inner.as_ref().is_some_and(|field| field.link) || StoryOutput::from(link).clicked
             })
             .inner
             == Some(true)
@@ -84,6 +85,31 @@ fn field_link_label_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         |ui| rows(ui, "neutral", Some(Tone::Neutral)),
     );
     StoryOutput { clicked: accent || neutral, ..StoryOutput::default() }
+}
+
+/// A field's label under each `CaptionInk`, enabled and disabled: the muted ink (the default), then the normal ink
+/// VectorCraft sets at its root. A disabled label reads in the disabled ink under both.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_caption_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut rows = |ui: &mut Ui, key: &'static str| {
+        Stack::new().id_salt(key).show(ui, |ui, _| {
+            for (salt, enabled) in [("enabled", true), ("disabled", false)] {
+                Field::new("Angle")
+                    .id_salt(salt)
+                    .enabled(enabled)
+                    .show(ui, |ui, _| NumberField::new("Angle", data.bind(key, Some(SIZE))).unit("°").show(ui));
+            }
+        });
+    };
+    rows(ui, "muted");
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(CaptionInk::Normal);
+        },
+        |ui| rows(ui, "normal"),
+    );
+    StoryOutput::default()
 }
 
 /// A glyph label: the icon shows, the text only names the control.

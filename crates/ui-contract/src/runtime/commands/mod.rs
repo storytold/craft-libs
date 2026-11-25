@@ -9,8 +9,8 @@ pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
 pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope, Trigger, TypingRule};
 pub use library::ChromeCommand;
-pub(crate) use library::WindowShortcut;
-pub use library::{EditCommands, NavCommand, WindowCommand};
+pub use library::{EditCommands, NavCommand, QuitCommand, WindowCommand};
+pub(crate) use library::{WindowShortcut, yields_default};
 pub use registry::CommandDefError;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};

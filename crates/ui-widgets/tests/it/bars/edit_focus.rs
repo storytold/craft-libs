@@ -1,9 +1,11 @@
 //! A toolbar's Undo and Redo act in the focused text field while it has a step for them, and otherwise go on to the
-//! app's command, whose state then enables the button; the press keeps the focus in the field either way.
+//! app's command, whose state then enables the button; the press keeps the focus in the field either way. A menu's
+//! edit commands act in the focused field too.
 
 use craft_ui::bars::{BarItem, BarItems};
 use craft_ui::contract::{Bind, Props as _, Show as _};
-use craft_ui::runtime::commands::{CommandRef, CommandSet as _, CommandState, EditCommands};
+use craft_ui::display::Text;
+use craft_ui::runtime::commands::{self, CommandRef, CommandSet as _, CommandState, EditCommands, FireSource};
 use craft_ui::runtime::frame;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::TextField;
@@ -18,19 +20,33 @@ fn label_of(command: EditCommands) -> String {
     defs.into_iter().find(|def| def.command.id == id).map(|def| def.label).expect("the edit command has a definition")
 }
 
-/// A text field holding "hello" over a toolbar with Undo and Redo; the field comes first, so Tab focuses it.
+/// A title, then a text field holding "hello" over a toolbar with Undo and Redo; the field is the first stop, so Tab
+/// focuses it.
 struct Rig {
     fixture: Fixture,
     text: Rc<RefCell<String>>,
     field: Rc<Cell<Option<Id>>>,
+    /// A menu pick the next frame fires, and whether in the UI (after the title, before the field, as the window's own
+    /// menu bar runs) or before it (as a host dispatches a system menu before the app's UI).
+    menu: Rc<Cell<Option<(EditCommands, bool)>>>,
 }
 
 /// The rig with the field focused and the app's Undo and Redo in `app_can_undo`'s state.
 fn rig(app_can_undo: bool) -> Rig {
     let text = Rc::new(RefCell::new("hello".to_owned()));
     let field = Rc::new(Cell::new(None));
-    let (held, id) = (text.clone(), field.clone());
+    let menu = Rc::new(Cell::new(None));
+    let (held, id, pick) = (text.clone(), field.clone(), menu.clone());
     let mut fixture = Fixture::new(move |ui| {
+        let (pick, ctx) = (pick.take(), ui.ctx().clone());
+        let fire = |in_ui| {
+            if let Some((command, _)) = pick.filter(|&(_, at)| at == in_ui) {
+                commands::fire(&ctx, command, FireSource::Menu);
+            }
+        };
+        fire(false);
+        Text::new("Title").show(ui);
+        fire(true);
         id.set(Some(TextField::new("Name", Bind::bound(&mut *held.borrow_mut())).id_salt("name").show(ui).response.id));
         BarItems::new(vec![BarItem::new(EditCommands::Undo), BarItem::new(EditCommands::Redo)]).show(ui);
     });
@@ -40,7 +56,7 @@ fn rig(app_can_undo: bool) -> Rig {
     fixture.room(Vec2::new(600.0, 200.0)).settle();
     fixture.key(Key::Tab, Modifiers::NONE);
     fixture.settle();
-    let rig = Rig { fixture, text, field };
+    let rig = Rig { fixture, text, field, menu };
     assert!(rig.focus_in_the_field(), "Tab focuses the field");
     rig
 }
@@ -108,4 +124,27 @@ fn undo_with_no_step_in_the_field_runs_the_app_command() {
     rig.fixture.command_state(EditCommands::Undo, CommandState::new().enabled(false));
     rig.fixture.settle();
     assert!(rig.disabled(EditCommands::Undo), "with neither the field nor the app able to undo, the toolbar's Undo is disabled");
+}
+
+/// A system menu's Select All, then its Copy, each picked before the frame's UI, select the field's text and copy it
+/// in their own frames; a menu pick in the UI, though before the field, copies in the next frame. Guards against a
+/// system menu edit that waited a pass, against a field whose recorded edits kept Copy disabled after a Select All of
+/// the same pass (which dropped the Copy), and against an in-window menu's edit taken a frame earlier than before or
+/// lost.
+#[trial]
+fn a_menus_select_all_then_copy_copy_the_fields_text() {
+    let mut rig = rig(false);
+    rig.fixture.key(Key::End, Modifiers::NONE).settle();
+    rig.menu.set(Some((EditCommands::SelectAll, false)));
+    rig.fixture.frame(Vec::new());
+    rig.menu.set(Some((EditCommands::Copy, false)));
+    rig.fixture.frame(Vec::new());
+    assert_eq!(rig.fixture.copied(), ["hello"], "the system menu's Copy copies the selected text in its own frame");
+    assert!(rig.focus_in_the_field(), "the field keeps the focus");
+
+    rig.menu.set(Some((EditCommands::Copy, true)));
+    rig.fixture.frame(Vec::new());
+    assert!(rig.fixture.copied().is_empty(), "the in-window menu's Copy waits for the next frame");
+    rig.fixture.frame(Vec::new());
+    assert_eq!(rig.fixture.copied(), ["hello"], "the in-window menu's Copy copies in the next frame");
 }

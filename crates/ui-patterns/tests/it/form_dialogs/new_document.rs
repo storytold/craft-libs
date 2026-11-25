@@ -1,6 +1,7 @@
 //! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards and
 //! the pixel aspect ratio.
 
+use craft_behavior::MotionMode;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, SaveKey, Show as _, clicked};
 use craft_ui::dialog::DialogHost;
@@ -35,10 +36,10 @@ fn shows(fixture: &Fixture, text: &str) -> bool {
 /// Opens `tab` and clicks the card titled `card` in it.
 fn pick(fixture: &mut Fixture, tab: &str, card: &str) {
     let target = fixture.by_label(tab).unwrap_or_else(|| panic!("the {tab} tab"));
-    fixture.click(&target).idle(10);
+    fixture.click(&target).settle();
     // A card's node is named by its title and size line together; its title is clicked where it is painted.
     let title = fixture.texts().iter().find(|painted| painted.text == card).map(|painted| painted.rect.center());
-    fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).idle(10);
+    fixture.click_at(title.unwrap_or_else(|| panic!("the {card} card in {tab}"))).settle();
 }
 
 /// The most a host's count may be: its `fitted` caps it.
@@ -176,12 +177,13 @@ fn the_orientation_turns_the_built_in_cards() {
         let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
         *held.borrow_mut() = options;
     });
-    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    // The cards are read where they are painted, so the motion is off: a settled frame shows them at rest.
+    fixture.motion(MotionMode::Off).room(Vec2::new(1400.0, 1000.0)).settle();
     let art = fixture.by_label("Art & Illustration").expect("the Art tab");
-    fixture.click(&art).idle(10);
+    fixture.click(&art).settle();
     let turn = |fixture: &mut Fixture, orientation: &str| {
         let control = fixture.by_label(orientation).unwrap_or_else(|| panic!("the {orientation} control"));
-        fixture.click(&control).idle(10);
+        fixture.click(&control).settle();
     };
     let page = |shared: &Rc<RefCell<DocumentOptions>>| {
         let size = shared.borrow().size;
@@ -384,6 +386,50 @@ fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
     }
 }
 
+/// An app that sets `PresetCardLook::Page` (VectorCraft) gets each preset card's page as blank paper at the preset's
+/// aspect above its title, and no page outline.
+#[trial]
+fn preset_cards_in_the_page_look_paint_paper_and_no_outline() {
+    use craft_behavior::PixelSize;
+    use craft_ui::patterns::form_dialogs::PresetCardLook;
+    use craft_ui::runtime::access::Role;
+    use craft_ui::runtime::env::with_env;
+    use craft_ui::testing::Frames;
+
+    let wide = PixelSize::new(1200, 900);
+    let mut frames = Frames::new();
+    frames.screen(Vec2::new(1440.0, 900.0));
+    let mut options = DocumentOptions::default();
+    let mut show = |ui: &mut egui::Ui| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(PresetCardLook::Page);
+            },
+            |ui| drop(NewDocumentDialog::new(Bind::bound(&mut options)).clipboard(wide).show(ui)),
+        );
+    };
+    for _ in 0..30 {
+        frames.frame(Vec::new(), &mut show);
+    }
+    let tree = frames.tree();
+    let card = tree
+        .with_role(Role::LIST_ITEM)
+        .into_iter()
+        .find(|key| tree.name_of(*key).is_some_and(|label| label.starts_with("Clipboard")))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the visible Clipboard card");
+    let shapes = frames.frame_shapes(&mut show);
+    let caption = frames.texts().iter().find(|line| line.text == "Clipboard").expect("the preset title is painted").rect;
+    let above_title =
+        |rect: &egui::Rect| card.contains_rect(*rect) && rect.bottom() <= caption.top() && (rect.center().x - card.center().x).abs() <= 1.0;
+    let rects: Vec<_> = shapes.iter().filter_map(|shape| if let egui::Shape::Rect(rect) = shape { Some(rect) } else { None }).collect();
+    let pages: Vec<_> = rects.iter().filter(|rect| rect.fill == egui::Color32::WHITE && above_title(&rect.rect)).map(|rect| rect.rect).collect();
+    assert_eq!(pages.len(), 1, "one sheet of paper in the card: {pages:?}");
+    assert!((pages[0].width() / pages[0].height() - wide.width as f32 / wide.height as f32).abs() < 0.05, "the paper has the preset's aspect");
+    assert!(!rects.iter().any(|rect| rect.stroke.width > 0.0 && above_title(&rect.rect)), "no page outline");
+}
+
 /// A Web card turns Artboards on and a Photo card turns it off again; Artboards the user ticked stays on.
 #[trial]
 fn web_cards_turn_artboards_on_and_only_take_back_their_own() {
@@ -394,13 +440,14 @@ fn web_cards_turn_artboards_on_and_only_take_back_their_own() {
         let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
         *held.borrow_mut() = options;
     });
-    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    // The cards are read where they are painted, so the motion is off: a settled frame shows them at rest.
+    fixture.motion(MotionMode::Off).room(Vec2::new(1400.0, 1000.0)).settle();
     pick(&mut fixture, "Web", "Web Most Common");
     assert!(shared.borrow().artboard, "a Web card turns Artboards on");
     pick(&mut fixture, "Photo", "Landscape, 6 x 4");
     assert!(!shared.borrow().artboard, "a Photo card takes it back");
     let artboards = fixture.by_label("Artboards").expect("the Artboards box");
-    fixture.click(&artboards).idle(10);
+    fixture.click(&artboards).settle();
     pick(&mut fixture, "Photo", "Landscape, 7 x 5");
     assert!(shared.borrow().artboard, "the user's tick stays");
 }

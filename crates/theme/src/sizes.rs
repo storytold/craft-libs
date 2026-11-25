@@ -93,6 +93,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
     leaves! { out;
         "base.size.control.sm" Num 16.0..=48.0 => s.control.sm;
         "base.size.control.md" Num 16.0..=48.0 => s.control.md;
+        "base.size.button" Num 16.0..=48.0 => s.button;
         "base.size.icon.sm" Num 10.0..=32.0 => s.icon.sm;
         "base.size.icon.md" Num 10.0..=32.0 => s.icon.md;
         "base.size.icon.lg" Num 10.0..=32.0 => s.icon.lg;
@@ -106,6 +107,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.bar.status" Num 16.0..=64.0 => s.bar.status;
         "base.size.bar.options" Num 16.0..=80.0 => s.bar.options;
         "base.size.bar.options_narrow" Num 16.0..=80.0 => s.bar.options_narrow;
+        "base.size.bar.column" Num 8.0..=48.0 => s.bar.column;
         "base.size.panel_header" Num 16.0..=64.0 => s.panel_header;
         "base.size.popup_min" Num 64.0..=640.0 => s.popup_min;
         "base.size.thumb.sm" Num 12.0..=96.0 => s.thumb.sm;
@@ -145,6 +147,9 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.dialog.wrap" Num 120.0..=1024.0 => s.dialog.wrap;
         "base.size.dialog.button" Num 24.0..=240.0 => s.dialog.button;
         "base.size.dialog.side_button" Num 24.0..=240.0 => s.dialog.side_button;
+        "base.size.page.column" Num 240.0..=2048.0 => s.page.column;
+        "base.size.page.margin" Num 0.0..=240.0 => s.page.margin;
+        "base.size.page.action" Num 16.0..=96.0 => s.page.action;
     }
     let sp = &mut b.space;
     leaves! { out;

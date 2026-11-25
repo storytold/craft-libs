@@ -31,6 +31,7 @@ use craft_theme::Srgba;
 use egui::{Context, Response, Ui};
 use std::cell::RefCell;
 
+pub use cards::PresetCardLook;
 use cards::{Left, TabId};
 
 use details::Right;
