@@ -266,3 +266,43 @@ fn a_raised_fallback_document_window_comes_to_the_front() {
     fixture.frame(Vec::new());
     assert_eq!(top.get(), first.get(), "the raised window is in front");
 }
+
+/// A document window raised in the pass the windows show again after a pass with none shown (Presentation Mode ending)
+/// comes to the front where the windows overlap. egui raises every layer that shows again and keeps the old order
+/// among them, so a raise asked in that pass alone left the window behind the one opened after it.
+#[trial]
+fn a_window_raised_as_the_windows_show_again_comes_to_the_front() {
+    use craft_ui::testing::Fixture;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let overlap = pos2(200.0, 200.0);
+    let (showing, raise, first, top) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(false)), Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (shows, asked, seen, front) = (showing.clone(), raise.clone(), first.clone(), top.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        front.set(ui.ctx().layer_id_at(overlap));
+        if !shows.get() {
+            return;
+        }
+        for (name, at) in [("First.psd", 40.0), ("Second.psd", 80.0)] {
+            let window = DocumentWindow::new(name).id_salt(name).first_placed(Rect::from_min_size(pos2(at, at), vec2(300.0, 200.0)));
+            let raised = name == "First.psd" && asked.get();
+            if raised { window.raise() } else { window }.show(ui, |ui, _| {
+                if name == "First.psd" {
+                    seen.set(Some(ui.layer_id()));
+                }
+            });
+        }
+    });
+    fixture.settle();
+    assert!(first.get().is_some() && top.get() != first.get(), "the window opened last is in front");
+    showing.set(false);
+    fixture.frame(Vec::new());
+    showing.set(true);
+    raise.set(true);
+    fixture.frame(Vec::new());
+    raise.set(false);
+    fixture.frame(Vec::new());
+    fixture.frame(Vec::new());
+    assert_eq!(top.get(), first.get(), "the window raised as they showed again is in front");
+}
