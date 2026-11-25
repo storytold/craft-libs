@@ -3,8 +3,9 @@
 
 use craft_theme::Rgba;
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::form::Field;
+use craft_ui::layout_components::Row;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::HexField;
@@ -110,4 +111,26 @@ fn a_pasted_colour_replaces_the_digits_with_or_without_its_hash() {
     paste(&mut fixture, "12");
     assert_eq!(text(&fixture), "FF880012", "a paste that is no colour is inserted at the caret");
     assert_eq!(*value.borrow(), start, "and the colour stays");
+}
+
+/// How far outside its editor egui clips an editor's text, in points, so the caret past the last letter shows whole.
+const EDITOR_CLIP_OUTSET: f32 = 1.0;
+
+/// A content-sized hex field is as wide as its digits in the monospace face it draws them in, not in the body face:
+/// all six digits of #336699 lie inside the field's text rect, and none is cut off.
+#[trial]
+fn a_content_sized_hex_field_shows_all_six_digits() {
+    let mut fixture = Fixture::new(|ui| {
+        Row::new().show(ui, |ui, _| {
+            HexField::hex("Hex", Bind::given(Rgba::rgb(0x33, 0x66, 0x99))).sizing(Sizing::Content).show(ui);
+        });
+    });
+    fixture.settle();
+    let digits = fixture.texts().iter().find(|run| run.text == "336699").cloned().unwrap_or_else(|| panic!("the field shows its digits"));
+    let text_rect = digits.clip.shrink(EDITOR_CLIP_OUTSET);
+    assert!(
+        digits.rect.min.x >= text_rect.min.x && digits.rect.max.x <= text_rect.max.x,
+        "the digits {:?} lie inside the field's text rect {text_rect:?}",
+        digits.rect
+    );
 }
