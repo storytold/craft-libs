@@ -4,7 +4,8 @@ use super::words::PanelWords;
 
 use crate::contract::overlay::{Dismiss, Outside, OverlayFit, ViewportShare};
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, Overlay, Pattern, Politeness, Props, Show as _, ShowCollection as _, ShowContainer as _, Sizing, announce, clicked,
+    Bind, BodyCx, CollectionEvent, LeastWidth, Overlay, Pattern, Politeness, Props, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    announce, clicked,
 };
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
@@ -124,6 +125,8 @@ impl crate::contract::Outcome for PaletteOutput {
 ///   out, showing the `placeholder`; it opens to the field with the key focus in the pass that opens it and lists the
 ///   results in a popup under the field. The in-place field is the palette's face, so it is named by the palette's
 ///   `label`, closed and open; the dialog face's field, inside a box named `label`, keeps the generic search name.
+/// - Width (dialog face): at least `least_width` ([`LeastWidth::Palette`] by default), so the box keeps its width as
+///   the query changes its rows; at most 60% of the window's width, where a row wider than the box shortens its label.
 /// - Empty query: with `suggested`, its heading and those commands; else the commands last run, newest first (the
 ///   `recents` binding), else the first entries.
 /// - Fallback: with `fallback`, a last row follows the matches of a query, or stands alone when nothing matches. Picking
@@ -162,6 +165,9 @@ pub struct CommandPalette<'a> {
     /// The row that hands the query back; its text is the template filled with the query as `{text}`.
     #[prop]
     fallback: Option<WordTemplate>,
+    /// The least width of the dialog face's content, from a size role; the box stays within its share of the window.
+    #[prop]
+    least_width: LeastWidth,
 }
 
 impl<'a> CommandPalette<'a> {
@@ -179,6 +185,7 @@ impl<'a> CommandPalette<'a> {
             placeholder: None,
             suggested: None,
             fallback: None,
+            least_width: LeastWidth::Palette,
         }
     }
 
@@ -198,7 +205,7 @@ impl<'a> CommandPalette<'a> {
     }
 
     fn show_dialog(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, index, open, uses, mut recents, placeholder, suggested, fallback, .. } = self;
+        let CommandPalette { label, entries, index, open, uses, mut recents, placeholder, suggested, fallback, least_width, .. } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -207,8 +214,11 @@ impl<'a> CommandPalette<'a> {
         let uses: &dyn Fn(&CommandRef) -> u32 = uses.unwrap_or(&never_used);
         let hint: Label = placeholder.unwrap_or_else(|| words.palette_placeholder.clone());
         let mut chosen = Chosen::default();
+        // The box's width is its least width, or its widest row when that is wider, within the share of the window: the
+        // rows a query lists come and go, and a box as wide as them would jump while the user types.
         let shown = Popover::new(label.clone(), open)
             .collection_body()
+            .least_width(least_width)
             .overlay(|_| {
                 let mut overlay = Overlay::modal().dismiss(Dismiss::new().outside(Outside::Close));
                 overlay.fit = OverlayFit::ContentCapped(SHARE);
