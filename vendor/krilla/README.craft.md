@@ -28,6 +28,7 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/16-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 | `patches/17-color-precision.patch` | Color precision | `graphics/{color,shading_function}.rs` |
 | `patches/18-subset-os2.patch` | Embedding permissions in TrueType subsets | `text/cid.rs` |
+| `patches/19-metadata-date.patch` | Metadata date in XMP | `interchange/metadata.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -451,3 +452,20 @@ font with no `OS/2` is embedded as before. CFF programs are still embedded bare 
 
 craft-pdf's `font_tables` test embeds a TrueType font with `fsType` 4 and checks the program's
 `OS/2` matches the source, its table order and checksums, and that it still parses.
+
+## 19: metadata date in XMP
+
+Upstream writes `xmp:CreateDate` and `xmp:ModifyDate` but no `xmp:MetadataDate`, so the
+shared writer's packet was missing the field two consumers already patch in after export
+(storytold/craft-libs#471): DesignCraft's PDF/X path injects `xmp:MetadataDate` and
+`xmpMM:VersionID` because its `validate-pdf` flags the missing date as a defect, and
+PdfCraft's demo postprocess writes one into the packet it assembles.
+
+`serialize_xmp_metadata` now also calls `xmp.metadata_date`, from the same instant as the
+modification date (the metadata last changed when the file did). The document information
+dictionary is unchanged: it has no metadata-date entry. A caller needing a different instant
+would add a builder field beside the creation and modification dates, where both consumers
+write it today.
+
+Tests: `crates/pdf/tests/writing.rs`
+(`writes_pages_metadata_and_selected_version_without_a_renderer`).
