@@ -512,7 +512,8 @@ impl Embed {
     }
 
     /// Warn about each catalog's and [`Embed::check_text`] file's characters that neither an
-    /// embedded face nor an [`Embed::embedded_elsewhere`] face covers.
+    /// embedded face nor an [`Embed::embedded_elsewhere`] face covers. The tab-title face, which draws only tab titles,
+    /// covers none of them.
     fn check_coverage(&self, faces: &[Face], dir: &Path, cargo: &mut Vec<String>) {
         let files = self.checked_files();
         if files.is_empty() {
@@ -521,6 +522,7 @@ impl Embed {
         let elsewhere = self.elsewhere(dir, cargo);
         let fonts: Vec<(&ManifestEntry, u32, Option<Vec<u8>>)> = faces
             .iter()
+            .filter(|face| face.entry.role.as_deref() != Some(TAB_ROLE))
             .map(|face| (&face.entry, face.index, read_bounded(&face.path, MAX_FILE_BYTES).ok()))
             .chain(elsewhere.iter().map(|entry| (entry, entry.index, read_bounded(&dir.join(&entry.file), MAX_FILE_BYTES).ok())))
             .collect();

@@ -371,8 +371,8 @@ fn an_oversized_manifest_and_a_directory_face_are_errors() {
 
 /// `Embed::tab_face` adds only the Noto Sans Condensed SemiBold row of `fonts/latin-manifest.txt`, with the `tab` role.
 /// A checkout without that manifest or row keeps its other faces, required or not; a broken manifest or row is an
-/// error only when required. The face counts for none of the scripts a required build asks for, and a served table
-/// leaves it out.
+/// error only when required. The face counts for none of the scripts a required build asks for and covers none of the
+/// characters of a checked text, and a served table leaves it out.
 #[test]
 fn the_tab_face_comes_from_the_latin_manifest_with_the_tab_role() {
     let scratch = Scratch::new("tab-face");
@@ -404,6 +404,13 @@ fn the_tab_face_comes_from_the_latin_manifest_with_the_tab_role() {
     let r = run(Embed::new().tab_face().serve(scratch.0.join("served"), "fonts/"), Some(&dir), Some("1"));
     assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular"]);
     assert!(warnings(&r).iter().any(|w| w.contains("not serving the tab-title face")), "{:?}", r.cargo);
+    // Only tab titles draw in the face, so it covers none of the characters of a checked text.
+    std::fs::write(dir.join("fonts/condensed.ttf"), tiny_font(&[(0x41, 0x5A, None), (0x4E00, 0x4E00, None)], &[])).unwrap();
+    let text = scratch.0.join("text.ftl");
+    std::fs::write(&text, "x = \u{4E00}\n").unwrap();
+    let r = run(Embed::new().tab_face().check_text([&text]), Some(&dir), Some("1"));
+    assert_eq!(r.result.as_ref().unwrap(), &["Noto Sans Arabic Regular", "Noto Sans Condensed SemiBold"]);
+    assert!(warnings(&r).iter().any(|w| w.contains("1 character no embedded face covers (\u{4E00})")), "{:?}", r.cargo);
 
     // No row for the face, or no latin manifest at all: the other faces and a warning, even when required.
     std::fs::write(&latin, row("Inter", "SemiBold", "fonts/inter.ttf")).unwrap();
