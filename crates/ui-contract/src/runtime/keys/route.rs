@@ -638,6 +638,8 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
         while let Some((key, _)) = ends.next_if(|(_, at)| *at <= place) {
             down.retain(|held| *held != key);
         }
+        // A clip at the place a hold ends at is left after it: a press a command fired for holds its key again
+        // (`leave_clip`), and an end read after the clip would take that hold back.
         while let Some(clip) = clips.next_if(|clip| clip.at <= place) {
             leave_clip(clip, took, &mut down, &mut left);
         }
