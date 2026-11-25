@@ -1354,8 +1354,10 @@ impl Job<'_> {
             }
             match (bk.and_then(|k| before.get(k)), ak.and_then(|k| after.get(k)), node) {
                 (Some(old), Some(new), Some((q, s, e))) => {
-                    // another image, or the same one cropped, turned or placed anew: written whole
-                    if old.data != new.data || old.settings != new.settings {
+                    // another image, or the same one cropped, turned or placed anew: written whole;
+                    // so is a turned one resized, whose frame, matrices and place all follow its size
+                    let turned = new.obj.clone().float_mut().is_some_and(|f| f.rot.is_finite() && f.rot.round().rem_euclid(360.0) != 0.0);
+                    if old.data != new.data || old.settings != new.settings || (turned && !old.same(new)) {
                         if let Some(xml) = self.new_picture(&new.obj) {
                             edits.push((s, e, xml));
                         }

@@ -518,3 +518,45 @@ fn an_edited_paragraph_beside_a_new_one_keeps_its_own_shape() {
     assert_eq!(shape_of("새 문단").as_deref(), Some("5"));
     assert_eq!(shape_of("머리 문단").as_deref(), Some("0"));
 }
+
+/// A turned picture resized is written again around its new size: hp:sz stays the box around
+/// the turned picture, not its own size. Before, the resize set both to the same size and Hancom
+/// drew the turned picture squeezed into it.
+#[test]
+fn write_back_keeps_a_resized_turned_picture_in_the_box_around_it() {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend(1u32.to_be_bytes());
+    png.extend(1u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0]);
+    let pic = r#"<hp:pic id="1" zOrder="1" textWrap="IN_FRONT_OF_TEXT"><hp:offset x="0" y="0"/><hp:orgSz width="10000" height="4000"/><hp:curSz width="10000" height="4000"/><hp:rotationInfo angle="90"/><hc:img binaryItemIDRef="image1"/><hp:sz width="4000" height="10000"/><hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/></hp:pic>"#;
+    let sec =
+        format!(r#"<hs:sec {NS} xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hp:p><hp:run>{pic}<hp:t>글</hp:t></hp:run></hp:p></hs:sec>"#);
+    let mut z = craft_zip::Writer::new();
+    let _ = z.add("mimetype", b"application/hwp+zip", craft_zip::Compression::Stored);
+    let _ = z.add("Contents/header.xml", br#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#, craft_zip::Compression::Deflated);
+    let _ = z.add("Contents/section0.xml", sec.as_bytes(), craft_zip::Compression::Deflated);
+    let _ = z.add("BinData/image1.png", &png, craft_zip::Compression::Deflated);
+    // a manifest to list the picture's new image item in
+    let hpf = br#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="s" href="Contents/section0.xml" media-type="application/xml"/><opf:item id="image1" href="BinData/image1.png" media-type="image/png" isEmbeded="1"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="s"/></opf:spine></opf:package>"#;
+    let _ = z.add("Contents/content.hpf", hpf, craft_zip::Compression::Deflated);
+    let original = z.finish().unwrap();
+    let mut doc = crate::read(&original).unwrap();
+    let resized = paras_mut(&mut doc.body, &mut |p| {
+        let Some(o) = p.objects.iter_mut().find(|o| matches!(o, craft_wordmodel::InlineObject::Image { .. })) else { return false };
+        if let craft_wordmodel::InlineObject::Image { w, h, .. } = o {
+            (*w, *h) = (*w / 2.0, *h / 2.0);
+        }
+        true
+    });
+    assert!(resized, "the picture is read");
+    let (bytes, _) = write_back(&original, &doc);
+    let out = crate::xml::parse(zip_part(&bytes, "Contents/section0.xml").as_bytes(), false).unwrap();
+    let pic = out.iter("hp:pic").next().expect("the picture");
+    let size = |tag: &str| -> (i64, i64) {
+        let e = pic.find(tag).expect(tag);
+        (e.get("width").unwrap().parse().unwrap(), e.get("height").unwrap().parse().unwrap())
+    };
+    let ((fw, fh), (cw, ch)) = (size("hp:sz"), size("hp:curSz"));
+    assert!(fw < 4000 || fh < 10000, "resized: {:?}", (fw, fh));
+    assert!((fw - ch).abs() <= 1 && (fh - cw).abs() <= 1, "the box around the turned picture: {:?}", ((fw, fh), (cw, ch)));
+}

@@ -774,14 +774,21 @@ fn polygon_points(kind: ShapeKind, w: i64, h: i64) -> Option<Vec<(i64, i64)>> {
 /// group when `member` is given: its offset in the group goes into the translation (as Hancom
 /// writes members).
 fn frame_xml(w: i64, h: i64, cur: (i64, i64), f: &craft_wordmodel::para::Float, member: Option<Member>) -> String {
-    let id = "e1=\"1\" e2=\"0\" e3=\"0\" e4=\"0\" e5=\"1\" e6=\"0\"";
-    let angle = if f.rot.is_finite() { (f.rot.round() as i64).rem_euclid(360) } else { 0 };
-    let (x, y) = member.map(|m| (m.x, m.y)).unwrap_or((0, 0));
+    let angle = angle_of(f);
+    let (mut x, mut y) = member.map(|m| (m.x, m.y)).unwrap_or((0, 0));
+    if member.is_none() {
+        // the turned object is drawn from its frame's corner (Hancom's viewer: hp:sz is the box
+        // around it, 2026-11-25)
+        let (fw, fh) = turned_box(cur.0, cur.1, angle);
+        (x, y) = ((fw - cur.0) / 2, (fh - cur.1) / 2);
+    }
     let (sx, sy) = (cur.0 as f64 / w.max(1) as f64, cur.1 as f64 / h.max(1) as f64);
     format!(
-        "<hp:offset x=\"{x}\" y=\"{y}\"/><hp:orgSz width=\"{w}\" height=\"{h}\"/><hp:curSz width=\"{}\" height=\"{}\"/>\
+        "<hp:offset x=\"{}\" y=\"{}\"/><hp:orgSz width=\"{w}\" height=\"{h}\"/><hp:curSz width=\"{}\" height=\"{}\"/>\
 <hp:flip horizontal=\"{}\" vertical=\"{}\"/><hp:rotationInfo angle=\"{angle}\" centerX=\"{}\" centerY=\"{}\" rotateimage=\"1\"/>\
-<hp:renderingInfo><hc:transMatrix e1=\"1\" e2=\"0\" e3=\"{x}\" e4=\"0\" e5=\"1\" e6=\"{y}\"/><hc:scaMatrix e1=\"{}\" e2=\"0\" e3=\"0\" e4=\"0\" e5=\"{}\" e6=\"0\"/><hc:rotMatrix {id}/></hp:renderingInfo>",
+<hp:renderingInfo><hc:transMatrix e1=\"1\" e2=\"0\" e3=\"{x}\" e4=\"0\" e5=\"1\" e6=\"{y}\"/><hc:scaMatrix e1=\"{}\" e2=\"0\" e3=\"0\" e4=\"0\" e5=\"{}\" e6=\"0\"/>{}</hp:renderingInfo>",
+        member.map_or(0, |m| m.x),
+        member.map_or(0, |m| m.y),
         cur.0,
         cur.1,
         b(f.flip_h),
@@ -789,8 +796,41 @@ fn frame_xml(w: i64, h: i64, cur: (i64, i64), f: &craft_wordmodel::para::Float, 
         w / 2,
         h / 2,
         scale(sx),
-        scale(sy)
+        scale(sy),
+        rot_matrix(w, h, angle)
     )
+}
+
+/// The object's turn, whole degrees clockwise, `0..360`.
+fn angle_of(f: &craft_wordmodel::para::Float) -> i64 {
+    if f.rot.is_finite() { (f.rot.round() as i64).rem_euclid(360) } else { 0 }
+}
+
+/// The box around a `w` x `h` object turned `angle` degrees (HWPUNIT).
+fn turned_box(w: i64, h: i64, angle: i64) -> (i64, i64) {
+    if angle == 0 {
+        return (w, h);
+    }
+    let (s, c) = (angle as f64).to_radians().sin_cos();
+    let (s, c) = (s.abs(), c.abs());
+    let (w, h) = (w as f64, h as f64);
+    ((w * c + h * s).round() as i64, (w * s + h * c).round() as i64)
+}
+
+/// hc:rotMatrix turning a `w` x `h` object `angle` degrees clockwise about its centre (page
+/// coordinates, y down; the matrix Hancom's viewer turned in 2026-11-25's test).
+fn rot_matrix(w: i64, h: i64, angle: i64) -> String {
+    if angle == 0 {
+        return "<hc:rotMatrix e1=\"1\" e2=\"0\" e3=\"0\" e4=\"0\" e5=\"1\" e6=\"0\"/>".into();
+    }
+    let (s, c) = (angle as f64).to_radians().sin_cos();
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    let m = [c, -s, cx - c * cx + s * cy, s, c, cy - s * cx - c * cy];
+    let v = |v: f64| {
+        let t = format!("{:.6}", if v.abs() < 1e-9 { 0.0 } else { v });
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    format!("<hc:rotMatrix e1=\"{}\" e2=\"{}\" e3=\"{}\" e4=\"{}\" e5=\"{}\" e6=\"{}\"/>", v(m[0]), v(m[1]), v(m[2]), v(m[3]), v(m[4]), v(m[5]))
 }
 
 /// A scale factor as Hancom writes it (up to six decimals, "1" for one).
@@ -1114,7 +1154,10 @@ impl Builder<'_> {
                     2_000_000 + z,
                     self.frame(wd, ht, float)
                 );
-                Some(Piece::Run(xml, if float.wrap == Wrap::Inline { *h } else { 0.0 }))
+                Some(Piece::Run(
+                    xml,
+                    if float.wrap == Wrap::Inline && self.member.is_none() { hu_pt(turned_box(wd, ht, angle_of(float)).1) } else { 0.0 },
+                ))
             }
             InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, freeform, .. } => {
                 self.shape(*kind, (*w, *h), fill.as_ref(), (*stroke, *stroke_width), float, (*story, freeform.as_deref()))
@@ -1289,7 +1332,7 @@ impl Builder<'_> {
             _ => (format!("<hc:startPt x=\"0\" y=\"0\"/><hc:endPt x=\"{wd}\" y=\"{ht}\"/>"), " isReverseHV=\"0\"".to_string()),
         };
         if float.wrap == Wrap::Inline && self.member.is_none() {
-            height = h;
+            height = hu_pt(turned_box(wd, ht, angle_of(float)).1);
         }
         let (wrap, tail) = self.placement_tail(wd, ht, float);
         let xml = format!(
@@ -1324,8 +1367,13 @@ impl Builder<'_> {
         if self.member.is_some() {
             return ("IN_FRONT_OF_TEXT", String::new());
         }
-        let (wrap, pos, margin) = placement_xml(float, self.area);
-        (wrap, format!("{}{pos}{margin}", sz_xml(w, h)))
+        // a turned object's hp:sz is the box around it, placed where the turned object lies
+        let (fw, fh) = turned_box(w, h, angle_of(float));
+        let mut at = float.clone();
+        at.x -= hu_pt(fw - w) / 2.0;
+        at.y -= hu_pt(fh - h) / 2.0;
+        let (wrap, pos, margin) = placement_xml(&at, self.area);
+        (wrap, format!("{}{pos}{margin}", sz_xml(fw, fh)))
     }
 
     /// The outline of a drawn shape (hp:lineShape).
@@ -1381,7 +1429,7 @@ impl Builder<'_> {
             _ => String::new(),
         };
         let (wrap, tail) = self.placement_tail(wd, ht, float);
-        let height = if float.wrap == Wrap::Inline && self.member.is_none() { hu_pt(ht) } else { 0.0 };
+        let height = if float.wrap == Wrap::Inline && self.member.is_none() { hu_pt(turned_box(wd, ht, angle_of(float)).1) } else { 0.0 };
         let xml = format!(
             "<hp:{tag} id=\"\" zOrder=\"{z}\" numberingType=\"NONE\" textWrap=\"{wrap}\" textFlow=\"BOTH_SIDES\" lock=\"0\" href=\"\" groupLevel=\"{}\" instid=\"{}\">\
 {}{line}{brush}{geometry}{tail}</hp:{tag}>",
@@ -1433,7 +1481,7 @@ impl Builder<'_> {
         let z = self.objects;
         let frame = self.frame(cur.0, cur.1, float);
         let (wrap, tail) = self.placement_tail(cur.0, cur.1, float);
-        let height = if float.wrap == Wrap::Inline && self.member.is_none() { hu_pt(cur.1) } else { 0.0 };
+        let height = if float.wrap == Wrap::Inline && self.member.is_none() { hu_pt(turned_box(cur.0, cur.1, angle_of(float)).1) } else { 0.0 };
         let xml = format!(
             "<hp:container id=\"\" zOrder=\"{z}\" numberingType=\"NONE\" textWrap=\"{wrap}\" textFlow=\"BOTH_SIDES\" lock=\"0\" href=\"\" groupLevel=\"{}\" instid=\"{}\">{frame}{members}{tail}</hp:container>",
             self.member.map_or(0, |m| m.level),

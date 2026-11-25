@@ -425,3 +425,50 @@ fn what_isnt_written_is_logged() {
     assert!(bytes.is_ok());
     assert!(warnings.iter().any(|w| w.contains("hyperlink destinations")), "{warnings:?}");
 }
+
+/// A turned object is written as Hancom's viewer turns it (2026-11-25): hp:sz is the box around
+/// the turned object, placed where it lies, hp:curSz the object's own size, and the drawing
+/// matrices turn it. Before, the matrices were left unturned and the viewer drew it upright.
+#[test]
+fn new_hwpx_writes_a_turned_object_in_the_box_around_it() {
+    use craft_wordmodel::{
+        CharProps, InlineObject, Paragraph,
+        para::{Anchor, Float, ShapeKind, Wrap},
+        para_block,
+    };
+    let mut float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 10.0, y: 50.0, ..Float::default() };
+    float.set_spin(craft_wordmodel::geom::Spin::new(90.0, false, false));
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: Some(craft_wordmodel::props::Rgb(0, 0, 0)),
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut doc = craft_wordmodel::Document::from_text("");
+    let mut p = Paragraph::with_text("x", CharProps::default());
+    p.insert_object(0, shape, &CharProps::default()).unwrap();
+    doc.body = vec![para_block(p)];
+    let (bytes, _) = new_hwpx(&doc).unwrap();
+    let sec = xml::parse(zip_part(&bytes, "Contents/section0.xml").as_bytes(), false).unwrap();
+    let rect = sec.iter("hp:rect").next().expect("the shape");
+    let size = |tag: &str| -> (i64, i64) {
+        let e = rect.find(tag).expect(tag);
+        (e.get("width").unwrap().parse().unwrap(), e.get("height").unwrap().parse().unwrap())
+    };
+    let ((fw, fh), (cw, ch)) = (size("hp:sz"), size("hp:curSz"));
+    assert!(fw < fh && cw > ch, "frame upright, own size wide: {:?}", ((fw, fh), (cw, ch)));
+    let rot = rect.find("hp:renderingInfo").and_then(|r| r.find("hc:rotMatrix")).expect("rotMatrix");
+    assert_ne!(rot.get("e1"), Some("1"), "the matrix turns it");
+    let pos = rect.find("hp:pos").unwrap();
+    let off = |k: &str| -> i64 { pos.get(k).unwrap().parse().unwrap() };
+    // the frame's centre is the object's centre
+    assert!((off("horzOffset") + fw / 2 - (1000 + cw / 2)).abs() <= 1, "{}", off("horzOffset"));
+    assert!((off("vertOffset") + fh / 2 - (5000 + ch / 2)).abs() <= 1, "{}", off("vertOffset"));
+}
