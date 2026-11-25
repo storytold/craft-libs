@@ -3,8 +3,9 @@
 //! container (in a window of its own, or in a full-screen or Wayland-maximized main window), the size of a
 //! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
-//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the placement of a minimized window, the root frame decided
-//! again, a held close, `act`, and a hosted window's Control-click and window-input policy.
+//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
+//! placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted window's
+//! Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
