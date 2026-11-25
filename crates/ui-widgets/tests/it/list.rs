@@ -1900,3 +1900,27 @@ fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
     fixture.key(Key::PageDown, Modifiers::NONE).settle();
     assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
 }
+
+/// The height of a thumbnail row and how far a nested row's label starts after a top-level one's, under `rows`.
+fn thumb_row_geometry(rows: craft_ui::list::ThumbRows) -> (f32, f32) {
+    use craft_ui::list::ThumbSize;
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]).depth(*key).thumb(ThumbSize::Medium, |_, _| {}));
+    });
+    fixture.root_value(rows).room(Vec2::new(300.0, 200.0)).settle();
+    let label_x = |name: &str| fixture.texts().iter().find(|text| text.text == name).expect("the row paints its label").rect.left();
+    let height = fixture.by_label(NAMES[0]).expect("the top-level row").rect.height();
+    (height, label_x(NAMES[1]) - label_x(NAMES[0]))
+}
+
+/// A list under `ThumbRows::Tight` (VectorCraft's Layers panel) stands its thumbnail rows lower, the thumbnail with a
+/// tight gap and no control-and-padding floor, and indents a level by less than an icon slot.
+#[trial]
+fn tight_thumbnail_rows_stand_lower_and_indent_less() {
+    use craft_ui::list::ThumbRows;
+    let ((roomy_height, roomy_indent), (tight_height, tight_indent)) = (thumb_row_geometry(ThumbRows::Roomy), thumb_row_geometry(ThumbRows::Tight));
+    assert!(tight_height < roomy_height, "the tight row ({tight_height}) is lower than the roomy one ({roomy_height})");
+    assert!(0.0 < tight_indent && tight_indent < roomy_indent, "a level indents less ({tight_indent}) than an icon slot ({roomy_indent})");
+}

@@ -133,10 +133,12 @@ impl<'a> Panel<'a> {
     }
 
     /// A header showing the title in a title row, with a rule under it unless the title's weight is a quiet one
-    /// ([`strength`](Panel::strength)): for a panel that no dock tab or window names.
+    /// ([`strength`](Panel::strength)): for a panel that no dock tab or window names. Where the app's quiet titles head
+    /// their body ([`QuietHeader::Heads`](crate::contract::QuietHeader)), the first section under a quiet title draws
+    /// no rule above it.
     #[must_use]
     pub fn titled(mut self) -> Self {
-        self.props.header = Some(HeaderRegion::new().rule(self.strength.ruled()));
+        self.props.header = Some(HeaderRegion::new().rule(self.strength.ruled()).heads(true));
         self
     }
 

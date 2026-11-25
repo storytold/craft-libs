@@ -264,7 +264,11 @@ fn editor_input_of(intent: &Intent, shift: bool) -> Option<EditorInput> {
 /// The intents routed to `id` this pass, with physical horizontal moves read in the component's direction.
 #[doc(hidden)]
 pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
-    let routed = current(ctx, |stage| stage.routed.get(&id).cloned()).unwrap_or_default();
+    let routed = current(ctx, |stage| {
+        stage.intents_read = true;
+        stage.routed.get(&id).cloned()
+    })
+    .unwrap_or_default();
     let flip = |mv| match (rtl, mv) {
         (true, NavMove::Back) => NavMove::Forward,
         (true, NavMove::Forward) => NavMove::Back,
