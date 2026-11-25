@@ -94,6 +94,107 @@ fn more_than_one_startxref(data: &[u8]) -> bool {
         .is_some_and(|before| crate::util::find_needle(before, needle).is_some())
 }
 
+/// PdfCraft patch: (trailing data) the most earlier document ends [`earlier_document_ends`]
+/// returns: each is a full open of the data before it, rebuild included.
+const MAX_EARLIER_ENDS: usize = 8;
+
+/// PdfCraft patch: (trailing data) where `data` could end as a whole document before its last
+/// `startxref`, newest first: after the `%%EOF` (and its end-of-line marker) of each earlier
+/// `startxref N %%EOF` whose `N` names a cross-reference table (`xref`) or an `N G obj` header
+/// before it. A file recovered from a damaged disk can carry another file's data after its own
+/// end (one recovered PDF carried 640 MB of fragments of other PDFs and a program, whose text
+/// held `startxref %ld %%EOF`): its last `startxref` names nothing, and a rebuild from every
+/// object header in the file takes the fragments' objects for the document's, which share their
+/// numbers. `Pdf::load` reads such a document from the data before one of these ends when
+/// reading the whole file finds none; `pdfcraft-cos` finds the same ends (`earlier_document_ends`
+/// there), so the two read the same document.
+pub(crate) fn earlier_document_ends(data: &[u8]) -> Vec<usize> {
+    let needle = b"startxref";
+    let mut ends = Vec::new();
+    let Some(last) = findr_needle(data, needle) else {
+        return ends;
+    };
+    let mut before = data.get(..last).unwrap_or_default();
+    while ends.len() < MAX_EARLIER_ENDS {
+        let Some(at) = findr_needle(before, needle) else {
+            break;
+        };
+        before = data.get(..at).unwrap_or_default();
+        if let Some(end) = document_end_at(data, at) {
+            ends.push(end);
+        }
+    }
+    ends
+}
+
+/// PdfCraft patch: (trailing data) the latest earlier end of a document in `data`
+/// ([`earlier_document_ends`]) when the file's own last `startxref` names no cross-reference
+/// section and what follows that end, past white space, is no PDF syntax: not an `N G obj`
+/// header, `xref`, `trailer`, `startxref` or a comment, as an appended update would start. That
+/// is another file's data after the document, such as a recovered file can carry, and a rebuild
+/// of the whole file would mix its objects into the document. `pdfcraft-cos` decides alike
+/// (`trailing_data_end` there).
+pub(crate) fn trailing_data_end(data: &[u8]) -> Option<usize> {
+    let last = findr_needle(data, b"startxref")?;
+    if document_end_at(data, last).is_some() {
+        return None;
+    }
+    let end = *earlier_document_ends(data).first()?;
+    let next = data
+        .get(end..)?
+        .iter()
+        .position(|&b| !is_white_space_character(b))?;
+    let rest = data.get(end + next..)?;
+    let pdf_syntax = starts_with_object_header(rest)
+        || [&b"xref"[..], b"trailer", b"startxref", b"%"]
+            .iter()
+            .any(|k| rest.starts_with(k));
+    (!pdf_syntax).then_some(end)
+}
+
+/// PdfCraft patch: (trailing data) the end of the document whose `startxref` is at `at`, if it
+/// is followed by an offset and `%%EOF` and the offset names a cross-reference section.
+fn document_end_at(data: &[u8], at: usize) -> Option<usize> {
+    let skip_white_space = |mut i: usize| {
+        while data.get(i).is_some_and(|&b| is_white_space_character(b)) {
+            i += 1;
+        }
+        i
+    };
+    let start = skip_white_space(at.checked_add(b"startxref".len())?);
+    let digits = data.get(start..)?.iter().take_while(|b| b.is_ascii_digit()).count();
+    let offset: usize = core::str::from_utf8(data.get(start..start + digits)?).ok()?.parse().ok()?;
+    let mut end = skip_white_space(start + digits);
+    if !data.get(end..)?.starts_with(b"%%EOF") {
+        return None;
+    }
+    end += b"%%EOF".len();
+    if data.get(end) == Some(&b'\r') {
+        end += 1;
+    }
+    if data.get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    let section = data.get(offset..at)?;
+    (section.starts_with(b"xref") || starts_with_object_header(section)).then_some(end)
+}
+
+/// PdfCraft patch: (trailing data) whether `data` starts with `N G obj`.
+fn starts_with_object_header(data: &[u8]) -> bool {
+    let mut i = 0;
+    for _ in 0..2 {
+        let digits = data.get(i..).map_or(0, |rest| rest.iter().take_while(|b| b.is_ascii_digit()).count());
+        let spaces = data.get(i + digits..).map_or(0, |rest| {
+            rest.iter().take_while(|&&b| is_white_space_character(b)).count()
+        });
+        if digits == 0 || spaces == 0 {
+            return false;
+        }
+        i += digits + spaces;
+    }
+    data.get(i..).is_some_and(|rest| rest.starts_with(b"obj"))
+}
+
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
 pub(crate) fn fallback_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<XRef> {
     crate::cancel::check(control.as_ref())?;

@@ -381,6 +381,22 @@ constructors, decode limits, and object sizes are preserved. Cryptographic and i
 run to completion between checkpoints. Synthetic API and backend tests cover interruption inside
 the supported stages.
 
+## Documents followed by other data
+
+A craft-libs patch to hayro-syntax, marked `PdfCraft patch: (trailing data)` in the source. A
+file recovered from a damaged disk can hold a whole document followed by another file's data
+(fragments of other PDFs, a program whose text holds `startxref %ld %%EOF`). Its last `startxref`
+names nothing, and the rebuild from every object header in the file takes the fragments' objects
+for the document's, which share their numbers, so the file did not open or showed another file's
+content. `Pdf::load` now reads the data before an earlier `startxref N %%EOF` whose `N` names a
+cross-reference table or object header (`xref::earlier_document_ends`, at most eight, the latest
+first) and keeps the first that has pages; `PdfData::prefix` shares the file's storage. It does
+so first when the last `startxref` names nothing and what follows the latest such end is no PDF
+syntax (`xref::trailing_data_end`), and otherwise only when the whole file gives no document, so
+a file that opened before reads as it did and an appended update with a damaged end is still
+rebuilt. `craft_pdf::cos` decides alike, so the renderer and the object layer read the same
+document. Test: `crates/pdf/tests/trailing_data.rs`.
+
 ## Craft patches for the flattener
 
 Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads

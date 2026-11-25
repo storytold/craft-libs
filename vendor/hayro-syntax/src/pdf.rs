@@ -173,6 +173,43 @@ impl Pdf {
     }
 
     fn load(data: PdfData, password: &str, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, LoadPdfError> {
+        // PdfCraft patch: (trailing data) a document followed by another file's data, as a file
+        // recovered from a damaged disk can be (`earlier_document_ends`), is read from the data
+        // before its end. When the file's own last `startxref` names nothing and what follows the
+        // latest earlier end is no PDF syntax (`trailing_data_end`), that end is read first: a
+        // rebuild of the whole file would mix the other data's objects into the document.
+        // Otherwise only when the whole file gives no document, the latest end that holds pages
+        // first, so a file that opens today reads as it did. `pdfcraft-cos` reads the same end.
+        if let Some(end) = crate::xref::trailing_data_end(data.as_ref())
+            && let Some(pdf) = Self::load_before(&data, end, password, limits, control.clone())?
+        {
+            return Ok(pdf);
+        }
+        let whole = Self::load_document(data.clone(), password, limits, control.clone());
+        if !matches!(whole, Err(LoadPdfError::Invalid)) {
+            return whole;
+        }
+        for end in crate::xref::earlier_document_ends(data.as_ref()) {
+            if let Some(pdf) = Self::load_before(&data, end, password, limits, control.clone())? {
+                return Ok(pdf);
+            }
+        }
+        whole
+    }
+
+    /// PdfCraft patch: (trailing data) the document with pages in the first `end` bytes of
+    /// `data`, or `None`. A decryption error stands: the document is there and encrypted.
+    fn load_before(data: &PdfData, end: usize, password: &str, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Option<Self>, LoadPdfError> {
+        crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;
+        warn!("reading the {end} bytes before an earlier %%EOF; other data follows them");
+        match Self::load_document(data.prefix(end), password, limits, control) {
+            Ok(pdf) if !pdf.pages().is_empty() => Ok(Some(pdf)),
+            Err(LoadPdfError::Decryption(e)) => Err(LoadPdfError::Decryption(e)),
+            _ => Ok(None),
+        }
+    }
+
+    fn load_document(data: PdfData, password: &str, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, LoadPdfError> {
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
         // PdfCraft patch: (hayro-syntax (43)) a last update cut off before its trailer is read by
