@@ -15,3 +15,7 @@ opt-level = 1
 
 [profile.dev.package.craft-imaging]
 opt-level = 1
+
+# The workspace lint test parses every source file with syn; at opt-level 0 that takes 44 s.
+[profile.dev.package.craft-design-lint]
+opt-level = 2

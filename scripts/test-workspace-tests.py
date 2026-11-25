@@ -108,7 +108,7 @@ COMMON = [
 ]
 CONFIG = "--config .config/cargo-dev.toml --config .config/cargo-ci.toml"
 ALL = f"--workspace --all-features --locked --profile ci {CONFIG}"
-DEFAULT = f"-p craft-image-codecs -p craft-text --locked --profile ci {CONFIG}"
+DEFAULT = f"-p craft-image-codecs --locked --profile ci {CONFIG}"
 TARGETS = "--lib --bins --tests"
 EXAMPLES = "--example stubicc --example h264_h264enc_bench"
 AUDIT_PACKAGES = ("craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-patterns",
@@ -129,7 +129,8 @@ def run_commands(test_filter="all()"):
 
 def archive_commands(directory, test_filter="all()"):
     return [
-        f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E {test_filter} --archive-file {directory}/1/a.tar.zst",
+        f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E ({test_filter}) & !({AUDIT}) "
+        f"--archive-file {directory}/1/a.tar.zst",
         f"nextest archive {ALL} {TARGETS} {EXAMPLES} -E ({test_filter}) & ({AUDIT}) "
         f"--archive-file {directory}/2/a.tar.zst",
         f"nextest archive {DEFAULT} {TARGETS} -E {test_filter} --archive-file {directory}/3/a.tar.zst",
@@ -193,13 +194,13 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(command=line):
                 self.assertIn(CONFIG, line)
 
-    def test_each_shard_runs_its_archive_and_shard_2_audits(self):
+    def test_each_shard_runs_its_archive_and_shard_2_also_audits(self):
         expected = "nextest run --archive-file /a/b.tar.zst --workspace-remap . --profile ci --no-tests=warn"
-        for shard, prefix in (("1", ""), ("2", "AUDIT "), ("3", "")):
+        for shard, prefixes in (("1", [""]), ("2", ["", "AUDIT "]), ("3", [""])):
             with self.subTest(shard=shard):
                 result, _ = step("shard", GATE_SHARD=shard, NEXTEST_ARCHIVE_FILE="/a/b.tar.zst")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), [prefix + expected])
+                self.assertEqual(result.stdout.splitlines(), [prefix + expected for prefix in prefixes])
         result, _ = step("shard", GATE_SHARD="4", NEXTEST_ARCHIVE_FILE="/a/b.tar.zst")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
