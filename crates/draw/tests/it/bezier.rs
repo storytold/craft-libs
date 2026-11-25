@@ -489,6 +489,30 @@ fn one_anchor_draws_other_paths_handles_only_while_one_anchor_is_selected_over_a
     );
 }
 
+// A frame reads the selection's anchor lists a number of times that grows with the selection, not with its square:
+// doubling the selected anchors of the edited path and the number of other paths listed at most doubles the entries
+// read (a search of the lists for each anchor laid out or drawn quadruples them).
+#[trial]
+fn a_frame_reads_the_selections_anchor_lists_in_proportion_to_the_selection() {
+    let reads_for = |n: usize| {
+        let knot = |i: usize| Knot::smooth(p(20.0 + (i % 40) as f64 * 12.0, 20.0 + (i / 40) as f64 * 12.0), p(26.0 + (i % 40) as f64 * 12.0, 20.0));
+        let edited = EditPath::new(1, vec![EditSubpath::new((0..n).map(knot).collect(), false)]);
+        let others: Vec<EditPath> =
+            (0..n).map(|i| EditPath::new(2 + i as u64, vec![EditSubpath::new((0..4).map(|k| knot(i * 4 + k)).collect(), true)])).collect();
+        let mut selection = PathSelection::new(Some(1), (0..n).map(kr).collect(), None);
+        for other in &others {
+            selection = selection.also(other.key, (0..4).map(kr).collect());
+        }
+        let mut h = harness(std::iter::once(edited).chain(others).collect());
+        craft_draw::ui::pen::bezier::reads::take();
+        h.update(|st| st.selection = selection);
+        craft_draw::ui::pen::bezier::reads::take()
+    };
+    let (small, large) = (reads_for(60), reads_for(120));
+    assert!(small > 0, "the frame reads the selection");
+    assert!(large < small * 3, "{small} entries read for 60 selected paths, {large} for 120");
+}
+
 // Hovering a segment under Add reports the segment with its parameter, which the preview anchor stands at.
 
 // `AnchorsShown::Hidden` draws outlines only: no anchor, no handle, no part, no AccessKit object.
