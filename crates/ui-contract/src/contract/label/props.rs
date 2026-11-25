@@ -175,7 +175,7 @@ pub enum AfterInk {
     /// `text.normal`.
     #[default]
     Normal,
-    /// `text.muted`, which keeps 4.5:1 on the surfaces: a switch's label that reads as secondary while it is off.
+    /// `text.muted`, the theme's secondary text ink: a switch's label that reads as secondary while it is off.
     Muted,
 }
 
