@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::read::gstate::{Clip, DevColor, GState, M, MAX_PATH, Seg, Space, arc_curve_count, arc_curves, bbox, bounded_arc_sweep, flatten};
 use crate::read::interp::{Interp, PsErr, R, SEG_BYTES, err, matrix_obj};
 use crate::read::obj::{Obj, PArr, PDict};
-use crate::read::pdf::StrokeParams;
+use crate::read::pdf::{Ink, MAX_COLORANTS, MAX_SPOT_SPACES, Paint, SpotSpace, StrokeParams};
 
 // ----- graphics-state stack -----
 
@@ -765,8 +765,8 @@ pub fn fill_path(ip: &mut Interp, path: &[Seg], eo: bool) -> R {
     if matches!(ip.gs.space, Space::Pattern) && crate::read::ops::shading::fill_pattern(ip, path, eo)? {
         return Ok(());
     }
-    let color = current_color(ip)?;
-    ip.out.fill(&ip.gs.clip, path, eo, color).map_err(PsErr::Fatal)
+    let paint = current_paint(ip)?;
+    ip.out.fill(&ip.gs.clip, path, eo, &paint).map_err(PsErr::Fatal)
 }
 
 pub fn fill(ip: &mut Interp) -> R {
@@ -786,10 +786,10 @@ pub fn stroke_path(ip: &mut Interp, path: &[Seg]) -> R {
     if ip.gs.nulldev {
         return Ok(());
     }
-    let color = current_color(ip)?;
+    let paint = current_paint(ip)?;
     let g = &ip.gs;
     let p = StrokeParams { width: g.line_width, cap: g.cap, join: g.join, miter: g.miter, dash: &g.dash };
-    ip.out.stroke(&g.clip, path, &g.ctm, &p, color).map_err(PsErr::Fatal)
+    ip.out.stroke(&g.clip, path, &g.ctm, &p, &paint).map_err(PsErr::Fatal)
 }
 
 pub fn stroke(ip: &mut Interp) -> R {
@@ -932,7 +932,7 @@ pub fn parse_space(ip: &mut Interp, o: &Obj, depth: usize) -> R<Space> {
             };
             let alt = parse_space(ip, params.get(1).ok_or(PsErr::Ps("rangecheck"))?, depth + 1)?;
             let tint = params.get(2).cloned().ok_or(PsErr::Ps("rangecheck"))?;
-            Space::Tint { names, alt: Box::new(alt), tint }
+            Space::Tint { names, alt: Box::new(alt), tint, written: Rc::default() }
         }
         b"Indexed" | b"I" => {
             let base = parse_space(ip, params.first().ok_or(PsErr::Ps("rangecheck"))?, depth + 1)?;
@@ -1023,7 +1023,7 @@ pub fn to_device(ip: &mut Interp, space: &Space, comps: &[f64], depth: usize) ->
                 lab_to_rgb(comps.first().copied().unwrap_or(0.0), comps.get(1).copied().unwrap_or(0.0), comps.get(2).copied().unwrap_or(0.0));
             DevColor::Rgb(r, g, b)
         }
-        Space::Tint { names, alt, tint } => {
+        Space::Tint { names, alt, tint, .. } => {
             // The colourant "None" paints nothing; "All" is registration black.
             if names.len() == 1 && names.first().is_some_and(|n| n == b"All") {
                 return Ok(DevColor::Cmyk(c(0), c(0), c(0), c(0)));
@@ -1046,6 +1046,93 @@ pub fn current_color(ip: &mut Interp) -> R<DevColor> {
     let space = ip.gs.space.clone();
     let comps = ip.gs.color.clone();
     to_device(ip, &space, &comps, 0)
+}
+
+/// The total samples a Separation or DeviceN tint transform is sampled at, spread evenly over
+/// its inputs (at least two along each).
+const TINT_SAMPLES: usize = 4096;
+
+/// What the next fill or stroke paints: Separation and DeviceN colours stay in their own space
+/// so their colourants keep their plates, other colours become device colours.
+pub fn current_paint(ip: &mut Interp) -> R<Paint> {
+    let overprint = ip.gs.overprint;
+    let space = ip.gs.space.clone();
+    if let Space::Tint { names, .. } = &space
+        && let Some(n) = written_space(ip, &space)?
+    {
+        let tints = (0..names.len()).map(|i| ip.gs.color.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0)).collect();
+        return Ok(Paint { ink: Ink::Spot(n, tints), overprint });
+    }
+    Ok(Paint { ink: Ink::Device(current_color(ip)?), overprint })
+}
+
+/// The PDF colour space a Separation or DeviceN space is written as, its tint transform sampled
+/// the first time; None when it paints in its alternate (too many colourants or spaces, or a
+/// tint transform that fails somewhere in its domain).
+fn written_space(ip: &mut Interp, space: &Space) -> R<Option<usize>> {
+    let Space::Tint { names, written, .. } = space else { return Ok(None) };
+    if let Some(n) = written.get() {
+        return Ok(*n);
+    }
+    let inputs = names.len();
+    let n = if inputs == 0 {
+        None
+    } else if inputs > MAX_COLORANTS {
+        ip.warnings.push(format!("DeviceN with more than {MAX_COLORANTS} colourants painted in its alternate space"));
+        None
+    } else {
+        // The largest size along each input whose grid stays within the sample budget.
+        let mut size = 2usize;
+        while (size + 1).checked_pow(inputs as u32).is_some_and(|t| t <= TINT_SAMPLES) && size < 256 {
+            size += 1;
+        }
+        let total = size.pow(inputs as u32);
+        ip.alloc(total * (4 + std::mem::size_of::<DevColor>()))?;
+        // Sampling runs the transform where the program may never paint: whatever it does to
+        // the operand stack (a transform that returns too few results pops the caller's
+        // operands) is undone afterwards.
+        let depth = ip.o.len();
+        ip.charge((depth / 8) as u64)?;
+        ip.alloc(depth.saturating_mul(crate::read::ops::basic::OBJ_BYTES))?;
+        let saved = ip.o.clone();
+        let mut colors = Vec::with_capacity(total);
+        let sampled = (|| -> R<bool> {
+            for i in 0..total {
+                let mut rest = i;
+                let comps: Vec<f64> = (0..inputs)
+                    .map(|_| {
+                        let k = rest % size;
+                        rest /= size;
+                        k as f64 / (size - 1) as f64
+                    })
+                    .collect();
+                match to_device(ip, space, &comps, 0) {
+                    // A transform that doesn't leave the stack as it found it is broken.
+                    Ok(c) if ip.o.len() == depth => colors.push(c),
+                    // One that is broken or fails where the program may never paint keeps the
+                    // old path: the alternate at the tints painted.
+                    Ok(_) | Err(PsErr::Ps(_)) => return Ok(false),
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(true)
+        })();
+        ip.o = saved;
+        if !sampled? {
+            None
+        } else {
+            let (alt, samples) = crate::read::ops::shading::pack(&colors);
+            let n = ip.out.spot_space(SpotSpace { names: names.clone(), alt, size, samples });
+            if n.is_none() {
+                ip.warnings.push(format!("more than {MAX_SPOT_SPACES} spot colour spaces: the rest painted in their alternate"));
+            }
+            n
+        }
+    };
+    // A tint transform that itself paints in this space may have set it meanwhile; the first
+    // answer stays.
+    let _ = written.set(n);
+    Ok(n)
 }
 
 fn set_space(ip: &mut Interp, space: Space) {

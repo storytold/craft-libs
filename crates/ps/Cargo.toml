@@ -24,6 +24,10 @@ skrifa = { workspace = true, optional = true }
 kurbo = { workspace = true, optional = true }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"], optional = true }
 
+[dev-dependencies]
+# Separates converted EPS into plates, to check spot inks and overprint survive.
+craft-prepress = { workspace = true }
+
 [[example]]
 name = "eps2pdf"
 required-features = ["read"]

@@ -111,10 +111,108 @@ fn huge_arc_checks_temporary_and_retained_memory_before_building_curves() {
     assert_eq!(content(&converted.pdf).lines().filter(|line| *line == "f").count(), 1);
 }
 
+/// The data of each sampled function (`/FunctionType 0`) in a converted EPS.
+fn sampled_functions(pdf: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(i) = pdf[at..].windows(15).position(|w| w == b"/FunctionType 0") {
+        let rest = &pdf[at + i..];
+        let s = rest.windows(7).position(|w| w == b"stream\n").unwrap() + 7;
+        let e = rest.windows(10).position(|w| w == b"\nendstream").unwrap();
+        out.push(&rest[s..e]);
+        at += i + e;
+    }
+    out
+}
+
 #[test]
 fn separation_colours_use_their_tint_transform() {
-    let (c, _) = run("[/Separation (Spot) /DeviceCMYK { dup 0 exch 0 } ] setcolorspace 0.5 setcolor 10 20 10 10 rectfill");
-    assert!(c.contains("0.5 0 0.5 0 k") || c.contains(".5 0 .5 0 k"), "{c}");
+    let (c, conv) = run("[/Separation (Spot) /DeviceCMYK { dup 0 exch 0 } ] setcolorspace 0.5 setcolor 10 20 10 10 rectfill");
+    assert!(c.contains("/CS0 cs") && (c.contains("0.5 scn") || c.contains(".5 scn")), "the tint stays in the spot space: {c}");
+    let pdf = String::from_utf8_lossy(&conv.pdf);
+    assert!(pdf.contains("[/Separation /Spot /DeviceCMYK"), "{pdf}");
+    // The alternate the tint transform gives at about half tint: half cyan, half yellow.
+    let samples = sampled_functions(&conv.pdf);
+    let half = samples.first().and_then(|s| s.chunks(4).nth(128)).expect("a sampled tint transform");
+    assert!(half[0].abs_diff(128) <= 1 && half[1] == 0 && half[2].abs_diff(128) <= 1 && half[3] == 0, "{half:?}");
+}
+
+/// The plates of a converted EPS at 72 dpi (a pixel per point, row 0 at the top), and the ink
+/// at a point of the EPS's default user space.
+fn separate(body: &str) -> (craft_prepress::Plates, impl Fn(&craft_prepress::Plates, &str, f64, f64) -> u8 + use<>) {
+    let c = eps_to_pdf(&eps(body), Limits::default()).unwrap();
+    let plates = craft_prepress::plates(&c.pdf, 0, 72.0, &craft_prepress::Options::default()).unwrap();
+    let [x0, _, _, y1] = c.bbox;
+    let at = move |p: &craft_prepress::Plates, ink: &str, x: f64, y: f64| {
+        let id = p.inks.lookup(ink).unwrap_or_else(|| panic!("no {ink} plate"));
+        p.tint(id, (x - x0) as u32, (y1 - y) as u32).unwrap()
+    };
+    (plates, at)
+}
+
+#[test]
+fn spot_inks_keep_their_plates_and_overprint_keeps_what_is_under_them() {
+    // A cyan page; a Gold square overprinting it on the left, one knocking it out on the right.
+    let (p, at) = separate(
+        "1 0 0 0 setcmykcolor 10 20 100 50 rectfill
+         [/Separation /Gold /DeviceCMYK { dup 0.3 mul exch 0 exch 0 } ] setcolorspace 1 setcolor
+         true setoverprint 20 30 20 30 rectfill
+         false setoverprint 70 30 20 30 rectfill",
+    );
+    let (left, right, page) = ((30.0, 45.0), (80.0, 45.0), (15.0, 25.0));
+    assert!(at(&p, "Gold", left.0, left.1) > 250 && at(&p, "Gold", right.0, right.1) > 250, "both squares are on the Gold plate");
+    assert_eq!(at(&p, "Gold", page.0, page.1), 0);
+    assert!(at(&p, "Yellow", left.0, left.1) < 5, "the spot isn't separated as its CMYK alternate");
+    assert!(at(&p, "Cyan", left.0, left.1) > 250, "the overprinting square leaves the cyan under it");
+    assert!(at(&p, "Cyan", right.0, right.1) < 5, "the knockout square clears the cyan under it");
+}
+
+#[test]
+fn devicen_colours_paint_each_colourant_plate() {
+    let (p, at) = separate(
+        "[/DeviceN [/Gold /Teal] /DeviceCMYK { pop 0 exch 0 0 } ] setcolorspace 0.5 1 setcolor
+         20 30 20 30 rectfill",
+    );
+    let (gold, teal) = (at(&p, "Gold", 30.0, 45.0), at(&p, "Teal", 30.0, 45.0));
+    assert!(gold > 0 && gold < teal && teal > 250, "Gold at half, Teal full: {gold} {teal}");
+    assert!(at(&p, "Magenta", 30.0, 45.0) < 5, "the colourants aren't separated as their alternate");
+}
+
+#[test]
+fn sampling_a_tint_transform_leaves_the_callers_operands() {
+    // The transform returns three results for four: every sample would pop a caller operand.
+    let (c, _) = run("0 1 299 { } for
+         [/Separation /Gold /DeviceCMYK { pop 0 0 0 } ] setcolorspace 1 setcolor 10 20 10 10 rectfill
+         count 299 ge { 0 0 1 0 setcmykcolor 60 20 5 5 rectfill } if");
+    assert!(c.contains("0 0 1 0 k"), "only the paint itself takes an operand: {c}");
+}
+
+/// An uncoloured tiling pattern `S` whose cell is solid.
+const SOLID_PATTERN: &str = "<< /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 4 4] /XStep 4 /YStep 4
+     /PaintProc { pop 0 0 4 4 rectfill } >> matrix makepattern /S exch def";
+
+#[test]
+fn an_uncoloured_pattern_paints_in_each_spot_base_it_is_used_with() {
+    let (p, at) = separate(&format!(
+        "{SOLID_PATTERN}
+         [/Pattern [/Separation /Gold /DeviceCMYK {{ dup dup dup }}]] setcolorspace 1 S setcolor 20 30 20 30 rectfill
+         [/Pattern [/Separation /Teal /DeviceCMYK {{ dup dup dup }}]] setcolorspace 1 S setcolor 70 30 20 30 rectfill"
+    ));
+    assert!(at(&p, "Gold", 30.0, 45.0) > 250, "the first fill is Gold");
+    assert!(at(&p, "Teal", 80.0, 45.0) > 250 && at(&p, "Gold", 80.0, 45.0) < 5, "the second is Teal, not the Gold cell again");
+}
+
+#[test]
+fn a_pattern_cell_reused_under_another_overprint_state_follows_it() {
+    // A cyan page; the same Gold pattern overprinting on the left and knocking out on the right.
+    let (p, at) = separate(&format!(
+        "1 0 0 0 setcmykcolor 10 20 100 50 rectfill {SOLID_PATTERN}
+         [/Pattern [/Separation /Gold /DeviceCMYK {{ dup dup dup }}]] setcolorspace 1 S setcolor
+         true setoverprint 20 30 20 30 rectfill false setoverprint 70 30 20 30 rectfill"
+    ));
+    assert!(at(&p, "Gold", 30.0, 45.0) > 250 && at(&p, "Gold", 80.0, 45.0) > 250, "both fills are Gold");
+    assert!(at(&p, "Cyan", 30.0, 45.0) > 250, "the overprinting fill leaves the cyan under it");
+    assert!(at(&p, "Cyan", 80.0, 45.0) < 5, "the knockout fill clears it");
 }
 
 #[test]

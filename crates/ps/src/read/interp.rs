@@ -192,8 +192,9 @@ pub struct Interp {
     pub next_fid: usize,
     pub main: usize,
     pub warnings: Vec<String>,
-    /// Tiling pattern cells already written, by pattern and colour.
-    pub cells: std::collections::HashMap<(crate::read::obj::Key, Vec<u64>), usize>,
+    /// Tiling pattern cells already written, by pattern, colour, the spot space an uncoloured
+    /// one paints in (by identity, 0 for none) and overprint (the cell's paints carry it).
+    pub cells: std::collections::HashMap<(crate::read::obj::Key, Vec<u64>, usize, bool), usize>,
     /// CMaps by index (CMap dictionaries refer to them).
     pub cmaps: Vec<crate::read::composite::CMap>,
     /// CFF font sets read by StartData.

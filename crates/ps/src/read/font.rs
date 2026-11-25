@@ -475,7 +475,7 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         ip.out.begin_actual_text(text, &ip.gs.clip).map_err(PsErr::Fatal)?;
     }
     let mut total = (0.0, 0.0);
-    let mut text_paths: Vec<(Vec<crate::read::gstate::Seg>, crate::read::gstate::DevColor)> = Vec::new();
+    let mut text_paths: Vec<(Vec<crate::read::gstate::Seg>, crate::read::pdf::Paint)> = Vec::new();
     let mut text_segments = 0usize;
     let result = (|| -> R<(f64, f64)> {
         for (i, (code, leaf, fm, key)) in jobs.into_iter().enumerate() {
@@ -487,7 +487,7 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
                     let pending = std::mem::take(&mut text_paths);
                     if !ip.gs.nulldev {
                         for (path, color) in pending {
-                            ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+                            ip.out.fill(&ip.gs.clip, &path, false, &color).map_err(PsErr::Fatal)?;
                         }
                     }
                     ip.charge(GLYPH_STEPS)?;
@@ -545,7 +545,7 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
                                         // path until their deferred representation is prepared.
                                         crate::read::ops::gfx::fill_path(ip, &path, false)?;
                                     } else {
-                                        let color = crate::read::ops::gfx::current_color(ip)?;
+                                        let color = crate::read::ops::gfx::current_paint(ip)?;
                                         // Charge the fill work before staging it so completed glyphs
                                         // can still be committed if a later glyph hits the budget.
                                         ip.charge(path.len() as u64 / 4 + 1)?;
@@ -581,7 +581,7 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
     let paint_result = (|| {
         if (result.is_ok() || !path_limit) && !ip.gs.nulldev {
             for (path, color) in text_paths {
-                ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+                ip.out.fill(&ip.gs.clip, &path, false, &color).map_err(PsErr::Fatal)?;
             }
         }
         Ok(())

@@ -19,8 +19,12 @@ comments, a binary preview header, ASCII85) stay in `craft-eps`.
 ## Reading EPS
 
 `read::eps_to_pdf(bytes, limits)` runs an EPS (plain, or DOS EPS with a binary header) and
-returns a one-page PDF 1.4 the size of its bounding box: vectors stay vectors, CMYK and spot
-colours stay as they are, so an app can draw and export the result as a placed PDF.
+returns a one-page PDF 1.5 the size of its bounding box: vectors stay vectors, CMYK and spot
+colours stay as they are, so an app can draw and export the result as a placed PDF. Fills,
+strokes and stencil masks in a Separation or DeviceN space (up to 8 colourants) are written in
+that space, with the alternate and the tint transform sampled; images and shadings in one are
+written in its alternate. `setoverprint` becomes an `OP`/`op` graphics state, so a separating
+device keeps what is under an overprinting paint.
 `read::cached_pdf` converts with the default limits and remembers the result by content.
 `is_eps`, `bounding_box` and `postscript_section` read the file without running it.
 EPS binary sections and DSC comments are read by `craft-eps`.
