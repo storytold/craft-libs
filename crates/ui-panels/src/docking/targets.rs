@@ -51,7 +51,7 @@ pub struct DockSizes {
     pub least_pane: f32,
     /// The height of a group's tab strip or section title row (the panel header height), which every group height includes.
     pub strip: f32,
-    /// The height of a column bar (a small control).
+    /// The height of a column bar (`size.bar.column`).
     pub bar: f32,
     /// The height of a floating window's title row, which is the bar of the column the window holds.
     pub title_row: f32,
@@ -146,7 +146,7 @@ impl DockSizes {
             strip_reach: size.hit.target,
             least_pane: size.pane.least,
             strip: size.panel_header,
-            bar: size.control.sm,
+            bar: size.bar.column,
             title_row: super::floating::title_row(cx.tokens),
             title_rule: cx.rule(RuleKind::Divider).width,
             pixels_per_point: cx.frame_ctx().pixels_per_point(),

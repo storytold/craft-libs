@@ -6,6 +6,7 @@
 //! user did; the dock decides what a drop changes.
 
 use super::divider::{self, Divider, Drag};
+use super::group::strip_surface;
 use super::{CardInset, DividerKind, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
 use crate::contract::{
     Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role,
@@ -15,6 +16,7 @@ use crate::menu::GroupItem;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, UiTokens};
+use crate::tabs::PanelTabLook;
 use craft_behavior::divider::{self as push, Segment};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::{Axis, DockSide, Flow, Metrics, PartKey, Sense, Value};
@@ -205,6 +207,10 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
     #[prop]
     card: Option<CardInset>,
+    /// The look of the dock's panel tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)): the column's bar
+    /// lies on the surface the groups' tab strips do.
+    #[prop]
+    tab_look: PanelTabLook,
     /// The plan `parts` laid out this pass, which update, paint and access read.
     laid: Option<Plan>,
     resized: Vec<(P, f32)>,
@@ -229,6 +235,7 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
             arrow: ColumnArrow::Collapse,
             within: Rect::NOTHING,
             card: None,
+            tab_look: PanelTabLook::Plain,
             laid: None,
             resized: Vec::new(),
             width: None,
@@ -519,7 +526,7 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
         if self.bar == ColumnBar::Own {
             // A card's bar is part of the card.
             if card == cx.rect {
-                ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
+                ui.draw().surface(plan.bar, strip_surface(self.tab_look), Corners::None);
             }
             if self.arrow.shown() {
                 paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());

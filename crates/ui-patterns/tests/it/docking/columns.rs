@@ -2,13 +2,14 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
+use craft_theme::{AppSizes, SizeValue};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
 use craft_ui::docking::{
     DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupAt, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights,
 };
 use craft_ui::patterns::dock::DockArea;
-use craft_ui::runtime::env::Direction;
+use craft_ui::runtime::env::{Direction, RootEnv};
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -653,4 +654,38 @@ fn every_docked_column_is_a_card_with_gutters_between_them() {
         assert!((cards.side.width() - plain.side.width() - edge).abs() <= 0.5, "{direction:?}: the edge column grows by its inset");
         assert!((cards.icons.width() - plain.icons.width() - gutter).abs() <= 0.5, "{direction:?}: the icons' column grows by its gutter");
     }
+}
+
+/// The top of the expanded column's panel body in the card dock, with the column bar `size.bar.column` set to `bar`
+/// points when given.
+fn body_top(bar: Option<f32>) -> f32 {
+    let mut iconic = Column::new(vec![Group::new(vec![ICONS], 0)]);
+    iconic.iconic = true;
+    let columns = vec![Column::new(vec![Group::new(vec![SIDE], 0)]).with_width(220.0), iconic];
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let body: Rc<Cell<Option<Rect>>> = Rc::default();
+    let (held, shown, specs) = (Rc::clone(&workspace), Rc::clone(&body), Tracked::new(CardPanels));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = held.borrow().clone();
+        let _ = DockArea::new("Bar dock", Bind::bound(&mut workspace), &specs, &mut CardStage(Rc::clone(&shown)), DockConfig::default()).show(ui);
+        *held.borrow_mut() = workspace;
+    });
+    let mut root = RootEnv::default();
+    if let Some(bar) = bar {
+        let mut sizes = AppSizes::default();
+        sizes.all.insert("size.bar.column".to_owned(), SizeValue::Number(bar));
+        root.sizes = Arc::new(sizes);
+    }
+    fixture.root(root).room(Vec2::new(900.0, 500.0)).settle();
+    body.get().expect("the side panel shows").top()
+}
+
+/// A dock column's bar is `size.bar.column` high: an app that sets it lower (VectorCraft's 14 points) raises the
+/// column's groups by the difference from the built-in small control height.
+#[trial]
+fn a_columns_bar_is_as_high_as_its_token() {
+    let built_in = body_top(None);
+    let low = body_top(Some(14.0));
+    assert!(low < built_in - 0.5, "a lower column bar raises the column's groups: {low} against {built_in}");
 }

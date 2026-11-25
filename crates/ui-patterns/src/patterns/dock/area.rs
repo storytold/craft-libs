@@ -1547,7 +1547,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .bar(bar)
                     .within(within)
                     .auto_collapse(scene.auto_collapse)
-                    .mode(mode);
+                    .mode(mode)
+                    .tab_look(scene.config.tab_look);
                 let shown = match card {
                     Some(place) => shown.card(place),
                     None => shown,
@@ -1606,7 +1607,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
-                .auto_collapse(scene.auto_collapse);
+                .auto_collapse(scene.auto_collapse)
+                .tab_look(scene.config.tab_look);
             let shown = match card {
                 Some(place) => shown.card(place),
                 None => shown,

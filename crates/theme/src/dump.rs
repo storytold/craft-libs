@@ -158,10 +158,16 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let RailSizes { width, button } = rail;
     out.line("size.rail.width", len(*width));
     out.line("size.rail.button", len(*button));
-    let BarSizes { title, tab, tab_large, status, options, options_narrow } = bar;
-    for (k, v) in
-        [("title", title), ("tab", tab), ("tab_large", tab_large), ("status", status), ("options", options), ("options_narrow", options_narrow)]
-    {
+    let BarSizes { title, tab, tab_large, status, options, options_narrow, column } = bar;
+    for (k, v) in [
+        ("title", title),
+        ("tab", tab),
+        ("tab_large", tab_large),
+        ("status", status),
+        ("options", options),
+        ("options_narrow", options_narrow),
+        ("column", column),
+    ] {
         out.line(&format!("size.bar.{k}"), len(*v));
     }
     out.line("size.panel_header", len(*panel_header));

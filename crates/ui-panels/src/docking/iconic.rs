@@ -5,7 +5,7 @@ use super::dock_column::{
     BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, card_rect, card_style, column_grip, describe_chevron, paint_card, paint_chevron,
     register_edges, show_bar,
 };
-use super::group::GripMarks;
+use super::group::{GripMarks, strip_surface};
 use super::{CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
@@ -19,6 +19,7 @@ use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::{EnvValue, Label};
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, Corners, GlyphRole, RuleKind, StyleColor, StyleCx, SurfaceKind, SurfaceStyle};
+use crate::tabs::PanelTabLook;
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
@@ -248,6 +249,10 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
     #[prop]
     card: Option<CardInset>,
+    /// The look of the dock's panel tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)): the column's bar
+    /// lies on the surface the groups' tab strips do.
+    #[prop]
+    tab_look: PanelTabLook,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
     /// The bar's rect this pass.
@@ -310,6 +315,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             mode: IconicMode::Flyouts,
             within: Rect::NOTHING,
             card: None,
+            tab_look: PanelTabLook::Plain,
             open,
             view: None,
             bar_rect: Rect::NOTHING,
@@ -653,7 +659,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         if self.bar == ColumnBar::Own {
             // A card's bar is part of the card.
             if self.card.is_none() {
-                ui.draw().surface(self.bar_rect, SurfaceKind::Background, Corners::None);
+                ui.draw().surface(self.bar_rect, strip_surface(self.tab_look), Corners::None);
             }
             paint_chevron(ui, self.edge, ColumnArrow::Collapse, self.expanded(), cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
