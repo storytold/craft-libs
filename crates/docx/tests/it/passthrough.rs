@@ -342,20 +342,35 @@ fn kept_extensions_carry_the_namespaces_their_own_ignorable_lists() {
 /// declares it again with the same namespace, and not when it binds it to another one.
 #[test]
 fn kept_extensions_keep_an_outer_ignorable_prefix_they_declare_again_alike() {
-    let kept = |uri: &str| {
-        let cex = format!(
-            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst xmlns:q="{uri}"><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
-        );
-        let doc = comments_with_cex(&cex);
-        let markup = doc.comments.values().find_map(|c| c.extensions.clone()).unwrap();
-        let ext = craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap();
-        let ignorable = ext.attrs.iter().find(|(k, _)| k.ends_with(":Ignorable")).map(|(_, v)| v.clone());
-        (ignorable.is_some_and(|v| v.split_whitespace().any(|t| t == "q")), markup)
-    };
-    let (same, markup) = kept("urn:q");
+    let (same, markup) = kept_marks_q_ignorable(r#"xmlns:q="urn:q""#);
     assert!(same, "{markup}");
-    let (other, markup) = kept("urn:other");
+    let (other, markup) = kept_marks_q_ignorable(r#"xmlns:q="urn:other""#);
     assert!(!other, "{markup}");
+}
+
+/// A prefix the file marks ignorable outside kept markup stays ignorable in it when the markup
+/// binds the file's Markup Compatibility prefix to another namespace.
+#[test]
+fn kept_extensions_keep_an_outer_ignorable_prefix_when_they_rebind_mc() {
+    let (kept, markup) = kept_marks_q_ignorable(r#"xmlns:mc="urn:vendor""#);
+    assert!(kept, "{markup}");
+}
+
+/// Whether the extension kept from an `extLst` carrying `decls`, under a root that marks `q`
+/// ignorable, still marks `q` ignorable by Markup Compatibility; and the kept markup.
+fn kept_marks_q_ignorable(decls: &str) -> (bool, String) {
+    const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst {decls}><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let markup = comments_with_cex(&cex).comments.values().find_map(|c| c.extensions.clone()).unwrap();
+    let ext = craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap();
+    let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
+    let marked = ext
+        .attrs
+        .iter()
+        .any(|(k, v)| k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)) && v.split_whitespace().any(|t| t == "q"));
+    (marked, markup)
 }
 
 /// The namespace `prefix` names on the first element called `name` in `root`, by the

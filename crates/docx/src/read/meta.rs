@@ -427,12 +427,19 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
                 tokens.extend(ignorable.iter().filter(|t| !v.split_whitespace().any(|o| o == **t)));
                 *v = tokens.join(" ");
             }
-            None => {
-                if let Some(p) = ext_scope.iter().find(|(p, u)| *u == MCE && !p.is_empty()).map(|(p, _)| *p) {
+            None => match ext_scope.iter().find(|(p, u)| *u == MCE && !p.is_empty()).map(|(p, _)| *p) {
+                Some(p) => {
                     el.attrs.push((format!("{p}:Ignorable"), ignorable.join(" ")));
                     needed.push(p);
                 }
-            }
+                // `ext` binds every prefix that named Markup Compatibility to something else, so
+                // it gets a prefix of its own for it.
+                None => {
+                    let free = (1..).map(|i| format!("mc{i}")).find(|p| ext_scope.iter().all(|(s, _)| s != p)).unwrap_or_default();
+                    el.attrs.push((format!("xmlns:{free}"), MCE.to_string()));
+                    el.attrs.push((format!("{free}:Ignorable"), ignorable.join(" ")));
+                }
+            },
         }
         needed.extend(ignorable);
     }
