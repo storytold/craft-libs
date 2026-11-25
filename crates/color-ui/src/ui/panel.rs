@@ -432,9 +432,13 @@ struct Tandem {
 
 /// `anchor` with channel `channel` at `x` and the others moved with it: scaled by the ratio the channel moved, or, for a
 /// channel that was at zero or when the dragged one was, shifted by the same amount. Each stays in its range and, for
-/// Web Color, on the web levels.
+/// Web Color, on the web levels. Back at its start, the dragged channel gives back `anchor` itself, so a channel that
+/// was off the web levels returns where it was.
 fn tandem_values(model: &dyn ColorModel, anchor: ModelValues, channel: usize, x: f64, web: bool) -> ModelValues {
     let from = f64::from(anchor.values[channel]);
+    if (x - from).abs() <= f64::EPSILON {
+        return anchor;
+    }
     let mut values = anchor;
     for (j, ch) in model.channels().iter().enumerate() {
         let v = if j == channel {

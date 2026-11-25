@@ -305,6 +305,20 @@ fn a_command_drag_through_zero_keeps_the_proportions() {
     assert!(in_proportion(&before, &after, 0, 3), "green and blue kept their proportion to red ({before:?}, {after:?})");
 }
 
+/// A Web Color drag with Command held, through zero and back to where it began, gives back the starting colour, even
+/// when a channel it moved with it was off the web levels.
+#[trial]
+fn a_web_color_drag_back_to_its_start_keeps_an_off_level_channel() {
+    let mut rig = PanelRig::applying(ColorPanelMode::WebColorSliders, Srgba::rgb(0.6, 200.0 / 255.0, 0.0));
+    let red = slider(&rig, 0);
+    let from = red.center();
+    rig.fixture.hold(Modifiers::COMMAND).drag_hold_at(from, Vec2::new(-400.0, 0.0));
+    rig.fixture.frame(vec![moved(from)]);
+    rig.fixture.release_at(from).settle();
+    let (before, after) = committed(&rig);
+    assert_eq!(after, before, "red is back where it began, and so is green ({before:?}, {after:?})");
+}
+
 /// Dragged up with Shift held, an RGB slider lifts a channel at zero by as much as it moved, and scales the others.
 #[trial]
 fn a_shift_drag_lifts_a_channel_at_zero_by_the_same_amount() {
