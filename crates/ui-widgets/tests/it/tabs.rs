@@ -1252,6 +1252,11 @@ fn large_text_tabs_have_bigger_labels_and_a_wider_gap() {
             let strip = if large { strip.large() } else { strip };
             let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         });
+        // A fixture's context is given its fonts without the facts text layout reads of them, so a semibold role
+        // draws in the regular face there and the strong body type paints as wide as the body type. Loading the
+        // suite's fonts as an app does (`fonts::load`) records that the semibold family exists, so the strong
+        // labels paint in Inter SemiBold and the trial can see the stronger type.
+        craft_ui::fonts::load(fixture.ctx(), craft_ui::fonts::deflated_default_definitions());
         fixture.settle();
         // Text tabs touch (the strip puts no gap between their rects); the room between them is each tab's tail
         // after its label, so the gap is measured between the painted labels, from the end of one to the start of
