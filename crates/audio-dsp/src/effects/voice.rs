@@ -478,7 +478,10 @@ impl AudioEffect for VoicePitch {
             // While Keep Formants is off and faded out, the stage's frames copy the shifted voice,
             // so switching it on crossfades from a delayed copy instead of from silence.
             let warp = if mix > 0.0 { back } else { 1.0 };
-            for (c, (line, io)) in self.lines.iter().zip(channels.iter_mut()).enumerate() {
+            // A channel the block leaves out runs as if the block held silence for it, so the
+            // formant stage takes the same input as from a block of zeros; only its output is
+            // not written.
+            for (c, line) in self.lines.iter().enumerate() {
                 let dry = line[(self.pos + dry_at) & self.mask] as f64;
                 let y = if t.wet == 0.0 {
                     dry
@@ -492,10 +495,9 @@ impl AudioEffect for VoicePitch {
                 // The stage's output is `n` samples later than `y`, so a switch fades one out
                 // before the other comes in instead of mixing them.
                 let out = if mix < 0.5 { (1.0 - 2.0 * mix) * y } else { (2.0 * mix - 1.0) * z as f64 };
-                io[i] = out.clamp(-f32::MAX as f64, f32::MAX as f64) as f32;
-            }
-            for c in ch..self.lines.len() {
-                self.follow.tick(c, 0.0, warp);
+                if let Some(io) = channels.get_mut(c) {
+                    io[i] = out.clamp(-f32::MAX as f64, f32::MAX as f64) as f32;
+                }
             }
             self.pos = (self.pos + 1) & self.mask;
         }
@@ -1215,6 +1217,33 @@ mod tests {
             fx.process(&mut [&mut a, &mut b, &mut c]);
             assert!(b.iter().chain(&c).all(|v| *v == 0.0), "{}: earlier audio came back", fx.id());
         }
+    }
+
+    /// A block that leaves a channel out gives the same output, once the channel is back, as a
+    /// block that holds silence for it: with Keep Formants on, an impulse just before the block
+    /// still sounds afterward.
+    #[test]
+    fn a_channel_left_out_of_a_block_runs_as_silence() {
+        let mut out = Vec::new();
+        for omit in [false, true] {
+            let mut p = VoicePitch::new(SR, 2);
+            assert!(p.set_param("formant_follow", 1.0));
+            p.reset();
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            r[479] = 1.0;
+            p.process(&mut [&mut l, &mut r]);
+            let (mut l, mut r) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            if omit {
+                p.process(&mut [&mut l]);
+            } else {
+                p.process(&mut [&mut l, &mut r]);
+            }
+            let (mut l, mut r) = (vec![0.0f32; 4_000], vec![0.0f32; 4_000]);
+            p.process(&mut [&mut l, &mut r]);
+            assert!(r.iter().any(|v| *v != 0.0), "omit {omit}: the impulse did not sound");
+            out.push((l, r));
+        }
+        assert!(out[0] == out[1], "leaving the channel out changed the output");
     }
 
     /// The tracker finds a voice's period down to 70 Hz and reports nothing for silence.

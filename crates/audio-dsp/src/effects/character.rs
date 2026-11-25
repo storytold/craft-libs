@@ -412,6 +412,10 @@ impl AudioEffect for Tremolo {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        if n == 0 {
+            // No sample used the current settings, so a glide in progress goes on unchanged.
+            return;
+        }
         let nch = channels.len().min(self.channels);
         let rate = self.pv.v("rate");
         let edge = self.edge_len();
@@ -732,11 +736,12 @@ mod tests {
         let mut a: Vec<f32> = (0..10).map(|i| (i + 1) as f32 / 1024.0).collect();
         c.process(&mut [&mut a]);
         assert!(c.set_param("rate_divide", 2.0));
-        let mut b: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
+        let x: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
+        let mut b = x.clone();
         c.process(&mut [&mut b]);
-        let at = changes(&b);
-        assert_eq!(at[0], 0);
-        assert!(at.windows(2).all(|w| w[1] - w[0] == 2), "holds after the change: {at:?}");
+        // The first sample after the change is captured, and each capture is held for two.
+        let want: Vec<f32> = (0..x.len()).map(|i| x[i - i % 2]).collect();
+        assert_eq!(b, want);
     }
 
     /// A held sample sounds for no longer than the tail reports after the input ends.
@@ -903,6 +908,25 @@ mod tests {
         assert!(b.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02), "the glide jumped");
         assert_eq!(b[glide..], want[glide..]);
         assert!((b[0] - want[0]).abs() > 0.2, "{} {}", b[0], want[0]);
+    }
+
+    /// A shape that only an empty block saw does not restart a glide in progress: the glide goes
+    /// on as if the shape had not changed.
+    #[test]
+    fn tremolo_empty_block_keeps_the_glide() {
+        let glide = (0.02 * SR) as usize;
+        let mut t = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        let mut s = tremolo(&[("rate", 5.0), ("depth", 100.0), ("shape", 0.0)], 1);
+        for fx in [&mut t, &mut s] {
+            gains(fx, 2000);
+            assert!(fx.set_param("shape", 2.0));
+            gains(fx, 100);
+        }
+        assert!(t.set_param("shape", 1.0));
+        let mut empty: [f32; 0] = [];
+        t.process(&mut [&mut empty[..]]);
+        assert!(t.set_param("shape", 2.0));
+        assert_eq!(gains(&mut t, 2 * glide), gains(&mut s, 2 * glide));
     }
 
     /// A new rate moves the square's edges to a new share of the cycle. Changed just before an

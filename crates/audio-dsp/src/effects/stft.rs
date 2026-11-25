@@ -20,6 +20,10 @@ impl StftChannel {
         self.output.iter_mut().for_each(|v| *v = 0.0);
         self.pos = 0;
     }
+    /// Samples taken since the last frame: the next frame comes `hop - pos()` samples on.
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
     /// Push one sample and pop one output sample. Every `hop` samples `frame` is called with the
     /// last `n` input samples and must write an `n`-sample (windowed) frame that is overlap-added.
     #[inline]
