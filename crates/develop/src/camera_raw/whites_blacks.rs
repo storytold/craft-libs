@@ -61,7 +61,7 @@ pub struct Model {
     /// Internal amounts the Whites and Blacks sliders reach.
     pub whites_range: [f32; 2],
     pub blacks_range: [f32; 2],
-    /// See [`POINTS_SIDE`] and [`POINT_QUANTILES`].
+    /// See `POINTS_SIDE` and `POINT_QUANTILES`.
     pub points_side: usize,
     pub point_quantiles: [f32; 2],
 }
