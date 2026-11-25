@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use crate::cmap::Cmap;
-use crate::manifest::{ManifestEntry, ParseError, parse_manifest, script_matches};
+use crate::manifest::{DEFAULT_MANIFEST, HEBREW_MANIFEST, LATIN_MANIFEST, ManifestEntry, ParseError, parse_manifest, script_matches};
 
 const DIR_VAR: &str = "CRAFT_FONTS_DIR";
 const REQUIRED_VAR: &str = "CRAFT_FONTS_REQUIRED";
@@ -65,6 +65,7 @@ type Filter = Box<dyn Fn(&ManifestEntry) -> bool>;
 /// Which faces to embed, and from where. [`Embed::write`] does the work.
 #[derive(Default)]
 pub struct Embed {
+    manifest: Option<PathBuf>,
     scripts: Option<Vec<String>>,
     filter: Option<Filter>,
     dir: Option<PathBuf>,
@@ -78,20 +79,20 @@ pub struct Embed {
 }
 
 /// Where [`Embed::serve`] copies the faces, and the URL prefix they are served under.
-struct Serve {
-    dir: PathBuf,
-    url_prefix: String,
+pub(crate) struct Serve {
+    pub(crate) dir: PathBuf,
+    pub(crate) url_prefix: String,
 }
 
 /// A selected face and the file the table embeds it from.
-struct Face {
-    entry: ManifestEntry,
-    path: PathBuf,
-    index: u32,
+pub(crate) struct Face {
+    pub(crate) entry: ManifestEntry,
+    pub(crate) path: PathBuf,
+    pub(crate) index: u32,
     /// An interface face to cut to the catalogs' characters before it is embedded.
-    cut: bool,
+    pub(crate) cut: bool,
     /// Hex SHA-256 of the file: the manifest's, or the cut's.
-    sha256: String,
+    pub(crate) sha256: String,
 }
 
 impl Embed {
@@ -110,6 +111,37 @@ impl Embed {
     /// [`Embed::scripts`] and [`Embed::filter`].
     pub fn documents(families: &[&str]) -> Self {
         Self { families: Some(families.iter().map(|f| (*f).to_owned()).collect()), ..Self::default() }
+    }
+
+    /// Read an opt-in manifest file relative to the `craft-fonts` checkout instead of
+    /// [`DEFAULT_MANIFEST`] (`"fonts/manifest.txt"`), such as [`HEBREW_MANIFEST`] or
+    /// [`LATIN_MANIFEST`].
+    pub fn manifest(mut self, rel_path: impl Into<PathBuf>) -> Self {
+        self.manifest = Some(rel_path.into());
+        self
+    }
+
+    /// Every face in the opt-in Hebrew catalog ([`HEBREW_MANIFEST`], `"fonts/hebrew-manifest.txt"`).
+    /// Narrow it with [`Embed::filter`] or select specific families with
+    /// [`Embed::hebrew_documents`].
+    pub fn hebrew() -> Self {
+        Self::new().manifest(HEBREW_MANIFEST)
+    }
+
+    /// Every face of these families from the opt-in Hebrew catalog ([`HEBREW_MANIFEST`]).
+    pub fn hebrew_documents(families: &[&str]) -> Self {
+        Self::documents(families).manifest(HEBREW_MANIFEST)
+    }
+
+    /// Every face in the opt-in Latin presentation catalog ([`LATIN_MANIFEST`],
+    /// `"fonts/latin-manifest.txt"`).
+    pub fn latin() -> Self {
+        Self::new().manifest(LATIN_MANIFEST)
+    }
+
+    /// Every face of these families from the opt-in Latin presentation catalog ([`LATIN_MANIFEST`]).
+    pub fn latin_documents(families: &[&str]) -> Self {
+        Self::documents(families).manifest(LATIN_MANIFEST)
     }
 
     /// Embed only faces with at least one of these script tags (see
@@ -253,7 +285,7 @@ impl Embed {
             }
         }
         let selected = match (selected, &self.serve, &dir) {
-            (Ok(faces), Some(serve), Some(dir)) => match serve.copy(dir, &faces, cargo) {
+            (Ok(faces), Some(serve), Some(dir)) => match serve.copy(dir, &self.manifest_path(dir), &faces, cargo) {
                 Ok(table) => Ok((table, faces)),
                 Err(e) => {
                     write(&out, EMPTY_TABLE)?;
@@ -278,9 +310,18 @@ impl Embed {
         Ok(faces)
     }
 
+    /// Path to the selected manifest file inside `dir`.
+    fn manifest_path(&self, dir: &Path) -> PathBuf {
+        dir.join(self.manifest.as_deref().unwrap_or_else(|| Path::new(DEFAULT_MANIFEST)))
+    }
+
     /// The wanted manifest entries with their canonical file paths.
     fn select(&self, dir: &Path, cargo: &mut Vec<String>) -> Result<Vec<Face>, Error> {
-        let manifest = dir.join("fonts/manifest.txt");
+        let rel = self.manifest.as_deref().unwrap_or_else(|| Path::new(DEFAULT_MANIFEST));
+        let manifest = dir.join(rel);
+        if !rel.to_str().is_some_and(is_checkout_relative) {
+            return Err(Error::OutsideCheckout { manifest, file: rel.display().to_string() });
+        }
         let text = read_text_bounded(&manifest, MAX_MANIFEST_BYTES).map_err(|source| Error::Read { path: manifest.clone(), source })?;
         // Cargo treats a missing watched file as changed, which would rerun the build every time.
         rerun_if_changed(cargo, &manifest)?;
@@ -428,7 +469,7 @@ impl Embed {
         if self.elsewhere.is_empty() {
             return Vec::new();
         }
-        let manifest = dir.join("fonts/manifest.txt");
+        let manifest = self.manifest_path(dir);
         // `select` read and parsed this manifest already.
         let entries = read_text_bounded(&manifest, MAX_MANIFEST_BYTES).ok().and_then(|text| parse_manifest(&text).ok()).unwrap_or_default();
         for family in self.elsewhere.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)) {
@@ -497,7 +538,7 @@ impl Embed {
     }
 
     fn check_required(&self, dir: &Path, faces: Vec<Face>) -> Result<Vec<Face>, Error> {
-        let manifest = dir.join("fonts/manifest.txt");
+        let manifest = self.manifest_path(dir);
         if faces.is_empty() {
             return Err(Error::NoFaces { manifest });
         }
@@ -552,9 +593,8 @@ fn table(faces: &[Face]) -> Result<String, Error> {
 
 impl Serve {
     /// Copy the faces' files and licences into the served directory; returns the table.
-    fn copy(&self, checkout: &Path, faces: &[Face], cargo: &mut Vec<String>) -> Result<String, Error> {
+    pub(crate) fn copy(&self, checkout: &Path, manifest: &Path, faces: &[Face], cargo: &mut Vec<String>) -> Result<String, Error> {
         let root = checkout.canonicalize().map_err(|source| Error::Read { path: checkout.to_path_buf(), source })?;
-        let manifest = checkout.join("fonts/manifest.txt");
         let mut copied: Vec<String> = Vec::new();
         let mut src = String::from("// Generated by craft-fonts-build. Do not edit.\n&[\n");
         for face in faces {
@@ -568,7 +608,7 @@ impl Serve {
                 // `select` checked the manifest paths; the served names must stay under `dir` too.
                 for name in [served.as_str(), licence_name.as_str()] {
                     if !name.is_empty() && !is_checkout_relative(name) {
-                        return Err(Error::OutsideCheckout { manifest, file: name.to_owned() });
+                        return Err(Error::OutsideCheckout { manifest: manifest.to_path_buf(), file: name.to_owned() });
                     }
                     // Writing follows a symlink, so one in the served directory could redirect it.
                     let to = self.dir.join(name);
@@ -584,7 +624,7 @@ impl Serve {
                 match licence {
                     None => cargo.push(format!("cargo::warning=craft-fonts: no licence file beside {}", entry.file)),
                     Some(licence) if !licence.starts_with(&root) => {
-                        return Err(Error::OutsideCheckout { manifest, file: entry.licence_file.clone() });
+                        return Err(Error::OutsideCheckout { manifest: manifest.to_path_buf(), file: entry.licence_file.clone() });
                     }
                     Some(licence) => copy_file(&licence, &self.dir.join(&licence_name), cargo)?,
                 }
