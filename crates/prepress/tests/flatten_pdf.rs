@@ -611,3 +611,17 @@ fn print_flagged_annotations_left_out_are_counted() {
     assert!(!list.items.is_empty());
     assert_eq!(report.dropped_annotations, 0);
 }
+
+#[test]
+fn page_overprint_is_set_and_takes_effect_as_read() {
+    use craft_prepress::flatten::PageOverprint;
+    let page = |gs: &str| {
+        let pdf = raw_pdf("/GS1 gs 0 0 0 1 k 10 10 50 50 re f", &format!("/ExtGState << /GS1 << {gs} >> >>"), &[]);
+        read(&pdf).0.overprint()
+    };
+    let answer = |set, takes_effect| PageOverprint { set, takes_effect };
+    assert_eq!(page("/CA 1"), answer(false, false), "no overprint");
+    assert_eq!(page("/op true"), answer(true, false), "DeviceCMYK at mode 0 over process plates alone");
+    assert_eq!(page("/op true /OPM 1"), answer(true, true), "mode 1 leaves the zero components");
+    assert_eq!(read(&scene_pdf("S04")).0.overprint(), answer(true, true), "a spot over the page");
+}
