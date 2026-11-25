@@ -34,7 +34,12 @@ struct EnvelopeOut<'a, P, T> {
 
 /// Serializes the envelope in its stable wire order and uses AniCraft's compact/pretty threshold.
 pub fn write<P: Serialize, T: Serialize>(generator: &str, paths: &[P], document: &T) -> Result<String, serde_json::Error> {
-    let envelope = EnvelopeOut { format: FORMAT_NAME, version: FORMAT_VERSION, generator, paths, document };
+    write_version(FORMAT_VERSION, generator, paths, document)
+}
+
+/// Serializes the envelope with an explicit format version and AniCraft's compact/pretty threshold.
+pub fn write_version<P: Serialize, T: Serialize>(version: u32, generator: &str, paths: &[P], document: &T) -> Result<String, serde_json::Error> {
+    let envelope = EnvelopeOut { format: FORMAT_NAME, version, generator, paths, document };
     let compact = serde_json::to_string(&envelope)?;
     if compact.len() < PRETTY_LIMIT { serde_json::to_string_pretty(&envelope) } else { Ok(compact) }
 }

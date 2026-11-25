@@ -11,8 +11,10 @@ a `Scene` into bytes. One Cargo feature per format, all on by default.
 | `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` |
 | `threemf` | 3MF, core and materials extension | yes | no | `craft-opc`, `craft-xml` |
 | `fbx` | FBX 6.x and 7.x, binary and ASCII | yes | no | `miniz_oxide` |
+| `dae` | COLLADA (`.dae`), scenes, transforms, cameras | yes | no | `craft-xml` |
+| `abc` | Alembic (`.abc`), Ogawa container | yes | no | none |
 
-USD, Alembic and COLLADA are not here yet.
+USD is not here yet.
 
 ## The neutral model
 
@@ -84,7 +86,9 @@ metal, roughness from the glossiness); textures whose image is in `EXT_texture_w
 in a buffer view or a `data:` URI, or named; skins; translation, rotation and scale animations;
 cameras; `KHR_lights_punctual`. Primitives of a mesh that name the same accessors share their
 vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials with
-their texture transforms, and images. The other formats' writers do not write texture transforms.
+their texture transforms and sampler wrap modes, and images; `write_glb_with_options` also writes
+each sampler's `magFilter` and `minFilter` when its `GlbWriteOptions` set them. The other
+formats' writers do not write texture transforms.
 
 **3MF.** The package is opened with `craft-opc` and the model part found through its `3dmodel`
 relationship; `threemf::read_model_part` reads a model part's XML on its own. Mesh objects,

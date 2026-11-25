@@ -24,10 +24,17 @@ use std::collections::HashMap;
 
 use usvg::Transform;
 
-#[cfg(feature = "tree-render")]
+#[cfg(feature = "draw")]
 pub use resvg;
-#[cfg(feature = "tree-render")]
+#[cfg(feature = "draw")]
 pub use resvg::tiny_skia;
+
+#[cfg(feature = "tree-render")]
+mod raster;
+#[cfg(feature = "tree-render")]
+pub use raster::{RasterValidationFailure, validate_raster};
+#[cfg(feature = "tree-render")]
+pub(super) use raster::{decode_raster, probe_raster_pixels};
 
 /// Filter primitives per filter. A result of every primitive is kept; real filters have 1 to 12
 /// (Inkscape's drop shadow has 5), and 64 leaves headroom for generated ones.
@@ -165,7 +172,7 @@ pub fn check(nodes: &[usvg::Node], ts: Transform, width: u32, height: u32, held:
 /// Draws a complete tree onto a transparent pixmap after checking the peak RGBA allocation.
 /// `held` is caller-owned RGBA storage that remains live during the draw; the target itself is
 /// charged by this function.
-#[cfg(feature = "tree-render")]
+#[cfg(feature = "draw")]
 pub fn render(tree: &usvg::Tree, ts: Transform, width: u32, height: u32, held: u64, budget: u64) -> Result<tiny_skia::Pixmap, Refusal> {
     check_filter_cost(tree, ts, 2_000_000_000, 10_000_000, 200)?;
     // Even an empty tree allocates the target. `check` only walks buffers added by nodes, so
@@ -186,7 +193,7 @@ pub fn render(tree: &usvg::Tree, ts: Transform, width: u32, height: u32, held: u
 
 /// Draws one node onto `target` after checking the peak RGBA allocation. The node remains in its
 /// parent's coordinate space, matching `resvg::render_node`.
-#[cfg(feature = "tree-render")]
+#[cfg(feature = "draw")]
 pub fn render_node(node: &usvg::Node, ts: Transform, target: &mut tiny_skia::Pixmap, held: u64, budget: u64) -> Result<bool, Refusal> {
     check(std::slice::from_ref(node), ts, target.width(), target.height(), held, budget)?;
     Ok(resvg::render_node(node, ts, &mut target.as_mut()).is_some())
@@ -546,3 +553,6 @@ fn deeper(cx: Cx) -> Result<(), Refusal> {
     }
     Ok(())
 }
+
+#[cfg(all(test, feature = "tree-render"))]
+mod decoder_edges;
