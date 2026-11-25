@@ -201,20 +201,25 @@ layout_component!(
     /// a collection that fills it.
     Stack,
     StackStyleKey,
-    [command_scope, surface],
+    [command_scope, surface, fallback_collection],
     <'a> { header: Option<RegionFn<'a>>, footer: Option<RegionFn<'a>> }
 );
 layout_component!(
     /// Children side by side.
     Row,
     RowStyleKey,
-    []
+    [fallback_collection]
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
+    ///
+    /// The cells are the grid's craft children. An egui container shown in the body (`ui.horizontal`, an
+    /// `egui::Grid`) is no cell: egui places it below the cells placed so far, and its children are not cells. The
+    /// rows after it are placed over it, since the grid's rows do not count it: show it as the last child, or put it
+    /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
-    []
+    [fallback_collection]
 );
 
 impl<'a> Stack<'a> {

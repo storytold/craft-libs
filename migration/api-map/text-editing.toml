@@ -63,19 +63,21 @@ name = "FindBar"
 old = "craft_text::ui::find::FindBar"
 new = "craft_text::ui::find::FindBar"
 status = "replaced"
-note = "A pattern; `FindBar::new(query, options, matches)`, no id salt."
+note = "A pattern; `FindBar::new(query, options, matches)`, no id salt; `replace(with, open)` adds the replace row."
 
 [[type]]
 name = "FindBarOutput"
 old = "craft_text::ui::find::FindBarOutput"
 new = "craft_text::ui::find::FindBarOutput"
 status = "same"
+note = "`request` carries the replace row's Replace or Replace All as a `FindRequest`."
 
 [[type]]
 name = "FindBarState"
 old = "craft_text::ui::find::FindBarState"
 new = "craft_text::ui::find::FindBarState"
 status = "same"
+note = "`taken` clears a request for a caller that shows no bar; `open_replace` opens the bar with its replace row."
 
 [[type]]
 name = "FindReplaceDialog"

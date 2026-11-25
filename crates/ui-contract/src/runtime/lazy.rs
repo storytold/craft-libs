@@ -490,7 +490,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - the focus is where its run left it (`replay::Held`: the same stop and egui widget of it, or none), and while the
 ///   focus is in it no key, text, IME, clipboard or AccessKit event came (`Input::Sent`, which such a run reads);
 /// - none of its stops is the target of a focus request, now or in its last run;
-/// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes);
+/// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes), and no scroll
+///   move waits for a component in it (`moving`, the targets the contract's scroll owners queued);
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`), or,
 ///   replaying a run of this frame, after that run started;
 /// - the call's key is the one of its last run (its props key after that run), and its environment (theme, density,
@@ -502,14 +503,23 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no framework input its run read outside its props has moved (`runtime::inputs`), the scroll view a nested `Lazy`
 ///   child of it decided by is the same (moved with it, `moved`), no command waits for a command scope instance of
 ///   it, and no close waits for a layer it shows.
-pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, call: Call, view: Option<View>, key: Key) -> Option<(Vec2, Rect, RecordShift)> {
+pub(crate) fn settled(
+    ctx: &Context,
+    owner: Option<Id>,
+    id: Id,
+    call: Call,
+    view: Option<View>,
+    key: Key,
+    moving: &[Id],
+) -> Option<(Vec2, Rect, RecordShift)> {
     let (place, sizing, flow) = match call {
         Call::Real(place) => (Some(place), None, place.flow),
         Call::Measuring { room, flow } => (None, room, flow),
     };
     let real = place.is_some();
     let revealed = focus::targets(ctx)[1];
-    let routed = crate::runtime::keys::routed_to(ctx);
+    let mut routed = crate::runtime::keys::routed_to(ctx);
+    routed.extend_from_slice(moving);
     let now = frame::clock(ctx);
     let dragged = input_state::dragged(ctx);
     let focused = replay::Held::focused(ctx);

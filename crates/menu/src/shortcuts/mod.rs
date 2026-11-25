@@ -512,6 +512,11 @@ impl<'a> ShortcutsDialog<'a> {
     }
 }
 
+/// The width a read-only shortcuts dialog opens at, in points.
+const READ_ONLY_WIDTH: f32 = 560.0;
+/// The height a read-only shortcuts dialog opens at, in points.
+const READ_ONLY_HEIGHT: f32 = 480.0;
+
 /// What a footer button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Act {
@@ -575,9 +580,13 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
     let enter = env.options.enter_is_ok && !state.modal() && !state.is_recording();
     let title = env.title();
     let mut open = true;
+    // A read-only reference opens at a fixed, moderate height (production's key list scrolls inside it), not at the
+    // window's; the user's own resize is still remembered.
+    let reference = !env.options.editable;
     let session = RefCell::new(Session { env, state });
     let shown = Dialog::new(title)
         .resizable(true)
+        .overlay(|overlay| if reference { overlay.size(egui::vec2(READ_ONLY_WIDTH, READ_ONLY_HEIGHT)) } else { overlay })
         .remember(SaveKey::new("craft_menu.shortcuts"))
         .outer_gesture(true)
         .collection_body()

@@ -16,6 +16,8 @@ use crate::contract::{
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupHandle, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _, step_stop, step_stops,
 };
+use crate::display::{Shade, Text};
+use crate::layout_components::Row;
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::menu::Menu;
 use crate::primitives::ContentPainterCx;
@@ -24,6 +26,7 @@ use crate::runtime::focus::FocusMove;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
+use craft_behavior::overlay::MinWidth;
 use craft_behavior::{
     CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, WheelPhase, wheel_step,
 };
@@ -57,6 +60,17 @@ pub struct SelectStyle {
 
 /// The icon of the button in the popup header that opens the header menu.
 const HEADER_MENU_ICON: &str = "more";
+
+/// The options a searchable select keeps whatever the query: a destination of its own beside the searched ones (Save
+/// as PDF among the printers).
+struct SearchKept<'a, T>(Box<dyn Fn(&T) -> bool + 'a>);
+
+impl<'a, T> SearchKept<'a, T> {
+    /// Keeps the options `kept` answers true for.
+    fn new(kept: impl Fn(&T) -> bool + 'a) -> Self {
+        SearchKept(Box::new(kept))
+    }
+}
 
 /// The rows of the menu a select's popup header opens: the host's menu body.
 struct HeaderMenu<'a>(Box<HeaderRows<'a>>);
@@ -93,6 +107,18 @@ pub struct Select<'a, T: Value + 'static> {
     /// A filter field above the entries narrows them as the user types.
     #[prop(flag)]
     searchable: bool,
+    /// The search field's name; "{label} Search" without it.
+    #[prop(into)]
+    search_label: Option<Label>,
+    /// Shown above the list while the query matches none of the searched options; the list's "No matches" without it.
+    #[prop(into)]
+    no_matches: Option<Label>,
+    /// Options the search never hides, shown after the matches.
+    #[prop(func = "Fn(&T) -> bool")]
+    search_kept: Option<SearchKept<'a, T>>,
+    /// The open list is at least this wide, in points, within the screen; the field's width without it.
+    #[prop(quantity = "width of the open list, in points")]
+    list_width: Option<f32>,
     /// Shown, muted, while the value is none of the entries.
     #[prop(into)]
     placeholder: Option<Label>,
@@ -122,6 +148,10 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             value,
             entries,
             searchable: false,
+            search_label: None,
+            no_matches: None,
+            search_kept: None,
+            list_width: None,
             placeholder: None,
             decorate: None,
             picture: None,
@@ -302,7 +332,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         access.numeric(numeric.step(1.0));
     }
 
-    /// The listbox: one option row per entry, a spacer for a separator, the picked entry's row selected. Each row the
+    /// The listbox: one option row per entry, a separator row for a separator, the picked entry's row selected. Each row the
     /// keys move the lead to is proposed, and with a preview each row the pointer moves it to; a pick comes back from
     /// the list as Enter or a click on a row and commits.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
@@ -313,14 +343,24 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let words = cx.words::<PickerWords>();
         let held = self.position(cx.value());
         let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
+        let kept =
+            |at: usize| self.search_kept.as_ref().is_some_and(|kept| entries.get(at).and_then(Entry::value).is_some_and(|value| (kept.0)(value)));
+        let (search_label, no_matches, wide) = (self.search_label.clone(), self.no_matches.clone(), self.list_width.is_some());
+        let folder = cx.env.folder();
         let mut header_menu = self.header_menu.as_mut();
-        let events = ui.show(popup, Overlay::dropdown(), |ui, body| {
-            let list = ui.scope_id().with("options");
+        let list = cx.id.with("options");
+        let overlay = Overlay::dropdown().list(list);
+        let overlay = match self.list_width {
+            Some(width) if width.is_finite() && width > 0.0 => overlay.min_width(MinWidth::Points(width)),
+            _ => overlay,
+        };
+        let events = ui.show(popup, overlay, |ui, body| {
             let mut query = String::new();
             if searchable || header_menu.is_some() {
-                ui.horizontal(|ui| {
+                let row = if wide { Row::new().fill_width() } else { Row::new() };
+                let _ = row.show(ui, |ui, _| {
                     if searchable {
-                        query = search::show(ui, body, popup, cx, &name, list);
+                        query = search::show_named(ui, body, popup, cx, &name, (search_label.as_ref(), wide), list);
                     }
                     if let Some(rows) = header_menu.as_mut() {
                         let more = IconButton::new(IconId::new(HEADER_MENU_ICON)).popup(PopupKind::Menu).label(words.header_menu.clone()).show(ui);
@@ -333,6 +373,13 @@ impl<T: Value + 'static> Component for Select<'_, T> {
                 });
             }
             let rows = EntryRows::new(entries, &labels);
+            // A query that matches none of the searched options says so above the kept ones.
+            let matcher = craft_i18n::matcher::Matcher::new(&folder, query.trim());
+            let none_match = !matcher.is_empty()
+                && !(0..entries.len()).filter(|&at| entries[at].is_item() && !kept(at)).any(|at| matcher.score(labels[at].as_str()).is_some());
+            if let (true, Some(text)) = (none_match, no_matches.as_ref()) {
+                Text::new(text.clone()).shade(Shade::Muted).show(ui);
+            }
             let selection = held.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, Selection::single);
             // While a query narrows the list the lead starts nowhere, so Down lands on the first match and Enter picks it.
             let lead = if query.trim().is_empty() { LeadOnOpen::First } else { LeadOnOpen::Selected };
@@ -341,7 +388,11 @@ impl<T: Value + 'static> Component for Select<'_, T> {
                 .empty(words.no_matches.clone())
                 .selection(Bind::given(selection))
                 .lead_on_open(lead)
-                .filter(&query, |at| labels[*at].clone())
+                // A kept option matches any query by carrying the query among its texts.
+                .filter(
+                    &query,
+                    |at| if kept(*at) { vec![labels[*at].clone(), Label::from(query.trim().to_owned())] } else { vec![labels[*at].clone()] },
+                )
                 .show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress, picture))
                 .events
         });

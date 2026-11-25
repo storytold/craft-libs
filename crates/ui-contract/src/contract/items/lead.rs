@@ -23,7 +23,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     }
 
     pub(super) fn range(&self, from: usize, to: usize) -> Vec<C::Key> {
-        let keys = (from.min(to)..=from.max(to)).filter(|&at| self.source.enabled(at) && !self.source.is_section(at)).map(|at| self.source.key(at));
+        let keys = (from.min(to)..=from.max(to))
+            .filter(|&at| self.source.enabled(at) && (!self.source.is_section(at) || self.source.selectable_section(at)))
+            .map(|at| self.source.key(at));
         if from <= to { keys.collect() } else { keys.rev().collect() }
     }
 
@@ -72,9 +74,16 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         clicks > 1 && self.holds(at)
     }
 
+    /// The position of the collection's current item (`CollectionProps::current`) when nothing is picked.
+    fn current_when_unpicked(&self, comp: &C) -> Option<usize> {
+        let current = comp.items().current.as_deref().and_then(|key| key.downcast_ref::<C::Key>())?;
+        let at = self.index_of(current)?;
+        self.placed().rows().is_empty().then_some(at)
+    }
+
     /// A press or key that selects row `at` the way the modifiers say.
     pub(super) fn pick(&mut self, comp: &C, at: usize, extend: bool, toggle: bool) {
-        if self.source.section_stop(at) {
+        if self.source.section_stop(at) && !self.source.selectable_section(at) {
             return;
         }
         let key = self.source.key(at);
@@ -86,11 +95,19 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 self.select_rows(comp, anchor, at);
             }
             SelectMode::Multi | SelectMode::Cells => {
+                // With nothing picked, the current item counts as picked: a modified click adds to it, as a file
+                // manager's or a page grid's does.
+                let seed = if extend || toggle { self.current_when_unpicked(comp) } else { None };
                 if extend {
-                    let anchor = self.anchor_at(self.lead.at);
+                    let anchor = self.selection.anchor().and_then(|key| self.index_of(key)).or(seed).unwrap_or(self.lead.at);
                     self.change(SelectionChange::Set(self.range(anchor, at)));
                 } else if toggle {
-                    self.change(SelectionChange::Toggle(key));
+                    match seed.filter(|&current| current != at) {
+                        Some(current) => self.change(SelectionChange::Set(vec![self.source.key(current), key])),
+                        None => self.change(SelectionChange::Toggle(key)),
+                    }
+                } else if comp.items().picks_beside_current {
+                    self.change(SelectionChange::Clear);
                 } else {
                     self.change(SelectionChange::Set(vec![key]));
                 }

@@ -53,6 +53,18 @@ impl Seen {
         self.events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).collect()
     }
 
+    /// The reorders reported since the last call, as the moved keys and where they go.
+    fn moves(&self) -> Vec<(Vec<usize>, usize)> {
+        let events: Vec<_> = self.events.borrow_mut().drain(..).collect();
+        events
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Reorder(edit) => edit.value().map(|mv| (mv.keys.clone(), mv.to)),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn selections(&self) -> Vec<SelectionChange<usize>> {
         self.events
             .borrow()
@@ -367,23 +379,44 @@ fn stacking_keys_move_the_selected_rows() {
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     press(&mut frames, Key::ArrowDown, Modifiers::SHIFT, &mut show);
-    let moves = |seen: &Seen| -> Vec<(Vec<usize>, usize)> {
-        let events: Vec<_> = seen.events.borrow_mut().drain(..).collect();
-        events
-            .iter()
-            .filter_map(|event| match event {
-                CollectionEvent::Reorder(edit) => edit.value().map(|mv| (mv.keys.clone(), mv.to)),
-                _ => None,
-            })
-            .collect()
-    };
-    moves(&seen);
+    seen.moves();
     press(&mut frames, Key::ArrowDown, Modifiers::ALT, &mut show);
-    assert_eq!(moves(&seen), Vec::new(), "Alt+Down moves nothing");
+    assert_eq!(seen.moves(), Vec::new(), "Alt+Down moves nothing");
     press(&mut frames, Key::CloseBracket, Modifiers::COMMAND, &mut show);
-    assert_eq!(moves(&seen), vec![(vec![2, 3], 1)], "Cmd+] moves both selected rows one place up");
+    assert_eq!(seen.moves(), vec![(vec![2, 3], 1)], "Cmd+] moves both selected rows one place up");
     press(&mut frames, Key::OpenBracket, Modifiers::COMMAND | Modifiers::SHIFT, &mut show);
-    assert_eq!(moves(&seen), vec![(vec![2, 3], 4)], "Shift+Cmd+[ moves them to the bottom");
+    assert_eq!(seen.moves(), vec![(vec![2, 3], 4)], "Shift+Cmd+[ moves them to the bottom");
+}
+
+/// Under the Alt+arrow scheme Alt+Down moves the selected row one place later and Alt+Up one place earlier, and the
+/// stacking keys move nothing. Guards the scheme reaching the key table from the collection's reorder rule: read at
+/// the wrong place, Alt+Down opens or closes instead and Cmd+] still reorders.
+#[trial]
+fn alt_arrows_reorder_under_the_alt_arrow_scheme() {
+    use super::table::Table;
+    use craft_ui::contract::{CollectionProps, ReorderKeys, ReorderRule};
+    // The kit's `List` builds its rule itself; the trial's `Table` takes the collection props whole.
+    let source = Count(labels().len());
+    let seen = Seen::default();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let items = CollectionProps::new().select(SelectMode::Single).reorder(ReorderRule::new().keys(ReorderKeys::AltArrows));
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            seen.take(Table::new(items).id_salt("list").show_items(ui, &source, &mut |_, _| Row::new()));
+        });
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    for _ in 0..3 {
+        press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    }
+    seen.moves();
+    press(&mut frames, Key::ArrowDown, Modifiers::ALT, &mut show);
+    assert_eq!(seen.moves(), vec![(vec![2], 3)], "Alt+Down moves the selected row one place down");
+    press(&mut frames, Key::ArrowUp, Modifiers::ALT, &mut show);
+    assert_eq!(seen.moves(), vec![(vec![2], 1)], "Alt+Up moves it one place up");
+    press(&mut frames, Key::CloseBracket, Modifiers::COMMAND, &mut show);
+    assert_eq!(seen.moves(), Vec::new(), "Cmd+] is no key of this scheme");
 }
 
 /// A million rows: the last row places and hits exactly through the runtime.
