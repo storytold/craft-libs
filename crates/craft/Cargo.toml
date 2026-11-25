@@ -229,6 +229,7 @@ craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
 craft-audio-dsp = { workspace = true, optional = true }
 craft-sbs = { workspace = true, optional = true }
+craft-parquet = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -679,6 +680,8 @@ ora = ["dep:craft-ora"]
 pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
+
+parquet = ["dep:craft-parquet"]
 
 pcap = ["dep:craft-pcap"]
 

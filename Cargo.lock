@@ -1889,6 +1889,7 @@ dependencies = [
  "craft-ora",
  "craft-pages",
  "craft-palette",
+ "craft-parquet",
  "craft-pcap",
  "craft-pcraft-bundle",
  "craft-pcraft-format",
