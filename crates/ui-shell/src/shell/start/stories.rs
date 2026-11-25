@@ -211,9 +211,9 @@ fn page_templates() -> Vec<Template> {
 /// The links of the Column stories: a call to action and two plain links.
 fn column_links() -> [StartLink; 3] {
     [
-        StartLink::url("Join the community", Some(IconId::new("message-circle")), "https://example.com/chat").primary(),
+        StartLink::url("Join the community", Some(IconId::new("note")), "https://example.com/chat").primary(),
         StartLink::url("Website", Some(IconId::new("globe")), "https://example.com"),
-        StartLink::url("Source code", Some(IconId::new("git-branch")), "https://example.com/source"),
+        StartLink::url("Source code", Some(IconId::new("open")), "https://example.com/source"),
     ]
 }
 
