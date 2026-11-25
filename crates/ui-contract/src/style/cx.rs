@@ -38,6 +38,9 @@ pub enum GlyphRole {
     ToolRail,
     /// A list row's trailing icon button: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
     PanelRail,
+    /// A stack of small arrow buttons (a gallery's scroll arrows): `size.icon.glyph_sm` whatever the control size, and
+    /// a ribbon's small icon side does not widen it.
+    Compact,
 }
 
 /// What `fn style` gets. Tokens are read here and nowhere else.
