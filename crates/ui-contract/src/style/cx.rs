@@ -489,7 +489,7 @@ impl<'a> StyleCx<'a> {
 
     /// The look of a field that sits in a bar (a title bar's search box): [`field`](Self::field) filled with the bar's
     /// `surface.chrome` at rest and with the field fill under the pointer and while it holds focus, and with the quieter
-    /// `line.border` edge at rest. The focus and invalid edges are the field's own. A bevelled well keeps its look.
+    /// `line.border` edge at rest. The focus and invalid edges are the field's own. A bevelled well keeps its bevel; only its fill changes.
     pub fn quiet_field(&self) -> SurfaceLook {
         let mut look = self.field();
         let (surface, line) = (&self.tokens.color.surface, &self.tokens.color.line);
