@@ -707,6 +707,39 @@ fn an_open_app_popup_keeps_tab() {
     assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "the framework moved no focus");
 }
 
+/// A Tab in a window with no stop and nothing focused moves no focus, so it stays in egui's input for the app's own
+/// binding (EffectCraft's Tab for the timeline's mini flowchart), from the window's first pass on. Once the app draws a
+/// focusable widget, that widget is a stop and the Tab is the framework's move to it.
+#[trial]
+fn an_unowned_tab_with_no_stops_reaches_the_app() {
+    let button = named_id("app button");
+    let (reached, draw) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(false)));
+    let mut show = {
+        let (reached, draw) = (Rc::clone(&reached), Rc::clone(&draw));
+        move |ui: &mut Ui| {
+            if key_reached(ui.ctx(), Key::Tab) {
+                reached.set(reached.get() + 1);
+            }
+            if draw.get() {
+                fixture::host_button(ui, button, Rect::from_min_size(Pos2::new(40.0, 40.0), egui::vec2(80.0, 30.0)));
+            }
+        }
+    };
+    let mut frames = Frames::new();
+    press_key(&mut frames, &mut show, Key::Tab);
+    assert_eq!(reached.take(), 1, "the window's first pass has no stop: its Tab is the app's");
+    frames.idle(2, &mut show);
+    frames.frame(vec![key_press(Key::Tab, Modifiers::SHIFT), key_release(Key::Tab, Modifiers::SHIFT)], &mut show);
+    assert_eq!(reached.take(), 1, "with nothing drawn, Shift+Tab is the app's too");
+    assert_eq!(egui_focused(&frames.ctx), None);
+    draw.set(true);
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Tab);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(reached.take(), 0, "the app's button is a stop: the Tab is the framework's move");
+    assert_eq!(egui_focused(&frames.ctx), Some(button), "and the Tab moved focus to the button");
+}
+
 #[trial]
 fn escape_ends_an_egui_drag_on_a_host_widget() {
     let area = named_id("host drag area");

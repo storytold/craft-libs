@@ -45,8 +45,9 @@ struct Strip<'a> {
     /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Escape, the plain Enter and the
     /// clipboard events are its own, and no window intent comes of them.
     foreign: bool,
-    /// A bare Tab is egui's (`FocusedRecord::tab_in_egui`): an app's own popup is open, or the app's own focused widget
-    /// keeps Tab by its egui key filter.
+    /// A bare Tab is egui's: an app's own popup is open, or the app's own focused widget keeps Tab by its egui key
+    /// filter (`FocusedRecord::tab_in_egui`), or the window has no stop to move the focus to and nothing focused
+    /// (`focus::tab_has_no_stop`), so the Tab is the app's own binding's.
     tab_in_egui: bool,
     /// The focused stop is the app's own egui widget (`Stop::host`, `FocusedRecord::host`), which reads its keys from
     /// egui: its Escape stays there, as an app's own focused widget's does. Tab and the arrows follow its `KeyUse`, as
@@ -665,6 +666,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let bound = |chord: &Chord| commands::runs_now(ctx, viewport, chord);
     let press_captured = crate::runtime::pointer::press_captured_in(ctx, viewport) || crate::runtime::drag::running(ctx);
     let repeats = Env::root_for(ctx, viewport).is_some_and(|env| env.shortcuts_repeat);
+    let tab_in_egui = record.tab_in_egui || focus::tab_has_no_stop(ctx, viewport);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, target_canvas.as_ref(), stage);
         let edits = |command| !record.host && keys.is_some_and(|keys| keys.edits.contains(command));
@@ -686,7 +688,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             holds_drafts: keys.is_some_and(|keys| keys.holds_drafts),
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
-            tab_in_egui: record.tab_in_egui,
+            tab_in_egui,
             host: record.host,
             egui_edits: keys.filter(|_| record.host).or(canvas).map_or(EditSet::NONE, |keys| keys.edits),
             label_selection: record.label_selection,

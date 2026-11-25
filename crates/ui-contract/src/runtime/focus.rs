@@ -345,6 +345,14 @@ pub(crate) fn is_canvas_member(ctx: &Context, rec: &StopRec) -> bool {
     })
 }
 
+/// Whether a bare Tab in `viewport` has no stop to move the focus to: the window's last pass registered no stop (the
+/// app's focusable egui widgets are stops too, `take_app_widgets`) and nothing held the focus at its end. Such a Tab
+/// stays in egui's input for the app's own binding. Read by the input hook, before the begin hook rotates the
+/// registrations.
+pub(crate) fn tab_has_no_stop(ctx: &Context, viewport: ViewportId) -> bool {
+    with_viewport(ctx, viewport, |state| state.stops.is_empty() && state.focus_now.is_none())
+}
+
 /// How many stops the running pass has registered so far.
 pub(crate) fn stop_count(ctx: &Context) -> usize {
     take_app_widgets(ctx, None);
