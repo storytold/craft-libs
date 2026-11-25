@@ -134,13 +134,39 @@ pub fn fixtures_root(var: Option<&str>) -> io::Result<PathBuf> {
 /// # Errors
 ///
 /// Returns [`io::ErrorKind::InvalidInput`] when `sub` is absolute, contains `..`, or has a part that
-/// is not a plain folder name on its own (on Windows, `group\C:outside`), and the error of
+/// is not a plain folder name on its own (on Windows, `group\C:outside`), or when a folder on the way
+/// resolves outside the root (a symbolic link or junction that points elsewhere), and the error of
 /// [`fixtures_root`] or of creating the folder otherwise.
 pub fn fixtures_dir(sub: &str, var: Option<&str>) -> io::Result<PathBuf> {
     let relative = relative_subdir(sub)?;
-    let dir = fixtures_root(var)?.join(relative);
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+    create_below(&fixtures_root(var)?, &relative)
+}
+
+/// Create `root/relative` one folder at a time, and return an error before creating the next folder
+/// when the one before it resolves outside `root`. Returns `root.join(relative)` as given, not the
+/// canonical path. Each folder is checked by path when it is reached, so a folder that another process
+/// replaces with a link between that check and the next `create_dir` is not detected; callers then use
+/// the returned path by name too ([`temp_path`], [`publish`]).
+fn create_below(root: &Path, relative: &Path) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(root)?;
+    let real_root = root.canonicalize()?;
+    let mut real = real_root.clone();
+    for part in relative.components() {
+        let next = real.join(part);
+        match std::fs::create_dir(&next) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        real = next.canonicalize()?;
+        if !real.starts_with(&real_root) || !real.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("fixture folder {} resolves to {}, which is not a folder inside the fixtures root", next.display(), real.display()),
+            ));
+        }
+    }
+    Ok(root.join(relative))
 }
 
 fn relative_subdir(sub: &str) -> io::Result<PathBuf> {
@@ -1183,6 +1209,45 @@ mod tests {
             assert_eq!(relative_subdir(sub).unwrap_err().kind(), io::ErrorKind::InvalidInput, "accepted {sub}");
             assert!(fixtures_dir(sub, Some(PROBE_UNSET)).is_err(), "fixtures_dir accepted {sub}");
         }
+    }
+
+    /// Link `link` to the folder `target`, or return `false` when this system does not allow it (Windows
+    /// without the symbolic link privilege or Developer Mode).
+    fn link_folder(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(target, link);
+        #[cfg(not(any(unix, windows)))]
+        let made: io::Result<()> = Err(io::Error::from(io::ErrorKind::Unsupported));
+        match made {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("SKIPPED: cannot create a folder link here: {e}");
+                false
+            }
+        }
+    }
+
+    #[test]
+    fn fixture_folders_do_not_follow_a_link_out_of_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        if !link_folder(outside.path(), &root.path().join("link")) {
+            return;
+        }
+        let err = create_below(root.path(), Path::new("link").join("new").as_path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+        assert!(!outside.path().join("new").exists(), "a folder was created outside the root");
+
+        std::fs::create_dir(root.path().join("real")).unwrap();
+        assert!(link_folder(&root.path().join("real"), &root.path().join("inner")));
+        let dir = create_below(root.path(), Path::new("inner").join("new").as_path()).unwrap();
+        assert_eq!(dir, root.path().join("inner").join("new"));
+        assert!(root.path().join("real").join("new").is_dir());
+
+        std::fs::write(root.path().join("file"), b"not a folder").unwrap();
+        assert!(create_below(root.path(), Path::new("file")).is_err());
     }
 
     #[test]
