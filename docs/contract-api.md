@@ -2279,10 +2279,11 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::GroupState`: `pub struct GroupState<M> { pub selected: Option<M>, pub members: Vec<(M, Id, bool)> }`. A group's registrations: the members shown in the last pass and the member the group picked.
 - `craft_ui::contract::HeaderEdge`: `pub enum HeaderEdge { Start, End }`. An edge of a header's line, where a container's own header parts sit.
 - `craft_ui::contract::HeaderMenuRequest`: `pub struct HeaderMenuRequest { pub column: Option<ColumnKey>, pub at: Pos2 }`. A request for the header menu: a secondary click on a header cell or on the empty header after the last one, or the
-- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
+- `craft_ui::contract::HeaderParts`: `pub struct HeaderParts { pub start: f32, pub end: f32, pub end_least: Option<f32>, pub keep: f32 }`. The room a container's own parts take on its header's line (`Container::header_parts`): a width at the start edge
   - `pub const NONE: HeaderParts`. No room for parts.
   - `pub const fn start(mut self, width: f32) -> Self`. `width` at the start edge.
   - `pub const fn end(mut self, width: f32) -> Self`. `width` at the end edge.
+  - `pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self`. The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
 - `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
   - `pub const fn new() -> Self`. A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
   - `pub const fn fill(mut self, kind: SurfaceKind) -> Self`. The surface of a band behind the header.

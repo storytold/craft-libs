@@ -280,11 +280,16 @@ pub struct HeaderParts {
     pub start: f32,
     /// The width at the end edge.
     pub end: f32,
+    /// The least the end edge narrows to, when the line is too narrow for the header's children to keep `keep`
+    /// beside the end parts' whole width. `None`: the end edge keeps its width.
+    pub end_least: Option<f32>,
+    /// The room the header's children keep before the end edge narrows below `end` (to `end_least`).
+    pub keep: f32,
 }
 
 impl HeaderParts {
     /// No room for parts.
-    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0 };
+    pub const NONE: HeaderParts = HeaderParts { start: 0.0, end: 0.0, end_least: None, keep: 0.0 };
 
     /// `width` at the start edge.
     pub const fn start(mut self, width: f32) -> Self {
@@ -295,6 +300,14 @@ impl HeaderParts {
     /// `width` at the end edge.
     pub const fn end(mut self, width: f32) -> Self {
         self.end = width;
+        self
+    }
+
+    /// The end edge narrows, down to `least`, so the header's children keep `keep` of the line: on a line too narrow
+    /// for both, the children's least room comes before the end parts' whole width.
+    pub const fn end_narrows(mut self, least: f32, keep: f32) -> Self {
+        self.end_least = Some(least);
+        self.keep = keep;
         self
     }
 }
