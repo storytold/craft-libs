@@ -62,6 +62,12 @@ pub(crate) fn focus_with_filter(ctx: &Context, id: Id, filter: KeyFilter) {
     });
 }
 
+/// Keeps egui from taking the focus of `id`, if it holds it, on a press or click elsewhere, until the focus moves or a
+/// request gives it again.
+pub(crate) fn never_surrender(ctx: &Context, id: Id) {
+    ctx.memory_mut(|memory| memory.set_focus_surrender(id, SurrenderFocusOn::Never));
+}
+
 /// Leaves the focus of the app's own widget `id`, if it holds it, to egui's rule, the app's `surrender_focus_on`, with
 /// the key filter it has.
 pub(crate) fn leave_to_egui(ctx: &Context, id: Id) {

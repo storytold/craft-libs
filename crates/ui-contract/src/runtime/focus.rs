@@ -200,6 +200,8 @@ pub(crate) struct State {
     /// The widget the runtime gave egui's focus, under its own press rule, until the end hook settles it
     /// (`settle_given`): the focus of an app's own widget is left to egui's rule there.
     given: Option<Id>,
+    /// The app's document canvas whose focus is off egui's press rule (`hold_canvas_focus`).
+    held_canvas: Option<Id>,
     /// The canvases the running pass declared with `host_canvas`, which the end hook looks up among egui's widgets.
     host_canvases: SmallVec<[Id; 1]>,
     /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
@@ -333,6 +335,11 @@ fn take_app_widgets(ctx: &Context, except: Option<Id>) {
 /// focused is never the canvas's, even when it keeps Tab: it moves focus into the window or toggles the panels, so the
 /// canvas cannot trap keyboard navigation. With the canvas focused, the same keys stay in egui, a Tab it keeps and
 /// Escape too, as for any focused widget of the app's own; Escape with nothing focused is the window's cancel.
+///
+/// A press that nothing takes leaves the canvas focused, whoever gave it the focus and whatever the app's
+/// `surrender_focus_on`: a press on the app's own widgets that take no focus or on empty space moves no focus. The canvas
+/// loses the focus to a component or widget that takes it, Tab, F6, a dialog, the app's own request or surrender, and
+/// when it is no longer drawn.
 ///
 /// Call it in each pass the canvas shows, before or after the canvas is drawn, with the id of the focusable, enabled
 /// egui widget the app draws for it in every such pass (`Sense::click()`, `Sense::drag()`; the bare flags `Sense::CLICK`
@@ -1102,6 +1109,7 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
         dialog_tab,
         frame: crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx)),
     };
+    let focused = input.focused;
     let (acts, announcements, host_focus) = with(ctx, |state| {
         state.awaited = None;
         let host_focus = state.record.host_focus;
@@ -1113,9 +1121,26 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     if !host_focus || !acts.is_empty() {
         egui_focus::clear_directional_focus(ctx);
     }
+    hold_canvas_focus(ctx, focused);
     apply(ctx, acts);
     for text in announcements {
         crate::runtime::frame::announce(ctx, text);
+    }
+}
+
+/// Takes the focus `focused` off egui's press rule while it is on the app's document canvas, as the last pass declared
+/// it: whoever gave that focus, only `State::apply_press` decides what a press does to it. A canvas the app no longer
+/// declares is one of the app's own widgets, whose focus is egui's again.
+fn hold_canvas_focus(ctx: &Context, focused: Option<Id>) {
+    let (held, left) = with(ctx, |state| {
+        let held = focused.filter(|id| nav::declared_canvas(&state.last_stops, *id));
+        let before = std::mem::replace(&mut state.held_canvas, held);
+        (held, before.filter(|id| held.is_none() && focused == Some(*id)))
+    });
+    if let Some(id) = held {
+        egui_focus::never_surrender(ctx, id);
+    } else if let Some(id) = left {
+        egui_focus::leave_to_egui(ctx, id);
     }
 }
 
