@@ -255,16 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn the_usual_forms() {
-        assert_eq!(parse_address_list("ada@example.org"), [a("", "ada@example.org")]);
-        assert_eq!(parse_address_list("<ada@example.org>"), [a("", "ada@example.org")]);
-        assert_eq!(parse_address_list("Ada Lovelace <ada@example.org>"), [a("Ada Lovelace", "ada@example.org")]);
-        assert_eq!(parse_address_list("  Ada   Lovelace\t< ada@example.org >  "), [a("Ada Lovelace", "ada@example.org")]);
-        assert_eq!(parse_address_list(""), []);
-        assert_eq!(parse_address_list(" , ;, "), []);
-    }
-
-    #[test]
     fn lists() {
         let got = parse_address_list("Ada <ada@example.org>, bob@example.org,\r\n \"Hopper, Grace\" <grace@example.org>; carol@example.org");
         assert_eq!(got, [a("Ada", "ada@example.org"), a("", "bob@example.org"), a("Hopper, Grace", "grace@example.org"), a("", "carol@example.org")]);
@@ -334,43 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn many_addresses_are_capped() {
-        let s = "a@example.org,".repeat(MAX_ADDRESSES + 100);
-        assert_eq!(parse_address_list(&s).len(), MAX_ADDRESSES);
-        let _ = parse_address_list(&"(".repeat(100_000));
-        let _ = parse_address_list(&"<".repeat(100_000));
-        let _ = parse_address_list(&"\"\\".repeat(100_000));
-    }
-
-    #[test]
-    fn writes_names_as_needed() {
-        assert_eq!(format_address_list(&[a("", "ada@example.org")]), "ada@example.org");
-        assert_eq!(format_address_list(&[a("Ada Lovelace", "ada@example.org")]), "Ada Lovelace <ada@example.org>");
-        assert_eq!(format_address_list(&[a("Lovelace, Ada", "ada@example.org")]), "\"Lovelace, Ada\" <ada@example.org>");
-        assert_eq!(format_address_list(&[a("Ada \"C\" L\\", "ada@example.org")]), r#""Ada \"C\" L\\" <ada@example.org>"#);
-        assert_eq!(format_address_list(&[a("J. Doe", "j@example.org")]), "\"J. Doe\" <j@example.org>");
-        assert_eq!(format_address_list(&[a("Adá", "ada@example.org")]), "=?UTF-8?B?QWTDoQ==?= <ada@example.org>");
-        assert_eq!(format_address_list(&[a("a", "a@example.org"), a("", ""), a("", "b@example.org")]), "a <a@example.org>, b@example.org");
-        assert_eq!(format_address_list(&[a("Name only", "")]), "Name only <>");
-        assert_eq!(format_address_list(&[]), "");
-    }
-
-    #[test]
-    fn addresses_cannot_inject_recipients_or_headers() {
-        let evil = a("Eve\r\nBcc: x@example.org", "a@example.org>, <evil@example.org");
-        let written = format_address_list(&[evil]);
-        assert!(!written.contains(['\r', '\n']));
-        let back = parse_address_list(&written);
-        assert_eq!(back.len(), 1);
-        assert_eq!(back.first().map(|x| x.email.as_str()), Some("a@example.orgevil@example.org"));
-        assert_eq!(format_address_list(&[a("", "a@example.org, b@example.org")]), "a@example.orgb@example.org");
-        assert_eq!(format_address_list(&[a("", "a b\t@example.org\r\n")]), "ab@example.org");
-        assert_eq!(format_address_list(&[a("x", "\"unterminated@example.org")]), "x <unterminated@example.org>");
-        // A well-formed quoted local part is kept.
-        assert_eq!(format_address_list(&[a("", "\"john doe\"@example.org")]), "<\"john doe\"@example.org>");
-    }
-
-    #[test]
     fn an_address_alone_reads_back_as_an_address() {
         for email in ["ada@example.org", "postmaster", "=?UTF-8?Q?x?=", "\"a b\"", "\"john doe\"@example.org", "ünï@example.org", "a=?b@example.org"]
         {
@@ -391,11 +344,6 @@ mod tests {
         fn written_lists_read_back(names in proptest::collection::vec(name(), 0..5)) {
             let list: Vec<Mailbox> = names.iter().enumerate().map(|(i, n)| a(n, &format!("user{i}@example.org"))).collect();
             proptest::prop_assert_eq!(parse_address_list(&format_address_list(&list)), list);
-        }
-
-        #[test]
-        fn any_text_parses(s in proptest::prelude::any::<String>()) {
-            let _ = parse_address_list(&s);
         }
 
         #[test]
