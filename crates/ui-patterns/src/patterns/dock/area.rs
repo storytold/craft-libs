@@ -1661,7 +1661,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.report.flyout.extend(output.edit.events);
             self.rail_work(output.front);
             let width = output.width.map(|width| width - inset);
-            ColumnWork { iconic: output.iconic, picked: output.picked, icon_picked: output.icon_picked, resized: Vec::new(), width, flyout: output.flyout }
+            ColumnWork {
+                iconic: output.iconic,
+                picked: output.picked,
+                icon_picked: output.icon_picked,
+                resized: Vec::new(),
+                width,
+                flyout: output.flyout,
+            }
         } else {
             if !in_window && scene.rail_beside(column) {
                 // The rail keeps to the dock's window edge and the expanded column shows inward of it.
@@ -1677,7 +1684,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let Some(output) = icons(rail_cell, None, None) else { return };
                 self.rail_work(output.front);
                 // The rail's inner edge sets its own width, not the expanded column's.
-                self.column_work(column, ColumnWork { iconic: output.iconic, picked: output.picked, icon_picked: output.icon_picked, resized: Vec::new(), width: None, flyout: None });
+                self.column_work(
+                    column,
+                    ColumnWork {
+                        iconic: output.iconic,
+                        picked: output.picked,
+                        icon_picked: output.icon_picked,
+                        resized: Vec::new(),
+                        width: None,
+                        flyout: None,
+                    },
+                );
                 if let (Some(width), Some(first)) = (output.width, column.groups.first().and_then(|group| group.panels.first())) {
                     self.report.actions.push(Action::resize_iconic(first.clone(), Some(width)));
                 }
