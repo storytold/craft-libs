@@ -75,6 +75,12 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   model (cues with exact tick times): SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and
   TTML / IMSC1 / DFXP readers and writers, and CEA-608 / CEA-708 byte-pair coding. Carved from
   FilmCraft.
+- [`craft-asr`](crates/asr/README.md): speech recognition behind one streaming protocol
+  (`start` / `feed` / `finish` / `poll`, partial and final segments), bounded microphone audio
+  resampled to 16 kHz mono, the Whisper model manifest with size and SHA-256 verification, and a
+  consent-gated download loop. Optional `candle` feature for CPU Whisper inference. Carved from
+  DeckCraft's live subtitles; caption layout, capture devices and slide-show timing stay with the
+  app.
 - [`craft-cfb`](crates/cfb/README.md): clean-room Compound File Binary ([MS-CFB], OLE structured
   storage) reader and writer: the container of legacy Office files, Outlook messages, encrypted
   OOXML packages and AAF. Bounded on hostile input; what the streams hold stays with each format.

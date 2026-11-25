@@ -1604,6 +1604,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-asr"
+version = "0.1.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokenizers",
+ "ureq",
+]
+
+[[package]]
 name = "craft-assuan"
 version = "0.1.0"
 dependencies = [
