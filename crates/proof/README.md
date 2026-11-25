@@ -40,6 +40,8 @@ Hunspell dictionaries are not bundled; they are read from, in order: the folder 
 `set_dictionaries_folder`, `WORDCRAFT_DICTIONARIES`, WordCraft's own folder under the user's
 application data (`%LOCALAPPDATA%\WordCraft\dictionaries` and `%APPDATA%\WordCraft\dictionaries`,
 `~/Library/Application Support/WordCraft/dictionaries`, `$XDG_DATA_HOME/wordcraft/dictionaries`),
+on Windows the `dictionaries` folder beside the running executable (portable packages, independent
+of the working directory),
 then the usual Hunspell and LibreOffice locations. None on the web.
 
 French remains a `ProofLang::Pack` locale: use its full `tag()` for settings and issue identity.
