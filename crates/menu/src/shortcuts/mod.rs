@@ -317,9 +317,6 @@ pub struct Options {
     /// The keyboard pane's least height in points, so its keys stay readable in a short dialog. `None`: the height of
     /// the keys at the framework's control size.
     pub keyboard_height: Option<f32>,
-    /// The width in points the editable dialog opens at, before the user resizes it, at 90 % of the window's height.
-    /// `None`: the dialog's own size. The size the user gave it is kept.
-    pub width: Option<f32>,
     /// Read-only rows for keys outside the catalog.
     pub fixed: Vec<FixedRow>,
     /// Formats the app can read, besides the built-in ones.
@@ -352,7 +349,6 @@ impl Default for Options {
             visible: None,
             keyboard: false,
             keyboard_height: None,
-            width: None,
             fixed: Vec::new(),
             import_formats: Vec::new(),
             export_formats: Vec::new(),
@@ -559,8 +555,6 @@ impl<'a> ShortcutsDialog<'a> {
 const READ_ONLY_WIDTH: f32 = 560.0;
 /// The height a read-only shortcuts dialog opens at, in points.
 const READ_ONLY_HEIGHT: f32 = 480.0;
-/// The share of the window's height the dialog opens at when the app names its width.
-const OPEN_HEIGHT_SHARE: f32 = 0.9;
 
 /// What a footer button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -628,20 +622,10 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
     // A read-only reference opens at a fixed, moderate height (production's key list scrolls inside it), not at the
     // window's; the user's own resize is still remembered.
     let reference = !env.options.editable;
-    // An app that names a width opens the editable dialog at it, as tall as most of the window.
-    let wide = env
-        .options
-        .width
-        .filter(|_| !reference)
-        .map(|width| egui::vec2(width, (ui.ctx().content_rect().height() * OPEN_HEIGHT_SHARE).max(READ_ONLY_HEIGHT)));
     let session = RefCell::new(Session { env, state });
     let shown = Dialog::new(title)
         .resizable(true)
-        .overlay(|overlay| match wide {
-            _ if reference => overlay.size(egui::vec2(READ_ONLY_WIDTH, READ_ONLY_HEIGHT)),
-            Some(size) => overlay.size(size),
-            None => overlay,
-        })
+        .overlay(|overlay| if reference { overlay.size(egui::vec2(READ_ONLY_WIDTH, READ_ONLY_HEIGHT)) } else { overlay })
         .remember(SaveKey::new("craft_menu.shortcuts"))
         .outer_gesture(true)
         .collection_body()

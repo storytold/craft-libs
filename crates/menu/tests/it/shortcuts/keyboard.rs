@@ -94,11 +94,3 @@ fn the_add_button_follows_the_chips_of_every_row() {
         assert!(add.rect.left() - before < 24.0, "the add button {:?} follows its chips ({before})", add.rect);
     }
 }
-
-/// An app that names a width opens the dialog at it.
-#[trial]
-fn a_named_width_opens_the_dialog_at_it() {
-    let rig = Rig::tuned(Platform::Windows, |options| options.width = Some(900.0));
-    let dialog = rig.fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog");
-    assert!((dialog.rect.width() - 900.0).abs() < 4.0, "the dialog opens at the width the app named: {:?}", dialog.rect);
-}
