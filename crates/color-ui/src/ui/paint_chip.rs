@@ -734,7 +734,7 @@ impl Component for PaintChip<'_> {
                                     && let Some(color) = colors.get(name.as_str())
                                 {
                                     shown.picked = Some(color.to_srgb(cmyk));
-                                    shown.swatch_color = Some((**color).clone());
+                                    shown.swatch_color = Some(**color);
                                 }
                             }
                         }
