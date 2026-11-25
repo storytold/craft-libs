@@ -118,6 +118,11 @@ pub const REC601_525: RgbSpace = RgbSpace { r: Xy::new(0.630, 0.340), g: Xy::new
 pub const REC2020: RgbSpace = RgbSpace { r: Xy::new(0.708, 0.292), g: Xy::new(0.170, 0.797), b: Xy::new(0.131, 0.046), white: D65 };
 /// The DCI-P3 primaries with a D65 white (SMPTE EG 432-1).
 pub const DISPLAY_P3: RgbSpace = RgbSpace { r: Xy::new(0.680, 0.320), g: Xy::new(0.265, 0.690), b: Xy::new(0.150, 0.060), white: D65 };
+/// ProPhoto RGB (ROMM RGB, ISO 22028-2) primaries with a D50 white.
+pub const PROPHOTO: RgbSpace =
+    RgbSpace { r: Xy::new(0.734699, 0.265301), g: Xy::new(0.159597, 0.840403), b: Xy::new(0.036598, 0.000105), white: D50 };
+/// The 1998 Adobe RGB primaries with a D65 white.
+pub const ADOBE_RGB: RgbSpace = RgbSpace { r: Xy::new(0.64, 0.33), g: Xy::new(0.21, 0.71), b: Xy::new(0.15, 0.06), white: D65 };
 
 impl From<Primaries> for RgbSpace {
     fn from(p: Primaries) -> RgbSpace {
@@ -291,5 +296,17 @@ mod tests {
         assert_eq!(serde_json::from_str::<RgbSpace>(&json).unwrap(), read);
         let m: [[f64; 3]; 3] = read.to_xyz().into();
         assert_eq!(Mat3::from(m), read.to_xyz());
+    }
+
+    #[test]
+    fn prophoto_and_adobe_rgb_map_white_and_roundtrip() {
+        for sp in [PROPHOTO, ADOBE_RGB] {
+            let w = sp.to_space(&REC2020).apply([1.0, 1.0, 1.0]);
+            assert!(w.iter().all(|c| (c - 1.0).abs() < 1e-3), "{sp:?} -> {w:?}");
+        }
+        let a = SRGB.to_space(&PROPHOTO);
+        let b = PROPHOTO.to_space(&SRGB);
+        let v = b.apply(a.apply([0.2, 0.5, 0.9]));
+        assert!((v[0] - 0.2).abs() < 1e-9 && (v[1] - 0.5).abs() < 1e-9 && (v[2] - 0.9).abs() < 1e-9);
     }
 }

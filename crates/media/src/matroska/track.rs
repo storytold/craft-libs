@@ -258,6 +258,11 @@ impl Track {
             Codec::Mp3 => (Id::Mp3, Vec::new()),
             Codec::Mp2 => (Id::Mp2, Vec::new()),
             Codec::Mp1 => (Id::Mp1, Vec::new()),
+            Codec::Other(id) if id == "V_FFV1" => (Id::Ffv1, self.codec_private.clone()),
+            // VfW CodecPrivate starts with the 40-byte BITMAPINFOHEADER.
+            Codec::VfwFourcc { fourcc: [b'F', b'F', b'V', b'1'], bitmap_info_header } => {
+                (Id::Ffv1, bitmap_info_header.get(40..).unwrap_or_default().to_vec())
+            }
             // the ALACSpecificConfig, as MP4's `alac` box holds it after its FullBox header
             Codec::Other(id) if id == "A_ALAC" => (Id::Alac, self.codec_private.clone()),
             Codec::VfwFourcc { fourcc: [b'A', b'V', b'd', b'n' | b'h'], .. } => (Id::Dnxhd, Vec::new()),
@@ -438,6 +443,36 @@ mod codec_params_tests {
     use crate::CodecId;
     use crate::matroska::mux::{MkvWriter, MuxOptions, TrackSpec};
     use crate::matroska::{Demuxer, TrackKind};
+
+    #[test]
+    fn ffv1_native_and_vfw_preserve_configuration_and_dimensions() {
+        let config = vec![1, 2, 3, 4, 5];
+        let mut native = TrackSpec::new(TrackKind::Video, "V_FFV1");
+        native.codec_private = config.clone();
+        native.video_size = Some((32, 24));
+        let mut vfw = TrackSpec::new(TrackKind::Video, "V_MS/VFW/FOURCC");
+        let mut bih = vec![0; 40];
+        bih[..4].copy_from_slice(&40u32.to_le_bytes());
+        bih[16..20].copy_from_slice(b"FFV1");
+        bih.extend_from_slice(&config);
+        vfw.codec_private = bih;
+        vfw.video_size = native.video_size;
+        let mut writer = MkvWriter::new(std::io::Cursor::new(Vec::new()), vec![native, vfw], MuxOptions::default()).unwrap();
+        for track in 0..2 {
+            writer.write_frame(track, 0, true, &[0; 4], None).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let demux = Demuxer::from_slice(&bytes).unwrap();
+        for track in demux.tracks() {
+            let params = track.codec_params();
+            assert_eq!(params.codec, CodecId::Ffv1);
+            assert_eq!(params.extradata, config);
+            assert_eq!((params.width, params.height), (Some(32), Some(24)));
+            assert!(params.codec.is_video());
+            assert!(!params.codec.is_audio());
+            assert_eq!(params.codec.name(), "FFV1");
+        }
+    }
 
     #[test]
     fn alac_dnx_and_opus_match_mp4() {

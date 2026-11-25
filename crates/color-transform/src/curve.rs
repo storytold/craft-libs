@@ -225,6 +225,32 @@ impl Lut1 {
         }
     }
 
+    /// Resample this table to `n` evenly spaced entries over `0..1` (2 to [`MAX_LUT`]).
+    pub fn resample(&self, n: usize) -> Lut1 {
+        let n = n.clamp(2, MAX_LUT);
+        if self.v.len() == n {
+            return self.clone();
+        }
+        Lut1::from_fn(n, |x| self.eval(x))
+    }
+
+    /// `self ∘ inner` sampled at `n` evenly spaced entries over `0..1` (2 to [`MAX_LUT`]).
+    ///
+    /// Preserves fixed-size GPU LUT contracts (such as 1,024-entry shader tables) where
+    /// [`Lut1::compose`] would expand to the common refinement grid. When `inner` is empty it
+    /// resamples `self` to `n` entries; when `inner` already has `n` entries it evaluates `self`
+    /// directly at each of `inner`'s samples.
+    pub fn compose_len(&self, inner: &Lut1, n: usize) -> Lut1 {
+        let n = n.clamp(2, MAX_LUT);
+        if inner.v.is_empty() {
+            return self.resample(n);
+        }
+        if inner.v.len() == n {
+            return Lut1 { v: inner.v.iter().map(|&x| self.eval(x)).collect() };
+        }
+        Lut1::from_fn(n, |x| self.eval(inner.eval(x)))
+    }
+
     pub fn is_identity(&self) -> bool {
         let n = self.v.len();
         n >= 2 && self.v.iter().enumerate().all(|(i, &y)| (y - i as f32 / (n - 1) as f32).abs() < 1e-6)
@@ -317,6 +343,21 @@ mod tests {
         let b = Lut1::from_fn(1024, f32::sqrt);
         assert!((a.compose(&b).eval(0.3) - 0.3).abs() < 2e-3);
         assert_eq!(a.compose(&Lut1 { v: vec![] }), a);
+    }
+
+    #[test]
+    fn compose_len_preserves_fixed_gpu_lut_size() {
+        const N: usize = 1024;
+        let a = Lut1::from_fn(N, |x| x * x);
+        let b = Lut1::from_fn(N, f32::sqrt);
+        let c = a.compose_len(&b, N);
+        assert_eq!(c.v.len(), N);
+        assert!((c.eval(0.3) - 0.3).abs() < 2e-3);
+        assert_eq!(a.compose_len(&Lut1 { v: vec![] }, N), a);
+        let small = Lut1::from_fn(17, f32::sqrt);
+        let d = a.compose_len(&small, N);
+        assert_eq!(d.v.len(), N);
+        assert!((d.eval(0.3) - a.eval(small.eval(0.3))).abs() < 2e-3);
     }
 
     /// A short `inner` does not drop the outer table's points between its own.
