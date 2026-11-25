@@ -1784,3 +1784,74 @@ fn a_context_menu_from_a_native_palette_too_tall_for_either_side_covers_the_poin
         assert!(window.contains_rect(shown), "row {row} {shown:?} lies whole in the menu's window {window:?}");
     }
 }
+
+/// A palette whose panel 1 holds two buttons, each with a context menu of one row.
+struct TwoTargets;
+
+impl DockPanels<u32> for TwoTargets {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if *panel != 1 {
+            return;
+        }
+        for (target, menu, row) in [("First target", "First menu", "First action"), ("Second target", "Second menu", "Second action")] {
+            let button = Button::new(target).show(ui);
+            let _ = Menu::context(menu, &button).show(ui, |ui, _| {
+                MenuItem::new(row).show(ui);
+            });
+            ui.add_space(60.0);
+        }
+    }
+}
+
+/// Whether the menu row `name` shows in a popup window of `dock`'s palette, in the frame `out`.
+fn palette_menu_shows(dock: &NativeDock, out: &Out, name: &str) -> bool {
+    popups(dock, out).into_iter().any(|viewport| node_rect(tree_of_viewport(out, viewport), name, Role::MENU_ITEM).is_some())
+}
+
+/// A right-click at `point` in the palette's window — the move, the press and the release, in their own frames — and two
+/// more frames for the menu it opens to settle: the frame after the last event.
+fn right_click_in_palette(dock: &mut NativeDock, panels: &mut dyn DockPanels<u32>, at: &mut Rect, point: Pos2) -> Out {
+    let mut out = collapsed_frame(dock, panels, at, vec![], vec![moved(point)]);
+    for events in [vec![secondary(point, true)], vec![secondary(point, false)], vec![], vec![]] {
+        out = collapsed_frame(dock, panels, at, vec![], events);
+    }
+    out
+}
+
+/// A press in a palette's window is judged against the menus that window showed in the pass before it, as in the main
+/// window: a menu the palette opens in the press's own pass, after the press was recorded, is not outside that press. A
+/// double right-click on the first target does it: the press of the first click closes the second target's menu, and the
+/// release that ends it opens the first target's menu in the pass of the second press. That press lands outside the zone
+/// the second menu set in the pass it closed, so the pass records it, and one press per pass keeps both events in it, the
+/// press last. The first menu's body runs in its popup window's pass, inside the palette's, and the record is not for it.
+#[trial]
+fn a_context_menu_a_palette_opens_is_not_closed_by_the_press_that_opened_it() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
+    let mut at = FLOAT_AT;
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    let mut panels = TwoTargets;
+    let mut out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![]);
+    let palette = dock.palette.expect("the palette's window opened");
+    let target = |out: &Out, name: &str| {
+        node_rect(tree_of_viewport(out, palette), name, Role::BUTTON).unwrap_or_else(|| panic!("the palette shows {name}")).center()
+    };
+    let (first, second) = (target(&out, "First target"), target(&out, "Second target"));
+    out = right_click_in_palette(&mut dock, &mut panels, &mut at, first);
+    assert!(palette_menu_shows(&dock, &out, "First action"), "the right-click on the first target opens its menu");
+    assert!(!palette_menu_shows(&dock, &out, "Second action"), "and only the first menu");
+    out = right_click_in_palette(&mut dock, &mut panels, &mut at, second);
+    assert!(palette_menu_shows(&dock, &out, "Second action"), "the right-click on the second target opens its menu");
+    assert!(!palette_menu_shows(&dock, &out, "First action"), "the first menu closed");
+    // The double right-click on the first target: the press that begins it closes the second menu, its release opens the
+    // first target's menu in the pass of the second press, which the pass records as an outside press.
+    out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![moved(first)]);
+    out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![secondary(first, true)]);
+    out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![secondary(first, false), secondary(first, true)]);
+    // A menu a pass closes leaves the tree in the pass after it, while it fades; nothing presses again in these.
+    for _ in 0..3 {
+        out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![]);
+    }
+    assert!(palette_menu_shows(&dock, &out, "First action"), "the press recorded in the pass the first menu appears in does not close it");
+    assert!(!palette_menu_shows(&dock, &out, "Second action"), "and the second menu closed");
+}
