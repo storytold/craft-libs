@@ -479,7 +479,13 @@ fn a_layer_in_a_popup_window_keeps_its_scroll_until_it_closes() {
             });
         })
     };
-    let settled = || (0..PAST_THE_WAIT).map(|_| frame()).last().expect("frames ran");
+    let settled = || {
+        let mut out = frame();
+        for _ in 1..PAST_THE_WAIT {
+            out = frame();
+        }
+        out
+    };
     let palette = builder_titled(&frame(), "tool").0;
     open.set(true);
     assert!(popup_window(&settled(), palette).is_some(), "the layer opened in the palette shows in a popup window");
