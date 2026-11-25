@@ -66,30 +66,41 @@ enum Subtable {
 /// system and replaces glyph `from` with glyph `to`.
 fn gsub(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable) -> Vec<u8> {
     // No required feature (0xFFFF); one optional feature, feature 0.
-    gsub_listing(feature, from, to, subtable, &[(b"DFLT", &[0xFFFF, 1, 0])])
+    gsub_listing(from, &[(feature, to)], subtable, &[(b"DFLT", &[0xFFFF, 1, 0])])
 }
 
-/// [`gsub`] with a second feature, `zero`, which has no lookups, and with `scripts`: each one's
-/// tag and its default language system's `requiredFeatureIndex`, `featureIndexCount` and
-/// `featureIndices`.
-fn gsub_listing(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable, scripts: &[(&[u8; 4], &[u16])]) -> Vec<u8> {
-    // A script's default language system (offset 4, no other language systems; no lookup order)
-    // lists the features as `scripts` says.
-    let mut records = u16s(&[u16::try_from(scripts.len()).unwrap()]);
-    let mut tables = Vec::new();
-    for (tag, language) in scripts {
-        records.extend(*tag);
-        records.extend(u16s(&[u16::try_from(2 + 6 * scripts.len() + tables.len()).unwrap()]));
-        tables.extend(u16s(&[4, 0, 0]));
-        tables.extend(u16s(language));
+/// A GSUB table with `features`, each one's tag and the glyph its lookup replaces `from` with, and
+/// `scripts`, each one's tag and its default language system's `requiredFeatureIndex`,
+/// `featureIndexCount` and `featureIndices`.
+fn gsub_listing(from: u16, features: &[(&[u8; 4], u16)], subtable: Subtable, scripts: &[(&[u8; 4], &[u16])]) -> Vec<u8> {
+    // The default language system at offset 4; no other language systems; no lookup order.
+    let script_list = list(scripts.iter().map(|(tag, language)| (tag.as_slice(), [u16s(&[4, 0, 0]), u16s(language)].concat())));
+    // Feature n has one lookup, lookup n.
+    let feature_list = list(features.iter().zip(0..).map(|((tag, _), n)| (tag.as_slice(), u16s(&[0, 1, n]))));
+    let lookup_list = list(features.iter().map(|(_, to)| (&[][..], lookup(from, *to, subtable))));
+    let script_offset = 10;
+    let feature_offset = script_offset + u16::try_from(script_list.len()).unwrap();
+    let lookup_offset = feature_offset + u16::try_from(feature_list.len()).unwrap();
+    [u16s(&[1, 0, script_offset, feature_offset, lookup_offset]), script_list, feature_list, lookup_list].concat()
+}
+
+/// An OpenType list of `tables`: their count, each one's tag (a lookup has none) and offset, then
+/// the tables.
+fn list<'a>(tables: impl Iterator<Item = (&'a [u8], Vec<u8>)>) -> Vec<u8> {
+    let tables: Vec<_> = tables.collect();
+    let data = 2 + tables.iter().map(|(tag, _)| tag.len() + 2).sum::<usize>();
+    let mut records = u16s(&[u16::try_from(tables.len()).unwrap()]);
+    let mut bodies = Vec::new();
+    for (tag, table) in tables {
+        records.extend(tag);
+        records.extend(u16s(&[u16::try_from(data + bodies.len()).unwrap()]));
+        bodies.extend(table);
     }
-    let scripts = [records, tables].concat();
-    // Feature 0: `feature`, lookup 0. Feature 1: `zero`.
-    let mut features = u16s(&[2]);
-    features.extend(feature);
-    features.extend(u16s(&[14]));
-    features.extend(b"zero");
-    features.extend(u16s(&[20, 0, 1, 0, 0, 0]));
+    [records, bodies].concat()
+}
+
+/// A lookup that replaces glyph `from` with glyph `to`.
+fn lookup(from: u16, to: u16, subtable: Subtable) -> Vec<u8> {
     // Coverage of `from` only.
     let coverage = u16s(&[1, 1, from]);
     let single = match subtable {
@@ -101,11 +112,7 @@ fn gsub_listing(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable, scrip
         // Extension format 1: the type it holds, then a 32-bit offset to it.
         Subtable::DeltaInExtension => (7, [u16s(&[1, 1, 0, 8]), single].concat()),
     };
-    let lookups = [u16s(&[1, 4, lookup_type, 0, 1, 8]), body].concat();
-    let script_list = 10u16;
-    let feature_list = script_list + u16::try_from(scripts.len()).unwrap();
-    let lookup_list = feature_list + u16::try_from(features.len()).unwrap();
-    [u16s(&[1, 0, script_list, feature_list, lookup_list]), scripts, features, lookups].concat()
+    [u16s(&[lookup_type, 0, 1, 8]), body].concat()
 }
 
 /// A `cmap` table whose one subtable (Windows Unicode BMP, format 4) maps `character` to `glyph`.
@@ -240,30 +247,31 @@ fn a_face_without_a_vertical_glyph_draws_the_ordinary_one() {
 }
 
 /// A language system may list `vert` only as its required feature (`requiredFeatureIndex`, with
-/// no optional features): its lookups apply too.
+/// no optional features): its lookups apply too, and `kana`'s before `DFLT`'s.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn a_vert_feature_the_language_system_requires_applies() {
-    let (bracket, a) = (glyph('「'), glyph('A'));
-    // Required feature 0, no optional features.
-    let required = with_table(TINY_GLYF, b"GSUB", Some(&gsub_listing(b"vert", bracket, a, Subtable::List, &[(b"DFLT", &[0, 0])])));
+    let (bracket, a, comma) = (glyph('「'), glyph('A'), glyph('、'));
+    // `kana` requires feature 1 and lists no optional features; `DFLT` lists feature 0.
+    let gsub = gsub_listing(bracket, &[(b"vert", comma), (b"vert", a)], Subtable::List, &[(b"DFLT", &[0xFFFF, 1, 0]), (b"kana", &[1, 0])]);
+    let required = with_table(TINY_GLYF, b"GSUB", Some(&gsub));
     assert_eq!(glyphs(&pdf("UniJIS-UCS2-V", "300C"), &required), [u32::from(a)], "the required vert feature applies");
     assert_eq!(glyphs(&pdf("UniJIS-UCS2-H", "300C"), &required), [u32::from(bracket)], "a horizontal CID keeps its glyph");
 }
 
 /// A script that exists but lists no vertical feature does not end the search: when `kana`, the
-/// collection's script, lists another feature only, `DFLT`'s `vert` applies; when `DFLT` lists
-/// none either, the `vert` of any script does.
+/// collection's script, lists a horizontal feature only, `DFLT`'s `vert` applies; when `DFLT`
+/// lists none either, the `vert` of any script does.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn a_script_without_a_vertical_feature_leaves_it_to_the_next() {
-    let (bracket, a) = (glyph('「'), glyph('A'));
-    // Feature 0 is `vert`, feature 1 `zero`.
-    let (vert, zero): (&[u16], &[u16]) = (&[0xFFFF, 1, 0], &[0xFFFF, 1, 1]);
-    let only_dflt: &[(&[u8; 4], &[u16])] = &[(b"DFLT", vert), (b"kana", zero)];
-    let only_another: &[(&[u8; 4], &[u16])] = &[(b"DFLT", zero), (b"kana", zero), (b"latn", vert)];
+    let (bracket, a, comma) = (glyph('「'), glyph('A'), glyph('、'));
+    let (hkna, vert): (&[u16], &[u16]) = (&[0xFFFF, 1, 0], &[0xFFFF, 1, 1]);
+    let only_dflt: &[(&[u8; 4], &[u16])] = &[(b"DFLT", vert), (b"kana", hkna)];
+    let only_another: &[(&[u8; 4], &[u16])] = &[(b"DFLT", hkna), (b"kana", hkna), (b"latn", vert)];
     for (scripts, which) in [(only_dflt, "only DFLT"), (only_another, "only a script other than kana and DFLT")] {
-        let face = with_table(TINY_GLYF, b"GSUB", Some(&gsub_listing(b"vert", bracket, a, Subtable::List, scripts)));
+        let gsub = gsub_listing(bracket, &[(b"hkna", comma), (b"vert", a)], Subtable::List, scripts);
+        let face = with_table(TINY_GLYF, b"GSUB", Some(&gsub));
         assert_eq!(glyphs(&pdf("UniJIS-UCS2-V", "300C"), &face), [u32::from(a)], "{which} lists vert: it applies");
         assert_eq!(glyphs(&pdf("UniJIS-UCS2-H", "300C"), &face), [u32::from(bracket)], "{which} lists vert: a horizontal CID keeps its glyph");
     }
