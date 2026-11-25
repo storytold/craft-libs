@@ -109,8 +109,9 @@ pub fn overflow(ui: &mut Ui, items: &[MenuItem], labels: &MenuLabels) -> Option<
     items_of(&hit, items)
 }
 
-/// Width of a split button's chevron half.
-const CHEVRON_WIDTH: f32 = 24.0;
+/// Width of a split button's chevron half, as a share of the control height, so it follows
+/// density.
+const CHEVRON_WIDTH_PER_HEIGHT: f32 = 0.8;
 
 /// A primary action with a chevron beside it.
 ///
@@ -158,7 +159,8 @@ pub fn split_named(ui: &mut Ui, primary: &str, name: &str, items: &[MenuItem], l
                 .scope(|ui| {
                     ui.spacing_mut().button_padding.x = 0.0;
                     let corner = if backwards { outer } else { inner };
-                    ui.add(egui::Button::new("").min_size(egui::vec2(CHEVRON_WIDTH, 0.0)).corner_radius(corner))
+                    let width = ui.spacing().interact_size.y * CHEVRON_WIDTH_PER_HEIGHT;
+                    ui.add(egui::Button::new("").min_size(egui::vec2(width, 0.0)).corner_radius(corner))
                 })
                 .inner;
             // `chevron` paints 9 points in from the rect's right edge; centre it.
