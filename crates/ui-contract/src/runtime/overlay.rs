@@ -725,7 +725,8 @@ pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
 /// The input hook: keeps the first press of any button that lands outside the top menu family, its anchors and its
 /// parents for the layers' dismissal, and removes the primary ones, so nothing below the menu sees them
 /// (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a right-click on another part closes
-/// the menu and opens that part's menu. Returns whether it removed one.
+/// the menu and opens that part's menu. The record is for the layers open when the press was made: a layer that appears
+/// in this pass was not, and its dismissal reads none of it (`opening`). Returns whether it removed one.
 pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::input::RawInput) -> bool {
     let zone = with_persist(ctx, input.viewport_id, |persist| persist.absorb_zone.clone());
     let Some(zone) = zone else { return false };
@@ -744,7 +745,8 @@ pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::in
     input.events.len() != before
 }
 
-/// The outside press the input hook recorded for the running pass. A tracked input (`Input::Press`).
+/// The outside press the input hook recorded for the running pass, beside the layers open when it was made. A tracked
+/// input (`Input::Press`).
 pub(crate) fn absorbed_press(ctx: &Context) -> Option<Pos2> {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
     absorbed_press_raw(ctx)
