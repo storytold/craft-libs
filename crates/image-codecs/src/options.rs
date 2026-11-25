@@ -251,7 +251,8 @@ pub const TIFF_PYRAMID_MIN: u32 = 64;
 pub struct JpegQuantisationTables {
     /// The luma table (DQT id 0).
     pub luma: [u8; 64],
-    /// The chroma table (DQT id 1); a gray image writes the luma table only.
+    /// The chroma table (DQT id 1); a gray image uses only the luma table, and the writer still
+    /// emits an id-1 chroma DQT that nothing in the file refers to.
     pub chroma: [u8; 64],
 }
 
