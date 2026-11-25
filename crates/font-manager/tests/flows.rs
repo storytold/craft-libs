@@ -61,6 +61,17 @@ fn setup_with(
     runner: Runner,
     fonts: impl Fn(&egui::Context) + 'static,
 ) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
+    setup_seeded(name, settings, runner, fonts, |_| {})
+}
+
+/// [`setup_with`] after `seed` filled the store folder, as families installed by an earlier run.
+fn setup_seeded(
+    name: &str,
+    settings: Settings,
+    runner: Runner,
+    fonts: impl Fn(&egui::Context) + 'static,
+    seed: impl Fn(&std::path::Path),
+) -> (Harness<'static, FontsPanel>, Arc<FakeStore>) {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("flows").join(name);
     let _ = std::fs::remove_dir_all(&root);
     let system = root.join("usr/share/fonts");
@@ -68,6 +79,7 @@ fn setup_with(
     std::fs::write(system.join("Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).unwrap();
     let store_dir = root.join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
+    seed(&store_dir);
     let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
     let catalog = Arc::new(Catalog::new(env).with_font_service(false));
     catalog.rescan();
@@ -246,6 +258,17 @@ fn installs_are_copied_to_the_system_fonts_folder_unless_kept_in_craft_apps() {
     craft_apps_only_switch(&mut h);
     click(&mut h, "Hack");
     assert!(h.query_by_label("Available to all apps").is_some());
+}
+
+#[test]
+fn families_installed_before_os_copies_are_copied_at_start() {
+    let seed = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir.join("Hack")).unwrap();
+        std::fs::write(dir.join("Hack/Hack-Regular.ttf"), epaint_default_fonts::HACK_REGULAR).unwrap();
+    };
+    let (_h, store) = setup_seeded("os-copy-at-start", Settings::default(), Runner::Inline, |_| {}, seed);
+    assert_eq!(store.calls(), [Call::MakeAvailable("Hack".into())]);
+    assert!(store.is_available_to_all("Hack", &[]));
 }
 
 #[test]

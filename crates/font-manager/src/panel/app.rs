@@ -210,6 +210,8 @@ pub struct FontsPanel {
     pub(crate) not_copied: HashMap<String, NotCopied>,
     /// "Keep fonts in Craft apps only" as last read or set.
     pub(crate) craft_apps_only: bool,
+    /// Whether the start-up copy of families installed before OS copies existed was queued.
+    shared_at_start: bool,
     focused: bool,
     pub(crate) folder: Folder,
     /// The download consent as last read, and when.
@@ -299,6 +301,7 @@ impl FontsPanel {
             catalog: options.catalog,
             craft_apps_only: options.installer.craft_apps_only(),
             installer: options.installer,
+            shared_at_start: false,
             catalogue,
             query: Query::default(),
             show: Show::All,
@@ -527,6 +530,7 @@ impl FontsPanel {
         self.skin = Skin { p: self.look.palette(&ctx), look: self.look.clone() };
         self.faces.begin_frame(&ctx);
         self.subsets.begin_frame(&ctx);
+        self.share_installed_at_start(&ctx);
         self.poll_jobs();
         let focused = ctx.input(|i| i.focused);
         if focused && !self.focused {
@@ -633,6 +637,18 @@ impl FontsPanel {
         self.craft_apps_only = on;
         self.notice = None;
         self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::CraftAppsOnly(on));
+    }
+
+    /// Once per start, with the setting off, copies the store families that have no OS copy yet
+    /// (installed before installs copied) through the job that turning the setting off runs.
+    /// Refusals and errors show as for that job.
+    fn share_installed_at_start(&mut self, ctx: &Context) {
+        if std::mem::replace(&mut self.shared_at_start, true) {
+            return;
+        }
+        if self.installer.available_to_all_supported() && !self.installer.craft_apps_only() {
+            self.jobs.start(ctx, Arc::clone(&self.installer), Arc::clone(&self.catalog), Request::CraftAppsOnly(false));
+        }
     }
 
     fn refresh_installed(&mut self) {
