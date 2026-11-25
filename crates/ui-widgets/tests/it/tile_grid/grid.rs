@@ -318,3 +318,33 @@ fn an_insert_gap_at_rest_is_muted() {
     let hovered = strokes(&fixture.frame_shapes());
     assert!(hovered.iter().any(|color| !rest.contains(color)), "the gap under the pointer is drawn in another colour: {rest:?} / {hovered:?}");
 }
+
+/// A grid with a card size in points lays its cards out at that picture side, plus what a tile adds around it.
+#[craft_ui::testing::trial]
+fn a_card_size_in_points_sets_the_picture_side() {
+    let side = |card_size: Option<f32>| {
+        let shown = Shown::shared();
+        let held = shown.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let keys: Vec<usize> = (0..4).collect();
+            let source = keyed(&keys, |key: &usize| *key);
+            held.borrow_mut().tiles.clear();
+            let grid = TileGrid::new("Presets").card();
+            let grid = match card_size {
+                Some(points) => grid.card_size(points),
+                None => grid,
+            };
+            let _ = grid.show_items(ui, &source, &mut |key, icx| {
+                held.borrow_mut().tiles.insert(*key, icx.rect);
+                Tile::new("Card")
+            });
+        });
+        fixture.room(Vec2::new(600.0, 400.0));
+        fixture.settle();
+        let tile = shown.borrow().tile(0);
+        tile.width()
+    };
+    let (default, small, large) = (side(None), side(Some(60.0)), side(Some(120.0)));
+    assert!((large - small - 60.0).abs() < 1.0, "the cards differ by the difference of their sizes: {small} and {large}");
+    assert!(small < default, "a card of 60 points is smaller than the thumbnail card: {small} against {default}");
+}

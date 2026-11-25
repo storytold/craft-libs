@@ -1239,3 +1239,25 @@ fn a_tab_dropped_on_another_strip_lands_there_even_with_no_tabs() {
         assert_eq!(over, Some(wanted), "the tab dropped on {wanted:?} lands in the other strip: {:?}", seen.borrow());
     }
 }
+
+/// Large text tabs (a dialog's categories) set their labels in the strong body type and stand further apart than text tabs
+/// of the strip's usual size.
+#[trial]
+fn large_text_tabs_have_bigger_labels_and_a_wider_gap() {
+    let strip = |large: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let keys = [0_usize, 1];
+            let source = keyed(&keys, |key: &usize| *key);
+            let strip = TabStrip::new("Categories").kind(TabKind::Text).shown(0);
+            let strip = if large { strip.large() } else { strip };
+            let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+        });
+        fixture.settle();
+        let (first, second) = (tab_rect(fixture.tree(), "One"), tab_rect(fixture.tree(), "Two"));
+        let label = fixture.texts().iter().find(|line| line.text == "One").expect("the label is painted").rect;
+        (second.left() - first.right(), label.width())
+    };
+    let ((gap, width), (large_gap, large_width)) = (strip(false), strip(true));
+    assert!(large_gap > gap, "the large tabs stand further apart: {large_gap} against {gap}");
+    assert!(large_width > width, "the large labels are set larger or stronger: {large_width} against {width}");
+}

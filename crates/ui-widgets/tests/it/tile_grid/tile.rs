@@ -151,6 +151,29 @@ fn a_selected_band_tile_is_outlined() {
     assert!(edges(true) > edges(false), "selected {} against unselected {}", edges(true), edges(false));
 }
 
+/// A selected card with a pick ring (the New Document presets) is outlined as a whole, over the fill its flat thumbnail marks
+/// a pick with: it paints an edge that the same card unselected, or selected without the ring, does not.
+#[trial]
+fn a_selected_card_with_a_pick_ring_is_outlined() {
+    let edges = |selected: bool, ring: bool| {
+        let mut frames = Frames::new();
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = frames.frame_shapes(|ui| {
+                let tile = Tile::new("Letter").detail("51p0 x 66p0").card().card_text(CardText::Preset).flat_thumbnail().selected(selected);
+                if ring {
+                    tile.pick_ring().show(ui);
+                } else {
+                    tile.show(ui);
+                }
+            });
+        }
+        shapes.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.stroke.width > 0.0 && rect.stroke.color.a() > 0)).count()
+    };
+    assert!(edges(true, true) > edges(true, false), "selected with the ring {} against without it {}", edges(true, true), edges(true, false));
+    assert!(edges(true, true) > edges(false, true), "selected {} against unselected {}", edges(true, true), edges(false, true));
+}
+
 /// A card of a preset centres its name; a card of a file sets it at the reading start.
 #[trial]
 fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
@@ -170,4 +193,21 @@ fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
     assert!((name.center().x - tile.center().x).abs() <= 1.0, "a preset's name is centred: {name:?} in {tile:?}");
     let (tile, name) = name_in(CardText::File);
     assert!(name.left() - tile.left() < tile.width() / 4.0, "a file's name starts at the tile's start edge: {name:?} in {tile:?}");
+}
+
+/// A preset card's name is as strong as a file card's, as large as the strong body type sets it.
+#[trial]
+fn a_preset_cards_name_is_strong() {
+    let width = |text: CardText| {
+        let mut frames = Frames::new();
+        for _ in 0..3 {
+            frames.frame(Vec::new(), |ui| {
+                let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+                in_region(ui, region, |ui| Tile::new("Letter Poster").card().card_text(text).detail("Just now").show(ui).response.rect);
+            });
+        }
+        frames.texts().iter().find(|line| line.text == "Letter Poster").expect("the name is painted").rect.width()
+    };
+    let (preset, file) = (width(CardText::Preset), width(CardText::File));
+    assert!((preset - file).abs() < 0.5, "a preset's name is set as strongly as a file's: {preset} against {file}");
 }

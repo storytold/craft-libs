@@ -44,7 +44,7 @@ pub enum CardText {
     /// reading start.
     #[default]
     File,
-    /// For cards of presets (New Document): a regular name and the detail under it, both centred.
+    /// For cards of presets (New Document): a strong name and the detail under it, both centred.
     Preset,
 }
 
@@ -53,7 +53,7 @@ impl CardText {
     pub(super) fn name_role(self) -> craft_theme::TypeRole {
         match self {
             CardText::File => craft_theme::TypeRole::BodyStrong,
-            CardText::Preset => craft_theme::TypeRole::Body,
+            CardText::Preset => craft_theme::TypeRole::BodyStrong,
         }
     }
 
