@@ -138,6 +138,8 @@ pub enum Pad {
     Control,
     /// `space.pad.regular`.
     Regular,
+    /// `space.pad.dialog`: a dialog frame.
+    Dialog,
     /// `space.pad.roomy`.
     Roomy,
     /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a
@@ -333,6 +335,20 @@ pub enum QuietHeader {
     /// The header heads the body: its flow starts as after a rule, so the first section under the title draws no rule
     /// above it and sections after it keep theirs. Production VectorCraft's kind line over its inspector's sections.
     Heads,
+}
+
+/// The cursor over a header's move band ([`DragBand::Move`]). An app sets it once at its root (`RootEnv::values`); the
+/// default is `Hand`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MoveBandCursor {
+    /// The open hand, and the closed hand while the band is dragged.
+    #[default]
+    Hand,
+    /// The arrow, as an OS title bar shows, also over the click-only controls on the band (menu titles, buttons):
+    /// production VectorCraft's title bar and panel headers.
+    Arrow,
 }
 
 /// A header region, filled by `Container::header`.
@@ -779,6 +795,18 @@ pub enum Gap {
     CardRow,
     /// `space.gap.inline`: between groups of tools in a rail.
     Inline,
+    /// `size.page.gap.title`: between a page's title and its subtitle.
+    PageTitle,
+    /// `size.page.gap.lead`: between a page's title and subtitle and the actions under them.
+    PageLead,
+    /// `size.page.gap.actions`: between a page's New and Open.
+    PageActions,
+    /// `size.page.gap.section`: between the sections of a page's column.
+    PageSection,
+    /// `size.page.gap.heading`: between a page section's heading and its body.
+    PageHeading,
+    /// `size.page.gap.link`: between a page's links.
+    PageLink,
 }
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows

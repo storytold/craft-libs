@@ -1199,6 +1199,10 @@ fn run_pass(
             Label::from(words.page_of.fill(&[("page", label.as_str()), ("count", total.as_str())]))
         };
         let bars = if count > 0 { bars.tip(&tip) } else { bars };
+        // Pages that fit the view's width can't scroll sideways, so there is no horizontal bar. The layout drawn
+        // decides, as the bars measure it.
+        let (x_lo, x_hi) = offset_range(drawn.doc.x0, drawn.doc.x1, vw);
+        let bars = if x_lo >= x_hi { bars.vertical_only() } else { bars };
         // Full screen's edge-to-edge view (`PageView::fill_screen`) has no scroll bars: nothing is drawn and nothing takes a press
         // along the window's edges.
         let bar_moved = if build.fill_screen {
