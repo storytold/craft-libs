@@ -529,7 +529,7 @@ const TEXT: PartKey = PartKey::new("text");
 const CHEVRON: PartKey = PartKey::new("chevron");
 /// The mark before the chevron of a shown font that is not installed; its tooltip is the note.
 const WARNING: PartKey = PartKey::new("missing");
-const WARNING_ICON: &str = "warning";
+const WARNING_ICON: &str = "warning_filled";
 /// The popup the chevron and Alt+Down toggle.
 const POPUP: &str = "list";
 /// The Show Similar part at the end of a family row, in the `Chips` layout.
@@ -735,11 +735,17 @@ pub struct FontPicker<'a> {
 #[derive(Clone, Copy, Default)]
 struct StopBuilds(u64);
 
+/// Where the stop-build count lives in the context's memory.
+#[cfg(feature = "screen-testing")]
+fn stop_builds_id() -> egui::Id {
+    craft_ui::runtime::memory::global("font_picker_stop_builds", ())
+}
+
 /// How many times a closed [`FontPicker`] built its stop list on `ctx`.
 #[doc(hidden)]
 #[cfg(feature = "screen-testing")]
 pub fn stop_builds(ctx: &egui::Context) -> u64 {
-    ctx.data(|data| data.get_temp::<StopBuilds>(egui::Id::unique("font_picker_stop_builds")).unwrap_or_default().0)
+    craft_ui::runtime::memory::with_session::<StopBuilds, _>(ctx, stop_builds_id(), |builds| builds.0)
 }
 
 impl<'a> FontPicker<'a> {
@@ -819,9 +825,7 @@ impl<'a> FontPicker<'a> {
     /// families in the list's narrowed order. A notice takes no step.
     fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<Stop> {
         #[cfg(feature = "screen-testing")]
-        cx.response.ctx.data_mut(|data| {
-            data.get_temp_mut_or_default::<StopBuilds>(egui::Id::unique("font_picker_stop_builds")).0 += 1;
-        });
+        craft_ui::runtime::memory::with_session::<StopBuilds, _>(&cx.response.ctx, stop_builds_id(), |builds| builds.0 += 1);
         let folder = cx.env.folder();
         let host = rank::host_rows(self.host, "", &folder)
             .into_iter()

@@ -1,6 +1,6 @@
 //! Stories of the menu bar, the edit menu and the panel menu.
 
-use super::{MenuBar, MenuHelp, MenuTitle, MenuTitlePad};
+use super::{MenuBar, MenuHelp, MenuTitle, MenuTitleLook, MenuTitlePad};
 use crate::buttons::{IconButton, PopupMark};
 use crate::contract::{Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
@@ -97,6 +97,21 @@ fn menu_bar_close_titles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         ui,
         |overrides| {
             overrides.values.set(MenuTitlePad::Control);
+        },
+        |ui| MenuBar::new("Main menu", titles()).show(ui),
+    )
+    .into()
+}
+
+/// Titles that stand as bare push buttons (`MenuTitleLook::Button`), a push button high with its corners and the tight
+/// gap beside the text, as egui's menu bar draws them; the open File menu's title shows the hover tint.
+#[story(MenuBar<'static>, covers = [], drive = Drive::Custom(open_file))]
+fn menu_bar_button_titles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(MenuTitleLook::Button);
+            overrides.values.set(CommandHighlight::Hover);
         },
         |ui| MenuBar::new("Main menu", titles()).show(ui),
     )

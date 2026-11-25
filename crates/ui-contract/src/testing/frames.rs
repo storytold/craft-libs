@@ -201,6 +201,12 @@ impl Frames {
         passes
     }
 
+    /// One frame with `events`, as [`frame`](Self::frame); returns whether the frame sent a window a close command.
+    pub fn frame_closing(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
+        set_input(&self.ctx, self.input());
+        self.run(egui::ViewportId::ROOT, events, ui)
+    }
+
     /// One frame with no `set_input`, as an app that never calls it would drive it: the root values and the
     /// interface scale stay as they were. Returns whether the frame sent a close command.
     pub fn frame_without_input(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {

@@ -122,6 +122,28 @@ pub enum NavCommand {
     FocusMenuBar,
 }
 
+/// The `window` command that quits the app (egui's own quit shortcut, which the runtime clears at install, had the same
+/// default). The runtime runs it: it asks the root window to close through the window's close path
+/// (`WindowAction::Close`), so the app's close decision (`embed::logic`) asks about unsaved work as it does for the
+/// window's close button. It fires whatever is open; under an app-modal layer the close path refuses the close and
+/// brings the modal forward. Its default chord, like the window shortcuts', yields to another command that binds the
+/// same chord; an app that reads its quit key from egui itself unbinds it in its overrides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
+#[command(prefix = "window")]
+#[non_exhaustive]
+pub enum QuitCommand {
+    /// Quit the app.
+    #[command(label = "Quit", default = "Cmd+Q", modal = "always")]
+    Quit,
+}
+
+/// Whether `command` is a library command whose default chords yield to another command that binds the same chord:
+/// the window shortcuts and Quit. An app's binding beats the framework's default.
+pub(crate) fn yields_default(command: &CommandRef) -> bool {
+    use super::CommandSet as _;
+    WindowShortcut::of(command).is_some() || QuitCommand::from_ref(command).is_some()
+}
+
 /// A key the window owns before any component: a chrome toggle (Tab), a pane move (F6) or the menu bar's focus (F10),
 /// as the commands of `ChromeCommand` and `NavCommand` are bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -315,6 +315,10 @@ pub(crate) struct Persist {
     held_open: IdSet,
     /// The root frame and pass each shown layer first ran its body in; gone with the layer's last entry.
     appeared: IdMap<(u64, u64)>,
+    /// The roots whose asked raise ran in a pass where a floating window (re)appeared: egui raises every layer that
+    /// shows again, and its area order keeps the old order among the layers raised in one pass, so the raise is asked
+    /// again in the next pass.
+    raise_again: Vec<Id>,
 }
 
 /// The closes queued and not yet taken, each with the root frame that queued it and whether it is carried: a carried
@@ -501,6 +505,11 @@ pub fn entry(ctx: &Context, id: Id) -> Option<OpenEntry> {
     with_pass(ctx, |pass| pass.last.iter().find(|entry| entry.id == id).cloned())
 }
 
+/// The actual egui layer registered for `id` in this pass, never an old or exiting entry or an OS-window placeholder.
+pub(crate) fn current_egui_layer(ctx: &Context, id: Id) -> Option<Layer> {
+    with_pass(ctx, |pass| pass.current.iter().find(|entry| entry.id == id && !entry.exiting && !entry.window).map(|entry| entry.layer))
+}
+
 /// The side of its anchor the layer `id` was placed on in this pass, once its host placed it by a known size.
 pub(crate) fn placed_side(ctx: &Context, id: Id) -> Option<Side> {
     with_pass(ctx, |pass| pass.sides.iter().rev().find(|(layer, _)| *layer == id).map(|(_, side)| *side))
@@ -659,7 +668,8 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
 }
 
 /// Brings the family of the open layer `id` in front of the other families of its class at the end of this pass, as a
-/// press on it does.
+/// press on it does: a floating window goes to the top of egui's area order, which it shares with the app's own egui
+/// windows.
 pub fn raise(ctx: &Context, id: Id) {
     with_pass(ctx, |pass| pass.raise.push(id));
 }
@@ -859,15 +869,17 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
-/// The end hook: raises the families that appeared or were pressed, hands egui the whole order, and records the
-/// open-modal fact.
+/// The end hook: raises the families that appeared, were pressed or were asked to (`raise`), hands egui the order of
+/// every layer above the floating windows (which keep egui's own area order, where an asked raise moves them to the
+/// top), and records the open-modal fact.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (current, last_ids, raise) =
         with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>(), pass.raise.clone()));
     let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
     let now = pass::root_frame_nr(ctx);
-    let order = with_persist(ctx, viewport, |persist| {
+    let (order, to_top, floats, asked) = with_persist(ctx, viewport, |persist| {
+        let raise: Vec<Id> = std::mem::take(&mut persist.raise_again).into_iter().chain(raise).collect();
         let stamp = |id: Id, persist: &mut Persist| {
             persist.counter += 1;
             persist.raised.insert(id, persist.counter);
@@ -883,6 +895,7 @@ pub(crate) fn end_pass(ctx: &Context) {
                 stamp(*root, persist);
             }
         }
+        let mut asked: Vec<Id> = Vec::new();
         for id in raise {
             let mut at = current.iter().find(|entry| entry.id == id);
             while let Some(parent) = at.and_then(|entry| entry.parent).and_then(|parent| current.iter().find(|other| other.id == parent)) {
@@ -890,6 +903,7 @@ pub(crate) fn end_pass(ctx: &Context) {
             }
             if let Some(root) = at {
                 stamp(root.id, persist);
+                asked.push(root.id);
             }
         }
         persist.raised.retain(|id, _| roots.contains(id));
@@ -906,12 +920,28 @@ pub(crate) fn end_pass(ctx: &Context) {
         }
         let families = families(&current, &persist.raised);
         let mut order: Vec<Layer> = Vec::new();
+        let mut listed: Vec<Id> = Vec::new();
+        let mut to_top: Vec<Layer> = Vec::new();
+        let mut floats: Vec<Layer> = Vec::new();
         persist.stack.clear();
         for members in &families {
             for member in members {
-                if !member.window {
+                // A floating window or panel (`Rank::Window`) is left to egui's own area order, which raises a layer
+                // when it first shows and when it is pressed: the app's own egui windows stack with it in that one
+                // order, so a dialog the app opens later shows above it. Listed layers would go above every unlisted
+                // layer of their egui order, so a float opened from a listed layer (a panel floated from a full-window
+                // container) is listed too, above its parent. An OS window has no egui layer here.
+                let over_listed = member.parent.is_some_and(|parent| listed.contains(&parent));
+                if !member.window && (member.rank != Rank::Window || over_listed) {
                     order.extend(member.cover);
                     order.push(member.layer);
+                    listed.push(member.id);
+                } else if !member.window {
+                    floats.push(member.layer);
+                    if members.first().is_some_and(|root| asked.contains(&root.id)) {
+                        // An asked raise of a layer left to egui's area order raises it there, as a press on it does.
+                        to_top.push(member.layer);
+                    }
                 }
                 persist.stack.push(member.id);
             }
@@ -938,9 +968,15 @@ pub(crate) fn end_pass(ctx: &Context) {
             .map(|(_, members)| {
                 members.iter().flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied())).collect()
             });
-        order
+        (order, to_top, floats, asked)
     });
     areas::set_layer_order(ctx, &order);
+    for layer in &to_top {
+        areas::move_to_top(ctx, *layer);
+    }
+    if !to_top.is_empty() && floats.iter().any(|layer| !areas::visible_last_frame(ctx, *layer)) {
+        with_persist(ctx, viewport, |persist| persist.raise_again = asked);
+    }
     // An owner takes a close in the frame after the request at the latest; one nobody took is for a layer that is not shown.
     pass_state::with::<Closes, _>(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
     let top_modal = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
@@ -1027,23 +1063,29 @@ pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
     (root.is_some() || modal_elsewhere(ctx, viewport), root)
 }
 
-/// The live viewports with a modal layer open as of their last finished pass, each with its place in the modal stack
-/// (`Persist::modal`).
+/// The live viewports with a modal open, each with its place in the modal stack: a modal layer as of their last
+/// finished pass (`Persist::modal`), or the app's own egui modal (`FrameInput::app_modal`), which blocks the app's other
+/// windows as a modal layer does. With both, the one that opened later is the window's top modal.
 fn modal_viewports(ctx: &Context) -> impl Iterator<Item = (ViewportId, u64)> + '_ {
-    pass::live_viewports(ctx).into_iter().filter_map(|viewport| with_persist(ctx, viewport, |persist| persist.modal).map(|opened| (viewport, opened)))
+    let app_modal = crate::runtime::frame::app_modal(ctx);
+    pass::live_viewports(ctx).into_iter().filter_map(move |viewport| {
+        let layer = with_persist(ctx, viewport, |persist| persist.modal);
+        let app = app_modal.filter(|(shown, _)| *shown == viewport).map(|(_, since)| since);
+        layer.max(app).map(|opened| (viewport, opened))
+    })
 }
 
-/// The viewport whose modal layer blocks `viewport`: of the other viewports whose top modal opened in a later frame
-/// than `viewport`'s own (any, when it has none), the one that opened last, the window a blocked press raises.
+/// The viewport whose modal blocks `viewport`: of the other viewports whose top modal opened in a later frame than
+/// `viewport`'s own (any, when it has none), the one that opened last, the window a blocked press raises.
 pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<ViewportId> {
-    let own = with_persist(ctx, viewport, |persist| persist.modal);
+    let own = modal_viewports(ctx).find(|(shown, _)| *shown == viewport).map(|(_, opened)| opened);
     modal_viewports(ctx)
         .filter(|(other, opened)| *other != viewport && own.is_none_or(|own| *opened > own))
         .max_by_key(|(_, opened)| *opened)
         .map(|(other, _)| other)
 }
 
-/// The viewport at the top of the modal stack: the window that blocks the app's other windows.
+/// The viewport at the top of the modal stack (`modal_viewports`): the window that blocks the app's other windows.
 pub(crate) fn app_modal_viewport(ctx: &Context) -> Option<ViewportId> {
     modal_viewports(ctx).max_by_key(|(_, opened)| *opened).map(|(viewport, _)| viewport)
 }

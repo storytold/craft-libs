@@ -78,12 +78,14 @@ pub struct PressStart {
     pub time: f64,
     /// 1 for a single press, 2 for a double press, and so on.
     pub clicks: u32,
+    /// The press went down on another target, which handed it to this one ([`PressMachine::take_over`]).
+    pub handed: bool,
 }
 
 impl PressStart {
     /// A press of `button` at `origin`.
     pub const fn new(origin: Pos2, button: PointerButton, time: f64, clicks: u32) -> Self {
-        PressStart { origin, button, time, clicks }
+        PressStart { origin, button, time, clicks, handed: false }
     }
 }
 
@@ -629,8 +631,9 @@ impl<T: Copy> PressMachine<T> {
     }
 
     /// Takes over a press whose button is down and went down elsewhere, as a drag of `target` from `start`: the next
-    /// pass reports `DragStart`, and later ones the press's own `Drag`, `Release` or `Cancel` from their input. A
-    /// press this machine holds already stays as it is.
+    /// pass reports `DragStart`, and later ones the press's own `Drag`, `Release` or `Cancel` from their input, each
+    /// with a start that says it was handed over ([`PressStart::handed`]). A press this machine holds already stays as
+    /// it is.
     // PLAN: the sheet's Files table has no row for this file; the handover of a held press (decision q346) needs the
     // machine to open a press that did not begin on it, which only the machine can build.
     pub fn take_over(&mut self, target: T, sense: Sense, start: PressStart) {
@@ -640,7 +643,7 @@ impl<T: Copy> PressMachine<T> {
         self.open = Some(Open {
             target,
             sense: sense - Sense::CLICK,
-            start,
+            start: PressStart { handed: true, ..start },
             dragging: true,
             abandoned: false,
             left: false,

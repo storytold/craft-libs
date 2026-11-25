@@ -1,6 +1,9 @@
 //! A frame driver for trials with child viewports: the context opens OS viewports (not embedded), and a renderer
 //! like eframe's runs each child's pass nested inside its parent's UI closure, with events and window facts the trial
-//! gives it. As an integration does, the window gets what changed in its builder as commands before the pass.
+//! gives it. As an integration does, the window gets what changed in its builder as commands before the pass. The
+//! windows share one texture store, as eframe's renderer: each pass's texture changes reach it when the window paints
+//! (a child as soon as its pass ends, the root after its run), and a change to a texture the store has not allocated
+//! panics, as egui-wgpu's renderer does.
 
 use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
@@ -11,8 +14,12 @@ use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::windows::{FullOutput, RawInput};
-use egui::{Context, Event, HoveredFile, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{
+    Context, Event, HoveredFile, Modifiers, Pos2, Rect, TextureId, TexturesDelta, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId,
+    ViewportInfo,
+};
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const ROOT_SIZE: Vec2 = Vec2::new(800.0, 600.0);
@@ -46,6 +53,30 @@ thread_local! {
     /// Each child's builder as its window has it: a later builder patches it, and what changed goes to the window as
     /// commands, as an integration sends them.
     static BUILDERS: RefCell<Vec<(ViewportId, ViewportBuilder)>> = const { RefCell::new(Vec::new()) };
+    /// The textures the shared renderer has allocated.
+    static TEXTURES: RefCell<HashSet<TextureId>> = RefCell::new(HashSet::new());
+}
+
+/// Paints `viewport`'s texture changes into the shared store, in order.
+fn paint_textures(viewport: ViewportId, delta: &mut TexturesDelta) {
+    TEXTURES.with(|textures| {
+        let mut textures = textures.borrow_mut();
+        for (id, images) in delta.set.drain() {
+            for image in images {
+                if image.is_whole() {
+                    textures.insert(id);
+                } else {
+                    assert!(
+                        textures.contains(&id),
+                        "{viewport:?} updates {id:?}, which the renderer has not allocated yet: an earlier change to it has not reached the renderer"
+                    );
+                }
+            }
+        }
+        for id in delta.free.drain() {
+            textures.remove(&id);
+        }
+    });
 }
 
 /// Seconds between two frames.
@@ -204,7 +235,7 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     input.viewports = all_viewports();
     input.viewports.insert(viewport.ids.this, info);
     let mut output = ctx.run_ui(input, |ui| callback(ui));
-    output.textures_delta.clear();
+    paint_textures(viewport.ids.this, &mut output.textures_delta);
     keep_commands(&output);
     keep_tree(&mut output, viewport.ids.this);
 }
@@ -286,6 +317,7 @@ pub struct Windows {
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
     root: RefCell<RootEnv>,
+    app_modal: Cell<Option<ViewportId>>,
     window_input: Cell<WindowInput>,
     commands: RefCell<CommandInput>,
 }
@@ -316,11 +348,13 @@ impl Windows {
         CHILDREN.with(|children| children.borrow_mut().clear());
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
+        TEXTURES.with(|textures| textures.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
         Windows {
             ctx,
             root_info: RefCell::new(ViewportInfo::default()),
             root: RefCell::new(RootEnv::default()),
+            app_modal: Cell::new(None),
             window_input: Cell::new(WindowInput::Live),
             commands: RefCell::new(CommandInput::new()),
         }
@@ -340,6 +374,11 @@ impl Windows {
     /// The modifiers held in the child's window, which its passes report from now on.
     pub fn child_modifiers(&self, held: Modifiers) {
         CHILD_MODIFIERS.with(|kept| kept.set(held));
+    }
+
+    /// The window in which the app's own egui code shows a modal (`FrameInput::app_modal`), from the next frame on.
+    pub fn app_modal(&self, viewport: Option<ViewportId>) {
+        self.app_modal.set(viewport);
     }
 
     /// The window-input policy every following frame's input gives, as a host's `FrameInput::window_input` does.
@@ -392,7 +431,10 @@ impl Windows {
         SHAPES.with(|kept| kept.borrow_mut().clear());
         set_input(
             &self.ctx,
-            FrameInput::new(self.root.borrow().clone()).window_input(self.window_input.get()).commands(self.commands.borrow().clone()),
+            FrameInput::new(self.root.borrow().clone())
+                .app_modal(self.app_modal.get())
+                .window_input(self.window_input.get())
+                .commands(self.commands.borrow().clone()),
         );
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
@@ -415,7 +457,7 @@ impl Windows {
         CHILDREN.with(|children| children.borrow_mut().retain(shown));
         OWN_INFO.with(|own| own.borrow_mut().retain(|(id, _)| shown(id)));
         BUILDERS.with(|kept| kept.borrow_mut().retain(|(id, _)| shown(id)));
-        output.textures_delta.clear();
+        paint_textures(ViewportId::ROOT, &mut output.textures_delta);
         keep_commands(&output);
         keep_tree(&mut output, ViewportId::ROOT);
         let builders = output.viewport_output.iter().map(|(id, viewport)| (*id, viewport.builder.clone())).collect();

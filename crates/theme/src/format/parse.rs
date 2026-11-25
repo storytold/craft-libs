@@ -5,13 +5,14 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use super::{
-    EDGE, ErrorKind, FormatError, FormatErrors, GRIP_MARK, GRIP_NUMBER, ICON_PACK, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, SCHEMA, SCHEMA_VERSION,
+    EDGE, ErrorKind, FormatError, FormatErrors, GRIP_MARK, ICON_PACK, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, SCHEMA, SCHEMA_VERSION, SHAPE_NUMBER,
     ThemeFile, WELLS,
 };
 use crate::color::Rgba;
 use crate::scale::Radius;
 use crate::theme::{
-    AppOverrides, ContrastIntent, EdgeSeed, GripSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
+    AppOverrides, ContrastIntent, EdgeSeed, GripSeed, LocatorSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed,
+    ThemeDef, Variants,
 };
 use crate::tokens::{ColorToken, GripMark, KnobShape, RadiusSet, Status, WellShape};
 use crate::{AppId, IconPackId, ThemeId};
@@ -271,8 +272,13 @@ impl Parser {
                 Some(g) => p.at("grip", |p| p.grip(g)).map(Some),
                 None => Some(None),
             };
+            let locator = match p.optional_object(shape, "locator") {
+                Some(l) => p.at("locator", |p| p.locator(l)).map(Some),
+                None => Some(None),
+            };
             Some(Some(ShapeSeed {
                 grip: grip?,
+                locator: locator?,
                 radius: radius?,
                 radius_offset: radius_offset?,
                 button_radius: button_radius?,
@@ -324,27 +330,36 @@ impl Parser {
                 None
             }
         });
-        let number = |p: &mut Self, key: &str, min: f32, max: f32, whole: bool| -> Option<Option<f32>> {
-            p.at(key, |p| match g.get(key) {
-                None | Some(Value::Null) => Some(None),
-                Some(v) => match v.as_f64().filter(|x| x.is_finite() && (!whole || x.fract() == 0.0)) {
-                    Some(x) if (f64::from(min)..=f64::from(max)).contains(&x) => Some(Some(x as f32)),
-                    Some(_) => {
-                        p.fail(ErrorKind::OutOfRange { min, max });
-                        None
-                    }
-                    None => {
-                        p.fail(ErrorKind::BadValue { expected: GRIP_NUMBER });
-                        None
-                    }
-                },
-            })
-        };
-        let count = number(self, "count", 1.0, 32.0, true);
-        let length = number(self, "length", 0.5, 32.0, false);
-        let width = number(self, "width", 0.5, 8.0, false);
-        let gap = number(self, "gap", 0.5, 16.0, false);
+        let count = self.optional_number(g, "count", (1.0, 32.0), true);
+        let length = self.optional_number(g, "length", (0.5, 32.0), false);
+        let width = self.optional_number(g, "width", (0.5, 8.0), false);
+        let gap = self.optional_number(g, "gap", (0.5, 16.0), false);
         Some(GripSeed { mark: mark?, count: count?.map(|c| c as u16), length: length?, width: width?, gap: gap? })
+    }
+
+    /// `shape.locator`: the reference point's squares. Each value is optional.
+    fn locator(&mut self, l: &Map<String, Value>) -> Option<LocatorSeed> {
+        let cell = self.optional_number(l, "cell", (1.0, 32.0), false);
+        let square = self.optional_number(l, "square", (1.0, 16.0), false);
+        Some(LocatorSeed { cell: cell?, square: square? })
+    }
+
+    /// The optional number at `key` of `map`, in `range` and, when `whole`, a whole number.
+    fn optional_number(&mut self, map: &Map<String, Value>, key: &str, (min, max): (f32, f32), whole: bool) -> Option<Option<f32>> {
+        self.at(key, |p| match map.get(key) {
+            None | Some(Value::Null) => Some(None),
+            Some(v) => match v.as_f64().filter(|x| x.is_finite() && (!whole || x.fract() == 0.0)) {
+                Some(x) if (f64::from(min)..=f64::from(max)).contains(&x) => Some(Some(x as f32)),
+                Some(_) => {
+                    p.fail(ErrorKind::OutOfRange { min, max });
+                    None
+                }
+                None => {
+                    p.fail(ErrorKind::BadValue { expected: SHAPE_NUMBER });
+                    None
+                }
+            },
+        })
     }
 
     /// A signed length in logical pixels.

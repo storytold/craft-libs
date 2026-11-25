@@ -2,10 +2,10 @@
 //!
 //! Selection, the lead, the focus ring and the drag ghost belong to the collection that shows the tab; the tab draws
 //! the look the item step gives it and reports what its own parts do. The strip gives the tab a rect: the tab's
-//! measure is its natural width (`Proposal::Min` the room for the first letters of its title), and a narrower rect cuts the label
-//! first, then the detail, and shows the whole text as a tooltip.
+//! measure is its natural width (`Proposal::Min` the room for the first letters of its title beside its icon and close
+//! button), and a narrower rect cuts the label first, then the detail, and shows the whole text as a tooltip.
 
-use super::rules::{CloseSide, PanelTabLook, TabKind, close_side};
+use super::rules::{CloseSide, PanelTabLook, TabCloseLook, TabKind, close_side};
 use super::words::TabWords;
 use std::borrow::Cow;
 
@@ -14,8 +14,8 @@ const MAX_NAME_DIGITS: usize = 22;
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::{MarkerStyle, paint_marker};
 use crate::contract::{
-    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, SetPosition, Styled as _,
-    WordSetCx as _,
+    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition,
+    Styled as _, WordSetCx as _,
 };
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
@@ -136,6 +136,9 @@ pub struct TabStyle {
     /// The pill a panel tab in [`PanelTabLook::Pill`] shows under its label in place of the surface.
     pill: Option<Pill>,
     close_side: CloseSide,
+    /// The close glyph's side and its ink at rest and under the pointer under [`TabCloseLook::Glyph`]; none for the icon
+    /// button.
+    close_glyph: Option<(f32, StyleColor, StyleColor)>,
     sizes: Sizes,
     /// Document tabs in [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking): a name capped at
     /// `MAX_NAME_DIGITS` digits' width, a readable prefix at their least, and the marker dot for a modified tab.
@@ -261,7 +264,7 @@ impl<'a> Tab<'a> {
 
     /// Whether the tab can be closed.
     fn can_close(&self) -> bool {
-        self.closable.unwrap_or(self.kind.shows_close())
+        self.closable.unwrap_or(self.kind.closes_by_default())
     }
 
     /// Whether the tab shows a close button.
@@ -317,7 +320,8 @@ impl<'a> Tab<'a> {
         if self.shows_close() {
             let at_start = style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
             let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
-            close = Some(slot);
+            // The glyph takes clicks in a square of the button's width, not the content's whole height.
+            close = Some(if style.close_glyph.is_some() { Rect::from_center_size(slot.center(), Vec2::splat(sizes.close_box)) } else { slot });
             flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
         }
         flow = flow.take_end(sizes.tail).1;
@@ -421,6 +425,9 @@ impl Component for Tab<'_> {
             Stateful::new(c(clear)).off(States::new(c(clear), hover, c(clear), c(clear))).on(States::new(c(clear), c(clear), c(clear), c(clear)))
         } else if text_only {
             Stateful::new(c(clear))
+        } else if key.kind == TabKind::Panel && key.panel_look == PanelTabLook::Block {
+            let control = c(colors.surface.control);
+            Stateful::new(c(clear)).off(States::new(c(clear), hover, hover, c(clear))).on(States::new(control, control, control, control))
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
@@ -473,6 +480,7 @@ impl Component for Tab<'_> {
             divider: key.kind.trailing_divider(),
             pill,
             close_side: close_side(cx.os, cx.direction.is_rtl()),
+            close_glyph: (cx.env::<TabCloseLook>() == TabCloseLook::Glyph).then(|| (size.icon.sm, c(colors.text.muted), c(colors.text.normal))),
             sizes,
             shrinking: key.kind.shrinks_in(cx.env::<super::DocumentTabLook>()),
             strong: key.kind == TabKind::Document && cx.env::<super::DocumentTabLook>() == super::DocumentTabLook::Semibold,
@@ -486,23 +494,28 @@ impl Component for Tab<'_> {
         let sizes = &cx.style.sizes;
         let shown = self.shown_label(cx.style, cx.resolved.label);
         let label: &str = &shown;
+        // What `place` takes before the label: the tail, the icon and the close button, each with its gap.
+        let mut parts = sizes.tail;
+        if self.icon.is_some() {
+            parts += sizes.icon + sizes.gap;
+        }
+        if self.shows_close() {
+            parts += sizes.gap + sizes.close_box;
+        }
         // The first letters of the title: the least a shrunk tab shows.
         let letters = || {
             let first: String = label.chars().take(MIN_LETTERS).collect();
             cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x
         };
         if cx.proposal == Proposal::Min && !cx.style.shrinking {
-            return Vec2::new(letters(), sizes.label_line);
+            return Vec2::new(parts + letters(), sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
         let label_width = width(&self.label_run(cx.style, label));
         // A document tab never takes more than a name of `MAX_NAME_DIGITS` digits' width, as production's tabs cut a long
         // name short so the other tabs and the Open control keep their room; the label is cut with an ellipsis.
         let capped = if cx.style.shrinking { label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS)))) } else { label_width };
-        let mut natural = sizes.tail + capped;
-        if self.icon.is_some() {
-            natural += sizes.icon + sizes.gap;
-        }
+        let mut natural = parts + capped;
         if let Some(detail) = self.detail_text() {
             natural += sizes.gap + width(&TextRun::new(detail).role(cx.style.detail.role));
         }
@@ -512,14 +525,11 @@ impl Component for Tab<'_> {
         if self.dotted(cx.style) {
             natural += sizes.gap + cx.style.marker;
         }
-        if self.shows_close() {
-            natural += sizes.gap + sizes.close_box;
-        }
         let measured = if cx.proposal == Proposal::Min {
             let end = label.char_indices().nth(12).map_or(label.len(), |(index, _)| index);
             let prefix = label.get(..end).unwrap_or(label);
             let readable = natural - capped + width(&self.label_run(cx.style, prefix));
-            readable.max(letters()).min(natural)
+            readable.max(parts + letters()).min(natural)
         } else {
             natural
         };
@@ -630,7 +640,11 @@ impl Component for Tab<'_> {
             }
             ui.draw().icon(at, icon);
         }
-        if placed.close.is_some() {
+        if let (Some(at), Some((side, rest, hover))) = (placed.close, style.close_glyph) {
+            let mut glyph = IconSpec::from(IconId::new("close"));
+            glyph.color = Some(if cx.hover_pos(CLOSE).is_some() { hover } else { rest });
+            ui.draw().icon(Rect::from_center_size(at.center(), Vec2::splat(side)), &glyph);
+        } else if placed.close.is_some() {
             let words = cx.words::<TabWords>();
             let name = match &self.close_label {
                 Some(name) => name.as_str().to_owned(),

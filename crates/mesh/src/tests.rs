@@ -21,17 +21,19 @@ mod threemf;
 mod triangulate;
 
 /// Every truncation of `good` and two mutations of every byte go through `read`: it may refuse
-/// them, it must not panic, and what it accepts must be a valid scene.
+/// them, it must not panic, and what it accepts must be a valid scene. The gate runs every
+/// divisor-th truncation and byte (`CRAFT_HOSTILE_DIVISOR`); nightly runs every one.
 pub(crate) fn hammer(good: &[u8], read: &dyn Fn(&[u8]) -> Result<Scene>) {
     let check = |bytes: &[u8]| {
         if let Ok(scene) = read(bytes) {
             scene.validate().unwrap();
         }
     };
-    for len in 0..good.len() {
+    let step = craft_testkit::hostile::divisor();
+    for len in (0..good.len()).step_by(step) {
         check(&good[..len]);
     }
-    for i in 0..good.len() {
+    for i in (0..good.len()).step_by(step) {
         let mut b = good.to_vec();
         b[i] ^= 0xA5;
         check(&b);

@@ -71,6 +71,9 @@ pub enum SelectLook {
     /// and padding): at least `size.length.short`, at most a field length, where a longer text elides. It changes
     /// width with the pick (a workspace switcher at the end of an app bar).
     Quiet,
+    /// A field filled with `surface.control`, with no edge until it has focus, as wide as its widest entry:
+    /// VectorCraft 0.24's status bar selects.
+    Filled,
 }
 
 /// The icon of the button in the popup header that opens the header menu.
@@ -260,12 +263,12 @@ fn fits(sizing: Option<Sizing>, in_bar: bool) -> bool {
     }
 }
 
-/// The closed box of a quiet select: the panel surface at the control radius, the hover fill under the pointer, and
-/// an edge only in the focus colour while it has focus.
-fn quiet(cx: &StyleCx<'_>) -> SurfaceLook {
+/// The closed box of a quiet or filled select: `fill` at the well radius, the hover fill under the pointer, and an edge
+/// only in the focus colour while it has focus.
+fn borderless(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> SurfaceLook {
     let colors = &cx.tokens.color;
-    let (panel, hover) = (cx.color(colors.surface.panel), cx.color(colors.state.hover));
-    let fill = Stateful::new(panel).off(States::new(panel, hover, hover, panel));
+    let (rest, hover) = (cx.color(fill), cx.color(colors.state.hover));
+    let fill = Stateful::new(rest).off(States::new(rest, hover, hover, rest));
     // The edge takes the fill's colour in every state, so it shows only with focus.
     let edge = fill.clone().when(Flags::FOCUSED, cx.color(colors.line.focus));
     SurfaceLook::new(fill).radius(cx.surface(SurfaceKind::Well).radius).border(edge, cx.tokens.stroke.thin).border_replaces_edge()
@@ -294,7 +297,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
         let (surface, least_width) = match key.look {
             SelectLook::Field => (cx.dropdown(), 0.0),
-            SelectLook::Quiet => (quiet(cx), cx.tokens.size.length.short),
+            SelectLook::Quiet => (borderless(cx, cx.tokens.color.surface.panel), cx.tokens.size.length.short),
+            SelectLook::Filled => (borderless(cx, cx.tokens.color.surface.control), 0.0),
         };
         SelectStyle {
             surface,
