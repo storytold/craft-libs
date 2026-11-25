@@ -302,8 +302,9 @@ pub(crate) struct Persist {
     stack: Vec<Id>,
     /// A press the modal drop removed, for the window host to raise the modal's window.
     dropped_press: bool,
-    /// The screen rects a press may land in without closing the top menu family: the family and its anchors, without
-    /// the window that hosts the menus (`absorb_zone`). `None` when the top layer does not absorb outside presses.
+    /// The screen rects a press may land in without closing the top menu family: its live layers and their anchors,
+    /// without the window that hosts the menus (`absorb_zone`). `None` when the top layer does not absorb outside
+    /// presses.
     absorb_zone: Option<Vec<Rect>>,
     /// An outside press the input hook recorded for the running pass (and removed, for a primary one).
     outside_press: Option<Pos2>,
@@ -742,8 +743,8 @@ pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
 }
 
 /// The input hook: keeps the first press of any button that lands outside the top menu family, its anchors and its
-/// parents up to the window that hosts it (`absorb_zone`) for the layers' dismissal, and removes the primary ones, so
-/// nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a
+/// parents short of the window that hosts it (`absorb_zone`) for the layers' dismissal, and removes the primary ones,
+/// so nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a
 /// right-click on another part closes the menu and opens that part's menu. The record is for the layers open when the
 /// press was made: a layer that appears in this pass was not, and its dismissal reads none of it (`opening`). Returns
 /// whether it removed one.
@@ -909,15 +910,20 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
 }
 
 /// The screen rects a press may land in without closing `top`, the top layer of the family `members` (parent first),
-/// which absorbs outside presses: the rect, anchor and peers of each member opened inside the window that hosts `top`,
-/// or of every member when no window hosts it. The host is the nearest of `top`'s parents that is a window: a floating
-/// window or panel (`Rank::Window`) or the entry of an OS window mount. The menus show over their window and are not
-/// part of it, so a press elsewhere in the window is outside them, as one beside them in the main window is.
+/// which absorbs outside presses: the rect, anchor and peers of each live member of the family, less the layers that
+/// host it. The host is the nearest of `top`'s parents that is a window, a floating window or panel (`Rank::Window`) or
+/// the entry of an OS window mount, outside every menu of the family; the layers it was opened from host the family
+/// with it. The menus show over their window and are not part of it, so a press elsewhere in the window is outside
+/// them, as one beside them in the main window is. A window opened from a menu (a menu's companion bar) is part of the
+/// menu, not its host. A member fading out takes no input, so a press on it, or on its anchor, is outside: the press
+/// that reopens a menu still fading out closes its open sibling.
 fn absorb_zone(members: &[OpenEntry], top: &OpenEntry) -> Vec<Rect> {
-    let host = parents(members, top).find(|entry| entry.rank == Rank::Window || (entry.window && !entry.popup)).map(|entry| entry.id);
+    let in_menu = |entry: &OpenEntry| parents(members, entry).any(|parent| parent.rank == Rank::Popup);
+    let host = parents(members, top).find(|entry| (entry.rank == Rank::Window || (entry.window && !entry.popup)) && !in_menu(entry));
+    let hosts: Vec<Id> = host.into_iter().flat_map(|host| std::iter::once(host).chain(parents(members, host))).map(|entry| entry.id).collect();
     members
         .iter()
-        .filter(|member| host.is_none_or(|host| parents(members, member).any(|parent| parent.id == host)))
+        .filter(|member| !member.exiting && !hosts.contains(&member.id))
         .flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied()))
         .collect()
 }
