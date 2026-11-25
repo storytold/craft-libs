@@ -719,7 +719,10 @@ fn baseline_shift(device: Affine) -> f64 {
     {
         return 0.0;
     }
-    f.round() - f
+    // Halves round up, not away from zero, as in `snap_minified_image`: a tile's origin moves the
+    // baseline by whole pixels, and only then does it land on the row the whole page puts it on
+    // (-0.5 must go to 0 as 24.5 goes to 25).
+    (f + 0.5).floor() - f
 }
 
 /// `device` with its baseline on a whole pixel row (`baseline_shift`).

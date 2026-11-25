@@ -871,7 +871,8 @@ mod mesh_extent_tests {
 /// must differ.
 #[cfg(test)]
 mod text_baseline_tests {
-    use super::{InterpreterSettings, Pdf, render_pdf};
+    use super::{InterpreterSettings, Pdf, RenderCache, RenderSettings, render, render_pdf};
+    use vello_cpu::color::palette::css::WHITE;
 
     /// A 120 x 40 pt page showing `text` in Helvetica (a standard font, drawn by its substitute)
     /// at 20 pt, through the text matrix `tm` (`a b c d e f`).
@@ -936,6 +937,44 @@ trailer << /Root 1 0 R >>
         assert_ne!(
             pixels("1 0 0 1 10 15.95", "HHxg", 3.0),
             pixels("1 0 0 1 10 15.9", "HHxg", 3.0)
+        );
+    }
+
+    #[test]
+    fn a_tile_puts_a_baseline_half_a_pixel_off_on_the_row_the_whole_page_does() {
+        // A baseline at y = 15.5 pt is 24.5 rows down, so the whole page snaps it to row 25. A tile
+        // starting at row 25 sees it at -0.5: it must snap to the tile's row 0, the same page row,
+        // or the descenders in the tile sit one row higher than on the whole page.
+        let pdf = Pdf::new(page("1 0 0 1 10 15.5", "gjpq")).unwrap();
+        let first = pdf.pages().get(0).expect("the fixture has one page");
+        let cache = RenderCache::new();
+        let settings = InterpreterSettings::default();
+        let at = |y_offset: f32, height: Option<u16>| {
+            let render_settings = RenderSettings {
+                bg_color: WHITE,
+                y_offset,
+                height,
+                ..RenderSettings::default()
+            };
+            render(first, &cache, &settings, &render_settings)
+        };
+        let (whole, tile) = (at(0.0, None), at(25.0, Some(15)));
+        let tile = tile.data_as_u8_slice();
+        assert!(
+            tile.chunks(4).any(|p| p[0] < 128),
+            "no descenders in the tile"
+        );
+        let row = 120 * 4;
+        let moved: Vec<usize> = whole.data_as_u8_slice()[25 * row..]
+            .chunks(row)
+            .zip(tile.chunks(row))
+            .enumerate()
+            .filter(|(_, (page_row, tile_row))| page_row != tile_row)
+            .map(|(y, _)| 25 + y)
+            .collect();
+        assert!(
+            moved.is_empty(),
+            "page rows the tile draws differently: {moved:?}"
         );
     }
 }
