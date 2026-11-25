@@ -871,6 +871,8 @@ pub(crate) fn end_pass(ui: &mut Ui) {
         paint_frame_layers(&ctx);
     }
     toast::end_pass(&ctx);
+    // Every taker of the pass has run, and the layers and the focus are the pass's still.
+    keys::hand_on_cancel(&ctx);
     overlay::end_pass(&ctx);
     focus::end(&ctx);
     let sweeps: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.sweeps.values().copied().collect());
