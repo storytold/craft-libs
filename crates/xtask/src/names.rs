@@ -819,9 +819,10 @@ struct Lexer<'s> {
     marker: Option<&'s str>,
     /// Open delimiters, the line of each, and what the fields or parameters in each are.
     delims: Vec<(char, usize, Fields)>,
-    /// The next `{` or `(` that declares fields or parameters, after a `struct`, `union`, `enum` or
-    /// `fn`.
-    declares: Option<Declares>,
+    /// The declarations after a `struct`, `union`, `enum` or `fn` whose `{` or `(` of fields or
+    /// parameters has not opened yet, innermost last: a declaration in another's header
+    /// (`struct S<T = (fn(),)>`) is pending until its own delimiter opens, and the outer one after.
+    declares: Vec<Declares>,
     test: Option<TestRegion>,
     /// Whether the last token read, past whitespace and comments, is a word.
     after_word: bool,
@@ -845,7 +846,7 @@ fn lex(source: &str, kinds: Literals, marker: Option<&str>) -> Result<Lexed, Syn
         kinds,
         marker,
         delims: Vec::new(),
-        declares: None,
+        declares: Vec::new(),
         test: None,
         after_word: false,
         after_bang: false,
@@ -1117,12 +1118,12 @@ impl Lexer<'_> {
         // `union` is a keyword only before the union's name.
         let named = word != "union" || !self.word_at(self.skip_space(self.at)).is_empty();
         let keyword = ["struct", "union", "enum", "fn"].into_iter().find(|&k| k == word);
-        // A `fn` type in a declaration's header (`struct S<F = fn(u8)>`) does not replace it.
-        let in_header = self.declares.is_some_and(|d| d.level == self.delims.len() && (d.angle > 0 || d.after_where));
-        if let Some(keyword) = keyword.filter(|_| named && !in_header) {
-            self.declares = Some(Declares { level: self.delims.len(), keyword, angle: 0, after_where: false });
+        // A `fn` type in a declaration's header (`struct S<F = fn(u8)>`, `struct S<T = (fn(),)>`)
+        // is pending on top of it, and its `(` opens before the declaration's fields.
+        if let Some(keyword) = keyword.filter(|_| named) {
+            self.declares.push(Declares { level: self.delims.len(), keyword, angle: 0, after_where: false });
         } else if word == "where"
-            && let Some(declares) = &mut self.declares
+            && let Some(declares) = self.declares.last_mut()
             && declares.level == self.delims.len()
         {
             declares.after_where = true;
@@ -1197,7 +1198,7 @@ impl Lexer<'_> {
         let arrow = c == '>' && self.at.checked_sub(1).and_then(|i| self.chars.get(i)) == Some(&'-');
         let turbofish = c == '<' && self.prev == Some(':') && self.prev_prev == Some(':');
         let level_now = self.delims.len();
-        if let Some(declares) = &mut self.declares
+        if let Some(declares) = self.declares.last_mut()
             && declares.level == level_now
             && !arrow
         {
@@ -1618,9 +1619,9 @@ impl Lexer<'_> {
             }
         }
         let level = self.delims.len();
-        let fields = match self.declares {
+        let fields = match self.declares.last().copied() {
             Some(Declares { level: at, keyword, angle: 0, after_where }) if at == level && (c == '{' || (c == '(' && !after_where)) => {
-                self.declares = None;
+                self.declares.pop();
                 match (keyword, c) {
                     ("enum", '{') => Fields::Variants,
                     ("fn", _) | (_, '{') => Fields::Typed,
@@ -1671,9 +1672,7 @@ impl Lexer<'_> {
         }
         self.at += 1;
         let depth = self.delims.len();
-        if self.declares.is_some_and(|declares| declares.level > depth) {
-            self.declares = None;
-        }
+        self.declares.retain(|declares| declares.level <= depth);
         let ends = match self.test {
             Some(TestRegion::Item { level, opened, item, semi, block, .. }) => {
                 let block_end = opened && depth == level && c == '}';
@@ -1719,8 +1718,9 @@ impl Lexer<'_> {
     /// arguments (`f::<A, B>`) or in the parameters of a closure that starts it.
     fn item_end(&mut self, comma: bool) {
         // A unit struct (`struct S;`) declares no fields.
-        if !comma && self.declares.is_some_and(|declares| declares.level == self.delims.len()) {
-            self.declares = None;
+        if !comma {
+            let level = self.delims.len();
+            self.declares.retain(|declares| declares.level < level);
         }
         if let Some(TestRegion::Item { level, opened, item, semi, angle, params, .. }) = self.test
             && level == self.delims.len()
@@ -2438,6 +2438,35 @@ fn borrowed(#[cfg(test)] &(a, b): &Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{
 fn fields(#[cfg(test)] P { x, .. }: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "four".len() }>) {}
 fn by_ref(#[cfg(test)] ref mut p: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "five".len() }>) {}
 fn paths(#[cfg(test)] m::P(x): Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "six".len() }>) {}
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six"]);
+    }
+
+    #[test]
+    fn nested_function_pointer_types_keep_the_declaration() {
+        let source = r#"struct Nested<T = (fn(),)> {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "one".len() }>,
+}
+struct Boxed<T = Box<[fn(u8, u16); 2]>>(#[cfg(test)] Pair<u8, Tag<{ "AzureKit".len() }>>, Tag<{ "two".len() }>);
+enum Listed<T = [fn(); 1]> {
+    V {
+        #[cfg(test)]
+        field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+        live: Tag<{ "three".len() }>,
+    },
+}
+struct Bounded<F> where F: Into<(fn(u8),)> {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "four".len() }>,
+}
+struct Outer<const N: usize = { struct Inner { #[cfg(test)] field: Pair<u8, Tag<{ "AzureKit".len() }>>, live: Tag<{ "five".len() }> } 0 }> {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "six".len() }>,
+}
 "#;
         assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six"]);
     }
