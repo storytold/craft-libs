@@ -46,6 +46,24 @@ impl Rig {
         self.fixture.by_label("Select All").is_some()
     }
 
+    /// A primary click at `at`, well after any other click.
+    fn click_at(&mut self, at: egui::Pos2) {
+        self.fixture.advance(1.0);
+        self.fixture.click_at(at);
+        self.fixture.settle();
+    }
+
+    /// A point just inside the field's start edge, in the room before its text.
+    fn padding_start(&self) -> egui::Pos2 {
+        let field = self.fixture.by_label("Name").expect("the field").rect;
+        egui::pos2(field.left() + 2.0, field.center().y)
+    }
+
+    fn type_text(&mut self, text: &str) {
+        self.fixture.type_text(text);
+        self.fixture.settle();
+    }
+
     /// What the frames that deliver `events`, one per frame, and the idle frames after them put on the clipboard.
     fn copied_through(&mut self, events: Vec<egui::Event>) -> Vec<String> {
         let mut copied = Vec::new();
@@ -137,6 +155,36 @@ fn return_in_the_edit_menu_runs_the_row_the_pointer_lit() {
     rig.fixture.type_text("x");
     rig.fixture.settle();
     assert_eq!(*rig.text.borrow(), "x", "Select All ran: typing replaced the whole text");
+}
+
+/// A click in the field around its text (its padding) places the caret at the nearest character, as a click on the
+/// text does: here before the first one.
+#[trial]
+fn a_click_in_the_room_around_the_text_places_the_caret() {
+    let mut rig = rig();
+    rig.fixture.key(Key::A, Modifiers::COMMAND);
+    rig.fixture.settle();
+    let at = rig.padding_start();
+    rig.click_at(at);
+    rig.type_text("X");
+    assert_eq!(*rig.text.borrow(), "Xhello", "the click put the caret before the first character");
+}
+
+/// A click outside the edit menu closes it and goes no further, so the field keeps the selection it had; the next
+/// click in the field places a caret, here in the room before its text (the LightCraft click-back case).
+#[trial]
+fn a_click_after_the_edit_menu_closes_places_a_caret() {
+    let mut rig = rig();
+    rig.fixture.key(Key::A, Modifiers::COMMAND);
+    rig.fixture.settle();
+    rig.right_click_in_the_field();
+    let at = rig.padding_start();
+    rig.click_at(at);
+    assert!(!rig.menu_open(), "the first click closes the menu");
+    assert!(rig.focus_in_the_field(), "and the focus is back in the field");
+    rig.click_at(at);
+    rig.type_text("X");
+    assert_eq!(*rig.text.borrow(), "Xhello", "the second click placed the caret before the first character");
 }
 
 #[trial]
