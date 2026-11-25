@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-pdf"
 description = "Shared PDF reading, rendering and optional writing for Craft apps"
 version.workspace = true
@@ -51,6 +52,7 @@ craft-svg = { workspace = true, optional = true }
 krilla-svg = { version = "=0.8.1", optional = true }
 usvg = { version = "=0.47.0", features = ["text"], optional = true }
 thiserror = { workspace = true, optional = true }
+serde = { workspace = true }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
 roxmltree = { version = "0.21", optional = true }
 # The filter chain (`filters`). flate2 with zlib-rs, the backend the chain's Flate prices were measured on.
@@ -81,13 +83,10 @@ ttf-parser = "=0.25.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 proptest = { workspace = true }
+craft-testkit = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
-
-[[test]]
-name = "testing_pdf"
-required-features = ["test-support"]
 
 [[example]]
 name = "cos_info"
