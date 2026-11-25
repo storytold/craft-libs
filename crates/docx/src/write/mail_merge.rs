@@ -29,7 +29,7 @@ pub(crate) fn keep_rels(rels: &Rels) -> Result<Vec<u8>, DocxError> {
                 let size = match byte {
                     b'&' => 5,
                     b'<' | b'>' | b'\t' => 4,
-                    b'"' | b'\'' => 6,
+                    b'"' => 6,
                     b'\n' | b'\r' => 5,
                     _ => 1,
                 };
