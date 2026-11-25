@@ -1171,7 +1171,7 @@ fn scale_mode_neither_turns_from_outside_nor_distorts() {
 
 /// Distort lets a corner go past the opposite diagonal into a concave box (the reference application, 2026-11-24:
 /// the top-left corner of the 302 × 202 box dragged to (331, 246) draws a dart; the picture shows the source until
-/// the box is convex again, and Enter commits nothing). Perspective still stops at the fold.
+/// the box is convex again, and Enter commits nothing).
 #[test]
 fn a_distort_corner_goes_past_the_diagonal_into_a_concave_box() {
     let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
@@ -1182,6 +1182,23 @@ fn a_distort_corner_goes_past_the_diagonal_into_a_concave_box() {
     let distort = BoxRules::in_mode(TransformMode::Distort);
     let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(331.0, 246.0), Mods::NONE, &distort);
     assert_eq!(moved.quad[0], p(331.0, 246.0), "Distort mode: {:?}", moved.quad);
+}
+
+/// Perspective corners pass through each other (the reference application, 2026-11-25: the top-left corner of the
+/// 302 × 202 box dragged from (150, 125) towards (837, 41), read halfway at (493.5, 83), has the top corners at x 493.5
+/// and 108.5 on the top edge's line, an hourglass; it used to stop where the two met, a triangle). Up and down the
+/// same: the left corners pass through each other.
+#[test]
+fn perspective_corners_pass_through_each_other() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let perspective = BoxRules::in_mode(TransformMode::Perspective);
+    let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(493.5, 83.0), Mods::NONE, &perspective);
+    assert_eq!(moved.quad, [p(493.5, 125.0), p(108.5, 125.0), p(452.0, 327.0), p(150.0, 327.0)]);
+    let keys = Mods { cmd: true, alt: true, shift: true, ..Mods::NONE };
+    let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(493.5, 83.0), keys, &BoxRules::default());
+    assert_eq!(moved.quad[..2], [p(493.5, 125.0), p(108.5, 125.0)], "with the gesture's keys");
+    let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(160.0, 425.0), Mods::NONE, &perspective);
+    assert_eq!(moved.quad, [p(150.0, 425.0), p(452.0, 125.0), p(452.0, 327.0), p(150.0, 27.0)]);
 }
 
 /// A turn reads the pointer at the rules' turn offset: half a pixel up and left by default (100 %), the pointer itself

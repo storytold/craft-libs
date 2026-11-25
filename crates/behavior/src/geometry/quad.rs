@@ -530,7 +530,9 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
         BoxPart::Corner(i) if mods.cmd && mods.alt && mods.shift => {
             // Perspective: the corner moves along the box's dominant axis (along its top edge or
             // across it, as on the reference: a turned box keeps its top edge's direction) and the
-            // corner sharing that side moves the opposite way.
+            // corner sharing that side moves the opposite way. Nothing stops the two where they meet: the
+            // reference lets them pass through each other into an hourglass (2026-11-25: the top-left corner of
+            // a 302 × 202 box dragged 343.5 px right put the top corners at x 493.5 and 108.5, the box crossed).
             let i = usize::from(i) % 4;
             let top = q0[1] - q0[0];
             let len = top.hypot();
@@ -552,8 +554,7 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             let mut q = q0;
             q[i] = q0[i] + m;
             q[j] = q0[j] - m;
-            let quad = keep_convex(q0, q);
-            BoxState { quad, pivot: carry_pivot(q0, quad, c) }
+            BoxState { quad: q, pivot: carry_pivot(q0, q, c) }
         }
         BoxPart::Corner(i) if mods.cmd => {
             // Distort: the corner moves freely, past the diagonal into a concave box too (the reference application
@@ -1365,7 +1366,7 @@ fn convex(q: &[Point; 4], sign: f64, min_turn: f64) -> bool {
     turns(q).iter().all(|t| t * sign > min_turn)
 }
 
-/// Perspective (and a corner or edge turn) stops a corner where the box would turn concave or fold over itself:
+/// A Skew corner slide stops the corner where the box would turn concave or fold over itself:
 /// the result goes from `from` towards `to` as far as the quad stays convex. A box that is not
 /// convex to begin with is left free.
 fn keep_convex(from: [Point; 4], to: [Point; 4]) -> [Point; 4] {
