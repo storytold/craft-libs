@@ -44,10 +44,12 @@ pub(super) fn to_x_height(reference: &FontData, face: &mut FontData) {
     face.tweak.scale = reference.tweak.scale * wanted / own;
 }
 
-/// A face's x-height in ems, from its `OS/2` table; `None` when the table gives none.
+/// A face's x-height in ems, from its `OS/2` table, at the instance its variation coordinates set; `None` when the
+/// table gives none.
 fn x_height(data: &FontData) -> Option<f32> {
     let font = FontRef::from_index(data.bytes(), data.index).ok()?;
-    let metrics = font.metrics(Size::unscaled(), LocationRef::default());
+    let location = font.axes().location(data.tweak.coords.as_ref());
+    let metrics = font.metrics(Size::unscaled(), &location);
     let em = f32::from(metrics.units_per_em);
     metrics.x_height.filter(|&x| x > 0.0 && em > 0.0).map(|x| x / em)
 }

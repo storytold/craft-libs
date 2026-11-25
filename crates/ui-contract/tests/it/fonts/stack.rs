@@ -182,11 +182,13 @@ fn a_craft_face_with_the_signature_role_leads_only_the_signature_family() {
     assert_eq!(without.chain(&FontRef::signature()), without.chain(&FontRef::proportional()), "without its face it is the proportional chain");
 }
 
-/// The x-height of `data` as drawn, in ems of the font size: its `OS/2` x-height times its scale.
+/// The x-height of `data` as drawn, in ems of the font size: its x-height at the instance its variation coordinates
+/// set, times its scale.
 fn drawn_x_height(data: &FontData) -> f32 {
     use skrifa::MetadataProvider as _;
     let font = skrifa::FontRef::from_index(data.bytes(), data.index).expect("a font");
-    let metrics = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let location = font.axes().location(data.tweak.coords.as_ref());
+    let metrics = font.metrics(skrifa::instance::Size::unscaled(), &location);
     data.tweak.scale * metrics.x_height.expect("an x-height") / f32::from(metrics.units_per_em)
 }
 
@@ -244,7 +246,13 @@ fn a_craft_face_with_the_tab_role_leads_the_tab_title_family() {
     let own = app.chain(&semibold).first().cloned().unwrap_or_default();
     assert!(own.starts_with("ui-semibold"), "{:?}", app.chain(&semibold));
     assert_eq!(app.chain(&tab).get(1), Some(&format!("{own} (tab title)")), "{:?}", app.chain(&tab));
-    assert!(app.flat_definitions().font_data.contains_key(&format!("{own} (tab title)")), "the copy has its data");
+    let app_definitions = app.flat_definitions();
+    assert!(app_definitions.font_data.contains_key(&format!("{own} (tab title)")), "the copy has its data");
+    // The variable face's x-height grows with its weight: the tab-title face matches it at 600.
+    let lead = app_definitions.font_data.get(name).expect("the tab-title face's data");
+    let reference = app_definitions.font_data.get(&own).expect("the app's semibold face's data");
+    assert!(!reference.tweak.coords.as_ref().is_empty(), "the app's semibold face is set to a weight");
+    assert!((drawn_x_height(lead) - drawn_x_height(reference)).abs() < 1e-4, "an x is as tall in a tab title as in the app's semibold text");
 
     assert!(build(CRAFT, craft_theme::InterfaceFont::Suite).chain(&tab).is_empty(), "without the face there is no tab-title family");
     assert!(build(&with, craft_theme::InterfaceFont::System).chain(&tab).is_empty(), "the OS's interface face keeps tab titles");
