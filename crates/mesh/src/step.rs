@@ -4,7 +4,8 @@
 //! (`VERTEX_POINT`, `EDGE_CURVE`, `ORIENTED_EDGE`, `EDGE_LOOP`, `FACE_OUTER_BOUND`) into a
 //! [`Scene`] within [`Limits`]. Curved B-Rep edges that require analytic surface tessellation are
 //! refused with [`Error::Unsupported`]. [`write`] serializes every mesh of a [`Scene`] into an
-//! ISO 10303-21 ASCII stream of `CARTESIAN_POINT` and `POLY_LOOP` entities.
+//! ISO 10303-21 ASCII stream: each triangle becomes a `POLY_LOOP` inside a `FACE_BOUND` and `FACE`,
+//! and the faces form an `OPEN_SHELL` in a `SHELL_BASED_SURFACE_MODEL` with its shape representation.
 //!
 //! Moved from `encoderCraft`'s `encodercraft-spatial-io::step` module.
 
@@ -31,7 +32,9 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
         return Err(malformed(KIND, "not a valid ISO-10303-21 STEP file (missing `ISO-10303-21` or `DATA;`)"));
     }
 
-    let max_entities = limits.max_vertices.max(limits.max_triangles);
+    // A triangle of B-Rep needs its points plus vertices, edges, curves and a face: budget the
+    // supporting entities separately from the decoded geometry, which is checked as it is built.
+    let max_entities = limits.max_vertices.saturating_add(limits.max_triangles.saturating_mul(8));
     let mut points: HashMap<u64, [f64; 3]> = HashMap::new();
     let mut poly_loops: Vec<Vec<u64>> = Vec::new();
     let mut vertex_points: HashMap<u64, u64> = HashMap::new();
@@ -39,11 +42,14 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     let mut oriented_edges: HashMap<u64, (u64, bool)> = HashMap::new();
     let mut edge_loops: Vec<(u64, Vec<u64>)> = Vec::new();
     let mut outer_bounds: HashMap<u64, bool> = HashMap::new();
+    let mut plain_bounds: HashMap<u64, (u64, bool)> = HashMap::new();
+    let mut faces: Vec<Vec<u64>> = Vec::new();
+    let mut outer_bound_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut curve_types: HashMap<u64, String> = HashMap::new();
     let mut entity_count = 0usize;
 
-    for raw_line in text.split(';') {
-        let line = raw_line.trim();
+    for statement in statements(text)? {
+        let line = statement.trim();
         let Some((id_str, entity_body)) = line.split_once('=') else { continue };
         let id_str = id_str.trim().trim_start_matches('#');
         let Ok(id) = id_str.parse::<u64>() else { continue };
@@ -118,9 +124,20 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
                     }
                 }
             }
+            "FACE_BOUND" => {
+                if let (Some(loop_id), Some(orientation)) = (args.get(1).and_then(|arg| step_references(arg).first().copied()), args.get(2)) {
+                    plain_bounds.insert(id, (loop_id, orientation.trim().eq_ignore_ascii_case(".T.")));
+                }
+            }
+            "FACE" | "ADVANCED_FACE" | "FACE_SURFACE" => {
+                if let Some(arg) = args.get(1) {
+                    faces.push(step_references(arg));
+                }
+            }
             "FACE_OUTER_BOUND" => {
                 if let (Some(loop_id), Some(orientation)) = (args.get(1).and_then(|arg| step_references(arg).first().copied()), args.get(2)) {
                     outer_bounds.insert(loop_id, orientation.trim().eq_ignore_ascii_case(".T."));
+                    outer_bound_ids.insert(id);
                 }
             }
             _ => {}
@@ -129,6 +146,20 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
 
     if points.is_empty() {
         return Err(malformed(KIND, "no 3D coordinate points found"));
+    }
+
+    // A face with more than one bound has holes (or several outer rings); filling them would be
+    // wrong, so refuse. A face whose single bound is a plain `FACE_BOUND` is its outer ring.
+    for face in &faces {
+        let rings = face.iter().filter(|b| outer_bound_ids.contains(b) || plain_bounds.contains_key(b)).count();
+        if rings > 1 {
+            return Err(Error::Unsupported("STEP: faces with inner boundaries are not supported".into()));
+        }
+        if let [bound] = face.as_slice()
+            && let Some(&(loop_id, forward)) = plain_bounds.get(bound)
+        {
+            outer_bounds.entry(loop_id).or_insert(forward);
+        }
     }
 
     if !edge_loops.is_empty() {
@@ -180,20 +211,26 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     let mut tri_count = 0usize;
 
     for polygon in poly_loops {
-        let Some(&p0) = points.get(&polygon[0]) else {
-            return Err(malformed(KIND, "polygon references a missing point"));
-        };
-        for i in 1..polygon.len() - 1 {
+        let mut ring = Vec::with_capacity(polygon.len());
+        for id in &polygon {
+            let Some(&p) = points.get(id) else {
+                return Err(malformed(KIND, "polygon references a missing point"));
+            };
+            ring.push(p);
+        }
+        // Triangulate in the declared winding; a fan is only right for convex polygons.
+        let corners =
+            (0..ring.len()).filter_map(|i| u32::try_from(i).ok()).map(|position| Corner { position, normal: crate::NONE, uv: crate::NONE }).collect();
+        let face = Part { corners, face_sizes: vec![ring.len() as u32], ..Part::default() };
+        for [c0, c1, c2] in face.triangles_in(&ring) {
             if tri_count >= limits.max_triangles {
                 return Err(too_large(KIND, format!("more than {} triangles", limits.max_triangles)));
             }
             if mesh.positions.len().saturating_add(3) > limits.max_vertices {
                 return Err(too_large(KIND, format!("more than {} vertices", limits.max_vertices)));
             }
-            let Some(&p1) = points.get(&polygon[i]) else {
-                return Err(malformed(KIND, "polygon references a missing point"));
-            };
-            let Some(&p2) = points.get(&polygon[i + 1]) else {
+            let tri = [c0, c1, c2].map(|c| ring.get(c.position as usize).copied());
+            let [Some(p0), Some(p1), Some(p2)] = tri else {
                 return Err(malformed(KIND, "polygon references a missing point"));
             };
             let (Ok(base), Ok(normal_idx)) = (u32::try_from(mesh.positions.len()), u32::try_from(mesh.normals.len())) else {
@@ -214,6 +251,57 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     }
     mesh.parts.push(part);
     Ok(Scene::from_meshes(vec![mesh], Vec::new()))
+}
+
+/// Split the exchange structure into statements at each `;` outside a quoted string and outside a
+/// `/* ... */` comment, dropping the comments (ISO 10303-21 §5.3, §6.4).
+fn statements(text: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            current.push(c);
+            if c == '\'' {
+                if chars.peek() == Some(&'\'') {
+                    current.push('\'');
+                    chars.next();
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_string = true;
+                current.push(c);
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut closed = false;
+                while let Some(d) = chars.next() {
+                    if d == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return Err(malformed(KIND, "unterminated comment"));
+                }
+                current.push(' ');
+            }
+            ';' => out.push(std::mem::take(&mut current)),
+            other => current.push(other),
+        }
+    }
+    if in_string {
+        return Err(malformed(KIND, "unterminated string"));
+    }
+    out.push(current);
+    Ok(out)
 }
 
 fn step_arguments(input: &str) -> Vec<&str> {
@@ -288,30 +376,70 @@ pub fn write(scene: &Scene, name: &str, limits: &Limits) -> Result<String> {
     out.push_str("FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\nENDSEC;\nDATA;\n");
 
     let mut entity_id: u64 = 10;
-    let mut loops = Vec::new();
+    let mut faces = Vec::new();
+    let mut triangles = 0usize;
+    // The shape's origin point is a Cartesian point too, and counts against the vertex limit.
+    let mut points = 1usize;
 
     for (index, world) in scene.instances(limits)? {
         let Some(mesh) = scene.meshes.get(index) else { continue };
         let mirror = is_mirror(&world);
         for t in mesh.parts.iter().flat_map(|p| p.triangles_in(&mesh.positions)) {
+            triangles = triangles.saturating_add(1);
+            points = points.saturating_add(3);
+            if triangles > limits.max_triangles {
+                return Err(too_large(KIND, format!("more than {} triangles", limits.max_triangles)));
+            }
+            if points > limits.max_vertices {
+                return Err(too_large(KIND, format!("more than {} Cartesian points", limits.max_vertices)));
+            }
             let p = t.map(|c| mesh.positions.get(c.position as usize).copied());
             let [Some(a), Some(b), Some(c)] = p else { return Err(malformed(KIND, "a corner index is out of range")) };
             let v = if mirror { [a, c, b] } else { [a, b, c] }.map(|pt| transform_point(&world, pt));
             let mut ids = [0u64; 3];
             for (slot, pt) in ids.iter_mut().zip(v) {
-                let _ = writeln!(out, "#{entity_id}=CARTESIAN_POINT('',({:.6},{:.6},{:.6}));", pt[0], pt[1], pt[2]);
+                let _ = writeln!(out, "#{entity_id}=CARTESIAN_POINT('',({},{},{}));", real(pt[0]), real(pt[1]), real(pt[2]));
                 *slot = entity_id;
                 entity_id += 1;
             }
-            loops.push(ids);
+            let [p0, p1, p2] = ids;
+            let (poly, bound, face) = (entity_id, entity_id + 1, entity_id + 2);
+            let _ = writeln!(out, "#{poly}=POLY_LOOP('',(#{p0},#{p1},#{p2}));");
+            let _ = writeln!(out, "#{bound}=FACE_BOUND('',#{poly},.T.);");
+            let _ = writeln!(out, "#{face}=FACE('',(#{bound}));");
+            entity_id += 3;
+            faces.push(face);
         }
     }
 
-    for [p0, p1, p2] in loops {
-        let _ = writeln!(out, "#{entity_id}=POLY_LOOP('',(#{p0},#{p1},#{p2}));");
-        entity_id += 1;
-    }
+    // The faces form an open shell inside a shell-based surface model, placed in a 3D context.
+    let list = faces.iter().map(|f| format!("#{f}")).collect::<Vec<_>>().join(",");
+    let [shell, model, origin, z, x, axis, length, angle, solid, accuracy, context, shape] = std::array::from_fn(|i| entity_id + i as u64);
+    let _ = writeln!(out, "#{shell}=OPEN_SHELL('',({list}));");
+    let _ = writeln!(out, "#{model}=SHELL_BASED_SURFACE_MODEL('{clean_name}',(#{shell}));");
+    let _ = writeln!(out, "#{origin}=CARTESIAN_POINT('',(0.,0.,0.));");
+    let _ = writeln!(out, "#{z}=DIRECTION('',(0.,0.,1.));");
+    let _ = writeln!(out, "#{x}=DIRECTION('',(1.,0.,0.));");
+    let _ = writeln!(out, "#{axis}=AXIS2_PLACEMENT_3D('',#{origin},#{z},#{x});");
+    let _ = writeln!(out, "#{length}=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT($,.METRE.));");
+    let _ = writeln!(out, "#{angle}=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));");
+    let _ = writeln!(out, "#{solid}=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());");
+    let _ = writeln!(out, "#{accuracy}=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-9),#{length},'distance_accuracy_value','');");
+    let _ = writeln!(
+        out,
+        "#{context}=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{accuracy}))GLOBAL_UNIT_ASSIGNED_CONTEXT((#{length},#{angle},#{solid}))REPRESENTATION_CONTEXT('Context','3D'));"
+    );
+    let _ = writeln!(out, "#{shape}=SHAPE_REPRESENTATION('{clean_name}',(#{model},#{axis}),#{context});");
 
     out.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
     Ok(out)
+}
+
+/// A STEP REAL: shortest decimal that parses back to `v`, always with a `.` and, when scientific,
+/// an `E` exponent (`1.E-7`).
+fn real(v: f64) -> String {
+    let s = format!("{v:e}");
+    let (mantissa, exponent) = s.split_once('e').unwrap_or((&s, "0"));
+    let mantissa = if mantissa.contains('.') { mantissa.to_string() } else { format!("{mantissa}.") };
+    if exponent == "0" { mantissa } else { format!("{mantissa}E{exponent}") }
 }

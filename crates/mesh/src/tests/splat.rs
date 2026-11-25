@@ -14,13 +14,21 @@ fn splat_round_trip_and_limits() {
     assert_eq!(parsed.meshes.len(), 1);
     assert_eq!(parsed.meshes[0].positions.len(), 4);
     assert_eq!(parsed.meshes[0].colors.len(), 4);
-    assert_eq!(parsed.meshes[0].triangle_count(), 2);
+    assert_eq!(parsed.meshes[0].triangle_count(), 0, "splat records carry no connectivity");
 
     let tight = Limits { max_vertices: 2, ..Limits::default() };
     assert!(matches!(splat::read(&bytes, &tight), Err(Error::TooLarge(_))));
     assert!(matches!(splat::write(&scene, &tight), Err(Error::TooLarge(_))));
     assert!(matches!(splat::read(&bytes[..31], &Limits::default()), Err(Error::Malformed(_))));
     assert!(matches!(splat::read(&[], &Limits::default()), Err(Error::Malformed(_))));
+}
+
+#[test]
+fn splat_write_refuses_positions_f32_cannot_hold() {
+    let mut m = tri_mesh();
+    m.positions[0] = [1e40, 0.0, 0.0];
+    let scene = Scene::from_meshes(vec![m], vec![]);
+    assert!(matches!(splat::write(&scene, &Limits::default()), Err(Error::Malformed(_))));
 }
 
 #[test]
