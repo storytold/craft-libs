@@ -648,7 +648,8 @@ impl FooterBar {
     /// A footer bar of icon actions laid out from the reading end, as Photoshop's panel footers: the first action given
     /// sits at the end edge (Delete), the next one before it, and a panel menu given last at the start of the group.
     /// Tab visits them in display order; the indexes the output reports are those of the given order. The actions show
-    /// their icons at the tool size (`GlyphRole::Tool`). Show it with `show_footer`.
+    /// their icons at the tool size (`GlyphRole::Tool`). Actions that do not fit beside each other in the bar continue
+    /// on a new line. Show it with `show_footer`.
     pub fn actions(actions: impl IntoIterator<Item = FooterAction>) -> Self {
         let body = FooterBar::body();
         let props = body.props.child_glyphs(GlyphRole::Tool);
@@ -666,7 +667,8 @@ impl FooterBar {
     }
 
     /// A footer bar of dialog buttons, in the order of the platform's dialog convention, each at least
-    /// `size.dialog.button` wide (`size.dialog.side_button` in a column). Show it with `show_footer`.
+    /// `size.dialog.button` wide (`size.dialog.side_button` in a column). Buttons that do not fit beside each other in
+    /// the bar continue on a new line. Show it with `show_footer`.
     pub fn buttons(buttons: impl IntoIterator<Item = FooterButton>) -> Self {
         let buttons: Vec<FooterButton> = buttons.into_iter().collect();
         let arms = buttons.iter().filter_map(|button| button.armed_after).collect();
@@ -688,6 +690,11 @@ impl FooterBar {
     fn show_footer_with<R>(mut self, ui: &mut Ui, mut leading: Option<impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R>) -> (FooterOutput, Option<R>) {
         let content = std::mem::take(&mut self.content);
         let (enter, column, start) = (self.enter, self.column, self.start);
+        if !matches!(content, Content::Body) && leading.is_none() && start == 0 {
+            // Actions or buttons that do not fit beside each other continue on a new line inside the bar. A bar with a
+            // start group keeps its two groups on one line, each group wrapping in its own row.
+            self.props.layout = self.props.layout.clone().wrap(true);
+        }
         let mut led = None;
         let shown = self.show(ui, |ui, bar| match &content {
             Content::Body => Shown::default(),
@@ -700,12 +707,12 @@ impl FooterBar {
                     // width; the end group fills the rest.
                     led = Some(leading(ui, bar));
                     show_actions(ui, actions, 0..start, &mut shown);
-                    Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                    Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
                 } else if start == 0 {
                     show_actions(ui, actions, from_end(), &mut shown);
                 } else {
-                    Row::new().show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
-                    Row::new().show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                    Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
+                    Row::new().wrap(true).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
                 }
                 shown.responses.sort_by_key(|(at, _)| *at);
                 shown
@@ -775,10 +782,10 @@ impl FooterBar {
                     }
                 };
                 if let Some(leading) = leading.as_mut() {
-                    // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest and
-                    // sit at the end edge.
+                    // The leading controls stand at the start edge of the buttons' line; the buttons fill the rest, sit at
+                    // the end edge and continue on a new line when they do not fit beside each other.
                     led = Some(leading(ui, bar));
-                    Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| place(ui, &mut shown));
+                    Row::new().fill_width().align(RowAlign::End).wrap(true).show(ui, |ui, _| place(ui, &mut shown));
                 } else {
                     place(ui, &mut shown);
                 }

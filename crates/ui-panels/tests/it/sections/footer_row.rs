@@ -6,7 +6,9 @@ use craft_ui::buttons::IconButton;
 use craft_ui::choice::Segmented;
 use craft_ui::contract::{Bind, Entry, ListDrag, Props as _, RowAlign, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::sections::{DropAction, FooterAction, FooterBar, ReorderableSections, SectionKey, SectionLayout, SectionSpec};
+use craft_ui::sections::{
+    DialogRole, DropAction, FooterAction, FooterBar, FooterButton, ReorderableSections, SectionKey, SectionLayout, SectionSpec,
+};
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::tile_grid::{ThumbnailSlider, TileZoom};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Ui, Vec2};
@@ -154,4 +156,78 @@ fn the_start_and_end_groups_of_a_footer_bar_sit_at_their_edges() {
     assert!(ltr[3].max.x < ltr[2].min.x, "the end group reads from the end edge: {ltr:?}");
     let rtl = split(Direction::Rtl);
     assert!(rtl[0].min.x > rtl[2].max.x, "right to left the start group sits at the right: {rtl:?}");
+}
+
+/// A bar of eight icon actions too narrow for them on one line keeps every action inside it, with or without a start
+/// group or leading controls.
+#[trial]
+fn a_footer_bar_too_narrow_for_its_actions_keeps_them_inside_it() {
+    for (start, leading) in [(0, false), (2, false), (0, true), (2, true)] {
+        let seen = Rc::new(RefCell::new((Rect::NOTHING, Vec::new())));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let icons = ["ban", "check", "copy", "trash", "plus", "more", "list", "grid"];
+            let bar = FooterBar::actions(icons.map(|icon| FooterAction::new(IconId::new(icon), icon))).at_start(start);
+            let output = if leading {
+                bar.show_footer_leading(ui, |ui, _| {
+                    IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+                })
+                .0
+            } else {
+                bar.show_footer(ui)
+            };
+            *out.borrow_mut() = (output.response.rect, output.responses.iter().map(|response| response.rect).collect::<Vec<_>>());
+        });
+        fixture.room(Vec2::new(120.0, 200.0)).settle();
+        let (bar, actions) = seen.borrow().clone();
+        assert_eq!(actions.len(), 8);
+        for rect in &actions {
+            assert!(bar.expand(0.5).contains_rect(*rect), "start {start}, leading {leading}: {rect:?} lies outside the bar {bar:?}");
+        }
+    }
+}
+
+const DIALOG_BUTTONS: [&str; 4] = ["Reset", "Don't Save", "Cancel", "OK"];
+
+/// The rect of a bar of four dialog buttons and the rect of each button, in a room `width` wide; `leading` puts a
+/// control at the start of the buttons' line.
+fn dialog_buttons(width: f32, leading: bool) -> (Rect, Vec<Rect>) {
+    let seen = Rc::new(RefCell::new(Rect::NOTHING));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let roles = [DialogRole::Other, DialogRole::Alternate, DialogRole::Cancel, DialogRole::Accept];
+        let buttons = DIALOG_BUTTONS.into_iter().zip(roles).map(|(label, role)| FooterButton::new(label, role));
+        let bar = FooterBar::buttons(buttons);
+        let output = if leading {
+            bar.show_footer_leading(ui, |ui, _| {
+                IconButton::new(IconId::new("settings")).label("Settings").show(ui);
+            })
+            .0
+        } else {
+            bar.show_footer(ui)
+        };
+        *out.borrow_mut() = output.response.rect;
+    });
+    fixture.room(Vec2::new(width, 200.0)).settle();
+    let buttons = DIALOG_BUTTONS.iter().map(|label| fixture.by_label(label).map_or(Rect::NOTHING, |target| target.rect)).collect();
+    (*seen.borrow(), buttons)
+}
+
+/// A bar of dialog buttons too narrow for them on one line keeps every button inside it, on more lines; a bar wide
+/// enough keeps them on one line at its end edge.
+#[trial]
+fn a_footer_bar_too_narrow_for_its_dialog_buttons_keeps_them_inside_it() {
+    for leading in [false, true] {
+        let (bar, buttons) = dialog_buttons(240.0, leading);
+        for (label, rect) in DIALOG_BUTTONS.iter().zip(&buttons) {
+            assert!(rect.is_positive(), "leading {leading}: {label} is shown: {rect:?}");
+            assert!(bar.expand(0.5).contains_rect(*rect), "leading {leading}: {label} at {rect:?} lies outside the bar {bar:?}");
+        }
+        assert!(buttons.iter().any(|rect| rect.min.y > buttons[0].max.y - 0.5), "leading {leading}: the buttons take more lines: {buttons:?}");
+
+        let (bar, buttons) = dialog_buttons(900.0, leading);
+        assert!(buttons.iter().all(|rect| (rect.min.y - buttons[0].min.y).abs() < 0.5), "leading {leading}: one line in a wide bar: {buttons:?}");
+        let end = buttons.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max);
+        assert!(end > bar.max.x - 1.0, "leading {leading}: the buttons end at {end}, short of the bar's end {}", bar.max.x);
+    }
 }
