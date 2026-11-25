@@ -13,6 +13,7 @@ fn metadata() -> Metadata {
         creators: vec!["A & B".into(), "  ".into(), "C".into()],
         subjects: vec!["food".into()],
         description: Some("About \"fish\"".into()),
+        publication_date: Some("2024-01-02".into()),
         modified: "2026-10-13T09:30:00Z".into(),
         generator: Some("Test \"1\"".into()),
     }
@@ -89,6 +90,7 @@ fn the_package_document_carries_the_metadata_manifest_and_spine() {
         "<dc:creator>A &amp; B</dc:creator>\n<dc:creator>C</dc:creator>",
         "<dc:subject>food</dc:subject>",
         "<dc:description>About \"fish\"</dc:description>",
+        "<dc:date>2024-01-02</dc:date>",
         "<meta property=\"dcterms:modified\">2026-10-13T09:30:00Z</meta>",
         "<meta name=\"generator\" content=\"Test &quot;1&quot;\"/>",
         "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
@@ -100,6 +102,28 @@ fn the_package_document_carries_the_metadata_manifest_and_spine() {
     }
     assert!(!opf.contains("rendition:"), "a reflowable book says nothing about rendition");
     craft_xml::Options::default().strict().parse(opf.as_bytes()).expect("well formed");
+}
+
+#[test]
+fn publication_date_is_distinct_from_modification_time_and_optional() {
+    let mut b = book();
+    b.metadata.publication_date = Some("2024 & 2025".into());
+    let opf = text(&write(&b).unwrap(), "OEBPS/content.opf");
+    assert!(opf.contains("<dc:date>2024 &amp; 2025</dc:date>"));
+    assert!(opf.contains("<meta property=\"dcterms:modified\">2026-10-13T09:30:00Z</meta>"));
+    for date in [None, Some("   ".into())] {
+        b.metadata.publication_date = date;
+        assert!(!text(&write(&b).unwrap(), "OEBPS/content.opf").contains("<dc:date>"));
+    }
+}
+
+#[test]
+fn publication_date_rejects_xml_forbidden_characters() {
+    for date in ["2024\0-01", "2024\u{ffff}-01"] {
+        let mut b = book();
+        b.metadata.publication_date = Some(date.into());
+        assert!(matches!(write(&b), Err(Error::Invalid(_))), "invalid date was silently changed");
+    }
 }
 
 #[test]
