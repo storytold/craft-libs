@@ -245,6 +245,31 @@ fn colour_replacement_is_explicit_and_preserves_alpha() {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
+fn caller_colour_map_respects_paint_selection_and_alpha() {
+    let doc =
+        craft_pdf::open(pdf("/G gs 0 0 0 rg 0 0 20 20 re f 1 0 0 rg 20 0 20 20 re f", "/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"), None)
+            .unwrap();
+    let page = &doc.pages()[0];
+    let cache = RenderCache::new();
+    let settings = InterpreterSettings::default();
+    let mut pixels = vec![0; 40 * 20 * 4];
+    let mut replacement = raster::ColorReplacement { text: [255, 0, 0], background: [255; 3], only_black: true, line_art: true };
+    let ink_to_green: raster::SolidColorMap = |_rgb, [r, g, b], _paper| [g, r, b];
+    let options = |color_replacement| Options { color_replacement, ..Default::default() };
+    raster::render_into_with_color_map(page, &cache, &settings, &options(Some(replacement)), Some(ink_to_green), &mut pixels).unwrap();
+    assert_eq!(&pixels[..4], &[0, 128, 0, 128], "black line art uses the caller's mapping");
+    assert_eq!(&pixels[120..124], &[128, 0, 0, 128], "only-black leaves the red paint alone");
+
+    replacement.line_art = false;
+    raster::render_into_with_color_map(page, &cache, &settings, &options(Some(replacement)), Some(ink_to_green), &mut pixels).unwrap();
+    let original = raster::render(page, &cache, &settings, &Options::default()).unwrap();
+    assert_eq!(pixels, original.bytes(), "disabling line art bypasses the callback");
+    raster::render_into_with_color_map(page, &cache, &settings, &options(None), Some(ink_to_green), &mut pixels).unwrap();
+    assert_eq!(pixels, original.bytes(), "a callback alone does not enable replacement");
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
 fn malformed_stream_completion_warning_reaches_raster_and_caller() {
     let doc = craft_pdf::open(
         assemble(&[

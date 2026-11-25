@@ -109,10 +109,31 @@ pub struct ColorReplacement {
     pub line_art: bool,
 }
 
+/// Maps straight sRGB bytes. The arguments are source RGB, ink RGB and paper RGB.
+/// The renderer supplies the original paint alpha separately.
+pub type SolidColorMap = fn([u8; 3], [u8; 3], [u8; 3]) -> [u8; 3];
+
+#[derive(Clone, Copy)]
+pub(crate) struct ColorMapping {
+    pub(crate) replacement: ColorReplacement,
+    pub(crate) solid_color_map: Option<SolidColorMap>,
+}
+
 impl ColorReplacement {
     /// Maps a solid paint colour. `is_text` distinguishes glyph fills/strokes from
     /// plain path art. Alpha is copied verbatim. Never panics.
     pub fn map(&self, rgba8: [u8; 4], is_text: bool) -> [u8; 4] {
+        self.map_with(rgba8, is_text, None)
+    }
+
+    /// Maps eligible paints through the caller's RGB map, or through the default luminance
+    /// interpolation. The paint selection rules and original alpha apply to either map.
+    pub fn map_with(
+        &self,
+        rgba8: [u8; 4],
+        is_text: bool,
+        solid_color_map: Option<SolidColorMap>,
+    ) -> [u8; 4] {
         if !is_text && !self.line_art {
             return rgba8;
         }
@@ -121,6 +142,10 @@ impl ColorReplacement {
         let t = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0;
         if self.only_black && t > 0.10 {
             return rgba8;
+        }
+        if let Some(map) = solid_color_map {
+            let [r, g, b] = map([r, g, b], self.text, self.background);
+            return [r, g, b, a];
         }
         let [text_r, text_g, text_b] = self.text;
         let [background_r, background_g, background_b] = self.background;
@@ -230,6 +255,19 @@ pub fn render_into<'a>(
     render_settings: &RenderSettings,
     buffer: &mut [u8],
 ) {
+    render_into_with_color_map(page, cache, interpreter_settings, render_settings, None, buffer);
+}
+
+/// Like [`render_into`], with an optional RGB map for eligible solid paints when
+/// [`RenderSettings::color_replacement`] is enabled.
+pub fn render_into_with_color_map<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &RenderSettings,
+    solid_color_map: Option<SolidColorMap>,
+    buffer: &mut [u8],
+) {
     let (x_scale, y_scale) = (render_settings.x_scale, render_settings.y_scale);
     let initial_transform = Affine::translate((-render_settings.x_offset as f64, -render_settings.y_offset as f64))
         * Affine::scale_non_uniform(x_scale as f64, y_scale as f64)
@@ -261,7 +299,10 @@ pub fn render_into<'a>(
         pix_height,
         vc_settings,
         cache,
-        render_settings.color_replacement,
+        render_settings.color_replacement.map(|replacement| ColorMapping {
+            replacement,
+            solid_color_map,
+        }),
         interpreter_settings.preview,
     );
 

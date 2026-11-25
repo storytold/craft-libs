@@ -95,6 +95,10 @@ also patch `hayro`. Writer consumers patch `krilla`. A plain `write` consumer do
 reader patches. Keep unrelated craft-ui/craft-print versions unchanged when adopting PDF.
 A pinned commit must be available remotely before a fresh public checkout can resolve it.
 
+Raster callers can supply a solid-paint RGB transform through
+`raster::render_into_with_color_map`. The renderer applies the configured paint selection
+and preserves alpha. Callers own the transform and its display policy.
+
 Synthetic native and WASM contracts cover opening, caller limits, alpha, geometry, settings,
 preview/final caching, diagnostics, cancellation and native panic recovery. Vendored syntax
 unit tests additionally cover decoder limits and incomplete streams. App-owned regression
