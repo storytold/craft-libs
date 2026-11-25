@@ -1,6 +1,37 @@
 # Changelog
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
+
+## v1.1
+
+- **Release Notes:** [GitHub Release v1.1](https://github.com/ussoewwin/craft-libs/releases/tag/v1.1)
+
+### 2026-11-25 - Upstream Merge (`next`) and the Design-Lint Repairs
+
+- **Merged `storytold/craft-libs` into the fork's `next`:** `next` at `6fcf61c81`, 213 upstream
+  commits on top of the line this fork follows (444 files), with the fork's own crates, their
+  trials and its Space rule kept.
+- **Space stays the canvas's Hand in the activation harness.** Upstream's trial loop now walks
+  every activation key; the fork's `keys` array still holds Enter alone, so Space is never a path,
+  while upstream's sampling, disabled-part filter and shared fixture are taken as they are.
+- **The page picture's paper and its document dimensions are declared exemptions.** `Tile::page`
+  takes the document's own width and height, in any one unit, and its paper is the blank page of a
+  document rather than a theme surface; both carry a `design: allow` marker and an entry in
+  `design/exceptions`.
+- **A start-screen story's links name catalog icons.** The column story used two names the catalog
+  does not carry (`message-circle`, `git-branch`); it now names `message_square` and
+  `external_link`, which the catalog's generated list has.
+- **Consumer-exposed space allocation goes through `runtime::egui::alloc`.** `alloc::space` is
+  public, so a crate outside the contract allocates through the one door the design lint names.
+- **Small clippy repairs in the fork's own crates.** Three range loops index a slice they can
+  iterate instead (`develop`), a test helper iterates its matrix (`color-transform`), a test module
+  sits last in `font-manager/src/picker/rank.rs`, and the reading-view Space trial upstream left
+  unregistered is registered and passes (116 trials in that binary).
+- The committed components index is regenerated from the registrations.
+- **Suites**: `cargo nextest run --workspace` reports **18,485 passed / 0 failed / 63 skipped**
+  (exit 0, 1,542 s); `cargo clippy --workspace --all-targets -- -D warnings` exits 0; `cargo fmt --
+  --check` exits 0; `craft-design-lint`'s workspace check passes.
+
 ## v1.0.6
 
 - **Release Notes:** [GitHub Release v1.0.6](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.6)
