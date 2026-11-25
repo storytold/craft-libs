@@ -81,7 +81,11 @@ pub struct Package {
     /// `rendition:layout` is `pre-paginated`: a fixed-layout book.
     pub pre_paginated: bool,
     pub manifest: Vec<Item>,
+    /// The manifest had entries beyond `Limits::max_manifest`.
+    pub manifest_truncated: bool,
     pub spine: Vec<SpineItem>,
+    /// The spine had entries beyond `Limits::max_spine`.
+    pub spine_truncated: bool,
     /// The archive entry of the EPUB 2 NCX the spine's `toc` attribute names.
     pub ncx: Option<String>,
     /// The id of the EPUB 2 cover image (`<meta name="cover">`).
@@ -194,7 +198,11 @@ pub fn parse_package(xml: &[u8], opf_dir: &str, limits: &Limits) -> Result<Packa
         }
     }
     let attr = |e: &El, name: &str| e.attr(name).unwrap_or_default().to_string();
-    for item in root.child("manifest").into_iter().flat_map(|m| m.children("item")).take(limits.max_manifest) {
+    for (index, item) in root.child("manifest").into_iter().flat_map(|m| m.children("item")).enumerate() {
+        if index >= limits.max_manifest {
+            pkg.manifest_truncated = true;
+            break;
+        }
         let (Some(id), Some(href)) = (item.attr("id"), item.attr("href")) else { continue };
         pkg.manifest.push(Item {
             id: id.to_string(),
@@ -211,7 +219,11 @@ pub fn parse_package(xml: &[u8], opf_dir: &str, limits: &Limits) -> Result<Packa
     }
     if let Some(spine) = root.child("spine") {
         pkg.ncx = spine.attr("toc").and_then(|id| by_id.get(id)).map(ToString::to_string);
-        for itemref in spine.children("itemref").take(limits.max_spine) {
+        for (index, itemref) in spine.children("itemref").enumerate() {
+            if index >= limits.max_spine {
+                pkg.spine_truncated = true;
+                break;
+            }
             let Some(idref) = itemref.attr("idref") else { continue };
             let path = by_id.get(idref).map(ToString::to_string);
             pkg.spine.push(SpineItem { idref: idref.to_string(), linear: itemref.attr("linear") != Some("no"), path });

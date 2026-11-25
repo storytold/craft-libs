@@ -260,3 +260,24 @@ fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
     let bomb = craft_zip::zip64_entry_count_sample(100_001);
     assert_eq!(Epub::open(&bomb).err(), Some(Error::TooManyEntries { found: 100_001, limit: 100_000 }));
 }
+
+#[test]
+fn truncated_manifest_and_spine_are_reported_without_changing_their_contents() {
+    let xml = opf(r#"<itemref idref="c1"/><itemref idref="c2"/><itemref idref="c1"/>"#);
+    let limited = parse_package(&xml, "", &Limits { max_manifest: 2, max_spine: 2, ..Limits::DEFAULT }).unwrap();
+    assert_eq!(limited.manifest.len(), 2);
+    assert_eq!(limited.spine.len(), 2);
+    assert!(limited.manifest_truncated);
+    assert!(limited.spine_truncated);
+    let all = parse_package(&xml, "", &Limits::DEFAULT).unwrap();
+    assert!(!all.manifest_truncated);
+    assert!(!all.spine_truncated);
+    let exact = parse_package(&xml, "", &Limits { max_manifest: all.manifest.len(), max_spine: all.spine.len(), ..Limits::DEFAULT }).unwrap();
+    assert!(!exact.manifest_truncated);
+    assert!(!exact.spine_truncated);
+    let zero = Limits { max_manifest: 0, max_spine: 0, ..Limits::DEFAULT };
+    let empty = parse_package(b"<package><manifest/><spine/></package>", "", &zero).unwrap();
+    assert!(!empty.manifest_truncated && !empty.spine_truncated);
+    let none_kept = parse_package(&xml, "", &zero).unwrap();
+    assert!(none_kept.manifest_truncated && none_kept.spine_truncated);
+}
