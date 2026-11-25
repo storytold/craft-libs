@@ -285,7 +285,10 @@ mod tests {
         assert!(contours.contours().next().is_none());
     }
 
+    // With `slow-asserts`, building the topology checks the winding numbers
+    // and panics on this path, so the test runs only without that feature.
     #[test]
+    #[cfg(not(feature = "slow-asserts"))]
     fn inconsistent_winding_numbers_are_an_error() {
         // The sweep gives this path winding numbers that disagree around a
         // point.
