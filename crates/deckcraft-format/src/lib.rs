@@ -164,7 +164,7 @@ impl<'a> Package<'a> {
     }
 
     fn open_with_entry_limit(bytes: &'a [u8], max_entries: u64) -> Result<Self> {
-        craft_zip::check_entry_count(bytes, max_entries).map_err(|e| FormatError::Damaged(e.to_string()))?;
+        craft_zip::check_fallback_entry_counts(bytes, max_entries).map_err(|e| FormatError::Damaged(e.to_string()))?;
         let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| FormatError::NotOurs(e.to_string()))?;
         Ok(Package { zip })
     }

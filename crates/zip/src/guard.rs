@@ -17,26 +17,48 @@ const EOCD64_LOCATOR: &[u8; 4] = b"PK\x06\x07";
 const EOCD64: &[u8; 4] = b"PK\x06\x06";
 const CENTRAL_HEADER: &[u8; 4] = b"PK\x01\x02";
 
-/// End records looked at, at most. A package has one; a few more can turn up inside stored data.
+/// Limit ambiguous candidates and ZIP64 searches. A straightforward bounded
+/// classic directory needs no search and may belong to an embedded archive.
 const MAX_END_RECORDS: usize = 16;
 
-/// Refuse `bytes` when the end record `zip` would use declares more than `max_entries` entries.
-///
-/// `zip` searches the file backwards for an end of central directory record. A ZIP64 one points
-/// through its locator at the ZIP64 end record, which `zip` looks for from the locator's offset
-/// on: every such record there is checked, and as `zip` may fall back to an earlier end record
-/// when one doesn't parse, the search goes on. A plain one is used when it declares no entries, or
-/// a central directory header lies between its directory offset and itself: it is the last one
-/// looked at.
+/// ZIP 9 searches for classic end records within 64 KiB plus the 22-byte record.
+const END_SEARCH_BYTES: usize = (1 << 16) + 22;
+
+/// The single-disk ZIP32 metadata the downstream reader accepts. An empty
+/// directory may start at its end record. A nonempty one must start earlier.
+fn classic_entries(disk: u16, directory_disk: u16, on_disk: u16, total: u16, offset: u32, record: u64) -> Option<u64> {
+    if disk != 0 || directory_disk != 0 || on_disk != total {
+        return None;
+    }
+    let offset = u64::from(offset);
+    (offset < record || (total == 0 && offset == record)).then_some(u64::from(total))
+}
+
+/// Check the declared entry count before indexing a ZIP. Stop at the first
+/// plausible classic directory. Use [`check_fallback_entry_counts`] when the
+/// limit must also cover earlier directories after an indexing error.
 pub fn check_entry_count(bytes: &[u8], max_entries: u64) -> Result<(), Error> {
+    check_entries(bytes, max_entries, false)
+}
+
+/// Check every directory that ZIP 9 can try if indexing the last one fails.
+/// A stored nested archive with an over-budget directory in the search
+/// window may also be refused. The search for classic trailers covers the
+/// last 64 KiB plus the end record.
+pub fn check_fallback_entry_counts(bytes: &[u8], max_entries: u64) -> Result<(), Error> {
+    check_entries(bytes, max_entries, true)
+}
+
+fn check_entries(bytes: &[u8], max_entries: u64, check_fallbacks: bool) -> Result<(), Error> {
     let u16_at = |at: usize| bytes.get(at..at.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]]));
     let u32_at = |at: usize| bytes.get(at..at.checked_add(4)?).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let u64_at = |at: usize| bytes.get(at..at.checked_add(8)?).and_then(|b| <[u8; 8]>::try_from(b).ok()).map(u64::from_le_bytes);
     let refuse =
         |n: u64| -> Result<(), Error> { if n > max_entries { Err(Error::TooManyEntries { declared: n, limit: max_entries }) } else { Ok(()) } };
+    let first = if check_fallbacks { bytes.len().saturating_sub(END_SEARCH_BYTES) } else { 0 };
     let mut end = bytes.len();
     let mut seen = 0;
-    while let Some(at) = bytes.get(..end).and_then(|b| b.windows(4).rposition(|w| w == EOCD)) {
+    while let Some(at) = bytes.get(first..end).and_then(|b| b.windows(4).rposition(|w| w == EOCD)).map(|offset| first + offset) {
         end = at;
         seen += 1;
         if seen > MAX_END_RECORDS {
@@ -65,12 +87,25 @@ pub fn check_entry_count(bytes: &[u8], max_entries: u64) -> Result<(), Error> {
             }
             continue;
         }
-        if total == 0 {
+        let (Some(disk), Some(directory_disk)) = (u16_at(at + 4), u16_at(at + 6)) else { continue };
+        let Some(count) = classic_entries(disk, directory_disk, on_disk, total, cd_offset, at as u64) else { continue };
+        if count == 0 {
             return Ok(());
+        }
+        if check_fallbacks && count <= max_entries {
+            // No header search is necessary. A directory with room for its
+            // 46-byte headers may be one of many ordinary ZIP attachments.
+            if u32_at(at + 12).is_some_and(|size| u64::from(size) >= 46 * count) {
+                seen -= 1;
+            }
+            continue;
         }
         let cd = cd_offset as usize;
         if cd < at && bytes.get(cd..at).is_some_and(|b| b.windows(4).any(|w| w == CENTRAL_HEADER)) {
-            return refuse(u64::from(on_disk.max(total)));
+            refuse(count)?;
+            if !check_fallbacks {
+                return Ok(());
+            }
         }
     }
     Ok(())
@@ -135,11 +170,13 @@ pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u
             }
             continue;
         }
-        if total == 0 {
+        let at_pos = tail_start + at as u64;
+        let (Some(disk), Some(directory_disk)) = (u16_at(&tail, at + 4), u16_at(&tail, at + 6)) else { continue };
+        let Some(count) = classic_entries(disk, directory_disk, on_disk, total, cd_offset, at_pos) else { continue };
+        if count == 0 {
             return Ok(());
         }
         let cd = u64::from(cd_offset);
-        let at_pos = tail_start + at as u64;
         if cd < at_pos {
             let has_cd = if let Some(in_tail) = cd.checked_sub(tail_start).and_then(|o| usize::try_from(o).ok()) {
                 tail.get(in_tail..at).is_some_and(|b| b.windows(4).any(|w| w == CENTRAL_HEADER))
@@ -149,7 +186,7 @@ pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u
                 reader.read_exact(&mut sig).is_ok() && &sig == CENTRAL_HEADER
             };
             if has_cd {
-                return refuse(u64::from(on_disk.max(total)));
+                return refuse(count);
             }
         }
     }
@@ -247,6 +284,42 @@ mod tests {
         bytes[eocd + 16..eocd + 20].copy_from_slice(&0u32.to_le_bytes());
         assert!(zip::ZipArchive::new(std::io::Cursor::new(&bytes)).is_ok());
         assert_eq!(check(&bytes, 20), Err(Error::TooManyEntries { declared: 21, limit: 20 }));
+    }
+
+    #[test]
+    fn stored_zip_members_within_budget_are_accepted() {
+        use crate::{Compression, Writer};
+        let mut embedded = Writer::new();
+        embedded.add("notes", b"notes", Compression::Stored).unwrap();
+        let embedded = embedded.finish().unwrap();
+        let mut package = Writer::new();
+        for index in 0..20 {
+            package.add(&format!("attachment-{index}.zip"), &embedded, Compression::Stored).unwrap();
+        }
+        let bytes = package.finish().unwrap();
+        assert!(super::check_fallback_entry_counts(&bytes, 20).is_ok());
+        assert!(check(&bytes, 20).is_ok());
+        assert!(check_entry_count_seekable(&mut std::io::Cursor::new(&bytes), 20).is_ok());
+
+        // The native policy also bounds the directory of a stored attachment
+        // when it falls in the search window. Ordinary callers budget the outer ZIP.
+        let mut envelope = Writer::new();
+        envelope.add("bundle.zip", &bytes, Compression::Stored).unwrap();
+        let envelope = envelope.finish().unwrap();
+        assert!(check(&envelope, 1).is_ok());
+        assert_eq!(super::check_fallback_entry_counts(&envelope, 1), Err(Error::TooManyEntries { declared: 20, limit: 1 }));
+    }
+
+    #[test]
+    fn classic_directory_fields_match_single_disk_layout() {
+        use super::classic_entries;
+        assert_eq!(classic_entries(0, 0, 0, 0, 12, 12), Some(0));
+        assert_eq!(classic_entries(0, 0, 2, 2, 10, 12), Some(2));
+        assert_eq!(classic_entries(1, 0, 0, 0, 12, 12), None);
+        assert_eq!(classic_entries(0, 1, 0, 0, 12, 12), None);
+        assert_eq!(classic_entries(0, 0, 1, 0, 12, 12), None);
+        assert_eq!(classic_entries(0, 0, 0, 0, 13, 12), None);
+        assert_eq!(classic_entries(0, 0, 1, 1, 12, 12), None);
     }
 
     #[test]
