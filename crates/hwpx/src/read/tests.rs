@@ -249,6 +249,28 @@ fn drawing_offsets_are_signed() {
     assert!(x.is_some_and(|x| x < 0.0), "{x:?}");
 }
 
+/// Where Hancom's viewer draws an object before its anchor (2026-11-25): an offset written with a
+/// minus sign is 0; held in the body (flowWithText), one above its paragraph is at the
+/// paragraph's top, and one left of the column stays there.
+#[test]
+fn offsets_before_the_anchor_go_where_hancom_draws_them() {
+    let at = |flow: &str, v: &str, h: &str| {
+        let rect = format!(
+            r#"<hp:rect id="1" zOrder="1" textWrap="IN_FRONT_OF_TEXT"><hp:sz width="2000" height="2000"/><hp:pos treatAsChar="0" flowWithText="{flow}" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="{v}" horzOffset="{h}"/></hp:rect>"#
+        );
+        let doc = read_bytes(&hwpx(&format!(r#"<hs:sec {NS}><hp:p><hp:run>{rect}<hp:t>글</hp:t></hp:run></hp:p></hs:sec>"#))).unwrap();
+        doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+            InlineObject::Shape { float, .. } => Some((float.x, float.y)),
+            _ => None,
+        })
+    };
+    let before = "4294964461"; // -2835
+    assert_eq!(at("0", "1000", "-2835").map(|p| p.0), Some(0.0), "a minus sign reads as 0");
+    assert!(at("1", "1000", before).is_some_and(|p| p.0 < 0.0), "held, it still goes left of the column");
+    assert_eq!(at("1", before, "0").map(|p| p.1), Some(0.0), "held, not above its paragraph");
+    assert!(at("0", before, "0").is_some_and(|p| p.1 < 0.0), "not held, above its paragraph");
+}
+
 /// A turned object's frame (hp:sz) is the box around it (viewer, 2026-11-25): a 100 × 40 shape
 /// turned 90° in a 40 × 100 frame keeps its own size, centred in the frame, and is turned there.
 #[test]

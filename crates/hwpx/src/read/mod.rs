@@ -43,8 +43,12 @@ const SILENT_TEXT_MARKS: &[&str] = &["hp:markpenBegin", "hp:markpenEnd", "hp:tit
 /// Deepest nesting of tables, text boxes and notes followed (hostile files).
 const MAX_NESTING: usize = 64;
 
-/// An offset attribute; HWPX writes negative ones as unsigned 32-bit numbers.
+/// An offset attribute; HWPX writes negative ones as unsigned 32-bit numbers. One written with a
+/// minus sign Hancom's viewer reads as 0 (2026-11-25), and so does this.
 pub(crate) fn signed32(v: Option<&str>) -> i64 {
+    if v.is_some_and(|v| v.trim_start().starts_with('-')) {
+        return 0;
+    }
     let n = num(v);
     if n >= 1 << 31 { n - (1 << 32) } else { n }
 }

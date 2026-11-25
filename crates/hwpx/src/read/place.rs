@@ -64,6 +64,11 @@ impl Converter<'_> {
         // 32-bit values written unsigned (4294966596 is -700)
         p.x = signed32(pos.get("horzOffset"));
         p.y = signed32(pos.get("vertOffset"));
+        // held in the body (flowWithText), an object placed from its paragraph doesn't go above
+        // the paragraph's top; across, it goes where its offset says (Hancom's viewer, 2026-11-25)
+        if p.v_rel == Anchor::Paragraph && truthy(pos.get("flowWithText")) {
+            p.y = p.y.max(0);
+        }
         p.align_h = pos.get("horzAlign").unwrap_or("LEFT").into();
         p.align_v = pos.get("vertAlign").unwrap_or("TOP").into();
         p.wrap_text = match el.get("textFlow").unwrap_or("") {
