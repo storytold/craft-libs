@@ -1662,8 +1662,12 @@ impl Lexer<'_> {
             }
         }
         let level = self.delims.len();
+        // A macro's delimiters in the header (`struct S where ty!{}: Copy { .. }`) are not the
+        // fields; the declaration stays pending across them.
         let fields = match self.declares.last().copied() {
-            Some(Declares { level: at, keyword, angle: 0, after_where }) if at == level && (c == '{' || (c == '(' && !after_where)) => {
+            Some(Declares { level: at, keyword, angle: 0, after_where })
+                if at == level && !self.after_bang && (c == '{' || (c == '(' && !after_where)) =>
+            {
                 self.declares.pop();
                 match (keyword, c) {
                     ("enum", '{') => Fields::Variants,
@@ -2512,6 +2516,30 @@ struct Outer<const N: usize = { struct Inner { #[cfg(test)] field: Pair<u8, Tag<
 }
 "#;
         assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six"]);
+    }
+
+    #[test]
+    fn macro_braces_in_a_where_clause_are_not_the_body() {
+        let source = r#"struct S where ty!{}: Copy {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "one".len() }>,
+}
+enum E where m::ty! { u8 }: Copy, F: Fn(u8, u16) {
+    V {
+        #[cfg(test)]
+        field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+        live: Tag<{ "two".len() }>,
+    },
+}
+union U where ty! {}: Copy {
+    #[cfg(test)]
+    field: Pair<u8, Tag<{ "AzureKit".len() }>>,
+    live: Tag<{ "three".len() }>,
+}
+fn f() where ty!{}: Copy { let _ = S { #[cfg(test)] probe: a < b, live: "four" }; }
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "four"]);
     }
 
     #[test]
