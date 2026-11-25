@@ -1227,9 +1227,9 @@ fn a_box_moved_from_inside_snaps_its_edges() {
 }
 
 /// Free Transform's corner snaps to a layer edge and a guide alike; an explicit Distort corner snaps to guides only,
-/// and a corner the folding rule stops short of a guide crossing claims no line.
+/// past the opposite diagonal too, where the box turns concave as the reference application's does.
 #[trial]
-fn a_distort_corner_snaps_to_guides_only_and_claims_no_line_it_stops_short_of() {
+fn a_distort_corner_snaps_to_guides_only_past_the_diagonal_too() {
     let layer_edge = SnapTarget::new(craft_behavior::Axis::X, 230.0, SnapKind::LayerEdge);
     for (mode, expected, lines) in [(TransformMode::Free, Point::new(310.0, 230.0), 2), (TransformMode::Distort, Point::new(310.0, 227.0), 1)] {
         let mut h = harness(BoxState::from_rect(RECT), |config| {
@@ -1247,7 +1247,8 @@ fn a_distort_corner_snaps_to_guides_only_and_claims_no_line_it_stops_short_of() 
         assert_eq!(h.host.borrow().snapped, lines, "{mode:?}");
     }
 
-    // The guides cross at (250, 180), past the diagonal from corner 1 to corner 3: corner 0 there would fold the box.
+    // The guides cross at (250, 180), past the diagonal from corner 1 to corner 3: corner 0 goes there and the box turns
+    // concave (measured on the reference application, 2026-11-24: a Distort corner dragged past the diagonal).
     let mut h = harness(BoxState::from_rect(RECT), |config| {
         config.snap = true;
         config.rules = BoxRules::in_mode(TransformMode::Distort);
@@ -1260,12 +1261,10 @@ fn a_distort_corner_snaps_to_guides_only_and_claims_no_line_it_stops_short_of() 
     frame(&mut h, vec![pointer::moved(from + by(4.0, 4.0))]);
     frame(&mut h, vec![pointer::moved(from + by(147.0, 97.0))]);
     let q = h.state().quad;
-    assert!(q[0].distance(Point::new(250.0, 180.0)) > 1.0, "the crossing would fold the box: {q:?}");
-    for i in 0..4 {
-        let (a, b, c) = (q[i], q[(i + 1) % 4], q[(i + 2) % 4]);
-        assert!((b - a).cross(c - b) > 0.0, "still convex: {q:?}");
-    }
-    assert_eq!(h.host.borrow().snapped, 0, "a stopped corner reports no guide line");
+    assert!(q[0].distance(Point::new(250.0, 180.0)) < 1e-6, "the corner snaps to the crossing: {q:?}");
+    let turns: Vec<f64> = (0..4).map(|i| (q[(i + 1) % 4] - q[i]).cross(q[(i + 2) % 4] - q[(i + 1) % 4])).collect();
+    assert!(turns.iter().any(|t| *t > 0.0) && turns.iter().any(|t| *t < 0.0), "the box is concave: {q:?}");
+    assert_eq!(h.host.borrow().snapped, 2, "both guide lines");
 }
 
 /// Off macOS Control is ⌘: on an explicit Distort corner it keeps the snapping, in Skew and Perspective it suspends it.
@@ -1311,12 +1310,18 @@ fn the_rotate_handle_turns_the_box_about_its_reference_point_and_the_rest_of_the
     let knob = reach[reach.len() / 2];
 
     let centre = RECT.center();
-    for (mods, angle, within) in [(None, 20.0, 0.01), (Some(Mods::SHIFT), 15.0, 1e-6)] {
+    // A turn reads the pointer half a document pixel up and left of it (measured on the reference application), so a
+    // drag 20° about the centre turns by the angle between those points.
+    let end = Affine::rotate_about(20f64.to_radians(), centre) * knob;
+    let read = |p: Point| (p.y - 0.5 - centre.y).atan2(p.x - 0.5 - centre.x);
+    let free = (read(end) - read(knob)).to_degrees();
+    assert!((free - 20.0).abs() < 0.2, "{free}");
+    for (mods, angle, within) in [(None, free, 0.01), (Some(Mods::SHIFT), 15.0, 1e-6)] {
         let mut h = harness(BoxState::from_rect(RECT), |config| {
             handle(config);
             config.mods = mods;
         });
-        drag(&mut h, knob, Affine::rotate_about(20f64.to_radians(), centre) * knob);
+        drag(&mut h, knob, end);
         let state = h.state();
         assert!((state.angle() - angle).abs() < within, "{mods:?}: turned {}, expected {angle}", state.angle());
         assert!(state.pivot.distance(centre) < 1e-9, "about the reference point: {:?}", state.pivot);

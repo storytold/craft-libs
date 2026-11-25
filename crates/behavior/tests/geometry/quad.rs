@@ -101,6 +101,8 @@ fn a_distort_corner_goes_where_it_is_dragged_past_the_fold_too() {
     // (2026-11-24; it shows the source then and commits nothing).
     let q = drag(&start, &start, BoxPart::Corner(0), p(0.0, 0.0), p(300.0, 200.0), Mods::CMD, &rules).quad;
     assert!(near(q[0], p(300.0, 200.0)), "{q:?}");
+    let t = turns(&q);
+    assert!(t.iter().any(|t| *t > 0.0) && t.iter().any(|t| *t < 0.0), "the box no longer turns one way: {q:?}");
     assert_eq!(q[1..], start.quad[1..], "the other corners stay put");
     // A drag that keeps the box convex is not held back.
     let q = drag(&start, &start, BoxPart::Corner(0), p(0.0, 0.0), p(2.0, 4.0), Mods::CMD, &rules).quad;
