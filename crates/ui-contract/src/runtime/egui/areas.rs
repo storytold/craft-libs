@@ -432,6 +432,11 @@ pub(crate) fn move_to_top(ctx: &Context, layer: LayerId) {
     ctx.move_to_top(layer);
 }
 
+/// Whether egui showed `layer` in the last pass.
+pub(crate) fn visible_last_frame(ctx: &Context, layer: LayerId) -> bool {
+    ctx.memory(|memory| memory.areas().visible_last_frame(&layer))
+}
+
 /// Makes `layer` the modal layer of the running pass: layers below it take no input.
 pub(crate) fn set_modal_layer(ctx: &Context, layer: LayerId) {
     ctx.memory_mut(|memory| memory.set_modal_layer(layer));
