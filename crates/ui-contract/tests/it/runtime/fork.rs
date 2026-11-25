@@ -2,13 +2,17 @@
 //! components' scroll offsets included, and keeps a runtime of its own: it runs passes inside the window's, and what it
 //! does stays its own.
 
-use craft_ui::contract::{ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_host::{AppInfo, Host, Jobs, ManualJobs};
+use craft_ui::contract::{ContainerProps, Job, Pending, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::runtime::memory::{ForkError, fork_into};
 use craft_ui::testing::layout::{Block, in_region};
+use craft_ui::testing::memory::{Stage, global};
 use craft_ui::testing::{Frames, pointer, trial};
 use craft_ui_test_kit::body::Slab;
 use egui::{Pos2, Rect, Ui, Vec2};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const VIEW: Vec2 = Vec2::new(300.0, 200.0);
 const ORIGIN: Pos2 = Pos2::new(10.0, 10.0);
@@ -70,4 +74,47 @@ fn fork_into_a_context_running_a_pass_is_refused() {
         *refused.borrow_mut() = Some(fork_into(&window.ctx, ui.ctx()));
     });
     assert_eq!(refused.into_inner(), Some(Err(ForkError::DuringPass)));
+}
+
+fn host_over(jobs: Arc<dyn Jobs>) -> Arc<Host> {
+    Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs).build())
+}
+
+/// The pending result of `"k"` under `id`'s stage, polled in a real pass. The job's answer is how many jobs this run of
+/// the trial submitted before it, so a fork's own submission is told from the window's.
+fn poll(ui: &Ui, id: egui::Id, attempts: &Arc<AtomicUsize>) -> Pending<u32, String> {
+    let attempts = Arc::clone(attempts);
+    let mut stage = Stage::open(ui.ctx(), id);
+    let result = stage
+        .pending("k", move || {
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+            Job::new(move |_, _| Ok::<u32, String>(attempt as u32))
+        })
+        .clone();
+    stage.finish();
+    result
+}
+
+#[trial]
+fn a_copied_pending_slot_takes_no_landed_result_from_the_context_it_was_forked_from() {
+    let jobs = Arc::new(ManualJobs::new());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let id = global("fork.pending", "owner");
+    let mut window = Frames::new();
+    let mut shadow = Frames::new();
+    window.host(host_over(jobs.clone()));
+    shadow.host(host_over(jobs.clone()));
+    let (seen, shadow_seen) = (RefCell::new(Pending::default()), RefCell::new(Pending::default()));
+    window.frame(vec![], |ui| *seen.borrow_mut() = poll(ui, id, &attempts));
+    assert!(matches!(*seen.borrow(), Pending::Loading { .. }), "the window waits for its job: {:?}", seen.borrow());
+    jobs.run_all();
+    assert_eq!(attempts.load(Ordering::Relaxed), 1, "the window submitted the job once");
+
+    fork_into(&window.ctx, &shadow.ctx).expect("the shadow runs no pass");
+    // The shadow polls first, before the window takes what landed.
+    shadow.frame(vec![], |ui| *shadow_seen.borrow_mut() = poll(ui, id, &attempts));
+    window.frame(vec![], |ui| *seen.borrow_mut() = poll(ui, id, &attempts));
+    assert_eq!(*seen.borrow(), Pending::Ready(0), "the window still takes its own landed result");
+    assert_eq!(*shadow_seen.borrow(), Pending::Loading { progress: None }, "the fork submits a job of its own");
+    assert_eq!(attempts.load(Ordering::Relaxed), 2, "the fork's job is its own submission");
 }

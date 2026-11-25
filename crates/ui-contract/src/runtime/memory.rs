@@ -462,6 +462,14 @@ pub(crate) fn adopt<T: Any + Clone + Send + Sync>(ctx: &Context, owner: Id, id: 
     });
 }
 
+/// Edits the shown slot of type `T` under `id` in place, outside a memory stage: the slot moves out of context data,
+/// `f` edits it, and it moves back. `f` runs no call that reaches the context.
+pub(crate) fn edit_shown<T: Slot>(ctx: &Context, id: Id, f: impl FnOnce(&mut T)) {
+    let Some(mut moved) = store::take::<Wrapped<SHOWN, T>>(ctx, id) else { return };
+    f(&mut moved.0);
+    store::put(ctx, id, moved);
+}
+
 /// Moves the shown slot of type `T` under `id` out of context data into the graveyard, as eviction does.
 pub(crate) fn dispose_shown<T: Slot>(ctx: &Context, id: Id) {
     let moved = pass_state::with::<Registry, _>(ctx, |reg| {
@@ -1029,10 +1037,7 @@ pub fn fork_into(from: &Context, to: &Context) -> Result<(), ForkError> {
     if frame::in_pass(to) {
         return Err(ForkError::DuringPass);
     }
-    let copied = from.memory(Clone::clone);
-    let mut replaced = None;
-    let gone = store::keep_own_services(to, || replaced = Some(to.memory_mut(|memory| std::mem::replace(memory, copied))));
-    drop(replaced);
-    drop(gone);
+    store::copy_memory(from, to);
+    pending::detach_fork(from, to);
     Ok(())
 }

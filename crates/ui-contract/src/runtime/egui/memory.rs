@@ -200,6 +200,17 @@ fn put_service<S: Send + 'static>(data: &mut Map, handle: Removed) -> Option<Rem
     }
 }
 
+/// Replaces `to`'s egui memory with a copy of `from`'s, and leaves `to` with its own runtime services (see
+/// [`keep_own_services`]). Both contexts' egui memory closures stay in this module, the one layer the workspace's
+/// `contract/egui-import` rule lets at egui's memory.
+pub(crate) fn copy_memory(from: &Context, to: &Context) {
+    let copied = from.memory(Clone::clone);
+    let mut replaced = None;
+    let gone = keep_own_services(to, || replaced = Some(to.memory_mut(|memory| std::mem::replace(memory, copied))));
+    drop(replaced);
+    drop(gone);
+}
+
 /// Runs `copy` (which replaces `to`'s egui memory) and leaves `to` with the runtime services it had before: the
 /// handles `copy` brought in share another context's state (a `Service` clone shares it), so they are dropped, and a
 /// type `to` had none of starts fresh on first use. Returns what was moved out, to drop outside every lock.
