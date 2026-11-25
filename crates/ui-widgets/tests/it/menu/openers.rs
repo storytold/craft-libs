@@ -127,8 +127,9 @@ fn a_new_right_click_moves_an_open_context_menu_to_the_pointer() {
 }
 
 /// A right-click on a second opener while a menu is open closes that menu and opens the second one, as it does on the
-/// opener of a closed one: the press lay outside the menu it closed, not outside the menu it opened. Held for a press
-/// and its release in one frame too, where the menu the press opens runs its dismissal in the press's own pass.
+/// opener of a closed one: the press lay outside the menu it closed, not outside the menu it opened. A press is judged
+/// against the menus open when it was recorded, so a menu that appears in that same pass, after the record, is not
+/// dismissed by it.
 #[trial]
 fn a_right_click_on_a_second_opener_closes_the_open_menu_and_opens_its_own() {
     const FIRST: Rect = Rect { min: Pos2::new(8.0, 8.0), max: Pos2::new(200.0, 32.0) };
@@ -154,10 +155,13 @@ fn a_right_click_on_a_second_opener_closes_the_open_menu_and_opens_its_own() {
     right_click(&mut fixture, second);
     assert!(fixture.by_label("Second action").is_some(), "the right-click on the second target opens its menu");
     assert!(fixture.by_label("First action").is_none(), "the first menu closed");
-    // The same right-click with its press and release in one frame: the press is not outside the menu it opens.
-    fixture.frame(vec![pointer::moved(first)]).frame(vec![pointer::secondary(first, true), pointer::secondary(first, false)]).settle();
-    assert!(fixture.by_label("First action").is_some(), "the press and its release in one frame open the first menu");
-    assert!(fixture.by_label("Second action").is_none(), "and close the second");
+    // A press in the pass a menu appears in: a double right-click on the first target, its second press in the frame of
+    // the release that opens the first menu. That press is the frame's one press, recorded while the second menu stands;
+    // the first menu appears in that same pass, after the record was made, and the press is not outside it.
+    fixture.frame(vec![pointer::moved(first)]).frame(vec![pointer::secondary(first, true)]);
+    fixture.frame(vec![pointer::secondary(first, false), pointer::secondary(first, true)]).settle();
+    assert!(fixture.by_label("First action").is_some(), "the press recorded in the pass the first menu appears in does not close it");
+    assert!(fixture.by_label("Second action").is_none(), "and the second menu closed");
 }
 
 /// A menu request retains its point until an image arrives from the clipboard in a later frame.
