@@ -942,6 +942,7 @@ ui-system_fonts = ["ui", "craft-ui/system_fonts"]
 ui-testing = ["ui", "craft-ui/testing"]
 
 update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
+update-local-mirror = ["update", "craft-update/local-mirror"]
 update-oci_migration = ["update", "craft-update/oci_migration"]
 
 usd = ["dep:craft-usd"]
