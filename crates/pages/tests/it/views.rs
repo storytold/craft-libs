@@ -107,6 +107,82 @@ impl PageSource for SmallPages {
     }
 }
 
+/// Whether the view shows a horizontal scroll bar at `zoom` in a window 900 wide.
+fn has_horizontal_bar(zoom: f64) -> bool {
+    let (fixture, _, _) = layout_rig(
+        3,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = zoom;
+        }),
+    );
+    horizontal_bar(&fixture).is_some()
+}
+
+#[trial]
+fn the_horizontal_bar_shows_only_when_the_pages_are_wider_than_the_view() {
+    assert!(!has_horizontal_bar(0.5), "pages that fit the width need no horizontal bar");
+    assert!(has_horizontal_bar(3.0), "pages wider than the view scroll sideways");
+}
+
+/// The horizontal scroll bar the fixture shows, if any.
+fn horizontal_bar(fixture: &Fixture) -> Option<egui::Rect> {
+    fixture.by_role(Role::SCROLL_BAR).iter().map(|bar| bar.rect).find(|rect| rect.width() > rect.height())
+}
+
+#[trial]
+fn a_horizontal_thumb_held_while_the_pages_come_to_fit_keeps_its_bar_until_the_release() {
+    let (mut fixture, state, _) = layout_rig(
+        3,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = 3.0;
+        }),
+    );
+    let bar = horizontal_bar(&fixture).expect("pages wider than the view have a horizontal bar");
+    // The view starts at the left edge, so the thumb is at the start of the track.
+    let from = pos2(bar.left() + 4.0, bar.center().y);
+    fixture.drag_hold_at(from, vec2(20.0, 0.0));
+    state.borrow_mut().zoom = 0.5;
+    fixture.idle(3);
+    assert!(horizontal_bar(&fixture).is_some(), "the held thumb keeps its bar, so its release reaches it");
+    fixture.release_at(from + vec2(20.0, 0.0)).idle(2);
+    assert!(horizontal_bar(&fixture).is_none(), "after the release, pages that fit have no horizontal bar");
+}
+
+#[trial]
+fn a_horizontal_thumb_released_while_the_bars_are_not_shown_leaves_no_bar_behind() {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 3.0;
+    })));
+    let full_screen = Rc::new(Cell::new(false));
+    let (kept, edge_to_edge) = (Rc::clone(&state), Rc::clone(&full_screen));
+    let pages = DemoPages::new(3);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).fill_screen(edge_to_edge.get()).show(ui, |_, _| ());
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let bar = horizontal_bar(&fixture).expect("pages wider than the view have a horizontal bar");
+    let from = pos2(bar.left() + 4.0, bar.center().y);
+    fixture.drag_hold_at(from, vec2(20.0, 0.0));
+    // Full screen mid-drag: the bars go, and the release can't reach them.
+    full_screen.set(true);
+    fixture.idle(2);
+    fixture.release_at(from + vec2(20.0, 0.0)).idle(2);
+    full_screen.set(false);
+    {
+        let mut state = state.borrow_mut();
+        state.fit = Fit::None;
+        state.zoom = 0.5;
+    }
+    fixture.idle(3);
+    assert!(horizontal_bar(&fixture).is_none(), "a press that ended unseen leaves no horizontal bar over pages that fit");
+}
+
 #[trial]
 fn go_to_a_narrow_page_brings_it_back_into_horizontal_view() {
     let Rig { mut fixture, state, out, .. } = rig_over(

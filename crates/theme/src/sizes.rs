@@ -107,6 +107,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.bar.status" Num 16.0..=64.0 => s.bar.status;
         "base.size.bar.options" Num 16.0..=80.0 => s.bar.options;
         "base.size.bar.options_narrow" Num 16.0..=80.0 => s.bar.options_narrow;
+        "base.size.bar.column" Num 8.0..=48.0 => s.bar.column;
         "base.size.panel_header" Num 16.0..=64.0 => s.panel_header;
         "base.size.popup_min" Num 64.0..=640.0 => s.popup_min;
         "base.size.thumb.sm" Num 12.0..=96.0 => s.thumb.sm;
@@ -132,6 +133,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.length.number.sm" Num 32.0..=512.0 => s.length.number.sm;
         "base.size.length.number.md" Num 32.0..=512.0 => s.length.number.md;
         "base.size.row.text" Num 12.0..=48.0 => s.row.text;
+        "base.size.row.menu" Num 16.0..=64.0 => s.row.menu;
         "base.size.groove" Num 0.25..=16.0 => s.groove;
         "base.size.ramp.bar" Num 1.0..=64.0 => s.ramp.bar;
         "base.size.ramp.groove" Num 0.25..=32.0 => s.ramp.groove;
@@ -146,6 +148,19 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.dialog.wrap" Num 120.0..=1024.0 => s.dialog.wrap;
         "base.size.dialog.button" Num 24.0..=240.0 => s.dialog.button;
         "base.size.dialog.side_button" Num 24.0..=240.0 => s.dialog.side_button;
+        "base.size.dialog.button_height" Num 16.0..=64.0 => s.dialog.button_height;
+        "base.size.page.column" Num 240.0..=2048.0 => s.page.column;
+        "base.size.page.margin" Num 0.0..=240.0 => s.page.margin;
+        "base.size.page.action" Num 16.0..=96.0 => s.page.action;
+        "base.size.page.button" Num 16.0..=96.0 => s.page.button;
+        "base.size.page.button_side" Num 0.0..=64.0 => s.page.button_side;
+        "base.size.page.gap.title" Num 0.0..=64.0 => s.page.gap.title;
+        "base.size.page.gap.lead" Num 0.0..=64.0 => s.page.gap.lead;
+        "base.size.page.gap.actions" Num 0.0..=64.0 => s.page.gap.actions;
+        "base.size.page.gap.section" Num 0.0..=64.0 => s.page.gap.section;
+        "base.size.page.gap.heading" Num 0.0..=64.0 => s.page.gap.heading;
+        "base.size.page.gap.link" Num 0.0..=64.0 => s.page.gap.link;
+        "base.size.page.link" Num 0.0..=96.0 => s.page.link;
     }
     let sp = &mut b.space;
     leaves! { out;
@@ -159,6 +174,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.space.gap.card_row" Num 0.0..=32.0 => sp.gap.card_row;
         "base.space.pad.control" Num 0.0..=32.0 => sp.pad.control;
         "base.space.pad.regular" Num 0.0..=32.0 => sp.pad.regular;
+        "base.space.pad.dialog" Num 0.0..=48.0 => sp.pad.dialog;
         "base.space.pad.roomy" Num 0.0..=32.0 => sp.pad.roomy;
         "base.space.pad.chip" Num 0.0..=32.0 => sp.pad.chip;
         "base.space.pad.segment" Num 0.0..=32.0 => sp.pad.segment;

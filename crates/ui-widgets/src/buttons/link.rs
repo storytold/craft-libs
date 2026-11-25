@@ -1,4 +1,4 @@
-//! `Link`: text in the accent colour, always underlined, that reports a click.
+//! `Link`: text in the accent colour, underlined unless the app's `LinkLook` says not, that reports a click.
 
 use super::ButtonOutput;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, PaintUi, PartsCx, Pointer as _, Role, Styled as _};
@@ -29,6 +29,8 @@ pub struct LinkStyle {
     /// The link look (`StyleCx::link_look`), or the tone's colour in its place.
     #[style(text)]
     text: TextLook,
+    /// A link standing alone is underlined (`LinkLook::Underlined`).
+    underline: bool,
 }
 
 /// What `parts` found of a link in a sentence, for `update` and `access`.
@@ -53,7 +55,8 @@ struct LaidLine {
     link: Option<(Range<usize>, Rect)>,
 }
 
-/// A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue.
+/// A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue
+/// (`LinkLook::Plain` drops the underline of a link standing alone).
 /// A click, Enter or Space opens the URL in the same tab; a middle click, or a click with a modifier held, opens it in a new tab. The caller can also act on `clicked()`. AccessKit reports the role `Link`, with the URL when
 /// it has one; in a sentence the node is the paragraph, and the link is a `Link` node below each run it covers.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -101,9 +104,12 @@ impl Link {
         self.sentence.as_ref().map(|(before, after)| (resolve(before), resolve(after)))
     }
 
-    /// The run: the link span alone, or the paragraph `before` + link + `after` (empty stretches left out).
-    fn run<'a>(&self, label: &'a str, (before, after): (&'a str, &'a str)) -> TextRun<'a> {
-        let spans = [Span::new(before), Span::new(label).link().underline(), Span::new(after)];
+    /// The run: the link span alone, underlined unless `style` says not, or the paragraph `before` + link + `after`
+    /// (empty stretches left out), the link always underlined.
+    fn run<'a>(&self, style: &LinkStyle, label: &'a str, (before, after): (&'a str, &'a str)) -> TextRun<'a> {
+        let link = Span::new(label).link();
+        let link = if style.underline || self.sentence.is_some() { link.underline() } else { link };
+        let spans = [Span::new(before), link, Span::new(after)];
         TextRun::spans(spans.into_iter().filter(|span| span.link || !span.text.is_empty()).collect()).role(self.role).wrap(self.wrap)
     }
 
@@ -143,7 +149,7 @@ impl Component for Link {
             // PLAN: `link_look` takes the enabled state while the style is per key, so the off state is the look's own.
             None => cx.link_look(true),
         };
-        LinkStyle { metrics: Metrics::new(), focus: cx.focus_look(), text }
+        LinkStyle { metrics: Metrics::new(), focus: cx.focus_look(), text, underline: cx.env::<super::LinkLook>() == super::LinkLook::Underlined }
     }
 
     /// A middle click opens the link in a new tab. In a sentence the node only hovers: its parts take the click.
@@ -157,7 +163,7 @@ impl Component for Link {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let around = self.around(|label| cx.env.resolve(label));
-        let run = self.run(cx.resolved.label, stretches(&around));
+        let run = self.run(cx.style, cx.resolved.label, stretches(&around));
         // At its least a link that elides is at its readable least.
         if cx.proposal == Proposal::Min && self.cut_first() {
             let least = cx.least(&run);
@@ -173,7 +179,7 @@ impl Component for Link {
         self.laid = Laid::default();
         let around = self.around(|label| cx.env.resolve(label));
         let Some((before, label)) = around.as_ref().map(|(before, _)| (before.as_str(), cx.resolved.label)) else { return };
-        let run = self.run(label, stretches(&around));
+        let run = self.run(cx.style, label, stretches(&around));
         let layout = cx.layout_at(&run, cx.content_rect.width());
         let from = before.chars().count();
         let chars = from..from + label.chars().count();
@@ -253,7 +259,7 @@ impl Component for Link {
         let color = cx.resolve(&cx.style.text.color);
         let draw = ui.draw();
         let around = self.around(|label| cx.env.resolve(label));
-        let run = self.run(cx.resolved.label, stretches(&around)).link_color(color.egui());
+        let run = self.run(cx.style, cx.resolved.label, stretches(&around)).link_color(color.egui());
         let layout = draw.layout(&run, cx.content_rect.width());
         draw.galley(origin(cx.content_rect, &cx.flow, &layout), &layout);
     }

@@ -17,10 +17,12 @@ use crate::contract::{
 };
 use crate::display::{Badge, Picture};
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
-use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{Label, Units};
-use crate::style::{ComponentStyle, Corners, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, UiTokens};
+use crate::style::{
+    ComponentStyle, Corners, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceLook, SurfaceStyle, TextLook, UiTokens,
+};
 use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::{Emphasis, Tone};
@@ -185,7 +187,7 @@ impl Sizes {
     fn of(cx: &StyleCx<'_>, card: bool, text: CardText, place: CaptionPlace, regular_card_padding: bool) -> Sizes {
         let (tokens, control) = (cx.tokens, cx.control());
         let line = tokens.typography.get(TypeRole::Caption).line_height;
-        let name_line = if card { tokens.typography.get(text.name_role()).line_height } else { line };
+        let name_line = if card { tokens.typography.get(text.name_role()).line_height * f32::from(text.name_lines()) } else { line };
         let inset = match (card, place) {
             (true, _) if regular_card_padding => tokens.space.pad.regular,
             (true, _) => tokens.space.pad.control,
@@ -300,6 +302,25 @@ pub struct TileStyle {
     pill_radius: CornerRadius,
     plate_radius: CornerRadius,
     sizes: Sizes,
+}
+
+/// The paper of a page picture (`Tile::page`): a document's blank page, which is data, not a theme surface.
+const PAPER: DataColor = DataColor::new(Color32::WHITE); // design: allow[raw-colour/const](a document's blank page is data, not a theme surface)
+
+/// A `width` by `height` page centred in `picture` on the knob's shadow, the theme's short hard shadow of a part lifted
+/// just off the surface under it. The page's longer side spans the largest square the picture holds with the shadow,
+/// so pages of every shape stand at one scale of size.
+fn paint_page(cx: &ContentPainterCx<'_>, picture: Rect, width: f64, height: f64) {
+    let shadow = cx.style_cx().surface(SurfaceKind::Knob).shadow;
+    let reach = shadow.map(|shadow| shadow.margin()).unwrap_or_default();
+    let room = Rect::from_min_max(picture.min + Vec2::new(reach.left, reach.top), picture.max - Vec2::new(reach.right, reach.bottom));
+    let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
+    let scale = (room.width().min(room.height()) / width.max(height)).max(0.0);
+    let page = Rect::from_center_size(room.center(), Vec2::new(width * scale, height * scale));
+    cx.with_draw(|draw| {
+        draw.surface_styled(page, &SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow });
+        draw.data_fill(&PaintShape::Rect(page, CornerRadius::ZERO), PAPER);
+    });
 }
 
 /// A text badge's variant: a solid fill in its tone.
@@ -526,6 +547,16 @@ impl<'a> Tile<'a> {
         self.first = None;
         self.picture = None;
         self
+    }
+
+    /// The picture is a page `width` by `height` (in any one unit: only the shape counts): blank paper lifted on the
+    /// knob's short shadow, as large as the picture holds with its shadow, drawn flat on the tile. A preset or template
+    /// that stands for a document size shows it this way (New Document's presets in `PresetCardLook::Page`, a start
+    /// page's page templates).
+    #[must_use]
+    // design: allow[props/point-size](only the page's shape counts: `width` and `height` are a proportion in any one unit)
+    pub fn page(self, width: f64, height: f64) -> Self {
+        self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
     }
 
     /// A hover action: an `IconButton::command` face shown while the pointer is over the tile, it has visible focus or
@@ -787,6 +818,10 @@ impl Component for Tile<'_> {
                 c(state.selected),
                 c(state.selected),
             ))
+        } else if key.card && key.card_text == CardText::Page {
+            // A page card lies flat on the surface under it.
+            let (rest, hover, pressed) = (c(clear), c(state.hover), c(state.pressed));
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(hover, hover, pressed, hover))
         } else if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
@@ -819,12 +854,13 @@ impl Component for Tile<'_> {
         };
         let radius = UiTokens::corner(tokens.shape.radius.control);
         let mut surface = SurfaceLook::new(fill).radius(radius);
-        if key.action_place == TileActionPlace::Band {
-            // A band tile has no ring round its picture: the selected tile is outlined as a whole.
+        let page_card = key.card && key.card_text == CardText::Page;
+        if key.action_place == TileActionPlace::Band || page_card {
+            // A band tile or a page card has no ring round its picture: the selected tile is outlined as a whole.
             let (line, accent) = (c(clear), c(colors.accent.solid));
             surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
         }
-        let surface = if key.card { surface.kind(SurfaceKind::Raised) } else { surface };
+        let surface = if key.card && !page_card { surface.kind(SurfaceKind::Raised) } else { surface };
         // A selected tile's name reads in the normal ink: the selection is the ring, not a fill under the name.
         let normal = c(text.normal);
         let ink = |base: StyleColor| Stateful::new(base).on(States::new(normal, normal, normal, normal));
@@ -1292,11 +1328,15 @@ impl Tile<'_> {
         let failed = matches!(self.status, TileStatus::Offline(_));
         let look = if failed { &style.name_failed } else { &style.name };
         let ink = cx.resolve(&look.color);
+        let mut name_bottom = placed.name.bottom();
         if !self.renaming {
-            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElideMiddle);
+            let lines = if style.sizes.card { style.sizes.text.name_lines() } else { 1 };
+            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink);
+            let run = if lines > 1 { run.wrap(Wrap::Clamp(lines)).align(HAlign::Center) } else { run.wrap(Wrap::ElideMiddle) };
             let layout = draw.layout(&run, placed.name.width());
             let at = Pos2::new(Self::text_x(placed.name, layout.size().x, cx), placed.name.top());
             draw.galley(at, &layout);
+            name_bottom = at.y + layout.size().y;
             if self.hidden && self.caption == CaptionPlace::Start {
                 let name = Rect::from_min_size(at, layout.size());
                 draw.stroke(&PaintShape::Path(vec![name.left_bottom(), name.right_top()]), StrokeWidth::Medium, ink);
@@ -1305,7 +1345,9 @@ impl Tile<'_> {
         if let (Some(detail), Some(rect)) = (&self.detail, placed.detail) {
             let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, rect.width());
-            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), rect.top()), &layout);
+            // Under a name of fewer lines than the card keeps, the detail follows the name.
+            let top = if style.sizes.card && style.sizes.text.name_lines() > 1 { name_bottom } else { rect.top() };
+            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), top), &layout);
         }
         for (mark, rect) in self.marks.iter().zip(&placed.marks) {
             draw.icon(*rect, &IconSpec::svg(mark.icon.clone()).color(cx.resolve(&style.mark.color)));
