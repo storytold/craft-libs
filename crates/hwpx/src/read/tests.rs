@@ -249,6 +249,28 @@ fn drawing_offsets_are_signed() {
     assert!(x.is_some_and(|x| x < 0.0), "{x:?}");
 }
 
+/// A turned object's frame (hp:sz) is the box around it (viewer, 2026-11-25): a 100 × 40 shape
+/// turned 90° in a 40 × 100 frame keeps its own size, centred in the frame, and is turned there.
+#[test]
+fn a_turned_object_keeps_its_own_size_in_its_frame() {
+    let rect = r#"<hp:rect id="1" zOrder="1" textWrap="IN_FRONT_OF_TEXT"><hp:sz width="4000" height="10000"/><hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="1000"/><hp:rotationInfo angle="90"/><hp:curSz width="10000" height="4000"/><hp:orgSz width="10000" height="4000"/></hp:rect>"#;
+    let doc = read_bytes(&hwpx(&format!(r#"<hs:sec {NS}><hp:p><hp:run>{rect}<hp:t>글</hp:t></hp:run></hp:p></hs:sec>"#))).unwrap();
+    let (w, h, f) = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .find_map(|o| match o {
+            InlineObject::Shape { w, h, float, .. } => Some((*w, *h, float.clone())),
+            _ => None,
+        })
+        .expect("no shape");
+    assert!(w > h, "its own size, wide: {w} × {h}");
+    assert!(f.rot != 0.0, "turned");
+    let (frame_x, frame_y) = (10.0 + 20.0, 50.0); // the frame's centre, points
+    assert!((f.x + w / 2.0 - frame_x).abs() < 0.5 && (f.y + h / 2.0 - frame_y).abs() < 0.5, "centred in the frame: {:?}", (f.x, f.y));
+}
+
 /// A field command's backslashes escape only separators and themselves: a Windows path written
 /// as it is keeps its backslashes, and one written escaped reads the same.
 #[test]

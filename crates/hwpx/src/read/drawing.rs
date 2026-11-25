@@ -268,7 +268,7 @@ impl Converter<'_> {
             (w, h) = (num(sz.get("width")), num(sz.get("height"))); // the frame around the turned shape
         }
         let (w, h) = (w as f64, h as f64);
-        let obj = if el.tag == "hp:container" {
+        let (obj, inner) = if el.tag == "hp:container" {
             // A group stays one object, so its members keep their places relative to each other
             // whether the group is inline or floating.
             let (ow, oh) = org_size(el, w, h);
@@ -280,24 +280,35 @@ impl Converter<'_> {
             let (fw, fh) = frame_size(w, h);
             let (cw, ch) = (hu_pt(ow).clamp(0.0, MAX_LEN_PT), hu_pt(oh).clamp(0.0, MAX_LEN_PT));
             let (ch_w, ch_h) = if cw > 0.0 && ch > 0.0 { (cw, ch) } else { (fw.max(1.0), fh.max(1.0)) };
-            InlineObject::Group { w: fw, h: fh, float: Float::default(), ch_w, ch_h, children, canvas: None }
+            (InlineObject::Group { w: fw, h: fh, float: Float::default(), ch_w, ch_h, children, canvas: None }, (0.0, 0.0, w, h))
         } else {
-            self.body(el, w, h, false)?.0
+            self.body(el, w, h, false)?
         };
-        Some(self.frame(obj, props, &place, w, h))
+        Some(self.frame_box(obj, props, &place, w, h, inner))
     }
 
     /// Places `obj` (its frame `w` × `h` HWPUNIT) on its line or floating.
-    pub(crate) fn frame(&mut self, mut obj: InlineObject, props: &CharProps, p: &Placement, w: f64, h: f64) -> Item {
+    pub(crate) fn frame(&mut self, obj: InlineObject, props: &CharProps, p: &Placement, w: f64, h: f64) -> Item {
+        self.frame_box(obj, props, p, w, h, (0.0, 0.0, w, h))
+    }
+
+    /// Places `obj` drawn in the box `inner` (x, y, w, h HWPUNIT, from the frame's top left) of
+    /// its frame `w` × `h`: a turned object's frame is the box around it, and the object keeps
+    /// its own size, turned about the frame's centre.
+    fn frame_box(&mut self, mut obj: InlineObject, props: &CharProps, p: &Placement, w: f64, h: f64, inner: (f64, f64, f64, f64)) -> Item {
         self.pic_n += 1;
         let n = self.pic_n;
         // one side may be 0 (a level or upright line)
         let (w, h) = if w > 0.0 || h > 0.0 { (w.max(0.0), h.max(0.0)) } else { (1.0, 1.0) };
-        let (fw, fh) = frame_size(w, h);
+        let own_box = inner.2 != w || inner.3 != h;
+        let (fw, fh) = if own_box { frame_size(inner.2, inner.3) } else { frame_size(w, h) };
         let mut float = if p.inline {
             Float::default()
         } else {
-            let (x, y) = self.offsets(p, w, h);
+            let (mut x, mut y) = self.offsets(p, w, h);
+            if own_box {
+                (x, y) = (x.saturating_add(trunc(inner.0)), y.saturating_add(trunc(inner.1)));
+            }
             let dist = p.dist.map(|d| emu_pt(emu(d as f64)).clamp(0.0, 1584.0));
             let z = u32::try_from(Z_BASE.saturating_add(p.z)).ok();
             Float {
@@ -320,8 +331,9 @@ impl Converter<'_> {
         // The object's own turn and flips.
         let own = obj.float_mut().map(|f| Spin::new(f.rot, f.flip_h, f.flip_v)).unwrap_or_default();
         float.set_spin(own);
-        // An inline turned object keeps its line to the frame.
-        float.bare_turn = p.inline && float.rot != 0.0;
+        // An inline turned object keeps its line to the frame: drawn in the frame's size, it
+        // overhangs it; in its own size, its turned bounds are the frame.
+        float.bare_turn = p.inline && float.rot != 0.0 && !own_box;
         resize(&mut obj, fw, fh);
         if let Some(f) = obj.float_mut() {
             *f = float;
