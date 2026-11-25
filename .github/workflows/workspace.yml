@@ -78,7 +78,8 @@ jobs:
       - id: profile
         run: |
           echo "profile=$(cat .config/cargo-dev.toml .config/cargo-ci.toml | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
-          echo "deps-profile=$(python3 -I - <<'PY'
+          # An assignment, so a failure stops the step (`bash -e`) instead of naming every entry `v2-`.
+          deps=$(python3 -I - <<'PY'
           import hashlib, json, tomllib
           kept = []
           for path in (".config/cargo-dev.toml", ".config/cargo-ci.toml"):
@@ -87,7 +88,8 @@ jobs:
               kept.append([dev, dev.pop("package", {}).get("*", {})])
           print(hashlib.sha256(json.dumps(kept, sort_keys=True).encode()).hexdigest()[:12])
           PY
-          )" >> "$GITHUB_OUTPUT"
+          )
+          echo "deps-profile=$deps" >> "$GITHUB_OUTPUT"
 
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
