@@ -188,3 +188,25 @@ fn a_repeated_dictionary_entry_cannot_grow_a_table_past_the_text_budget() {
     assert_eq!(read(&bytes).unwrap().rows.len(), 64);
 }
 
+#[test]
+fn an_empty_row_group_reads() {
+    let schema = Arc::new(parse_message_type("message test { OPTIONAL BYTE_ARRAY name (UTF8); OPTIONAL DOUBLE amount; }").unwrap());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, Default::default()).unwrap();
+    for rows in [0, 2] {
+        let mut group = writer.next_row_group().unwrap();
+        let definitions = vec![1i16; rows];
+        let mut col = group.next_column().unwrap().unwrap();
+        col.typed::<ByteArrayType>().write_batch(&vec![ByteArray::from("a"); rows], Some(&definitions), None).unwrap();
+        col.close().unwrap();
+        let mut col = group.next_column().unwrap().unwrap();
+        col.typed::<DoubleType>().write_batch(&vec![1.5; rows], Some(&definitions), None).unwrap();
+        col.close().unwrap();
+        group.close().unwrap();
+    }
+    let bytes = writer.into_inner().unwrap();
+    let reader = SerializedFileReader::new(Bytes::from(bytes.clone())).unwrap();
+    let empty = reader.metadata().row_group(0).column(0);
+    assert_eq!((empty.data_page_offset(), empty.compressed_size()), (0, 0));
+    let table = read(&bytes).unwrap();
+    assert_eq!(table.rows, vec![vec![Value::Text("a".into()), Value::Float(1.5)]; 2]);
+}

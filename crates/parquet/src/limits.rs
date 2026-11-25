@@ -209,6 +209,11 @@ pub(crate) fn pages(bytes: &[u8], metadata: &ParquetMetaData, footer_start: usiz
             let start = usize::try_from(column.dictionary_page_offset().unwrap_or(column.data_page_offset()))
                 .map_err(|_| invalid("Invalid Parquet column offset"))?;
             let length = usize::try_from(column.compressed_size()).map_err(|_| invalid("Invalid Parquet column length"))?;
+            // A writer records offset 0 for a chunk with no pages, such as one in an empty row
+            // group. The chunk has no bytes to check.
+            if length == 0 && column.num_values() == 0 {
+                continue;
+            }
             let end = start
                 .checked_add(length)
                 .filter(|end| *end <= footer_start && start >= 4)
