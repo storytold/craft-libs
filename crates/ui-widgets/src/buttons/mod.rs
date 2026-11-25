@@ -53,6 +53,9 @@ pub enum GroupLevel {
 ///
 /// A page's call to action (a start page's primary link) sets `CallToAction`: a `Button` there stands
 /// `size.page.action` high, its label strong.
+///
+/// A start page's New and Open stand in `PageAction`: a `Button` there stands at least `size.page.button` high, with at
+/// least `size.page.button_side` at each side of its label.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
@@ -66,6 +69,8 @@ pub enum ControlPlace {
     SideMenu,
     /// A page's call to action.
     CallToAction,
+    /// A start page's New and Open.
+    PageAction,
 }
 
 /// How an icon button or a segment that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`),

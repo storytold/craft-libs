@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 
 use crate::{
     BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
-    GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PageSizes, PaneSizes, PlotSizes,
-    RadiusSet, RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens, TypeStyle,
-    TypeTokens, WellShape, WindowSizes,
+    GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PageGaps, PageSizes, PaneSizes,
+    PlotSizes, RadiusSet, RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens,
+    TypeStyle, TypeTokens, WellShape, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -222,10 +222,20 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.dialog.wrap", len(*wrap));
     out.line("size.dialog.button", len(*button));
     out.line("size.dialog.side_button", len(*side_button));
-    let PageSizes { column, margin, action } = page;
+    let PageSizes { column, margin, action, button, button_side, gap, link } = page;
     out.line("size.page.column", len(*column));
     out.line("size.page.margin", len(*margin));
     out.line("size.page.action", len(*action));
+    out.line("size.page.button", len(*button));
+    out.line("size.page.button_side", len(*button_side));
+    let PageGaps { title, lead, actions, section, heading, link: link_gap } = gap;
+    out.line("size.page.gap.title", len(*title));
+    out.line("size.page.gap.lead", len(*lead));
+    out.line("size.page.gap.actions", len(*actions));
+    out.line("size.page.gap.section", len(*section));
+    out.line("size.page.gap.heading", len(*heading));
+    out.line("size.page.gap.link", len(*link_gap));
+    out.line("size.page.link", len(*link));
 }
 
 fn slot(s: FontSlot) -> &'static str {

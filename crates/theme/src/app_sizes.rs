@@ -34,8 +34,17 @@ pub struct AppSizes {
 }
 
 /// Base values that follow another's override when an app sets none of their own: a push button stands a control high
-/// in an app that changes the control's height alone.
-const FOLLOWS: [(&str, &str); 1] = [("size.button", "size.control.md")];
+/// in an app that changes the control's height alone, and a page keeps the rhythm of the gaps its own stand in for.
+const FOLLOWS: [(&str, &str); 8] = [
+    ("size.button", "size.control.md"),
+    ("size.page.button", "size.button"),
+    ("size.page.gap.title", "space.gap.tight"),
+    ("size.page.gap.lead", "space.gap.section"),
+    ("size.page.gap.actions", "space.gap.stack"),
+    ("size.page.gap.section", "space.gap.section"),
+    ("size.page.gap.heading", "space.gap.stack"),
+    ("size.page.gap.link", "space.gap.stack"),
+];
 
 /// The base paths an app may override: sizes, spacing, corner radii, strokes and type sizes, not the
 /// edge or fonts.
@@ -85,9 +94,9 @@ impl AppSizes {
     }
 
     /// The override of base value `path` (with no `base.` prefix) in `merged`: its own, else the one of the value it
-    /// follows when it has none.
+    /// follows when it has none, and so on down the chain.
     pub(crate) fn override_of<'m>(merged: &'m SizeMap, path: &str) -> Option<&'m SizeValue> {
-        merged.get(path).or_else(|| FOLLOWS.iter().find(|(own, _)| *own == path).and_then(|(_, of)| merged.get(*of)))
+        merged.get(path).or_else(|| FOLLOWS.iter().find(|(own, _)| *own == path).and_then(|(_, of)| Self::override_of(merged, of)))
     }
 
     /// The overrides for `size`: `all`, with the set's own map over it.

@@ -779,6 +779,18 @@ pub enum Gap {
     CardRow,
     /// `space.gap.inline`: between groups of tools in a rail.
     Inline,
+    /// `size.page.gap.title`: between a page's title and its subtitle.
+    PageTitle,
+    /// `size.page.gap.lead`: between a page's title and subtitle and the actions under them.
+    PageLead,
+    /// `size.page.gap.actions`: between a page's New and Open.
+    PageActions,
+    /// `size.page.gap.section`: between the sections of a page's column.
+    PageSection,
+    /// `size.page.gap.heading`: between a page section's heading and its body.
+    PageHeading,
+    /// `size.page.gap.link`: between a page's links.
+    PageLink,
 }
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows

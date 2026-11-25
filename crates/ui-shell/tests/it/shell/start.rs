@@ -874,6 +874,7 @@ fn column_page_in(files: Vec<RecentFile>, root: RootEnv) -> (Fixture, f32) {
     let links = vec![
         StartLink::url("Join the community", Some(craft_behavior::IconId::new("globe")), "https://example.com/chat").primary(),
         StartLink::url("Website", Some(craft_behavior::IconId::new("globe")), "https://example.com"),
+        StartLink::url("Source", None, "https://example.com/source"),
     ];
     let mut fixture = Fixture::new(move |ui| {
         *widest.borrow_mut() = Env::of(ui).tokens.size.page.column;
@@ -960,4 +961,49 @@ fn a_column_page_follows_its_page_sizes() {
     };
     let (low, high) = (shown(20.0, 24.0), shown(90.0, 48.0));
     assert!(high.0 > low.0 && high.1 > low.1, "a larger margin lowers the column and a larger action height raises the pill: {low:?} {high:?}");
+}
+
+/// A Column page takes its rhythm from the page sizes, which an app sets (VectorCraft's roomier Home): the subtitle
+/// under the title, New and Open under them and beside each other, the sections, a heading over its body and the links
+/// each stand further apart, and New and Open stand taller and wider.
+#[trial]
+fn a_column_page_takes_its_rhythm_from_the_page_sizes() {
+    let shown = |roomy: bool| {
+        let mut sizes = AppSizes::default();
+        let page = [
+            ("size.page.gap.title", 16.0),
+            ("size.page.gap.lead", 40.0),
+            ("size.page.gap.actions", 30.0),
+            ("size.page.gap.section", 48.0),
+            ("size.page.gap.heading", 24.0),
+            ("size.page.gap.link", 20.0),
+            ("size.page.link", 36.0),
+            ("size.page.button", 40.0),
+            ("size.page.button_side", 30.0),
+        ];
+        for (path, value) in page.into_iter().filter(|_| roomy) {
+            sizes.all.insert(path.to_owned(), SizeValue::Number(value));
+        }
+        let mut root = RootEnv::default();
+        root.sizes = Arc::new(sizes);
+        let (fixture, _) = column_page_in(vec![RecentFile::new("/tmp/Report.vc", "Report.vc")], root);
+        let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("{label} shows")).rect;
+        let (title, subtitle, new, open) = (rect("Welcome"), rect("Make something"), rect("New…"), rect("Open…"));
+        let (recent, community, pill, website, source) =
+            (rect("Recent"), rect("Community"), rect("Join the community"), rect("Website"), rect("Source"));
+        [
+            ("title to subtitle", subtitle.top() - title.bottom()),
+            ("subtitle to New", new.top() - subtitle.bottom()),
+            ("New to Open", open.left() - new.right()),
+            ("New's height", new.height()),
+            ("New's width", new.width()),
+            ("New to Recent", recent.top() - new.bottom()),
+            ("Community to the pill", pill.top() - community.bottom()),
+            ("pill to link", website.top() - pill.bottom()),
+            ("link to link", source.top() - website.bottom()),
+        ]
+    };
+    for ((what, standard), (_, roomy)) in shown(false).into_iter().zip(shown(true)) {
+        assert!(roomy > standard + 1.0, "{what} grows with the page sizes: {standard} → {roomy}");
+    }
 }

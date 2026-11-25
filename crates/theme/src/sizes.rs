@@ -150,6 +150,15 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.page.column" Num 240.0..=2048.0 => s.page.column;
         "base.size.page.margin" Num 0.0..=240.0 => s.page.margin;
         "base.size.page.action" Num 16.0..=96.0 => s.page.action;
+        "base.size.page.button" Num 16.0..=96.0 => s.page.button;
+        "base.size.page.button_side" Num 0.0..=64.0 => s.page.button_side;
+        "base.size.page.gap.title" Num 0.0..=64.0 => s.page.gap.title;
+        "base.size.page.gap.lead" Num 0.0..=64.0 => s.page.gap.lead;
+        "base.size.page.gap.actions" Num 0.0..=64.0 => s.page.gap.actions;
+        "base.size.page.gap.section" Num 0.0..=64.0 => s.page.gap.section;
+        "base.size.page.gap.heading" Num 0.0..=64.0 => s.page.gap.heading;
+        "base.size.page.gap.link" Num 0.0..=64.0 => s.page.gap.link;
+        "base.size.page.link" Num 0.0..=96.0 => s.page.link;
     }
     let sp = &mut b.space;
     leaves! { out;

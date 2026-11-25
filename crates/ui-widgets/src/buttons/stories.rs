@@ -355,6 +355,25 @@ fn button_as_call_to_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     shown.into()
 }
 
+/// A start page's New and Open in the `PageAction` place: at least `size.page.button` high with at least
+/// `size.page.button_side` beside their labels (a push button's own in the built-in size sets).
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "As page actions")]
+fn button_as_page_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ControlPlace::PageAction);
+        },
+        |ui| {
+            Row::new().show(ui, |ui, _| {
+                Button::new("New file").variant(Variant::PRIMARY).show(ui);
+                Button::new("Open").show(ui);
+            })
+        },
+    )
+    .into()
+}
+
 /// One toggle off and one on with an icon, as the gallery card shows them.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

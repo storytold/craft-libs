@@ -136,7 +136,7 @@ impl Gap {
 }
 
 pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
-    let gaps = &tokens.tokens().space.gap;
+    let (gaps, page) = (&tokens.tokens().space.gap, &tokens.tokens().size.page.gap);
     match gap {
         Gap::None => 0.0,
         Gap::Tight => gaps.tight,
@@ -146,6 +146,12 @@ pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
         Gap::CardColumn => gaps.card_column,
         Gap::CardRow => gaps.card_row,
         Gap::Inline => gaps.inline,
+        Gap::PageTitle => page.title,
+        Gap::PageLead => page.lead,
+        Gap::PageActions => page.actions,
+        Gap::PageSection => page.section,
+        Gap::PageHeading => page.heading,
+        Gap::PageLink => page.link,
         _ => gaps.row,
     }
 }

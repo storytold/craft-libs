@@ -37,3 +37,21 @@ fn a_push_button_follows_the_control_height_unless_the_app_sets_its_own() {
     let own = applied(&json!({ "all": { "size.control.md": 40, "size.button": 30 } }));
     assert!(own.button < own.control.md, "the app's own button height wins");
 }
+
+/// A page gap follows the gap it stands in for when the app sets only that one, and the page's New and Open follow a
+/// push button down the chain to the control height; the app's own page values win.
+#[test]
+fn a_page_follows_the_values_it_stands_in_for_unless_the_app_sets_its_own() {
+    let base = crate::sizes::builtin(Size::Compact).base;
+    let applied = |v: &Value| {
+        let mut preset = base;
+        sizes(v).apply_base(Size::Compact, &mut preset);
+        preset
+    };
+    let follows = applied(&json!({ "all": { "space.gap.section": 30, "size.control.md": 40 } }));
+    assert!(follows.space.gap.section > base.space.gap.section, "the override widens the section gap");
+    assert_eq!(follows.size.page.gap.section, follows.space.gap.section, "the page's section gap follows it");
+    assert_eq!(follows.size.page.button, follows.size.control.md, "New and Open follow the push button to the control height");
+    let own = applied(&json!({ "all": { "space.gap.section": 30, "size.page.gap.section": 40 } }));
+    assert!(own.size.page.gap.section > own.space.gap.section, "the app's own page gap wins");
+}

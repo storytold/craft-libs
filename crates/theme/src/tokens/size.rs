@@ -325,6 +325,33 @@ pub struct PageSizes {
     pub margin: f32,
     /// The height of a page's call to action (`ControlPlace::CallToAction`).
     pub action: f32,
+    /// The height of a page's New and Open (`ControlPlace::PageAction`). An app that sets `size.button` and not this
+    /// keeps them a push button high.
+    pub button: f32,
+    /// The least room at each side of a page action's label; 0 keeps a push button's.
+    pub button_side: f32,
+    /// A page's rhythm, each following the gap it stands in for unless an app sets it (`Gap::Page*`).
+    pub gap: PageGaps,
+    /// The least height of a page's link row; 0 keeps a link its text's height.
+    pub link: f32,
+}
+
+/// The gaps of a full-window page's column, in logical pixels (`Gap::PageTitle` and its siblings). The size sets give
+/// each the value of the gap it follows, so a page keeps that rhythm unless an app sets its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageGaps {
+    /// Between the title and the subtitle (follows `space.gap.tight`).
+    pub title: f32,
+    /// Between the title and subtitle and New and Open under them (follows `space.gap.section`).
+    pub lead: f32,
+    /// Between New and Open (follows `space.gap.stack`).
+    pub actions: f32,
+    /// Between the column's sections (follows `space.gap.section`).
+    pub section: f32,
+    /// Between a section's heading and its body (follows `space.gap.stack`).
+    pub heading: f32,
+    /// Between the links (follows `space.gap.stack`).
+    pub link: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.

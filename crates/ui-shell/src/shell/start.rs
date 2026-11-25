@@ -859,7 +859,7 @@ impl StartScreen<'_> {
                 let width = room.width().min(column);
                 let at = Rect::from_min_size(pos2(room.center().x - width / 2.0, room.top() + margin), vec2(width, room.height()));
                 ui.scope_builder(UiBuilder::new().max_rect(at), |ui| {
-                    let _ = Stack::new().id_salt("start-column").gap(Gap::Section).fill_width().show(ui, |ui, _| {
+                    let _ = Stack::new().id_salt("start-column").gap(Gap::PageSection).fill_width().show(ui, |ui, _| {
                         column_heading(&page, ui, title.as_ref(), subtitle.as_ref());
                         host_sections(ui, StartPlace::BeforeRecent);
                         // The recent files as rows in the app's order, only when there are any.
@@ -1172,9 +1172,9 @@ fn page_section(title: Label) -> Section<'static> {
     Section::fixed(title).header_gap(Gap::Section)
 }
 
-/// A section of a Column page: its title a heading with no rule, its body a stack gap under it.
+/// A section of a Column page: its title a heading with no rule, its body the page's heading gap under it.
 fn column_section(title: Label) -> Section<'static> {
-    Section::fixed(title).quiet_header().header_gap(Gap::Stack)
+    Section::fixed(title).quiet_header().header_gap(Gap::PageHeading)
 }
 
 /// `body` centred across the column.
@@ -1182,69 +1182,98 @@ fn centred(ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) {
     let _ = Row::new().align(RowAlign::Center).fill_width().show(ui, body);
 }
 
-/// The top of a Column page: the title over the subtitle, then New and Open, each centred.
+/// The top of a Column page: the title over the subtitle, then New and Open as page actions, each centred.
 fn column_heading(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, subtitle: Option<&Label>) {
-    if title.is_some() || subtitle.is_some() {
-        let _ = Stack::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| {
-            if let Some(title) = title {
-                centred(ui, |ui, _| drop(Text::new(title.clone()).role(TypeRole::Display).show(ui)));
-            }
-            if let Some(subtitle) = subtitle {
-                centred(ui, |ui, _| drop(Text::new(subtitle.clone()).shade(Shade::Muted).show(ui)));
-            }
-        });
+    let (heading, actions) = (title.is_some() || subtitle.is_some(), page.offers_new || page.offers_open);
+    if !heading && !actions {
+        return;
     }
-    if page.offers_new || page.offers_open {
-        let _ = Row::new().align(RowAlign::Center).gap(Gap::Stack).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::Content));
-    }
+    let _ = Stack::new().id_salt("start-heading").gap(Gap::PageLead).fill_width().show(ui, |ui, _| {
+        if heading {
+            let _ = Stack::new().gap(Gap::PageTitle).fill_width().show(ui, |ui, _| {
+                if let Some(title) = title {
+                    centred(ui, |ui, _| drop(Text::new(title.clone()).role(TypeRole::Display).show(ui)));
+                }
+                if let Some(subtitle) = subtitle {
+                    centred(ui, |ui, _| drop(Text::new(subtitle.clone()).shade(Shade::Muted).show(ui)));
+                }
+            });
+        }
+        if actions {
+            let place = |overrides: &mut Overrides| {
+                overrides.values.set(ControlPlace::PageAction);
+            };
+            let _ = with_env(ui, place, |ui| {
+                Row::new().align(RowAlign::Center).gap(Gap::PageActions).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::Content))
+            });
+        }
+    });
 }
 
 /// The links of a Column page under their heading, each centred: the call to action ([`StartLink::primary`]) as a
-/// pill with its icon, the others as links without their icons. A URL opens in the browser (the URL is its tooltip);
-/// a command fires as a pointer activation.
+/// pill with its icon, the others as links without their icons, each run of them in rows `size.page.link` high a
+/// page link gap apart. A URL opens in the browser (the URL is its tooltip); a command fires as a pointer activation.
 fn column_links(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, links: &[StartLink]) {
     if links.is_empty() {
         return;
     }
-    let _ = Stack::new().id_salt("start-links").gap(Gap::Stack).label(page.words.start_links.clone()).fill_width().show(ui, |ui, cx| {
+    let stack = Stack::new().id_salt("start-links").gap(Gap::PageHeading).label(page.words.start_links.clone()).fill_width();
+    let _ = stack.show(ui, |ui, cx| {
         if let Some(title) = title {
             centred(ui, |ui, _| drop(Text::new(title.clone()).role(TypeRole::BodyStrong).show(ui)));
         }
-        for (at, link) in links.iter().enumerate() {
-            let url = match &link.target {
-                StartLinkTarget::Url(url) => Some(url),
-                StartLinkTarget::Command(_) => None,
-            };
-            let mut activated = false;
-            centred(ui, |ui, _| {
-                activated = if link.primary {
-                    let mut button = Button::new(link.label.clone()).id_salt(("start-link", at)).variant(Variant::Custom(CALL_TO_ACTION_LOOK));
-                    if let Some(icon) = &link.icon {
-                        button = button.icon(icon.clone());
+        let mut at = 0;
+        for run in links.chunk_by(|a, b| !a.primary && !b.primary) {
+            if run[0].primary {
+                column_link(ui, cx, at, &run[0]);
+            } else {
+                let _ = Stack::new().gap(Gap::PageLink).fill_width().show(ui, |ui, cx| {
+                    for (offset, link) in run.iter().enumerate() {
+                        column_link(ui, cx, at + offset, link);
                     }
-                    if let Some(url) = url {
-                        button = button.tooltip(url.clone());
-                    }
-                    let place = |overrides: &mut Overrides| {
-                        overrides.values.set(ControlPlace::CallToAction);
-                    };
-                    clicked(&with_env(ui, place, |ui| button.show(ui)))
-                } else {
-                    let mut text = Link::new(link.label.clone()).id_salt(("start-link", at));
-                    if let Some(url) = url {
-                        text = text.url(url.clone()).tooltip(url.clone());
-                    }
-                    clicked(&text.show(ui))
-                };
-            });
-            // A link opens its own URL; the pill is a button, so the page opens its URL.
-            match (&link.target, activated) {
-                (StartLinkTarget::Url(url), true) if link.primary => cx.open_url(url, false),
-                (StartLinkTarget::Command(command), true) => drop(commands::fire(ui.ctx(), command.clone(), FireSource::Pointer)),
-                _ => {}
+                });
             }
+            at += run.len();
         }
     });
+}
+
+/// Link `at` of a Column page, centred: the call to action as a pill, another as a link.
+fn column_link(ui: &mut Ui, cx: &mut BodyCx<'_>, at: usize, link: &StartLink) {
+    let url = match &link.target {
+        StartLinkTarget::Url(url) => Some(url),
+        StartLinkTarget::Command(_) => None,
+    };
+    let mut activated = false;
+    let row = Row::new().align(RowAlign::Center).fill_width();
+    let row = if link.primary { row } else { row.least_height(Env::of(ui).tokens.size.page.link) };
+    let _ = row.show(ui, |ui, _| {
+        activated = if link.primary {
+            let mut button = Button::new(link.label.clone()).id_salt(("start-link", at)).variant(Variant::Custom(CALL_TO_ACTION_LOOK));
+            if let Some(icon) = &link.icon {
+                button = button.icon(icon.clone());
+            }
+            if let Some(url) = url {
+                button = button.tooltip(url.clone());
+            }
+            let place = |overrides: &mut Overrides| {
+                overrides.values.set(ControlPlace::CallToAction);
+            };
+            clicked(&with_env(ui, place, |ui| button.show(ui)))
+        } else {
+            let mut text = Link::new(link.label.clone()).id_salt(("start-link", at));
+            if let Some(url) = url {
+                text = text.url(url.clone()).tooltip(url.clone());
+            }
+            clicked(&text.show(ui))
+        };
+    });
+    // A link opens its own URL; the pill is a button, so the page opens its URL.
+    match (&link.target, activated) {
+        (StartLinkTarget::Url(url), true) if link.primary => cx.open_url(url, false),
+        (StartLinkTarget::Command(command), true) => drop(commands::fire(ui.ctx(), command.clone(), FireSource::Pointer)),
+        _ => {}
+    }
 }
 
 /// New and Open, the first Tab stops of the page; Open alone where the app offers no New.
