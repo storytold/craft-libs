@@ -99,7 +99,7 @@ pub(crate) fn dynamic_range_optimizer(note: &makernote::MakerNote) -> Option<boo
 /// Verified on 15 files from 13 bodies covering seven `Tag2010` layouts: the deciphered `SonyISO` field encodes
 /// the Exif ISO (`100 · 2^(16 − v/256)`), the green level is 255–256 throughout, and on the ILCE-7M3 the deciphered
 /// `WB_RGBLevels` equal the plain raw-IFD `0x7313` levels.
-const DECIPHER: [u8; 256] = {
+pub(super) const DECIPHER: [u8; 256] = {
     let mut inv = [0u8; 256];
     let mut p = 0usize;
     while p < 256 {
@@ -569,6 +569,12 @@ fn dng_default_crop(raw: &Ifd, w: usize, h: usize) -> Option<Rect> {
     None
 }
 
+/// The optical reference rectangle the lens tables address: the DNG-style default crop when the file records one,
+/// else the image crop (for a body without crop tags, the inset [`recorded_size_crop`] gives: (8,8) on the A7R II).
+fn lens_reference(raw: &Ifd, crop: Rect, w: usize, h: usize) -> Rect {
+    dng_default_crop(raw, w, h).unwrap_or(crop)
+}
+
 /// A rectangle exactly as an origin tag and a size tag record it (two values each), when both exist and fit `usize`.
 fn recorded_rect(raw: &Ifd, origin: u16, size: u16) -> Option<Rect> {
     let (Some(origin), Some(size)) = (raw.u64s(origin), raw.u64s(size)) else { return None };
@@ -596,14 +602,16 @@ fn default_crop(raw: &Ifd, mn: Option<&makernote::MakerNote>, exif_size: Option<
 
 /// The crop for the maker note's `FullImageSize` `full` (width, height: the camera JPEG's size) and the Exif image
 /// size `exif` (`PixelXDimension` × `PixelYDimension`) in a `w × h` frame; `None` when they don't describe a crop of
-/// it. Older bodies store a few columns of padding at the right edge of the raw frame (constant values, 8–32 columns
-/// on the samples we checked) inside a frame 16–48 pixels wider than `FullImageSize`, so the crop is anchored at
-/// the left, which removes them while keeping the CFA phase. In the camera's 3:2 mode it is also anchored at the
-/// top. An in-camera aspect ratio narrower than the frame (16:9) is centred vertically, as measured by registering
+/// it. The frame is 8–24 rows taller and 16–48 columns wider than `FullImageSize`. The image sits in the middle of
+/// the rows, and the same number of columns in from the left: the rest of the spare columns are padding at the right
+/// edge (constant values, 8–32 columns on the samples we checked). That is where Adobe DNG Converter's default crop
+/// puts it on 33 of 53 bodies without crop tags and within 2–8 columns on the others, whose horizontal origin no
+/// tag records. Offsets stay even, keeping the CFA phase. An in-camera aspect ratio narrower than the frame (16:9)
+/// is centred vertically, as measured by registering
 /// each camera JPEG on its raw (the ILCE-7SM2's 4240 × 2384 at y 228–232 of 2848; the DSLR-A580's 4912 × 2760 at
 /// y 258–262 of 3280; storytold/lightcraft#535): its height comes from `FullImageSize` (ILCE-7SM2) or, when that still says
-/// 3:2, from an Exif image size of the same width (DSLR-A580). `centred` centres the window in both directions
-/// instead (see [`default_crop`]).
+/// 3:2, from an Exif image size of the same width (DSLR-A580); only the latter still tells the 3:2 inset, so the
+/// former stays at the left. `centred` centres the window in both directions instead (see [`default_crop`]).
 fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: usize, centred: bool) -> Option<Rect> {
     let (fw, fh) = (usize::try_from(full.0).ok()?, usize::try_from(full.1).ok()?);
     // only a plausible trim of the width: never more than 64 pixels, never an enlargement
@@ -614,20 +622,25 @@ fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: u
         Some((ew, eh)) if ew == fw && eh > 0 && eh < fh => eh,
         _ => fh,
     };
-    // even offsets keep the CFA phase
-    let x = if centred { ((w - fw) / 2) & !1 } else { 0 };
+    // even offsets keep the CFA phase; the inset is that of the 3:2 image `FullImageSize` names, when it names one
+    let inset = if fh.saturating_add(64) >= h { ((h - fh) / 2) & !1 } else { 0 };
+    let x = if centred { ((w - fw) / 2) & !1 } else { inset.min(w - fw) & !1 };
     if height.saturating_add(64) >= h {
-        return Some(Rect::new(x, if centred { ((h - height) / 2) & !1 } else { 0 }, fw, height));
+        return Some(Rect::new(x, if centred { ((h - height) / 2) & !1 } else { inset }, fw, height));
     }
     // an in-camera aspect ratio: at least half the frame's height, centred
     (height * 2 >= h).then(|| Rect::new(x, ((h - height) / 2) & !1, fw, height))
 }
 
+/// The raw image IFD: the largest CFA image or IFD with Sony's tone curve, else the largest four-sample IFD with a
+/// pixel-shift photometric (Sony's 32892, or the LinearRaw 34892 the ILCE-1M2 writes), so a composite written without
+/// the curve is still found without ever displacing a CFA image. [`pixel_shift_layout`] then checks model and size.
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
-    tiff.all_ifds()
-        .into_iter()
-        .filter(|i| i.u16(t::PHOTOMETRIC) == Some(photometric::CFA) || i.contains(TONE_CURVE))
-        .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
+    let ifds = tiff.all_ifds();
+    let area = |i: &&Ifd| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0));
+    let raw = ifds.iter().copied().filter(|i| i.u16(t::PHOTOMETRIC) == Some(photometric::CFA) || i.contains(TONE_CURVE)).max_by_key(area);
+    let composite = |i: &&Ifd| matches!(i.u16(t::PHOTOMETRIC), Some(32892 | 34892)) && i.u16(t::SAMPLES_PER_PIXEL) == Some(4);
+    raw.or_else(|| ifds.iter().copied().filter(composite).max_by_key(area))
 }
 
 fn valid_arw2_curve(curve: &[u64]) -> bool {
@@ -643,6 +656,139 @@ fn declared_arw2_curve(raw: &Ifd, compression: u16, one_byte_per_sample: bool) -
     Ok(curve)
 }
 
+/// Whether the file is a merged pixel-shift composite, and for a 16-shot one the crop of its doubled frame. Its
+/// four samples per pixel count against the sample limit.
+fn pixel_shift_frame(
+    info: &ImageInfo,
+    model: &str,
+    raw: &Ifd,
+    (w, h): (usize, usize),
+    samples: u64,
+    limits: &Limits,
+) -> Result<(bool, Option<Rect>)> {
+    let layout = pixel_shift_layout(info, model)?;
+    let high_res_crop = (layout == Some(PixelShiftLayout::HighResolution)).then(|| high_resolution_pixel_shift_crop(raw, w, h)).transpose()?;
+    let channels = usize::from(info.samples_per_pixel.max(1));
+    if samples as usize > limits.samples() / channels {
+        return Err(RawError::Limit("Sony sensor samples"));
+    }
+    Ok((layout.is_some(), high_res_crop))
+}
+
+/// Merged pixel-shift files store R,G1,G2,B at every pixel.
+/// Keep the sensor scale and WB, and combine the two greens with nearest-integer rounding.
+fn pixel_shift_rgb(data: &mut RawData, sensor_width: usize, high_res_crop: Option<Rect>) -> Result<()> {
+    let RawData::U16(values) = data else { return Err(RawError::Unsupported("float Sony pixel shift".into())) };
+    if !values.len().is_multiple_of(4) {
+        return Err(RawError::Corrupt("Sony pixel-shift channel count".into()));
+    }
+    if let Some(crop) = high_res_crop {
+        check_pixel_shift_bands(values, sensor_width, crop)?;
+    }
+    let pixels = values.len() / 4;
+    for i in 0..pixels {
+        let Some(&[r, g1, g2, b]) = values.get(i * 4..i * 4 + 4) else {
+            return Err(RawError::Corrupt("Sony pixel-shift sample".into()));
+        };
+        let rgb = [r, (u32::from(g1) + u32::from(g2)).div_ceil(2) as u16, b];
+        let Some(out) = values.get_mut(i * 3..i * 3 + 3) else {
+            return Err(RawError::Corrupt("Sony pixel-shift output".into()));
+        };
+        out.copy_from_slice(&rgb);
+    }
+    values.truncate(pixels * 3);
+    Ok(())
+}
+
+fn check_pixel_shift_bands(values: &[u16], sensor_width: usize, crop: Rect) -> Result<()> {
+    let row_words = sensor_width * 4;
+    let Some(rows) = values.get(crop.y * row_words..(crop.y + crop.height) * row_words) else {
+        return Err(RawError::Corrupt("Sony Pixel Shift crop outside the decoded strip".into()));
+    };
+    let columns = crop.x * 4..(crop.x + crop.width) * 4;
+    // These composites retain the sensor black pedestal even in deep shadows. A band
+    // of literal zeros over all four channels inside the crop indicates missing data.
+    // Two gallery ARQs contain only a top portion despite declaring the full strip length.
+    // `chunks`, not `chunks_exact`: the last band may be shorter than 64 rows and is checked too.
+    for band in rows.chunks(row_words * 64) {
+        if !band.chunks_exact(row_words).any(|row| row.get(columns.clone()).is_some_and(|words| words.iter().any(|&word| word != 0))) {
+            return Err(RawError::Corrupt("Sony Pixel Shift strip contains a blank sensor band".into()));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PixelShiftLayout {
+    Native,
+    HighResolution,
+}
+
+fn pixel_shift_layout(info: &ImageInfo, model: &str) -> Result<Option<PixelShiftLayout>> {
+    if info.samples_per_pixel != 4 {
+        return Ok(None);
+    }
+    // Other four-channel layouts need their own sample-backed channel ordering.
+    // Sony's own photometric value 32892; the α1 II writes DNG LinearRaw (34892) for the same R,G1,G2,B samples,
+    // matched channel by channel against one of its source frames (means within 0.1 %).
+    let photometric = info.photometric == 32892 || model == "ILCE-1M2" && info.photometric == 34892;
+    if info.compression == 1 && photometric && info.planar == 1 && info.bits() == 14 && info.bits_per_sample.iter().all(|&b| b == 14) {
+        match (model, info.width, info.height) {
+            ("ILCE-7RM3", _, _) | ("ILCE-1M2", 8672, 5784) => return Ok(Some(PixelShiftLayout::Native)),
+            ("ILCE-7RM4" | "ILCE-7RM5", 19200, 12752) => return Ok(Some(PixelShiftLayout::HighResolution)),
+            ("ILCE-1", 17344, 11568) => return Ok(Some(PixelShiftLayout::HighResolution)),
+            _ => {}
+        }
+    }
+    Err(RawError::Unsupported("unverified Sony four-channel layout".into()))
+}
+
+fn high_resolution_pixel_shift_crop(raw: &Ifd, w: usize, h: usize) -> Result<Rect> {
+    // The A1, A7R IV and A7R V 16-shot ARQs keep the default crop in single-shot
+    // coordinates. The embedded preview uses the doubled default origin.
+    let crop = recorded_rect(raw, t::DEFAULT_CROP_ORIGIN, t::DEFAULT_CROP_SIZE)
+        .filter(|r| r.width > 0 && r.height > 0 && *r == r.clipped(w / 2, h / 2))
+        .ok_or_else(|| RawError::Corrupt("Sony Pixel Shift default crop is missing or outside the sensor".into()))?;
+    Ok(Rect::new(2 * crop.x, 2 * crop.y, 2 * crop.width, 2 * crop.height))
+}
+
+/// Sony's crop tags placed with the DNG-style default crop: along an axis they do not narrow, the default crop's
+/// origin stands. The A7R III, IIIA, IV and IVA record a horizontal origin of 0 in `0x74c7` beside a default origin of
+/// 8 or 32 for the same width; the camera JPEG, Sony's converter and Adobe's all frame the image at the default
+/// origin (measured by registering each on the raw). An in-camera aspect ratio still narrows its own axis.
+fn sony_crop_on_default(sony: Rect, default: Option<Rect>) -> Rect {
+    let Some(default) = default else { return sony };
+    Rect::new(
+        if sony.width == default.width { default.x } else { sony.x },
+        if sony.height == default.height { default.y } else { sony.y },
+        sony.width,
+        sony.height,
+    )
+}
+
+/// The image crop: Sony's crop tags (see [`sony_crop_on_default`]), else the default crop (MakerNote, Exif size),
+/// else the old `SR2SubIFD`'s.
+fn image_crop(
+    raw: &Ifd,
+    exif: Option<&Ifd>,
+    note: Option<&makernote::MakerNote>,
+    sr2: Option<&crate::sr2::SubIfd>,
+    (w, h): (usize, usize),
+    packed12: bool,
+) -> Rect {
+    match (raw.u64s(CROP_TOP_LEFT).as_deref(), raw.u64s(CROP_SIZE).as_deref()) {
+        (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => {
+            sony_crop_on_default(Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize), dng_default_crop(raw, w, h)).clipped(w, h)
+        }
+        _ => {
+            let exif_size = exif.and_then(|e| Some((e.u64(t::PIXEL_X_DIMENSION)?, e.u64(t::PIXEL_Y_DIMENSION)?)));
+            let crop = default_crop(raw, note, exif_size, w, h, packed12);
+            // no crop from any other source: the old SR2SubIFD's
+            if crop == Rect::new(0, 0, w, h) { sr2.and_then(|s| sr2_old_crop(s, w, h)).unwrap_or(crop) } else { crop }
+        }
+    }
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("TIFF without IFDs".into()))?;
@@ -653,6 +799,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let samples = crate::checked_pixel_count(w as u64, h as u64).ok_or(RawError::Limit("image too large"))?;
     let bits = info.bits() as u32;
     let linear_rgb = info.compression == 7 && info.photometric == photometric::YCBCR;
+    let model = ifd0.string(t::MODEL).unwrap_or_default();
+    let (pixel_shift, high_res_crop) = pixel_shift_frame(&info, &model, raw, (w, h), samples, limits)?;
     let chunks = info.chunks(bytes.len() as u64);
     let strip_len = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     // The row-per-w-bytes (ARW2) layout stores exactly one byte per pixel in a single strip; all 108 such files in the test
@@ -661,7 +809,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let one_byte_per_sample = chunks.len() == 1 && strip_len == samples;
     let declared_curve = declared_arw2_curve(raw, info.compression, one_byte_per_sample)?;
     let packed12 = info.compression == 32767 && is_packed12(&info, chunks.len(), strip_len);
-    let (data, out_bits) = match info.compression {
+    let (mut data, out_bits) = match info.compression {
         7 if linear_rgb => (RawData::U16(read_ycbcr_tiles(bytes, &info, raw, mode, limits)?), 14),
         32767 if one_byte_per_sample && mode == Mode::Header => {
             chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
@@ -718,7 +866,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         32766 => return Err(RawError::Unsupported("ARW6 without exactly one strip".into())),
         1 => {
-            let word16 = strip_len >= (w * h * 2) as u64;
+            // a pixel-shift composite stores four samples a pixel, as the reader reads them
+            let word16 = strip_len >= samples.saturating_mul(if pixel_shift { 8 } else { 2 });
+            if pixel_shift && !word16 {
+                return Err(RawError::Unsupported("Sony pixel-shift composite without 16-bit words".into()));
+            }
             let packing = if word16 { Packing::Word16 } else { Packing::Msb };
             let order = match chunks.first().and_then(|c| chunk_bytes(bytes, c)) {
                 Some(strip) if word16 => word16_order(strip, bits, tiff.order),
@@ -728,6 +880,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         _ => (read_image_in(mode, bytes, &info, tiff.order, Packing::Msb, limits)?, bits),
     };
+    if pixel_shift && mode == Mode::Full {
+        pixel_shift_rgb(&mut data, w, high_res_crop)?;
+    }
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float ARW".into())) };
     // Sony's "12-bit uncompressed" mode stores 16-bit words on the 14-bit scale,
     // including dark frames with no sample above 4095. The layout, not the scene's
@@ -752,6 +907,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Some(v) if linear_rgb && !v.is_empty() => {
             (BlackLevel::uniform((v.iter().sum::<f64>() / v.len() as f64) as f32 + YCBCR_OFFSET), crate::LevelSource::Metadata)
         }
+        Some([r, g1, g2, b]) if pixel_shift => (
+            BlackLevel { repeat_rows: 1, repeat_cols: 1, values: vec![*r as f32, ((g1 + g2) / 2.0) as f32, *b as f32], ..Default::default() },
+            crate::LevelSource::Metadata,
+        ),
         Some([a, b, c, d]) => (
             BlackLevel { repeat_rows: 2, repeat_cols: 2, values: vec![*a as f32, *b as f32, *c as f32, *d as f32], ..Default::default() },
             crate::LevelSource::Metadata,
@@ -776,11 +935,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
     };
     let black = BlackLevel { values: black.values.iter().map(|v| v * unit).collect(), ..black };
-    let model = ifd0.string(t::MODEL).unwrap_or_default();
-    let mn = tiff
-        .exif()
-        .and_then(|e| e.get(t::MAKER_NOTE))
-        .and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
+    let mn_entry = tiff.exif().and_then(|e| e.get(t::MAKER_NOTE));
+    let mn =
+        mn_entry.and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
+    // the capture-gain diagnostics only from a note whose gain tags are not repeated (see `gain_tag_repeated`)
+    let gains_note = mn.as_ref().filter(|note| {
+        let header = if note.kind == makernote::MakerNoteKind::Sony { 12 } else { 0 };
+        let ifd = mn_entry.map_or(0, |e| e.offset).saturating_add(header);
+        !crate::arw_capture_gains::gain_tag_repeated(bytes, ifd, note.order)
+    });
     let body = sony_body(&ifd0.string(t::MAKE).unwrap_or_default(), &model, mn.as_ref());
     let wb = raw
         .f64s(WB_RGGB)
@@ -788,20 +951,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         .or_else(|| rggb_gains(&sr2()?.shorts(WB_RGGB)?))
         .or_else(|| mn.as_ref().and_then(|m| tag2010_wb(body, m.ifd.bytes(MN_TAG2010)?, m.order)))
         .or_else(|| sr2_old_wb(sr2()?));
-    let crop = match (raw.u64s(CROP_TOP_LEFT).as_deref(), raw.u64s(CROP_SIZE).as_deref()) {
-        (Some([x, y]), Some([cw, ch])) if *cw > 0 && *ch > 0 => Rect::new(*x as usize, *y as usize, *cw as usize, *ch as usize).clipped(w, h),
-        _ => {
-            let exif_size = tiff.exif().and_then(|e| Some((e.u64(t::PIXEL_X_DIMENSION)?, e.u64(t::PIXEL_Y_DIMENSION)?)));
-            let crop = default_crop(raw, mn.as_ref(), exif_size, w, h, packed12);
-            // no crop from any other source: the old SR2SubIFD's
-            if crop == Rect::new(0, 0, w, h) { sr2().and_then(|s| sr2_old_crop(s, w, h)).unwrap_or(crop) } else { crop }
-        }
-    };
+    let image_crop = image_crop(raw, tiff.exif(), mn.as_ref(), sr2(), (w, h), packed12);
+    // a 16-shot composite frames its doubled single-shot default crop
+    let crop = high_res_crop.unwrap_or(image_crop);
     // The lens-correction record. The distortion table is centred on the DNG-style default crop when the file has
-    // one: on the ILCE-7RM4A it starts at x = 32 where Sony's crop tags (the image crop, unchanged) start at 0, and
-    // the warp was validated against Sony's exports with that centre. The opcode's centre is in active-area
-    // coordinates, so it stays on the optical centre whichever crop frames the image.
-    let reference = dng_default_crop(raw, w, h).unwrap_or(crop);
+    // one: on the ILCE-7RM4A it starts at x = 32 where Sony's crop tags start at 0, and the warp was validated
+    // against Sony's exports with that centre (the image crop takes the same origin, see `sony_crop_on_default`).
+    // The opcode's centre is in active-area coordinates, so it stays on the optical centre whichever crop frames
+    // the image.
+    let reference = high_res_crop.unwrap_or_else(|| lens_reference(raw, crop, w, h));
     let geometry = SonyLensGeometry {
         storage_width: w,
         storage_height: h,
@@ -815,11 +973,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     };
     // decrypted for the copies' agreement check too, not only when a plain field is missing: a few dozen kB, found by
     // reading only three `SR2Private` entries (see `sr2::SubIfd::read`)
-    let (mut sony_lens, warp) = crate::arw_lens::corrections(bytes, tiff.order, (raw, tiff.bigtiff), sr2(), &model, geometry);
+    let (mut sony_lens, warp, fallback_warp) =
+        crate::arw_lens::corrections_and_off_warp(bytes, tiff.order, (raw, tiff.bigtiff), sr2(), &model, geometry);
     // The ILCE-7RM6's tables follow other conventions, measured against its camera JPEGs ([`crate::arw_lens_rm6`]);
-    // its allowlist and `arw_lens`'s are disjoint, so at most one of them produces an opcode. Both the image framing
-    // and the table geometry must stay within the validated 3:2 scope.
-    let rm6: Vec<crate::Opcode> = if linear_rgb || !crate::arw_lens::is_3_2(crop) {
+    // a warp `arw_lens` selected takes precedence. Both the image framing and the table geometry must stay within the
+    // validated 3:2 scope.
+    let rm6: Vec<crate::Opcode> = if linear_rgb || !crate::arw_lens::is_3_2(crop) || warp.is_some() {
         Vec::new()
     } else {
         // the lens and focal length as Exif states them (LensModel, FocalLength in the Exif IFD or IFD0)
@@ -834,13 +993,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         // distortion only: its lateral CA planes are off (see `arw_lens_rm6::lens_opcodes`)
         record.distortion.status = crate::lens_metadata::SonyLensStatus::Applied;
     }
+    let sony_camera_settings = mn.as_ref().and_then(|note| crate::arw_camera_settings::read(&note.ifd, &model));
     let img = RawImage {
         format: RawFormat::Arw,
         width: w,
         height: h,
-        cpp: if linear_rgb { 3 } else { 1 },
+        cpp: if linear_rgb || pixel_shift { 3 } else { 1 },
         data,
-        cfa: if linear_rgb { None } else { Some(cfa) },
+        cfa: if linear_rgb || pixel_shift { None } else { Some(cfa) },
         bits: out_bits,
         black,
         white: vec![white],
@@ -856,12 +1016,37 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         linearization_table: None,
         pixel_aspect: 1.0,
         // only validated components become opcodes (see `arw_lens`, and `arw_lens_rm6` for the ILCE-7RM6)
-        opcodes: OpcodeLists { list3: warp.into_iter().chain(rm6).collect(), ..Default::default() },
+        // the lens warp the camera did not apply rides alongside, unless another map already corrects the lens
+        opcodes: OpcodeLists {
+            fallback_warp: fallback_warp.filter(|_| rm6.is_empty()),
+            list3: warp.into_iter().chain(rm6).collect(),
+            ..Default::default()
+        },
         camera: Camera::from_ifd0(ifd0),
         cinema: Default::default(),
-        lens_metadata: LensMetadata { sony: sony_lens },
+        lens_metadata: LensMetadata {
+            sony: sony_lens,
+            sony_camera_settings: sony_camera_settings.clone(),
+            sony_capture_gains: gains_note.and_then(|note| crate::arw_capture_gains::read(&note.ifd)),
+            sony_capture_gains_q12: gains_note
+                .and_then(|note| {
+                    if model == "SLT-A58" {
+                        return crate::arw_capture_gains::read_slt_nominal(&note.ifd, &model, sony_camera_settings.as_ref()?.shading);
+                    }
+                    crate::arw_capture_gains::read_q12(&note.ifd).or_else(|| {
+                        let setting = sony_camera_settings.as_ref()?.shading;
+                        crate::arw_capture_gains::read_slt_nominal(&note.ifd, &model, setting)
+                            .or_else(|| crate::arw_capture_gains::read_early_rx1(&note.ifd, &model, setting))
+                    })
+                })
+                .map(|mut capture| {
+                    capture.source_bits = Some(bits);
+                    capture
+                }),
+            sony_capture_gains_q11: gains_note.and_then(|note| crate::arw_capture_gains::read_q11(&note.ifd)).map(Box::new),
+        },
         level_sources: crate::LevelSources { black: black_source, white: white_source },
-        notices: crate::RawNotices { assumed_cfa: assumed_cfa && !linear_rgb, ..Default::default() },
+        notices: crate::RawNotices { assumed_cfa: assumed_cfa && !linear_rgb && !pixel_shift, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -870,6 +1055,33 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The α1 II's four-shot composite (Imaging Edge `_PSMS.ARQ`): R,G1,G2,B at every pixel like the A7R III's, but
+    /// tagged DNG LinearRaw. Another body's or size's four-channel layout stays refused until a sample confirms it.
+    #[test]
+    fn four_shot_pixel_shift_layouts() {
+        let info = |photometric: u16, w: u32, h: u32| ImageInfo {
+            width: w,
+            height: h,
+            bits_per_sample: vec![14; 4],
+            samples_per_pixel: 4,
+            compression: 1,
+            photometric,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Strips { rows_per_strip: h },
+            offsets: vec![0],
+            byte_counts: vec![u64::from(w) * u64::from(h) * 8],
+        };
+        let layout = |p, w, h, model| pixel_shift_layout(&info(p, w, h), model).ok().flatten();
+        assert_eq!(layout(34892, 8672, 5784, "ILCE-1M2"), Some(PixelShiftLayout::Native));
+        assert_eq!(layout(32892, 8000, 5320, "ILCE-7RM3"), Some(PixelShiftLayout::Native));
+        assert_eq!(layout(34892, 8000, 5320, "ILCE-7RM3"), None, "LinearRaw only where measured");
+        assert_eq!(layout(34892, 9600, 6376, "ILCE-7RM5"), None);
+        assert!(pixel_shift_layout(&info(34892, 9600, 6376,), "ILCE-7RM5").is_err());
+    }
 
     #[test]
     fn downsized_lossless_is_linear_rgb_not_cfa() {
@@ -909,14 +1121,127 @@ mod tests {
     }
 
     #[test]
+    fn sony_crop_takes_the_default_origin_on_axes_it_does_not_narrow() {
+        let default = Some(Rect::new(32, 20, 9504, 6336));
+        // A7R IV / IVA and A7R III: the same size recorded at x = 0
+        assert_eq!(sony_crop_on_default(Rect::new(0, 20, 9504, 6336), default), Rect::new(32, 20, 9504, 6336));
+        assert_eq!(sony_crop_on_default(Rect::new(0, 8, 7952, 5304), Some(Rect::new(8, 8, 7952, 5304))), Rect::new(8, 8, 7952, 5304));
+        // an in-camera aspect ratio narrows one axis and keeps the default origin on the other (A7R IIIA 16:9)
+        assert_eq!(sony_crop_on_default(Rect::new(0, 422, 7952, 4472), Some(Rect::new(8, 8, 7952, 5304))), Rect::new(8, 422, 7952, 4472));
+        assert_eq!(sony_crop_on_default(Rect::new(560, 20, 8448, 6336), default), Rect::new(560, 20, 8448, 6336));
+        // agreeing tags and files without a default crop are unchanged
+        assert_eq!(sony_crop_on_default(Rect::new(32, 20, 9504, 6336), default), Rect::new(32, 20, 9504, 6336));
+        assert_eq!(sony_crop_on_default(Rect::new(0, 20, 9504, 6336), None), Rect::new(0, 20, 9504, 6336));
+    }
+
+    #[test]
+    fn pixel_shift_bands_cover_the_last_partial_band() {
+        // two words wide, four samples each: 80 rows are one full band of 64 and a partial one of 16
+        let (width, crop) = (2, Rect::new(0, 0, 2, 80));
+        let mut values = vec![600u16; 2 * 4 * 80];
+        assert!(check_pixel_shift_bands(&values, width, crop).is_ok());
+        values[2 * 4 * 64..].fill(0);
+        assert!(check_pixel_shift_bands(&values, width, crop).is_err(), "a blank partial band at the bottom");
+    }
+
+    #[test]
+    fn a_pixel_shift_composite_reports_no_assumed_cfa() {
+        // with and without the tone curve every composite seen so far carries: the image IFD is found either way
+        for tone_curve in [true, false] {
+            let file = craft_tiff::TiffWriter::default().write(&[pixel_shift_composite(4, tone_curve)]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&file, mode, &Limits::default()).unwrap();
+                // three-channel RGB: no CFA is used, so none was assumed
+                assert_eq!((image.cpp, image.cfa.is_none(), image.notices.assumed_cfa), (3, true, false), "{tone_curve} {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_linear_raw_composite_without_a_tone_curve_reaches_the_layout_check() {
+        use craft_tiff::Value;
+        // the ILCE-1M2 writes DNG LinearRaw (34892) for its composites: without the curve it is still found, and an
+        // unverified size is then refused by `pixel_shift_layout`, not by the IFD search
+        let mut raw = pixel_shift_composite(4, false);
+        raw.set(t::MODEL, Value::Ascii("ILCE-1M2".into()));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![34892]));
+        let file = craft_tiff::TiffWriter::default().write(&[raw]).unwrap();
+        let tiff = Tiff::parse(&file).unwrap();
+        assert_eq!(raw_ifd(&tiff).and_then(|i| i.u16(t::PHOTOMETRIC)), Some(34892));
+        for mode in [Mode::Header, Mode::Full] {
+            let result = decode(&file, mode, &Limits::default());
+            assert!(matches!(&result, Err(RawError::Unsupported(m)) if m.contains("four-channel")), "{mode:?}: {:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn a_composite_without_a_tone_curve_does_not_displace_a_cfa_image() {
+        use craft_tiff::{IfdBuilder, Value};
+        let mut cfa = IfdBuilder::new();
+        cfa.set(t::IMAGE_WIDTH, Value::Long(vec![2]));
+        cfa.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
+        cfa.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        let file = craft_tiff::TiffWriter::default().write(&[pixel_shift_composite(8, false), cfa]).unwrap();
+        let tiff = Tiff::parse(&file).unwrap();
+        assert_eq!(raw_ifd(&tiff).and_then(|i| i.u16(t::PHOTOMETRIC)), Some(photometric::CFA));
+    }
+
+    #[test]
+    fn a_packed_pixel_shift_composite_is_refused_as_unsupported() {
+        use craft_tiff::{ImageData, TiffWriter};
+        // 16-bit words (8 bytes a pixel) decode; 14-bit samples packed into 7 bytes a pixel are a layout no
+        // composite has shown, so they are refused rather than read word by word or bit by bit
+        for (bytes_per_pixel, decodes) in [(8, true), (7, false)] {
+            let mut raw = pixel_shift_composite(4, true);
+            raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![vec![0x58; 4 * 2 * bytes_per_pixel]] });
+            let file = TiffWriter::default().write(&[raw]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let result = decode(&file, mode, &Limits::default());
+                if decodes {
+                    assert!(result.is_ok(), "{bytes_per_pixel} {mode:?}: {:?}", result.err());
+                } else {
+                    assert!(matches!(result, Err(RawError::Unsupported(_))), "{bytes_per_pixel} {mode:?}: {:?}", result.err());
+                }
+            }
+        }
+    }
+
+    /// A 2-row ILCE-7RM3 pixel-shift composite `width` pixels wide: R, G1, G2, B, 14 bits, Sony's photometric 32892.
+    fn pixel_shift_composite(width: u32, tone_curve: bool) -> craft_tiff::IfdBuilder {
+        use craft_tiff::{IfdBuilder, ImageData, Value};
+        let mut raw = IfdBuilder::new();
+        raw.set(t::MAKE, Value::Ascii("SONY".into()));
+        raw.set(t::MODEL, Value::Ascii("ILCE-7RM3".into()));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![width]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14, 14, 14, 14]));
+        raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![4]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![32892]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        if tone_curve {
+            raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+        }
+        let words: Vec<u8> = std::iter::repeat_n(600u16.to_le_bytes(), width as usize * 2 * 4).flatten().collect();
+        raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![words] });
+        raw
+    }
+
+    #[test]
     fn recorded_size_crops_in_camera_aspect_ratios() {
-        // 3:2: anchored at the top-left, as before (ILCE-7S, DSLR-A700 whose Exif size is the whole frame)
-        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 2832)), 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
-        assert_eq!(recorded_size_crop((4272, 2848), Some((4288, 2856)), 4288, 2856, false), Some(Rect::new(0, 0, 4272, 2848)));
-        assert_eq!(recorded_size_crop((4240, 2832), None, 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
-        // 16:9 from FullImageSize (ILCE-7SM2) and from the Exif size when FullImageSize says 3:2 (DSLR-A580): centred
+        // 3:2: in the middle of the rows and as far in from the left (ILCE-7S; DSLR-A700, whose Exif size is the whole
+        // frame; ILCE-6000; ILCE-7R), the origins Adobe DNG Converter's default crop has for these bodies
+        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 2832)), 4288, 2848, false), Some(Rect::new(8, 8, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4272, 2848), Some((4288, 2856)), 4288, 2856, false), Some(Rect::new(4, 4, 4272, 2848)));
+        assert_eq!(recorded_size_crop((4240, 2832), None, 4288, 2848, false), Some(Rect::new(8, 8, 4240, 2832)));
+        assert_eq!(recorded_size_crop((6000, 4000), None, 6048, 4024, false), Some(Rect::new(12, 12, 6000, 4000)));
+        assert_eq!(recorded_size_crop((7360, 4912), None, 7392, 4920, false), Some(Rect::new(4, 4, 7360, 4912)));
+        // never past the right edge, and on even offsets (a 10-row margin gives 4, not 5)
+        assert_eq!(recorded_size_crop((4284, 2832), None, 4288, 2848, false), Some(Rect::new(4, 8, 4284, 2832)));
+        assert_eq!(recorded_size_crop((4272, 2848), None, 4288, 2858, false), Some(Rect::new(4, 4, 4272, 2848)));
+        // 16:9 from FullImageSize (ILCE-7SM2), which no longer tells the 3:2 inset, and from the Exif size when
+        // FullImageSize says 3:2 (DSLR-A580): centred vertically
         assert_eq!(recorded_size_crop((4240, 2384), Some((4240, 2384)), 4288, 2848, false), Some(Rect::new(0, 232, 4240, 2384)));
-        assert_eq!(recorded_size_crop((4912, 3264), Some((4912, 2760)), 4928, 3280, false), Some(Rect::new(0, 260, 4912, 2760)));
+        assert_eq!(recorded_size_crop((4912, 3264), Some((4912, 2760)), 4928, 3280, false), Some(Rect::new(8, 260, 4912, 2760)));
         // offsets stay even (CFA phase)
         assert_eq!(recorded_size_crop((4240, 2386), None, 4288, 2848, false).map(|r| r.y), Some(230));
         // not a crop of this frame: wider than it, far narrower, under half its height, empty, hostile values
@@ -925,7 +1250,7 @@ mod tests {
         assert_eq!(recorded_size_crop((4240, 1000), None, 4288, 2848, false), None);
         assert_eq!(recorded_size_crop((0, 2832), None, 4288, 2848, false), None);
         assert_eq!(recorded_size_crop((u64::MAX, u64::MAX), Some((u64::MAX, 1)), 4288, 2848, false), None);
-        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 0)), 4288, 2848, false), Some(Rect::new(0, 0, 4240, 2832)));
+        assert_eq!(recorded_size_crop((4240, 2832), Some((4240, 0)), 4288, 2848, false), Some(Rect::new(8, 8, 4240, 2832)));
         // centred (packed 12-bit DSLR-A900: 6048 x 4032 in the middle of 6080 x 4048)
         assert_eq!(recorded_size_crop((6048, 4032), Some((6048, 4032)), 6080, 4048, true), Some(Rect::new(16, 8, 6048, 4032)));
         assert_eq!(recorded_size_crop((6046, 4030), None, 6080, 4048, true), Some(Rect::new(16, 8, 6046, 4030)));

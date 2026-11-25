@@ -17,9 +17,178 @@ pub struct LensMetadata {
     /// encrypted `SR2SubIFD` copies. `None` when neither directory holds any of them.
     #[serde(default)]
     pub sony: Option<SonyLensCorrections>,
+    /// Separate Sony MakerNote camera-menu settings. These can exist without lens tables and are not
+    /// declarations that the corresponding corrections have changed stored RAW pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sony_camera_settings: Option<SonyCameraSettings>,
+    /// Candidate capture-gain data from a measured Sony MakerNote layout. Diagnostic only: its
+    /// presence is not a declaration that every supported storage mode has applied these gains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sony_capture_gains: Option<SonyCaptureGains>,
+    /// Older signature-selected Sony capture-gain layout, kept in its original Q12 units. Its adjacent
+    /// parameters are not the newer record's radius/center fields. Diagnostic only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sony_capture_gains_q12: Option<SonyCaptureGainsQ12>,
+    /// Three 32-knot curves and the native optical slot in the newer 0x9416 layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sony_capture_gains_q11: Option<Box<SonyCaptureGainsQ11>>,
 }
 
-/// Sony's in-file lens-correction record: three independent components, each a camera setting and a radial table.
+impl LensMetadata {
+    /// Whether the 16-word Sony shading table restates the recorded green
+    /// capture curve as Q14 attenuation. Pixel measurements still establish
+    /// when the capture gain has affected the samples.
+    pub fn sony_shading_matches_capture_gain(&self) -> bool {
+        let Some(shading) = self.sony.as_ref().map(|sony| &sony.shading) else { return false };
+        let Some(words) = shading.table.value.filter(|_| shading.samples_per_channel == Some(16)) else { return false };
+        let matches = |gains: [u32; 32], unity: u32| {
+            words
+                .into_iter()
+                .zip(gains.into_iter().step_by(2))
+                .all(|(word, gain)| gain >= unity && i64::from(word) == 16384 * i64::from(gain - unity) / i64::from(gain))
+        };
+        self.sony_capture_gains_q12.as_ref().is_some_and(|g| matches(g.gains_q12[1].map(u32::from), 4096))
+            || self.sony_capture_gains.as_ref().is_some_and(|g| matches(g.gains_q16[1], 65536))
+    }
+}
+
+/// The 4416-byte 0x9416 Q11 layouts with signatures `[8, 128, 90, 13]` and `[9, 128, 98, 13]`.
+/// The recorded plane order is preserved. Unity is 2048.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonyCaptureGainsQ11 {
+    pub gains_q11: [[u16; 32]; 3],
+    /// Shared sensor-coordinate center in the measured captures.
+    pub center: [u16; 2],
+    pub native_shading: SonyNativeShading,
+}
+
+/// Stored values from measured `0x9405` Q12 layouts. The source layout stays explicit because
+/// the adjacent parameters need not have the same interpretation across record versions.
+/// A record alone cannot establish the capture or optical coordinates. See [`crate::sony_shading`] for the measured scope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonyCaptureGainsQ12 {
+    /// Older saved records omit this field and use the original 2300-byte layout.
+    #[serde(default, skip_serializing_if = "SonyCaptureGainsQ12Layout::is_standard")]
+    pub layout: SonyCaptureGainsQ12Layout,
+    /// Original ARW sample precision. A lossless DNG may store 12-bit or 14-bit source samples in
+    /// 16-bit words. Older DNG archives omit this evidence and cannot select a precision-specific map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bits: Option<u32>,
+    /// Four 32-knot arrays; 4096 denotes unity. Preserve the recorded plane order,
+    /// or copy the shared sequence to each plane for the single-sequence layout.
+    /// The measured RX1 Off descriptor leaves all phases at unity.
+    pub gains_q12: [[u16; 32]; 4],
+    /// Eight adjacent four-word groups, including unknown/sentinel values.
+    /// The single-sequence layout has no such groups and leaves these zero.
+    pub parameters: [[u16; 4]; 8],
+    /// Sixteen signed native attenuation words, distinct from the capture gains.
+    /// Some 2048-byte compact-camera records mark this slot absent and contain unrelated
+    /// bytes there. Older archived arrays deserialize as `Some` without a format migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_shading: Option<[i16; 16]>,
+    /// Three layout-specific descriptor bytes, preserved without assigning processing-history semantics.
+    pub native_flags: [u8; 3],
+}
+
+/// Measured Q12 record layout; this does not select a rendering formula.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SonyCaptureGainsQ12Layout {
+    /// 2300 bytes, signature 0xa3; gains/parameters/native words at 440/708/860.
+    #[default]
+    Standard2300,
+    /// 1992 bytes, signature 0x88 and native-table discriminator at 840;
+    /// gains/parameters/native words at 452/720/842.
+    Legacy1992,
+    /// 2048 bytes with a measured revision (0x89, 0x8a, 0x8b, 0x8e, 0x90 or 0x91).
+    /// Revision-specific offsets and the native-slot discriminator remain explicit.
+    Legacy2048 { revision: u8 },
+    /// Early revisions 3 and 5, with one shared 32-word sequence at byte 1546.
+    LegacySingle { bytes: u16 },
+}
+
+impl SonyCaptureGainsQ12Layout {
+    fn is_standard(&self) -> bool {
+        *self == Self::Standard2300
+    }
+}
+
+/// Four-plane record from four observed signatures of the decoded 4416-byte `0x9416` block.
+/// Layout selection follows the signature, not the camera name or lens age.
+/// These are stored values, not a rendering prescription.
+/// The A1 II wall series supports Q16 gains; radial spacing, channel calibration and other modes
+/// still need validation. Do not apply or remove them solely because this record is present.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonyCaptureGains {
+    /// Four 32-knot arrays; 65536 is unity in the measured A1 II captures. Plane order is preserved.
+    pub gains_q16: [[u32; 32]; 4],
+    /// Four adjacent values, preserved without assigning an unverified radius formula.
+    pub radius_parameters: [u16; 4],
+    /// Per-plane [x, y] values matching native sensor crop centers in the measured files.
+    /// They need not be coordinates of a resized/lossless-M/S decoded image.
+    pub centers: [[u16; 2]; 4],
+    /// Native attenuation copy and format marker from the same measured MakerNote block.
+    /// Absent in older serialized records; its presence alone does not authorize correction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_shading: Option<SonyNativeShading>,
+}
+
+/// Stored native lens-table slot from measured 4416-byte `0x9416` layouts.
+/// Older layouts store only 16 words before their marker; newer layouts store 32 plus an endpoint.
+/// In measured A1 II files, [1,1] accompanies 16 values and stored zero padding; [2,2] accompanies
+/// an interleaved 33-value curve. Other markers need not identify a usable copy (RX1R III's
+/// [1,0] slot is zero despite a nonzero raw table). Retain them without guessing their meaning.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonyNativeShading {
+    /// Number of words physically stored in `values`, excluding the endpoint: 16 or 32.
+    /// Missing in older LightCraft archives, which supported only the 32-word layout.
+    #[serde(default = "native_shading_samples", skip_serializing_if = "native_shading_full")]
+    pub stored_samples: u8,
+    /// Unstored tail words are normalized to zero; consult `stored_samples` before interpreting.
+    pub values: [i16; 32],
+    /// Zero when absent from the 16-word layout.
+    pub endpoint: i16,
+    pub marker: [u8; 2],
+}
+
+fn native_shading_samples() -> u8 {
+    32
+}
+
+fn native_shading_full(samples: &u8) -> bool {
+    *samples == 32
+}
+
+/// Capture settings from Sony MakerNote LONG[1] tags 0x2011, 0x2012 and 0x2013.
+/// Kept separately from raw/SR2 table settings: the A1 II wall pair records raw shading 272 in both
+/// Off and Auto captures. Do not infer these settings from the presence or contents of a table.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonyCameraSettings {
+    pub shading: SonyCameraSetting,
+    pub chromatic_aberration: SonyCameraSetting,
+    pub distortion: SonyCameraSetting,
+}
+
+/// A recorded camera setting, not a processing-history flag. Auto does not universally mean baked
+/// into RAW, and Off does not mean that the lens table is absent. Documented values are 0, 2 and u32::MAX;
+/// the A1 II's shading Low value 3 is verified by a controlled capture series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SonyCameraSetting {
+    /// No entry in the parsed MakerNote (also when the note cannot be parsed).
+    #[default]
+    Absent,
+    Off,
+    Auto,
+    /// Shading value 3 on ILCE-1M2 only; verified against the photographer's Off/Auto/Low sequence.
+    Low,
+    Unavailable,
+    /// Preserve undocumented values, including 1; do not guess that they mean Off or Low.
+    Unknown(u32),
+    /// A parsed entry with an unsupported type or count.
+    Rejected(SonyFieldError),
+}
+
+/// Sony's in-file lens-correction record: three independent components, each a raw/SR2 setting and a radial table.
 ///
 /// Tag identities and storage types from the ExifTool EXIF / Sony tag-name documentation: raw-IFD `0x7031` / `0x7032`
 /// (shading, "VignettingCorrection" / "VignettingCorrParams"), `0x7034` / `0x7035` (lateral chromatic aberration),
@@ -28,26 +197,58 @@ pub struct LensMetadata {
 /// in every file inspected.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SonyLensCorrections {
-    /// Shading (vignetting): 16 radial samples whose gain function, radius convention and processing stage are not
-    /// established. Opaque signed data.
+    /// Shading (vignetting): up to 16 radial samples. `crate::sony_shading` separately selects the
+    /// measured remaining-gain configurations; presence alone does not authorize a correction.
+    /// Only `samples_per_channel` entries are samples; unused entries are zero.
     pub shading: SonyComponent<[i16; 16]>,
-    /// Lateral chromatic aberration: two 16-sample radial curves. A public analysis reads them as red, then blue,
-    /// relative to green; that is not validated here.
+    /// Lateral chromatic aberration: red and blue curves relative to green, with 11 or 16 radial samples,
+    /// zero-padded to 16 each. `crate::sony_ca` separately selects the validated sensor-stage map
+    /// used by the app (see `docs/sony-reference-validation.md`).
     pub chromatic_aberration: SonyComponent<[[i16; 16]; 2]>,
-    /// Distortion: 16 radial samples (see `docs/sony-lens-corrections.md` for the validated interpretation).
+    /// Distortion: 11 or 16 radial samples, zero-padded to 16 (see `samples_per_channel`).
     pub distortion: SonyComponent<[i16; 16]>,
+    /// Alternate 19-knot distortion record found in newer body/lens combinations. Its presence
+    /// does not authorize a warp; the legacy component's status describes only the legacy table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extended_distortion: Option<SonyExtendedDistortion>,
     /// Whether the encrypted `SR2SubIFD` was found and decrypted. `false`: no copies to fall back on or compare.
     pub sr2_read: bool,
     /// The framing and coding the tables have to be interpreted against.
     pub geometry: SonyLensGeometry,
 }
 
-/// One correction component: the camera's setting, its table, and whether LightCraft applies it.
+/// Independently observed encrypted SR2 fields `0x7983` and `0x7984`. These are a separate
+/// distortion record, not a second copy of `0x7037`/`0x7982`. Synthetic A1 II exports respond
+/// to the 19-knot table while ignoring changes to the legacy table, so a usable record takes that
+/// table's place; the two records must never compose two corrections.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonyExtendedDistortion {
+    /// Older diagnostic archives did not select or convert this record.
+    #[serde(default = "extended_unvalidated")]
+    pub status: SonyLensStatus,
+    /// Exact SHORT[2] values. Observed pairs include [0/1/17, 11/16] and [65535, 65535].
+    /// Keep undocumented values intact rather than inferring processing history or geometry.
+    pub setting: SonyField<[u16; 2]>,
+    /// Exact SSHORT[20] layout headed by 19, followed by 19 signed knots. A zero prefix
+    /// is retained as a rejected/unavailable table, never confused with 19 neutral knots.
+    pub table: SonyField<[i16; 19]>,
+}
+
+fn extended_unvalidated() -> SonyLensStatus {
+    SonyLensStatus::NotValidatedComponent
+}
+
+/// One correction component: its raw/SR2 setting, its table, and whether LightCraft applies it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SonyComponent<T> {
+    /// Raw/SR2 table setting, which can differ from the camera-menu setting in `SonyCameraSettings`.
     pub setting: SonyField<SonySetting>,
-    /// The table's samples after the leading sample count, which must equal their number.
+    /// The table's active samples after the leading count, zero-padded to the fixed storage capacity.
     pub table: SonyField<T>,
+    /// Active radial knots per channel (11 or 16), excluding storage padding. `None` when the table was refused
+    /// or absent. Older serialized records omit this field and, when a table exists, contain 16 active knots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples_per_channel: Option<u8>,
     pub status: SonyLensStatus,
 }
 
@@ -95,12 +296,14 @@ pub enum SonyCopy {
 /// Why a present field was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SonyFieldError {
-    /// Another TIFF field type than SSHORT (8) for a table, or SHORT (3) / SSHORT for a setting.
+    /// Another TIFF field type than SSHORT (8) for a table, SHORT (3) / SSHORT for a raw/SR2 setting,
+    /// or LONG (4) for a MakerNote camera setting.
     FieldType(u16),
-    /// Another number of values than the supported layout's: 17 (shading, distortion), 33 (CA) or 1 (setting).
+    /// Another number of values than the supported layout's: 17 (legacy shading/distortion),
+    /// 33 (CA), 20 (alternate distortion), or 1/2 (setting).
     Count(u64),
-    /// The leading sample count is not the layout's 16 (32 for CA). Older bodies store 11 (22) samples padded to the
-    /// same length, a layout that is not interpreted; a count of 0 goes with an "unavailable" setting.
+    /// The leading sample count is not 11/16 (22/32 for CA), or 19 for alternate distortion. A count of 0 goes with an
+    /// "unavailable" setting and does not describe a usable table.
     CountPrefix(i16),
     /// The values lie outside the file (raw IFD) or the decrypted block (`SR2SubIFD`).
     OutsideData,
@@ -111,7 +314,8 @@ pub enum SonyFieldError {
     NegativeSetting(i16),
 }
 
-/// A camera correction setting: the stored number and its documented meaning.
+/// A raw/SR2 correction setting: the stored number and its documented meaning. This is not necessarily
+/// the camera-menu setting: shading 272 was observed with MakerNote shading both Off and Auto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SonySetting {
     pub value: u16,
@@ -137,28 +341,33 @@ pub enum SonySettingMeaning {
 /// Whether a component is applied, and if not, why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SonyLensStatus {
-    /// Converted into the image's `OpcodeList3` (ILCE-7RM4A, ILCE-7RM6 or eligible full-frame ILCE-7CR Bayer distortion).
+    /// Converted into the image's `OpcodeList3` for a validated camera and shooting mode.
     Applied,
+    /// The alternate record supplied the lens warp; this legacy table is not used.
+    Superseded,
     /// No usable table.
     NoTable,
-    /// Decoded only: no independent validation covers this component's rendering semantics on any body (shading,
-    /// lateral CA).
+    /// Decoded only in the ordinary rendering path: complete component semantics/integration are not validated.
+    /// Lateral CA and selected A1 II shading configurations use separately selected sensor/camera-RGB stages.
     NotValidatedComponent,
-    /// Decoded only: the component is validated on other camera models, not on this one.
+    /// Not an opcode: the component is validated on other camera models, not on this one. Distortion still gets
+    /// the general conversion's warp beside the opcodes ([`crate::OpcodeLists::fallback_warp`]).
     NotValidatedModel,
-    /// Decoded only: the model is validated, but not this coding or framing (linear YCbCr, a non-3:2 crop) or a
-    /// table found only in the `SR2SubIFD`.
+    /// Not an opcode: the model is validated, but not this coding or framing (linear YCbCr, a non-3:2 crop) or a
+    /// table found only in the `SR2SubIFD`. The general conversion applies as for [`Self::NotValidatedModel`].
     NotValidatedMode,
-    /// A7CR distortion is Off, unavailable, missing or unknown. Its uncorrected JPEG and render keep the same geometry.
+    /// The camera did not correct distortion (Off, unavailable, missing or unknown), on a validated body or in the
+    /// alternate record. The lens warp, if any, is beside the opcodes.
     CameraCorrectionDisabled,
-    /// Validated scope, but the table is all zeros: a valid no-op, nothing to apply.
+    /// Validated scope with a measured no-op or an all-zero table.
     Neutral,
     /// Validated scope, but the conversion refused this table (values outside the validated range, a degenerate
     /// crop, or a fitted map that misses the table or folds).
     Rejected,
 }
 
-/// The framing and coding evidence for interpreting the tables, all in raw-frame pixels.
+/// The framing and coding evidence for interpreting the tables. The image crop and reference
+/// use raw-frame pixels. A high-resolution Pixel Shift ARQ can record single-shot crop tags.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SonyLensGeometry {
     /// The stored raw frame, including any padding (lossless L files are padded).
