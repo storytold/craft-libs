@@ -319,6 +319,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
 
 const SOP_CLASS_SECONDARY_CAPTURE: &str = "1.2.840.10008.5.1.4.1.1.7";
 const TRANSFER_SYNTAX_EXPLICIT_VR_LE: &str = "1.2.840.10008.1.2.1";
+/// Identifies this writer (Implementation Class UID, PS3.7 D.3.3.2).
+const IMPLEMENTATION_CLASS_UID: &str = "1.2.826.0.1.3680043.10.1000.1";
 
 fn write_ui(b: &mut Vec<u8>, group: u16, elem: u16, val: &str) {
     let mut s = val.as_bytes().to_vec();
@@ -343,13 +345,40 @@ fn write_us(b: &mut Vec<u8>, group: u16, elem: u16, val: u16) {
 fn write_cs(b: &mut Vec<u8>, group: u16, elem: u16, val: &str) {
     let mut s = val.as_bytes().to_vec();
     if s.len() % 2 == 1 {
-        s.push(0);
+        s.push(b' '); // text VRs pad with SPACE; only UI pads with NUL
     }
     b.extend_from_slice(&group.to_le_bytes());
     b.extend_from_slice(&elem.to_le_bytes());
     b.extend_from_slice(b"CS");
     b.extend_from_slice(&(s.len() as u16).to_le_bytes());
     b.extend_from_slice(&s);
+}
+
+/// Type 2 attribute with a zero-length value (unknown), for the short-length text VRs.
+fn write_empty(b: &mut Vec<u8>, group: u16, elem: u16, vr: &[u8; 2]) {
+    b.extend_from_slice(&group.to_le_bytes());
+    b.extend_from_slice(&elem.to_le_bytes());
+    b.extend_from_slice(vr);
+    b.extend_from_slice(&0u16.to_le_bytes());
+}
+
+/// A fresh, globally unique UID under the `2.25.` root (a UUID-sized random integer, PS3.5 B.2).
+fn new_uid(salt: &[u8]) -> String {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let half = |tag: u8| {
+        // `RandomState` is seeded randomly per instance, so each half is unpredictable.
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u8(tag);
+        h.write_u64(count);
+        h.write(salt);
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+        h.finish()
+    };
+    let value = (u128::from(half(0)) << 64) | u128::from(half(1));
+    format!("2.25.{value}")
 }
 
 /// Writes an uncompressed DICOM Part 10 Secondary Capture file in Explicit VR Little Endian:
@@ -389,14 +418,51 @@ pub(crate) fn encode(src: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
     };
     let len32 = u32::try_from(padded_len).map_err(|_| enc("pixel data exceeds 4 GiB".into()))?;
 
-    let mut out = Vec::with_capacity(256 + padded_len);
+    let mut out = Vec::with_capacity(768 + padded_len);
     out.resize(128, 0u8);
     out.extend_from_slice(b"DICM");
 
-    // Group 0002 File Meta Information (Explicit VR Little Endian)
-    write_ui(&mut out, 0x0002, 0x0002, SOP_CLASS_SECONDARY_CAPTURE);
-    write_ui(&mut out, 0x0002, 0x0003, "1.2.826.0.1.3680043.10.1000.1");
-    write_ui(&mut out, 0x0002, 0x0010, TRANSFER_SYNTAX_EXPLICIT_VR_LE);
+    // Each file is its own SOP instance, in its own study and series.
+    let instance_uid = new_uid(&pixel_bytes);
+    let study_uid = new_uid(&pixel_bytes);
+    let series_uid = new_uid(&pixel_bytes);
+
+    // Group 0002 File Meta Information (PS3.10 7.1), after its group length element.
+    let mut meta = Vec::new();
+    meta.extend_from_slice(&[0x02, 0x00, 0x01, 0x00]); // (0002,0001) File Meta Information Version
+    meta.extend_from_slice(b"OB\0\0");
+    meta.extend_from_slice(&2u32.to_le_bytes());
+    meta.extend_from_slice(&[0, 1]);
+    write_ui(&mut meta, 0x0002, 0x0002, SOP_CLASS_SECONDARY_CAPTURE);
+    write_ui(&mut meta, 0x0002, 0x0003, &instance_uid);
+    write_ui(&mut meta, 0x0002, 0x0010, TRANSFER_SYNTAX_EXPLICIT_VR_LE);
+    write_ui(&mut meta, 0x0002, 0x0012, IMPLEMENTATION_CLASS_UID);
+    let meta_len = u32::try_from(meta.len()).map_err(|_| enc("file meta group too large".into()))?;
+    out.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // (0002,0000) File Meta Information Group Length
+    out.extend_from_slice(b"UL");
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&meta_len.to_le_bytes());
+    out.extend_from_slice(&meta);
+
+    // Secondary Capture dataset: identity, patient/study/series/equipment attributes (Type 2 ones
+    // empty), in ascending tag order.
+    write_ui(&mut out, 0x0008, 0x0016, SOP_CLASS_SECONDARY_CAPTURE);
+    write_ui(&mut out, 0x0008, 0x0018, &instance_uid);
+    write_empty(&mut out, 0x0008, 0x0020, b"DA"); // Study Date
+    write_empty(&mut out, 0x0008, 0x0030, b"TM"); // Study Time
+    write_empty(&mut out, 0x0008, 0x0050, b"SH"); // Accession Number
+    write_cs(&mut out, 0x0008, 0x0060, "OT"); // Modality
+    write_cs(&mut out, 0x0008, 0x0064, "WSD"); // Conversion Type: workstation
+    write_empty(&mut out, 0x0008, 0x0090, b"PN"); // Referring Physician's Name
+    write_empty(&mut out, 0x0010, 0x0010, b"PN"); // Patient's Name
+    write_empty(&mut out, 0x0010, 0x0020, b"LO"); // Patient ID
+    write_empty(&mut out, 0x0010, 0x0030, b"DA"); // Patient's Birth Date
+    write_empty(&mut out, 0x0010, 0x0040, b"CS"); // Patient's Sex
+    write_ui(&mut out, 0x0020, 0x000D, &study_uid);
+    write_ui(&mut out, 0x0020, 0x000E, &series_uid);
+    write_empty(&mut out, 0x0020, 0x0010, b"SH"); // Study ID
+    write_empty(&mut out, 0x0020, 0x0011, b"IS"); // Series Number
+    write_empty(&mut out, 0x0020, 0x0013, b"IS"); // Instance Number
 
     // Group 0028 Image Pixel Module
     write_us(&mut out, 0x0028, 0x0002, samples);
@@ -658,5 +724,52 @@ mod tests {
             assert_eq!((back16.dimensions(), back16.layout(), back16.sample_type()), ((4, 2), layout, SampleType::U16));
             assert_eq!(back16.data(), img16.data());
         }
+    }
+
+    /// Walk an Explicit VR Little Endian file written by `encode`, independent of the decoder.
+    fn written_elements(file: &[u8]) -> Vec<(u16, u16, [u8; 2], Vec<u8>)> {
+        let mut pos = PREAMBLE;
+        let mut out = Vec::new();
+        while pos < file.len() {
+            let g = u16::from_le_bytes([file[pos], file[pos + 1]]);
+            let e = u16::from_le_bytes([file[pos + 2], file[pos + 3]]);
+            let vr = [file[pos + 4], file[pos + 5]];
+            let (len, head) = if long_vr(&vr) {
+                (u32::from_le_bytes(file[pos + 8..pos + 12].try_into().unwrap()) as usize, 12)
+            } else {
+                (usize::from(u16::from_le_bytes([file[pos + 6], file[pos + 7]])), 8)
+            };
+            out.push((g, e, vr, file[pos + head..pos + head + len].to_vec()));
+            pos += head + len;
+        }
+        out
+    }
+
+    #[test]
+    fn written_file_is_a_complete_part_10_secondary_capture() {
+        let img = Image::from_u8(2, 2, ChannelLayout::Rgb, vec![7; 12]).unwrap();
+        let plan = Plan { layout: ChannelLayout::Rgb, sample: SampleType::U8 };
+        let file = encode(&img, plan).unwrap();
+        let els = written_elements(&file);
+        let find = |g: u16, e: u16| els.iter().find(|x| (x.0, x.1) == (g, e)).map(|x| x.3.clone());
+
+        // Group length counts exactly the rest of group 0002.
+        let declared = u32::from_le_bytes(find(0x0002, 0x0000).unwrap().try_into().unwrap()) as usize;
+        let group: usize = els.iter().skip(1).take_while(|x| x.0 == 0x0002).map(|x| 8 + x.3.len() + if long_vr(&x.2) { 4 } else { 0 }).sum();
+        assert_eq!(declared, group);
+        assert_eq!(find(0x0002, 0x0001).unwrap(), [0, 1]);
+        assert!(find(0x0002, 0x0012).is_some(), "implementation class UID");
+
+        let tags: Vec<(u16, u16)> = els.iter().map(|x| (x.0, x.1)).collect();
+        assert!(tags.windows(2).all(|w| w[0] < w[1]), "tags ascend: {tags:?}");
+        for required in [(0x0008, 0x0016), (0x0008, 0x0018), (0x0008, 0x0064), (0x0020, 0x000D), (0x0020, 0x000E)] {
+            assert!(find(required.0, required.1).is_some_and(|v| !v.is_empty()), "{required:?}");
+        }
+        assert_eq!(find(0x0002, 0x0003), find(0x0008, 0x0018), "meta and dataset name the same instance");
+        assert_eq!(find(0x0028, 0x0004).unwrap(), b"RGB ", "CS pads with SPACE");
+
+        let again = encode(&img, plan).unwrap();
+        let other = written_elements(&again).into_iter().find(|x| (x.0, x.1) == (0x0008, 0x0018)).unwrap().3;
+        assert_ne!(find(0x0008, 0x0018).unwrap(), other, "every file is a new SOP instance");
     }
 }
