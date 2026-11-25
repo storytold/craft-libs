@@ -396,8 +396,8 @@ impl Picture<'_> {
     fn reconstruct(&mut self, mx: usize, my: usize, blocks: &MbBlocks) {
         let info = self.info[my * self.mb_w + mx];
         if info.intra {
-            for b in 0..6 {
-                let samples: [u8; 64] = std::array::from_fn(|i| blocks.data[b][i] as u8);
+            for (b, block) in blocks.data.iter().enumerate().take(6) {
+                let samples: [u8; 64] = std::array::from_fn(|i| block[i] as u8);
                 write_block(&mut self.out, b, mx, my, &samples);
             }
             return;
