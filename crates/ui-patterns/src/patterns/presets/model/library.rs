@@ -196,6 +196,8 @@ pub enum PresetError {
     /// A rename to the name the preset or group already has (the same letters): nothing changes,
     /// so the app saves nothing. [`PresetLibrary::apply`] returns no change for it.
     Unchanged,
+    /// The host's naming rule refuses the name (too long, control characters, a reserved name).
+    InvalidName,
 }
 
 impl std::fmt::Display for PresetError {
@@ -207,6 +209,7 @@ impl std::fmt::Display for PresetError {
             PresetError::NoPreset => "no preset has that id",
             PresetError::TooDeep => "the group would be nested too deep",
             PresetError::Unchanged => "the name is the current name",
+            PresetError::InvalidName => "the name can't be used",
         })
     }
 }

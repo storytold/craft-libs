@@ -3,7 +3,7 @@
 //! orientation, SDK level…). Simple and complex (bag) entries, sparse and 16-bit offset tables.
 
 use crate::Error;
-use crate::axml::{ResValue, StringPool, chunk};
+use crate::axml::{MAX_RETAINED_VALUE_BYTES, ResValue, StringPool, ValueBudget, chunk, report_partial_string_pool};
 use crate::bytes::Reader;
 use serde::Serialize;
 
@@ -21,13 +21,17 @@ const MAX_BAG: usize = 4096;
 pub struct Limits {
     /// Most entries decoded across all types and configurations.
     pub max_entries: usize,
+    /// Most bytes retained in formatted simple-entry and bag values.
+    pub max_value_bytes: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_entries: 2_000_000 }
+        Limits { max_entries: 2_000_000, max_value_bytes: MAX_RETAINED_VALUE_BYTES }
     }
 }
+
+const VALUE_BUDGET_WARNING: &str = "resource value budget reached; remaining values were omitted";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TypeInfo {
@@ -300,30 +304,32 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
     let r = Reader::new(data);
     let mut table = Table::default();
     let mut global = StringPool::default();
+    let mut value_budget = ValueBudget::new(limits.max_value_bytes);
     let mut pos = h;
     while pos < size {
         let Some((ct, _ch, cs)) = chunk(&r, pos) else {
+            table.truncated = true;
             table.warnings.push(format!("unreadable chunk at offset {pos}"));
             break;
         };
         match ct {
             crate::axml::RES_STRING_POOL => match StringPool::parse(data, pos) {
                 Ok(p) => {
-                    if p.strings.len() < p.declared {
-                        table.truncated = true;
-                        table.warnings.push(format!("global string pool was capped at {} of {} strings", p.strings.len(), p.declared));
-                    }
+                    report_partial_string_pool(&p, "global string pool", &mut table.truncated, &mut table.warnings);
                     table.global_strings = p.declared;
                     global = p;
                 }
-                Err(e) => table.warnings.push(format!("global string pool: {e}")),
+                Err(e) => {
+                    table.truncated = true;
+                    table.warnings.push(format!("global string pool: {e}"));
+                }
             },
             RES_PACKAGE => {
                 if table.packages.len() >= MAX_PACKAGES {
                     table.truncated = true;
                     table.warnings.push("too many packages; the rest were skipped".into());
                 } else {
-                    parse_package(data, pos, cs, &global, &mut table, limits);
+                    parse_package(data, pos, cs, &global, &mut table, limits, &mut value_budget);
                 }
             }
             _ => {}
@@ -336,14 +342,16 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
     Ok(table)
 }
 
-fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table: &mut Table, limits: Limits) {
+fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table: &mut Table, limits: Limits, value_budget: &mut ValueBudget) {
     let Some(data) = pos.checked_add(cs).and_then(|end| data.get(..end)) else {
+        table.truncated = true;
         table.warnings.push("package runs past its resource table".into());
         return;
     };
     let r = Reader::new(data);
     let hsize = usize::from(r.u16_le(pos + 2).unwrap_or(0));
     if hsize < 284 {
+        table.truncated = true;
         table.warnings.push(format!("package at offset {pos}: incomplete header"));
         return;
     }
@@ -365,22 +373,17 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
             return StringPool::default();
         }
         let Some(start) = pos.checked_add(offset).filter(|&start| offset >= hsize && start < end) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: {label} string pool is outside its payload"));
             return StringPool::default();
         };
         match StringPool::parse(data, start) {
             Ok(pool) => {
-                if pool.strings.len() < pool.declared {
-                    table.truncated = true;
-                    table.warnings.push(format!(
-                        "package {name}: {label} string pool was capped at {} of {} strings",
-                        pool.strings.len(),
-                        pool.declared
-                    ));
-                }
+                report_partial_string_pool(&pool, &format!("package {name}: {label} string pool"), &mut table.truncated, &mut table.warnings);
                 pool
             }
             Err(error) => {
+                table.truncated = true;
                 table.warnings.push(format!("package {name}: {label} string pool: {error}"));
                 StringPool::default()
             }
@@ -393,12 +396,14 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
     let mut c = pos.saturating_add(hsize.max(8));
     while c < end {
         let Some((ct, ch, sz)) = chunk(&r, c) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: unreadable chunk at offset {c}"));
             break;
         };
         // Each child was checked against its package; reads within it must also stop before
         // the next sibling, including fixed-width library records and bag headers.
         let Some(child) = data.get(..c.saturating_add(sz)) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: child chunk runs past its package"));
             break;
         };
@@ -437,7 +442,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                         }
                     }
                 }
-                parse_type(&r, c, (ch, sz), (cfg, locale), &p, tid, global, table, limits);
+                parse_type(&r, c, (ch, sz), (cfg, locale), &p, tid, global, table, limits, value_budget);
             }
             (RES_TYPE_SPEC | RES_TYPE, None) if ch >= 16 => {
                 table.truncated = true;
@@ -449,6 +454,9 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 if n > available {
                     table.warnings.push(format!("package {name}: library records run past their chunk"));
                 }
+                if n > available.min(256) {
+                    table.truncated = true;
+                }
                 for i in 0..n.min(256).min(available) {
                     let e = c + ch + i * 260;
                     if let Some(lid) = r.u32_le(e) {
@@ -457,6 +465,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 }
             }
             (RES_TYPE_SPEC | RES_TYPE | RES_LIBRARY, _) => {
+                table.truncated = true;
                 table.warnings.push(format!("package {name}: incomplete chunk header at offset {c}"));
             }
             _ => {}
@@ -480,6 +489,7 @@ fn parse_type(
     global: &StringPool,
     table: &mut Table,
     limits: Limits,
+    value_budget: &mut ValueBudget,
 ) {
     let tid = r.u8(c + 8).unwrap_or(0);
     let flags = r.u8(c + 9).unwrap_or(0);
@@ -493,10 +503,12 @@ fn parse_type(
     let mut slots: Vec<(u32, usize)> = Vec::new();
     let table_bytes = if sparse || off16 { count.saturating_mul(if sparse { 4 } else { 2 }) } else { count.saturating_mul(4) };
     if c.saturating_add(ch).saturating_add(table_bytes) > end {
+        table.truncated = true;
         table.warnings.push(format!("{tname} ({cfg}): entry table runs past its chunk"));
         return;
     }
     if count != 0 && (entries_start < ch.saturating_add(table_bytes) || entries_start > sz) {
+        table.truncated = true;
         table.warnings.push(format!("{tname} ({cfg}): invalid entry data start"));
         return;
     }
@@ -517,15 +529,16 @@ fn parse_type(
             }
         }
     }
+    let mut skipped = 0usize;
     for (idx, o) in slots {
         if table.entries.len() >= limits.max_entries {
             table.truncated = true;
-            return;
+            break;
         }
-        let Some(e) = c.checked_add(entries_start).and_then(|x| x.checked_add(o)) else { continue };
-        if e.saturating_add(8) > end {
+        let Some(e) = c.checked_add(entries_start).and_then(|x| x.checked_add(o)).filter(|e| e.saturating_add(8) <= end) else {
+            skipped += 1;
             continue;
-        }
+        };
         let esize = usize::from(r.u16_le(e).unwrap_or(0));
         let eflags = r.u16_le(e + 2).unwrap_or(0);
         let id = (p.id << 24) | (u32::from(type_id) << 16) | (idx & 0xffff);
@@ -546,7 +559,7 @@ fn parse_type(
             // Compact entry: key index in the size field, type in the high byte of flags.
             entry.key = p.keys.get(u32::from(r.u16_le(e).unwrap_or(0))).unwrap_or("").to_string();
             let v = ResValue { data_type: (eflags >> 8) as u8, data: r.u32_le(e + 4).unwrap_or(0) };
-            entry.value = Some(v.format(global));
+            entry.value = value_budget.take(v.format(global), &mut table.truncated, &mut table.warnings, VALUE_BUDGET_WARNING);
             entry.value_type = Some(v.type_name());
             entry.raw = Some(v);
         } else {
@@ -579,20 +592,29 @@ fn parse_type(
                     }
                     let name = r.u32_le(m).unwrap_or(0);
                     let v = ResValue { data_type: r.u8(m + 7).unwrap_or(0), data: r.u32_le(m + 8).unwrap_or(0) };
-                    entry.bag.push(BagItem { name: format!("@{name:#010x}"), value: v.format(global), value_type: v.type_name() });
+                    let value =
+                        value_budget.take(v.format(global), &mut table.truncated, &mut table.warnings, VALUE_BUDGET_WARNING).unwrap_or_default();
+                    entry.bag.push(BagItem { name: format!("@{name:#010x}"), value, value_type: v.type_name() });
                     m += 12;
                 }
             } else {
                 let v_at = e.saturating_add(esize.max(8));
                 if v_at.saturating_add(8) <= end {
                     let v = ResValue { data_type: r.u8(v_at + 3).unwrap_or(0), data: r.u32_le(v_at + 4).unwrap_or(0) };
-                    entry.value = Some(v.format(global));
+                    entry.value = value_budget.take(v.format(global), &mut table.truncated, &mut table.warnings, VALUE_BUDGET_WARNING);
                     entry.value_type = Some(v.type_name());
                     entry.raw = Some(v);
+                } else {
+                    table.truncated = true;
+                    table.warnings.push(format!("{tname} ({cfg}): incomplete value"));
                 }
             }
         }
         table.entries.push(entry);
+    }
+    if skipped > 0 {
+        table.truncated = true;
+        table.warnings.push(format!("{tname} ({cfg}): {skipped} entries run past their chunk"));
     }
 }
 
@@ -643,6 +665,30 @@ mod tests {
     }
 
     #[test]
+    fn skipped_type_chunks_and_entries_mark_the_table_partial() {
+        let bytes = fx::resources_arsc();
+        // The French type chunk: RES_TYPE, an 84-byte header, and "fr" in its configuration.
+        let fr = (0..bytes.len() - 30).find(|&i| bytes[i..i + 4] == [0x01, 0x02, 84, 0] && &bytes[i + 28..i + 30] == b"fr").unwrap();
+        let corrupt = |at: usize, value: u32| {
+            let mut b = bytes.clone();
+            b[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            parse(&b, Limits::default()).unwrap()
+        };
+        for (what, t) in [
+            ("entry table past its chunk", corrupt(fr + 12, 1000)),
+            ("invalid entry data start", corrupt(fr + 16, 0xffff)),
+            ("an entry past its chunk", corrupt(fr + 84, 0x1000)),
+            // The second entry's header fits, but its value runs past the chunk.
+            ("a value past its chunk", corrupt(fr + 88, 24)),
+        ] {
+            let french = t.entries.iter().filter(|e| e.locale == "fr" && e.value.is_some()).count();
+            assert!(french < 2, "{what}: the corruption should lose a French value");
+            assert!(t.truncated, "{what}: lost content must mark the table partial");
+            assert!(!t.warnings.is_empty(), "{what}: lost content must be reported");
+        }
+    }
+
+    #[test]
     fn distinct_locale_scripts_and_variants_keep_separate_keys() {
         let mut cfg = [0u8; 64];
         cfg[0] = 64;
@@ -673,5 +719,163 @@ mod tests {
         let (q, l) = config_qualifiers(&Reader::new(&cfg), 0);
         assert_eq!(q, "es-rMX-land");
         assert_eq!(l, "es-rMX");
+    }
+
+    fn le_u16(v: &mut Vec<u8>, x: u16) {
+        v.extend_from_slice(&x.to_le_bytes());
+    }
+
+    fn le_u32(v: &mut Vec<u8>, x: u32) {
+        v.extend_from_slice(&x.to_le_bytes());
+    }
+
+    fn type_spec(id: u8, entries: u32) -> Vec<u8> {
+        let mut c = Vec::new();
+        le_u16(&mut c, 0x0202);
+        le_u16(&mut c, 16);
+        le_u32(&mut c, 16 + 4 * entries);
+        c.push(id);
+        c.push(0);
+        le_u16(&mut c, 0);
+        le_u32(&mut c, entries);
+        for _ in 0..entries {
+            le_u32(&mut c, 0);
+        }
+        c
+    }
+
+    fn type_chunk(id: u8, entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut cfg = vec![0u8; 64];
+        cfg[0] = 64;
+        let header = 20 + cfg.len();
+        let start = header + 4 * entries.len();
+        let mut body = Vec::new();
+        let mut offs = Vec::new();
+        for e in entries {
+            offs.push(body.len() as u32);
+            body.extend_from_slice(e);
+        }
+        let mut c = Vec::new();
+        le_u16(&mut c, 0x0201);
+        le_u16(&mut c, header as u16);
+        le_u32(&mut c, (start + body.len()) as u32);
+        c.push(id);
+        c.push(0);
+        le_u16(&mut c, 0);
+        le_u32(&mut c, entries.len() as u32);
+        le_u32(&mut c, start as u32);
+        c.extend_from_slice(&cfg);
+        for o in offs {
+            le_u32(&mut c, o);
+        }
+        c.extend(body);
+        c
+    }
+
+    fn table_with_entries(pool: &[&str], type_name: &str, keys: &[&str], entries: &[Vec<u8>]) -> Vec<u8> {
+        let global = fx::string_pool(pool, true);
+        let types = fx::string_pool(&[type_name], false);
+        let key_pool = fx::string_pool(keys, false);
+        let mut chunks = type_spec(1, entries.len() as u32);
+        chunks.extend(type_chunk(1, entries));
+        let header = 288usize;
+        let mut pkg = Vec::new();
+        le_u16(&mut pkg, 0x0200);
+        le_u16(&mut pkg, header as u16);
+        le_u32(&mut pkg, (header + types.len() + key_pool.len() + chunks.len()) as u32);
+        le_u32(&mut pkg, 0x7f);
+        pkg.extend(vec![0u8; 256]);
+        le_u32(&mut pkg, header as u32);
+        le_u32(&mut pkg, 1);
+        le_u32(&mut pkg, (header + types.len()) as u32);
+        le_u32(&mut pkg, keys.len() as u32);
+        le_u32(&mut pkg, 0);
+        pkg.extend(types);
+        pkg.extend(key_pool);
+        pkg.extend(chunks);
+        let mut out = Vec::new();
+        le_u16(&mut out, 0x0002);
+        le_u16(&mut out, 12);
+        le_u32(&mut out, (12 + global.len() + pkg.len()) as u32);
+        le_u32(&mut out, 1);
+        out.extend(global);
+        out.extend(pkg);
+        out
+    }
+
+    fn simple_string_entry(key: u32, pool_index: u32) -> Vec<u8> {
+        let mut e = Vec::new();
+        le_u16(&mut e, 8);
+        le_u16(&mut e, 0);
+        le_u32(&mut e, key);
+        le_u16(&mut e, 8);
+        e.push(0);
+        e.push(0x03);
+        le_u32(&mut e, pool_index);
+        e
+    }
+
+    fn compact_string_entry(key: u16, pool_index: u32) -> Vec<u8> {
+        let mut e = Vec::new();
+        le_u16(&mut e, key);
+        le_u16(&mut e, 0x0308);
+        le_u32(&mut e, pool_index);
+        e
+    }
+
+    fn bag_string_entry(key: u32, pool_indices: &[u32]) -> Vec<u8> {
+        let mut e = Vec::new();
+        le_u16(&mut e, 16);
+        le_u16(&mut e, 1);
+        le_u32(&mut e, key);
+        le_u32(&mut e, 0);
+        le_u32(&mut e, pool_indices.len() as u32);
+        for (i, idx) in pool_indices.iter().enumerate() {
+            le_u32(&mut e, 0x0101_0000 + i as u32);
+            le_u16(&mut e, 8);
+            e.push(0);
+            e.push(0x03);
+            le_u32(&mut e, *idx);
+        }
+        e
+    }
+
+    #[test]
+    fn value_budget_omits_long_copies_and_keeps_a_later_short_value() {
+        let long = "x".repeat(16);
+        let tight = Limits { max_value_bytes: 20, ..Limits::default() };
+        let keys = ["a", "b", "c"];
+
+        let simple =
+            table_with_entries(&[&long, "ok"], "string", &keys, &[simple_string_entry(0, 0), simple_string_entry(1, 0), simple_string_entry(2, 1)]);
+        let complete = parse(&simple, Limits::default()).unwrap();
+        assert!(!complete.truncated, "{:?}", complete.warnings);
+        assert_eq!(complete.entries.iter().map(|e| e.value.as_deref()).collect::<Vec<_>>(), [Some(long.as_str()), Some(long.as_str()), Some("ok")]);
+
+        let partial = parse(&simple, tight).unwrap();
+        assert!(partial.truncated);
+        assert!(partial.warnings.iter().any(|w| w.contains("value budget")), "{:?}", partial.warnings);
+        assert_eq!(partial.entries.iter().map(|e| e.value.as_deref()).collect::<Vec<_>>(), [Some(long.as_str()), None, Some("ok")]);
+
+        let compact = table_with_entries(
+            &[&long, "ok"],
+            "string",
+            &keys,
+            &[compact_string_entry(0, 0), compact_string_entry(1, 0), compact_string_entry(2, 1)],
+        );
+        let partial = parse(&compact, tight).unwrap();
+        assert!(partial.truncated);
+        assert!(partial.warnings.iter().any(|w| w.contains("value budget")), "{:?}", partial.warnings);
+        assert_eq!(partial.entries.iter().map(|e| e.value.as_deref()).collect::<Vec<_>>(), [Some(long.as_str()), None, Some("ok")]);
+
+        let bag = table_with_entries(&[&long, "ok"], "style", &["theme"], &[bag_string_entry(0, &[0, 0, 1])]);
+        let complete = parse(&bag, Limits::default()).unwrap();
+        assert!(!complete.truncated, "{:?}", complete.warnings);
+        assert_eq!(complete.entries[0].bag.iter().map(|i| i.value.as_str()).collect::<Vec<_>>(), [long.as_str(), long.as_str(), "ok"]);
+
+        let partial = parse(&bag, tight).unwrap();
+        assert!(partial.truncated);
+        assert!(partial.warnings.iter().any(|w| w.contains("value budget")), "{:?}", partial.warnings);
+        assert_eq!(partial.entries[0].bag.iter().map(|i| i.value.as_str()).collect::<Vec<_>>(), [long.as_str(), "", "ok"]);
     }
 }

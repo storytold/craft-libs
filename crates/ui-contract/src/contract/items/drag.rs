@@ -10,7 +10,7 @@
 use super::marquee::MarqueeDrag;
 use super::{ItemsHooks, Placement};
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove,
+    CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, RowPreview,
     ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
@@ -25,6 +25,7 @@ use craft_behavior::{
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
+use std::borrow::Cow;
 
 /// Maps a point to layout coordinates once for every collection type.
 fn logical_point(layout: &dyn ItemLayout, rect: Rect, rtl: bool, at: Pos2) -> Pos2 {
@@ -74,7 +75,7 @@ fn screen_row(layout: &dyn ItemLayout, view: Rect, at: usize, offset: ScrollPos,
 fn drop_spot(
     layout: &dyn ItemLayout,
     outline: &dyn craft_behavior::NavOutline,
-    len: &dyn Fn() -> usize,
+    section_stop: &dyn Fn(usize) -> bool,
     xf: Option<crate::runtime::egui::areas::LayerMap>,
     (rect, offset, rtl): (Rect, ScrollPos, bool),
     groups: Option<f32>,
@@ -88,11 +89,11 @@ fn drop_spot(
     // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
     // row-wise layout that is beyond the last item's end edge on its row, or below its row.
     let past = hit.is_none() && {
-        let last = screen_row(layout, rect, len() - 1, offset, rtl);
+        let last = screen_row(layout, rect, outline.len() - 1, offset, rtl);
         let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
         !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
     };
-    let over = hit.or_else(|| past.then(|| len() - 1))?;
+    let over = hit.or_else(|| past.then(|| outline.len() - 1))?;
     let row = screen_row(layout, rect, over, offset, rtl);
     if matches!(nav, NavShape::Spatial) {
         let (low, high) = (to_screen(row.min), to_screen(row.max));
@@ -103,6 +104,11 @@ fn drop_spot(
         let parent = gap.parent;
         return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(to_screen) });
     }
+    // A section row across a row-wise layout (a grid's group header) starts its group: a drop on it lands first in
+    // the group.
+    if across && section_stop(over) {
+        return Some(Spot { over, insert: over + 1, parent: None, mark: DropMark::Into(Rect::from_min_max(to_screen(row.min), to_screen(row.max))) });
+    }
     // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
     // right-to-left the physical end is the earlier place in reading order.
     let at = if past && across { Pos2::new(if rtl { row.min.x } else { row.max.x }, row.center().y) } else { at };
@@ -110,9 +116,6 @@ fn drop_spot(
     let after = (gap.insert == 1) != (across && rtl);
     Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(to_screen) })
 }
-
-/// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
-pub(super) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
 
 /// A toggle sweep: the value it sets and the rows it has crossed.
 #[derive(Clone)]
@@ -146,6 +149,9 @@ pub enum SweepStep<K> {
     Restore(ToggleEdit<K>),
     /// Undo the `ShowOnly` of a cancelled Alt sweep: the cell has the value from before it.
     UndoShowOnly(ToggleEdit<K>),
+    /// The first press held exactly one of the [`SweepApply::claims`] modifiers: it belongs to the host. It flips
+    /// nothing, and the cells its drag crosses give nothing. Reported once; its Cancel gives nothing.
+    Claimed(ToggleEdit<K>),
 }
 
 /// The state a sweep needs between events: which gesture opened it and whether Alt was held.
@@ -153,6 +159,8 @@ pub enum SweepStep<K> {
 struct Run {
     first: GestureId,
     alt: bool,
+    /// The first press held one of the claimed modifiers: the sweep gives the host nothing but `Claimed`.
+    claimed: bool,
     /// A `Commit` or `Cancel` came: the next `Begin` or `Update` opens a new sweep.
     ended: bool,
 }
@@ -172,6 +180,7 @@ struct Run {
 pub struct SweepApply {
     run: Option<Run>,
     show_only: bool,
+    claims: Vec<craft_keymap::Mods>,
 }
 
 /// A move of a collection's own items as they stand before the drop, and as the drop leaves them.
@@ -185,7 +194,15 @@ impl SweepApply {
 
     /// A column where Alt plus the first press shows only that cell.
     pub fn show_only() -> Self {
-        SweepApply { run: None, show_only: true }
+        SweepApply { show_only: true, ..Self::default() }
+    }
+
+    /// A first press with exactly `mods` held belongs to the host: it flips nothing, and the cells its drag crosses
+    /// give nothing (`SweepStep::Claimed`). Claims are checked before `show_only`'s Alt, and the method can be called
+    /// more than once.
+    pub fn claims(mut self, mods: craft_keymap::Mods) -> Self {
+        self.claims.push(mods);
+        self
     }
 
     /// Whether this is a [`SweepApply::show_only`] column, where Alt plus the first press shows only that cell.
@@ -202,19 +219,24 @@ impl SweepApply {
     /// The step for `edit`, if it asks the host for one. `Commit` repeats what its `Update` already applied.
     pub fn feed<K: Clone>(&mut self, edit: &EditEvent<ToggleEdit<K>>) -> Option<SweepStep<K>> {
         match edit {
-            EditEvent::Set { after, .. } => {
-                Some(if self.show_only && after.mods.alt { SweepStep::ShowOnly(after.clone()) } else { SweepStep::Flip(after.clone()) })
-            }
+            EditEvent::Set { after, .. } => Some(if self.claims.contains(&after.mods) {
+                SweepStep::Claimed(after.clone())
+            } else if self.show_only && after.mods.alt {
+                SweepStep::ShowOnly(after.clone())
+            } else {
+                SweepStep::Flip(after.clone())
+            }),
             EditEvent::Begin { id, before: Mixed::Same(before), .. } => {
                 self.open(*id, before);
                 None
             }
             EditEvent::Update { id, value, .. } => {
                 let run = self.open(*id, value);
-                match (run.alt, run.first == *id) {
-                    (false, _) => Some(SweepStep::Flip(value.clone())),
-                    (true, true) => Some(SweepStep::ShowOnly(value.clone())),
-                    (true, false) => None,
+                match (run.claimed, run.alt, run.first == *id) {
+                    (true, _, true) => Some(SweepStep::Claimed(value.clone())),
+                    (true, _, false) | (false, true, false) => None,
+                    (false, false, _) => Some(SweepStep::Flip(value.clone())),
+                    (false, true, true) => Some(SweepStep::ShowOnly(value.clone())),
                 }
             }
             EditEvent::Commit { .. } => {
@@ -222,6 +244,7 @@ impl SweepApply {
                 None
             }
             EditEvent::Cancel { id, before: Some(Mixed::Same(before)), .. } => match self.end() {
+                Some(Run { claimed: true, .. }) => None,
                 Some(Run { alt: true, first, .. }) => (first == *id).then(|| SweepStep::UndoShowOnly(before.clone())),
                 _ => Some(SweepStep::Restore(before.clone())),
             },
@@ -234,7 +257,8 @@ impl SweepApply {
         match self.run {
             Some(run) if !run.ended => run,
             _ => {
-                let run = Run { first: id, alt: self.show_only && edit.mods.alt, ended: false };
+                let claimed = self.claims.contains(&edit.mods);
+                let run = Run { first: id, alt: !claimed && self.show_only && edit.mods.alt, claimed, ended: false };
                 self.run = Some(run);
                 run
             }
@@ -260,6 +284,9 @@ pub(super) struct Drags<K> {
     pub(super) pending: Option<PendingDrop<K>>,
     /// The selected row a plain press landed on: a click on it narrows the selection to it, a drag keeps it.
     pub(super) collapse: Option<K>,
+    /// The unselected row a plain primary press landed on: a click on it picks it, a drag carries it alone and leaves
+    /// the selection as it was.
+    pub(super) pick: Option<K>,
     /// The row whose rename column got a double press: the editor opens when the press ends as a click, not when it
     /// becomes a drag.
     pub(super) rename: Option<K>,
@@ -301,6 +328,7 @@ impl<K> Default for Drags<K> {
             moving: None,
             pending: None,
             collapse: None,
+            pick: None,
             rename: None,
             activate: None,
             command: None,
@@ -392,19 +420,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return;
         }
         let row = layout.rect(0, ScrollPos::default()).height();
-        let band = row.min(view / 2.0);
-        if band <= 0.0 {
+        // The step is linear in the frame's time, so the rate for one second says whether the pointer is in a band.
+        let rate = reorder::edge_step(view, row, y, 1.0);
+        if rate == 0.0 {
             return;
         }
-        let depth = if y < band { (band - y) / band } else { (y - (view - band)) / band };
-        let direction = if y < band { -1.0 } else { 1.0 };
-        if depth <= 0.0 {
-            return;
-        }
+        // Taken even by a pass that steps by no time, so the body around does not step in a rerun pass instead.
+        reorder::mark_edge_step(&cx.core.ctx);
         cx.core.ctx.request_repaint();
         let dt = crate::runtime::frame::facts(&cx.core.ctx).elapsed.clamp(0.0, 0.1) as f32;
-        let step = depth.min(1.0) * EDGE_ROWS_PER_SECOND * row * dt;
-        self.offset = (self.offset + f64::from(direction * step)).clamp(0.0, self.max_offset(view));
+        self.offset = (self.offset + f64::from(rate * dt)).clamp(0.0, self.max_offset(view));
     }
 
     /// `at` in the layout's logical coordinates, relative to the rows' rect.
@@ -567,17 +592,24 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let key = self.source.key(at);
         let keys = self.keys_at(&self.acted_on(at));
         let count = keys.len() as u64;
-        let preview = match props.drag_count.filter(|_| props.drag_badge) {
-            Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
-            None if !props.drag_badge => DragPreview::None,
-            None if count > 1 => DragPreview::Badge(Label::from(count.to_string())),
-            None => self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned()))),
+        let text = || match props.drag_count {
+            Some(word) => Some(cx.env.counted(word, count)),
+            None if count > 1 => Some(count.to_string()),
+            None => self.source.text(at).map(Cow::into_owned),
+        };
+        let preview = match props.drag_preview {
+            RowPreview::Badge => text().map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text))),
+            RowPreview::Named => text().map_or(DragPreview::None, |text| DragPreview::Named(Label::from(text))),
+            _ => DragPreview::None,
         };
         let drag = ListDrag::new(id, keys, key.clone());
-        match props.drag_payload.as_ref().and_then(|map| map.of(&drag)) {
-            Some(also) => cx.start_drag_also(drag, also, preview),
-            None if props.reorder.is_some() => cx.start_drag(drag, preview),
-            None => return,
+        let also: Vec<_> = props.drag_payloads.iter().filter_map(|map| map.of(&drag)).collect();
+        if !also.is_empty() {
+            cx.start_drag_also(drag, also, preview);
+        } else if props.reorder.is_some() {
+            cx.start_drag(drag, preview);
+        } else {
+            return;
         }
         self.drags.grabbed = Some(key);
     }
@@ -594,7 +626,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return None;
         }
         let outline = Outline::new(&*self.source);
-        drop_spot(layout, &outline, &|| self.source.len(), self.xf, (rect, offset, rtl), groups, at)
+        drop_spot(layout, &outline, &|at| self.source.section_stop(at), self.xf, (rect, offset, rtl), groups, at)
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
@@ -662,19 +694,42 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
+    /// Whether `at` lies over the middle of a row, between the top and bottom shares where a drop lands before or
+    /// after it.
+    fn over_middle(&self, layout: &C::ItemLayout, (rect, offset, rtl): (Rect, ScrollPos, bool), at: Pos2) -> bool {
+        let Some(over) = (at.y >= rect.min.y).then(|| layout.hit(Self::logical(layout, rect, rtl, at), offset)).flatten() else { return false };
+        let row = self.screen(layout, rect, over, offset, rtl);
+        let from_top = if row.height() > 0.0 { (at.y - row.min.y) / row.height() } else { 0.0 };
+        (reorder::GROUP_EDGE..1.0 - reorder::GROUP_EDGE).contains(&from_top)
+    }
+
     /// A drag that did not start in the collection: the first drop kind that takes its payload at the place under the
     /// pointer registers the target and scrolls the rows at their edges; its release reports `Dropped`, and while held
-    /// it is the pending drop. A drag no kind takes here scrolls nothing: it is meant for another target.
-    fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool)) {
+    /// it is the pending drop. A drag no kind takes here scrolls nothing: it is meant for another target. `own` is the
+    /// collection's own drag, offered here where its reorder refuses the landing: only `Onto` kinds take it, and the
+    /// rows scrolled already. Where an `Onto` kind takes the same payload, a `Between` kind leaves it the middle of the
+    /// row, as a tree's reorder leaves a group row's middle to a drop into it: there the drop is onto the row or
+    /// nowhere.
+    fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool), own: bool) {
         let xf = self.xf;
         let (rect, _, rtl) = place;
-        for kind in comp.drops() {
+        let drops = comp.drops();
+        for kind in drops {
+            if own && !matches!(kind.place(), DropPlace::Onto) {
+                continue;
+            }
             let Some((payload, at)) = cx.core.dragging_of(kind.payload()) else { continue };
             let point = xf.map_or(at, |map| map.to_layer(at));
+            let onto_too = || drops.iter().any(|other| matches!(other.place(), DropPlace::Onto) && other.payload() == kind.payload());
+            if matches!(kind.place(), DropPlace::Between) && onto_too() && self.over_middle(layout, place, point) {
+                continue;
+            }
             let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), point).filter(|(at, _)| kind.accepts(&*payload, at)) else {
                 continue;
             };
-            self.edge_scroll(cx, layout, rect.height(), Self::logical(layout, rect, rtl, point).y);
+            if !own {
+                self.edge_scroll(cx, layout, rect.height(), Self::logical(layout, rect, rtl, point).y);
+            }
             let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
             if let Some(op) = cx.core.drop_target_of(kind.payload(), &KindDrop { mark }) {
                 self.events.push(CollectionEvent::Dropped { at, op, payload: DropPayload::new(payload) });
@@ -715,7 +770,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 {
                     if free {
                         self.free_move(cx, origin, layer(pos));
-                    } else if (props.reorder.is_some() || props.drag_payload.is_some()) && self.drags.grabbed.is_none() {
+                    } else if (props.reorder.is_some() || !props.drag_payloads.is_empty()) && self.drags.grabbed.is_none() {
                         self.begin_row_drag(cx, props, at);
                     }
                 }
@@ -740,6 +795,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let own = cx.dragging::<ListDrag<C::Key>>().filter(|(payload, _)| payload.list == cx.core.id);
         if let Some((payload, at)) = own {
+            let mut spot = None;
             if let Some(rule) = props.reorder {
                 // Above or below the rows too, while the pointer stays over their columns: `edge_scroll` scrolls at
                 // its full rate past an edge.
@@ -749,7 +805,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 }
                 let groups = rule.into_groups && matches!(layout.nav(), NavShape::Tree);
                 let step = groups.then(|| cx.env.control(cx.core.resolved.size).icon);
-                let spot = if self.source.is_empty() {
+                spot = if self.source.is_empty() {
                     self.empty_spot(rect, layer(at)).filter(|spot| comp.accepts(&payload, None, spot.insert))
                 } else {
                     self.spot(layout, rect, offset, rtl, step, layer(at))
@@ -769,9 +825,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     }
                 }
             }
+            if spot.is_none() {
+                self.kind_drop(comp, cx, layout, (rect, offset, rtl), true);
+            }
         } else {
             self.drags.grabbed = None;
-            self.kind_drop(comp, cx, layout, (rect, offset, rtl));
+            self.kind_drop(comp, cx, layout, (rect, offset, rtl), false);
         }
     }
 

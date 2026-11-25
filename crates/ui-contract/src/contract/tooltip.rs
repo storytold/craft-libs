@@ -2,7 +2,8 @@
 //!
 //! A tooltip shows after one delay while the pointer rests on the component, or on keyboard focus after the same
 //! delay, and at once while a neighbour's tooltip was hiding a moment ago. A press, a menu that owns keys and a
-//! running drag hide it.
+//! running drag hide it. A press on the component keeps its tooltip hidden until the pointer leaves it, so what the
+//! press opens (a popover under a swatch) is not covered.
 //!
 //! A component with no tooltip shows its own label as the tooltip when its type declares `Component::SHOWS_LABEL`
 //! false (or an instance does, through `Component::shows_label`): no text paints that name, inside a field or not. A
@@ -42,6 +43,8 @@ struct TipState {
     shown: bool,
     /// The part the tooltip belongs to; `None` for the component's own.
     subject: Option<PartRef>,
+    /// A press on the subject hid the tooltip; it stays hidden until neither the pointer nor the keyboard is on it.
+    dismissed: bool,
 }
 
 /// When the last tooltip of the context hid.
@@ -279,7 +282,8 @@ struct TipCall<'a> {
     text: &'a dyn Fn() -> Option<String>,
     rich: Option<TipFn<'a>>,
     spec: Option<&'a TooltipSpec>,
-    /// The tooltip shows at the pointer whatever its spec's `at` says.
+    /// The tooltip shows at the pointer whatever its spec's `at` says. Such a tip has no subject a press could
+    /// dismiss it from: it hides only while the press lasts.
     at_pointer: bool,
     /// The pointer rests on the subject or the keyboard is on it.
     wants_input: bool,
@@ -292,6 +296,8 @@ struct TipCall<'a> {
 fn show_tip(call: TipCall<'_>) {
     let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text: build, rich, spec, at_pointer, wants_input, pressed, subject, describes } =
         call;
+    // The host turned tooltips off: none shows, and one that was showing goes as it does when the pointer leaves.
+    let wants_input = wants_input && env.tooltips;
     let state_id = sub(id, "tip_state");
     let built = std::cell::OnceCell::new();
     let text = || built.get_or_init(build).as_deref();
@@ -311,7 +317,12 @@ fn show_tip(call: TipCall<'_>) {
     }
     let when_now = spec.is_some_and(|spec| spec.when == TooltipWhen::Now);
     let screen = areas::layer_to_screen(ctx, rect_layer) * rect;
-    let suppressed = pressed || overlay_blocks(ctx, screen.center()) || pointer::press_captured(ctx) || drag::running(ctx);
+    if !wants_input {
+        state.dismissed = false;
+    } else if pressed && !at_pointer {
+        state.dismissed = true;
+    }
+    let suppressed = pressed || state.dismissed || overlay_blocks(ctx, screen.center()) || pointer::press_captured(ctx) || drag::running(ctx);
     if wants {
         state.since.get_or_insert(now);
     } else {
@@ -332,7 +343,7 @@ fn show_tip(call: TipCall<'_>) {
     state.shown = show;
     let tip_id = sub(id, "tip");
     let presence = motion::layer_presence(ctx, tip_id, owner, env.motion, show, overlay_motion());
-    if state.shown || state.since.is_some() || presence.visible {
+    if state.shown || state.since.is_some() || state.dismissed || presence.visible {
         store::put(ctx, state_id, state);
     }
     if !presence.visible {

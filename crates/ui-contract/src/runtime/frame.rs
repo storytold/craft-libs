@@ -32,12 +32,41 @@ pub struct FrameInput {
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
+    /// The window in which the app's own egui code shows a modal this frame (a dialog the app draws itself, not a
+    /// framework layer). It blocks the app's other windows as a framework app-modal layer open in it does: their
+    /// presses, keys, wheel and text go nowhere, a press there brings the modal's window forward, and they refuse to
+    /// close. A panel floated into a window of its own is one of them. `None` (the default) when the app shows no such
+    /// modal; set every frame from the app's own state.
+    pub app_modal: Option<ViewportId>,
+    /// Whether the window system's input reaches the OS windows the runtime hosts.
+    pub window_input: WindowInput,
+}
+
+/// Whether the window system's input reaches the OS windows the runtime hosts beside the root (a panel floated into
+/// its own window). eframe gives the host only the root's raw input (`App::raw_input_hook`), so the host applies its
+/// policy to the root there and gives it here for the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowInput {
+    /// The window system's input reaches every hosted window.
+    #[default]
+    Live,
+    /// An agent-driven session: a hosted window's events, hovered files and dropped files are dropped before any
+    /// stage reads them, so only the runtime's injected input reaches it. Its window facts (size, focus, close
+    /// requests) stay.
+    Dropped,
 }
 
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE }
+        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, app_modal: None, window_input: WindowInput::Live }
+    }
+
+    /// Sets whether the window system's input reaches the hosted windows.
+    pub fn window_input(mut self, window_input: WindowInput) -> Self {
+        self.window_input = window_input;
+        self
     }
 
     /// Sets the command input.
@@ -49,6 +78,12 @@ impl FrameInput {
     /// Sets the modifiers latched beyond the window's input.
     pub fn latched(mut self, mods: Mods) -> Self {
         self.latched = mods;
+        self
+    }
+
+    /// Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`](Self::app_modal)).
+    pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self {
+        self.app_modal = viewport;
         self
     }
 
@@ -68,6 +103,10 @@ pub enum ChromeToggle {
     Panels,
     /// Every panel of the window except the tools.
     PanelsKeepTools,
+    /// Ends Tab and Shift+Tab hiding the panels; nothing when they are shown.
+    ShowPanels,
+    /// Reveals the edge while the window is body-only or its panels are hidden; `None` ends the reveal.
+    Reveal(Option<super::env::RevealEdge>),
 }
 
 /// A step of the outer gesture of a container whose `ContainerProps::outer_edit` is on: one undo step over the edits of
@@ -106,6 +145,10 @@ pub struct FrameOutput {
     /// The commands components took since the last call, in order, whatever fired them (a key, a menu row, the
     /// palette): what ran inside the framework, for an app that records the commands it runs (an action recorder).
     pub delivered: Vec<Fired>,
+    /// The key presses since the last call that ran nothing because their chord binds only commands disabled where the
+    /// press landed, in order: each as the key would have fired its first such command. The app says why it did not
+    /// run (`commands::resolve`'s hint), as it does for a disabled menu row.
+    pub dimmed: Vec<Fired>,
     /// The app-scope commands a key press fired while only the app's own command state disabled them, in order.
     /// Refusals by the gate or the modal rule are not listed.
     pub declined: Vec<Fired>,
@@ -123,12 +166,18 @@ pub struct FrameOutput {
     pub outer_edits: Vec<OuterEdit>,
     /// Whether a component refused this pass's input since the last call (`frame::refuse`): the app plays its alert.
     pub refused: bool,
+    /// The components whose live preview ended because they stopped showing; the host ends the preview it holds for
+    /// each id.
+    pub ended_previews: Vec<egui::Id>,
 }
 
 /// The per-frame and per-context state of the frame loop.
 #[derive(Default)]
 pub(crate) struct FrameState {
     input: Option<FrameInput>,
+    /// The window of `FrameInput::app_modal` and the root frame its modal first showed in: its place in the modal stack
+    /// (`overlay::modal_viewport`). It stays while the app names the same window frame after frame.
+    app_modal: Option<(ViewportId, u64)>,
     /// The pointer tolerances of the app's resolved tokens (`tokens.size.hit`) and the `sizes` they came from:
     /// the input hook writes the slop before any `Env` exists, and the press lifecycle reads the hit target.
     hit: Option<(Arc<AppSizes>, HitSizes)>,
@@ -359,6 +408,10 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
         if !state.hit.as_ref().is_some_and(|(sizes, _)| Arc::ptr_eq(sizes, &input.root.sizes)) {
             state.hit = Some((input.root.sizes.clone(), resolved_hit(&input.root.sizes)));
         }
+        state.app_modal = match (input.app_modal, state.app_modal) {
+            (Some(viewport), Some((shown, since))) if shown == viewport => Some((viewport, since)),
+            (viewport, _) => viewport.map(|viewport| (viewport, pass::root_frame_nr(ctx))),
+        };
         state.input = Some(input);
         ran
     });
@@ -400,9 +453,35 @@ fn frame_hit(ctx: &Context) -> HitSizes {
     pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
 }
 
-/// The wheel speed and Alt-code pages of the frame's root values; the defaults before the app sets any input.
-pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
-    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
+/// What the raw-input step reads of the frame's root values (`RootEnv`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RootInput {
+    pub(crate) wheel: WheelSpeed,
+    pub(crate) alt_codes: AltCodePages,
+    pub(crate) ctrl_wheel_pinch: bool,
+}
+
+impl RootInput {
+    fn of(root: &RootEnv) -> Self {
+        RootInput { wheel: root.wheel, alt_codes: root.alt_codes, ctrl_wheel_pinch: root.ctrl_wheel_pinch }
+    }
+}
+
+/// The raw-input values of the frame's root values; the defaults before the app sets any input.
+pub(crate) fn root_input(ctx: &Context) -> RootInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| RootInput::of(&input.root)))
+        .unwrap_or_else(|| RootInput::of(&RootEnv::default()))
+}
+
+/// The window in which the app's own egui code shows a modal this frame (`FrameInput::app_modal`), and the root frame
+/// that modal first showed in.
+pub(crate) fn app_modal(ctx: &Context) -> Option<(ViewportId, u64)> {
+    pass_state::with::<FrameState, _>(ctx, |state| state.app_modal)
+}
+
+/// The frame's window-input policy; `Live` before the app sets any input.
+pub(crate) fn window_input(ctx: &Context) -> WindowInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.window_input)).unwrap_or_default()
 }
 
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own
@@ -433,12 +512,16 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
     output.delivered = commands::take_delivered(ctx);
+    output.dimmed = commands::take_dimmed(ctx);
     output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
-    // already acted in the key stage.
+    // already acted in the key stage. Quit, from any source, asks the root window to close through its close path.
     let focused = crate::runtime::egui::viewports::reported(ctx).into_iter().find(|(_, facts)| facts.focused).map(|(viewport, _)| viewport);
     for fired in &output.fired {
+        if fired.phase == commands::FirePhase::Press && commands::QuitCommand::from_ref(&fired.command).is_some() {
+            windows::act(ctx, ViewportId::ROOT, windows::WindowAction::Close);
+        }
         if fired.source == commands::FireSource::Key {
             continue;
         }
@@ -460,6 +543,11 @@ pub(crate) fn set_frame_layers(ctx: &Context, painter: Option<fn(&Context)>) {
 /// Adds a gesture whose component was evicted to the next `FrameOutput`.
 pub(crate) fn note_removed_gesture(ctx: &Context, id: GestureId) {
     pass_state::with::<FrameState, _>(ctx, |state| state.output.removed_gestures.push(id));
+}
+
+/// Adds a component whose live preview ended to the next `FrameOutput`.
+pub(crate) fn note_ended_preview(ctx: &Context, id: Id) {
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.ended_previews.push(id));
 }
 
 /// Adds a step of an outer gesture to the next `FrameOutput`.
@@ -494,6 +582,14 @@ pub fn discardable(ctx: &Context) -> bool {
     crate::runtime::egui::sizing::discardable(ctx)
 }
 
+/// Whether egui will run the running pass again, so nothing of it paints: egui's `Context::will_discard`, or a discard
+/// pass that layout memory asked for in this pass and requests from egui only at the pass's end. Host code that does
+/// work once per shown frame (a frame count, a settle count) skips it while this is true; `will_discard` alone is still
+/// false during the app's UI in a pass that a changed size runs again.
+pub fn will_rerun(ctx: &Context) -> bool {
+    ctx.will_discard() || crate::runtime::layout_memory::discard_pending(ctx)
+}
+
 /// Discards the running pass, so nothing of it paints, and runs it again, when [`discardable`]: for a host that learns
 /// only after a part ran that the part showed what it must not. A pass after a discard carries no input (events,
 /// injected steps and press edges enter a frame's first pass only); held state persists.
@@ -514,7 +610,7 @@ pub fn note_shell(ctx: &Context, viewport: ViewportId, window: &WindowKey, root:
 
 /// The root container of the shell the latest pass of `viewport` showed: where a key pressed with nothing focused
 /// matches, so the window's commands take it.
-pub(crate) fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
+pub fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
     pass_state::with::<FrameState, _>(ctx, |state| {
         state.shells.iter().filter(|shell| shell.viewport == viewport).max_by_key(|shell| shell.pass).map(|shell| shell.root)
     })
@@ -522,7 +618,7 @@ pub(crate) fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
 
 /// Adds a chrome toggle of `viewport` to the next `FrameOutput` and aims it at the window of the viewport that holds
 /// focus, or at the first shell that asks when none does.
-pub(crate) fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
+pub fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
     queue_toggle(ctx, viewport, toggle);
     pass_state::with::<FrameState, _>(ctx, |state| state.output.chrome_toggles.push((viewport, toggle)));
 }
@@ -617,10 +713,9 @@ pub fn stepped_clock(ctx: &Context, step: f64) -> f64 {
     at
 }
 
-/// The running pass's time in seconds, read once by the begin hook. Content that changes with time reads
-/// [`stepped_clock`], which shows it again when the value it read changes; this read notes nothing, for timing
-/// events in the component that has the pointer or the focus.
-#[doc(hidden)]
+/// The running pass's time in seconds, the same on every pass of a frame: for app code that times a wait. Content
+/// that changes with time reads [`stepped_clock`], which shows it again when the value it read changes; this read
+/// notes nothing, for timing events in the component that has the pointer or the focus.
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {
         Some(facts) => facts.now,
@@ -642,6 +737,21 @@ pub(crate) fn holds_input(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.holds())
 }
 
+/// The events the one-press rule (H0) or the key stage held that the frame `frame` of `viewport` gets, read in its
+/// input hook before H0 hands them on.
+pub(crate) fn held_for(ctx: &Context, viewport: ViewportId, frame: u64) -> Vec<egui::Event> {
+    PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.delivered_in(frame))
+}
+
+/// The mode the current frame's root theme resolves to on `ctx`.
+fn effective_mode(ctx: &Context) -> Mode {
+    let root = pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.root.clone()));
+    match root {
+        Some(root) => root.effective_mode(ctx),
+        None => RootEnv::fallback(ctx).effective_mode(ctx),
+    }
+}
+
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
 /// records keyed by `input.viewport_id`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
@@ -653,6 +763,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     raw_input::prepare(ctx, input);
     // H0b: the OS colour scheme egui's integration reports reaches the system reader.
     crate::runtime::env::system::input_hook(ctx, &input.events);
+    // H0d: match egui's font coverage transfer function to the pass's resolved theme mode before egui runs
+    // `Fonts::begin_pass`, so dark-on-light and light-on-dark text use the right curve even when the app's mode
+    // differs from the OS's.
+    let mode = effective_mode(ctx);
+    style::set_text_color_transfer(ctx, mode);
     // From H0 to H3 the events go with the input time each arrived at (`Arrived`): held events keep theirs, and the key
     // stage gives each shortcut its own. egui's events are what these stages leave.
     let mut events = Arrived::take(input);
@@ -662,6 +777,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
     // to the focus are counted first, before the IME and key stages take theirs.
     keys::count_sent(ctx, viewport, &events);
+    keys::note_ime_presses(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {
@@ -755,6 +871,8 @@ pub(crate) fn end_pass(ui: &mut Ui) {
         paint_frame_layers(&ctx);
     }
     toast::end_pass(&ctx);
+    // Every taker of the pass has run, and the layers and the focus are the pass's still.
+    keys::hand_on_cancel(&ctx);
     overlay::end_pass(&ctx);
     focus::end(&ctx);
     let sweeps: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.sweeps.values().copied().collect());

@@ -1804,6 +1804,7 @@ dependencies = [
  "craft-flow",
  "craft-font-catalog",
  "craft-font-manager",
+ "craft-font-os-windows",
  "craft-font-store",
  "craft-font-subset",
  "craft-format",
@@ -1846,6 +1847,7 @@ dependencies = [
  "craft-lottie",
  "craft-macho",
  "craft-markdown",
+ "craft-material-graph",
  "craft-materialx",
  "craft-math",
  "craft-mcmat",
@@ -1935,6 +1937,7 @@ dependencies = [
  "craft-vectordrawable",
  "craft-video",
  "craft-wasm",
+ "craft-wayland",
  "craft-web-api",
  "craft-web-host",
  "craft-webp",
@@ -2019,6 +2022,7 @@ dependencies = [
 name = "craft-android-res"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -2029,6 +2033,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-appkit"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -2065,6 +2078,9 @@ dependencies = [
 [[package]]
 name = "craft-audio-dsp"
 version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+]
 
 [[package]]
 name = "craft-automation"
@@ -2137,6 +2153,7 @@ version = "0.1.0"
 dependencies = [
  "craft-media",
  "craft-media-testkit",
+ "craft-testkit",
  "craft-timeline",
  "craft-xml",
  "proptest",
@@ -2159,6 +2176,7 @@ name = "craft-cfb"
 version = "0.1.0"
 dependencies = [
  "craft-media-testkit",
+ "craft-testkit",
 ]
 
 [[package]]
@@ -2196,6 +2214,7 @@ dependencies = [
 name = "craft-cms"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "md-5 0.10.6",
  "moxcms",
  "rayon",
@@ -2283,6 +2302,7 @@ dependencies = [
 name = "craft-crw"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2357,6 +2377,7 @@ dependencies = [
  "craft-geom",
  "craft-raw",
  "craft-render-parity",
+ "craft-testkit",
  "proptest",
  "rayon",
  "serde",
@@ -2415,6 +2436,7 @@ dependencies = [
  "blake3",
  "craft-ecproj-format",
  "craft-pcraft-format",
+ "craft-testkit",
  "craft-vectorcraft-format",
  "flate2",
  "ruzstd",
@@ -2470,6 +2492,7 @@ dependencies = [
  "craft-math",
  "craft-offcrypto",
  "craft-opc",
+ "craft-testkit",
  "craft-wordmodel",
  "craft-xml",
  "image",
@@ -2513,6 +2536,7 @@ name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "craft-testkit",
  "craft-xml",
  "kurbo",
  "log",
@@ -2609,6 +2633,7 @@ dependencies = [
 name = "craft-exr"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "exr",
  "flate2",
  "half",
@@ -2744,7 +2769,16 @@ dependencies = [
  "epaint_default_fonts",
  "log",
  "serde",
- "skrifa 0.44.0",
+ "serde_json",
+ "skrifa 0.47.0",
+]
+
+[[package]]
+name = "craft-font-os-windows"
+version = "0.1.0"
+dependencies = [
+ "windows-registry",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2754,6 +2788,7 @@ dependencies = [
  "cap-primitives",
  "craft-atomic",
  "craft-font-catalog",
+ "craft-font-os-windows",
  "flate2",
  "log",
  "ruzstd",
@@ -2766,6 +2801,7 @@ dependencies = [
  "toml",
  "ureq",
  "write-fonts 0.54.1",
+ "wuff",
 ]
 
 [[package]]
@@ -2773,6 +2809,7 @@ name = "craft-font-subset"
 version = "0.1.0"
 dependencies = [
  "brotli 9.1.1",
+ "craft-testkit",
  "harfbuzz-subset-sys",
  "rustybuzz",
  "serde_json",
@@ -2921,6 +2958,7 @@ dependencies = [
 name = "craft-heif"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "heic-rs",
  "proptest",
  "rayon",
@@ -3103,6 +3141,7 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "jpeg-decoder",
  "jpeg-encoder 0.6.1",
  "rayon",
@@ -3174,6 +3213,7 @@ dependencies = [
  "craft-markdown",
  "craft-math",
  "craft-mime",
+ "craft-testkit",
  "craft-wordmodel",
  "proptest",
 ]
@@ -3217,6 +3257,15 @@ dependencies = [
  "craft-flow",
  "craft-html",
  "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-material-graph"
+version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+ "libm",
+ "rayon",
 ]
 
 [[package]]
@@ -3323,6 +3372,7 @@ name = "craft-mesh"
 version = "0.1.0"
 dependencies = [
  "craft-opc",
+ "craft-testkit",
  "craft-xml",
  "craft-zip",
  "miniz_oxide 0.9.1",
@@ -3370,6 +3420,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "craft-codepage",
+ "craft-testkit",
  "encoding_rs",
  "proptest",
 ]
@@ -3441,6 +3492,7 @@ dependencies = [
 name = "craft-openpgp"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "ed25519-dalek 2.2.0",
  "pgp",
  "proptest",
@@ -3523,6 +3575,7 @@ dependencies = [
  "chrono",
  "craft-stream-codecs",
  "craft-svg",
+ "craft-testkit",
  "flate2",
  "hayro",
  "hayro-cmap",
@@ -3737,6 +3790,7 @@ dependencies = [
  "craft-cms",
  "craft-pdf 0.1.0",
  "craft-plate-test",
+ "craft-testkit",
  "kurbo",
  "linesweeper",
  "thiserror 2.0.21",
@@ -3780,6 +3834,7 @@ dependencies = [
 name = "craft-proof"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "log",
  "miniz_oxide 0.9.1",
  "proptest",
@@ -3792,6 +3847,7 @@ name = "craft-proto"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-testkit",
  "log",
  "proptest",
  "zeroize",
@@ -3802,6 +3858,7 @@ name = "craft-ps"
 version = "0.1.0"
 dependencies = [
  "craft-eps",
+ "craft-testkit",
  "flate2",
  "kurbo",
  "miniz_oxide 0.8.9",
@@ -3815,6 +3872,7 @@ name = "craft-psd"
 version = "0.1.0"
 dependencies = [
  "craft-psd",
+ "craft-testkit",
  "encoding_rs",
  "flate2",
  "proptest",
@@ -3828,6 +3886,7 @@ name = "craft-pst"
 version = "0.1.0"
 dependencies = [
  "craft-pst",
+ "craft-testkit",
  "proptest",
 ]
 
@@ -3861,6 +3920,7 @@ dependencies = [
  "chrono",
  "craft-crw",
  "craft-metadata",
+ "craft-testkit",
  "craft-tiff",
  "jpeg-encoder 0.7.1",
  "jxl-oxide",
@@ -3940,6 +4000,7 @@ version = "0.1.0"
 dependencies = [
  "craft-audio",
  "craft-midi",
+ "craft-testkit",
  "craft-time",
  "craft-zip",
  "proptest",
@@ -4081,6 +4142,7 @@ dependencies = [
 name = "craft-stream-codecs"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "fax",
  "hayro-ccitt",
  "hayro-jbig2",
@@ -4335,6 +4397,7 @@ name = "craft-ui-canvas"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-i18n",
  "craft-keymap",
  "craft-theme",
@@ -4342,6 +4405,7 @@ dependencies = [
  "craft-ui-macros",
  "craft-ui-panels",
  "craft-ui-test-kit",
+ "craft-window",
  "egui",
  "serde",
  "serde_json",
@@ -4363,6 +4427,7 @@ dependencies = [
  "craft-quit",
  "craft-settings",
  "craft-svg",
+ "craft-testkit",
  "craft-theme",
  "craft-tracked",
  "craft-ui-contract",
@@ -4503,6 +4568,7 @@ dependencies = [
  "egui",
  "raw-window-handle",
  "serde",
+ "serde_json",
  "web-time",
 ]
 
@@ -4626,6 +4692,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wayland"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "wayland-backend",
+ "wayland-client",
+]
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 dependencies = [
@@ -4668,6 +4743,7 @@ dependencies = [
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-host",
@@ -4684,6 +4760,7 @@ dependencies = [
  "tempfile",
  "wayland-client",
  "winsafe",
+ "x11rb",
 ]
 
 [[package]]
@@ -4712,6 +4789,7 @@ dependencies = [
 name = "craft-xcf"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "flate2",
  "thiserror 2.0.21",
 ]
@@ -4735,6 +4813,7 @@ dependencies = [
 name = "craft-xfl"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "craft-xml",
  "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
@@ -4760,6 +4839,7 @@ dependencies = [
  "craft-drawingml",
  "craft-opc",
  "craft-sheet",
+ "craft-testkit",
  "craft-xlsx",
  "craft-xml",
  "thiserror 2.0.21",
@@ -4769,6 +4849,7 @@ dependencies = [
 name = "craft-xml"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "quick-xml 0.41.0",
  "serde",
  "thiserror 2.0.21",
@@ -5500,7 +5581,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "bytemuck",
  "emath",
@@ -5556,7 +5637,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5591,7 +5672,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "accesskit",
  "ahash",
@@ -5610,7 +5691,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5629,7 +5710,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -5649,7 +5730,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "bytemuck",
  "egui",
@@ -5662,7 +5743,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "eframe",
  "egui",
@@ -5739,7 +5820,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "bytemuck",
 ]
@@ -5812,7 +5893,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5838,7 +5919,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[package]]
 name = "equator"
@@ -15170,19 +15251,19 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[patch.unused]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
+source = "git+https://github.com/storytold/egui.git?rev=b15ffe9bfc2c8e6748533b32b708e10abaf2afec#b15ffe9bfc2c8e6748533b32b708e10abaf2afec"

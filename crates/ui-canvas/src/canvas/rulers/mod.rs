@@ -320,10 +320,12 @@ impl<'a> Rulers<'a> {
             PressPhase::Drag { pos, .. } => (GesturePhase::Update, pos),
             PressPhase::Release { pos, click: false, .. } => (GesturePhase::Commit, pos),
             PressPhase::Cancel { .. } => (GesturePhase::Cancel, start.origin),
+            PressPhase::Down { .. } if press.double_pressed() => (GesturePhase::Commit, start.origin),
             _ => return None,
         };
         let along = if press.mods.alt { across_axis(part.guide_along()) } else { part.guide_along() };
-        let at = (phase != GesturePhase::Cancel && content.contains(pos)).then(|| {
+        // PLAN: a double press lies on the strip itself, outside `content`; the guides' bounds decide whether it lands.
+        let at = (phase != GesturePhase::Cancel && (press.double_pressed() || content.contains(pos))).then(|| {
             let across = coordinate_across(along, space.view.to_doc(pos));
             if press.mods.shift {
                 let (text, _) = space.rulers().across(along);
@@ -400,7 +402,7 @@ impl Component for Rulers<'_> {
         for (part, strip) in [(RulerPart::Horizontal, top), (RulerPart::Vertical, left)] {
             let declared = cx.part(part.part(), strip).priority(handle).pointer_only("the New Guide... command places a guide by number");
             if self.interactive {
-                let declared = declared.sense(Sense::DRAG | Sense::CLICK);
+                let declared = declared.sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK);
                 if let Some(space) = space {
                     declared.cursor(resize_cursor(&space.view, motion_across(part.guide_along())));
                 }
@@ -408,7 +410,11 @@ impl Component for Rulers<'_> {
         }
         let declared = cx.part(CORNER, corner).priority(handle);
         if self.interactive {
-            let sense = if self.origin_locked { Sense::CLICK | Sense::CONTEXT_CLICK } else { Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS };
+            let sense = if self.origin_locked {
+                Sense::CLICK | Sense::CONTEXT_CLICK
+            } else {
+                Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS
+            };
             let declared = declared.sense(sense);
             if self.origin_locked {
                 declared.pointer_only("the zero point is locked");
@@ -436,17 +442,25 @@ impl Component for Rulers<'_> {
         let press = cx.part(CORNER).press;
         let started = press.phase.start().filter(|start| start.button == PointerButton::Primary);
         if started.is_some() && !self.origin_locked {
+            // Every step of the drag proposes where it lands, its start and its release too: a drag of one move lands.
+            // A release lands only while the drag's edit is open: a cancelled drag stays cancelled.
+            let land =
+                |pos: Pos2, start: Point| if corner.contains(pos) { start } else { Self::landing(&space, self.snap.as_ref(), pos, press.mods, zero) };
             match press.phase {
-                PressPhase::DragStart { .. } => {
+                PressPhase::DragStart { pos, .. } => {
                     *cx.press_slot::<Point>() = Some(zero);
                     cx.begin();
+                    cx.propose(land(pos, zero));
                 }
                 PressPhase::Drag { pos, .. } => {
                     let start = cx.press_slot::<Point>().unwrap_or(zero);
-                    let at = if corner.contains(pos) { start } else { Self::landing(&space, self.snap.as_ref(), pos, press.mods, zero) };
-                    cx.propose(at);
+                    cx.propose(land(pos, start));
                 }
-                PressPhase::Release { click: false, .. } => cx.commit(),
+                PressPhase::Release { pos, click: false, .. } if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) => {
+                    let start = cx.press_slot::<Point>().unwrap_or(zero);
+                    cx.propose(land(pos, start));
+                    cx.commit();
+                }
                 _ => {}
             }
             if press.double_pressed() {
@@ -694,7 +708,8 @@ pub struct RulersOutput {
     /// document's origin (a double click on the corner, the menu's Reset Zero Point).
     pub zero: EditResponse<Point>,
     /// The guide a drag from a strip is placing in this pass. The app forwards it to the guides control; it ends
-    /// with a `Commit` or a `Cancel`, and a position of `None` removes the guide.
+    /// with a `Commit` or a `Cancel`, and a position of `None` removes the guide. A double press on a strip reports
+    /// one in phase `Commit` without a `Begin` before it.
     pub guide: Option<GuideDrag>,
     /// A unit picked from the rulers' own menu ([`Rulers::units`]): the app keeps it as the ruler unit.
     pub unit_picked: Option<UnitKind>,

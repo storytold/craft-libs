@@ -2,22 +2,25 @@
 
 use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
-    Common, Component, Cx, Hover, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _,
+    Access, Common, Component, Cx, Hover, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, PopupKind, Props, Role,
+    Styled as _, WordSetCx as _,
 };
-use crate::display::{Picture, Spinner};
+use crate::display::{ChordWrite, DisplayWords, Kbd, Picture, Spinner};
 use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, PaintShape};
-use crate::runtime::commands::CommandRef;
+use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
-use craft_behavior::{Insets, Metrics, PartKey, PressPhase, Sense};
-use craft_keymap::Mods;
+use craft_behavior::{Insets, Metrics, PartKey, PointerButton, PressPhase, Sense};
+use craft_host::target::Os;
+use craft_keymap::{Mods, Trigger};
 use craft_theme::{
     Rgba, Stateful, Variant,
     variant::{Emphasis, Tone},
 };
 use egui::{Color32, Rect, Response, Vec2};
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// The part a loading button shows its spinner in.
 const SPINNER: PartKey = PartKey::new("spinner");
@@ -34,7 +37,7 @@ const SIDE_MENU_DISABLED_ALPHA: u8 = 110;
 
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct ButtonStyle {
     #[style(surface)]
@@ -75,6 +78,7 @@ impl ButtonStyle {
         let ink = cx.ink_on(DataColor::new(cx.color(tint).egui()));
         style.text = TextLook::new(TypeRole::Label, Stateful::new(ink));
         style.icon = IconLook::new(super::small_icon(cx, cx.control().icon), Stateful::new(ink));
+        style.face.muted = Stateful::new(ink);
         style
     }
 }
@@ -92,6 +96,9 @@ pub struct ButtonOutput {
     /// The modifiers held at the activation (with the click for a pointer one); none when the button was not
     /// activated.
     pub mods: Mods,
+    /// True in every pass from the pointer press on the button to its release or cancel, also after the pointer leaves
+    /// the button or the window. A key or AccessKit activation never sets it.
+    pub held: bool,
     /// The pointer's stay over the button: hovered, entered, left and clicked under the pointer.
     pub hover: Hover,
 }
@@ -108,7 +115,8 @@ impl ButtonOutput {
             (true, Some(activation)) => activation.mods,
             _ => Mods::NONE,
         };
-        ButtonOutput { response: cx.response.clone(), clicks, mods, hover: cx.hover() }
+        let held = cx.press().phase.button_down() && cx.press().phase.start().is_some_and(|start| start.button == PointerButton::Primary);
+        ButtonOutput { response: cx.response.clone(), clicks, mods, held, hover: cx.hover() }
     }
 
     /// Whether the button was clicked this pass, by pointer or by key, by the framework's click rule. It stands in
@@ -132,6 +140,18 @@ impl Outcome for ButtonOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+}
+
+/// Whether a command button shows its command's chord.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ButtonChord {
+    /// No chord.
+    #[default]
+    Hidden,
+    /// The command's chord after the label, in the `Kbd` notation; a command with no chord shows none. The chord is
+    /// dropped first when room is short.
+    Trailing,
 }
 
 /// A push button. A label wider than the room is cut with an ellipsis and shown whole in a tooltip. While `loading`
@@ -172,6 +192,19 @@ pub struct Button<'a> {
     /// that names an item at the reading start).
     #[prop]
     align: HAlign,
+    /// A muted caption-role second line, wrapped under the icon and label. The face grows to fit it. It is the
+    /// accessible description unless `description` is set.
+    #[prop(into)]
+    detail: Option<Label>,
+    /// Whether a command button shows its command's chord after the label.
+    #[prop]
+    chord: ButtonChord,
+    /// The kind of popup the button opens: AccessKit reports it.
+    #[prop(into)]
+    popup: Option<PopupKind>,
+    /// Whether the popup the button opens is open, as the host knows it.
+    #[prop(into)]
+    expanded: Option<bool>,
     /// How the icon and label are laid out: beside each other, or the icon over the label.
     #[style_key]
     #[prop]
@@ -192,6 +225,10 @@ impl<'a> Button<'a> {
             tint: None,
             least_width: None,
             align: HAlign::Center,
+            detail: None,
+            chord: ButtonChord::Hidden,
+            popup: None,
+            expanded: None,
             arrangement: Arrangement::default(),
         }
         .label(label)
@@ -219,13 +256,14 @@ impl<'a> Button<'a> {
         self
     }
 
-    /// The face as it shows `label` in `style`: the painted text in its place when set.
-    fn spec<'s>(&'s self, label: &'s str, style: &ButtonStyle) -> FaceSpec<'s> {
-        self.face_of(self.painted.as_ref().map_or(label, Label::as_str), style)
+    /// The face as it shows `label` in `style`, with `chord` after it: the painted text in its place when set.
+    fn spec<'s>(&'s self, label: &'s str, style: &ButtonStyle, chord: Option<&'s str>) -> FaceSpec<'s> {
+        self.face_of(self.painted.as_ref().map_or(label, Label::as_str), style, chord)
     }
 
-    /// The face showing `label` as it is: in the label role, unless `style` names another (a side menu's row).
-    fn face_of<'s>(&'s self, label: &'s str, style: &ButtonStyle) -> FaceSpec<'s> {
+    /// The face showing `label` as it is, with `chord` after it: in the label role, unless `style` names another (a
+    /// side menu's row).
+    fn face_of<'s>(&'s self, label: &'s str, style: &ButtonStyle, chord: Option<&'s str>) -> FaceSpec<'s> {
         FaceSpec {
             arrangement: self.arrangement,
             label,
@@ -236,7 +274,18 @@ impl<'a> Button<'a> {
             loading: self.loading,
             mnemonic: None,
             align: self.align,
+            chord,
+            detail: self.detail.as_ref().map(Label::as_str),
         }
+    }
+
+    /// The chord a `Trailing` button shows: the bound `command`'s, written as `Kbd` writes it for the scope's OS and
+    /// with its key names (`keys`, asked only then, so a button with no chord reads neither). `None` for a hidden chord
+    /// and for a command with none.
+    fn chord_text(&self, command: Option<&ResolvedCommand>, keys: impl FnOnce() -> (Os, Arc<DisplayWords>)) -> Option<String> {
+        let chord = command.filter(|_| self.chord == ButtonChord::Trailing)?.chord?;
+        let (os, words) = keys();
+        Some(Kbd::text(&Trigger::from(chord), os, &words, ChordWrite::default()))
     }
 }
 
@@ -245,6 +294,10 @@ impl Component for Button<'_> {
     const OVERLAYS: bool = false;
     type Style = ButtonStyle;
     type Output = ButtonOutput;
+
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
         let cx = &super::placed(cx);
@@ -257,6 +310,20 @@ impl Component for Button<'_> {
         }
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
+            // A dialog's footer button stands a dialog button high.
+            if matches!(least, LeastWidth::DialogButton | LeastWidth::DialogSideButton) && key.arrangement == Arrangement::Inline {
+                style.metrics.min_size.y = cx.dialog_button_height();
+            }
+        }
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::CallToAction {
+            style.metrics.min_size.y = style.metrics.min_size.y.max(cx.tokens.size.page.action);
+            style.text.role = TypeRole::BodyStrong;
+        }
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::PageAction {
+            let page = &cx.tokens.size.page;
+            let padding = &mut style.metrics.padding;
+            style.metrics.min_size.y = style.metrics.min_size.y.max(page.button);
+            (padding.start, padding.end) = (padding.start.max(page.button_side), padding.end.max(page.button_side));
         }
         // A side menu's row: the large body text, padded as a list row of places, not as a control.
         if cx.env::<super::ControlPlace>() == super::ControlPlace::SideMenu && key.arrangement == Arrangement::Inline {
@@ -287,9 +354,10 @@ impl Component for Button<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let shown = face::measure(cx, &self.spec(cx.resolved.label, cx.style));
+        let chord = self.chord_text(cx.command(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
+        let shown = face::measure(cx, &self.spec(cx.resolved.label, cx.style, chord.as_deref()));
         match &self.room_for {
-            Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str(), cx.style))),
+            Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str(), cx.style, chord.as_deref()))),
             None => shown,
         }
     }
@@ -303,14 +371,17 @@ impl Component for Button<'_> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let (area, rtl) = (cx.content_rect, cx.flow.is_rtl());
         if self.loading {
-            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label, cx.style), &cx.style.face, cx.style.icon.side, area, rtl);
+            // A busy face shows no chord.
+            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label, cx.style, None), &cx.style.face, cx.style.icon.side, area, rtl);
             if let Some(rect) = spinner {
                 cx.part(SPINNER, rect);
             }
-        } else if self.picture.is_some()
-            && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style), &cx.style.face, cx.style.icon.side, area, rtl)
-        {
-            cx.part(PICTURE, rect);
+        } else if self.picture.is_some() {
+            let chord = self.chord_text(cx.command(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
+            let lead = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style, chord.as_deref()), &cx.style.face, cx.style.icon.side, area, rtl);
+            if let Some(rect) = lead {
+                cx.part(PICTURE, rect);
+            }
         }
     }
 
@@ -326,13 +397,36 @@ impl Component for Button<'_> {
         if self.loading { crate::style::Flags::BUSY } else { crate::style::Flags::empty() }
     }
 
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        let detail = self.detail.as_ref().map(Label::as_str).filter(|detail| !detail.is_empty());
+        if let Some(detail) = detail
+            && cx.resolved.description.is_none()
+        {
+            access.description(detail);
+        }
+        if let Some(kind) = self.popup {
+            access.has_popup(kind);
+        }
+        if let Some(open) = self.expanded {
+            access.expanded(open);
+        }
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if let Some(tint) = self.tint {
             let shape = PaintShape::Rect(cx.rect, cx.style.surface.radius);
             ui.draw().data_fill(&shape, DataColor::new(Color32::from(craft_theme::Srgba::from(tint))));
             ui.draw().fill(&shape, cx.resolve(&cx.style.overlay));
         }
-        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, cx.style), cx.content_rect);
+        let chord = self.chord_text(cx.command.as_deref(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
+        face::paint(
+            ui,
+            cx,
+            (&cx.style.text, &cx.style.icon),
+            &cx.style.face,
+            &self.spec(cx.resolved.label, cx.style, chord.as_deref()),
+            cx.content_rect,
+        );
         if cx.part_if_declared(SPINNER).is_some() {
             ui.face(SPINNER, Spinner::new().size(cx.resolved.size));
         }

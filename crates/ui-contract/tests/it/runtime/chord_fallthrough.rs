@@ -106,6 +106,14 @@ fn alt_f7_at(focus: Focus, move_disabled: bool, dropped: bool) -> (Vec<String>, 
         return (vec!["the trial's catalog is refused".to_owned()], false);
     };
     let catalog = if dropped { catalog.replace_defaults(WindowCommand::Move.id(), Vec::new()) } else { catalog };
+    let (fired, _, began) = press_alt_f7(focus, move_disabled, catalog);
+    (fired, began)
+}
+
+/// What Alt+F7 does with the focus at `focus` inside or beside a floating window, whose Move is disabled with
+/// `move_disabled`, under `catalog`: the commands it fired and the ones it hit disabled into the output, and whether a
+/// keyboard move began.
+fn press_alt_f7(focus: Focus, move_disabled: bool, catalog: AppCatalog) -> (Vec<String>, Vec<String>, bool) {
     let catalog = if focus.page_like() { catalog.typing_rule(TypingRule::PlainKeysWait) } else { catalog };
     let (log, seen, beside) = (RefCell::new(Vec::new()), RefCell::new(Seen::default()), RefCell::new(Seen::default()));
     let page = named_id("page");
@@ -142,7 +150,7 @@ fn alt_f7_at(focus: Focus, move_disabled: bool, dropped: bool) -> (Vec<String>, 
         request(&frames.ctx, FocusTarget::Id(target));
         frames.idle(2, &mut show);
     } else if focus != Focus::Nothing {
-        return (vec!["the focus target never showed".to_owned()], false);
+        return (vec!["the focus target never showed".to_owned()], Vec::new(), false);
     }
     assert_eq!(frames.ctx.memory(|memory| memory.focused()), target, "the target has the focus");
     take_output(&frames.ctx);
@@ -153,9 +161,10 @@ fn alt_f7_at(focus: Focus, move_disabled: bool, dropped: bool) -> (Vec<String>, 
     }
     frames.frame(events, &mut show);
     frames.idle(2, &mut show);
-    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    let output = take_output(&frames.ctx);
+    let ids = |fired: Vec<craft_ui::runtime::commands::Fired>| fired.into_iter().map(|fired| fired.command.id).collect();
     let began = log.borrow().iter().any(|change| change.kind == PlacementKind::Keyboard && change.phase == GesturePhase::Begin);
-    (fired, began)
+    (ids(output.fired), ids(output.dimmed), began)
 }
 
 /// By default Alt+F7 inside a floating window is its Move (16.3), ahead of the app's binding. Move has no default
@@ -196,4 +205,17 @@ fn outside_a_floating_window_alt_f7_is_the_apps() {
     for (focus, name) in cases {
         assert_eq!(alt_f7_at(focus, false, false), (vec![SPELLING.to_owned()], false), "{name}: Alt+F7 runs the app's command");
     }
+}
+
+/// A chord whose only binding is disabled where the press lands runs nothing, and the output names the command it hit,
+/// so the app can say why; a chord that runs its command names none.
+#[trial]
+fn a_press_on_a_chord_bound_only_to_a_disabled_command_reports_the_command() {
+    let move_only = || {
+        let binding = Binding::parse("Alt+F7").expect("the trial's chord parses");
+        AppCatalog::new(Vec::new(), 1).expect("the trial's catalog is taken").replace_defaults(WindowCommand::Move.id(), vec![binding])
+    };
+    let moves = vec![WindowCommand::Move.id().to_owned()];
+    assert_eq!(press_alt_f7(Focus::Inside, true, move_only()), (Vec::new(), moves, false), "the disabled Move is named and nothing runs");
+    assert_eq!(press_alt_f7(Focus::Inside, false, move_only()), (Vec::new(), Vec::new(), true), "an enabled Move moves and is not named");
 }

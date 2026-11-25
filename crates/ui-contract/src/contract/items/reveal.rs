@@ -1,7 +1,7 @@
 //! Bringing a row into view: a requested reveal and the scroll that does it.
 
 use super::measure::{Known, RowMeasure};
-use super::{ItemsHooks, rows};
+use super::{ItemsHooks, key_hash, rows};
 use crate::contract::Collection;
 use crate::runtime::env::{Env, EnvView};
 use crate::runtime::memory::MemoryStage;
@@ -82,14 +82,21 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let odd = striped && self.stripe_run(None, row).is_multiple_of(2) && !self.source.is_section(row);
                 let (state, flags) = self.known_row(row, known, odd);
                 let measure = RowMeasure { at: row, rect, cells, state, flags, tree };
-                let (size, _) = crate::contract::steps::measuring(&ctx, || {
-                    self.measure_row(comp, ui, (id, view_env, installed), &mut memory, measure, |measure| measure(Proposal::Width(rect.width())))
+                let (size, fits) = crate::contract::steps::measuring(&ctx, || {
+                    self.measure_row(comp, ui, (id, view_env, installed), &mut memory, measure, |measure, _, fits| {
+                        (measure(Proposal::Width(rect.width())).0, fits)
+                    })
                 });
-                let height_id = rows::measured_id(id, &self.source.key(row));
+                let key = self.source.key(row);
+                let height_id = rows::measured_id(id, &key);
                 #[cfg(feature = "testing")]
                 crate::runtime::measure::count_row_measure(&ctx, height_id);
                 rows::record_measure(&ctx, id, height_id, Vec2::new(rect.width(), size.y));
                 Arc::make_mut(layout).set_height(row, size.y);
+                let fit = fits.then_some(size.x);
+                if rows::keep_fit(&ctx, id, key_hash(&key), fit) {
+                    Arc::make_mut(layout).set_fit(row, fit);
+                }
                 measured.push(row);
             }
             let content = layout.content_size();

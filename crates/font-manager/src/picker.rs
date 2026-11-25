@@ -11,20 +11,22 @@ pub(crate) mod stories;
 
 use std::sync::Arc;
 
+use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps, wheel_step};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense, Value};
-use craft_behavior::{HitLevel, HitPriority, NavMove, Preview};
+use craft_behavior::{HitLevel, HitPriority, NavMove, Preview, WheelPhase};
 use craft_font_catalog::Catalog;
 use craft_host::Section;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
-    Access, Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
+    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, InBar, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _, step_stop,
 };
 use craft_ui::controls::disclosure::{DisclosureGlyph, DropdownArrow};
 use craft_ui::fonts::FontRef;
-use craft_ui::list::{ListRow, ThumbSize};
+use craft_ui::list::{ListRow, ThumbSize, TrailingPart};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
+use craft_ui::runtime::edit::PreviewWatch;
 use craft_ui::runtime::env::{EnvView, Label};
 use craft_ui::runtime::memory::StageAccess;
 use craft_ui::style::{ComponentStyle, Metrics, Stateful, States, StyleColor, StyleCx, SurfaceLook};
@@ -57,8 +59,6 @@ craft_ui::words! {
         /// The name of the preview banner, with `{family}` for the family it shows.
         preview_of: template "fontPicker.previewOf" = "Font preview: {family}";
         no_match: "fontPicker.noMatch" = "No fonts match";
-        /// The family field's label when the selection has several families.
-        mixed: "fontPicker.mixed" = "Mixed";
         /// The name of a row's star, with `{row}` for the row's label.
         favorite: template "fontPicker.favorite" = "Favorite {row}";
         list: "fontPicker.list" = "Fonts";
@@ -81,6 +81,21 @@ craft_ui::words! {
         format_true_type: "fontPicker.formatTrueType" = "TrueType";
         format_variable: "fontPicker.formatVariable" = "Variable";
         served: "fontPicker.served" = "Not installed";
+        all_scripts: "fontPicker.allScripts" = "All Scripts";
+        script_latin: "fontPicker.scriptLatin" = "Latin";
+        script_japanese: "fontPicker.scriptJapanese" = "Japanese";
+        script_thai: "fontPicker.scriptThai" = "Thai";
+        any_kind: "fontPicker.anyKind" = "Any Kind";
+        font_technology: "fontPicker.fontTechnology" = "Font Technology";
+        preview_size: "fontPicker.previewSize" = "Font Preview Size";
+        preview_small: "fontPicker.previewSmall" = "Small";
+        preview_medium: "fontPicker.previewMedium" = "Medium";
+        preview_large: "fontPicker.previewLarge" = "Large";
+        /// The similar-fonts chip, with `{family}` for the reference family.
+        similar_to: template "fontPicker.similarTo" = "≈ {family}";
+        clear_similar: "fontPicker.clearSimilar" = "Clear Similar Fonts";
+        /// The name of a row's show-similar action, with `{row}` for the row's label.
+        show_similar: template "fontPicker.showSimilar" = "Show fonts similar to {row}";
         /// The field's text while the installed fonts are still being read.
         loading: "fontPicker.loading" = "Loading fonts…";
     }
@@ -163,6 +178,79 @@ impl FontPreviewSize {
     }
 }
 
+/// Coverage from the face: Latin, the basic Latin letters in the cmap; Japanese, the OS/2 kana or CJK unicode-range
+/// bits or the JIS code page bit, or a Japanese family name; Thai, U+0E01 and U+0E32 in the cmap. Read lazily like the
+/// class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontScript {
+    /// The basic Latin letters.
+    Latin,
+    /// Japanese kana and CJK.
+    Japanese,
+    /// Thai.
+    Thai,
+}
+
+impl FontScript {
+    /// Every script the script row can offer, in order.
+    pub const ALL: [FontScript; 3] = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
+}
+
+/// A family set the host gives (VectorCraft: Document, Recently Added), one filter toggle each. An `ordered` set that
+/// is on lists in its own order. A disabled set's toggle is off and dimmed, with its hint as the reason.
+pub struct FamilySet<'a> {
+    key: &'a str,
+    label: Label,
+    hint: Option<Label>,
+    families: &'a [String],
+    ordered: bool,
+    enabled: bool,
+}
+
+impl<'a> FamilySet<'a> {
+    /// The set `key` named `label` over `families`.
+    pub fn new(key: &'a str, label: impl Into<Label>, families: &'a [String]) -> Self {
+        FamilySet { key, label: label.into(), hint: None, families, ordered: false, enabled: true }
+    }
+
+    /// The reason shown while the set is disabled.
+    pub fn hint(mut self, hint: impl Into<Label>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// Lists the set in its own order while it is on.
+    pub fn ordered(mut self) -> Self {
+        self.ordered = true;
+        self
+    }
+
+    /// Whether the set's toggle can be turned on.
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
+
+    /// The family's place in the set. A host may give canonical lowercase names, so case does not matter.
+    fn position(&self, family: &str) -> Option<usize> {
+        self.families.iter().position(|f| f.eq_ignore_ascii_case(family))
+    }
+}
+
+/// Named layout of the list's filter area. `Toolbar`: the toggle row and class column. `Chips`: rows of chip toggles
+/// (the script row; Favorites, the host sets, Any Kind and the classes; Font Technology and Variable; the Font
+/// Preview Size row).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilterLayout {
+    /// The toggle row and class column.
+    #[default]
+    Toolbar,
+    /// Rows of chip toggles.
+    Chips,
+}
+
 /// What narrows the list. Every filter off shows every installed family.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -173,14 +261,18 @@ pub struct FontFilters {
     pub favorites: bool,
     /// Only variable fonts.
     pub variable: bool,
-    /// Families like the current one, most alike first ([`SIMILAR_COUNT`] of them).
-    pub similar: bool,
+    /// The reference family of Show Similar Fonts, most alike first ([`SIMILAR_COUNT`] of them); `None` is off.
+    pub similar: Option<String>,
+    /// Only families whose regular face covers the script.
+    pub script: Option<FontScript>,
+    /// Keys of the host family sets that are on; each keeps only its families.
+    pub sets: Vec<String>,
 }
 
 impl FontFilters {
     /// Whether any filter narrows the list (Clear All is enabled).
     pub fn any(&self) -> bool {
-        self.class.is_some() || self.favorites || self.variable || self.similar
+        self.class.is_some() || self.favorites || self.variable || self.similar.is_some() || self.script.is_some() || !self.sets.is_empty()
     }
 
     /// Clear All: every filter off.
@@ -208,6 +300,8 @@ pub struct FontPickerSettings {
     pub preview: FontPreviewSize,
     /// Show family names in English rather than their own language (Type › Show Font Names in English).
     pub names_in_english: bool,
+    /// Row samples and the banner paint black type on a white paper fill, in every theme.
+    pub samples_on_white: bool,
 }
 
 impl Default for FontPickerSettings {
@@ -218,6 +312,7 @@ impl Default for FontPickerSettings {
             recent_limit: 10,
             preview: FontPreviewSize::default(),
             names_in_english: false,
+            samples_on_white: false,
         }
     }
 }
@@ -299,11 +394,11 @@ pub fn family_rows(
     query: &str,
     settings: Option<&FontPickerSettings>,
     filters: &FontFilters,
-    current: &str,
+    sets: &[FamilySet<'_>],
     language: &str,
 ) -> Vec<FamilyRow> {
     let (folder, collator) = (craft_i18n::Folder::new(language), craft_i18n::Collator::new(language));
-    let listing = rank::Listing { query, settings, filters, current, language, served: &[] };
+    let listing = rank::Listing { query, settings, filters, language, served: &[], sets };
     rank::list(catalog, infos, &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
 }
 
@@ -434,9 +529,11 @@ const TEXT: PartKey = PartKey::new("text");
 const CHEVRON: PartKey = PartKey::new("chevron");
 /// The mark before the chevron of a shown font that is not installed; its tooltip is the note.
 const WARNING: PartKey = PartKey::new("missing");
-const WARNING_ICON: &str = "warning";
+const WARNING_ICON: &str = "warning_filled";
 /// The popup the chevron and Alt+Down toggle.
 const POPUP: &str = "list";
+/// The Show Similar part at the end of a family row, in the `Chips` layout.
+const SIMILAR: TrailingPart = TrailingPart::new(0);
 /// The share of a sample band's height the sample's em takes, in the list's rows and the preview banner.
 const SAMPLE_EM: f32 = 0.7;
 /// The widest family names in common use, which the field's width is sized by.
@@ -509,10 +606,12 @@ impl Codec for Loading {
 }
 
 /// What the picker keeps between passes: the draft the list was last filtered for, the family the list previews,
-/// whether the class column is hidden, and, for the open list only, the families whose styles show and the families
-/// already reported as rested.
+/// whether the class column is hidden, the watch that reports a preview the picker stopped showing, and, for the open
+/// list only, the families whose styles show and the families already reported as rested.
 #[derive(Clone, Default)]
 struct Typing {
+    /// Armed while a preview shows: the picker's eviction then ends the preview it proposed.
+    watch: PreviewWatch,
     draft: Option<String>,
     lead: Option<String>,
     /// The lead's family was proposed by the pointer, so it ends when the pointer leaves the rows.
@@ -522,6 +621,7 @@ struct Typing {
     hide_classes: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
+    focused: bool,
 }
 
 /// The interface language code of the host, English without one.
@@ -567,7 +667,10 @@ enum Stop {
 }
 
 /// The font family field. Typing filters the list to the families whose name (in any language) matches, the best
-/// match first, and opens it; a click on the name while the list is closed, the chevron and Alt+Down open it on every family (the click selects the name), Alt+Up closes it. Rows: a star, the
+/// match first, and opens it; in the library picker a click on the name while the list is closed opens it on every
+/// family and selects the name, whereas in `Plain` only a click that focuses the field selects the name without opening
+/// the list (subsequent clicks place the caret). The chevron and Alt+Down open the list on every family, and Alt+Up
+/// closes it. Rows: a star, the
 /// family name in the interface face, the sample text (the preview text, else "Sample") in the family's own face at the
 /// preview size and the class mark.
 /// Recent families form a group at the top. Up, Down and Page keys move the keyboard row, which previews, Enter or a
@@ -600,6 +703,15 @@ pub struct FontPicker<'a> {
     /// Families the host can fetch but that are not installed, listed with the served mark.
     #[prop]
     served: &'a [String],
+    /// The host's family sets; their toggles follow Favorites.
+    #[prop]
+    sets: &'a [FamilySet<'a>],
+    /// The scripts the script row offers (with All Scripts first); empty: no script row.
+    #[prop]
+    scripts: &'a [FontScript],
+    /// Picks the layout of the filter area.
+    #[prop]
+    filter_layout: FilterLayout,
     /// How the list is laid out: the library picker, or Word's plain font box.
     #[prop]
     kind: FontPickerKind,
@@ -620,6 +732,27 @@ pub struct FontPicker<'a> {
     #[prop]
     current_host: Option<String>,
     host_picked: Option<String>,
+    /// Whether the font picker uses compact bar sizing (`size.length.field.sm` / `size.length.short`).
+    #[style_key]
+    compact: bool,
+}
+
+/// How many times a closed [`FontPicker`] built its stop list on `ctx`, for regression trials.
+#[cfg(feature = "screen-testing")]
+#[derive(Clone, Copy, Default)]
+struct StopBuilds(u64);
+
+/// Where the stop-build count lives in the context's memory.
+#[cfg(feature = "screen-testing")]
+fn stop_builds_id() -> egui::Id {
+    craft_ui::runtime::memory::global("font_picker_stop_builds", ())
+}
+
+/// How many times a closed [`FontPicker`] built its stop list on `ctx`.
+#[doc(hidden)]
+#[cfg(feature = "screen-testing")]
+pub fn stop_builds(ctx: &egui::Context) -> u64 {
+    craft_ui::runtime::memory::with_session::<StopBuilds, _>(ctx, stop_builds_id(), |builds| builds.0)
 }
 
 impl<'a> FontPicker<'a> {
@@ -637,6 +770,9 @@ impl<'a> FontPicker<'a> {
             preview: Preview::Unchanged,
             preview_text: None,
             served: &[],
+            sets: &[],
+            scripts: &[],
+            filter_layout: FilterLayout::default(),
             kind: FontPickerKind::default(),
             actions: &[],
             shown_as: None,
@@ -645,9 +781,17 @@ impl<'a> FontPicker<'a> {
             host: &[],
             current_host: None,
             host_picked: None,
+            compact: false,
         }
         .label(label)
         .enabled(catalog.is_ready())
+    }
+
+    /// Sets whether the font picker uses compact bar sizing (`size.length.field.sm` / `size.length.short`).
+    #[must_use]
+    pub fn compact(mut self, compact: bool) -> Self {
+        self.compact = compact;
+        self
     }
 
     /// The adornments at the end of the field: the missing mark when `missing`, then the chevron. The mark is a glyph
@@ -693,25 +837,29 @@ impl<'a> FontPicker<'a> {
     }
 
     /// What the closed field's arrows and wheel step through: the host face and action rows in group order, then the
-    /// families. A notice takes no step.
-    fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>) -> Vec<Stop> {
+    /// families in the list's narrowed order. A notice takes no step.
+    fn stops(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<Stop> {
+        #[cfg(feature = "screen-testing")]
+        craft_ui::runtime::memory::with_session::<StopBuilds, _>(&cx.response.ctx, stop_builds_id(), |builds| builds.0 += 1);
         let folder = cx.env.folder();
         let host = rank::host_rows(self.host, "", &folder)
             .into_iter()
             .filter_map(|(group, at)| self.host.get(group)?.rows.get(at))
             .filter(|row| !matches!(row.kind, HostFontKind::Notice))
             .map(|row| Stop::Host(row.key.clone()));
-        host.chain(self.ordered(cx, settings).into_iter().map(|row| Stop::Family(row.family))).collect()
+        host.chain(self.ordered(cx, settings, filters).into_iter().map(|row| Stop::Family(row.family))).collect()
     }
 
-    /// The families in list order without filters or recents.
-    fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>) -> Vec<FamilyRow> {
+    /// The families in the list's narrowed order (the bound filters and the host's sets apply) without the Recent
+    /// group, which the arrows and the wheel step through.
+    fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<FamilyRow> {
         let infos = infos_of(&cx.response.ctx, cx.id, self.catalog);
         let (folder, collator) = (cx.env.folder(), cx.env.collator());
-        let filters = FontFilters::default();
         let language = ui_language(&cx.env);
-        let listing = rank::Listing { query: "", settings, filters: &filters, current: "", language: &language, served: &[] };
-        rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, false).0
+        let listing = rank::Listing { query: "", settings, filters, language: &language, served: &[], sets: self.sets };
+        let mut rows = rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, true).0;
+        rows.retain(|row| !row.recent);
+        rows
     }
 }
 
@@ -760,11 +908,14 @@ impl Component for FontPicker<'_> {
     type Style = FontPickerStyle;
     type Output = FontPickerOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) held at the small field length (`size.length.field.sm`), as a
-    /// ribbon's font box is: wide enough for a family name and its menu arrow, the same width whichever it shows.
-    fn style(cx: &StyleCx<'_>, _: FontPickerStyleKey) -> FontPickerStyle {
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) or toolbar (`InBar`), or when `compact` is set,
+    /// held at the small field length (`size.length.field.sm`), as a ribbon's font box is:
+    /// wide enough for a family name and its menu arrow, the same width whichever it shows.
+    fn style(cx: &StyleCx<'_>, key: FontPickerStyleKey) -> FontPickerStyle {
         let field = FieldStyle::at(cx);
-        let field = if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.held_at(cx.tokens.size.length.field.sm) } else { field };
+        let in_bar = cx.env::<InBar>().0;
+        let ribbon = cx.env::<ControlPlace>() == ControlPlace::Ribbon;
+        let field = if key.compact || ribbon || in_bar { field.held_at(cx.tokens.size.length.field.sm) } else { field };
         let warn = cx.tone(Tone::Warn);
         let off = cx.color(cx.tokens.color.text.disabled);
         let thumb = &cx.tokens.size.thumb;
@@ -786,7 +937,7 @@ impl Component for FontPicker<'_> {
     }
 
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.
-    /// In a ribbon the name field is the short field length (`size.length.short`) wide whichever family it shows, a
+    /// In a ribbon or toolbar the name field is the short field length (`size.length.short`) wide whichever family it shows, a
     /// longer name scrolling in it as in a word processor's font box: that is its least, about the old ribbon's font
     /// name, so a row short of room never narrows the box to its menu arrow; where the room allows the style holds
     /// the box at the small field length (`FieldStyle::held_at`).
@@ -794,8 +945,8 @@ impl Component for FontPicker<'_> {
         let host = self.host_name();
         let current = host.as_deref().or(cx.value().map(String::as_str)).unwrap_or("");
         let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
-        let ribbon = cx.env.get::<ControlPlace>() == ControlPlace::Ribbon;
-        let widest = if ribbon { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
+        let compact = self.compact || cx.env.get::<ControlPlace>() == ControlPlace::Ribbon || cx.env.get::<InBar>().0;
+        let widest = if compact { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
         let name = cx.words::<FontPickerWords>().list.clone();
         let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
         Vec2::new(widest.x + reserve(&cx.style.field, &[], &Self::trailing(name, note.is_some(), cx.env.get())), widest.y)
@@ -819,10 +970,8 @@ impl Component for FontPicker<'_> {
         }
         let mut options = TextOptions::new();
         options.select_on_focus = true;
+        // A selection of several families shows an empty field, as the reference applications do.
         options.mixed = cx.value().is_none();
-        if options.mixed {
-            options.placeholder = Some(cx.words::<FontPickerWords>().mixed.clone());
-        }
         if !self.catalog.is_ready() {
             // The first scan runs on a background thread; the field asks again until it ends.
             self.catalog.scan_in_background();
@@ -839,12 +988,6 @@ impl Component for FontPicker<'_> {
         Some(self.family.reborrow())
     }
 
-    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
-        if cx.value().is_none() && cx.text(&text_key()).is_none_or(|text| text.draft.as_deref().is_none_or(str::is_empty)) {
-            access.value(cx.words::<FontPickerWords>().mixed.as_str());
-        }
-    }
-
     /// A changed draft filters the list: it opens on the matches, and closes when the draft ended (committed,
     /// cancelled or replaced by a pick). A preview that the list closed on without a pick is cancelled. While the
     /// list is closed, the arrows and the wheel step through the host rows and the families.
@@ -852,6 +995,8 @@ impl Component for FontPicker<'_> {
         if !self.catalog.is_ready() {
             return;
         }
+        let focused = cx.is_focused();
+        let was_focused = std::mem::replace(&mut cx.memory::<Typing>().focused, focused);
         let list = cx.popup(POPUP);
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
         let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
@@ -867,10 +1012,18 @@ impl Component for FontPicker<'_> {
             }
         }
         // A click on the name while the list is closed opens it on every family and selects the name, so typing
-        // replaces it (Photoshop's font field).
+        // replaces it (Photoshop's font field). In Word's plain font picker, clicking selects the name without
+        // auto-opening the popup list so the user can immediately type a replacement family. Subsequent clicks on
+        // an already-focused plain field place the caret rather than re-selecting all text.
         if !list.is_open(cx) && cx.text(&text_key()).is_some_and(|outcome| outcome.clicked) {
-            cx.select_all_text();
-            list.open(cx);
+            if self.kind == FontPickerKind::Plain {
+                if !was_focused {
+                    cx.select_all_text();
+                }
+            } else {
+                cx.select_all_text();
+                list.open(cx);
+            }
         }
         if list.is_open(cx) {
             return;
@@ -880,37 +1033,76 @@ impl Component for FontPicker<'_> {
         let typing = cx.memory::<Typing>();
         typing.expanded.clear();
         typing.rested.clear();
-        let settings = read(&mut self.settings, cx);
-        let current = cx.value().cloned().unwrap_or_default();
-        let all = self.stops(cx, settings.as_ref());
-        let here = match self.current_host.as_deref() {
-            Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
-            None => all.iter().position(|stop| matches!(stop, Stop::Family(family) if *family == current)),
-        };
-        let Some(here) = here else { return };
-        let mut to = here;
+        // Collect stepping input before building the sorted stop list: idle frames carry neither arrow moves nor
+        // wheel ticks, so skipping `stops` avoids collating every installed family on every repaint.
+        let mut moves: Vec<bool> = Vec::new();
         while let Some((step, mods)) = cx.intents().take_move() {
             match step {
-                NavMove::Down if !mods.fine => to = (to + 1).min(all.len() - 1),
-                NavMove::Up if !mods.fine => to = to.saturating_sub(1),
+                NavMove::Down if !mods.fine => moves.push(true),
+                NavMove::Up if !mods.fine => moves.push(false),
                 _ => {}
             }
         }
-        if let Some(wheel) = cx.take_wheel()
-            && wheel.scroll.y != 0.0
-        {
-            to = if wheel.scroll.y < 0.0 { (to + 1).min(all.len() - 1) } else { to.saturating_sub(1) };
-        }
-        if to == here {
+        let wheel = cx.take_wheel();
+        let wheel_along = wheel.as_ref().and_then(|wheel| {
+            if wheel.phase == WheelPhase::End {
+                None
+            } else if let StepResult::Set(along) =
+                wheel_step(&ValueSteps::new(0.0, -f64::MAX, f64::MAX, 1.0, 1.0).fine(1.0), ValueAxes::Both, wheel, cx.env.direction().is_rtl())
+                && along != 0.0
+            {
+                Some((wheel.phase, along))
+            } else {
+                None
+            }
+        });
+        let wheel_ended = wheel.is_some_and(|wheel| wheel.phase == WheelPhase::End);
+        if moves.is_empty() && wheel_along.is_none() {
+            if wheel_ended {
+                cx.wheel_run(WheelPhase::End, None);
+            }
             return;
         }
-        match all.get(to) {
-            Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
-            Some(Stop::Family(family)) => {
-                self.picked = Some(family.clone());
-                cx.set(family.clone());
+        let settings = read(&mut self.settings, cx);
+        let filters = read(&mut self.filters, cx).unwrap_or_default();
+        let all = self.stops(cx, settings.as_ref(), &filters);
+        let stops: Vec<usize> = (0..all.len()).collect();
+        if !moves.is_empty() {
+            let here = match self.current_host.as_deref() {
+                Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
+                None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
+            };
+            let mut to = here;
+            for forward in moves {
+                to = step_stop(&stops, to, forward);
             }
-            None => {}
+            if to != here {
+                match to.and_then(|at| all.get(at)) {
+                    Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
+                    Some(Stop::Family(family)) => {
+                        self.picked = Some(family.clone());
+                        cx.set(family.clone());
+                    }
+                    None => {}
+                }
+            }
+        }
+        // The wheel steps one stop a line down for a step forward, as one run the wheel's end commits.
+        if wheel_ended {
+            cx.wheel_run(WheelPhase::End, None);
+        } else if let Some((phase, along)) = wheel_along {
+            let mut stop = match self.current_host.as_deref() {
+                Some(key) => all.iter().position(|stop| matches!(stop, Stop::Host(host) if host == key)),
+                None => cx.value().and_then(|current| all.iter().position(|stop| matches!(stop, Stop::Family(family) if family == current))),
+            };
+            for _ in 0..along.abs().round() as usize {
+                stop = step_stop(&stops, stop, along < 0.0);
+            }
+            match stop.and_then(|at| all.get(at)) {
+                Some(Stop::Host(key)) => self.host_picked = Some(key.clone()),
+                Some(Stop::Family(family)) => cx.wheel_run(phase, Some(family.clone())),
+                None => {}
+            }
         }
     }
 

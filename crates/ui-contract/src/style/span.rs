@@ -27,6 +27,8 @@ pub struct Span<'a> {
     pub strikethrough: bool,
     /// The role's semibold face, at the role's size.
     pub strong: bool,
+    /// A link in a paragraph: drawn in the run's link colour, and the only part of the paragraph that takes the pointer.
+    pub link: bool,
     /// Underlined in the ink of this tone.
     pub flag: Option<Tone>,
 }
@@ -45,8 +47,15 @@ impl<'a> Span<'a> {
             underline: false,
             strikethrough: false,
             strong: false,
+            link: false,
             flag: None,
         }
+    }
+
+    /// Makes the span a link: it takes the run's link colour and the pointer.
+    pub fn link(mut self) -> Self {
+        self.link = true;
+        self
     }
 
     /// Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
