@@ -115,6 +115,13 @@ pub fn overflow(ui: &mut Ui, items: &[MenuItem], labels: &MenuLabels) -> Option<
 /// the chevron offers the variations. One control that did both would leave a
 /// person guessing which half they had hit.
 pub fn split(ui: &mut Ui, primary: &str, items: &[MenuItem], labels: &MenuLabels) -> Option<SplitHit> {
+    split_named(ui, primary, primary, items, labels)
+}
+
+/// [`split`] for a primary action whose label leaves out what it acts on, as on each card of a
+/// list. `name` is the button's accessible name ("Install Hack" for "Install"), and starts with
+/// the label.
+pub fn split_named(ui: &mut Ui, primary: &str, name: &str, items: &[MenuItem], labels: &MenuLabels) -> Option<SplitHit> {
     let mut hit = None;
     ui.horizontal(|ui| {
         // The halves touch, so they read as one control with two parts. Square
@@ -133,7 +140,11 @@ pub fn split(ui: &mut Ui, primary: &str, items: &[MenuItem], labels: &MenuLabels
             (egui::CornerRadius { ne: 0, se: 0, ..radius }, egui::CornerRadius { nw: 0, sw: 0, ..radius })
         };
         let label = |ui: &mut Ui, hit: &mut Option<SplitHit>| {
-            if ui.add(egui::Button::new(primary).corner_radius(if backwards { inner } else { outer })).clicked() {
+            let button = ui.add(egui::Button::new(primary).corner_radius(if backwards { inner } else { outer }));
+            if name != primary {
+                button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, button.enabled(), name));
+            }
+            if button.clicked() {
                 *hit = Some(SplitHit::Primary);
             }
         };
