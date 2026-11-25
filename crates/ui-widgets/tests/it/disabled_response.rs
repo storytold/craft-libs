@@ -103,12 +103,14 @@ fn a_disabled_root_contains_the_pointer_without_reporting_hover() {
         *out.borrow_mut() = Some((shown.response.enabled(), shown.response.contains_pointer(), shown.response.hovered()));
     });
     fixture.frame(vec![pointer::moved(FIELD.center())]);
+    fixture.frame(Vec::new());
     let (is_enabled, contains, hovered) = seen.borrow().expect("the button ran");
     assert!(!is_enabled, "the button reports itself disabled");
     assert!(contains, "a disabled root still reports that it contains the pointer");
     assert!(!hovered, "egui's rule: a disabled response is not hovered, though the pointer is over it");
     enabled.set(true);
     fixture.frame(vec![pointer::moved(FIELD.center())]);
+    fixture.frame(Vec::new());
     let (is_enabled, contains, hovered) = seen.borrow().expect("the button ran");
     assert!(is_enabled && contains && hovered, "an enabled root is hovered under the pointer");
 }
