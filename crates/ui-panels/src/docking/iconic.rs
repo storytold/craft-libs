@@ -209,14 +209,12 @@ pub struct IconicColumnStyle {
 /// column registers its drop spots with the dock `dock` as an expanded column does: its edges, the seams between its
 /// icon groups, the top and bottom of the stack and each icon group's cells, which join its tabs. The flyout shows
 /// its group through the `view` of [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
-/// group within the room and at least the default height ([`DockHeights`](super::DockHeights)) of each of its panels
-/// whose [`FlyoutHeight`] is `Docked`, the default: a panel whose flyout is `Content` tall leaves its docked heights to
-/// its group docked in a column. A group the user sized keeps that size. The flyout's top is level with its group's
-/// icons, shifted by the group's `flyout_offset`, inside `within`. The user resizes it by its top and bottom edges and
-/// the edge away from the column; each step comes back in [`IconicColumnOutput::flyout`], which the host keeps in the
-/// group (`flyout_width`, `height`, `flyout_offset`).
-/// The flyouts stand above the floating windows as popups do, or below them with `flyout_layer` set to
-/// `PopupLayer::BelowWindows`, which a dock area sets for its docked columns from `DockConfig::flyout_layer`.
+/// group within the room and at least the height of its panels' default heights, which a panel whose
+/// [`FlyoutHeight`] is `Content` leaves to its group docked in a column; a group the user sized keeps that size. The
+/// flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`; a flyout
+/// taller than the room below that top moves up by what it overflows and no further.
+/// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
+/// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 ///
 /// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's sides set
 /// its width: the column shows its icons under it, with no divider on its inner edge, and registers no edge bands.

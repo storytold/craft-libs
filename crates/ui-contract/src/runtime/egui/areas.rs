@@ -556,6 +556,12 @@ pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
 }
 
+/// A host's own egui window `id` around `body`: its first pass is a sizing pass, in an invisible `Ui`.
+#[cfg(feature = "suite")]
+pub(crate) fn host_egui_window(ctx: &Context, id: Id, body: impl FnOnce(&mut Ui)) {
+    egui::Window::new("host").id(id).show(ctx, body);
+}
+
 /// The size of one entry of [`host_popup_list`], as an app's popup list entry.
 #[cfg(feature = "suite")]
 const HOST_LIST_ENTRY: Vec2 = Vec2::new(104.0, 22.0);

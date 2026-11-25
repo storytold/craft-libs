@@ -159,6 +159,11 @@ impl<'a> OverlayUi<'a> {
         };
         // An in-place editor is part of its owner: the owner's node reports no popup of it.
         let (kind, peers, reported) = (overlay.popup, overlay.opener.is_none(), overlay.role != LayerRole::InPlaceEditor);
+        // A popup with no recorded opener hangs from this component: when the component goes disabled, its anchor is
+        // gone, as for an explicit opener that goes disabled (`dismissal`).
+        if open && peers && overlay.dismiss.anchor_gone && !self.resolved.enabled {
+            crate::runtime::overlay::request_close(self.ctx, popup.id, CloseReason::AnchorGone);
+        }
         let ctx = self.ctx.clone();
         with_popups(&ctx, |popups| {
             if reported {

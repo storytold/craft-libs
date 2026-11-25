@@ -87,7 +87,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         // A kept measure serves only the outermost measuring run, which this opens when none is open.
         let inputs = self.items_inputs(comp, ui, room);
         if let Some(inputs) = &inputs
-            && crate::runtime::measure::run(&ctx, || layout_memory::kept_serves(&ctx, key, inputs))
+            && crate::runtime::measure::measuring(&ctx, || layout_memory::kept_serves(&ctx, key, inputs))
             && let Some(found) = found(&ctx)
         {
             return found.took;

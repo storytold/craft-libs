@@ -850,21 +850,29 @@ impl Env {
         Env { scoped: Arc::new(scoped) }
     }
 
-    /// A child entry that changes layer-local fields only (arena, item, row, roving, grid, scroll owner,
-    /// transform, ink): the key carries over, because none of its inputs change.
     /// This env for a body that starts a layout room of its own (a layer, a pane): the flow grid and the content
-    /// column of the room around it do not reach in.
+    /// column of the room around it do not reach in. When opened inside a bar, it leaves the bar (`InBar(false)`) and
+    /// recomputes the env key so styles do not reuse the bar's cache entries.
     pub(crate) fn new_room(&self) -> Env {
-        self.derive_local(|scoped| {
+        let reset = |scoped: &mut Scoped| {
             scoped.start_room();
             scoped.bracket = None;
             scoped.lazy = None;
             scoped.measure = None;
-            // A pane opened from a bar is not the bar's line.
-            scoped.inherited_mut().values.set(InBar(false));
-        })
+        };
+        if self.get::<InBar>().0 {
+            self.derive(|scoped| {
+                reset(scoped);
+                // A pane opened from a bar is not the bar's line.
+                scoped.inherited_mut().values.set(InBar(false));
+            })
+        } else {
+            self.derive_local(reset)
+        }
     }
 
+    /// A child entry that changes layer-local fields only (arena, item, row, roving, grid, scroll owner,
+    /// transform, ink): the key carries over, because none of its inputs change.
     pub(crate) fn derive_local(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
