@@ -44,6 +44,7 @@ jobs:
       filter: ${{ steps.select.outputs.filter }}
       audit: ${{ steps.audit.outputs.audit }}
       profile: ${{ steps.audit.outputs.profile }}
+      deps-profile: ${{ steps.audit.outputs.deps-profile }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -67,6 +68,10 @@ jobs:
       # passes (scripts/ci-workspace-tests.sh), which names the Workspace legs' cache entries:
       # rust-cache's key does not hash these files, and an entry built with other overrides would be
       # rebuilt in full on every run. Other events than a pull request check out only these files.
+      # The macOS and Windows legs cache dependencies only, so `deps-profile` hashes only the
+      # settings that reach a dependency: `[profile.dev]` and `[profile.dev.package."*"]`. Every
+      # other override names a workspace crate (scripts/test-workspace-tests.py), so changing one
+      # keeps those entries, and next's runs restore main's.
       - uses: actions/checkout@v7.0.1
         if: github.event_name != 'pull_request'
         with:
@@ -83,6 +88,16 @@ jobs:
         run: |
           echo "audit=$(bash scripts/ci-workspace-tests.sh audit)" >> "$GITHUB_OUTPUT"
           echo "profile=$(cat .config/cargo-dev.toml .config/cargo-ci.toml | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "deps-profile=$(python3 -I - <<'PY'
+          import hashlib, json, tomllib
+          kept = []
+          for path in (".config/cargo-dev.toml", ".config/cargo-ci.toml"):
+              with open(path, "rb") as file:
+                  dev = tomllib.load(file)["profile"]["dev"]
+              kept.append([dev, dev.pop("package", {}).get("*", {})])
+          print(hashlib.sha256(json.dumps(kept, sort_keys=True).encode()).hexdigest()[:12])
+          PY
+          )" >> "$GITHUB_OUTPUT"
 
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
@@ -172,7 +187,8 @@ jobs:
     with:
       os: '["windows-latest","macos-latest"]'
       lint-cache: false
-      cache-version: *cache-version
+      # Named by the dependency settings alone (`deps-profile`), so next restores main's entries.
+      cache-version: v2-${{ needs.platforms.outputs.deps-profile }}
       timeout-minutes: *timeout
       tools: *tools
       craft-fonts-ref: *craft-fonts
