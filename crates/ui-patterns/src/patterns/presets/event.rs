@@ -1,0 +1,147 @@
+//! What a preset browser reports.
+
+use super::footer::PresetFooterEvent;
+use crate::contract::{DropAt, DropPayload, ListDrag, NoValue, OpenChange, Outcome, ReorderMove};
+use craft_behavior::{DropOperation, EditEvent, SelectionChange};
+use craft_keymap::Mods;
+use egui::{Pos2, Response};
+
+/// What a preset browser reports, in the order it happened. The host performs every command; the browser changes
+/// only its `PresetState`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum PresetEvent<K> {
+    /// The selection changed, when the host gave the browser a `selection` binding that does not write through.
+    Selection(SelectionChange<K>),
+    /// A host payload was dropped onto a preset or between presets (`PresetBrowser::takes_drop`).
+    #[non_exhaustive]
+    Dropped {
+        /// Where the payload landed.
+        at: DropAt<K>,
+        /// What the drop does.
+        op: DropOperation,
+        /// The payload.
+        payload: DropPayload,
+        /// The modifiers held at the release.
+        mods: Mods,
+    },
+    /// A click or Space on a preset. Not an edit: the host sets its selection (and applies the preset); `mods` let
+    /// Alt, Ctrl or Cmd choose a variant of the application. It fires only for a pick without Shift or Cmd/Ctrl.
+    #[non_exhaustive]
+    Select {
+        /// The preset.
+        key: K,
+        /// The modifiers held.
+        mods: Mods,
+    },
+    /// A double click or Enter on a preset.
+    #[non_exhaustive]
+    Activate {
+        /// The preset.
+        key: K,
+        /// The modifiers held.
+        mods: Mods,
+    },
+    /// A group was opened or closed. The browser has already changed its state; the event lets a host with its own
+    /// open state follow.
+    Open(OpenChange<K>),
+    /// A rename was committed with a changed, non-empty name.
+    #[non_exhaustive]
+    Rename {
+        /// The preset or group.
+        key: K,
+        /// The new name.
+        text: String,
+    },
+    /// Delete was chosen (context menu, Delete Group) for a preset or group.
+    Delete(K),
+    /// Move to was chosen: the preset goes to the end of `group`.
+    #[non_exhaustive]
+    MoveTo {
+        /// The preset.
+        key: K,
+        /// The group (or folder) it goes to.
+        group: K,
+    },
+    /// A drag to reorder, or a Cmd/Ctrl+] or [ move, as one edit gesture.
+    Reorder(EditEvent<ReorderMove<K>>),
+    /// A preset was dragged from the browser and released inside its drop zone (`PresetBrowser::drop_zone`: a canvas,
+    /// a timeline): the host applies `key` at `at`. Items only: a group dropped on the zone reports nothing.
+    #[non_exhaustive]
+    DropAt {
+        /// The preset.
+        key: K,
+        /// The pointer at the release, in the zone's layer space.
+        at: Pos2,
+        /// The modifiers held at the release.
+        mods: Mods,
+    },
+    /// A button of the browser's footer was pressed, in the order it happened among the other events.
+    Footer(PresetFooterEvent<K>),
+    /// An action row (`PresetBrowser::actions`) was clicked or took Enter: its index among the actions.
+    Action(usize),
+    /// A row the host added to the context menu was chosen for `target`.
+    #[non_exhaustive]
+    Menu {
+        /// The preset or group the menu was opened on.
+        target: K,
+        /// The command the host gave the row.
+        command: String,
+    },
+}
+
+impl<K> PresetEvent<K> {
+    /// A click on `key` with `mods` held.
+    pub fn select(key: K, mods: Mods) -> Self {
+        PresetEvent::Select { key, mods }
+    }
+
+    /// A double click on `key` with `mods` held.
+    pub fn activate(key: K, mods: Mods) -> Self {
+        PresetEvent::Activate { key, mods }
+    }
+
+    /// `key` renamed to `text`.
+    pub fn rename(key: K, text: impl Into<String>) -> Self {
+        PresetEvent::Rename { key, text: text.into() }
+    }
+
+    /// `key` moved to the end of `group`.
+    pub fn move_to(key: K, group: K) -> Self {
+        PresetEvent::MoveTo { key, group }
+    }
+
+    /// `key` dropped on the drop zone at `at` with `mods` held.
+    pub fn drop_at(key: K, at: Pos2, mods: Mods) -> Self {
+        PresetEvent::DropAt { key, at, mods }
+    }
+}
+
+/// What `PresetBrowser::show` returns.
+#[derive(Debug)]
+#[non_exhaustive]
+#[must_use = "the host applies the browser's events"]
+pub struct PresetOutput<K> {
+    /// The browser: its focus and its rect.
+    pub response: Response,
+    /// What happened this frame, in order.
+    pub events: Vec<PresetEvent<K>>,
+    /// While a preset or group is dragged, its payload, so the host can draw its own drop highlight; `None`
+    /// otherwise.
+    pub drag: Option<ListDrag<K>>,
+}
+
+impl<K> PresetOutput<K> {
+    /// The output of a browser pass.
+    pub fn new(response: Response, events: Vec<PresetEvent<K>>, drag: Option<ListDrag<K>>) -> Self {
+        PresetOutput { response, events, drag }
+    }
+}
+
+impl<K> Outcome for PresetOutput<K> {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}

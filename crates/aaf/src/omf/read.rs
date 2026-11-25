@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use craft_timeline::time::{FrameRate, Tick};
+use craft_timeline::{FrameRate, Tick};
 
 use super::bento::Container;
 use crate::model::{CClip, CItem, CKind, CTrack, CTransition, Composition, Document, Gain, Source, units_to_ticks};

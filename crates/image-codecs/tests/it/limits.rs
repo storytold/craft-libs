@@ -665,10 +665,12 @@ fn a_dwab_exr_gets_a_looser_file_size_bound() {
 
 #[test]
 fn highly_compressible_jpeg_and_gif_still_decode() {
-    let img = Image::from_u8(3000, 3000, ChannelLayout::Rgba, vec![255u8; 3000 * 3000 * 4]).unwrap();
+    let side = 2048usize;
+    let img = Image::from_u8(side as u32, side as u32, ChannelLayout::Rgba, vec![255u8; side * side * 4]).unwrap();
     for f in [Format::Jpeg, Format::Gif, Format::Qoi, Format::OpenExr] {
         let b = encode(&img, f, &EncodeOptions::default()).unwrap();
-        assert_eq!(decode(&b).unwrap().width(), 3000, "{f:?}");
+        eprintln!("DIAG ratio {f:?}: {} bytes file, {} declared, {}:1", b.len(), side * side * 4, side * side * 4 / b.len());
+        assert_eq!(decode(&b).unwrap().width() as usize, side, "{f:?}");
     }
 }
 

@@ -15,6 +15,7 @@
 //!   reference and field structure. That index is the seeking table.
 //! - Units are read back on demand by re-reading the file from the unit's first packet, so the
 //!   index costs a few dozen bytes per access unit.
+//! - [`mux`] writes one program as a transport stream to any `io::Write`, frame by frame.
 //!
 //! The module does no decoding. No dependencies beyond `std`, no `unsafe`, builds for
 //! `wasm32-unknown-unknown`.
@@ -26,6 +27,7 @@
 
 mod es;
 pub use es::{FrameInfo, frame_bytes, frame_info, sei_has_recovery_point};
+pub mod mux;
 mod pes;
 mod ps;
 mod ts;
