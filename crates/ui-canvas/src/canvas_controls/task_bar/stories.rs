@@ -1,9 +1,9 @@
 //! Stories of `TaskBar`.
 
-use super::{TaskBar, TaskBarDismiss, TaskBarPlace};
+use super::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarHang, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
-use crate::contract::{Props as _, Show as _};
+use crate::contract::{Gap, Props as _, Show as _};
 use crate::menu::PanelRow;
 use crate::runtime::commands::{CommandRef, EditCommands};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -197,4 +197,54 @@ fn placed_and_pinned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             })
             .output
     })
+}
+
+/// Points the pointer at the grip.
+fn hover_grip(fixture: &mut Fixture) {
+    if let Some(grip) = fixture.by_label("Move bar") {
+        fixture.frame(vec![crate::testing::pointer::moved(grip.center())]);
+        fixture.idle(8);
+    }
+}
+
+/// How far the grip is dragged, in drag thresholds: left and down, far enough that the bar visibly moves.
+const GRIP_DRAG_THRESHOLDS: [f32; 2] = [-8.0, 6.0];
+
+/// Drags the bar by its grip and holds it there, the button down.
+fn drag_grip(fixture: &mut Fixture) {
+    if let Some(grip) = fixture.by_label("Move bar") {
+        let threshold = crate::testing::input::slop(fixture.ctx());
+        let [x, y] = GRIP_DRAG_THRESHOLDS;
+        fixture.drag_hold_at(grip.center(), egui::vec2(x * threshold, y * threshold));
+    }
+}
+
+/// The bar grip: one rounded upright bar in the line colour.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn bar_grip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
+}
+
+/// The bar grip under the pointer: muted text.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Custom(hover_grip))]
+fn bar_grip_hovered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
+}
+
+/// The bar grip while the bar moves: muted text.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Custom(drag_grip))]
+fn bar_grip_dragged(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
+}
+
+/// A bar whose members stand a control gap apart.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn control_gap(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.member_gap(Gap::Item))
+}
+
+/// A bar hung clear of the frame's handles: the handle ring and a section gap below it.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn clear_of_handles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.hang_gap(TaskBarHang::ClearOfHandles))
 }

@@ -111,6 +111,10 @@ pub struct TextOptions {
     pub live: bool,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
+    /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
+    /// goes on to the enclosing scope. A live filter keeps its query this way. Ignored with `clear_on_escape`, and on a
+    /// disabled or read-only part.
+    pub keep_on_escape: bool,
     /// Monospace text.
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
@@ -173,6 +177,10 @@ pub struct TextOptions {
     /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
     /// the line.
     pub submit_key: SubmitKey,
+    /// The text shown, and exposed as the part's accessible value, instead of the value's own text while the part has
+    /// neither focus nor a draft (a derived number in parentheses). Focus, and any typing, start from the value's own
+    /// text: this changes only what an idle part shows, never what the codec formats or parses.
+    pub resting: Option<String>,
     /// Colours stretches of the text: the ranges it gives, in order, take their inks and the rest the part's ink. A range
     /// that is empty, overlaps the one before, ends past the text or splits a character is skipped. Colour is display
     /// only: editing, the caret, selection, wrapping and what assistive technology reads are as without it. A masked or
@@ -200,6 +208,7 @@ impl Default for TextOptions {
             mask: false,
             live: false,
             clear_on_escape: false,
+            keep_on_escape: false,
             mono: false,
             role: TypeRole::Body,
             ink: None,
@@ -224,6 +233,7 @@ impl Default for TextOptions {
             holds_drafts: false,
             whole_paste: None,
             submit_key: SubmitKey::CommandEnter,
+            resting: None,
             color_ranges: None,
         }
     }

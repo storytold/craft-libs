@@ -13,7 +13,7 @@ use crate::controls::disclosure::Disclosure;
 use crate::menu::Menu;
 use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::commands::CommandRef;
-use crate::runtime::env::Label;
+use crate::runtime::env::{EnvValue, Label};
 use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use craft_behavior::{CursorIcon, Flow, IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
 use craft_theme::variant::Tone;
@@ -37,11 +37,39 @@ pub enum HeaderStrength {
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
+    /// A sub-heading inside a section, over a group of its controls: label text in the normal ink, as written, with no
+    /// rule.
+    Subheading,
+    /// A muted line over the sections or controls it names: the caption role in the muted ink, as written, with no
+    /// rule. An inspector's kind line over its sections ("Ellipse").
+    Quiet,
     /// A window's drag bar: one text row high (`size.row.text`), with label text; its action parts shrink to the row.
     Bar,
     /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
     /// dialog's group names ("PAGES TO PRINT").
     Overline,
+}
+
+impl HeaderStrength {
+    /// Whether a header of this weight stands with a rule beside it: every weight but the quiet ones over a group
+    /// of controls (`Caption`, `Subheading`, `Quiet`, `Overline`).
+    pub(crate) const fn ruled(self) -> bool {
+        !matches!(self, HeaderStrength::Caption | HeaderStrength::Subheading | HeaderStrength::Quiet | HeaderStrength::Overline)
+    }
+}
+
+/// The row a title of a quiet weight (`Caption`, `Subheading`, `Quiet`, `Overline`) stands in. An app sets it once at
+/// its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum QuietTitleRow {
+    /// A control high, as the rows of controls under it.
+    #[default]
+    Control,
+    /// A text row (`size.row.text`): VectorCraft's, whose sub-headings and kind line are a line of text over their
+    /// fields.
+    Text,
 }
 
 /// What a title row's action parts ask the container to do.
@@ -160,6 +188,9 @@ pub struct TitleRowStyle {
     subtitle: TextLook,
     /// The side of an action part: the control height, which is below a tall header's height.
     action: f32,
+    /// Whether the row is a quiet title's text row (`QuietTitleRow::Text`), as tall as it must be to hold its title
+    /// on its centre line.
+    text_row: bool,
 }
 
 /// An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional
@@ -343,14 +374,18 @@ impl Component for TitleRow<'_> {
 
     fn style(cx: &StyleCx<'_>, key: TitleRowStyleKey) -> TitleRowStyle {
         let text = &cx.tokens.color.text;
+        let text_row = !key.strength.ruled() && cx.env::<QuietTitleRow>() == QuietTitleRow::Text;
+        let quiet = if text_row { cx.tokens.size.row.text } else { cx.control().height };
         let (height, role, shade) = match key.strength {
             HeaderStrength::Normal => (cx.control().height, TypeRole::Label, text.normal),
             HeaderStrength::Strong => (cx.tokens.size.panel_header, TypeRole::Title, text.normal),
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
-            HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
+            HeaderStrength::Caption => (quiet, TypeRole::Label, text.faint),
+            HeaderStrength::Subheading => (quiet, TypeRole::Label, text.normal),
+            HeaderStrength::Quiet => (quiet, TypeRole::Caption, text.muted),
             HeaderStrength::Bar => (cx.tokens.size.row.text, TypeRole::Label, text.normal),
-            HeaderStrength::Overline => (cx.control().height, TypeRole::Caption, text.faint),
+            HeaderStrength::Overline => (quiet, TypeRole::Caption, text.faint),
         };
         let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
         let (ink, disabled) = (cx.ink(key.icon_ink), cx.color(text.disabled));
@@ -363,6 +398,7 @@ impl Component for TitleRow<'_> {
                 TextLook::new(TypeRole::Caption, Stateful::new(faint).off(States::new(faint, faint, faint, disabled)))
             },
             action: cx.control().height,
+            text_row,
         }
     }
 
@@ -381,7 +417,13 @@ impl Component for TitleRow<'_> {
         let natural = text + (side + cx.gap()) * parts as f32 + (cx.style.icon.side + cx.gap()) * glyphs as f32 + lead;
         // A row takes the room it is offered, a filling row all of it, and never more: the title elides to what is left.
         let width = cx.room.map_or(natural, |room| if self.fill { room } else { natural.min(room) });
-        Vec2::new(width, title.y)
+        if !cx.style.text_row {
+            return Vec2::new(width, title.y);
+        }
+        // The title's x-height sits on the row's centre line (`text_on_centre_line`), so a text row no taller than its
+        // text holds it there.
+        let centre = cx.layout(&TextRun::new("x").role(role)).galley.mesh_bounds.center().y;
+        Vec2::new(width, title.y.max(2.0 * centre).max(2.0 * (title.y - centre)))
     }
 
     fn sense(&self) -> Sense {
@@ -506,7 +548,7 @@ impl Component for TitleRow<'_> {
         let overline = self.strength == HeaderStrength::Overline;
         let capitals = overline.then(|| cx.resolved.label.to_uppercase());
         let mut title = TextRun::new(capitals.as_deref().unwrap_or(cx.resolved.label)).role(role).elide();
-        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Overline) {
+        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Quiet | HeaderStrength::Overline) {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
         ui.draw().text_on_centre_line(placed.title, &title);

@@ -10,7 +10,7 @@
 use super::marquee::MarqueeDrag;
 use super::{ItemsHooks, Placement};
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove,
+    CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, RowPreview,
     ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
@@ -25,6 +25,7 @@ use craft_behavior::{
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
+use std::borrow::Cow;
 
 /// Maps a point to layout coordinates once for every collection type.
 fn logical_point(layout: &dyn ItemLayout, rect: Rect, rtl: bool, at: Pos2) -> Pos2 {
@@ -591,11 +592,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let key = self.source.key(at);
         let keys = self.keys_at(&self.acted_on(at));
         let count = keys.len() as u64;
-        let preview = match props.drag_count.filter(|_| props.drag_badge) {
-            Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
-            None if !props.drag_badge => DragPreview::None,
-            None if count > 1 => DragPreview::Badge(Label::from(count.to_string())),
-            None => self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned()))),
+        let text = || match props.drag_count {
+            Some(word) => Some(cx.env.counted(word, count)),
+            None if count > 1 => Some(count.to_string()),
+            None => self.source.text(at).map(Cow::into_owned),
+        };
+        let preview = match props.drag_preview {
+            RowPreview::Badge => text().map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text))),
+            RowPreview::Named => text().map_or(DragPreview::None, |text| DragPreview::Named(Label::from(text))),
+            _ => DragPreview::None,
         };
         let drag = ListDrag::new(id, keys, key.clone());
         let also: Vec<_> = props.drag_payloads.iter().filter_map(|map| map.of(&drag)).collect();

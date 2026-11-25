@@ -4,10 +4,11 @@ use super::CELL;
 use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
-use crate::docking::{ColumnBar, GroupAt, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
+use crate::docking::{ColumnBar, ColumnCards, DockSizes, GroupAt, IconGroupSeparator, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
 use crate::runtime::commands::{CommandState, CommandStates};
-use crate::runtime::env::{Env, Message};
+use crate::runtime::env::{Env, Message, with_env};
 use crate::sections::Panel;
+use crate::tabs::PanelTabLook;
 use crate::testing::memory::global;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::Mixed;
@@ -57,9 +58,19 @@ fn at_stage<'a>(
     column: IconicColumn<'a, u8>,
     view: impl FnMut(&Group<u8>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
 ) -> IconicColumnOutput<u8> {
+    at_stage_wider(ui, column, 0.0, view)
+}
+
+/// [`at_stage`] with the column `extra` wider than the rail: a card's inset.
+fn at_stage_wider<'a>(
+    ui: &mut Ui,
+    column: IconicColumn<'a, u8>,
+    extra: f32,
+    view: impl FnMut(&Group<u8>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a,
+) -> IconicColumnOutput<u8> {
     let room = stage(ui);
     let env = Env::of(ui);
-    let width = env.tokens.tokens().size.rail.width; // design: allow[style/token-read](a story sizes its stage from the rail token)
+    let width = env.tokens.tokens().size.rail.width + extra; // design: allow[style/token-read](a story sizes its stage from the rail token)
     let cell = if env.direction.is_rtl() {
         Rect::from_min_max(room.min, egui::pos2(room.left() + width, room.bottom()))
     } else {
@@ -79,6 +90,47 @@ fn icon_groups(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         None
     })
     .into()
+}
+
+/// A docked column of icons shown as a card (`DockConfig::column_cards`), at the window edge or inward of another
+/// column: inset on its top and bottom, and on its outer side by the window edge's inset or by the gutter between two
+/// cards, its bar and icons on the rounded panel card over the dock's background.
+#[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Never)]
+fn icons_as_a_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let at = *data.choice("place", 1_usize, &[("At the window edge", 0), ("Inward of another column", 1)]);
+    let sizes = DockSizes { column_cards: ColumnCards::All, ..DockSizes::of_scope(ui) };
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let inset = sizes.card_inset(at, &column, &spec);
+    let card = sizes.card_place(at, &column, &spec);
+    let column = IconicColumn::new("Panels", global("iconic column", "card story"), &column, Bind::kept(), &spec);
+    let column = match card {
+        Some(place) => column.card(place),
+        None => column,
+    };
+    at_stage_wider(ui, column, inset, |group, at, ui, _| {
+        let GroupAt::Show(rect) = at else { return None };
+        let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
+        Panel::new(title).titled().show_at(ui, rect, |_, _| ());
+        None
+    })
+    .into()
+}
+
+/// The icon groups of an app that sets `IconGroupSeparator::Rule` at its root (VectorCraft's): no grip strips, and an
+/// edge rule across the room between two groups.
+#[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Never, title = "Icon groups apart by a rule")]
+fn icon_groups_apart_by_a_rule(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(IconGroupSeparator::Rule);
+        },
+        |ui| {
+            let column = IconicColumn::new("Panels", global("iconic column", "rule story"), &column, Bind::kept(), &spec);
+            at_stage(ui, column, |_, _, _, _| None).into()
+        },
+    )
 }
 
 /// Cells bound to their panels' toggle commands: a marked command whose panel is closed shows the marker.
@@ -181,4 +233,23 @@ fn a_flyout_of_a_panel_not_in_the_column(ui: &mut Ui, data: &mut StoryData) -> S
         _ => Validity::Ok,
     };
     flyout_of(ui, open_at.bind(open).check(in_column))
+}
+
+/// A column of VectorCraft 0.24's dock (`DockConfig::flush_docks`, `PanelTabLook::Block`): framed in `line.border`, its
+/// bar on `surface.canvas`, the open panel's icon on `surface.control`, and its flyout square on the panel surface with
+/// the same frame and no shadow. The flyout opens from its icon.
+#[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Custom(open_first_flyout), title = "A flush dock's column and its flyout")]
+fn a_flush_docks_column_and_its_flyout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (open, open_at) = data.value_at("open", None::<u8>);
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "flush story"), &column, open_at.bind(open), &spec)
+        .framed(true)
+        .tab_look(PanelTabLook::Block);
+    at_stage(ui, column, |group, at, ui, _| {
+        let GroupAt::Show(rect) = at else { return None };
+        let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
+        Panel::new(title).titled().show_at(ui, rect, |_, _| ());
+        None
+    })
+    .into()
 }

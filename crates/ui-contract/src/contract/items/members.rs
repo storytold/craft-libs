@@ -100,7 +100,9 @@ pub(super) fn item_id<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     crate::runtime::memory::sub(id, ("key", key_hash(key)))
 }
 
-/// The access node a members collection's lead item stands for: the sub-node of its item part.
-pub(super) fn lead_node<K: std::hash::Hash>(id: Id, key: &K) -> Id {
+/// The access node of the item `key` of the members collection `id` (a tab strip, a swatch table): the sub-node of its
+/// item part, which [`focused_node`](crate::runtime::access::focused_node) reports while the item is the lead of the
+/// focused collection.
+pub fn item_node<K: std::hash::Hash>(id: Id, key: &K) -> Id {
     access::sub_node_id(id, ITEM_NODE.at(key_hash(key)))
 }

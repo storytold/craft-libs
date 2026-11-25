@@ -55,6 +55,8 @@ pub struct SurfaceColors {
     /// The dots or grid an app may draw on the canvas outside the document. Equal to `canvas` (no
     /// pattern) unless the theme sets it.
     pub canvas_pattern: Rgba,
+    /// A full-window page with no document open (a start page); follows `canvas` unless pinned.
+    pub page: Rgba,
     /// Panels, bars and rails.
     pub panel: Rgba,
     /// Window chrome: title bars, toolbars, option bars, rulers and scrollbar tracks; follows
@@ -322,6 +324,7 @@ impl ColorTokens {
                 background: c,
                 canvas: c,
                 canvas_pattern: c,
+                page: c,
                 panel: c,
                 chrome: c,
                 raised: c,
@@ -436,6 +439,8 @@ color_tokens! {
     SurfaceCanvas = "surface.canvas" => surface.canvas;
     /// `surface.canvas_pattern`
     SurfaceCanvasPattern = "surface.canvas_pattern" => surface.canvas_pattern;
+    /// `surface.page`
+    SurfacePage = "surface.page" => surface.page;
     /// `surface.panel`
     SurfacePanel = "surface.panel" => surface.panel;
     /// `surface.chrome`
@@ -657,14 +662,15 @@ impl ColorToken {
     /// (`surface.*` except `scrim` and `shadow`); those must be opaque.
     pub const fn is_opaque_surface(self) -> bool {
         use ColorToken::{
-            SurfaceBackground, SurfaceCanvas, SurfaceCanvasPattern, SurfaceChrome, SurfaceInverse, SurfaceKnob, SurfacePanel, SurfaceRaised,
-            SurfaceSunken,
+            SurfaceBackground, SurfaceCanvas, SurfaceCanvasPattern, SurfaceChrome, SurfaceInverse, SurfaceKnob, SurfacePage, SurfacePanel,
+            SurfaceRaised, SurfaceSunken,
         };
         matches!(
             self,
             SurfaceBackground
                 | SurfaceCanvas
                 | SurfaceCanvasPattern
+                | SurfacePage
                 | SurfaceChrome
                 | SurfacePanel
                 | SurfaceRaised

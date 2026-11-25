@@ -16,8 +16,8 @@ use craft_behavior::{ColumnWidth, EditEvent, EditEvents, GestureId, IconId, Mixe
 use craft_ui::buttons::ToggleButton;
 use craft_ui::canvas::CanvasRulers;
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, FieldLayout, GlyphLabel, LabelKind, LabelPress, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel,
-    Sizing,
+    Bind, BodyCx, Bracket, Entry, FieldLayout, GlyphLabel, LabelKind, LabelPress, NoValue, Outcome, Props as _, Show as _, ShowContainer as _,
+    SideLabel, Sizing,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, FieldGroup};
@@ -135,7 +135,8 @@ pub enum FieldArrangement {
     /// W, the link and H on the first row, then X and Y.
     #[default]
     SizeFirst,
-    /// X and W on the first row, Y and H on the second, the link after them: Tab runs X, W, Y, H.
+    /// X and W on the first row, Y and H on the second, the link beside them centred across the two rows: Tab runs X,
+    /// W, Y, H.
     PositionFirst,
 }
 
@@ -224,7 +225,8 @@ impl Outcome for TransformFieldsOutput {
 /// - **Panel form** (the default): two field columns that fill the width, the link's column between them: W, the
 ///   link and H on one row, X and Y on the next, the angle, then the H and V skews; the compact reference point, when
 ///   shown, leads the first row. [`groups`](Self::groups) leaves out the rows of hidden groups. With
-///   [`FieldArrangement::PositionFirst`] the grid is X and W, then Y and H, with the link after them.
+///   [`FieldArrangement::PositionFirst`] the grid is X and W, then Y and H, with the link beside it, centred across
+///   the two rows.
 /// - **Bar form** ([`bar`](Self::bar)): the compact reference point, then captioned fields in Photoshop's order with a
 ///   divider between the groups, the Δ toggle between X and Y, the interpolation select last.
 ///   [`groups`](Self::groups) narrows the strip.
@@ -437,10 +439,10 @@ struct Cells<'a> {
 const FIELD_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
 /// The panel form's columns with the reference point before them.
 const REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
-/// The position-first panel form's columns: two fields, then the link's column.
-const POSITION_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0), ColumnWidth::Content];
+/// The position-first panel form's columns: two fields that share the width.
+const PAIR_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 /// The position-first panel form's columns with the reference point before them.
-const POSITION_REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::fill(1.0), ColumnWidth::Content];
+const REFERENCE_PAIR_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
 /// Which form the cells show in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -503,7 +505,7 @@ impl Cells<'_> {
     /// inside the field.
     fn side_and_name(&self, field: TransformField, form: Form) -> (SideLabel, Label) {
         let words = &self.words;
-        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone())));
+        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::caption(glyph.clone())));
         let (side, name) = match field {
             TransformField::X => (beside(&words.x_glyph), &words.x_name),
             TransformField::Y => (beside(&words.y_glyph), &words.y_name),
@@ -690,43 +692,39 @@ impl Cells<'_> {
         });
     }
 
-    /// The position-first grid of [`rows`](Self::rows): X and W, Y and H with the link after them, the angle, then the
-    /// skews; two field columns and the link's column, the reference point, when shown, in a column before them.
+    /// The position-first form of [`rows`](Self::rows): X and W, then Y and H, in a grid beside the link, which stands
+    /// centred across their two rows; the reference point, when shown, leads the grid's first row in a column of its
+    /// own. The angle and the skews follow in a grid of their own.
     fn position_first(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass) {
         let groups = self.groups;
-        let columns: &'static [ColumnWidth] = if groups.reference { &POSITION_REFERENCE_COLUMNS } else { &POSITION_COLUMNS };
-        Grid::new(columns).id_salt("fields").fill_width().show(ui, |ui, _| {
-            let mut first = true;
-            let pair = [(groups.position, TransformField::X, TransformField::Y), (groups.size, TransformField::W, TransformField::H)];
-            if groups.position || groups.size || groups.reference {
-                self.lead(ui, cx, pass, &mut first);
-                for (shown, top, _) in pair {
-                    self.field_or_empty(ui, cx, pass, shown, top);
-                }
+        if groups.position || groups.size || groups.reference {
+            let columns: &'static [ColumnWidth] = if groups.reference { &REFERENCE_PAIR_COLUMNS } else { &PAIR_COLUMNS };
+            Row::new().bracket(Bracket::Unlinked).fill_width().show(ui, |ui, _| {
+                Grid::new(columns).id_salt("fields").fill_width().show(ui, |ui, _| {
+                    let mut first = true;
+                    let rows = if groups.position || groups.size { 2 } else { 1 };
+                    for row in [[TransformField::X, TransformField::W], [TransformField::Y, TransformField::H]].into_iter().take(rows) {
+                        self.lead(ui, cx, pass, &mut first);
+                        self.field_or_empty(ui, cx, pass, groups.position, row[0]);
+                        self.field_or_empty(ui, cx, pass, groups.size, row[1]);
+                    }
+                });
                 if groups.size {
                     self.link(ui);
-                } else {
-                    empty(ui);
                 }
-            }
-            if groups.position || groups.size {
-                self.lead(ui, cx, pass, &mut first);
-                for (shown, _, bottom) in pair {
-                    self.field_or_empty(ui, cx, pass, shown, bottom);
-                }
-                empty(ui);
-            }
+            });
+        }
+        if !(groups.angle || groups.skew) {
+            return;
+        }
+        Grid::new(&PAIR_COLUMNS).id_salt("turns").fill_width().show(ui, |ui, _| {
             if groups.angle {
-                self.lead(ui, cx, pass, &mut first);
                 self.field(ui, cx, pass, TransformField::Angle, Form::Panel);
-                empty(ui);
                 empty(ui);
             }
             if groups.skew {
-                self.lead(ui, cx, pass, &mut first);
                 self.field(ui, cx, pass, TransformField::SkewH, Form::Panel);
                 self.field(ui, cx, pass, TransformField::SkewV, Form::Panel);
-                empty(ui);
             }
         });
     }
