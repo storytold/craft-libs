@@ -12,6 +12,7 @@ use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::ime;
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
+use crate::testing::contract::findings;
 use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
@@ -750,6 +751,187 @@ fn an_app_field_that_keeps_tab_types_it_and_a_single_line_field_tabs_on() {
     assert_eq!(texts.borrow().1, "", "and types nothing");
 }
 
+/// How the focus of the app's own widget `id` in `mixed_window`, given by Tab (`tab`) or by the app's own egui request,
+/// ends.
+#[derive(Debug, PartialEq, Eq)]
+struct FocusEnds {
+    /// egui's focus after the press and after the release of a click elsewhere.
+    click: (Option<Id>, Option<Id>),
+    /// Whether the widget lost focus by egui's word, in each pass from the press on.
+    lost: Vec<bool>,
+    /// egui's focus after Escape, the focus given again.
+    escape: Option<Id>,
+    /// egui's focus after a click elsewhere while the app's option is never to surrender it, the focus given again.
+    kept: Option<Id>,
+}
+
+fn focus_ends(id: Id, tab: bool) -> FocusEnds {
+    let lost = Rc::new(RefCell::new(Vec::new()));
+    let losses = Rc::clone(&lost);
+    let mut base = mixed_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        losses.borrow_mut().push(ui.ctx().read_response(id).is_some_and(|response| response.lost_focus()));
+    };
+    let give = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
+        for _ in 0..MIXED.len() {
+            if tab && egui_focused(&frames.ctx) != Some(id) {
+                tab_with(frames, &mut &mut *show, Modifiers::NONE);
+            }
+        }
+        if !tab {
+            fixture::host_focus(&frames.ctx, id);
+        }
+        frames.idle(2, &mut *show);
+        assert_eq!(egui_focused(&frames.ctx), Some(id), "the widget has the focus");
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let empty = Pos2::new(300.0, 450.0);
+    give(&mut frames, &mut show);
+    lost.borrow_mut().clear();
+    let click = click_focus(&mut frames, &mut show, empty);
+    frames.idle(2, &mut show);
+    let lost = lost.take();
+    give(&mut frames, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    let escape = egui_focused(&frames.ctx);
+    fixture::set_app_surrender(&frames.ctx, true);
+    give(&mut frames, &mut show);
+    let (_, kept) = click_focus(&mut frames, &mut show, empty);
+    FocusEnds { click, lost, escape, kept }
+}
+
+/// Focus that Tab gave an app's own button or text field ends as the focus the app's own request gave it: a click
+/// elsewhere and Escape release it once, by egui's rule and the app's surrender option.
+#[trial]
+fn tab_focus_on_an_app_widget_ends_as_the_focus_the_app_gave_it() {
+    for id in ["app first", "app field"].map(named_id) {
+        let ends = focus_ends(id, true);
+        assert_eq!(ends.click, (Some(id), None), "a click elsewhere releases it, at the release by egui's option");
+        assert!(ends.lost.contains(&true), "and the widget sees its focus lost");
+        assert_eq!(ends.escape, None, "Escape releases it");
+        assert_eq!(ends.kept, Some(id), "the app's option keeps it over a click elsewhere");
+        assert_eq!(ends, focus_ends(id, false), "as the focus the app gave it does, seen lost in the same passes");
+    }
+}
+
+/// A component reached with Tab keeps its focus over Escape and drops it at a press no component takes.
+#[trial]
+fn tab_focus_on_a_component_ends_by_the_framework_s_press_rule() {
+    let mut show = mixed_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    tab_with(&mut frames, &mut show, Modifiers::NONE);
+    let one = Some(named_id("framework one"));
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), one);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(egui_focused(&frames.ctx), one, "Escape leaves the component's focus");
+    let empty = Pos2::new(300.0, 450.0);
+    assert_eq!(click_focus(&mut frames, &mut show, empty).0, None, "a press no component takes drops it at the press");
+}
+
+/// A press on a component that takes focus moves it there from the app's field that Tab focused, and the field sees its
+/// focus lost once.
+#[trial]
+fn a_press_on_a_component_takes_the_focus_tab_gave_an_app_field() {
+    let field = named_id("app field");
+    let rect = Rect::from_min_size(Pos2::new(300.0, 400.0), egui::vec2(160.0, 40.0));
+    let lost = Rc::new(Cell::new(0));
+    let losses = Rc::clone(&lost);
+    let mut base = mixed_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        sensing::show(ui, &[ProbeRoot::new("probe", rect, Sense::CLICK | Sense::TAKE_FOCUS)]);
+        register_stop(ui.ctx(), Stop::new(ProbeRoot::id("probe"), KeyUse::of(Input::Pointer)));
+        losses.set(losses.get() + usize::from(ui.ctx().read_response(field).is_some_and(|response| response.lost_focus())));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    for _ in 0..3 {
+        tab_with(&mut frames, &mut show, Modifiers::NONE);
+    }
+    assert_eq!(egui_focused(&frames.ctx), Some(field));
+    lost.set(0);
+    let probe = Some(ProbeRoot::id("probe"));
+    assert_eq!(click_focus(&mut frames, &mut show, rect.center()), (probe, probe), "the press moves the focus to the component");
+    frames.idle(2, &mut show);
+    assert_eq!(lost.get(), 1, "the field sees its focus lost once");
+}
+
+/// What gives an app's field the focus during a click elsewhere.
+#[derive(Clone, Copy, Debug)]
+enum GivenAt {
+    /// The press closes a popup, which gives the focus back to the field it opened from.
+    PopupPress,
+    /// The app's request at the press.
+    Press,
+    /// The app's request at the release, in a pass that draws the field later.
+    Release,
+}
+
+/// Focus the runtime gives an app's own widget during a click elsewhere stands: neither the press nor its release takes
+/// it back. The next click elsewhere does, by egui's rule.
+#[trial]
+fn a_click_that_gives_an_app_field_the_focus_does_not_take_it_back() {
+    for at in [GivenAt::PopupPress, GivenAt::Press, GivenAt::Release] {
+        let field = named_id("app field");
+        let (asking, popup) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let (ask, open) = (Rc::clone(&asking), Rc::clone(&popup));
+        let mut base = mixed_window();
+        let mut show = move |ui: &mut Ui| {
+            let (pressed, clicked) = ui.input(|input| (input.pointer.primary_pressed(), input.pointer.any_click()));
+            let now = if matches!(at, GivenAt::Release) { clicked } else { pressed };
+            if now && ask.take() {
+                match at {
+                    GivenAt::PopupPress => open.set(false),
+                    GivenAt::Press | GivenAt::Release => _ = request(ui.ctx(), FocusTarget::Id(field)),
+                }
+            }
+            base(ui);
+            if open.get() {
+                push_scope(ui.ctx(), named_id("popup"), FocusPolicy::POPUP, None);
+                widget(ui, named_id("popup button"));
+                register_stop(ui.ctx(), Stop::new(named_id("popup button"), KeyUse::of(Input::Pointer)));
+                pop_scope(ui.ctx());
+            }
+        };
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show);
+        if matches!(at, GivenAt::PopupPress) {
+            fixture::host_focus(&frames.ctx, field);
+            frames.idle(1, &mut show);
+            popup.set(true);
+            frames.idle(2, &mut show);
+            assert_eq!(egui_focused(&frames.ctx), Some(named_id("popup button")), "the popup takes the focus");
+        }
+        asking.set(true);
+        let empty = Pos2::new(300.0, 450.0);
+        assert_eq!(click_focus(&mut frames, &mut show, empty).1, Some(field), "{at:?}: the focus stands over the release");
+        assert_eq!(click_focus(&mut frames, &mut show, empty).1, None, "{at:?}: the next click elsewhere takes it");
+    }
+}
+
+/// A canvas declared after a component registered behind it is first taken as one of the app's widgets: focus the runtime
+/// gave it there follows the canvas's rules, which keep it over Escape.
+#[trial]
+fn focus_given_to_a_canvas_before_its_declaration_is_the_canvas_s() {
+    let canvas = named_id("host canvas");
+    let mut show = move |ui: &mut Ui| {
+        fixture::host_button(ui, canvas, Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)));
+        widget(ui, named_id("button"));
+        register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), |_| {});
+    request(&frames.ctx, FocusTarget::Id(canvas));
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas));
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas), "egui keeps the focus on the canvas over its Escape");
+}
+
 /// Where Tab reaches only text fields (the Mac's default), it reaches the app's own text field and skips the app's
 /// own buttons, as it skips the framework's.
 #[trial]
@@ -996,6 +1178,100 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
         (vec![(ViewportId::ROOT, ChromeToggle::Panels)], false),
         "a canvas keeps Tab only while focused: with nothing focused, Tab toggles the panels"
     );
+}
+
+/// Focus that Tab moves to the app's canvas in a layer returns to the stop it came from when the layer goes away, also
+/// when the group the canvas sits in first appears in the pass of the Tab: declaring the canvas enters nothing.
+#[trial]
+fn declaring_a_focused_canvas_keeps_the_opener_of_its_layer() {
+    let (opener, canvas) = (named_id("opener"), named_id("host canvas"));
+    let layer = Rc::new(Cell::new(true));
+    let grouped = Rc::new(Cell::new(false));
+    let (shown, group) = (Rc::clone(&layer), Rc::clone(&grouped));
+    let mut show = move |ui: &mut Ui| {
+        widget(ui, opener);
+        register_stop(ui.ctx(), Stop::new(opener, KeyUse::of(Input::Pointer)));
+        if !shown.get() {
+            return;
+        }
+        push_scope(ui.ctx(), named_id("layer"), FocusPolicy::TAB_LAYER, None);
+        if group.get() {
+            push_scope(ui.ctx(), named_id("group"), FocusPolicy::NONE, None);
+        }
+        widget(ui, canvas);
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        if group.get() {
+            pop_scope(ui.ctx());
+        }
+        pop_scope(ui.ctx());
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    focus_stop(&mut frames, &mut show, opener);
+    grouped.set(true);
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), Some(canvas), "Tab goes from the stop into the layer");
+    layer.set(false);
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(opener), "the layer gives the focus back to the stop it came from");
+}
+
+/// How an app's window shows the canvas of `host_canvas_findings`.
+#[derive(Clone, Copy, Debug)]
+enum Shown {
+    /// Neither declared nor drawn.
+    Hidden,
+    /// Declared, and drawn with a focusable widget that senses clicks or drags.
+    Click,
+    Drag,
+    /// Declared, and drawn with a focusable widget in an egui window, whose first pass sizes it invisibly.
+    Window,
+    /// Declared, and drawn with a widget that senses drags and is not focusable.
+    Unfocusable,
+    /// Declared, and drawn in a disabled `Ui`.
+    Disabled,
+    /// Declared and not drawn.
+    Undrawn,
+}
+
+/// Whether the canvas holds egui focus after a Tab from nothing in a window that shows it as `shown`, declared before it
+/// is drawn, and the subjects of the findings on it.
+fn host_canvas_findings(shown: Shown) -> (bool, Vec<String>) {
+    let canvas = named_id("host canvas");
+    let mut show = move |ui: &mut Ui| {
+        if !matches!(shown, Shown::Hidden) {
+            host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        }
+        let rect = Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0));
+        match shown {
+            Shown::Hidden | Shown::Undrawn => {}
+            Shown::Click => _ = fixture::host_button(ui, canvas, rect),
+            Shown::Drag => _ = fixture::host_drag_area(ui, canvas, rect),
+            Shown::Window => areas::host_egui_window(ui.ctx(), named_id("host window"), |ui| _ = widget(ui, canvas)),
+            Shown::Unfocusable => fixture::host_unfocusable_area(ui, canvas, rect),
+            Shown::Disabled => fixture::host_disabled_button(ui, canvas, rect),
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Tab);
+    frames.idle(2, &mut show);
+    let found = findings(&frames.ctx).into_iter().filter(|finding| finding.rule == "canvas-without-widget");
+    (egui_focused(&frames.ctx) == Some(canvas), found.map(|finding| finding.subject).collect())
+}
+
+/// Guards the finding that tells an app its canvas stop takes Tab and loses the focus: `host_canvas` named an id that no
+/// focusable egui widget of the pass has.
+#[trial]
+fn a_host_canvas_no_focusable_widget_draws_is_a_finding() {
+    for shown in [Shown::Click, Shown::Drag, Shown::Window] {
+        assert_eq!(host_canvas_findings(shown), (true, Vec::new()), "{shown:?}: Tab stays at a canvas with a focusable widget");
+    }
+    assert_eq!(host_canvas_findings(Shown::Hidden).1, Vec::<String>::new(), "a hidden canvas makes no call");
+    for (shown, says) in [(Shown::Undrawn, "no egui widget"), (Shown::Unfocusable, "sense"), (Shown::Disabled, "disabled")] {
+        let (focused, found) = host_canvas_findings(shown);
+        assert!(!focused, "{shown:?}: egui drops the focus Tab gave the canvas");
+        assert!(matches!(found.as_slice(), [only] if only.contains(says)), "{shown:?}: {found:?}");
+    }
 }
 
 /// What `event` did with nothing focused in a window whose host declares its canvas with `keys`: whether the event

@@ -16,7 +16,7 @@ use craft_ui::list::ThumbAspect;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Commands as _, Scope};
 use craft_ui::runtime::env::with_env;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
@@ -645,6 +645,62 @@ fn a_side_menus_row_shows_the_standard_icon() {
     };
     let (menu, plain) = (icon_side(true), icon_side(false));
     assert!(menu > plain, "a side menu's icon is the standard one: {menu} against {plain}");
+}
+
+/// The command the arrow trial's split button is bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "splitTrial", scope = "splitTrial")]
+#[non_exhaustive]
+enum SplitCommand {
+    #[command(label = "Trace")]
+    Trace,
+}
+
+/// A click on a split button's arrow opens its menu and never runs the action, read from the output or bound as a
+/// command; a click on the main part runs it.
+#[trial]
+fn a_split_buttons_arrow_never_runs_its_action() {
+    let ran = Rc::new(Cell::new(0));
+    let count = Rc::clone(&ran);
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(0u8, "For all apps")];
+        if SplitButton::new("Install", &entries).arrow_label("Install options").show(ui).activated {
+            count.set(count.get() + 1);
+        }
+    });
+    fixture.settle();
+    let arrow = fixture.by_label("Install options").expect("the arrow part");
+    fixture.click(&arrow).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    assert_eq!(ran.get(), 0, "the arrow's click is not the action's");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    let main = fixture.by_label("Install").expect("the split button");
+    fixture.click_at(Pos2::new(main.rect.left() + 4.0, main.rect.center().y)).settle();
+    assert_eq!(ran.get(), 1, "the main part runs the action");
+
+    let fired = Rc::new(Cell::new(0));
+    let count = Rc::clone(&fired);
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::layout_components::Stack::new().command_scope(SplitCommand::SCOPE).show(ui, |ui, scope| {
+            while scope.take_command::<SplitCommand>().is_some() {
+                count.set(count.get() + 1);
+            }
+            scope.publish(SplitCommand::Trace, CommandState::new());
+            let entries = [Entry::new(0u8, "Colour")];
+            let _ = SplitButton::command(SplitCommand::Trace, SplitMenu::Entries(&entries)).arrow_label("Tracing presets").show(ui);
+        });
+    });
+    fixture.settle();
+    let arrow = fixture.by_label("Tracing presets").expect("the arrow part");
+    fixture.click(&arrow).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    assert_eq!(fired.get(), 0, "the arrow's click does not fire the command");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    let main = fixture.by_label("Trace").expect("the split button");
+    fixture.click_at(Pos2::new(main.rect.left() + 4.0, main.rect.center().y)).settle();
+    assert_eq!(fired.get(), 1, "the main part fires it");
 }
 
 /// A split button's body that closes itself (a colour palette's swatch pick) closes the split's menu layer: before,
