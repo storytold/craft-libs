@@ -190,6 +190,7 @@ pub(crate) struct FrameState {
     passes_open: u32,
     /// How many root-viewport passes the begin hook has run for: egui counts a pass when it ends.
     root_passes_hooked: u64,
+    /// What drops the records of closed viewports as a frame begins.
     prunes: HashMap<TypeId, fn(&Context, &[ViewportId])>,
     sweeps: HashMap<TypeId, fn(&Context)>,
     /// What a layer above the runtime reads at the begin hook, after the pointer snapshot and before any component runs.
@@ -219,8 +220,8 @@ struct PendingToggle {
 /// How many passes a shell has to take its toggle before the toggle is dropped.
 const TOGGLE_PASSES: u64 = 2;
 
-/// Records of one runtime service, one per viewport. A viewport egui stops reporting has its record dropped
-/// at once, by the frame loop's end hook.
+/// Records of one runtime service, one per viewport, kept from the viewport's first pass until it closes: the root's
+/// begin hook drops the records of the viewports egui no longer reports as a frame begins.
 #[doc(hidden)]
 pub struct PerViewport<T> {
     /// One or two entries: a linear search beats hashing.
@@ -374,11 +375,23 @@ impl<T: Stored> PerViewport<Stamped<T>> {
     }
 }
 
-/// Registers the end hook's prune of a service's per-viewport records, once per service type.
+/// Registers the prune of a service's per-viewport records to the open viewports ([`prune_closed`]), once per service
+/// type.
 pub(crate) fn register_prune(ctx: &Context, key: TypeId, prune: fn(&Context, &[ViewportId])) {
     pass_state::with::<FrameState, _>(ctx, |state| {
         state.prunes.entry(key).or_insert(prune);
     });
+}
+
+/// Drops the records of the viewports that have closed, at the start of a frame. A pass's list of viewports dates from
+/// the start of its frame, so only there does it name every viewport with a record that is still open: later in the
+/// frame it lacks the ones the frame opened.
+fn prune_closed(ctx: &Context) {
+    let live = pass::live_viewports(ctx);
+    let prunes: Vec<fn(&Context, &[ViewportId])> = pass_state::with::<FrameState, _>(ctx, |state| state.prunes.values().copied().collect());
+    for prune in prunes {
+        prune(ctx, &live);
+    }
 }
 
 /// Registers a sweep the end hook runs for the running viewport's pass, once per service type.
@@ -822,6 +835,9 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
         running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, frame_nr, now, elapsed } });
     });
     pass_state::hold(&ctx);
+    if root_pass.is_some() && pass::first_of_frame(&ctx) {
+        prune_closed(&ctx);
+    }
     if cancelled {
         raw_input::stop_dragging(&ctx);
     }
@@ -885,14 +901,7 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     motion::end_pass(&ctx);
     windows::end(&ctx);
     ime::end_pass(&ctx);
-    let live = pass::live_viewports(&ctx);
-    let prunes: Vec<fn(&Context, &[ViewportId])> = pass_state::with::<FrameState, _>(&ctx, |state| {
-        state.passes_open = state.passes_open.saturating_sub(1);
-        state.prunes.values().copied().collect()
-    });
-    for prune in prunes {
-        prune(&ctx, &live);
-    }
+    pass_state::with::<FrameState, _>(&ctx, |state| state.passes_open = state.passes_open.saturating_sub(1));
     #[cfg(feature = "testing")]
     crate::runtime::egui::access::check_parents_acyclic(&ctx);
     RUNNING.with(|running| {
