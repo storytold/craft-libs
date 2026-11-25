@@ -28,6 +28,12 @@ pub enum Outside {
 
 /// What an untaken Escape at a popup's explicit registered opener does. This does not make the opener a member
 /// of the popup's focus scope or change its Tab order; the focus policy's `CancelRule::Ignore` still wins.
+///
+/// `Default` is the focus policy's own eligibility: an untaken Escape reaches the top layer while the focus is in its
+/// scope, in no layer at all, or on the opener of a scope that opens with `Initial::KeepAnchor`
+/// (`focus::focus_in_layer` counts that opener). A popover opens with `Initial::Keep`: the focus stays on its opener,
+/// which may sit in another layer, so with `Default` the Escape is that layer's and the popover stays open. `Close` and
+/// `CloseAndBlur` are that popover's opt-in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OpenerEscape {
