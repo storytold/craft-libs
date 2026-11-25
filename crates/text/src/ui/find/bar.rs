@@ -173,9 +173,6 @@ impl<'a> FindBar<'a> {
         let mut out = FindBarOutput { search: false, stepped: false, closed: false, request: None, response: ui.response() };
         let mut step: Option<bool> = None;
         let bar = Stack::new().show(ui, |ui, cx: &mut BodyCx<'_>| {
-            while let Some((command, _)) = cx.take_command::<FindStep>() {
-                step = Some(command == FindStep::Previous);
-            }
             Row::new().show(ui, |ui, _| {
                 let edit = TextField::search(words.find_text.clone(), Bind::given(query.clone()))
                     .clear_button(false)
@@ -261,6 +258,12 @@ impl<'a> FindBar<'a> {
                         out.request = Some(FindRequest::replace_all(query.clone(), with.clone(), *options));
                     }
                 });
+            }
+            // Taken after the rows: Previous and Next fire their commands when they are pressed, in this pass, and a key's
+            // command was fired before it. Taken before the rows, a press would be left for the app, which has no use
+            // for it.
+            while let Some((command, _)) = cx.take_command::<FindStep>() {
+                step = Some(command == FindStep::Previous);
             }
             // The query field takes the Esc that clears it; an Esc a field passes on closes the bar.
             if cx.take_cancel() {
