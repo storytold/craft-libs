@@ -34,7 +34,8 @@ pub(super) fn dismissal(
     if dismiss.anchor_gone && layer.overlay.opener.as_ref().is_some_and(|first| !first.active(ctx, None).0.enabled) {
         return Some(CloseReason::AnchorGone);
     }
-    // The input hook removed the press and recorded it; presses inside the family and its anchors never get here.
+    // The input hook recorded the press (and removed a primary one); presses inside the family and its anchors never
+    // get here.
     if dismiss.outside == Outside::Absorb {
         if overlay::absorbed_press(ctx).is_some() {
             return Some(CloseReason::Outside);

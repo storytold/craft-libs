@@ -2406,7 +2406,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool, pub continue_move: Option<Vec2>, pub role: LayerRole }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
-  - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
+  - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it, and a primary one goes no further.
   - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.
   - `pub fn tooltip() -> Overlay`. A tooltip: below the control, no focus, never takes input.
   - `pub fn dialog() -> Overlay`. A dialog: modal with no backdrop (the window behind stays at true contrast), floating, movable and resizable.
@@ -2728,7 +2728,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool, pub continue_move: Option<Vec2>, pub role: LayerRole }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
-  - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
+  - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it, and a primary one goes no further.
   - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.
   - `pub fn tooltip() -> Overlay`. A tooltip: below the control, no focus, never takes input.
   - `pub fn dialog() -> Overlay`. A dialog: modal with no backdrop (the window behind stays at true contrast), floating, movable and resizable.
