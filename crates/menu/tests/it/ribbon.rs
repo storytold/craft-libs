@@ -214,7 +214,8 @@ fn slide(direction: Direction, motion: MotionMode, from: usize, to: usize) -> (f
     assert_eq!(shown.get(), to, "the click on the tab showed it");
     let title = ["Alpha", "Beta", "Gamma"][to];
     let first = group_x(&controls, title);
-    fixture.idle(120);
+    // The slide is a tween on the frame clock: two seconds of clock bring it to rest in the frames a settle runs.
+    fixture.advance(2.0).settle();
     let rest = group_x(&controls, title);
     (first, rest)
 }

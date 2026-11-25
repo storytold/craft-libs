@@ -565,4 +565,7 @@ pub struct PlacementChange {
     pub pointer: Option<Pos2>,
     /// What changed the rect.
     pub kind: PlacementKind,
+    /// The move continues a press that went down outside the overlay and was handed to its move band
+    /// ([`Overlay::continue_move`]): a drag the host began elsewhere (a panel's tab) that the layer carries on.
+    pub continued: bool,
 }

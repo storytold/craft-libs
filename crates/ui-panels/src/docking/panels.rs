@@ -69,7 +69,9 @@ pub trait DockPanels<P> {
     /// Shows `panel`'s body in `ui`: the group's body, inset from its edges by the panel padding. The group is the
     /// body's panel and its tab the body's title, so the body shows no framework `Panel` or padding of its own; content
     /// taller than the group scrolls in the body's own scrolling container. A document panel's body
-    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
+    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge. The body lays out with the group's
+    /// spacing, or with the style of the `Ui` the dock was shown in where the panel's body is the app's own egui code
+    /// (`PanelSpec::host_body`).
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
     /// Shows the fixed trailing controls of the rail containing `panel`, in top-to-bottom order. The dock calls this

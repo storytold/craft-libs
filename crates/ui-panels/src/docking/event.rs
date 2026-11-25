@@ -32,6 +32,22 @@ pub enum DockEvent<P> {
         /// The command.
         command: DockCommands,
     },
+    /// The tab of a panel's document was picked ([`PanelDocument`](super::PanelDocument)): the host shows the document
+    /// in the panel. The area also activates the panel, as a pick of its own tab does.
+    DocumentPicked {
+        /// The panel whose document it is.
+        panel: P,
+        /// The document's id.
+        document: u64,
+    },
+    /// The close button or a middle click on the tab of a panel's document asked to close it. The host closes it by
+    /// removing it from the panel's spec; the layout does not change.
+    DocumentClosed {
+        /// The panel whose document it is.
+        panel: P,
+        /// The document's id.
+        document: u64,
+    },
     /// A floating frame holding `panel` was moved or resized to `rect`.
     FloatPlaced {
         /// A panel of the frame.

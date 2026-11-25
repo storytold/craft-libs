@@ -17,4 +17,5 @@ zeroize = "1"
 log = { workspace = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }

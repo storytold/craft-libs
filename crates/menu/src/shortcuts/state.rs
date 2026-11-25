@@ -399,6 +399,15 @@ impl DialogState {
         self.opened = Some(Opened { profiles: env.sets.as_ref().map(|(p, _)| (**p).clone()), overrides: env.keymap.overrides().clone(), holds });
         self.session = Some(EditSession::begin(env.keymap));
         self.areas = rows::areas(env.keymap, env.options, env.text);
+        // Without All Commands in Show, the dialog opens on the area that lists the selected command, else the first.
+        if !self.areas.iter().any(|area| area.id == self.area) {
+            let listed = |id: &AreaId| self.areas.iter().any(|area| area.id == *id);
+            let selected = self.selected.as_ref().and_then(|command| env.keymap.bindable(command));
+            let home = selected.map(|b| rows::area_of(&self.areas, b, env.options)).filter(listed);
+            if let Some(area) = home.or_else(|| self.areas.first().map(|area| area.id.clone())) {
+                self.area = area;
+            }
+        }
         self.sync_set(env);
     }
 
@@ -457,11 +466,12 @@ impl DialogState {
         }
     }
 
-    /// Selects a command and shows its row: area All, no search, no filter.
-    pub(crate) fn go_to(&mut self, command: &CommandRef) {
+    /// Selects a command and shows its row: area All (or, when Show does not list All, the first listed area that holds
+    /// the row), no search, no filter.
+    pub(crate) fn go_to(&mut self, env: &Env, command: &CommandRef) {
         self.select_row(command);
         self.keys_pick = None;
-        self.area = AreaId::All;
+        self.area = env.keymap.bindable(command).map_or(AreaId::All, |b| rows::area_of(&self.areas, b, env.options));
         self.query.clear();
         self.filter = Filter::All;
         self.collapsed.clear();
@@ -714,7 +724,7 @@ impl DialogState {
             let first = c.holders.first().map(|h| h.command.clone());
             self.apply_and_say(env, &c.command, c.old, c.binding, Policy::Steal);
             if let Some(holder) = first {
-                self.go_to(&holder);
+                self.go_to(env, &holder);
             }
         }
     }

@@ -499,7 +499,7 @@ impl Component for Guides<'_> {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, rect) else { continue };
             let part = cx
                 .part(guide.key.part(GUIDE), HitShape::segment(a, b))
-                .sense(Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS)
+                .sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .cursor(resize_cursor(&space.view, motion_across(guide.along)))
                 .focusable();

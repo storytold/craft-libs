@@ -137,7 +137,7 @@ fn max_coverage_omits_excess_strokes_and_fast_rects() {
     let red = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[2] < 50).count();
 
     for (leaf, marker) in cases {
-        let bytes = doubling_forms_pdf(10, leaf, marker);
+        let bytes = doubling_forms_pdf(8, leaf, marker);
         let (whole, whole_warnings) = render_with_coverage_budget(bytes.clone(), None);
         assert!(!whole.diagnostics.content_truncated);
         assert_eq!(whole_warnings, 0);

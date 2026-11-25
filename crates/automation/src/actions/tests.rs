@@ -80,6 +80,22 @@ fn action_list_file_round_trip_keeps_pc_json() {
     assert_eq!(back.sets, ["Empty"]);
     assert_eq!(ActionList::from_file(back).sets(), ["S", "Empty"]);
 }
+// An empty set made before filled ones keeps its place through a save; a file of the older layout
+// (empty sets in `sets`, no `set_order`) loads with its filled sets first.
+#[trial]
+fn set_order_survives_the_file() {
+    let mut list = ActionList::new();
+    list.new_set("A").unwrap();
+    list.new_set("B").unwrap();
+    list.new_set("C").unwrap();
+    list.push(Action { set: Some("B".into()), ..action("X", &[]) }).unwrap();
+    list.push(Action { set: Some("C".into()), ..action("Y", &[]) }).unwrap();
+    let back = ActionList::from_file(ActionsFile::from_json(&list.to_file().to_json().unwrap()).unwrap());
+    assert_eq!(back.sets(), ["A", "B", "C"]);
+
+    let old = r#"{"version":1,"actions":[{"name":"X","steps":[],"set":"F"}],"sets":["E"]}"#;
+    assert_eq!(ActionList::from_file(ActionsFile::from_json(old).unwrap()).sets(), ["F", "E"]);
+}
 // A file that repeats a name keeps a later action's own name: `Foo, Foo, Foo 2` renames the repeat
 // (`Foo 3`), never the real `Foo 2`; a merge does the same against the names already in the list.
 #[trial]

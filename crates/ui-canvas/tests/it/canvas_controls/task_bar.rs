@@ -55,6 +55,12 @@ fn low_frame() -> Vec<Point> {
     [(120.0, 290.0), (520.0, 290.0), (520.0, 390.0), (120.0, 390.0)].into_iter().map(|(x, y)| Point::new(x, y)).collect()
 }
 
+/// A frame far larger than the story canvas, as a crop frame on a document zoomed past the view: it leaves no room for
+/// a bar above or below it.
+fn filling_frame() -> Vec<Point> {
+    [(-2000.0, -2000.0), (3000.0, -2000.0), (3000.0, 3000.0), (-2000.0, 3000.0)].into_iter().map(|(x, y)| Point::new(x, y)).collect()
+}
+
 /// A canvas that shows the bar for the scene's anchor and place, with the More menu before a Done button: a movable
 /// bar, or a `fixed` one, which takes no place.
 fn fixture(scene: &Rc<RefCell<Scene>>, fixed: bool) -> Fixture {
@@ -422,6 +428,36 @@ fn a_fixed_task_bar_ignores_a_drag_shows_no_more_menu_and_opens_above_with_no_ro
         (scrolled.min - edge.min).length() < SLACK && (scrolled.size() - edge.size()).length() < SLACK,
         "the edge bar keeps its rect while the view scrolls: {edge:?} then {scrolled:?}"
     );
+}
+
+/// An anchor that fills the canvas leaves no room on either side: the task bar and a fixed bar still show all their
+/// members, over the anchor at the area's bottom edge, instead of an empty surface at its top (photocraft#16657).
+#[trial]
+fn a_bar_whose_anchor_fills_the_area_keeps_its_members_at_the_bottom_edge() {
+    for fixed in [false, true] {
+        let scene = Rc::new(RefCell::new(Scene {
+            anchor: filling_frame(),
+            place: TaskBarPlace::default(),
+            bounds: Rect::NOTHING,
+            area: Rect::NOTHING,
+            rect: Rect::NOTHING,
+        }));
+        let mut fixture = fixture(&scene, fixed);
+        fixture.settle();
+        let shown = seen(&scene);
+        assert!(shown.bounds.contains_rect(shown.area), "fixed {fixed}: the anchor {:?} covers the canvas {:?}", shown.bounds, shown.area);
+        let done = fixture.by_label("Done").unwrap_or_else(|| panic!("fixed {fixed}: the bar shows its members"));
+        assert!(done.rect.is_positive(), "fixed {fixed}: Done has a size: {:?}", done.rect);
+        assert!(shown.rect.contains_rect(done.rect.shrink(SLACK)), "fixed {fixed}: Done {:?} lies in the bar {:?}", done.rect, shown.rect);
+        assert!(inside_area(&shown), "fixed {fixed}: inside the canvas {:?}: {:?}", shown.area, shown.rect);
+        assert!(
+            (shown.area.bottom() - shown.rect.bottom()).abs() < SLACK,
+            "fixed {fixed}: on the canvas's bottom edge {:?}: {:?}",
+            shown.area,
+            shown.rect
+        );
+        assert_eq!(fixture.by_label("More options").is_some(), !fixed, "fixed {fixed}: only the task bar has its More menu");
+    }
 }
 
 /// The grip is one of the bar's members: it sits on the members' line, centred with them, inside the bar's padding,
