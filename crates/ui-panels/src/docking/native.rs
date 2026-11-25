@@ -113,6 +113,16 @@ pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, spec
     Opening { rect: recorded.unwrap_or_else(|| restore(ctx, window)), spec: Some(spec_for(specs)), waits: false }
 }
 
+/// Asks for the pass in which a group that waits to open its OS window ([`Opening::waits`]) opens it: the next one once
+/// the press that moved it has ended, or the one after a target in another window had its chance to take the drop.
+#[doc(hidden)]
+pub fn waited(ctx: &Context, opening: &Opening, output: &FloatingGroupOutput) {
+    let ended = output.placed.is_some_and(|change| matches!(change.phase, GesturePhase::Commit | GesturePhase::Cancel));
+    if opening.waits && (ended || pointer::pressed_part(ctx, output.response.id).is_none()) {
+        crate::runtime::frame::request_repaint(ctx);
+    }
+}
+
 /// The action that records where the OS put the native window `window`, shown in `viewport`: its placement, as an
 /// app window's is recorded, with the rect `kept` gives for the rect the OS shows the window at (outer top-left corner
 /// and inner size, in desktop points), so a collapsed window keeps its expanded rect

@@ -26,7 +26,6 @@ use crate::runtime::derived::derived;
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
-use crate::runtime::pointer;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
 use crate::sections::{HeaderAction, Panel};
 use craft_behavior::dock::{
@@ -1830,6 +1829,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             });
             self.dock = area_dock;
             let output = shown.output;
+            native::waited(&ctx, &opening, &output);
             // The window's grips, then everything it drew, in the OS window it shows in, if it has one.
             let grips = output.grip.map(|(rect, node)| DockSource::new(SourceKind::WindowGrip(anchor.clone()), rect, node));
             let resize =
@@ -1847,12 +1847,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 let under = output.files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
                 let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
                 self.report.files.push(WindowFiles { panel, files: output.files });
-            }
-            let ended = output.placed.is_some_and(|change| matches!(change.phase, GesturePhase::Commit | GesturePhase::Cancel));
-            // The window opens its OS window in a pass after the press that moved it: the next, or the one after a
-            // target in another window had its chance to take the drop.
-            if opening.waits && (ended || pointer::pressed_part(&ctx, group_id).is_none()) {
-                crate::runtime::frame::request_repaint(&ctx);
             }
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
