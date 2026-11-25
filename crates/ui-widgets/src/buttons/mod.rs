@@ -37,6 +37,19 @@ pub enum GroupLevel {
     Collapsed,
 }
 
+/// How a `Link` that stands alone marks itself beside its colour. An app sets it once at its root (`RootEnv::values`);
+/// a link in a sentence stays underlined, since the text around it shares its line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum LinkLook {
+    /// Underlined, so colour is not its only cue.
+    #[default]
+    Underlined,
+    /// The link colour alone, as a list of links under its heading on a start page (VectorCraft's).
+    Plain,
+}
+
 /// Where controls are shown. A ribbon group sets `Ribbon` for its content (and for its collapsed button and the
 /// popover that holds its content), and styles keyed on the env follow it:
 ///
