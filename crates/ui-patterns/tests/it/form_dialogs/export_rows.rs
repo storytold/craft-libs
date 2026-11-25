@@ -314,3 +314,28 @@ fn automation_edits_the_row_it_selects() {
     let refused = host.borrow_mut().get_mut::<HostedExportAs>().map(|dialog| dialog.set_json_field(fixture.ctx(), "row", "nope".into()));
     assert!(refused.is_some_and(|set| set.is_err()), "an id the list has no row for is refused");
 }
+
+/// Alt-Reset puts the settings the dialog opened with back into the selected row, and leaves the other rows' settings
+/// as their own.
+#[trial]
+fn reset_puts_the_opening_settings_back_into_the_selected_row() {
+    let (host, mut fixture) = dialog(true);
+    let row = {
+        let mut list = fixture.by_role(Role::LIST_ITEM);
+        list.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+        list[1]
+    };
+    fixture.click(&row).idle(4);
+    let format = fixture.by_label("Format").expect("the format select");
+    fixture.click(&format).idle(3);
+    let tiff = fixture.by_label("TIFF").expect("the select offers TIFF");
+    fixture.click(&tiff).idle(4);
+    assert_eq!(held(&host)[1].1, "tif", "the selected row took the format");
+    fixture.hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    fixture.click(&reset).idle(4);
+    let held = held(&host);
+    assert_eq!(held[1].1, "png", "Reset puts the settings the dialog opened with back into the selected row");
+    assert_eq!(held[0].1, "jpg", "the first row keeps its own settings");
+    assert_eq!(held[2].1, "webp", "and the third row keeps its own");
+}

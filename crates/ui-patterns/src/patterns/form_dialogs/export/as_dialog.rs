@@ -84,11 +84,13 @@ struct Held {
     error: Option<SizeError>,
     /// The view of the preset picker.
     picker: PresetState<String>,
+    /// Which row's settings the form's value holds, counted from 0; unused without an asset list.
+    value_row: usize,
 }
 
 impl Default for Held {
     fn default() -> Self {
-        Held { revisions: Revisions::default(), shown: None, view: PreviewView::fitting(), error: None, picker: PresetState::default() }
+        Held { revisions: Revisions::default(), shown: None, view: PreviewView::fitting(), error: None, picker: PresetState::default(), value_row: 0 }
     }
 }
 
@@ -338,14 +340,22 @@ impl<'a> ExportAsDialog<'a> {
                     // another.
                     let at = pass.row_of(cell);
                     pass.source.set(cell.borrow().rows[at].asset.source);
-                    *values = cell.borrow().rows[at].options.clone();
+                    // The row's settings are the value the form edits. They are read again when the row changes rather
+                    // than in every pass: settings a host or a Reset put into the value stay, and the pass that follows
+                    // writes them into the row.
+                    if first || held.value_row != at {
+                        *values = cell.borrow().rows[at].options.clone();
+                    }
+                    held.value_row = at;
                     editing = Some(at);
                 }
                 Stack::new().show(ui, |ui, _| {
                     FieldGroup::new(words.title.clone()).show(ui, |ui, _| pass.settings(ui, values, &mut held));
                 });
                 let empty = editing.is_some_and(|at| listed.as_ref().is_some_and(|cell| cell.borrow().rows[at].asset.empty));
+                // A measuring pass edits nothing, so it writes nothing back into the row either.
                 if let (Some(cell), Some(at)) = (listed.as_ref(), editing)
+                    && !crate::runtime::measure::active(ui.ctx())
                     && let Some(row) = cell.borrow_mut().rows.get_mut(at)
                 {
                     row.options.clone_from(values);
