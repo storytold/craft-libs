@@ -331,3 +331,21 @@ fn hwp_cell_margins_of_minus_one_take_the_tables() {
         cell.props.margins.iter().flatten().copied().chain(cell.props.partial_margins.iter().flatten().flatten().copied()).collect();
     assert!(margins.iter().all(|m| *m < 10.0), "{margins:?}");
 }
+
+/// An object's placement among the text (common properties, bits 21-23) is read in the order
+/// Hancom's files use: 0 square, 1 top and bottom, 2 behind text, 3 in front of text. The format
+/// document's table lists HWPX's six values instead (1 tight ...), which real files don't follow
+/// (2026-11-25: a picture of value 1 has its paragraph's stored lines below it, across the whole
+/// width); read that way, the ordinary tables of a document float with text beside them.
+#[test]
+fn object_placement_follows_hancoms_files() {
+    let wrap = |v: u32| {
+        let mut d = vec![0u8; 64];
+        d[4..8].copy_from_slice(&(v << 21).to_le_bytes());
+        let mut obj = craft_hwpx::owpml::Element::new("hp:pic");
+        read::common(&mut obj, &d);
+        obj.get("textWrap").unwrap_or("").to_string()
+    };
+    let got: Vec<String> = (0..4).map(wrap).collect();
+    assert_eq!(got, ["SQUARE", "TOP_AND_BOTTOM", "BEHIND_TEXT", "IN_FRONT_OF_TEXT"]);
+}

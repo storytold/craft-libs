@@ -1028,11 +1028,14 @@ fn placed(d: &[u8], o: usize, org_w: f64, org_h: f64) -> Option<(f64, f64, f64, 
 }
 
 /// Object common properties (after the control id) -> hp:sz, hp:pos, hp:outMargin.
-fn common(obj: &mut Element, d: &[u8]) {
+pub(crate) fn common(obj: &mut Element, d: &[u8]) {
     let attr = u32_(d, 4);
     obj.set("zOrder", i32_(d, 24).to_string());
     obj.set("textFlow", pick(&["BOTH_SIDES", "LEFT_ONLY", "RIGHT_ONLY", "LARGEST_ONLY"], (attr >> 24) & 3, "BOTH_SIDES"));
     // 0 square, 1 top and bottom, 2 behind text, 3 in front of text (HWPX adds TIGHT and THROUGH).
+    // The format document's table of common properties lists six values in HWPX's order (1 tight,
+    // 3 top and bottom, ...); Hancom's files don't follow it: a picture of value 1 has the lines
+    // Hancom laid out for its paragraph start below it, across the whole width (2026-11-25).
     obj.set("textWrap", pick(&["SQUARE", "TOP_AND_BOTTOM", "BEHIND_TEXT", "IN_FRONT_OF_TEXT"], (attr >> 21) & 7, "TOP_AND_BOTTOM"));
     push(obj, el!("hp:sz", "width" => u32_(d, 16), "height" => u32_(d, 20)));
     push(
