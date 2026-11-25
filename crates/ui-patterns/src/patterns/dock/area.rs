@@ -104,6 +104,17 @@ pub struct DockAreaOutput<P> {
     /// The files dropped on the area's floating OS windows this pass that no target there took, one entry per drop,
     /// each with the panel it was dropped on, for the host to open.
     pub window_files: Vec<WindowFiles<P>>,
+    /// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the area's floating windows in their
+    /// own OS windows that nothing took this pass, in the order of the windows. egui hands each OS window only its own
+    /// input, so the app's main window never sees these: an app that runs its shortcuts from its main window's input
+    /// runs them on these too, to keep them working while a floating window has the focus. The framework took its own
+    /// keys in the window (Escape, Tab and focus moves, claimed and edit chords, a command a shortcut fired), and the
+    /// window's widgets theirs. A window where a component has keyboard focus forwards nothing: its keys are that
+    /// component's. A clipboard chord stands for the `Copy`, `Cut` or `Paste` (or `PasteImage`) event without its key. Floating windows
+    /// that show in the app window forward nothing: their keys are the app window's own.
+    pub forwarded_events: Vec<egui::Event>,
+    /// The modifiers held in the window that forwarded the last of `forwarded_events`; `None` when it is empty.
+    pub forwarded_modifiers: Option<egui::Modifiers>,
     /// Every place the area drew this pass where a press starts a dock gesture: each tab, each group's drag bar, each
     /// floating window's grip and resize grips, and each divider, with its rect, its OS window and the id of its
     /// accessibility node. Nothing the area did not draw reports: a hidden panel, the groups of a column collapsed to
@@ -338,6 +349,10 @@ struct Report<P> {
     windows: Vec<(P, ViewportId)>,
     /// The files dropped on the floating windows that no target there took.
     files: Vec<WindowFiles<P>>,
+    /// The keyboard events the floating windows' own OS windows left, and the modifiers held in the last window that
+    /// left any.
+    forwarded_events: Vec<egui::Event>,
+    forwarded_modifiers: Option<egui::Modifiers>,
     /// The gesture sources the parts drew, in the order they showed.
     sources: Vec<DockSource<P>>,
     /// The groups shown this pass, by their shown panel, in the order they showed.
@@ -505,6 +520,8 @@ struct Passed<P> {
     columns: Vec<(P, Rect)>,
     windows: Vec<(P, ViewportId)>,
     files: Vec<WindowFiles<P>>,
+    forwarded_events: Vec<egui::Event>,
+    forwarded_modifiers: Option<egui::Modifiers>,
     sources: Vec<DockSource<P>>,
 }
 
@@ -668,21 +685,37 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             passed = Some(result);
         });
         let requested = close_requests::<P>(&ctx);
-        let Passed { geometry, actions, events, focused, pressed, picked, edit, space, columns, windows, files, sources } =
-            passed.unwrap_or_else(|| Passed {
-                geometry: Vec::new(),
-                actions: Vec::new(),
-                events: Vec::new(),
-                focused: None,
-                pressed: None,
-                picked: None,
-                edit: EditEvents::new(),
-                space: None,
-                columns: Vec::new(),
-                windows: Vec::new(),
-                files: Vec::new(),
-                sources: Vec::new(),
-            });
+        let Passed {
+            geometry,
+            actions,
+            events,
+            focused,
+            pressed,
+            picked,
+            edit,
+            space,
+            columns,
+            windows,
+            files,
+            forwarded_events,
+            forwarded_modifiers,
+            sources,
+        } = passed.unwrap_or_else(|| Passed {
+            geometry: Vec::new(),
+            actions: Vec::new(),
+            events: Vec::new(),
+            focused: None,
+            pressed: None,
+            picked: None,
+            edit: EditEvents::new(),
+            space: None,
+            columns: Vec::new(),
+            windows: Vec::new(),
+            files: Vec::new(),
+            forwarded_events: Vec::new(),
+            forwarded_modifiers: None,
+            sources: Vec::new(),
+        });
         if shown.output.dropped.is_some() {
             cross_window::accept_cross_window(&ctx);
         }
@@ -700,6 +733,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             columns,
             windows,
             window_files: files,
+            forwarded_events,
+            forwarded_modifiers,
             sources,
             response: shown.output.response,
         }
@@ -858,6 +893,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             placed: Vec::new(),
             windows: Vec::new(),
             files: Vec::new(),
+            forwarded_events: Vec::new(),
+            forwarded_modifiers: None,
             sources: Vec::new(),
             shown: Vec::new(),
         },
@@ -965,6 +1002,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         columns: report.placed,
         windows: report.windows,
         files: report.files,
+        forwarded_events: report.forwarded_events,
+        forwarded_modifiers: report.forwarded_modifiers,
         sources: report.sources,
     }
 }
@@ -1679,6 +1718,28 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
+    /// What a floating window handed back this pass besides its layout: the files dropped on it, for the group under
+    /// the drop, else its first group (a drop on the title row, or with no pointer known), from `first_group` on in the
+    /// shown groups, else `active`; and the keys nothing in it took, with the modifiers held in it.
+    fn take_window_input(
+        &mut self,
+        first_group: usize,
+        active: &P,
+        (files, files_at): (Vec<drag::OsFile>, Option<Pos2>),
+        (forwarded, modifiers): (Vec<egui::Event>, Option<egui::Modifiers>),
+    ) {
+        if !files.is_empty() {
+            let groups = &self.report.shown[first_group..];
+            let under = files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
+            let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
+            self.report.files.push(WindowFiles { panel, files });
+        }
+        if !forwarded.is_empty() {
+            self.report.forwarded_modifiers = modifiers;
+            self.report.forwarded_events.extend(forwarded);
+        }
+    }
+
     /// The floating windows of the pruned layout, each a `FloatingGroup` holding its one column, drawn as a dock
     /// column is with the window's title row as the column's bar, in an OS window where the config, the platform and
     /// its panels allow one. A window takes the drops over it on its own layer, from the spots its column registers in
@@ -1841,13 +1902,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     source.viewport = viewport;
                 }
             }
-            if !output.files.is_empty() {
-                // The group under the drop, else the first group: a drop on the title row, or with no pointer known.
-                let groups = &self.report.shown[first_group..];
-                let under = output.files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
-                let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
-                self.report.files.push(WindowFiles { panel, files: output.files });
-            }
+            self.take_window_input(first_group, &active, (output.files, output.files_at), (output.forwarded_events, output.forwarded_modifiers));
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);

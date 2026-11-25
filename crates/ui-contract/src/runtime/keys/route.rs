@@ -1,9 +1,9 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, scalar, with};
+use super::{Batch, EscapePress, Item, LeftClip, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, scalar, with};
 use crate::runtime::commands::{self, ClipContent, FirePhase};
-use crate::runtime::egui::input::{Action, ActionKind};
+use crate::runtime::egui::input::{Action, ActionKind, Leftover, leftover};
 use crate::runtime::focus::{self, StopRec};
 use crate::runtime::frame::request_chrome_toggle;
 use crate::runtime::overlay;
@@ -11,8 +11,8 @@ use craft_behavior::focus::{EscapeRouting, key_owner};
 use craft_behavior::keys;
 use craft_behavior::{EditCommand, Intent, KeyOwner, MoveMods, NavMove, OwnerClass};
 use craft_host::target::Os;
-use craft_keymap::{Chord, Key, Layout, Mods};
-use egui::{Context, Id, IdMap, Vec2};
+use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
+use egui::{Context, Event, Id, IdMap, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -24,6 +24,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let target = focus::focused_rec(ctx);
     let (batch, nodes, captures, held_claims, alt_claims, fired_claims, hover_deletes, scalar_rows) = current(ctx, |stage| {
         stage.routed.clear();
+        stage.fired.clear();
         stage.intents_read = false;
         stage.contexts.clear();
         stage.claimed.clear();
@@ -263,6 +264,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             stage.menu.push(MenuKey::Focus);
         }
         stage.shortcuts = shortcuts;
+        stage.left_clips = batch.left_clips;
+        stage.passed = batch.passed;
         if !stage.shortcuts.keys.is_empty() {
             stage.shortcuts.layout = stage.layout.clone();
         }
@@ -623,6 +626,112 @@ pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
     let mut stays = kept.iter().copied();
     shortcuts.keys.retain(|_| stays.next().unwrap_or(true));
     shortcuts
+}
+
+/// Records that the shortcut dispatcher fired a command for the press `input` in the running pass, or holds it for a
+/// hold binding's wait, so [`leftover_events`] leaves the press, its auto-repeats until its release, the release and the
+/// clipboard event that stood for it to the command. With `repeat`, the command fired for an auto-repeat of a press
+/// the dispatcher left (`RootEnv::shortcuts_repeat`): that repeat alone is the command's, and the press's release goes
+/// the way of the press.
+pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
+    let held = input.physical.or(input.typed).filter(|_| !repeat);
+    current(ctx, |stage| {
+        stage.fired.push((*input, repeat));
+        if let Some(key) = held.filter(|key| !stage.fired_down.contains(key)) {
+            stage.fired_down.push(key);
+        }
+    });
+}
+
+/// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the running pass that
+/// nothing took, in the order they arrived, for a host that runs shortcuts of its own on the input of a window the
+/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only. Call it once
+/// the viewport's content has run. Other events (pointer, IME, window events) are never in it.
+///
+/// An event is left over when no component of the viewport has keyboard focus (a framework stop or an app's own
+/// widget), the key stage neither took it for itself (Escape, Tab and focus moves, claimed and edit chords, the menu
+/// bar's keys) nor handed it to a component (typing, a list's keys), no widget has read it from egui's input since,
+/// and the shortcut dispatcher fired no command for it. A press a command fired for holds its key: the key's
+/// auto-repeats are the command's too, whether or not they fire it again (`RootEnv::shortcuts_repeat`), and so is its
+/// release. The hold ends at any release of the key, wherever it lands, so the next press and release of the key are
+/// left over. A press the dispatcher declined (a chord whose commands are all disabled) is left over, and so are its
+/// repeats that fire nothing.
+///
+/// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
+/// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events. Empty
+/// while a component has focus, as that component owns the keys then. The same in every call of a pass: it reads the
+/// pass and changes nothing.
+pub fn leftover_events(ctx: &Context) -> Vec<Event> {
+    let viewport = crate::runtime::egui::pass::current_viewport(ctx);
+    let record = focus::record(ctx, viewport);
+    if record.focused.is_some() || record.foreign || crate::runtime::egui::focus::focused(ctx).is_some() {
+        return Vec::new();
+    }
+    let platform = craft_keymap::egui::platform(ctx);
+    // The keys whose press a command took in an earlier pass and that are still held as this pass's events begin. The
+    // key stage keeps the hold itself (`note_fired_up`), so this reads it and leaves it as it is.
+    let (fired, clips, passed, mut down) =
+        current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), stage.passed.clone(), stage.fired_before.clone()));
+    let key_of = |input: &KeyInput| input.physical.or(input.typed);
+    let same = |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) && input.mods == other.mods;
+    let took = |input: &KeyInput| fired.iter().any(|(fired, by_repeat)| !by_repeat && same(fired, input));
+    let mut clips = clips.into_iter().peekable();
+    let events = ctx.input(|input| input.events.clone());
+    let mut left = Vec::with_capacity(events.len());
+    // The place in `passed` after the last event found there.
+    let mut from = 0;
+    for event in events {
+        // A clip goes back before the first event the strip left after it. Where an event stood is found among the
+        // events the strip left, as a widget may have taken earlier ones from egui's input since.
+        let place = match passed.get(from..).and_then(|rest| rest.iter().position(|passed| *passed == event)) {
+            Some(found) => {
+                from += found + 1;
+                from - 1
+            }
+            None => from,
+        };
+        while let Some(clip) = clips.next_if(|clip| clip.at <= place) {
+            leave_clip(clip, took, &mut down, &mut left);
+        }
+        match leftover(&event) {
+            Leftover::Key { pressed, repeat } => {
+                let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
+                if pressed && fired.iter().any(|(fired, by_repeat)| *by_repeat == repeat && same(fired, &input)) {
+                    // A press a command took holds its key until its release.
+                    if let Some(key) = key_of(&input).filter(|key| !repeat && !down.contains(key)) {
+                        down.push(key);
+                    }
+                    continue;
+                }
+                // A later pass's repeat of a key a command took at its press is the command's whether or not the repeat
+                // fires it again (`RootEnv::shortcuts_repeat`): it is known by the key staying down since that press.
+                if pressed && repeat && key_of(&input).is_some_and(|key| down.contains(&key)) {
+                    continue;
+                }
+                if !pressed && let Some(at) = key_of(&input).and_then(|key| down.iter().position(|held| *held == key)) {
+                    down.swap_remove(at);
+                    continue;
+                }
+                left.push(event);
+            }
+            Leftover::Plain => left.push(event),
+            Leftover::Other => {}
+        }
+    }
+    for clip in clips {
+        leave_clip(clip, took, &mut down, &mut left);
+    }
+    left
+}
+
+/// Puts `clip` in `left` in [`leftover_events`] when no command took the press it stands for (`took`); a press a command
+/// took holds its key in `down` until its release, as a key's own press does.
+fn leave_clip(clip: LeftClip, took: impl Fn(&KeyInput) -> bool, down: &mut Vec<Key>, left: &mut Vec<Event>) {
+    if !took(&clip.input) {
+        left.push(clip.event);
+    } else if let Some(key) = clip.input.physical.or(clip.input.typed).filter(|key| !down.contains(key)) {
+        down.push(key);
+    }
 }
 
 /// Asks the focused component of the running viewport to take `command` as `Intent::Edit`: in this pass when no

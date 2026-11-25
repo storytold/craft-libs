@@ -1,7 +1,7 @@
 //! The input hook's key steps (H3): what it strips from each raw key event and records.
 
 use super::route::layout_of;
-use super::{AltTrack, Batch, EscapePress, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
+use super::{AltTrack, Batch, EscapePress, LastPress, LeftClip, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, Arrived, KeyEvent, RawInput};
 use crate::runtime::env::Env;
@@ -12,7 +12,7 @@ use crate::runtime::sampler;
 use craft_behavior::{EditCommand, OwnerClass};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Event, Id, ViewportId};
 use std::sync::Arc;
 
 /// What the strip of one event decided.
@@ -226,6 +226,7 @@ impl Strip<'_> {
             KeyEvent::Clip { command, pasted, mods } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
                 // web sends the chord's press as well. A paste's content goes with the command the chord fires.
+                let left = pasted.clone();
                 if let Some(pasted) = pasted.filter(|_| command == EditCommand::Paste) {
                     let content = batch.app_paste.get_or_insert_default();
                     content.text = pasted.text.or(content.text.take());
@@ -241,6 +242,16 @@ impl Strip<'_> {
                     self.press(batch, key, &input, false, at);
                 } else if !sent {
                     batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at, place: batch.place });
+                    // No component took it, so a host that reads what is left over (`leftover_events`) gets the event back,
+                    // in its place among the events egui keeps.
+                    let text = left.as_ref().and_then(|left| left.text.as_deref());
+                    let event = match (command, left.as_ref().and_then(|left| left.image.as_ref())) {
+                        (EditCommand::Cut, _) => Event::Cut,
+                        (EditCommand::Paste, Some(image)) if text.is_none() => Event::PasteImage(Arc::clone(image)),
+                        (EditCommand::Paste, _) => Event::Paste(text.unwrap_or_default().to_owned()),
+                        _ => Event::Copy,
+                    };
+                    batch.left_clips.push(LeftClip { event, input, at: batch.egui_events });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -645,6 +656,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             stage.keyed = false;
             stage.stirred = false;
             stage.textless_paste = false;
+            stage.fired_before.clone_from(&stage.fired_down);
         });
         return (removed || trimmed, Vec::new());
     }
@@ -716,6 +728,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.keyed = false;
         stage.stirred = false;
         stage.textless_paste = false;
+        stage.fired_before.clone_from(&stage.fired_down);
         let mut place = 0;
         let ime_presses = std::mem::take(&mut stage.ime_presses);
         let press_next: Vec<bool> = (0..events.len())
@@ -758,13 +771,23 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
+            note_fired_up(&mut stage.fired_down, &mut stage.fired_before, &read);
+            if batch.focus_lost {
+                // The releases of the keys held now go to another window.
+                stage.fired_down.clear();
+            }
             let arrival = Arrival {
                 at: arrived.at,
                 ime_next: ime_presses.contains(&arrived.event),
                 press_next: press_next.get(batch.place).copied().unwrap_or(false),
             };
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival)
+            let kept = strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival);
+            batch.egui_events += usize::from(kept);
+            kept
         });
+        if !batch.left_clips.is_empty() {
+            batch.passed = events.iter().map(|arrived| arrived.event.clone()).collect();
+        }
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);
         }
@@ -855,6 +878,21 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
         }
         KeyEvent::Release { input } => down.retain(|key| Some(*key) != input.physical.or(input.typed)),
         KeyEvent::RightAlt(false) => down.clear(),
+        _ => {}
+    }
+}
+
+/// Ends the hold of a key a command fired for (`Stage::fired_down`) at any release of the key, whatever has focus, and
+/// at a press of it that is no repeat, as the release of the earlier press went to another window: the next release
+/// of that key is no command's. Such a press ends it for this pass's events too (`Stage::fired_before`).
+fn note_fired_up(fired_down: &mut Vec<Key>, fired_before: &mut Vec<Key>, event: &KeyEvent) {
+    match event {
+        KeyEvent::Press { input, repeat: false, .. } => {
+            let pressed = input.physical.or(input.typed);
+            fired_down.retain(|key| Some(*key) != pressed);
+            fired_before.retain(|key| Some(*key) != pressed);
+        }
+        KeyEvent::Release { input } => fired_down.retain(|key| Some(*key) != input.physical.or(input.typed)),
         _ => {}
     }
 }

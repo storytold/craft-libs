@@ -7,7 +7,7 @@ use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
-use egui::{Context, Id, IdMap, Vec2, ViewportId};
+use egui::{Context, Event, Id, IdMap, Vec2, ViewportId};
 use std::collections::HashMap;
 
 mod claims;
@@ -53,9 +53,9 @@ pub(crate) use intents::{
 pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub(crate) use route::{
-    activated_member, begin, focus_in_modal_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts,
+    activated_member, begin, focus_in_modal_dialog, layout_of, note_fired, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts,
 };
-pub use route::{escape_mods, focus_holds};
+pub use route::{escape_mods, focus_holds, leftover_events};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +154,18 @@ pub(crate) struct Shortcuts {
     pub(crate) pasted: Option<ClipContent>,
 }
 
+/// A clipboard event the strip took from egui's input for a shortcut press that no component lists the command of
+/// (`Strip::event`), which `leftover_events` gives back in its place when no command took the press.
+#[derive(Clone)]
+struct LeftClip {
+    /// The `Copy`, `Cut`, `Paste` or `PasteImage` event.
+    event: Event,
+    /// The press the event stands for.
+    input: KeyInput,
+    /// How many events the strip had left in egui's input before it (`Batch::egui_events`).
+    at: usize,
+}
+
 /// What the input hook recorded for the next pass's begin hook.
 #[derive(Default)]
 struct Batch {
@@ -171,6 +183,14 @@ struct Batch {
     egui_texts: usize,
     /// Each clipboard command of the pass, with its place among the frame's events.
     clips: Vec<(EditCommand, usize)>,
+    /// The clipboard events the strip took from egui's input for a shortcut press that no component lists the command
+    /// of (`Strip::event`), so a host reading what no component took gets them back.
+    left_clips: Vec<LeftClip>,
+    /// How many events the strip has left in egui's input so far.
+    egui_events: usize,
+    /// The events the strip left in egui's input, kept only in a pass with `left_clips`: `leftover_events` puts each
+    /// clip back among them where it was, though a widget may have taken some of them since.
+    passed: Vec<Event>,
     access: Vec<Action>,
     escapes: Vec<EscapePress>,
     claimed: Vec<Chord>,
@@ -327,6 +347,20 @@ pub(crate) struct Stage {
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,
+    /// The clipboard events `Batch::left_clips` held, for this pass.
+    left_clips: Vec<LeftClip>,
+    /// The events `Batch::passed` held, for this pass.
+    passed: Vec<Event>,
+    /// The presses the shortcut dispatcher fired a command for in this pass (`note_fired`), each `true` when the command
+    /// fired for an auto-repeat.
+    fired: Vec<(KeyInput, bool)>,
+    /// The keys whose press a command fired and whose release has not come yet: the release is the command's too. The
+    /// key stage drops a key at any release of it, whatever has focus, at a press of it that is no repeat (the earlier
+    /// release went to another window) and when the window loses focus.
+    fired_down: Vec<Key>,
+    /// The keys of `fired_down` held over from earlier passes, as `leftover_events` reads this pass's events by them:
+    /// `fired_down` before this pass's events, less each key pressed again (no repeat) in this pass.
+    fired_before: Vec<Key>,
     /// The paste the focused component reads through its clipboard handle.
     pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.

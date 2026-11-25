@@ -2259,8 +2259,13 @@ pub(crate) fn begin(ctx: &Context) {
                     continue;
                 }
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, true, &enabled)));
-                let repeated = tap.and_then(|tap| press(tap, None, time, Some(shortcut.place)));
-                fired.extend(repeated.map(|fired| Fired { phase: FirePhase::Repeat, ..fired }));
+                if let Some(repeated) = tap.and_then(|tap| press(tap, None, time, Some(shortcut.place))) {
+                    // A host that reads the keys nothing took (`keys::leftover_events`) leaves this repeat to the command. A
+                    // repeat that fires nothing goes the way of its press: the command's while a fired press holds the
+                    // key, else left over, as a declined press is.
+                    keys::note_fired(ctx, &shortcut.input, true);
+                    fired.push(Fired { phase: FirePhase::Repeat, ..repeated });
+                }
             }
             FirePhase::Press => {
                 // Another key's press settles the wait first: keys act in the order they went down.
@@ -2271,8 +2276,19 @@ pub(crate) fn begin(ctx: &Context) {
                     .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, false, &enabled)));
                 match (hold, tap) {
-                    (Some((key, hold)), tap) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
-                    (None, Some(tap)) => fired.extend(press(tap, key, time, Some(shortcut.place))),
+                    (Some((key, hold)), tap) => {
+                        // The wait fires the tap or the hold for this key in a later event or pass: a host that reads
+                        // the keys nothing took (`keys::leftover_events`) leaves the press, its repeats and its release to it.
+                        keys::note_fired(ctx, &shortcut.input, false);
+                        wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport });
+                    }
+                    (None, Some(tap)) => {
+                        if let Some(pressed) = press(tap, key, time, Some(shortcut.place)) {
+                            // A host that reads the keys nothing took (`keys::leftover_events`) leaves this press to the command.
+                            keys::note_fired(ctx, &shortcut.input, false);
+                            fired.push(pressed);
+                        }
+                    }
                     // A chord that binds only disabled commands runs nothing; the app hears of the first one, to say
                     // why it did not run as a menu row's hint does, and may receive it as declined.
                     (None, None) => {
