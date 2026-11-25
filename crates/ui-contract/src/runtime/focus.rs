@@ -1311,18 +1311,25 @@ pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
 /// Only a modal dialog counts: a modeless window's edits belong to the app, so its field reverts its own draft first
 /// and the next Escape closes the window.
 pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
-    escaping_dialog(ctx).is_some()
+    escaping_dialog(ctx, true).is_some()
+}
+
+/// Whether the focused stop's innermost layer-like scope is a dialog on top whose Escape closes it, modal or modeless:
+/// an Escape that a field there does not take for itself closes the dialog, so the field keeps the focus instead of
+/// giving it up (`RootEnv::escape_leaves_fields`).
+pub(crate) fn escape_reaches_dialog(ctx: &Context) -> bool {
+    escaping_dialog(ctx, false).is_some()
 }
 
 /// Whether the dialog that [`escape_closes_dialog`] finds keeps the focused field's typing on Escape
 /// (`FocusPolicy::escape_keeps_typing`): the field then commits its draft instead of cancelling it.
 pub(crate) fn escape_keeps_typing(ctx: &Context) -> bool {
-    escaping_dialog(ctx).is_some_and(|policy| policy.escape_keeps_typing)
+    escaping_dialog(ctx, true).is_some_and(|policy| policy.escape_keeps_typing)
 }
 
-/// The policy of the modal dialog on top whose Escape closes it and which holds the focused stop
-/// ([`escape_closes_dialog`]).
-fn escaping_dialog(ctx: &Context) -> Option<FocusPolicy> {
+/// The policy of the dialog on top whose Escape closes it and which holds the focused stop, when `modal` only a modal
+/// one ([`escape_closes_dialog`]).
+fn escaping_dialog(ctx: &Context, modal: bool) -> Option<FocusPolicy> {
     let rec = focused_rec(ctx)?;
     let (id, policy) = with(ctx, |state| {
         let mut at = rec.scope;
@@ -1338,9 +1345,9 @@ fn escaping_dialog(ctx: &Context) -> Option<FocusPolicy> {
         }
         None
     })?;
-    let modal_on_top =
-        crate::runtime::overlay::top(ctx) == Some(id) && crate::runtime::overlay::entry(ctx, id).is_some_and(|entry| entry.rank.is_modal());
-    modal_on_top.then_some(policy)
+    let on_top =
+        crate::runtime::overlay::top(ctx) == Some(id) && crate::runtime::overlay::entry(ctx, id).is_some_and(|entry| !modal || entry.rank.is_modal());
+    on_top.then_some(policy)
 }
 
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop
