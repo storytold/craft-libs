@@ -21,6 +21,10 @@
       "mark": "bar",
       "length": 18,
       "width": 3
+    },
+    "locator": {
+      "cell": 9,
+      "square": 5
     }
   },
   "light": {
@@ -30,6 +34,7 @@
     "line.border": "#d0d5dd",
     "line.control_edge": "#c3c9d3",
     "line.divider": "#dde1e8",
+    "line.grip": "#9aa1ad",
     "line.outline": "#a4abb8",
     "seeds": {
       "accent": "#d9472f",
@@ -42,6 +47,7 @@
     "surface.background": "#e6e9ee",
     "surface.canvas": "#dfe3e9",
     "surface.control": "#e3e7ed",
+    "surface.page": "#e9ecf1",
     "surface.panel": "#f3f5f8",
     "surface.sunken": "#ffffff",
     "text.disabled": "#9aa1ad",
@@ -56,6 +62,7 @@
     "line.border": "#06070a",
     "line.control_edge": "#2c323e",
     "line.divider": "#232832",
+    "line.grip": "#5a6271",
     "line.outline": "#4a5363",
     "state.hover": "#262b35",
     "state.pressed": "#593330",
@@ -64,6 +71,7 @@
     "surface.background": "#0b0d12",
     "surface.canvas": "#101217",
     "surface.control": "#282d37",
+    "surface.page": "#13161c",
     "surface.panel": "#181b22",
     "surface.sunken": "#0f1116",
     "text.disabled": "#5a6271",

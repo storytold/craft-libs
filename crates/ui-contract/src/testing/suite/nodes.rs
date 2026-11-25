@@ -3,6 +3,7 @@
 use crate::runtime::access::Role;
 use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::testing::fixture::{Fixture, Target};
+use crate::testing::story::Story;
 use craft_behavior::PartRef;
 
 /// `node` and every node below it.
@@ -159,4 +160,22 @@ pub(super) fn sampled_actions(tree: &AccessTree, mut pairs: Vec<(NodeKey, Declar
         }
     }
     sets.iter().flat_map(|set| sample(set)).collect()
+}
+
+/// `stories` cut, when [`samples_repeats`], to the first story of each distinct kind: stories that cover the same
+/// required states, drive the same way, give the same disabled reason and set command states alike differ only in
+/// what they show, which the cases that read the type as a whole (`reads`, `variants`, `containers`) see through
+/// the first of them. The nightly run keeps every story.
+pub(super) fn sampled_stories(stories: Vec<Story>) -> Vec<Story> {
+    if !samples_repeats() {
+        return stories;
+    }
+    let kind = |story: &Story| (story.covers, std::mem::discriminant(&story.drive), story.disabled_text, story.commands.is_some());
+    let mut kept: Vec<Story> = Vec::new();
+    for story in stories {
+        if !kept.iter().any(|known| kind(known) == kind(&story)) {
+            kept.push(story);
+        }
+    }
+    kept
 }

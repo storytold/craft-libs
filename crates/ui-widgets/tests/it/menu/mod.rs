@@ -4,6 +4,11 @@ pub(crate) mod bar;
 
 pub(crate) mod closed;
 
+pub(crate) mod context_capture;
+pub(crate) mod context_capture_guards;
+pub(crate) mod context_capture_nested;
+pub(crate) mod context_capture_text_native;
+
 pub(crate) mod companion;
 
 pub(crate) mod icon_row;

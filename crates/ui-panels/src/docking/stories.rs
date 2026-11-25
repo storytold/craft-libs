@@ -5,7 +5,8 @@ use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
 use super::{
-    DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows,
+    DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelDocument, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles,
+    WindowMenuRows,
 };
 use crate::buttons::Button;
 use crate::contract::SizeLimits;
@@ -17,6 +18,7 @@ use crate::tabs::PanelTabLook;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Layout, Node, SplitSize};
 use craft_behavior::{Axis, IconId, Mixed};
+use craft_theme::Srgba;
 use egui::{Ui, Vec2};
 
 const LAYERS: usize = 0;
@@ -118,6 +120,26 @@ fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOu
     DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
 }
 
+/// A group whose Timeline lists its open compositions as tabs after the panel tabs, each with its label colour and a
+/// close button; the shown composition's tab is selected while the Timeline shows, a pick shows another and a close
+/// closes it.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_panel_with_documents(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = *data.value("shown", 1_u64);
+    let open = data.value("open", vec![1_u64, 2]).clone();
+    let comp = |id: u64| {
+        let color = (id == 1).then(|| Srgba::rgb(0.8, 0.3, 0.3));
+        PanelDocument::new(id, format!("Comp {id}")).swatch(color).closable(true).shown(id == shown)
+    };
+    let panels = vec![title_of(LAYERS).documents(open.iter().map(|id| comp(*id)).collect()), title_of(CHANNELS)];
+    let output = DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).closable().show(ui, |_, _| ()).output;
+    if let Some((_, id)) = output.picked_document {
+        *data.value("shown", 1_u64) = id;
+    }
+    data.value("open", vec![1_u64, 2]).retain(|id| !output.closed_documents.iter().any(|(_, closed)| closed == id));
+    output.into()
+}
+
 /// A click on the panel menu button opens the group's panel menu.
 fn open_panel_menu(fixture: &mut Fixture) {
     if let Some(button) = fixture.root_id().and_then(|id| fixture.part(id, MENU)) {
@@ -143,6 +165,22 @@ fn pill_tabs_and_the_panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .menu(move || rows.clone())
         .panel_menu_icon(IconId::new("menu"))
         .tab_look(PanelTabLook::Pill)
+        .show(ui, |_, _| ())
+        .output
+        .into()
+}
+
+/// VectorCraft 0.24's group header (`DockConfig::tab_look(PanelTabLook::Block)`): the shown tab a square
+/// `surface.control` block as tall as the strip, the strip on `surface.canvas`, and the panel menu button in the
+/// strip's middle at its end.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn block_tabs_and_the_panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = titles(&[LAYERS, CHANNELS]);
+    let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
+        .menu(move || rows.clone())
+        .panel_menu_icon(IconId::new("menu"))
+        .tab_look(PanelTabLook::Block)
         .show(ui, |_, _| ())
         .output
         .into()

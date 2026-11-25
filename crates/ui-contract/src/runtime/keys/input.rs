@@ -42,24 +42,20 @@ struct Strip<'a> {
     holds_drafts: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
     canvas_space: bool,
-    /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
-    /// events are its own.
+    /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Escape, the plain Enter and the
+    /// clipboard events are its own, and no window intent comes of them.
     foreign: bool,
+    /// A bare Tab is egui's: an app's own popup is open, or the app's own focused widget keeps Tab by its egui key
+    /// filter (`FocusedRecord::tab_in_egui`), or the window has no stop to move the focus to and nothing focused
+    /// (`focus::tab_has_no_stop`), so the Tab is the app's own binding's.
+    tab_in_egui: bool,
     /// The focused stop is the app's own egui widget (`Stop::host`, `FocusedRecord::host`), which reads its keys from
     /// egui: its Escape stays there, as an app's own focused widget's does. Tab and the arrows follow its `KeyUse`, as
     /// the framework's navigation reads it.
     host: bool,
-    /// The keys of the window's canvas while nothing has the focus, neither a framework stop nor an app's own widget
-    /// or popup: the canvas is then the key target, as the chrome gate takes it, and reads from egui the keys its
-    /// `KeyUse` keeps (Tab with `KeepKeys::Tab`).
-    canvas: Option<KeyUse>,
     /// The edit set whose clipboard events and edit chords stay in egui's input: the focused stop's when it is the
-    /// app's own widget (`host`), else the canvas's with nothing focused (`canvas`).
+    /// app's own widget (`host`), else the window canvas's with nothing focused (`target_canvas`).
     egui_edits: EditSet,
-    /// egui holds no focus and the window registered no focus stop in its last pass: a framework focus move has
-    /// nowhere to go, so a bare Tab is egui's. Focus on a component's widget without a stop is focus: egui would take
-    /// a Tab from it as a move to the next widget it shows, in a later pass.
-    no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
     /// A tool host claimed the lone Alt tap: it goes to the claimer on every OS, not to the menu bar.
@@ -346,6 +342,7 @@ impl Strip<'_> {
         let ctrl_tab = key == Key::Tab && (if self.os == Os::Mac { mods.ctrl && !mods.cmd } else { mods.cmd });
         let ctrl_tab = ctrl_tab && self.pages && !self.keeps_tab;
         let bare_tab = key == Key::Tab && !mods.cmd && !mods.ctrl && !mods.alt;
+        let plain_enter = key == Key::Enter && mods.is_none();
         // Alt and Shift ride along, as with Enter: a canvas tool reads them; Cmd and Ctrl chords are the app's. While
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
         // scope escape. Over an open press any Escape is the press's cancel: a borrowed tool's drag holds Cmd. Shift or
@@ -364,7 +361,6 @@ impl Strip<'_> {
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         let egui_edit =
             self.edit_chords.iter().any(|(command, chord)| self.egui_edits.contains(*command) && self.layout.matches(chord, input, self.os));
-        let canvas_tab = bare_tab && self.canvas.is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
         // The chrome keys are Tab's, which the bare-Tab arm and `take_nav` read.
         let window_shortcut = self
             .window_shortcuts
@@ -377,10 +373,12 @@ impl Strip<'_> {
             PressUse::Edit(*command)
         } else if key == Key::Space && self.canvas_space {
             PressUse::CanvasSpace
-        } else if (self.foreign && (bare_tab || escape)) || (self.host && escape && !self.press_captured) || canvas_tab || egui_edit {
+        } else if (self.foreign && (escape || plain_enter))
+            || (bare_tab && self.tab_in_egui)
+            || (self.host && escape && !self.press_captured)
+            || egui_edit
+        {
             PressUse::Egui
-        } else if bare_tab && self.no_stops {
-            PressUse::TabToEgui
         } else if bare_tab && !self.keeps_tab {
             PressUse::Tab
         } else if ctrl_tab {
@@ -441,11 +439,6 @@ impl Strip<'_> {
             // the key from egui; the runtime routes nothing for it, so no shortcut toggles the chrome or fires an edit
             // command with it either.
             PressUse::Egui => true,
-            PressUse::TabToEgui => {
-                // egui moves its own focus with it, from nothing focused into the app's own widgets (`focus::begin`).
-                batch.nav.tab_to_egui = true;
-                true
-            }
             PressUse::Tab => {
                 batch.tabs.push(TabPress { input: *input, repeat, at, place: batch.place });
                 false
@@ -535,8 +528,6 @@ enum PressUse {
     CanvasSpace,
     /// The app's own widget or popup, or the canvas with nothing focused, reads the key from egui.
     Egui,
-    /// A bare Tab egui moves its own focus with.
-    TabToEgui,
     /// A bare Tab: a focus move or a chrome toggle, which `take_nav` decides.
     Tab,
     /// The page switch of the focused stop.
@@ -667,7 +658,6 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));
     let edit_chords = if keys.as_ref().or(canvas.as_ref()).is_some_and(lists_edits) { commands::edit_chords(ctx) } else { Arc::default() };
     let window_shortcuts = commands::window_shortcuts(ctx);
-    let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = &input.latin_layout_chars;
     let requested_paste = commands::board::has_pending_paste(ctx, viewport);
     let mut requested_content = None::<commands::ClipContent>;
@@ -676,6 +666,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let bound = |chord: &Chord| commands::runs_now(ctx, viewport, chord);
     let press_captured = crate::runtime::pointer::press_captured_in(ctx, viewport) || crate::runtime::drag::running(ctx);
     let repeats = Env::root_for(ctx, viewport).is_some_and(|env| env.shortcuts_repeat);
+    let tab_in_egui = record.tab_in_egui || focus::tab_has_no_stop(ctx, viewport);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, target_canvas.as_ref(), stage);
         let edits = |command| !record.host && keys.is_some_and(|keys| keys.edits.contains(command));
@@ -697,10 +688,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             holds_drafts: keys.is_some_and(|keys| keys.holds_drafts),
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
+            tab_in_egui,
             host: record.host,
-            canvas,
             egui_edits: keys.filter(|_| record.host).or(canvas).map_or(EditSet::NONE, |keys| keys.edits),
-            no_stops,
             label_selection: record.label_selection,
             alt_claimed: !stage.alt_claims.is_empty(),
             in_menu: record.menu.is_some(),
