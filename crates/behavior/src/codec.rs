@@ -340,6 +340,12 @@ impl NumberCodec {
     pub fn reader(&self) -> &Reader {
         &self.reader
     }
+
+    /// Whether the codec writes a positive value with its `+` ([`NumberCodec::explicit_plus`]): its own text then
+    /// starts with a sign that is the number's, not a relative edit.
+    pub fn writes_sign(&self) -> bool {
+        self.plus
+    }
 }
 
 impl Default for NumberCodec {
