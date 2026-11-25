@@ -315,9 +315,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
 }
 
 /// The sizes a dock area lays out with: the dock's style, with its docked columns as cards when `config` shows them
-/// ([`DockConfig::column_cards`]).
+/// ([`DockConfig::column_cards`]) and no gap beside a flush dock ([`DockConfig::flush_docks`]).
 fn area_sizes(mut sizes: DockSizes, config: &DockConfig) -> DockSizes {
     sizes.column_cards = config.column_cards;
+    if config.flush_docks {
+        sizes.dock_gap = 0.0;
+    }
     sizes
 }
 
@@ -863,7 +866,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let limits = |panel: &P| scene.spec(panel).limits;
     let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
     let stripless = |panel: &P| scene.spec(panel).canvas;
-    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless);
+    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless).dock_gap(scene.sizes.dock_gap);
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
     let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
     let area = SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
@@ -1548,7 +1551,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .within(within)
                     .auto_collapse(scene.auto_collapse)
                     .mode(mode)
-                    .tab_look(scene.config.tab_look);
+                    .tab_look(scene.config.tab_look)
+                    .framed(scene.config.flush_docks && !in_window);
                 let shown = match card {
                     Some(place) => shown.card(place),
                     None => shown,

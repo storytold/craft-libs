@@ -89,6 +89,12 @@ pub struct DockConfig {
     /// width (a tool rail its steps); its dividers, drop bands and edge handle stay on its outer rect. Off: a column
     /// fills its cell.
     pub column_cards: ColumnCards,
+    /// Docks stand flush against the node beside them, with no gap, and their columns collapsed to icons show the
+    /// `line.border` frame expanded columns show, so one rule parts a dock from the canvas; the flyouts of those columns
+    /// stand square on the panel surface with that frame and no shadow ([`Flyout::docked`](super::Flyout::docked)):
+    /// VectorCraft 0.24's dock.
+    /// Off: a `space.gap.tight` gap of the window's background parts them.
+    pub flush_docks: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -134,6 +140,7 @@ impl Default for DockConfig {
             floating_grip: false,
             floating_rounded_body: false,
             column_cards: ColumnCards::None,
+            flush_docks: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
@@ -264,6 +271,13 @@ impl DockConfig {
     #[must_use]
     pub fn tab_look(mut self, look: PanelTabLook) -> Self {
         self.tab_look = look;
+        self
+    }
+
+    /// Flush docks on or off ([`flush_docks`](Self::flush_docks)).
+    #[must_use]
+    pub fn flush_docks(mut self, on: bool) -> Self {
+        self.flush_docks = on;
         self
     }
 

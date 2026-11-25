@@ -254,6 +254,10 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// lies on the surface the groups' tab strips do.
     #[prop]
     tab_look: PanelTabLook,
+    /// The docked column shows the `line.border` frame an expanded docked column shows, and its flyouts stand as docked
+    /// columns do ([`Flyout::docked`], [`DockConfig::flush_docks`](super::DockConfig::flush_docks)).
+    #[prop]
+    framed: bool,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
     /// The bar's rect this pass.
@@ -317,6 +321,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             within: Rect::NOTHING,
             card: None,
             tab_look: PanelTabLook::Plain,
+            framed: false,
             open,
             view: None,
             bar_rect: Rect::NOTHING,
@@ -709,6 +714,9 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
                     }
                 }
             }
+        }
+        if self.framed {
+            ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
         // edges are the window's.

@@ -44,6 +44,9 @@ pub struct DockSizes {
     /// The divider between two docked groups or between a dock and its neighbour (the tight gap: the references'
     /// dock dividers are 3 px at 100%).
     pub gap: f32,
+    /// The room between a dock and the node beside it: [`gap`](Self::gap), or none in a flush dock
+    /// ([`DockConfig::flush_docks`](super::DockConfig::flush_docks)).
+    pub dock_gap: f32,
     /// How far a band (edge, seam, column edge, new dock) reaches into a tab strip from its drop line (the least hit
     /// size): the rest of the strip joins the group.
     pub strip_reach: f32,
@@ -157,6 +160,7 @@ impl DockSizes {
             cascade_inset: size.window.cascade,
             float_size: Vec2::new(size.float.width, size.float.height),
             gap: cx.tokens.space.gap.tight,
+            dock_gap: cx.tokens.space.gap.tight,
             strip_reach: size.hit.target,
             least_pane: size.pane.least,
             strip: size.panel_header,

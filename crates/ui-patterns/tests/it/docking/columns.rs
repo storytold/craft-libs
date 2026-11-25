@@ -711,3 +711,58 @@ fn only_the_tool_rail_is_a_card_with_stepped_cards() {
         assert!(clear, "{direction:?}: the panel column {side:?} overlaps the toolbar {cell:?}");
     }
 }
+
+/// Panels that record the rect of the canvas's group (panel 1), which they draw themselves.
+struct CanvasStage(Rc<Cell<Option<Rect>>>);
+
+impl DockPanels<u32> for CanvasStage {
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn group_view(&mut self, panels: &[u32], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if !panels.contains(&1) {
+            return None;
+        }
+        Some(match at {
+            GroupAt::Measure(_) => 0.0,
+            GroupAt::Show(rect) => {
+                self.0.set(Some(rect));
+                rect.height()
+            }
+        })
+    }
+}
+
+/// The room between the canvas and the end dock of the card dock's columns, with `DockConfig::flush_docks` set to
+/// `flush`.
+fn canvas_to_dock(flush: bool, direction: Direction) -> f32 {
+    let mut iconic = Column::new(vec![Group::new(vec![ICONS], 0)]);
+    iconic.iconic = true;
+    let columns = vec![Column::new(vec![Group::new(vec![SIDE], 0)]).with_width(220.0), iconic];
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let placed: Rc<RefCell<Vec<(u32, Rect)>>> = Rc::default();
+    let canvas: Rc<Cell<Option<Rect>>> = Rc::default();
+    let (held, seen, shown, specs) = (Rc::clone(&workspace), Rc::clone(&placed), Rc::clone(&canvas), Tracked::new(CardPanels));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = held.borrow().clone();
+        let config = DockConfig::default().flush_docks(flush);
+        let out = DockArea::new("Flush dock", Bind::bound(&mut workspace), &specs, &mut CanvasStage(Rc::clone(&shown)), config).show(ui);
+        *held.borrow_mut() = workspace;
+        *seen.borrow_mut() = out.columns;
+    });
+    fixture.direction(direction).room(Vec2::new(900.0, 500.0)).settle();
+    let icons = placed.borrow().iter().find(|(at, _)| *at == ICONS).map(|(_, rect)| *rect).expect("the icons' column shows");
+    let canvas = canvas.get().expect("the canvas shows");
+    if direction == Direction::Rtl { canvas.left() - icons.right() } else { icons.left() - canvas.right() }
+}
+
+/// A flush dock (`DockConfig::flush_docks`, VectorCraft's) meets the canvas with no gap and without overlapping it; by
+/// default a gap parts them. Right to left mirrors it.
+#[trial]
+fn a_flush_dock_meets_the_canvas() {
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let (gap, flush) = (canvas_to_dock(false, direction), canvas_to_dock(true, direction));
+        assert!(gap > 0.5, "{direction:?}: a gap {gap} parts the canvas from the dock by default");
+        assert!(flush.abs() <= 0.5, "{direction:?}: the flush dock stands {flush} from the canvas");
+    }
+}
