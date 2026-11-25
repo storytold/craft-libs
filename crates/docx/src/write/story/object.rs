@@ -173,7 +173,8 @@ impl Writer<'_> {
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
                     self.rpr(w, props);
-                    w.leaf("w:t", &[("xml:space", "preserve")], text);
+                    let t = if self.is_del(props) { "w:delText" } else { "w:t" };
+                    w.leaf(t, &[("xml:space", "preserve")], text);
                     w.close("w:r");
                     self.rev_close(w, props);
                 }

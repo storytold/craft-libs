@@ -391,6 +391,9 @@ fn deleted_blocks(blocks: &[std::sync::Arc<craft_wordmodel::Block>], del: u32, d
                         c.del = Some(del);
                     }
                 });
+                if p.mark.del.is_none() {
+                    p.mark.del = Some(del);
+                }
                 std::sync::Arc::new(Block::Para(p))
             }
             Block::Table(t) if depth < MAX_DELETED_TABLE_DEPTH => {

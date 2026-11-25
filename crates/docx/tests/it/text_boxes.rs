@@ -280,3 +280,49 @@ fn a_deleted_shapes_text_box_text_is_written_as_del_text() {
     assert!(xml.contains(">Kept text</w:t>"), "{xml}");
     assert!(!xml.contains(">Kept text</w:delText>"), "{xml}");
 }
+
+#[test]
+fn a_deleted_shapes_empty_text_box_paragraph_mark_is_written_as_deleted() {
+    // An empty paragraph in a deleted text box has no runs to delete: its paragraph mark is
+    // the deletion, written as `w:del` in the mark's `w:rPr` inside the box's content.
+    let mut d = Document::from_text("a\nb");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let del = CharProps { del: Some(0), ..Default::default() };
+    let gone = text_box(&mut d, "", TextBody::default());
+    d.insert_object(&Pos::body(0, 1), gone, &del).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    let content = xml.split("txbxContent").nth(1).and_then(|t| t.split("</w:txbxContent>").next()).unwrap_or("");
+    assert!(content.contains("<w:del "), "{xml}");
+}
+
+#[test]
+fn a_deleted_shapes_opaque_fallback_text_is_written_as_del_text() {
+    // A non-DOCX opaque object in a deleted text box falls back to its text: that text is
+    // deleted text, so it is written as `w:delText` inside the `w:del` run, not `w:t`.
+    let mut d = Document::from_text("a\nb");
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let del = CharProps { del: Some(0), ..Default::default() };
+    let mut p = craft_wordmodel::Paragraph::with_text("", Default::default());
+    p.insert_object(0, InlineObject::Opaque { format: "docx".into(), xml: "<broken".into(), text: "Fallback text".into() }, &CharProps::default())
+        .unwrap();
+    let id = d.add_part(PartKind::TextBox, vec![para_block(p)]);
+    let gone = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 1), gone, &del).unwrap();
+    let xml = document_xml(&craft_docx::write(&d).unwrap());
+    assert!(xml.contains(">Fallback text</w:delText>"), "{xml}");
+    assert!(!xml.contains(">Fallback text</w:t>"), "{xml}");
+}
