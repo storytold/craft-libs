@@ -222,3 +222,47 @@ fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
         assert!((thumb().bounds.center().x - at.x).abs() < 0.01, "the clicked value is drawn at the same position");
     }
 }
+
+/// A replay at another place moves a hit area's original bounds with the expanded rect, so the audit compares like with
+/// like: the record a moved region returns equals the record of the same region at its new place.
+#[trial]
+fn a_replay_moves_each_hit_areas_bounds_with_its_rect() {
+    use craft_ui::runtime::Shift as _;
+    use craft_ui::runtime::env::RootEnv;
+    use craft_ui::testing::Frames;
+    use craft_ui::value_drag::Slider;
+    use egui::{Pos2, Vec2, vec2};
+
+    const FIELD: Rect = Rect { min: Pos2::new(30.0, 40.0), max: Pos2::new(250.0, 70.0) };
+    let value = Rc::new(RefCell::new(0.0));
+    let recorded = Rc::new(RefCell::new(None::<Arc<Recorded>>));
+    let (shown_value, shown_record) = (Rc::clone(&value), Rc::clone(&recorded));
+    let mut show = move |ui: &mut egui::Ui| {
+        let (_, record) = inspect::record(ui, Id::NULL.with("replayed-bounds"), |ui| {
+            Slider::new(Bind::bound(&mut *shown_value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+        });
+        if let Some(record) = record {
+            *shown_record.borrow_mut() = Some(record);
+        }
+    };
+    let mut frames = Frames::new();
+    // An enlarged hit target, so an area's bounds and its expanded rect differ.
+    let mut root = RootEnv::new();
+    root.sizes = Arc::new(craft_theme::AppSizes::parse(br#"{ "all": { "size.hit.target": 32 } }"#).expect("valid enlarged hit target"));
+    frames.root(root);
+    frames.ctx.disable_accesskit();
+    frames.idle(3, &mut show);
+    let record = recorded.borrow().clone().expect("the region ran");
+    let thumb = |record: &Recorded| {
+        record.hits.iter().find(|hit| hit.part.is_some_and(|part| part.key == Slider::THUMB)).cloned().expect("the pointer-only thumb is recorded")
+    };
+    let before = thumb(&record);
+    assert!(before.rect.width() > before.bounds.width(), "the hit target is expanded past the drawn thumb");
+    let offset = vec2(0.0, 60.0);
+    let clip = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::splat(400.0));
+    let shift = egui::RecordShift { offset, ran_clip: clip, clip: clip.translate(offset) };
+    let after = thumb(&record.shifted(&shift));
+    assert_eq!(after.rect, shift.rect(before.rect), "the expanded rect moves with the replay");
+    assert_eq!(after.bounds, shift.rect(before.bounds), "the original bounds move with it");
+    assert_ne!(after.bounds, before.bounds, "the replay really moved the record");
+}
