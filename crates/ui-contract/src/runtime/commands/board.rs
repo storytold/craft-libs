@@ -972,8 +972,9 @@ pub fn keymap_builds() -> u64 {
 /// The keymap of `registry` and the app catalog `app` on `platform` under `overrides`, and the chords it binds to the
 /// edit commands and to the window's keys. A catalog command whose id the registry has keeps the registry's
 /// definition, and the catalog's default bindings join the registry's after them (an app's alternate keys, such as
-/// F2/F3/F4 for Cut/Copy/Paste), with its [`Dispatch`]: an app that runs a linked set's command from its own key
-/// handling says so on its def for the id, and the set's chord then shows without the key stage taking it.
+/// F2/F3/F4 for Cut/Copy/Paste). The catalog's [`Dispatch`] joins too only when it says the app runs the keys itself,
+/// so a set that already says so keeps it: an app that runs a linked set's command from its own key handling says so on
+/// its def for the id, and the set's chord then shows without the key stage taking it.
 ///
 /// A yielding library command's default chord (a window shortcut's, Quit's: `yields_default`) that another command also
 /// binds is that command's: the library command loses it, so the app's binding beats the framework's default. One the
@@ -1012,8 +1013,11 @@ fn build_keymap(
         for extra in app.defs() {
             if let Some(def) = defs.iter_mut().find(|def| def.command == extra.command) {
                 // An app that runs the set's command itself says so on its def for the id: the set's def follows, so the
-                // chord shows and the key stage leaves the key alone.
-                def.dispatch = extra.dispatch;
+                // chord shows and the key stage leaves the key alone. A def that leaves the dispatch at the keymap's adds
+                // its keys and leaves the set's dispatch alone, which a set running its own keys keeps.
+                if extra.dispatch == Dispatch::App {
+                    def.dispatch = Dispatch::App;
+                }
                 for binding in &extra.defaults {
                     if !def.defaults.contains(binding) {
                         def.defaults.push(binding.clone());
