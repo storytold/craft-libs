@@ -1,6 +1,8 @@
 # The Workspace gate's additions to .config/cargo-dev.toml (scripts/ci-workspace-tests.sh passes both). The gate runs
 # every test of these crates, and their tests spend nearly all their time in sample and pixel loops, which run several
-# times faster at opt-level 1; locally they stay at 0, so an edit to them rebuilds fast.
+# times faster at opt-level 1; locally they stay at 0, so an edit to them rebuilds fast. craft-pdf (R6 hash and AES-CBC
+# loops), craft-pkcs7 and craft-odf (PBKDF2 rounds, monomorphised in the crate) and craft-cms (CLUT builds) run their
+# own hot loops in tests, so they take part too.
 [profile.dev.package.craft-audio-dsp]
 opt-level = 1
 
@@ -16,6 +18,14 @@ opt-level = 1
 [profile.dev.package.craft-imaging]
 opt-level = 1
 
-# The workspace lint test parses every source file with syn; at opt-level 0 that takes 44 s.
-[profile.dev.package.craft-design-lint]
-opt-level = 2
+[profile.dev.package.craft-pdf]
+opt-level = 1
+
+[profile.dev.package.craft-pkcs7]
+opt-level = 1
+
+[profile.dev.package.craft-odf]
+opt-level = 1
+
+[profile.dev.package.craft-cms]
+opt-level = 1
