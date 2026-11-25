@@ -30,6 +30,7 @@ use crate::index::{
     Face, Family, FontFile, GOOGLE_FONTS, Index, IndexError, LicenseFile, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, SourceProblem, Unavailable,
 };
 use crate::pin::IndexPin;
+use crate::service::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource};
 use crate::source::{is_source_url, safe_dir, safe_file_name, slug};
 use crate::sources::{MAX_SOURCES_BYTES, SourceEntry, SourcesFile};
 use crate::verify::{VerifyError, is_font, sha256_hex, verify_font};
@@ -235,15 +236,6 @@ pub struct Problem {
     pub file: String,
     /// What is wrong; `None` when the file is missing.
     pub error: Option<VerifyError>,
-}
-
-/// Which of a family's legal texts [`FontStore::legal_text`] reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LegalText {
-    /// The licence file (`OFL.txt`, `LICENSE.txt`).
-    License,
-    /// An Apache family's `NOTICE` file.
-    Notice,
 }
 
 /// A licence or NOTICE file's size and sha256, when the index has them. A format 1.0 index has
@@ -688,22 +680,6 @@ pub(crate) fn read_limited(path: &Path, max: u64) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(path).ok()
-}
-
-/// The environment variable that sets the preview service's base URL; it beats the saved setting.
-pub const PREVIEW_SERVICE_ENV: &str = "CRAFT_FONT_PREVIEW_URL";
-
-/// Where the preview service in effect comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreviewServiceSource {
-    /// [`PREVIEW_SERVICE_ENV`]; the setting can't change it.
-    Env,
-    /// The `preview_service` setting in `settings.json`.
-    Saved,
-    /// The host's default, [`FontStore::with_default_preview_service`].
-    Default,
-    /// There is no service.
-    None,
 }
 
 /// The environment value when set and not empty, else the setting; an unusable value counts as

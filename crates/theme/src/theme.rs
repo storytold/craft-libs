@@ -242,6 +242,18 @@ pub struct ShapeSeed {
     pub wells: Option<WellShape>,
     /// The dock grips' marks; each value left unset keeps [`GripShape::DEFAULT`]'s.
     pub grip: Option<GripSeed>,
+    /// The reference point's squares; each value left unset is the Size preset's handle size.
+    pub locator: Option<LocatorSeed>,
+}
+
+/// A theme's reference point squares ([`LocatorShape`](crate::LocatorShape)): each `None` takes the Size preset's value, `size.handle.md`
+/// for the step and `size.handle.sm` for the square.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorSeed {
+    /// The step from one square's centre to the next, in points.
+    pub cell: Option<f32>,
+    /// A square's side, in points.
+    pub square: Option<f32>,
 }
 
 /// A theme's grip marks: each `None` keeps [`GripShape::DEFAULT`]'s value.

@@ -552,7 +552,7 @@ pub(crate) fn settled(
                         && !facts.discards
                         && facts.quiet(now, edited.as_ref())
                         && !settled.record.focus.stop_ids().any(|stop| revealed == Some(stop) || routed.contains(&stop))
-                        && !routed.iter().any(|id| settled.record.widgets.contains(id))
+                        && !routed.iter().any(|id| settled.record.widgets.contains(id) || settled.record.facts.node_owners.contains(id))
                         && !dragged.is_some_and(|widget| settled.record.widgets.contains(&widget))
                         && focused.within(&settled.record.focus, &settled.record.widgets) == settled.record.held
                 });

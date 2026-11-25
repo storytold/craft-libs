@@ -260,7 +260,10 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         let content = placed.union(output.response.rect).union(text_rect);
         super::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
     }
-    let focused = output.response.has_focus();
+    // The widget's key focus, whether or not the window has the system's: switching to another app is no focus move,
+    // so the typing run, caret and selection carry on (egui's `Response::has_focus` is false while the window is in
+    // the background).
+    let focused = ui.memory(|memory| memory.has_focus(id));
     let caret = output.cursor_range.map(|range| {
         let at = output.galley.pos_from_cursor(range.primary);
         at.translate(output.galley_pos.to_vec2())
