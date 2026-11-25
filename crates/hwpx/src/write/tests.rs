@@ -550,3 +550,43 @@ fn new_hwpx_writes_hangul_word_wrapping_as_the_model_has_it() {
     let keep: Vec<Option<bool>> = back.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.keep_hangul_words).collect();
     assert_eq!(keep, [Some(false), Some(true), Some(false)]);
 }
+
+/// A mirrored picture is written mirrored by its drawing matrices as well as its hp:flip, as
+/// Hancom's viewer mirrors it only by the matrices (2026-11-25): the scale matrix is negative on
+/// that axis and the translation moves it back by its width. Before, only hp:flip said so.
+#[test]
+fn new_hwpx_mirrors_a_picture_in_its_matrices() {
+    use craft_wordmodel::{
+        CharProps, InlineObject, Paragraph,
+        para::{Float, Wrap},
+        para_block,
+    };
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend(1u32.to_be_bytes());
+    png.extend(1u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0]);
+    let mut float = Float { wrap: Wrap::InFrontOfText, ..Float::default() };
+    float.set_spin(craft_wordmodel::geom::Spin::new(0.0, true, false));
+    let pic =
+        InlineObject::Image { media: "p.png".into(), w: 40.0, h: 20.0, alt: String::new(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
+    let mut doc = craft_wordmodel::Document::from_text("");
+    doc.media.insert("p.png".into(), std::sync::Arc::new(png));
+    let mut p = Paragraph::with_text("x", CharProps::default());
+    p.insert_object(0, pic, &CharProps::default()).unwrap();
+    doc.body = vec![para_block(p)];
+    let (bytes, _) = new_hwpx(&doc).unwrap();
+    let sec = xml::parse(zip_part(&bytes, "Contents/section0.xml").as_bytes(), false).unwrap();
+    let pic = sec.iter("hp:pic").next().expect("the picture");
+    assert_eq!(pic.find("hp:flip").and_then(|f| f.get("horizontal")), Some("1"));
+    let ri = pic.find("hp:renderingInfo").expect("renderingInfo");
+    let num = |m: &str, k: &str| -> f64 { ri.find(m).and_then(|e| e.get(k)).and_then(|v| v.parse().ok()).unwrap_or(f64::NAN) };
+    assert!(num("hc:scaMatrix", "e1") < 0.0, "scaled by -1 across");
+    assert!(num("hc:scaMatrix", "e5") > 0.0, "not down");
+    assert_eq!(num("hc:transMatrix", "e3"), 4000.0, "moved back by its width");
+    let back = crate::read(&bytes).unwrap();
+    let flipped = back.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Image { float, .. } => Some(float.flip_h),
+        _ => None,
+    });
+    assert!(flipped.is_some(), "read back");
+}

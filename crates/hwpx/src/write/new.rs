@@ -797,6 +797,15 @@ fn frame_xml(w: i64, h: i64, cur: (i64, i64), f: &craft_wordmodel::para::Float, 
         (x, y) = ((fw - cur.0) / 2, (fh - cur.1) / 2);
     }
     let (sx, sy) = (cur.0 as f64 / w.max(1) as f64, cur.1 as f64 / h.max(1) as f64);
+    // a mirrored object is drawn mirrored by its matrices (Hancom's viewer, 2026-11-25: hp:flip
+    // alone doesn't mirror): scaled by -1 on that axis, then moved back by its size
+    let signed = |v: f64, flip: bool| if flip { format!("-{}", scale(v)) } else { scale(v) };
+    if f.flip_h {
+        x += cur.0;
+    }
+    if f.flip_v {
+        y += cur.1;
+    }
     format!(
         "<hp:offset x=\"{}\" y=\"{}\"/><hp:orgSz width=\"{w}\" height=\"{h}\"/><hp:curSz width=\"{}\" height=\"{}\"/>\
 <hp:flip horizontal=\"{}\" vertical=\"{}\"/><hp:rotationInfo angle=\"{angle}\" centerX=\"{}\" centerY=\"{}\" rotateimage=\"1\"/>\
@@ -809,8 +818,8 @@ fn frame_xml(w: i64, h: i64, cur: (i64, i64), f: &craft_wordmodel::para::Float, 
         b(f.flip_v),
         w / 2,
         h / 2,
-        scale(sx),
-        scale(sy),
+        signed(sx, f.flip_h),
+        signed(sy, f.flip_v),
         rot_matrix(w, h, angle)
     )
 }
