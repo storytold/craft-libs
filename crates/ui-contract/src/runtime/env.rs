@@ -424,6 +424,13 @@ impl Scoped {
         !self.content.0 && !self.content_column
     }
 
+    /// The direction of a layer opened from this scope: the interface's (`text_direction`), which an axis that keeps
+    /// its left-to-right order (`Props::ltr_axis`) leaves alone. The layer flows in it (`start_layer`), and its side
+    /// and alignment to its anchor mirror by it.
+    pub fn layer_direction(&self) -> Direction {
+        self.text_direction
+    }
+
     /// Starts a layer from its opener's scope: the inherited group stays, the layer-local fields start fresh, and the
     /// layer is no line of a bar it was opened from. A layer's content measures and runs in this.
     ///
@@ -435,7 +442,7 @@ impl Scoped {
     /// (`Props::ltr_axis`) and a scope that turns only the flow keep that order for their own content, not for a
     /// popover or bar opened from inside them.
     pub(crate) fn start_layer(&mut self) {
-        self.direction = self.text_direction;
+        self.direction = self.layer_direction();
         self.start_room();
         self.inside_label = None;
         self.cell_fills = false;

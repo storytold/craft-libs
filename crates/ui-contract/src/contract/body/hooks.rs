@@ -329,6 +329,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// the room. What the regions took is recorded for the rest of the pass; a record this pass already holds serves
     /// instead when the room still allows it (`reusable`).
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
+        // A layer measures under its opener's env and runs in its own, which flows in the layer's direction
+        // (`Scoped::layer_direction`): its measuring run lays out in that direction too.
+        let layer_env = matches!(self.props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow)
+            .then(|| at.env.derive(|scoped| scoped.direction = scoped.layer_direction()));
+        let at = &Measuring { env: layer_env.as_ref().unwrap_or(at.env), command: at.command.clone(), ..*at };
         let scrolled_share = match self.measure_room(comp, at, cx) {
             Ok(scrolled_share) => scrolled_share,
             Err(extent) => return extent,
