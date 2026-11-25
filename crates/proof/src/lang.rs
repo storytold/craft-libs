@@ -53,6 +53,11 @@ pub enum ProofLang {
     /// `id_ID` dictionary, dictionary-driven suggestions and generic checks with Indonesian
     /// messages. Hyphenation keeps the fallback English patterns.
     Id,
+    /// Romanian (`ro`, `ro-RO`, `ro-MD`; also ISO 639-2 `ron`/`rum` and the withdrawn Moldovan
+    /// `mo`/`mol`): the installed Hunspell dictionary (`ro_RO`, when there is one), Romanian
+    /// suggestions and the Romanian grammar rules ([`crate::ro`]). Hyphenation keeps the fallback
+    /// English patterns.
+    Ro,
     /// Spanish of Spain (`es`, `es-ES`, and every region not listed for [`ProofLang::EsMx`],
     /// [`ProofLang::Es419`] or [`ProofLang::EsUy`]; also ISO 639-2 `spa`): the installed
     /// Hunspell `es_ES` dictionary (or a generic Spanish one), dictionary-driven suggestions and
@@ -90,7 +95,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 16] = [
+    pub const PROOFED: [ProofLang; 17] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnAu,
@@ -103,6 +108,7 @@ impl ProofLang {
         ProofLang::Ru,
         ProofLang::Cs,
         ProofLang::Id,
+        ProofLang::Ro,
         ProofLang::Es,
         ProofLang::EsMx,
         ProofLang::Es419,
@@ -142,6 +148,12 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
+        } else if ["ro", "ron", "rum", "mo", "mol"].iter().any(|p| primary.eq_ignore_ascii_case(p))
+            && effective_script(tag).is_none_or(|s| s == "latn")
+        {
+            // `mo`/`mol` are the withdrawn Moldovan tags, Romanian since 2008. Romanian in another
+            // script (`ro-Cyrl`, `mo-Cyrl`) keeps its own pack.
+            ProofLang::Ro
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
@@ -225,6 +237,7 @@ impl ProofLang {
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
+            ProofLang::Ro => "ro",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
             ProofLang::Other => "",
@@ -358,7 +371,8 @@ pub(crate) fn default_script(primary: &str) -> Option<&'static str> {
 pub(crate) fn effective_script(tag: &str) -> Option<String> {
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or_default().to_ascii_lowercase();
-    parts.find(|p| is_script(p)).map(str::to_ascii_lowercase).or_else(|| default_script(&primary).map(str::to_string))
+    // Subtags after a singleton (`x-…` private use, `u-…` extensions) name no script.
+    parts.take_while(|p| p.len() != 1).find(|p| is_script(p)).map(str::to_ascii_lowercase).or_else(|| default_script(&primary).map(str::to_string))
 }
 
 /// The position of the region among a tag's subtags: the first two-letter or three-digit one
@@ -483,6 +497,14 @@ mod tests {
         assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
         assert_eq!(ProofLang::Id.code(), "id");
         assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
+        assert_tags(&["ro", "ro-RO", "RO_ro", "ro-MD", "ro_RO.UTF-8", " ro-RO ", "ron", "rum", "mo", "ro-Latn-RO"], ProofLang::Ro);
+        // A script-like subtag in a private-use extension is no script.
+        assert_eq!(ProofLang::from_tag(Some("ro-x-Cyrl")), ProofLang::Ro);
+        for tag in ["ro-Cyrl", "mo-Cyrl", "ro-Cyrl-MD"] {
+            assert!(matches!(ProofLang::from_tag(Some(tag)), ProofLang::Pack(_)), "{tag}: Cyrillic Romanian is a pack language");
+        }
+        assert!(ProofLang::Ro.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Ro));
+        assert_eq!(ProofLang::Ro.code(), "ro");
     }
 
     #[test]
