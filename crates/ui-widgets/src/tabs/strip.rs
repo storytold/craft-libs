@@ -331,9 +331,8 @@ impl StripLayout {
             })
             .collect();
         let selected = lane.iter().position(|place| matches!(*place, Lane::Tab(at) if at == *selected)).unwrap_or(usize::MAX);
-        let available = (*width - ends_room).max(0.0) + tab_gap;
         let minimum = min.iter().copied().fold(0.0, f32::max);
-        let fit = mode.fit(&padded, selected, &held, available, minimum + tab_gap, *height);
+        let fit = mode.fit(&padded, selected, &held, (*width - ends_room).max(0.0) + tab_gap, minimum + tab_gap, *height);
         *shown = vec![false; count];
         *left = vec![*width; count];
         *wide = vec![0.0; count];
@@ -515,10 +514,9 @@ impl<K> TabRoles<'_, K> {
 /// asks for the tab's context menu.
 ///
 /// The `kind` picks the rules: document and text tabs keep whole titles and send the rest to an overflow menu of
-/// every tab; panel tabs shrink to their first letters, clipped, beside the shown tab whole, before they overflow,
-/// and the menu lists the hidden ones. The shown tab is always visible. A tab
-/// dragged out of the strip and released where no other strip, dock or drop target takes it is reported as
-/// `torn_off`.
+/// every tab; panel tabs shrink before they overflow and the menu lists the hidden ones. The shown tab is always
+/// visible. A tab dragged out of the strip and released where no other strip, dock or drop target takes it is
+/// reported as `torn_off`.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(collection, overlay, probe(TabStrip<'static, usize>))]
 pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> {
@@ -1065,14 +1063,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         // Each end item is measured in this pass, with its label and icon only.
         let ends = self.trailing.iter().map(|end| end.fit_item(cx)).collect();
         let look = cx.env::<super::DocumentTabLook>();
-        let mode = self.kind.fit_mode_in(look);
-        let fitting = Fitting { selected, mode, kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
+        let fitting = Fitting { selected, mode: self.kind.fit_mode_in(look), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
         // Shrinking document tabs stand apart by the inline gap; the other kinds and looks touch.
         let tab_gap = if self.kind.shrinks_in(look) { cx.tokens.space.gap.inline } else { 0.0 };
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 
-    /// Every tab takes the strip's kind, panel look, panel shrink and size.
+    /// Every tab takes the strip's kind, panel look and size.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
         let tab = tab.kind(self.kind).panel_look(self.panel_look);
         if self.large { tab.large() } else { tab }
