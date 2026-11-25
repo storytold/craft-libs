@@ -923,7 +923,7 @@ fn absorb_zone(members: &[OpenEntry], top: &OpenEntry) -> Vec<Rect> {
 }
 
 /// Whether a press outside `entry` stops at it, so `entry` hosts the menus opened inside it (`absorb_zone`): a floating
-/// window or panel (`Rank::Window`), a dialog's card (`Rank::Modal`), which absorbs the presses outside itself, or the
+/// window or panel (`Rank::Window`), a modal layer (`Rank::Modal`), whose card takes the presses outside itself, or the
 /// entry of an OS window mount. A layer shown in a popup window of its own is no host: its presses are judged in the
 /// window that opened it.
 fn stops_presses(entry: &OpenEntry) -> bool {
