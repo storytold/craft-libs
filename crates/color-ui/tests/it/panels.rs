@@ -405,8 +405,32 @@ fn a_shift_key_step_or_typed_value_moves_one_channel() {
     let red = slider(&rig, 0);
     rig.fixture.access(AccessActionKind::Focus, &red).settle();
     rig.fixture.hold(Modifiers::SHIFT).frame(vec![moved(red.center())]);
-    rig.fixture.frame(vec![craft_ui::testing::pointer::wheel(-40.0)]).settle();
+    // The fixture's held modifiers reach button events only, so the wheel event carries Shift itself.
+    let shift_wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -40.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::SHIFT,
+        source: egui::MouseWheelSource::Wheel,
+    };
+    rig.fixture.frame(vec![shift_wheel]).settle();
     kept(&rig, "a wheel turn with Shift held");
+}
+
+/// A quick Shift drag, released in the pass that carries its only move, still moves the other channels with it.
+#[trial]
+fn a_quick_shift_drag_released_with_its_move_moves_the_channels_together() {
+    let start = Srgba::rgb(0.6, 0.4, 0.2);
+    let mut rig = PanelRig::new(ColorPanelMode::RgbSliders);
+    rig.set_colors([start, BLUE]);
+    let from = slider(&rig, 0).center();
+    let to = from + Vec2::new(-30.0, 0.0);
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![moved(from)]);
+    rig.fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    rig.fixture.frame(vec![moved(to), craft_ui::testing::pointer::release(to)]).settle();
+    let (before, after) = committed(&rig);
+    assert!(after[0] < before[0] && after[1] < before[1] && after[2] < before[2], "every channel fell with red ({before:?}, {after:?})");
+    assert!(in_proportion(&before, &after, 0, 3), "in proportion to the start ({before:?}, {after:?})");
 }
 
 /// A Shift drag the host's colour change cancels reports no before: the document moved, so there is nothing to undo to.

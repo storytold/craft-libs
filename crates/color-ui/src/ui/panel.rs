@@ -1158,6 +1158,12 @@ impl Body<'_> {
             }
         };
         let event = match event {
+            // A drag the pointer began with the modifier held is a tandem from its start, so a commit that comes with
+            // no update between still moves the other channels.
+            event @ EditEvent::Begin { .. } if together && pressed => {
+                self.kept.tandem = Some(Tandem { slot, anchor });
+                return self.channel_event(model, current, channel, event);
+            }
             EditEvent::Update { id, value, .. } if (together && pressed) || kept.is_some() => {
                 self.kept.tandem = Some(Tandem { slot, anchor });
                 EditEvent::update(id, moved(value))
@@ -1195,8 +1201,9 @@ impl Body<'_> {
             self.kept.tandem = None;
         }
         let together = tandem && ui.input(|input| input.modifiers.shift || input.modifiers.command);
-        // Only a pointer drag starts moving the channels together: a Shift wheel turn moves its channel alone.
-        let pressed = ui.input(|input| input.pointer.primary_down());
+        // Only a pointer drag starts moving the channels together: a Shift wheel turn moves its channel alone. The
+        // release pass counts, so a quick drag whose only move comes with the release still moves them.
+        let pressed = ui.input(|input| input.pointer.primary_down() || input.pointer.primary_released());
         if !together && let Some(kept) = self.kept.tandem.as_mut() {
             // The modifier went up: the next press anchors on the colour then, even if the pointer has not moved.
             kept.anchor = None;
