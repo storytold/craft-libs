@@ -27,6 +27,10 @@ assert!(scc.starts_with(b"Scenarist_SCC V1.0"));
   and the SMPTE ST 334-2 caption distribution packet.
 - `plain_text` strips inline tags and decodes the common entities, for display or for formats
   without markup.
+- Optional feature `mov-text` provides MP4 Timed Text (`mov_text` / `tx3g`, 3GPP TS 26.245)
+  sample decoding, encoding, modifier box parsing (`styl`, `hlit`, `hclr`, `krok`, `dlay`, `href`,
+  `tbox`, `blnk`, `wrap`), and `Tx3gConfig` sample entry parsing/writing for ISO BMFF (`.mp4`) and
+  QuickTime (`.mov`) subtitle tracks.
 
 ## Time
 

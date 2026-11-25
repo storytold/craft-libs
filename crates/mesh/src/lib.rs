@@ -31,10 +31,23 @@
 #![forbid(unsafe_code)]
 // The helpers the formats share are not all used by every subset of them.
 #![cfg_attr(
-    not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf", feature = "fbx", feature = "threemf")),
+    not(all(
+        feature = "stl",
+        feature = "obj",
+        feature = "ply",
+        feature = "gltf",
+        feature = "fbx",
+        feature = "threemf",
+        feature = "dae",
+        feature = "abc"
+    )),
     allow(dead_code, unused_imports)
 )]
 
+#[cfg(feature = "abc")]
+pub mod abc;
+#[cfg(feature = "dae")]
+pub mod dae;
 #[cfg(feature = "fbx")]
 pub mod fbx;
 #[cfg(feature = "gltf")]
@@ -448,6 +461,16 @@ pub struct Material {
     pub occlusion_texture: Option<TextureRef>,
     pub occlusion_strength: f32,
     pub emissive_texture: Option<TextureRef>,
+    /// Clearcoat layer strength in `0..=1` (glTF `KHR_materials_clearcoat`).
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
+    pub clearcoat_texture: Option<TextureRef>,
+    pub clearcoat_roughness_texture: Option<TextureRef>,
+    /// Sheen colour factor (linear RGB) and roughness (glTF `KHR_materials_sheen`).
+    pub sheen_color: [f32; 3],
+    pub sheen_roughness: f32,
+    pub sheen_color_texture: Option<TextureRef>,
+    pub sheen_roughness_texture: Option<TextureRef>,
 }
 
 impl Default for Material {
@@ -468,6 +491,14 @@ impl Default for Material {
             occlusion_texture: None,
             occlusion_strength: 1.0,
             emissive_texture: None,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            clearcoat_texture: None,
+            clearcoat_roughness_texture: None,
+            sheen_color: [0.0; 3],
+            sheen_roughness: 0.0,
+            sheen_color_texture: None,
+            sheen_roughness_texture: None,
         }
     }
 }
@@ -742,7 +773,17 @@ impl Scene {
             }
         }
         for m in &self.materials {
-            let slots = [m.base_color_texture, m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture];
+            let slots = [
+                m.base_color_texture,
+                m.metallic_roughness_texture,
+                m.normal_texture,
+                m.occlusion_texture,
+                m.emissive_texture,
+                m.clearcoat_texture,
+                m.clearcoat_roughness_texture,
+                m.sheen_color_texture,
+                m.sheen_roughness_texture,
+            ];
             if slots.iter().flatten().any(|t| t.image >= self.images.len()) {
                 return bad(format!("material `{}` names an image that does not exist", m.name));
             }
