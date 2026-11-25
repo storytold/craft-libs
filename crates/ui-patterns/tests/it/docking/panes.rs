@@ -6,6 +6,7 @@ use craft_ui::docking::GroupDrag;
 use craft_ui::patterns::dock::{PaneArea, PaneCommands, PaneContent, PaneEdges, PanePlace, PaneRequest, PaneSpec, PaneState};
 use craft_ui::runtime::commands::{FireSource, fire};
 use craft_ui::runtime::{drag, keys};
+use craft_ui::testing::layout::allocate;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
@@ -17,6 +18,11 @@ const ROOM: Vec2 = Vec2::new(900.0, 600.0);
 const FLOAT: Rect = Rect { min: Pos2::new(300.0, 200.0), max: Pos2::new(540.0, 360.0) };
 /// Where a floating frame's title row is first tried from its corner; [`Bed::title`] steps past any button there.
 const TITLE_AT: Vec2 = Vec2::new(24.0, 10.0);
+/// The content of the pane's body. A pane's window sizes to its content: with an empty body its title row, and the
+/// move band under it, would be only as wide as the row's Float and Close buttons, so no point of the band would be
+/// free of a button, and a press on a button over the band is the button's and never moves the window. A body half as
+/// wide and high as the frame, as a real pane has content, leaves the band free room before the buttons at its end.
+const BODY: Vec2 = Vec2::new(120.0, 80.0);
 /// How far past a button's bounds [`Bed::title`] steps, clear of the button's part.
 const PAST_BUTTON: f32 = 8.0;
 
@@ -37,7 +43,9 @@ impl PaneContent<u32> for Panes {
         Some(self.state.get())
     }
 
-    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        allocate(ui, BODY);
+    }
 }
 
 /// A pane area of one pane starting at `start`, with what the app saw.
@@ -89,9 +97,9 @@ impl Bed {
     }
 
     /// A point on the floating pane's title row where the window's move band takes the press: clear of the row's
-    /// buttons (Float and Close). A press on a button over the band is the button's and never moves the window, and in
-    /// a pane's window, which sizes to its content, the row's buttons may lie at the fixed corner offset, so the point
-    /// steps past every button there.
+    /// buttons (Float and Close). A press on a button over the band is the button's and never moves the window, so the
+    /// point steps past any button at the fixed corner offset; the pane's body ([`BODY`]) keeps the band wider than the
+    /// buttons.
     fn title(&self) -> Pos2 {
         let frame = self.state.get().float_rect.unwrap_or(FLOAT);
         let y = frame.min.y + TITLE_AT.y;
