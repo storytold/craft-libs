@@ -3660,7 +3660,6 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `pub fn new(defs: Vec<CommandDef>, generation: u64) -> Result<Self, CommandDefError>`. A catalog of `defs`; `generation` changes when the app's rows do. Refuses two defs with one id (`Duplicate`) and a
   - `pub fn replace_defaults(mut self, id: impl Into<String>, bindings: Vec<Binding>) -> Self`. Gives the linked set's command `id` the default chords `bindings` in place of the set's own; an empty list drops
   - `pub fn typing_rule(mut self, rule: TypingRule) -> Self`. Sets which chords fire while a text component has the keyboard. The keymap's default,
-  - `pub fn shown_only<I: Into<String>>(mut self, ids: impl IntoIterator<Item = I>) -> Self`. Makes the chords of the catalog's commands `ids` shown only: the app dispatches their keys with a keymap of its
   - `pub fn generation(&self) -> u64`. The app's version of the catalog. The board rebuilds the keymap when it differs from the last frame's, and never
   - `pub fn defs(&self) -> &[CommandDef]`. The catalog's rows in the order the app gave them, each with its scope (always [`Scope::app`]), kind and
 - `craft_ui::runtime::commands::CommandGate`: `pub struct CommandGate`. The app's one gate over commands: a dialog is open, a workspace is not ready, a recorder has the keys or an
