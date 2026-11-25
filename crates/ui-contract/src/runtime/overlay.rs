@@ -26,7 +26,8 @@ pub enum Backdrop {
     Scrim,
 }
 
-/// An overlay's place in the order. `Rank` is the only place a layer's egui order is chosen.
+/// An overlay's place in the order. `Rank` chooses a layer's egui order; a popup that stands among the floating
+/// windows (an iconic column's flyout) shares theirs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Rank {
@@ -183,6 +184,9 @@ pub struct OpenEntry {
     pub(crate) place: Option<usize>,
     /// The dialog of a dialog host the layer shows for (`stack_place`).
     dialog: Option<Id>,
+    /// A popup that stands among the floating windows (`Overlay::among_windows`, a dock column's flyout): left to
+    /// egui's area order with them, so the last of them opened or pressed is on top.
+    pub(crate) among_windows: bool,
 }
 
 /// A replay moves the entry's screen rects with its record; the rest stays.
@@ -233,6 +237,7 @@ impl OpenEntry {
             region: None,
             place: None,
             dialog: None,
+            among_windows: false,
         }
     }
 
@@ -541,10 +546,15 @@ pub fn drawing_parent(ctx: &Context) -> Option<Id> {
 
 /// The tier a layer of `rank` opened now shows in: the higher of its rank's and that of the layer whose body is
 /// running. egui sorts layers by tier before the family order, so a floating window opened inside a modal's family
-/// shows in the modal's tier, above its parent, and takes input.
-pub(crate) fn layer_tier(ctx: &Context, rank: Rank) -> Tier {
+/// shows in the modal's tier, above its parent, and takes input. A layer that stands among the floating windows
+/// (`among_windows`) shows in their tier, so it joins their order wherever it is opened.
+pub(crate) fn layer_tier(ctx: &Context, rank: Rank, among_windows: bool) -> Tier {
     let parent = with_pass(ctx, |pass| pass.drawing.last().map(|(_, tier)| *tier));
-    parent.map_or(rank.tier(), |parent| parent.max(rank.tier()))
+    let own = if among_windows { Tier::Window } else { rank.tier() };
+    match parent {
+        None => own,
+        Some(parent) => parent.max(own),
+    }
 }
 
 /// Whether the layer `id`, open in this pass, faded out in the last one: it opens anew.
@@ -916,14 +926,14 @@ pub(crate) fn end_pass(ctx: &Context) {
         persist.raised.retain(|id, _| roots.contains(id));
         persist.appeared.retain(|id, _| current.iter().any(|entry| entry.id == *id));
         let before = families(&current, &persist.raised);
-        if let Some(point) = pressed
-            && let Some(hit) = before
+        if let Some(point) = pressed {
+            let hit = before
                 .iter()
                 .rev()
-                .find(|members| members.iter().filter(live).filter(|entry| entry.interactable()).any(|entry| entry.rect.contains(point)))
-            && let Some(root) = hit.first()
-        {
-            stamp(root.id, persist);
+                .find(|members| members.iter().filter(live).filter(|entry| entry.interactable()).any(|entry| entry.rect.contains(point)));
+            if let Some(root) = hit.and_then(|members| members.first()) {
+                stamp(root.id, persist);
+            }
         }
         let families = families(&current, &persist.raised);
         let mut order: Vec<Layer> = Vec::new();
@@ -933,13 +943,16 @@ pub(crate) fn end_pass(ctx: &Context) {
         persist.stack.clear();
         for members in &families {
             for member in members {
-                // A floating window or panel (`Rank::Window`) is left to egui's own area order, which raises a layer
-                // when it first shows and when it is pressed: the app's own egui windows stack with it in that one
-                // order, so a dialog the app opens later shows above it. Listed layers would go above every unlisted
-                // layer of their egui order, so a float opened from a listed layer (a panel floated from a full-window
-                // container) is listed too, above its parent. An OS window has no egui layer here.
+                // A floating window or panel (`Rank::Window`), and a popup that stands among them (an iconic column's
+                // flyout), are left to egui's own area order, which raises a layer when it first shows and when it is
+                // pressed: the app's own egui windows stack with them in that one order, so a dialog the app opens
+                // later shows above them, and opening a flyout or pressing it raises it as a window is raised. Listed
+                // layers would go above every unlisted layer of their egui order, so a window opened from a listed
+                // layer (a panel floated from a full-window container) is listed too, above its parent, and so is the
+                // flyout of a column inside it. An OS window has no egui layer here.
                 let over_listed = member.parent.is_some_and(|parent| listed.contains(&parent));
-                if !member.window && (member.rank != Rank::Window || over_listed) {
+                let windows_order = member.rank == Rank::Window || member.among_windows;
+                if !member.window && (!windows_order || over_listed) {
                     order.extend(member.cover);
                     order.push(member.layer);
                     listed.push(member.id);
