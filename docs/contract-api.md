@@ -1562,7 +1562,7 @@ Pointer values and the press lifecycle (8.1, 8.2), egui-free: the runtime conver
 - `craft_behavior::press::PressPick`: `pub struct PressPick<T> { pub target: T, pub sense: Sense, pub passed: bool }`. The press winner a root picks at a press position, as [`PressMachine::step`]'s `pick` returns it.
   - `pub fn new(target: T, sense: Sense) -> Self`. `target`, sensing `sense`, takes the press.
   - `pub fn passed(mut self) -> Self`. The press's click went to a shape above that passes its drag to this target.
-- `craft_behavior::press::PressStart`: `pub struct PressStart { pub origin: Pos2, pub button: PointerButton, pub time: f64, pub clicks: u32 }`. Where and when a press began.
+- `craft_behavior::press::PressStart`: `pub struct PressStart { pub origin: Pos2, pub button: PointerButton, pub time: f64, pub clicks: u32, pub handed: bool }`. Where and when a press began.
   - `pub const fn new(origin: Pos2, button: PointerButton, time: f64, clicks: u32) -> Self`. A press of `button` at `origin`.
 - `craft_behavior::press::PressState`: `pub struct PressState { pub phase: PressPhase, pub mods: Mods, pub sample: Option<PointerSample>, pub captured: bool, pub context: Option<Pos2> }`. A part's phase, the modifiers held, the pen sample and whether it holds the pointer.
   - `pub const IDLE: PressState`. A part with no press history.
@@ -2266,7 +2266,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn begin(&mut self)`. Opens a gesture.
   - `fn commit(&mut self)`. Commits the proposed value.
   - `fn cancel(&mut self, reason: CancelReason)`. Cancels the running gesture.
-- `craft_ui::contract::EditResponse`: `pub struct EditResponse<T> { pub response: Response, pub events: EditEvents<T>, pub submitted: bool, pub submit_mods: craft_keymap::Mods, pub activation_mods: craft_keymap::Mods, pub left_by_tab: Option<bool>, pub escaped: bool, pub unparsed: bool, pub validity: Validity<T>, pub shown: Option<Mixed<Arc<T>>>, pub value_text: Option<String>, pub tab: Option<bool>, pub caret: Option<usize>, pub hover: Hover }`. The output of a component that edits a value. Only `cx.edit_response()` builds it.
+- `craft_ui::contract::EditResponse`: `pub struct EditResponse<T> { pub response: Response, pub events: EditEvents<T>, pub submitted: bool, pub submit_mods: craft_keymap::Mods, pub activation_mods: craft_keymap::Mods, pub left_by_tab: Option<bool>, pub text_lost_focus: bool, pub escaped: bool, pub unparsed: bool, pub validity: Validity<T>, pub shown: Option<Mixed<Arc<T>>>, pub value_text: Option<String>, pub tab: Option<bool>, pub caret: Option<usize>, pub hover: Hover }`. The output of a component that edits a value. Only `cx.edit_response()` builds it.
   - `pub fn lifted(response: Response, events: EditEvents<T>, shown: Option<Mixed<Arc<T>>>) -> Self`. The response of a composite that edits one value through several child components: `events` are the edits of
   - `pub fn value(&self) -> Option<&T>`. The latest value the pass's events carry: a proposal, a commit or a set; `None` when nothing was edited or no
   - `pub fn map<U>(self, f: impl Fn(T) -> U) -> EditResponse<U>`. The response of a child component's edit as the response of the edit of a value built from it: the events, the
@@ -2368,7 +2368,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const NONE: HeaderParts`. No room for parts.
   - `pub const fn start(mut self, width: f32) -> Self`. `width` at the start edge.
   - `pub const fn end(mut self, width: f32) -> Self`. `width` at the end edge.
-- `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
+- `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub heads: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
   - `pub const fn new() -> Self`. A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
   - `pub const fn fill(mut self, kind: SurfaceKind) -> Self`. The surface of a band behind the header.
   - `pub const fn tint(mut self, tone: Tone) -> Self`. A band behind the header in `tone`'s tinted fill (a slicer's caption band); the header's title row takes the
@@ -2376,6 +2376,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn inset(mut self, pad: Pad) -> Self`. The padding tier between the container's edge and the header's content.
   - `pub const fn band(mut self, band: DragBand) -> Self`. What dragging the header does.
   - `pub const fn rule(mut self, on: bool) -> Self`. Whether a rule separates the header from the body.
+  - `pub const fn heads(mut self, on: bool) -> Self`. Whether the header is a title that heads the body as a rule would where the app asks for it
   - `pub const fn rule_above(mut self, on: bool) -> Self`. Whether a rule runs above the header.
   - `pub const fn inline(mut self, on: bool) -> Self`. Whether the header shares a line with the body.
   - `pub const fn trailing(mut self, on: bool) -> Self`. Whether the header has a trailing region for the container's controls.
@@ -2426,6 +2427,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::LeastWidth`: `pub enum LeastWidth { Popup, Dialog, DialogButton, DialogSideButton, Rail(std::num::NonZeroU8), WideDialog, SideMenu, DockColumn }`. A size role that sets the least width of a container's content or of a button.
   - `pub fn points(self, tokens: &craft_theme::Tokens) -> f32`. The width the role names in `tokens`.
 - `craft_ui::contract::LinkLabelInk`: `pub enum LinkLabelInk { Accent, Neutral }`. The ink of a field's label shown as a link ([`SideLabel::link`]), which opens its control's options. An app sets it
+- `craft_ui::contract::LinkLabelUnderline`: `pub enum LinkLabelUnderline { Edge, Inside }`. Where a one-line link label ([`SideLabel::link`]) draws its underline. An app sets it once at its root
 - `craft_ui::contract::ListDrag`: `pub struct ListDrag<K> { pub list: Id, pub keys: Vec<K>, pub grabbed: K }`. What a row drag carries through the drag session (8.4).
   - `pub fn new(list: Id, keys: Vec<K>, grabbed: K) -> Self`. A drag of `keys` from `list`, grabbed at `grabbed`.
 - `craft_ui::contract::Looks`: `pub struct Looks`. Only apps write `Looks`: a replacement for one component type's style function, keyed by its `StyleKey`.
@@ -2647,6 +2649,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Presence`: re-export of `craft_ui::runtime::motion::Presence`.
 - `craft_ui::contract::Progress`: re-export of `craft_ui::runtime::pending::Progress`.
 - `craft_ui::contract::Props`: re-export of `craft_ui_macros::Props` (outside these crates).
+- `craft_ui::contract::QuietHeader`: `pub enum QuietHeader { Ruled, Heads }`. Whether a titled header that draws no rule under it (a quiet title, [`HeaderRegion::heads`]) still heads its body as
 - `craft_ui::contract::Remember`: re-export of `craft_ui::runtime::memory::Remember`.
 - `craft_ui::contract::Rename`: `pub struct Rename<K> { pub key: K, pub name: String }`. A committed rename.
   - `pub fn new(key: K, name: impl Into<String>) -> Self`. The rename of `key` to `name`.
@@ -2882,7 +2885,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn offset(mut self, by: egui::Vec2) -> Self`. The place shifted by `by` from where it would sit; no change off `Anchored`.
   - `pub fn covering_anchor(mut self) -> Self`. The place, below or above its anchor, sliding over the anchor when it fits on neither side; no change off
   - `pub fn clear_of(mut self, rect: egui::Rect) -> Self`. The place keeping clear of `rect`; no change off `Anchored`.
-- `craft_ui::contract::overlay::PlacementChange`: `pub struct PlacementChange { pub rect: Rect, pub phase: GesturePhase, pub pointer: Option<Pos2>, pub kind: PlacementKind }`. A move or resize of a layer the user made, or of the OS window a viewport mount shows in, reported to
+- `craft_ui::contract::overlay::PlacementChange`: `pub struct PlacementChange { pub rect: Rect, pub phase: GesturePhase, pub pointer: Option<Pos2>, pub kind: PlacementKind, pub continued: bool }`. A move or resize of a layer the user made, or of the OS window a viewport mount shows in, reported to
 - `craft_ui::contract::overlay::PlacementKind`: `pub enum PlacementKind { Move, Size(ResizeEdge), Keyboard }`. What kind of gesture a `PlacementChange` reports.
 - `craft_ui::contract::overlay::Popup`: `pub struct Popup`. The open state of a container's layer that has an opener and no binding, driven from the opener's side.
   - `pub fn open<C: Component>(opener: impl Into<Id>, cx: &mut Cx<'_, C>)`. Opens the container hung from `opener` (a [`PopupHandle`] or the id of the opener's response).
@@ -3288,7 +3291,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)>`. Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
   - `pub fn size(&self) -> egui::Vec2`. The galley size.
   - `pub fn char_x(&self, chars: usize) -> f32`. Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
-- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey }`. How a text part behaves beyond its codec.
+- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub keep_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub keep_caret_on_open: bool, pub select_all: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub end_aligned: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool, pub whole_paste: Option<Arc<WholePaste>>, pub submit_key: SubmitKey, pub resting: Option<String> }`. How a text part behaves beyond its codec.
   - `pub fn new() -> Self`. Options with every default.
 - `craft_ui::primitives::TextOutcome`: `pub struct TextOutcome<V> { pub rect: Rect, pub draft: Option<String>, pub value: Option<V>, pub layout: Option<super::TextLayout>, pub caret_visible: bool, pub invalid: bool, pub committed: Option<craft_behavior::ParseNote>, pub composing: bool, pub completions: Vec<super::Completion>, pub clicked: bool }`. A text part's result this pass.
   - `pub const fn new(rect: Rect) -> Self`. An outcome over `rect` with no draft or value.
@@ -4717,6 +4720,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn ink(&self, ink: Ink) -> StyleColor`. The colour text and icons on a surface read in.
   - `pub fn control(&self) -> ControlMetrics`. The height, icon side, padding, gap and field widths of a control at the ambient size.
   - `pub fn glyph(&self) -> f32`. The side of a mark inside a control at the ambient size (`size.icon.glyph_sm`, `glyph_md`): an icon-only
+  - `pub fn button_height(&self) -> f32`. The height of a push button at the ambient size: `size.button` at the medium size, grown as a control's height
   - `pub fn glyph_role(&self) -> GlyphRole`. How the icon-only buttons of the scope show their glyph.
   - `pub fn control_of(&self, size: ControlSize) -> ControlMetrics`. `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's
   - `pub fn segment_control(&self) -> ControlMetrics`. `control`, with the side padding of a segment of a segmented control: `space.pad.control` at the small size
