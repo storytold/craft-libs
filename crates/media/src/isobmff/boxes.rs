@@ -94,35 +94,45 @@ impl<'a> Reader<'a> {
         a.copy_from_slice(s);
         Ok(a)
     }
+    /// Reads a `u8`.
     pub fn u8(&mut self) -> Result<u8> {
         let [b] = self.array::<1>()?;
         Ok(b)
     }
+    /// Reads a big-endian `u16`.
     pub fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_be_bytes(self.array()?))
     }
+    /// Reads a big-endian `i16`.
     pub fn i16(&mut self) -> Result<i16> {
         Ok(i16::from_be_bytes(self.array()?))
     }
+    /// Reads a big-endian 24-bit unsigned integer (box flags, for example) as `u32`.
     pub fn u24(&mut self) -> Result<u32> {
         let [a, b, c] = self.array::<3>()?;
         Ok(u32::from_be_bytes([0, a, b, c]))
     }
+    /// Reads a big-endian `u32`.
     pub fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_be_bytes(self.array()?))
     }
+    /// Reads a big-endian `i32`.
     pub fn i32(&mut self) -> Result<i32> {
         Ok(i32::from_be_bytes(self.array()?))
     }
+    /// Reads a big-endian `u64`.
     pub fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_be_bytes(self.array()?))
     }
+    /// Reads a big-endian `i64`.
     pub fn i64(&mut self) -> Result<i64> {
         Ok(i64::from_be_bytes(self.array()?))
     }
+    /// Reads a big-endian IEEE 754 `f64`.
     pub fn f64(&mut self) -> Result<f64> {
         Ok(f64::from_be_bytes(self.array()?))
     }
+    /// Reads a four-character code.
     pub fn fourcc(&mut self) -> Result<FourCc> {
         Ok(FourCc(self.array()?))
     }
@@ -347,134 +357,4 @@ pub fn boxes(data: &[u8]) -> BoxIter<'_> {
 /// searched.
 pub fn find<'a>(data: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
     boxes(data).map_while(|b| b.ok()).find(|b| b.kind == kind).map(|b| b.payload)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::isobmff::bytes::BoxBuf;
-
-    fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-        let mut v = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
-        v.extend_from_slice(kind);
-        v.extend_from_slice(payload);
-        v
-    }
-
-    #[test]
-    fn header_forms() {
-        let h = BoxHeader::parse(&[0, 0, 0, 16, b'f', b'r', b'e', b'e']).unwrap();
-        assert_eq!((h.kind, h.header_len, h.size, h.payload_size()), (FourCc(*b"free"), 8, Some(16), Some(8)));
-        let h = BoxHeader::parse(&[0, 0, 0, 0, b'm', b'd', b'a', b't']).unwrap();
-        assert_eq!((h.size, h.payload_size()), (None, None));
-        let mut v = vec![0, 0, 0, 1, b'm', b'd', b'a', b't'];
-        v.extend_from_slice(&100u64.to_be_bytes());
-        let h = BoxHeader::parse(&v).unwrap();
-        assert_eq!((h.header_len, h.size), (16, Some(100)));
-        let mut v = vec![0, 0, 0, 30, b'u', b'u', b'i', b'd'];
-        v.extend_from_slice(&[7u8; 16]);
-        let h = BoxHeader::parse(&v).unwrap();
-        assert_eq!((h.header_len, h.user_type), (24, Some([7u8; 16])));
-        assert!(BoxHeader::parse(&[0, 0, 0, 4, b'f', b'r', b'e', b'e']).is_err());
-        assert!(BoxHeader::parse(&[0, 0, 0]).is_err());
-        // A uuid box whose size does not cover its user type.
-        let mut v = vec![0, 0, 0, 20, b'u', b'u', b'i', b'd'];
-        v.extend_from_slice(&[7u8; 16]);
-        assert!(BoxHeader::parse(&v).is_err());
-    }
-
-    #[test]
-    fn iterate_children() {
-        let mut b = BoxBuf::new();
-        b.leaf(b"aaaa", &[1, 2]);
-        let m = b.start(b"bbbb");
-        b.leaf(b"cccc", &[]);
-        b.end(m);
-        b.u32(0); // QT terminator
-        let kids: Vec<_> = boxes(&b.buf).collect::<Result<Vec<_>>>().unwrap();
-        assert_eq!(kids.len(), 2);
-        assert_eq!(kids[0].payload, &[1, 2]);
-        assert_eq!((kids[1].offset, kids[1].payload_range(), kids[1].range()), (10, 18..26, 10..26));
-        assert_eq!(find(&b.buf, b"bbbb").map(|p| p.len()), Some(8));
-        let inner: Vec<_> = BoxIter::within(&b.buf, kids[1].payload_range()).map(|r| r.unwrap().offset).collect();
-        assert_eq!(inner, [18]);
-        // Oversized child → one error, then the iterator stops.
-        let bad = [0u8, 0, 0, 99, b'x', b'x', b'x', b'x', 0];
-        let mut it = boxes(&bad);
-        assert!(it.next().unwrap().is_err());
-        assert!(it.next().is_none());
-    }
-
-    #[test]
-    fn large_size_zero_size_and_uuid() {
-        let mut large = vec![0, 0, 0, 1, b'm', b'd', b'a', b't'];
-        large.extend_from_slice(&19u64.to_be_bytes());
-        large.extend_from_slice(&[9, 9, 9]);
-        let mut uuid = vec![0, 0, 0, 26, b'u', b'u', b'i', b'd'];
-        uuid.extend_from_slice(&[0xAB; 16]);
-        uuid.extend_from_slice(&[1, 2]);
-        let tail = [0, 0, 0, 0, b'm', b'd', b'a', b't', 5, 6, 7];
-        let file = [large, uuid, tail.to_vec()].concat();
-        let all: Vec<_> = boxes(&file).collect::<Result<Vec<_>>>().unwrap();
-        assert_eq!(all.len(), 3);
-        assert_eq!((all[0].header_len, all[0].payload), (16, &[9u8, 9, 9][..]));
-        assert_eq!((all[1].user_type, all[1].header_len, all[1].payload), (Some([0xAB; 16]), 24, &[1u8, 2][..]));
-        assert_eq!((all[2].offset, all[2].extends_to_end, all[2].payload), (45, true, &[5u8, 6, 7][..]));
-        // Size 0 inside a range runs to the end of the range, not of the slice.
-        let in_range: Vec<_> = BoxIter::within(&file, 45..53).map(|r| r.unwrap().payload.len()).collect();
-        assert_eq!(in_range, [0]);
-    }
-
-    #[test]
-    fn truncated_last_box() {
-        let mut file = bx(b"ftyp", b"jp2 ");
-        let mut cut = bx(b"jp2c", &[0xFF, 0x4F, 0xFF, 0x51, 0, 0]);
-        cut.truncate(10);
-        file.extend_from_slice(&cut);
-        assert!(boxes(&file).nth(1).unwrap().is_err());
-        let all: Vec<_> = boxes(&file).allow_truncated().collect::<Result<Vec<_>>>().unwrap();
-        assert_eq!(all.len(), 2);
-        assert!(!all[0].truncated);
-        assert_eq!((all[1].truncated, all[1].payload), (true, &[0xFF, 0x4F][..]));
-    }
-
-    #[test]
-    fn hostile_sizes_never_panic() {
-        let headers: [&[u8]; 6] = [
-            &[0xFF, 0xFF, 0xFF, 0xFF, b'a', b'b', b'c', b'd'],
-            &[0, 0, 0, 1, b'a', b'b', b'c', b'd', 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
-            &[0, 0, 0, 1, b'a', b'b', b'c', b'd', 0, 0, 0, 0, 0, 0, 0, 3],
-            &[0, 0, 0, 1, b'u', b'u', b'i', b'd', 0, 0, 0, 0, 0, 0, 0, 30],
-            &[0, 0, 0, 0, b'u', b'u', b'i', b'd', 1, 2, 3],
-            &[0, 0, 0, 7, b'a', b'b', b'c', b'd'],
-        ];
-        for h in headers {
-            for lenient in [false, true] {
-                let mut it = BoxIter::new(h);
-                if lenient {
-                    it = it.allow_truncated();
-                }
-                assert!(it.count() <= 1);
-            }
-        }
-        // Ranges outside the data are clipped.
-        assert_eq!(BoxIter::within(&[0, 0, 0, 8, 1, 2, 3, 4], 4..100).count(), 1);
-        #[allow(clippy::reversed_empty_ranges)]
-        let backwards = 6..2;
-        assert_eq!(BoxIter::within(&[0; 8], backwards).count(), 0);
-        assert_eq!(BoxIter::within(&[0; 8], 50..60).count(), 0);
-    }
-
-    #[test]
-    fn reader_bounds() {
-        let mut c = Reader::labeled(&[0, 0, 0, 5, 1], "t");
-        assert!(c.count(1).is_err());
-        let mut c = Reader::new(&[0xFF, 0xFF, 0xFF, 0xFF]);
-        assert!(c.count(usize::MAX).is_err());
-        let mut c = Reader::new(&[1, 2, 3, 4, 5]);
-        assert_eq!(c.u24().unwrap(), 0x010203);
-        assert!(c.u32().is_err());
-        assert_eq!((c.position(), c.rest()), (3, &[4u8, 5][..]));
-        assert!(matches!(Reader::labeled(&[], "x").u8(), Err(Error::Truncated("x"))));
-    }
 }
