@@ -1404,6 +1404,23 @@ mod store {
         serde_json::from_slice(&std::fs::read(dir.join("os-fonts.json")).unwrap()).unwrap()
     }
 
+    /// Each copy in `family` matches the store's file, and the ledger lists exactly these copies.
+    fn assert_copies_match_store_and_ledger(dir: &Path, family: &Path, names: &[&str]) {
+        for name in names {
+            assert_eq!(std::fs::read(family.join(name)).unwrap(), std::fs::read(dir.join("testsans").join(name)).unwrap());
+        }
+        let l = ledger(dir);
+        assert_eq!((l["version"].as_u64(), l["families"][0]["family"].as_str()), (Some(1), Some("Test Sans")));
+        let files = l["families"][0]["files"].as_array().unwrap();
+        assert_eq!(files.len(), names.len());
+        for f in files {
+            let path = PathBuf::from(f["path"].as_str().unwrap());
+            assert_eq!(f["sha256"].as_str().unwrap(), sha256_hex(&std::fs::read(&path).unwrap()));
+            assert_eq!((f["state"].as_str(), f["mechanism"].as_str()), (Some("active"), Some("copy")));
+        }
+        assert_eq!(files[0]["postscript"], json!(["TestSans-Bold"]));
+    }
+
     #[test]
     fn a_family_made_available_to_all_apps_is_withdrawn_exactly() {
         let server = Server::start();
@@ -1418,19 +1435,7 @@ mod store {
         let names = ["TestSans-Bold.ttf", "TestSans-Italic.ttf", "TestSans-Regular.ttf"];
         assert_eq!(entries(&family), names, "fonts only: no licence, no temporary files");
         assert_eq!(copies, names.map(|n| family.join(n)));
-        for name in names {
-            assert_eq!(std::fs::read(family.join(name)).unwrap(), std::fs::read(dir.join("testsans").join(name)).unwrap());
-        }
-        let l = ledger(&dir);
-        assert_eq!((l["version"].as_u64(), l["families"][0]["family"].as_str()), (Some(1), Some("Test Sans")));
-        let files = l["families"][0]["files"].as_array().unwrap();
-        assert_eq!(files.len(), 3);
-        for f in files {
-            let path = PathBuf::from(f["path"].as_str().unwrap());
-            assert_eq!(f["sha256"].as_str().unwrap(), sha256_hex(&std::fs::read(&path).unwrap()));
-            assert_eq!((f["state"].as_str(), f["mechanism"].as_str()), (Some("active"), Some("copy")));
-        }
-        assert_eq!(files[0]["postscript"], json!(["TestSans-Bold"]));
+        assert_copies_match_store_and_ledger(&dir, &family, &names);
         assert!(store.is_available(GOOGLE_FONTS, "test sans"));
         // Again: the copies, which the catalog now lists as system fonts, aren't conflicts.
         assert_eq!(store.make_available(GOOGLE_FONTS, "Test Sans").unwrap(), copies);
