@@ -255,6 +255,32 @@ fn a_completed_checkbox_sweep_that_crossed_a_box_below_its_owner_still_sets_the_
 }
 
 #[trial]
+fn a_completed_checkbox_sweep_taken_after_its_owner_asked_still_sets_the_owner() {
+    let values = Rc::new(RefCell::new([false; 3]));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut values = shown.borrow_mut();
+        for (value, label) in values.iter_mut().zip(["Owner", "Crossed checkbox", "Next checkbox"]) {
+            Checkbox::new(Bind::bound(value)).label(label).show(ui);
+        }
+    });
+    fixture.settle();
+    let owner = fixture.by_label("Owner").expect("owner");
+    let crossed = fixture.by_label("Crossed checkbox").expect("crossed").center();
+    let next = fixture.by_label("Next checkbox").expect("next").center();
+
+    fixture.press(&owner);
+    // The crossing move, the release over the crossed box and the next press reach the sweep in one batch, so it finishes
+    // before either box it passed has taken its value: the owner asks first, and the crossed box takes it after.
+    fixture.frame(vec![pointer::moved(crossed), pointer::release(crossed), pointer::moved(next), pointer::press(next)]);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [true, true, false], "the owner, drawn before the box it crossed, takes the value that box took");
+    fixture.frame(vec![pointer::release(next)]);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [true, true, true], "the next click still toggles its own checkbox");
+}
+
+#[trial]
 fn a_completed_checkbox_sweep_allows_an_immediate_click_on_its_owner() {
     for batched_click in [false, true] {
         let values = Rc::new(RefCell::new([false; 2]));
