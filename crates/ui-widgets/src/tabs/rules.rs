@@ -19,6 +19,20 @@ pub enum DocumentTabLook {
     Semibold,
 }
 
+/// The look of a tab's close button app-wide. An app sets it once at its root (`RootEnv::values`); the default is
+/// `Button`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum TabCloseLook {
+    /// An icon button as tall as the tab's content, which the pointer fills.
+    #[default]
+    Button,
+    /// The × alone, a small icon (`size.icon.sm`) in the muted ink that turns to the text colour under the pointer, with
+    /// no fill; it takes clicks in a square of the button's width. Production VectorCraft's.
+    Glyph,
+}
+
 /// The look of panel tabs ([`TabKind::Panel`]): a strip's choice ([`TabStrip::panel_look`](super::TabStrip)), which a
 /// dock makes for its groups' tabs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]

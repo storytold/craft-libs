@@ -1,17 +1,17 @@
 config_version = 1
 
 [[exception]]
-name = "page-picture-paper"
+name = "tile-page-paper-white"
 kind = "marker"
 rule = "raw-colour/const"
 path = "crates/ui-widgets/src/tile_grid/tile.rs"
-reason = "The paper of a page picture is the document's blank page, data rather than a theme surface."
+reason = "A page picture's paper is a document's blank page, which is data (`DataColor`), not a theme surface."
 count = 1
 
 [[exception]]
-name = "page-picture-size"
+name = "tile-page-proportion"
 kind = "marker"
 rule = "props/point-size"
 path = "crates/ui-widgets/src/tile_grid/tile.rs"
-reason = "A page picture takes the document's own width and height, in any one unit, for its shape only."
+reason = "`Tile::page` takes a page's width and height in any one unit: only their proportion counts, never a size in points."
 count = 1

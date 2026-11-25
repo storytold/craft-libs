@@ -139,6 +139,8 @@ pub use craft_flow as flow;
 pub use craft_font_catalog as font_catalog;
 #[cfg(feature = "font-manager")]
 pub use craft_font_manager as font_manager;
+#[cfg(feature = "font-os-windows")]
+pub use craft_font_os_windows as font_os_windows;
 #[cfg(feature = "font-store")]
 pub use craft_font_store as font_store;
 #[cfg(feature = "font-subset")]

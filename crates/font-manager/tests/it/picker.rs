@@ -605,6 +605,9 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
     fx.settle();
 
     let field = fx.by_label("Font family").expect("the family field");
+    // Unfocus after Escape so the click below is a focusing click that selects all text in Plain mode.
+    fx.click_at(field.rect.right_center() + egui::vec2(20.0, 0.0));
+    fx.settle();
     fx.click(&field);
     fx.settle();
     fx.type_text("x");
@@ -620,6 +623,76 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
     fx.settle();
     assert_eq!(seen.borrow().family, "Zapfino", "a name that is no family is applied as typed");
     assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some("Zapfino"));
+}
+
+#[trial]
+fn clicking_the_font_field_selects_all_without_opening_dropdown_and_chevron_toggles() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let words = FontPickerWords::default();
+    let (recently, all) = (words.recently_used.as_str(), words.all_fonts.as_str());
+
+    // 1. Clicking the text field focuses and selects all text without opening the dropdown popup
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(!present(&fx, recently), "recently used fonts do not open on field click");
+    assert!(!present(&fx, all), "all fonts do not open on field click");
+
+    // 2. Typing in the field opens the dropdown filtered on matches
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "Hack"), "typing in the field opens the dropdown with matches");
+
+    // Pressing Enter commits the typed family and closes the dropdown
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "committing typed query closes the dropdown");
+
+    // 3. Clicking the dropdown arrow (chevron) toggles the dropdown list open
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    assert!(present(&fx, recently), "recently used fonts show up on chevron click");
+    assert!(present(&fx, all), "all fonts show up on chevron click");
+
+    // 4. Clicking inside the field while already open keeps dropdown open
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(present(&fx, all), "dropdown remains open on click inside field");
+
+    // 5. Clicking the chevron button again toggles the dropdown closed
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "dropdown closes on chevron click toggle");
+}
+
+#[trial]
+fn clicking_the_focused_plain_box_places_caret_instead_of_selecting_all() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let field = fx.by_label("Font family").expect("the family field");
+
+    // 1. The first click gives the field focus and selects all text
+    fx.click(&field);
+    fx.settle();
+
+    // 2. Clicking again after double-click interval places the caret before the "I" without re-selecting all
+    fx.advance(1.0);
+    fx.click_at(field.rect.left_center() + egui::vec2(6.0, 0.0));
+    fx.settle();
+
+    // 3. Typing "Ha" inserts before "Inter" producing "HaInter" rather than replacing the text with "Ha"
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "HaInter"), "typing inserts at placed caret before the existing family name");
+    assert!(!present(&fx, "Hack"), "Hack is not suggested because draft is HaInter, not Ha");
 }
 
 #[trial]
@@ -684,6 +757,48 @@ fn a_ribbons_font_box_is_short_and_keeps_its_width() {
     assert!((ribbon - length).abs() < 0.5, "the ribbon's font box is the small field length {length}: {ribbon}");
     let long = picker_width("Source Sans Pro Semibold Condensed Extra", true);
     assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
+}
+
+/// In a toolbar (`InBar`) or when `compact` is set, the font box is held at the small field length,
+/// narrower than in a form, and keeps its width whichever family it shows.
+#[trial]
+fn a_bars_font_box_is_short_and_keeps_its_width() {
+    let bar_width = |family: &'static str, in_bar: bool, compact: bool| {
+        let catalog = catalog_of(&[INTER_REGULAR]);
+        let mut fx = Fixture::new(move |ui| {
+            let mut family = family.to_owned();
+            let mut show = |ui: &mut egui::Ui| {
+                let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain);
+                if compact {
+                    picker = picker.compact(true);
+                }
+                let _ = picker.show(ui);
+            };
+            if in_bar {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(craft_ui::contract::InBar(true));
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fx.in_room(Room::Window);
+        fx.settle();
+        fx.by_label("Font family").expect("the picker").rect.width()
+    };
+    let standard = bar_width("Inter", false, false);
+    let bar = bar_width("Inter", true, false);
+    let opt_in = bar_width("Inter", false, true);
+    assert!(bar < standard - 0.5, "the bar's font box is narrower: {bar} against {standard}");
+    assert!((bar - opt_in).abs() < 0.5, "the opt-in compact picker matches the bar picker: {opt_in} against {bar}");
+    let length = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.field.sm;
+    assert!((bar - length).abs() < 0.5, "the bar's font box is the small field length {length}: {bar}");
+    let long = bar_width("Source Sans Pro Semibold Condensed Extra", true, false);
+    assert!((long - bar).abs() < 0.5, "a long family name leaves its width in a bar: {long} against {bar}");
 }
 
 /// The width of a plain picker over "Inter" in a ribbon group's place, in a row beside a block that leaves it 60 pt of
@@ -834,6 +949,64 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
         tints.iter().all(|tint| *tint == text_disabled),
         "a disabled picker paints its warning icon in text.disabled {text_disabled:?}, not {tints:?}"
     );
+}
+
+/// Texture ids of textured meshes whose centre falls inside `rect`.
+fn mesh_textures(shapes: &[egui::Shape], rect: egui::Rect, out: &mut Vec<egui::TextureId>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => mesh_textures(inner, rect, out),
+            egui::Shape::Mesh(mesh) if rect.contains(mesh.calc_bounds().center()) => {
+                out.push(mesh.texture_id);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[trial]
+fn the_missing_font_warning_icon_is_a_filled_triangle() {
+    use std::cell::Cell;
+
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let seen = Rc::new(Cell::new(None));
+    let held = Rc::clone(&seen);
+    let mut family = "Gotham".to_owned();
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).shown_as("Inter").show(ui);
+        held.set(Some(out.edit.response.id));
+    });
+    fx.pixels_per_point(2.0);
+    fx.record_paint();
+    fx.in_room(Room::Window);
+    fx.settle();
+    let picker = seen.get().expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    let mut paint = fx.take_paint().expect("recorded paint output");
+    let mut textures = Vec::new();
+    for clipped in &paint.shapes {
+        mesh_textures(std::slice::from_ref(&clipped.shape), mark, &mut textures);
+    }
+    let texture = *textures.first().expect("the missing-font warning icon paints a texture");
+    let image = paint
+        .textures_delta
+        .set
+        .get(&texture)
+        .and_then(|deltas| deltas.last())
+        .map(|delta| match &delta.image {
+            egui::ImageData::Color(color) => color,
+        })
+        .expect("the warning icon texture was uploaded");
+    let [w, h] = image.size;
+    let alpha = |fx: f32, fy: f32| {
+        let x = ((w as f32 * fx) as usize).min(w - 1);
+        let y = ((h as f32 * fy) as usize).min(h - 1);
+        image.pixels[y * w + x].a()
+    };
+    let (left, right, center) = (alpha(0.34, 0.69), alpha(0.66, 0.69), alpha(0.50, 0.48));
+    paint.textures_delta.clear();
+    assert!(left > 128 && right > 128, "the triangle interior is filled, not an outline (left={left}, right={right}, size={w}x{h})");
+    assert!(center < 128, "the exclamation stem stays knocked out inside the filled triangle (center={center})");
 }
 
 /// The library picker's family and settings, as the last pass left them.

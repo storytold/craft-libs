@@ -477,7 +477,9 @@ impl<'a> CanvasScrollbars<'a> {
     }
 
     fn bars(&self, view: &CanvasView, rect: Rect, style: &ScrollbarsStyle, held: Option<&HeldThumb>) -> Bars {
-        Bars::of(view, self.document, self.overscroll, !self.vertical_only, rect, style, held)
+        // A horizontal thumb held keeps its bar until the press ends, so its release closes the drag.
+        let horizontal = !self.vertical_only || held.is_some_and(|held| held.on(Axis::X));
+        Bars::of(view, self.document, self.overscroll, horizontal, rect, style, held)
     }
 }
 
@@ -547,6 +549,16 @@ impl Component for CanvasScrollbars<'_> {
         }
         let Some(view) = cx.value().copied() else { return };
         let mut held = cx.press_slot::<HeldThumb>().clone();
+        // A press that ended while the bars weren't shown (a full-screen view drops them) never reached them: its thumb
+        // is idle again, and the extent kept for it is stale.
+        let stale = held.as_ref().is_some_and(|held| {
+            let thumb = thumb_of(if held.horizontal { HORIZONTAL } else { VERTICAL });
+            matches!(cx.part(thumb).press.phase, PressPhase::Idle | PressPhase::Hover)
+        });
+        if stale {
+            *cx.press_slot::<HeldThumb>() = None;
+            held = None;
+        }
         let bars = self.bars(&view, cx.rect, cx.style, held.as_ref());
         let mut ended = false;
         let rtl = cx.flow.is_rtl();
