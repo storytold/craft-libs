@@ -69,6 +69,7 @@ pub(super) fn merge_entry(manifest: &mut Manifest, index: &Index, family: &Famil
                 license: family.license.clone(),
                 license_file: None,
                 files: Vec::new(),
+                available_to_all: None,
             });
             manifest.families.len() - 1
         }
