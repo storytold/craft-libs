@@ -14,10 +14,11 @@ result matches libheif to within one code value:
 - `imir` axis 0 flips top and bottom, as libheif writes and reads it (heic-rs names it the other way);
 - a grid's ICC profile may sit on its tiles.
 
-Single pictures and grid-tiled photos, 4:2:0 and monochrome, 8- to 10-bit, alpha auxiliary images
-(other auxiliary images — HDR gain maps, depth — are ignored), the container's rotation/mirror/crop,
-ICC, EXIF and XMP, and the file's thumbnail item. 4:2:2 and 4:4:4 (Canon/Sony "HIF") are refused
-with `Error::Unsupported`: heic-rs 0.1.1 loses sync on them. Read-only.
+Single pictures and grid-tiled photos, 4:2:0, 4:2:2 (Canon and Sony "HIF"), 4:4:4 and monochrome,
+8- to 10-bit, alpha auxiliary images (other auxiliary images — HDR gain maps, depth — are
+ignored), the container's rotation/mirror/crop, ICC, EXIF and XMP, and the file's thumbnail item.
+A picture that uses an HEVC range-extension tool heic-rs lacks is refused with
+`Error::Unsupported` naming the tool. Read-only.
 
 ```rust
 let info = craft_heif::probe(&bytes)?;           // size, depth, alpha: check limits first
@@ -32,7 +33,7 @@ Chroma is upsampled like libheif by default.
 decoder (and so Photoshop on macOS) instead; the two differ only next to sharp colour edges, where
 Apple's blends the neighbouring column and, for 4:2:0, the neighbouring row.
 
-Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or
+Errors are `Error::Unsupported` (image sequences, overlays, HEVC tools heic-rs lacks, …), `Error::Limit` or
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
 inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
 

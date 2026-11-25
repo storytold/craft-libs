@@ -1,6 +1,6 @@
 //! Caps on the container's metadata boxes, counted before heic-rs touches the file.
 //!
-//! heic-rs 0.1.4 (pinned `=0.1.4`) has no aggregate work budget inside its container parsing:
+//! heic-rs 0.1.5 (pinned `=0.1.5`) has no aggregate work budget inside its container parsing:
 //! every `ipma` association entry rescans the vector of already-seen item ids (quadratic in
 //! the number of entries), and an `iloc` extent using construction method 2 reconstructs its
 //! source item afresh for every extent that references it, with no shared cache. Legitimate
