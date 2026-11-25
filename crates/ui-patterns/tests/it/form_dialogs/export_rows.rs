@@ -4,8 +4,9 @@
 use craft_behavior::PixelSize;
 use craft_ui::contract::Role;
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
-use craft_ui::patterns::form_dialogs::{ExportAsAsset, ExportAsResult, ExportOptions, HostedExportAs, SizeEstimate};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::patterns::form_dialogs::{ExportAsAsset, ExportAsResult, ExportOptions, ExportSize, HostedExportAs, SizeEstimate};
+use craft_ui::testing::pointer;
+use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -80,6 +81,48 @@ fn ticks(fixture: &Fixture) -> Vec<craft_ui::testing::Target> {
     let mut ticks = fixture.by_role(Role::CHECK_BOX);
     ticks.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
     ticks
+}
+
+/// A host running one Export As over `list`, in a room of `room`. The dialog's own opening settings are what every
+/// trial here uses: PNG at the document's full size.
+fn over(list: Vec<ExportAsAsset>, room: Vec2) -> (Rc<RefCell<DialogHost>>, Fixture) {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(room);
+    host.borrow_mut().open(HostedExportAs::new("Poster", document(), ExportOptions::default()).assets(list));
+    fixture.idle(10);
+    (host, fixture)
+}
+
+/// The rows as the Reset trial opens with: the first as JPG, which the dialog's own opening value is not, and the
+/// second at a fixed pixel size of its own, which only fits its own 40 x 30 asset.
+fn opening_assets() -> Vec<ExportAsAsset> {
+    let mut thumb = settings("webp");
+    thumb.size = ExportSize::pixels(20, 15);
+    vec![
+        ExportAsAsset::new("big", "Big mark", PixelSize::new(400, 300)).options(settings("jpg")),
+        ExportAsAsset::new("thumb", "Thumb", PixelSize::new(40, 30)).options(thumb),
+    ]
+}
+
+/// Twelve assets with pixels, as a panel of twelve layers hands them over.
+fn long_list(count: usize) -> Vec<ExportAsAsset> {
+    (1..=count).map(|at| ExportAsAsset::new(format!("layer{at}"), format!("Layer {at}"), PixelSize::new(400, 300))).collect()
+}
+
+/// The rows of the list as the tree bounds them, top row first.
+fn row_targets(fixture: &Fixture) -> Vec<Target> {
+    let mut rows = fixture.by_role(Role::LIST_ITEM);
+    rows.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+    rows
+}
+
+/// The number an Image Size row shows, without its unit.
+fn size_row(fixture: &Fixture, label: &str) -> String {
+    let row = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
+    let value = fixture.tree().value_of(row.node).unwrap_or_default();
+    value.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect()
 }
 
 /// Presses Export and answers the path it asks for.
@@ -208,7 +251,11 @@ fn the_answer_carries_each_ticked_row_with_its_own_settings() {
     let sizes: Vec<PixelSize> = result.rows.iter().map(|row| row.size).collect();
     assert_eq!(sizes, [PixelSize::new(400, 300), PixelSize::new(40, 30)], "each row's size comes from its own asset");
     assert_eq!(result.rows.iter().map(|row| row.outputs.len()).collect::<Vec<_>>(), [1, 1], "one file per row before Scale All");
-    assert_eq!(result.size, PixelSize::new(1200, 800), "the single-file fields still read the document");
+    // The single-file fields describe the row the settings edit: the first row here, a 400 x 300 asset exported at its
+    // full size in JPG. The rows carry every row's own settings and size.
+    assert_eq!(result.options.format, "jpg", "the single-file options are the selected row's");
+    assert_eq!(result.size, PixelSize::new(400, 300), "and the single-file size comes from that row's asset");
+    assert_eq!(result.outputs.len(), 1, "one file for that row before Scale All");
 }
 
 /// A row whose tick box is off leaves the answer, and a row ticked again comes back: the tick box, not the selection,
@@ -315,27 +362,95 @@ fn automation_edits_the_row_it_selects() {
     assert!(refused.is_some_and(|set| set.is_err()), "an id the list has no row for is refused");
 }
 
-/// Alt-Reset puts the settings the dialog opened with back into the selected row, and leaves the other rows' settings
-/// as their own.
+/// Alt-Reset puts the settings the SELECTED ROW opened with back into that row: its own format and its own size, not
+/// the settings the dialog as a whole opened with. The other rows keep their own.
 #[trial]
 fn reset_puts_the_opening_settings_back_into_the_selected_row() {
-    let (host, mut fixture) = dialog(true);
-    let row = {
-        let mut list = fixture.by_role(Role::LIST_ITEM);
-        list.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
-        list[1]
-    };
-    fixture.click(&row).idle(4);
+    let (host, mut fixture) = over(opening_assets(), Vec2::new(1500.0, 1000.0));
+    let rows = row_targets(&fixture);
+    fixture.click(&rows[1]).idle(4);
     let format = fixture.by_label("Format").expect("the format select");
     fixture.click(&format).idle(3);
     let tiff = fixture.by_label("TIFF").expect("the select offers TIFF");
     fixture.click(&tiff).idle(4);
     assert_eq!(held(&host)[1].1, "tif", "the selected row took the format");
+    assert_eq!(size_row(&fixture, "Width"), "20", "and keeps the pixel size it opened with");
     fixture.hold(Modifiers::ALT).idle(2);
     let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
     fixture.click(&reset).idle(4);
     let held = held(&host);
-    assert_eq!(held[1].1, "png", "Reset puts the settings the dialog opened with back into the selected row");
-    assert_eq!(held[0].1, "jpg", "the first row keeps its own settings");
-    assert_eq!(held[2].1, "webp", "and the third row keeps its own");
+    assert_eq!(held[1].1, "webp", "Reset puts the format THIS row opened with back, not the dialog's");
+    assert_eq!(size_row(&fixture, "Width"), "20", "and the pixel size this row opened with, fitted to its own asset");
+    let thumb = cells_of(&fixture, 1);
+    assert!(thumb.iter().any(|cell| cell.contains("20") && cell.contains("15")), "its row shows that size again: {thumb:?}");
+    assert_eq!(held[0].1, "jpg", "the other row keeps its own settings");
+}
+
+/// The Image Size rows beside the list work on the selected row's asset: they show that asset's sides, and they change
+/// with the row the list selects — the document's sides are not what the settings edit.
+#[trial]
+fn the_size_rows_show_the_selected_rows_asset() {
+    let (_host, mut fixture) = dialog(true);
+    assert_eq!(size_row(&fixture, "Width"), "400", "the first row's asset is 400 wide");
+    assert_eq!(size_row(&fixture, "Height"), "300", "and 300 tall");
+    let rows = row_targets(&fixture);
+    fixture.click(&rows[1]).idle(4);
+    assert_eq!(size_row(&fixture, "Width"), "40", "the size follows the row the list selects");
+    assert_eq!(size_row(&fixture, "Height"), "30", "on both of its sides");
+}
+
+/// The list measures its columns from the text its rows hold, not from the text they held when the dialog opened: an
+/// estimate several characters wide takes the width it needs, where the waiting mark is one character.
+#[trial]
+fn the_estimate_column_widens_for_the_answer() {
+    const SLACK: f32 = 1.0;
+    let (host, mut fixture) = dialog(true);
+    let cells = cells_of(&fixture, 0);
+    assert!(cells.iter().any(|cell| cell == "…"), "the first row waits for its estimate: {cells:?}");
+    let before = row_targets(&fixture).remove(0);
+    let asked = host.borrow_mut().get_mut::<HostedExportAs>().map(HostedExportAs::wanted_estimates).unwrap_or_default();
+    let first = asked.into_iter().find(|asked| asked.id == "big").expect("the first row is asked for its estimate");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.set_row_estimate(&first.id, &first.asked, Some(SizeEstimate::Proxy(12_345_678_901)));
+    }
+    fixture.idle(6);
+    let row = row_targets(&fixture).remove(0);
+    assert!(row.rect.width() > before.rect.width(), "the row grew by the width the answer needs: {before:?} then {row:?}");
+    let answer = fixture
+        .texts()
+        .iter()
+        .filter(|run| row.rect.contains(run.rect.center()))
+        .max_by(|a, b| a.rect.center().x.total_cmp(&b.rect.center().x))
+        .expect("a row drawn in the list");
+    assert!(!answer.text.starts_with('…'), "the row shows the size the app answered: {answer:?}");
+    assert!(answer.rect.max.x <= row.rect.max.x + SLACK, "and inside the column it was measured for: {answer:?} in {row:?}");
+}
+
+/// A long asset list does not lay all of its rows out inside the dialog's scrolling body: it bounds itself and scrolls
+/// its own rows, so the last row is reachable (the collection rule for a long list in a scrolling body).
+#[trial]
+fn a_long_asset_list_scrolls_its_own_rows_and_reaches_the_last_one() {
+    let room = Vec2::new(1200.0, 500.0);
+    let (_host, mut fixture) = over(long_list(12), room);
+    let list = fixture.by_role(Role::LIST).into_iter().next().expect("the asset list");
+    let drawn = row_targets(&fixture).len();
+    assert!(drawn < 12, "twelve rows in a {}-point room: the list lays out all {drawn} instead of scrolling them", room.y);
+    assert!(list.rect.height() <= room.y, "the list is no taller than the room it stands in: {list:?} in a room of {room:?}");
+    let names = rows(&fixture);
+    assert!(!names.iter().any(|name| name == "Layer 12"), "the last row starts out of sight: {names:?}");
+    // A row of the list is picked, which gives the list its keys and its wheel; the wheel then turns over the rows.
+    let first = row_targets(&fixture).remove(0);
+    fixture.click(&first).idle(2);
+    fixture.frame(vec![pointer::moved(first.center())]).idle(2);
+    fixture.frame(vec![pointer::wheel_lines(-10.0)]).idle(4);
+    let names = rows(&fixture);
+    assert!(names.iter().any(|name| name == "Layer 12"), "the wheel over the list brings its last row into view: {names:?}");
+    assert!(row_targets(&fixture).len() < 12, "the well moved, it did not grow to hold every row: {names:?}");
+    let last = row_targets(&fixture).pop().expect("a row of the list");
+    assert!(last.rect.max.y <= room.y, "and that row lies inside the room the dialog stands in: {last:?} of a {room:?} room");
+    for _ in 0..11 {
+        fixture.key(Key::ArrowDown, Modifiers::NONE).idle(1);
+    }
+    let names = rows(&fixture);
+    assert!(names.iter().any(|name| name == "Layer 12"), "and the arrow keys reach it without the pointer: {names:?}");
 }
