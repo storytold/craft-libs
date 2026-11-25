@@ -1,7 +1,10 @@
 //! A disabled component reports its effective state on the response it returns, without disabling its native parent.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Props as _, Role, Show as _};
+use craft_ui::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::display::Text;
+use craft_ui::popover::Popover;
+use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::testing::{Fixture, trial};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -58,4 +61,31 @@ fn a_button_reports_explicit_and_inherited_disabled_state_on_its_response() {
     let target = *fixture.by_role(Role::BUTTON).first().expect("the re-enabled button");
     fixture.click(&target).settle();
     assert_eq!(clicks.get(), 1, "the re-enabled button activates once");
+}
+
+#[trial]
+fn a_disabled_opener_closes_its_popover_by_the_anchor_gone_rule() {
+    let enabled = Rc::new(Cell::new(true));
+    let closes = Rc::new(RefCell::new(Vec::new()));
+    let opens = Rc::new(Cell::new(false));
+    let (opener_enabled, seen_closes, seen_open) = (enabled.clone(), closes.clone(), opens.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Options").enabled(opener_enabled.get()).show(ui);
+        let mut is_open = seen_open.get();
+        let shown = Popover::new("Options card", Bind::bound(&mut is_open)).opened_by(&opener.response).show(ui, |ui, _| {
+            Text::new("Body").show(ui);
+        });
+        seen_open.set(is_open);
+        if let Some(why) = shown.output.closed {
+            seen_closes.borrow_mut().push(why);
+        }
+    });
+    fixture.settle();
+    opens.set(true);
+    fixture.idle(3);
+    assert!(opens.get(), "the popover stays open while its opener is enabled");
+    assert!(closes.borrow().is_empty(), "nothing closes it: {:?}", closes.borrow());
+    enabled.set(false);
+    fixture.idle(3);
+    assert_eq!(closes.borrow().first(), Some(&CloseReason::AnchorGone), "the disabled opener's popover closes: {:?}", closes.borrow());
 }
