@@ -7,6 +7,7 @@
 
 #[cfg(feature = "share")]
 pub mod account;
+pub mod anchor;
 pub mod backdrop;
 pub mod buttons;
 pub mod capture;
@@ -25,6 +26,7 @@ pub mod layout;
 pub mod localized;
 pub mod menu;
 pub mod panes;
+pub mod pick;
 pub mod presence;
 pub mod printing;
 pub mod shapes;
