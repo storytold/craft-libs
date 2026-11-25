@@ -211,6 +211,7 @@ impl Component for ListRow<'_> {
         self.measure_hosted(cx);
         let widths = self.widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let placed = self.place(&cx.style.sizes, &widths, rect, cx.flow.is_rtl());
+        self.record_cell_bounds(&placed);
         self.toggle_parts(&placed, cx);
         for (at, position, _) in &placed.texts {
             if self.cell_selects(*at) {
@@ -475,12 +476,18 @@ impl Component for ListRow<'_> {
         let column_of = |key: &ColumnKey| self.cells.iter().position(|(column, _)| column == key);
         if let Some(column) = self.label_column(&self.cells) {
             let node = access.node(LABEL_CELL, Role::CELL);
+            if let Some(rect) = self.cell_rect(LABEL_CELL) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(label.to_owned());
             node.grid.column_index = column_of(column);
             node.flags.set(Flags::SELECTED, selected);
         }
         for (at, toggle) in self.toggles.iter().enumerate() {
             let cell = access.node(TOGGLE_CELL.at(at as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(TOGGLE_CELL.at(at as u64)) {
+                cell.bounds(rect);
+            }
             cell.name = Name::Text(label.to_owned());
             cell.grid.column_index = column_of(&toggle.column);
             cell.flags.set(Flags::SELECTED, selected);
@@ -492,6 +499,9 @@ impl Component for ListRow<'_> {
         for text in &self.texts {
             let Some(position) = self.cells.iter().position(|(column, _)| *column == text.column) else { continue };
             let node = access.node(TEXT_CELL.at(position as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(TEXT_CELL.at(position as u64)) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(text.text.as_str().to_owned());
             node.description = self.tips.iter().find(|(column, _)| *column == text.column).map(|(_, tip)| tip.as_str().to_owned());
             node.grid.column_index = Some(position);
@@ -500,6 +510,9 @@ impl Component for ListRow<'_> {
         for (at, cell) in self.statuses.iter().enumerate() {
             let Some(position) = self.cells.iter().position(|(column, _)| *column == cell.column) else { continue };
             let node = access.node(STATUS.at(position as u64), Role::CELL);
+            if let Some(rect) = self.cell_rect(STATUS.at(position as u64)) {
+                node.bounds(rect);
+            }
             node.name = Name::Text(cell.status.text.as_str().to_owned());
             node.description = cell.status.tip.as_ref().map(|tip| tip.as_str().to_owned());
             node.grid.column_index = Some(position);
@@ -743,6 +756,21 @@ impl ListRow<'_> {
     /// The name of the trailing part `part`: the one given, or "More ({row})" for the row's menu button.
     fn part_name(&self, part: TrailingPart, name: &Label, words: &ListWords, row: &str) -> Label {
         if part == TrailingPart::MENU { Label::from(named(&words.more, row)) } else { name.clone() }
+    }
+
+    /// Keeps the placed rect of each cell node for the access step: the label cell's is the label band, which spans
+    /// the label column and the empty toggle columns beside it.
+    fn record_cell_bounds(&mut self, placed: &Placed) {
+        let toggles = placed.toggles.iter().map(|(at, cell)| (TOGGLE_CELL.at(*at as u64), *cell));
+        let texts = placed.texts.iter().map(|(_, position, cell)| (TEXT_CELL.at(*position as u64), *cell));
+        let statuses = placed.statuses.iter().map(|(_, position, cell)| (STATUS.at(*position as u64), *cell));
+        self.cell_bounds = std::iter::once((LABEL_CELL.into(), placed.band)).chain(toggles).chain(texts).chain(statuses).collect();
+    }
+
+    /// The placed rect of the cell node `part`, which `parts` recorded.
+    fn cell_rect(&self, part: impl Into<PartRef>) -> Option<Rect> {
+        let part = part.into();
+        self.cell_bounds.iter().find(|(key, _)| *key == part).map(|(_, rect)| *rect)
     }
 
     /// The parts of the row's toggle cells: their flags, held state and tooltip with the toggle's key.
