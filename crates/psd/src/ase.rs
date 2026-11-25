@@ -15,7 +15,7 @@
 //! L*/100 followed by a* and b*. Unknown colour models and block types are kept verbatim
 //! (colour models) or skipped (block types). Converting colours is the caller's job.
 //!
-//! [`parse`] and [`write`] keep what the file says. The reading rules an application applies
+//! [`parse`] and [`fn@write`] keep what the file says. The reading rules an application applies
 //! when it shows a file's swatches are separate, so each can choose them:
 //! [`AseColor::lab_lightness`] (some writers store L* itself), [`AseColor::value_name`] (names
 //! for unnamed colours, as new swatches are named) and [`AseFile::apply_names`] with
