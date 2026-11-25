@@ -161,6 +161,9 @@ pub(crate) struct Record {
     min_size: Option<Vec2>,
     /// For a popup window ([`show_popup`]): the window its layer was opened from, while the layer shows.
     opener: Option<ViewportId>,
+    /// The window an Escape nothing in this one takes goes to: the one it was opened from, where its spec says so
+    /// (`WindowSpec::hands_on_cancel`).
+    cancel_to: Option<ViewportId>,
 }
 
 /// The raise of the window holding an app-modal layer above the palettes the modal lowered. The raise goes out in the
@@ -215,6 +218,11 @@ pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
 pub(crate) fn os_resizes(ctx: &Context, viewport: ViewportId) -> bool {
     let chrome = shell_of(ctx, viewport).window.chrome;
     chrome == WindowChrome::Inset && PerViewport::<Record>::with(ctx, viewport, |record| record.resizable != Some(false))
+}
+
+/// The window an Escape nothing in the running viewport's window takes goes to (`WindowSpec::hands_on_cancel`).
+pub(crate) fn cancel_to(ctx: &Context) -> Option<ViewportId> {
+    PerViewport::<Record>::with_existing(ctx, pass::current_viewport(ctx), |record| record.cancel_to).flatten()
 }
 
 /// Whether the app runs the move of `viewport`'s window (`Overlay::moved_by_app`).
