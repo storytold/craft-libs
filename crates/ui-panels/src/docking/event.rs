@@ -18,8 +18,8 @@ pub enum DockEvent<P> {
     },
     /// Auto-Collapse Iconic Panels was chosen in a column menu. The host flips its preference and passes it back.
     ToggleAutoCollapse,
-    /// The area opened, switched or closed its flyout: an icon click, Escape, a press outside, or the focus
-    /// leaving it under Auto-Collapse. A host that binds the flyout takes it as the request when its binding is given.
+    /// The area opened, switched or closed its flyout: an icon click, Escape, or a press outside or the focus leaving
+    /// it under Auto-Collapse. A host that binds the flyout takes it as the request when its binding is given.
     FlyoutChanged {
         /// The panel now in the flyout; `None` when it closed.
         panel: Option<P>,

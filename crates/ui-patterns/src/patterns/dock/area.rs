@@ -172,8 +172,9 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// The floating window holding the panel takes over the held primary press in this pass, with the pointer at the
     /// grab point inside the window ([`FloatingGroup::continue_move`]): the window follows the pointer and docks where it
     /// would dock on release. A request of the pass: a host that floats a panel from a rail's `torn_off` keeps it for
-    /// the one pass after, when the window shows. Without a held press, or when no window holds the panel, it does
-    /// nothing.
+    /// the one pass after, when the window shows. Where the dock opens OS windows (`DockConfig::native_windows`), the
+    /// window shows in the app window until the press ends, and then opens its OS window where it was released. Without
+    /// a held press, when no window holds the panel, or when the window has shown in an OS window, it does nothing.
     #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
     /// Moves key focus to the group that shows the panel, as a press on the group's body does, and picks its tab, as a
@@ -1725,7 +1726,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let rights: Vec<Permissions> = window.panels().map(|panel| scene.permissions(panel)).collect();
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
-            let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
+            let continued = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)).map(|(_, grab)| grab);
+            let opening = native::opening(&ctx, scene.config, window, &specs, group_id, continued.is_some());
             // An OS window lays out at its own monitor's scale, which sizes its chrome; one in the app window at the
             // main window's.
             let scale = opening
@@ -1791,7 +1793,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if scene.focus.is_some_and(|focus| window.panels().any(|held| held == focus)) {
                 group = group.raise();
             }
-            if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
+            if let Some(grab) = continued {
                 group = group.continue_move(grab);
             }
             if scene.raise.is_some_and(|raised| window.panels().any(|held| held == raised)) {
@@ -1827,6 +1829,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             });
             self.dock = area_dock;
             let output = shown.output;
+            native::waited(&ctx, &opening, &output);
             // The window's grips, then everything it drew, in the OS window it shows in, if it has one.
             let grips = output.grip.map(|(rect, node)| DockSource::new(SourceKind::WindowGrip(anchor.clone()), rect, node));
             let resize =
