@@ -21,7 +21,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusRequest, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
-use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use crate::style::{ComponentStyle, Corners, FocusLook, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::{PanelTabLook, Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
@@ -37,6 +37,9 @@ use std::sync::Arc;
 pub struct GroupGripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring the grip shows while it has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     /// The marks a grip with [`ticks`](GroupGrip::ticks) shows.
     marks: GripMarks,
 }
@@ -166,7 +169,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     type Output = GroupGripOutput;
 
     fn style(cx: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
-        GroupGripStyle { metrics: Metrics::new(), marks: GripMarks::style(cx) }
+        GroupGripStyle { metrics: Metrics::new(), focus: cx.focus_look(), marks: GripMarks::style(cx) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -320,6 +323,9 @@ impl Outcome for DockGroupOutput {
 pub struct DockGroupStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The ring around the drag band or the panel menu button while it has keyboard focus.
+    #[style(focus)]
+    focus: FocusLook,
     header: f32,
     sizes: DockSizes,
 }
@@ -506,7 +512,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     fn style(cx: &StyleCx<'_>, _: DockGroupStyleKey<P>) -> DockGroupStyle {
         let sizes = DockSizes::style(cx);
-        DockGroupStyle { metrics: Metrics::new(), header: sizes.strip, sizes }
+        DockGroupStyle { metrics: Metrics::new(), focus: cx.focus_look(), header: sizes.strip, sizes }
     }
 
     fn sense(&self) -> Sense {
