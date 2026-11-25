@@ -28,12 +28,17 @@ def make(cbits, qbits, qshift, final_bias, final_shift, order, qround, mround):
         return [[((cols[c][r] + final_bias) >> final_shift) & 255 for c in range(8)] for r in range(8)]
     return decode
 if __name__ == '__main__':
-    rows = json.load(open(sys.argv[1]))
+    # the table in make() is quantiser 0's (its scale is 1), so only its rows can be compared
+    rows = [r for r in json.load(open(sys.argv[1])) if r['q'] == 0]
+    if not rows: raise SystemExit('no row of quantiser 0: collect them with dataset.py and a fixed quantiser of 0')
     res = []
     for cbits, qbits, order, qround, mround, fb in itertools.product((8, 11, 12, 13), (14, 16), ('cols', 'rows'), (0, 1), (0, 1), (0x7F, 0x80)):
         qshift = qbits - 5
         dec = make(cbits, qbits, qshift, fb, 8, order, qround, mround)
-        bad = sum(dec(r['dc'], r['coefs'])[y][x] != r['px'][y][x] for r in rows for y in range(8) for x in range(8))
+        bad = 0
+        for r in rows:
+            got = dec(r['dc'], r['coefs'])
+            bad += sum(got[y][x] != r['px'][y][x] for y in range(8) for x in range(8))
         res.append((bad, cbits, qbits, order, qround, mround, hex(fb)))
     res.sort()
     for r in res[:8]: print(r)

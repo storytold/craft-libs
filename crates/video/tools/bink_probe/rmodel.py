@@ -59,6 +59,7 @@ if __name__ == '__main__':
     MARK = bitsof(0, 7) + bitsof(0, 3) + [1]         # second block: one value +1 at (0,2)
     def run(bits):
         res, L = decode_residue(bits, variant)
+        bits = bits + [0] * (L - len(bits))              # the model read zeros past the end
         fr = frame(lambda b: luma_plane(b, {(5, 5): 4, (6, 5): 4}, xoff=[(0, 0)] * 2, yoff=[(0, 0)] * 2, inline=bits[:L] + MARK), extra_zero=400)
         cur, prev, msg = decode(fr)
         if not cur: return bits, L, 'ffmpeg error ' + msg

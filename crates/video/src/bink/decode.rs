@@ -349,6 +349,9 @@ enum ListCoder {
 /// Reads the values of one block with the list coder: `top_plane + 1` planes for residue,
 /// `planes` planes for coefficients. `out` is indexed by row * 8 + column.
 fn read_list(bits: &mut Bits, coder: ListCoder, planes: u32, mut budget: u32, out: &mut [i32; 64]) -> Result<()> {
+    if planes == 0 {
+        return Ok(());
+    }
     let mut list: Vec<Entry> = Vec::with_capacity(80);
     list.extend([Entry::Parent(0, 2), Entry::Parent(2, 0), Entry::Parent(2, 2)]);
     match coder {
@@ -356,7 +359,7 @@ fn read_list(bits: &mut Bits, coder: ListCoder, planes: u32, mut budget: u32, ou
         ListCoder::Residue => list.push(Entry::Group(0, 0)),
     }
     // positions in the order they became non-zero, for the residue refinement passes
-    let mut order: Vec<u8> = Vec::with_capacity(64);
+    let mut order: Vec<u8> = Vec::with_capacity(if coder == ListCoder::Residue { 64 } else { 0 });
     let at = |r: u8, c: u8| usize::from(r) * 8 + usize::from(c);
     for plane in (0..planes).rev() {
         if coder == ListCoder::Residue {

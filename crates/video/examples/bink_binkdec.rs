@@ -1,6 +1,7 @@
 //! Decode the video of a Bink file to raw I420 (`binkdec in.bik out.yuv`), for comparison with
 //! other decoders. Prints `ok N` for each frame that decodes and `ERR N message` for each that
-//! does not; a frame that fails writes no picture.
+//! does not; a frame that fails writes no picture. The output must not exist yet, so it can't be the
+//! input under another name.
 
 use std::io::Write;
 
@@ -9,16 +10,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let [_, input, output] = args.as_slice() else {
         return Err("usage: binkdec in.bik out.yuv".into());
     };
-    // creating the output truncates it: refuse when it is the input under another name
-    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(input), std::fs::canonicalize(output))
-        && a == b
-    {
-        return Err("the output would overwrite the input".into());
-    }
     let file = std::fs::File::open(input)?;
     let bink = craft_media::bink::open(&file)?;
     let mut dec = craft_video::bink::Decoder::from_params(&bink.video_params())?;
-    let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
+    let out = std::fs::File::create_new(output).map_err(|e| format!("cannot create {output}: {e}"))?;
+    let mut out = std::io::BufWriter::new(out);
     for i in 0..bink.frames.len() {
         let frame = bink.read_frame(&file, i)?;
         match dec.decode(bink.split_frame(&frame)?.video) {

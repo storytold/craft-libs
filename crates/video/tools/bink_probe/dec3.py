@@ -120,8 +120,8 @@ def decode_plane(pk, pos, bw, bh, log=None, w1=10, w2=11, prev=None, widths=None
             elif t == 1:
                 if by & 1 == 0:
                     st_ = sub.get(); HOLD['subs'].append((by, bx, st_)); px = blk(st_)
-                    for y in range(16):
-                        for x in range(16): img[by * 8 + y][bx * 8 + x] = px[(y // 2) * 8 + x // 2]
+                    for y in range(min(16, (bh - by) * 8)):
+                        for x in range(min(16, (bw - bx) * 8)): img[by * 8 + y][bx * 8 + x] = px[(y // 2) * 8 + x // 2]
                 bx += 1
             else:
                 px = blk(t)
@@ -139,7 +139,6 @@ def decode_frame(pk, w, h, prev=None, order='YVU', widths=None):
     for name in order:
         pw, ph = (w, h) if name == 'Y' else (cw, ch)
         bw, bh = (pw + 7) // 8, (ph + 7) // 8
-        if name != 'Y' and bh & 1: img = [[0] * (bw * 8) for _ in range(bh * 8 + 8)]
         out[name], end = decode_plane(pk, pos, bw, bh, prev=prev[name] if prev else None, widths=widths or widths_for(bw))
         pos = (end + 31) // 32 * 32
     return out, pos

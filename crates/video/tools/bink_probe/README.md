@@ -18,8 +18,8 @@ are not part of the build or the tests.
   1184): `t8.py`, `t9.py`, `synth.py` and `trees2.py`, and through them `scans.py`.
 - `BINK_PROBE_DECODER` (`fuzz_diff.py`): the program that decodes a `.bik` file with the Rust
   decoder; by default the `bink_binkdec` example in the workspace's release target directory.
-- `BINK_PROBE_CASES` (`fuzz_diff.py`): where differing cases are kept; by default
-  `bink_probe_cases` in the system's temporary directory.
+- `BINK_PROBE_CASES` (`fuzz_diff.py`): the directory in which each run makes its own one for the
+  cases it keeps; by default the system's temporary directory.
 - `IF` and `REV` (`cmodel.py`): switch the coefficient model to variants that were tried and
   rejected (`IF=1`: members left at zero go next to their group instead of to the front of the
   list; `REV=0`: they keep their order). The defaults are the model that matches.

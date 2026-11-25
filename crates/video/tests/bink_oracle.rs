@@ -76,7 +76,8 @@ fn real_files_decode_like_ffmpeg() {
             }
             let (y, rest) = theirs.split_at(w * h);
             let (u, v) = rest.split_at(cw * ch);
-            let diff = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+            // samples past the end of the shorter plane differ too
+            let diff = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x != y).count() + a.len().abs_diff(b.len());
             let (dy, du, dv) = (diff(&pic.y, y), diff(&pic.u, u), diff(&pic.v, v));
             if dy + du + dv != 0 {
                 failed = Some(format!("frame {i}: {dy} luma, {du} Cb and {dv} Cr samples differ"));

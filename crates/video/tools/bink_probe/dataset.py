@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from idct1 import block
 from concurrent.futures import ThreadPoolExecutor
 rnd = random.Random(int(sys.argv[2])); n = int(sys.argv[1]); out = sys.argv[3]; qfix = int(sys.argv[4]) if len(sys.argv) > 4 else None
+if qfix is not None and not 0 <= qfix <= 15: raise SystemExit('the quantiser is a 4-bit field: 0 to 15')
 cases = []
 for i in range(n):
     kind = i % 4
@@ -18,4 +19,5 @@ def run(c):
     g = block(co, dc=dc, q=q)
     return {'dc': dc, 'q': q, 'coefs': [[r, cc, x] for (r, cc), x in co.items()], 'px': g}
 with ThreadPoolExecutor(8) as ex: rows = [r for r in ex.map(run, cases) if r['px']]
-json.dump(rows, open(out, 'w')); print('saved', len(rows))
+if not rows: raise SystemExit('no probe decoded: %s is not written' % out)
+json.dump(rows, open(out, 'w')); print('saved', len(rows), 'rejected', n - len(rows))

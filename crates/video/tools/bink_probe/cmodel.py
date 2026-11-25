@@ -51,6 +51,7 @@ if __name__ == '__main__':
     cases = [one(k) for k in range(n)]
     def run(bits):
         coefs, L = decode_coefs(bits, v)
+        bits = bits + [0] * (L - len(bits))              # the model read zeros past the end
         F = ac5.est(bitsof(v, 4) + bits[:L] + bitsof(ac5.Q, 4) + [0] * 40)
         if F is None: return bits, coefs, L, 'ffmpeg error'
         if abs(F[0][0] - ac5.DC * ac5.QDC) > 6: return bits, coefs, L, 'length wrong (DC %d)' % round(F[0][0])

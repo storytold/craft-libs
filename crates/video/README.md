@@ -38,8 +38,8 @@ No codec feature is on by default.
 ## Decoded frames
 
 Each decoder returns its own picture type. `frame::VideoFrame` is a codec-agnostic form that
-every decoder's output converts into with `VideoFrame::try_from` (always built; each conversion
-comes with its codec's feature):
+every decoder's output but Bink's converts into with `VideoFrame::try_from` (always built; each
+conversion comes with its codec's feature):
 
 - Planes are `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]` (`ColorFamily`), plus an optional alpha plane.
   DNx, VP9 and AV1 (identity matrix) store RGB as G, B, R; the conversion reorders them.

@@ -27,7 +27,7 @@
 //! The decoders bound the pictures they hold with a memory budget ([`budget`]).
 //!
 //! Each decoder returns its own picture type. [`frame::VideoFrame`] is the codec-agnostic form
-//! they all convert into (`VideoFrame::try_from`).
+//! they all convert into (`VideoFrame::try_from`), except Bink's, which has no conversion.
 //!
 //! `TrackDecoder` picks the decoder for a track from its `craft_media::CodecParams` and returns
 //! `VideoFrame`s, for H.264, HEVC, VP9, AV1, MPEG-2, ProRes, DNx, APV, FFV1 and VP8

@@ -3,7 +3,8 @@
 //! Each decoder in this crate returns its own picture type. [`VideoFrame`] holds what they have in
 //! common: planar samples at their stored width (`u8` or `u16`), per-plane bit depth, chroma
 //! subsampling, an optional alpha plane, colour tags as ITU-T H.273 code points, and timing.
-//! Every decoder output converts into it with `VideoFrame::try_from`, behind the codec's feature.
+//! Every decoder output but Bink's converts into it with `VideoFrame::try_from`, behind the codec's
+//! feature.
 //! A conversion moves the sample buffers; it does not copy or rescale samples. Paletted video is
 //! the exception: VMD's decoder holds palette indices, and converting it (`&vmd::Decoder`) writes
 //! new 8-bit R, G, B planes from its palette.

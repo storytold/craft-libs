@@ -8,13 +8,16 @@ The options dict narrows what is generated, for example {'w': 17, 'h': 8, 'sig':
 {'planes': [7, 8, 9]}, {'frames': 4, 'new16': 1, 'cover': 1}; see the opt.get calls. Use
 'new16' with 'cover' so every block is drawn: where a 16x16 entry steps over blocks nothing
 drew, ffmpeg shows whatever its recycled buffer held, which differs from run to run of content. Cases that
-differ are kept in the directory BINK_PROBE_CASES names (default: bink_probe_cases in the
-system's temporary directory). BINK_PROBE_DECODER names the decoder program if it is not the
+differ, or that a decoder doesn't finish, are kept in a new directory, made for the run in the one BINK_PROBE_CASES
+names (default: the system's temporary directory) and printed at the end. BINK_PROBE_DECODER names the decoder program if it is not the
 example in the workspace's target directory."""
-import re, random, struct, subprocess, os, sys
+import re, random, struct, subprocess, os, sys, tempfile
 S=os.path.dirname(os.path.abspath(__file__))
 W=os.path.normpath(os.path.join(S,'..','..','..','..'))
-CASES=os.environ.get('BINK_PROBE_CASES') or os.path.join(__import__('tempfile').gettempdir(),'bink_probe_cases')
+PARENT=os.environ.get('BINK_PROBE_CASES') or None
+if PARENT: os.makedirs(PARENT,exist_ok=True)
+CASES=tempfile.mkdtemp(prefix='bink_probe_',dir=PARENT)  # private to this user and this run
+TIMEOUT=60  # seconds, for each decoder on one case
 DECODER=os.environ.get('BINK_PROBE_DECODER') or os.path.join(W,'target','release','examples','bink_binkdec')
 src=open(os.path.join(S,'..','..','src','bink','tables.rs')).read()
 blk=src[src.index('TREES'):src.index('RUN_SCANS')]
@@ -135,6 +138,7 @@ def gen_plane(b,rnd,bw,bh,inter,opt,subn=None):
         if t==3:
             ib.put(rnd.randint(0,15),4); i=0
             fixed=opt.get('runfixed')
+            assert fixed is None or fixed>0,'runfixed must be positive'
             while i<63:
                 run=min(rnd.choice([1,1,2,3,5,8,12,16,16]),64-i) if fixed is None else min(fixed,64-i)
                 run=min(run,16)
@@ -255,7 +259,7 @@ def gen_plane(b,rnd,bw,bh,inter,opt,subn=None):
                             if k=='idc' and not opt.get('dcwild'):
                                 if val-d<0: sg=0
                                 elif val+d>2047: sg=1
-                            b.put(sg,1)
+                            b.put(sg,1); val+=-d if sg else d
                 cnt+=g
         elif k=='run':
             if len(set(v))==1 and rnd.random()<memset: b.put(1,1); b.put(v[0],4); return
@@ -299,15 +303,22 @@ def run_case(seed,opt,keep=False):
     rnd=random.Random(seed)
     sig,w,h,pk=gen_file(rnd,opt)
     path=os.path.join(CASES,'c%d_%d.bik'%(os.getpid(),seed))
-    os.makedirs(os.path.dirname(path),exist_ok=True)
     open(path,'wb').write(build(sig,w,h,pk))
-    r=subprocess.run(['ffmpeg','-v','error','-i',path,'-f','rawvideo','-pix_fmt','yuv420p','-fps_mode','passthrough','-'],capture_output=True)
+    try: return compare(seed,opt,keep,sig,w,h,pk,path)
+    except subprocess.TimeoutExpired as e:
+        # the input stays for a look
+        return dict(seed=seed,sig=sig,w=w,h=h,res='timeout',cmd=e.cmd[0],path=path)
+    finally:
+        for out in (path+'.yuv',path+'.old'):
+            if os.path.exists(out): os.remove(out)
+def compare(seed,opt,keep,sig,w,h,pk,path):
+    r=subprocess.run(['ffmpeg','-v','error','-i',path,'-f','rawvideo','-pix_fmt','yuv420p','-fps_mode','passthrough','-'],capture_output=True,timeout=TIMEOUT)
     ff=r.stdout; fferr=r.stderr.decode(errors='replace')
-    r2=subprocess.run([opt.get('bin',DECODER),path,path+'.yuv'],capture_output=True,env=dict(os.environ,**opt.get('env',{})))
+    r2=subprocess.run([opt.get('bin',DECODER),path,path+'.yuv'],capture_output=True,env=dict(os.environ,**opt.get('env',{})),timeout=TIMEOUT)
     rs=open(path+'.yuv','rb').read() if os.path.exists(path+'.yuv') else b''
     rlog=r2.stdout.decode()+r2.stderr.decode()
     fs=w*h+2*((w+1)//2)*((h+1)//2)
-    ffclean=(fferr=='' and len(ff)==fs*len(pk))
+    ffclean=(fferr=='' and len(ff)==fs*len(pk) and r.returncode==0)
     rsclean=('ERR' not in rlog and len(rs)==fs*len(pk) and r2.returncode==0)
     if ffclean and rsclean: res='same' if ff==rs else 'DIFF'
     elif ffclean: res='RUSTERR'
@@ -322,14 +333,14 @@ def run_case(seed,opt,keep=False):
                 info['frame']=f; info['ndiff']=len(d); info['first']=d[:5]; info['lumasize']=w*h
                 break
     if opt.get('old'):
-        r3=subprocess.run([opt['old'],path,path+'.old'],capture_output=True)
-        ro=open(path+'.old','rb').read(); os.remove(path+'.old')
-        info['oldok']=('ERR' not in r3.stdout.decode() and len(ro)==fs*len(pk))
+        r3=subprocess.run([opt['old'],path,path+'.old'],capture_output=True,timeout=TIMEOUT)
+        # it may reject a case before it makes its output
+        ro=open(path+'.old','rb').read() if os.path.exists(path+'.old') else b''
+        info['oldok']=('ERR' not in r3.stdout.decode() and len(ro)==fs*len(pk) and r3.returncode==0)
         info['oldsame']=(ro==ff) if ffclean else None
         if ffclean and info['oldok'] and info['oldsame'] and res!='same': info['res']=res='REGRESS'
     if not keep and res in ('same','botherr'):
         os.remove(path)
-    if os.path.exists(path+'.yuv'): os.remove(path+'.yuv')
     return info
 if __name__=='__main__':
     import json
@@ -340,3 +351,5 @@ if __name__=='__main__':
     print(Counter(r['res'] for r in res))
     for r in res:
         if r['res'] not in ('same',): print({k:v for k,v in r.items() if k!='path'})
+    if os.listdir(CASES): print('kept cases:',CASES)
+    else: os.rmdir(CASES)

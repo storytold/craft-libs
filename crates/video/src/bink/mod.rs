@@ -218,8 +218,9 @@ impl Decoder {
             p.cur.fill(0);
         }
         if let Err(e) = self.decode_planes(packet) {
+            // the last picture is current again; the failed one is cleared when the next frame starts
             for p in &mut self.planes {
-                p.cur.copy_from_slice(&p.prev);
+                std::mem::swap(&mut p.cur, &mut p.prev);
             }
             return Err(e);
         }

@@ -1,7 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from synth2 import *
-from dc2 import bitsof
+def bitsof(v, n): return [(v >> i) & 1 for i in range(n)]
 def probe_inline(inline, dc=800, blocks=((5, 5), (6, 5))):
     bits = frame(lambda b: luma_plane(b, {p: 5 for p in blocks}, idc_bits=bitsof(len(blocks), 10) + bitsof(dc, 11) + ([0] * 4 if len(blocks) > 1 else []), inline=inline), extra_zero=400)
     cur, prev, msg = decode(bits)

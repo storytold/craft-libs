@@ -59,6 +59,6 @@ if __name__ == '__main__':
     ref, err = decode(f['d'])
     pk = [video_packet(f, i) for i in range(n)]
     got, err2 = decode(build(f['sig'], w, h, pk, f['flags']))
-    fs = w * h * 3 // 2
+    fs = w * h + 2 * ((w + 1) // 2) * ((h + 1) // 2)
     print('ref frames', len(ref) // fs, 'rebuilt frames', len(got) // fs, 'match', got == ref[:n * fs], repr(err[:200]), repr(err2[:200]))
     print('first words of frame 0 video packet:', [hex(x) for x in struct.unpack_from('<6I', pk[0], 0)], 'len', len(pk[0]))

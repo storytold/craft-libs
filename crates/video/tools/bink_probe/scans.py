@@ -13,6 +13,7 @@ for s in range(16):
     assert sorted(order) == list(range(64)), s
     scans[s] = order
     print('%2d %s' % (s, ' '.join('%d' % o for o in order)))
+if len(scans) != 16: raise SystemExit('only %d of 16 scans decoded: scans.json is left as it is' % len(scans))
 json.dump(scans, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scans.json'), 'w'))
 # flag polarity and run semantics: 16 runs of 4 (value 3), flags alternate 1,0
 for flags in ([1, 0] * 8, [0, 1] * 8):

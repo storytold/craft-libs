@@ -3,7 +3,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe
 from t1 import BW
 f = probe.parse(probe.sample_path()); w, h = f['w'], f['h']; pk = probe.video_packet(f, 0)
-ref, _ = probe.decode(probe.build(f['sig'], w, h, [pk]))
+ref, ref_err = probe.decode(probe.build(f['sig'], w, h, [pk]))
+if len(ref) != w * h + 2 * ((w + 1) // 2) * ((h + 1) // 2): raise SystemExit('the reference frame did not decode: ' + ref_err.strip()[:300])
 END = 461
 def run(name, mk, quiet=False):
     b = BW(); mk(b); b.align(32)

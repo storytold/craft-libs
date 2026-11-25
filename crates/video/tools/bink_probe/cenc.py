@@ -7,6 +7,7 @@ def encode_coefs(coefs):
     if not coefs: return 0, []
     top = {k: abs(x).bit_length() - 1 for k, x in coefs.items()}
     v = max(top.values()) + 1
+    if v > 15: raise ValueError('a coefficient of more than 15 bits: the plane count is a 4-bit field')
     out = []
     def members(mode, r, c):
         if mode == 'S': return [(r, c)]
@@ -40,7 +41,7 @@ def encode_coefs(coefs):
     return v, out
 if __name__ == '__main__':
     import random, cmodel
-    os.environ['IF'] = '0'; cmodel.OPT['insig_front'] = False
+    os.environ['IF'] = '0'; os.environ['REV'] = '1'; cmodel.OPT['insig_front'] = False  # the order the encoder writes
     rnd = random.Random(5); bad = 0
     for t in range(2000):
         n = rnd.randint(0, 20)

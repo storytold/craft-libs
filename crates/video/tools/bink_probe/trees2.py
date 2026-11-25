@@ -34,11 +34,13 @@ def walk(tree):
             else: codes[''.join(map(str, q))] = s
         level = nxt
     return codes, level
-out = {}
+out = {}; incomplete = []
 for t in range(16):
     codes, rest = walk(t)
     by = sorted(codes.items(), key=lambda kv: kv[1])
     kraft = sum(2.0 ** -len(c) for c in codes)
     print('tree %2d kraft=%.4f unresolved=%d syms=%d  %s' % (t, kraft, len(rest), len(set(codes.values())), ' '.join('%x:%s' % (s, c) for c, s in by)))
     out[str(t)] = {str(s): c for c, s in by}
+    if rest or sorted(codes.values()) != list(range(16)): incomplete.append(t)
+if incomplete: raise SystemExit('trees %s are incomplete: trees.json is left as it is' % incomplete)
 json.dump(out, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trees.json'), 'w'), indent=0)
