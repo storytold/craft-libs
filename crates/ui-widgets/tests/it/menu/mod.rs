@@ -2,6 +2,8 @@
 
 pub(crate) mod bar;
 
+pub(crate) mod anchor_gap;
+
 pub(crate) mod closed;
 
 pub(crate) mod context_capture;
