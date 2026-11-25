@@ -366,11 +366,7 @@ struct GalleryTileStyle {
     focus: FocusLook,
     /// Between the tile's edge and its picture.
     pad: f32,
-    /// The selection edge's width.
-    stroke: f32,
-    /// The current tile's fill.
-    fill: StyleColor,
-    /// The current tile's edge.
+    /// The current tile's outline: accent, unfilled, so the picture keeps its own background.
     edge: StyleColor,
     /// The ink of the item's name under the picture, in a captioned gallery.
     caption: StyleColor,
@@ -443,9 +439,7 @@ impl Component for GalleryTile<'_> {
             metrics: Metrics::new().padding(Insets::new(pad, pad, pad, pad)),
             focus: cx.focus_look(),
             pad,
-            stroke: cx.tokens.stroke.thin,
-            fill: cx.color(colors.state.selected),
-            edge: cx.color(colors.line.control_edge),
+            edge: cx.color(colors.accent.border),
             caption: cx.color(colors.text.normal),
             gap: cx.tokens.space.gap.tight,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
@@ -472,9 +466,7 @@ impl Component for GalleryTile<'_> {
         }
         if self.selected {
             let outer = area.expand(cx.style.pad);
-            let draw = ui.draw();
-            draw.fill(&PaintShape::Rect(outer, CornerRadius::ZERO), cx.style.edge);
-            draw.fill(&PaintShape::Rect(outer.shrink(cx.style.stroke), CornerRadius::ZERO), cx.style.fill);
+            ui.draw().stroke(&PaintShape::Rect(outer, CornerRadius::ZERO), craft_ui::primitives::StrokeWidth::Thin, cx.style.edge);
         }
         // A captioned tile keeps the picture's height at the top and shows the name in the rest under it.
         let (area, caption) = match self.caption {
