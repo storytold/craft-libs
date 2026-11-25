@@ -22,6 +22,7 @@ pub(crate) mod list;
 pub(crate) mod menu;
 pub(crate) mod notices;
 pub(crate) mod overlay;
+pub(crate) mod part_rings;
 pub(crate) mod pickers;
 pub(crate) mod picture;
 pub(crate) mod popover;

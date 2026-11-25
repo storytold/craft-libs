@@ -11,7 +11,7 @@ use crate::contract::{
 use crate::primitives::{HAlign, IconSpec, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
-use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
+use crate::style::{ComponentStyle, FocusLook, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, IconId, Metrics, NavShape, PartKey, Proposal, Roving, Sense};
 use craft_i18n::Format;
 use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
@@ -135,6 +135,8 @@ pub struct NoticeStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
     /// The title's role and colour.
     #[style(text)]
     title: TextLook,
@@ -581,6 +583,7 @@ impl Component for Notice<'_> {
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
+            focus: cx.focus_look(),
             title,
             brand,
             byline,

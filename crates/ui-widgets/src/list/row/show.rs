@@ -90,6 +90,7 @@ impl Component for ListRow<'_> {
             surface,
             // A separator is as high as its rule and the room around it.
             metrics: Metrics::new().min_size(Vec2::new(0.0, if key.separator { 0.0 } else { sizes.row })).gap(sizes.gap),
+            focus: cx.focus_look(),
             text: TextLook::new(role, ink(base)),
             icon: IconLook::new(
                 sizes.icon,
