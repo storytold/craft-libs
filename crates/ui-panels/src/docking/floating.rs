@@ -8,7 +8,7 @@
 //! A dock window's title row is also the bar of the column the window holds, with the column's double arrow.
 
 use super::dock_column::{CHEVRON, ColumnArrow, describe_chevron, paint_chevron};
-use super::drop::{DragUnit, start_group_drag};
+use super::drop::start_window_drag;
 use super::{DockDropTarget, DockDropped, DockSizes, DockWords, GroupDrag, PanelDrag, PanelKey, native};
 use crate::contract::BodyCx;
 use crate::contract::SizeLimits;
@@ -199,6 +199,8 @@ pub struct FloatingGroupOutput {
     /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
     /// accessibility node; none while it does not resize (minimized).
     pub resize: Vec<(ResizeEdge, Rect, Id)>,
+    /// Where `files` were dropped, in the group's layer space, when the drop session knew the pointer.
+    pub files_at: Option<Pos2>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -301,8 +303,10 @@ pub struct FloatingGroup<'a> {
     start_drag: Option<StartDrag<'a>>,
     /// Takes the drops released on the group, on the group's own layer.
     take_drop: Option<TakeDrop<'a>>,
-    /// A move by the title began this pass.
+    /// A move of the window began this pass.
     moving: bool,
+    /// That move continues a press another component handed over (`continue_move`), not a press on the title row.
+    continued: bool,
     /// The window takes over the held primary press in this pass: its own move gesture begins from that press with the
     /// pointer at this point inside the window, so the window follows the pointer and, with
     /// [`window_of`](FloatingGroup::window_of), docks where it would dock on release. A request of the pass, for the
@@ -318,9 +322,12 @@ pub struct FloatingGroup<'a> {
     raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
+    /// Where they were dropped.
+    files_at: Option<Pos2>,
 }
 
-type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
+/// Starts the window-unit drag: a move by the title row when the flag is set, else a drag the window took over.
+type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool) + 'a>;
 
 type TakeDrop<'a> = Box<dyn for<'b, 'c> FnMut(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
 
@@ -366,9 +373,11 @@ impl<'a> FloatingGroup<'a> {
             start_drag: None,
             take_drop: None,
             moving: false,
+            continued: false,
             continue_move: None,
             raise: false,
             files: Vec::new(),
+            files_at: None,
         }
         .label(title)
     }
@@ -379,7 +388,7 @@ impl<'a> FloatingGroup<'a> {
     pub fn window_of<P: Clone + Hash + Send + Sync + 'static>(mut self, anchor: P) -> Self {
         let active = PanelKey::of(&anchor);
         let size = self.rect.size();
-        self.start_drag = Some(Box::new(move |cx| start_group_drag(cx, DragUnit::Window(anchor), active, Some(size), None)));
+        self.start_drag = Some(Box::new(move |cx, title_row| start_window_drag(cx, anchor, active, size, title_row)));
         self
     }
 
@@ -530,6 +539,8 @@ impl Component for FloatingGroup<'_> {
             let target = WholeWindow::new(cx.rect);
             if let Some(dropped) = cx.window_drop_target::<OsFiles, _>(&target) {
                 self.files = dropped.files;
+                // The drop session's pointer, which a drop the OS sent before any position waits for.
+                self.files_at = cx.dragging::<OsFiles>().map(|(_, at)| at);
             }
         }
     }
@@ -553,7 +564,7 @@ impl Component for FloatingGroup<'_> {
         if self.moving
             && let Some(start) = self.start_drag.take()
         {
-            start(&mut cx);
+            start(&mut cx, !self.continued);
         }
         if let Some(opener) = self.menu_opener {
             Popup::toggle(opener, &mut cx);
@@ -571,6 +582,7 @@ impl Component for FloatingGroup<'_> {
             files: self.files,
             grip: cx.move_band(),
             resize: cx.resize_grips(),
+            files_at: self.files_at,
         };
         native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);
@@ -640,7 +652,10 @@ impl Container for FloatingGroup<'_> {
         } else if self.minimized {
             change.rect = Rect::from_min_size(change.rect.min, Vec2::new(change.rect.width(), self.rect.height()));
         }
-        self.moving |= change.kind == PlacementKind::Move && change.phase == GesturePhase::Begin;
+        if change.kind == PlacementKind::Move && change.phase == GesturePhase::Begin {
+            self.moving = true;
+            self.continued = change.continued;
+        }
         self.placed = Some(change);
     }
 }

@@ -64,7 +64,13 @@ struct Bed {
     chrome: Rc<Cell<f32>>,
     /// The panel whose window the next pass asks to continue the held press, with its grab point.
     hand_over: Rc<Cell<Option<(usize, Vec2)>>>,
+    /// Where an egui area above the dock shows, whose plain egui drag floats `WINDOW` at `WINDOW_AT` and hands the press
+    /// to its window with the grab point `HOST_GRAB`, as an app's own popup does when its title is dragged out.
+    popup: Rc<Cell<Option<Rect>>>,
 }
+
+/// The grab point inside the window a host's own drag hands its press to.
+const HOST_GRAB: Vec2 = Vec2::new(40.0, 12.0);
 
 fn bed(layout: Layout<usize>) -> Bed {
     bed_with(layout, DockConfig::default())
@@ -80,6 +86,8 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
     let seen_chrome = Rc::clone(&chrome);
     let hand_over: Rc<Cell<Option<(usize, Vec2)>>> = Rc::default();
     let asked = Rc::clone(&hand_over);
+    let popup: Rc<Cell<Option<Rect>>> = Rc::default();
+    let (shown_popup, hands_over) = (Rc::clone(&popup), Rc::clone(&hand_over));
     let mut other = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![SECOND], 0)), Vec::new())));
     let specs = Tracked::new(Numbered);
     let mut fixture = Fixture::new(move |ui| {
@@ -99,9 +107,21 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
         if shows_second.get() {
             DockArea::new("Second dock", Bind::bound(&mut other), &specs, &mut panels, DockConfig::default()).show(ui);
         }
+        if let Some(rect) = shown_popup.get() {
+            egui::Area::new(egui::Id::unique("host popup")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ui.ctx(), |ui| {
+                let (_, drag) = ui.allocate_exact_size(rect.size(), egui::Sense::drag());
+                if drag.drag_started() {
+                    shown_popup.set(None);
+                    let mut floated = held.borrow().layout().clone();
+                    floated.floating.push(Floating::single(100, vec![WINDOW], 0, WINDOW_AT));
+                    *held.borrow_mut() = Arc::new(Workspace::new(floated));
+                    hands_over.set(Some((WINDOW, HOST_GRAB)));
+                }
+            });
+        }
     });
     fixture.settle();
-    Bed { fixture, workspace, actions, second, float_height, chrome, hand_over }
+    Bed { fixture, workspace, actions, second, float_height, chrome, hand_over, popup }
 }
 
 /// A point on the floating window's title row, on its band: clear of the actions and the double arrow at its end.
@@ -259,6 +279,70 @@ fn a_window_asked_to_continue_the_held_press_follows_the_pointer() {
 
     let (_, followed, _) = follows(DOCKED);
     assert!(!followed, "no window holds the docked panel, so none takes the press");
+}
+
+/// A floating window that took over a panel's drag docks on release as that drag would, though the window's title row
+/// does not dock (`title_bar_docks(false)`): dropped on the docked group's tab strip, the panel joins the group. Its own
+/// title row dragged there only moves the window.
+#[trial]
+fn a_window_that_took_over_a_panel_drag_docks_on_a_tab_strip_though_its_title_row_does_not() {
+    let config = DockConfig::default().title_bar_docks(false);
+    let joins = |handed_over: bool| {
+        let mut bed = bed_with(with_window(Some(Node::tabs(vec![DOCKED], 0))), config.clone());
+        let tab = bed.fixture.by_role(Role::TAB).into_iter().find(|tab| !WINDOW_AT.contains(tab.center())).expect("the docked tab shows");
+        let over = Pos2::new(tab.rect.right() + 20.0, tab.center().y);
+        let from = if handed_over { tab.center() } else { window_title() };
+        bed.fixture.frame(vec![moved(from)]);
+        bed.fixture.frame(vec![press(from)]);
+        if handed_over {
+            bed.hand_over.set(Some((WINDOW, Vec2::new(40.0, 12.0))));
+            bed.fixture.frame(Vec::new());
+        }
+        for step in 1..=4 {
+            bed.fixture.frame(vec![moved(from + (over - from) * (step as f32 / 4.0))]);
+        }
+        bed.fixture.frame(vec![release(over)]).settle();
+        let layout = bed.workspace.borrow().layout().clone();
+        layout.floating.is_empty() && layout.place(&WINDOW).is_some_and(|place| layout.place(&DOCKED).is_some_and(|docked| docked == place))
+    };
+    assert!(joins(true), "the handed-over drag joins the docked group");
+    assert!(!joins(false), "the title row only moves the window");
+}
+
+/// A press a host's own egui widget holds (a popup's title, which no framework part senses) carries on as the drag of
+/// the window the host floats in that pass and hands the press to: the window follows the pointer and docks on the
+/// docked group's tab strip. The window shows first in the pass its drag starts, before its layer is recorded; the
+/// drop targets still look through it, so its own target does not take the drop and refuse it.
+#[trial]
+fn a_window_takes_over_a_press_a_plain_egui_widget_holds() {
+    let mut bed = bed_with(Layout::new(Some(Node::tabs(vec![DOCKED], 0)), Vec::new()), DockConfig::default().title_bar_docks(false));
+    let tab = bed.fixture.by_role(Role::TAB).into_iter().next().expect("the docked tab shows");
+    let over = Pos2::new(tab.rect.right() + 20.0, tab.center().y);
+    let popup = Rect::from_min_size(Pos2::new(WINDOW_AT.min.x, WINDOW_AT.max.y + 20.0), Vec2::new(160.0, 24.0));
+    bed.popup.set(Some(popup));
+    bed.fixture.frame(Vec::new());
+    let from = popup.center();
+    bed.fixture.frame(vec![moved(from)]);
+    bed.fixture.frame(vec![press(from)]);
+    for step in 1..=4 {
+        bed.fixture.frame(vec![moved(from + (over - from) * (step as f32 / 4.0))]);
+    }
+    assert!(dragging(&bed), "the window runs the handed-over drag");
+    let mark = drag::mark(bed.fixture.ctx()).expect("a target under the dragged window takes the drop");
+    let points = match mark {
+        DropMark::Line { from, to, .. } | DropMark::Region { line: Some([from, to]), .. } => vec![from, to],
+        DropMark::Into(rect) | DropMark::Region { area: rect, .. } => vec![rect.center()],
+        _ => Vec::new(),
+    };
+    let strip = tab.rect.expand(SLACK);
+    assert!(
+        !points.is_empty() && points.iter().all(|point| point.y >= strip.top() && point.y <= strip.bottom()),
+        "the mark is the tab strip's: {mark:?}"
+    );
+    bed.fixture.frame(vec![release(over)]).settle();
+    let layout = bed.workspace.borrow().layout().clone();
+    let joined = layout.floating.is_empty() && layout.place(&WINDOW).is_some_and(|place| layout.place(&DOCKED) == Some(place));
+    assert!(joined, "the window's panel joins the docked group: {layout:?}");
 }
 
 /// A dock area's first pass leaves a drag running in another area alone.

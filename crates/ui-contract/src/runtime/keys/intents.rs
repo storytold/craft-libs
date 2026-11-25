@@ -70,6 +70,14 @@ impl Intents {
         }
     }
 
+    /// Leaves an intent this pass's taker took to the enclosing scope, in the same pass: the next taker gets it. No
+    /// input is queued or copied.
+    pub(crate) fn pass_on(&mut self, intent: Intent) {
+        if let Some((_, taken)) = self.items.iter_mut().find(|(item, taken)| *taken && item.same_kind(&intent)) {
+            *taken = false;
+        }
+    }
+
     /// Takes an intent equal to `intent` in every field, once per pass: `Intent::delete(false, Granularity::Grapheme)`
     /// takes Backspace and leaves Delete, which `take` would also take.
     pub fn take_exact(&mut self, intent: &Intent) -> bool {

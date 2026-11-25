@@ -127,6 +127,7 @@ const SHAPES: &[Case] = &[
     Case::new("items-click-select", ANY, collection::click_selects_one_row),
     Case::new("items-type-ahead", ANY, collection::type_ahead_moves_the_lead),
     Case::new("items-rename", ANY, collection::rename_commits_and_cancels_once),
+    Case::new("items-rename-blur", ANY, collection::rename_ends_when_the_editor_loses_focus),
     Case::new("items-reorder", ANY, collection::keyboard_reorder_ends_once),
     Case::new("items-empty", ANY, collection::empty_collection_shows_no_rows),
     Case::new("items-virtualisation", ANY, collection::long_collection_builds_rows_within_the_room_only),

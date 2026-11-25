@@ -59,6 +59,10 @@ pub trait DockDrag<P> {
     fn press(&self) -> Option<Pos2> {
         None
     }
+    /// The drag is a floating window's move by its title row ([`GroupDrag::title_row`]).
+    fn title_row(&self) -> bool {
+        false
+    }
 }
 
 impl<P: Clone + Eq + Hash> DockDrag<P> for PanelDrag {
@@ -86,6 +90,10 @@ impl<P: Clone> DockDrag<P> for GroupDrag<P> {
 
     fn press(&self) -> Option<Pos2> {
         self.press
+    }
+
+    fn title_row(&self) -> bool {
+        self.title_row
     }
 }
 
@@ -341,7 +349,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         if pointer::mods(self.ctx).cmd {
             return if window { None } else { self.float(&unit, at, drag.source(), drag.strip(), drag.press()) };
         }
-        if window && !self.title_bar_docks {
+        if window && drag.title_row() && !self.title_bar_docks {
             return None;
         }
         if let Some((spot, applies)) = DockTargets::<P>::resolve(self.ctx, self.dock, at) {
@@ -487,7 +495,19 @@ where
 {
     let preview = name.map_or(DragPreview::None, DragPreview::Named);
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source, strip: None, press: None, started }, preview);
+    cx.start_drag(GroupDrag { unit, active, source, strip: None, press: None, started, title_row: false }, preview);
+}
+
+/// Starts the drag of the floating window that holds `anchor`, whose shown panel is `active`, at its `size`: a move by
+/// its title row when `title_row`, else a panel drag the window took over ([`GroupDrag::title_row`]).
+pub(crate) fn start_window_drag<P, C>(cx: &mut Cx<'_, C>, anchor: P, active: PanelKey, size: Vec2, title_row: bool)
+where
+    P: Clone + Send + Sync + 'static,
+    C: Component,
+{
+    let started = started(&cx.env);
+    let drag = GroupDrag { unit: DragUnit::Window(anchor), active, source: Some(size), strip: None, press: None, started, title_row };
+    cx.start_drag(drag, DragPreview::None);
 }
 
 /// Starts the drag of `unit` out of a collapsed column, from its icons of size `strip`, whose shown panel is
@@ -499,7 +519,7 @@ where
     C: Component,
 {
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), press: None, started }, DragPreview::Named(label));
+    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), press: None, started, title_row: false }, DragPreview::Named(label));
 }
 
 /// Ends a running tab or group drag that started on `shown`'s dock under another generation: another arrangement

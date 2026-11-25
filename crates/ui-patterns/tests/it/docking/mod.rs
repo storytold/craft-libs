@@ -26,6 +26,7 @@ pub(crate) mod sources;
 pub(crate) mod app_modal;
 pub(crate) mod columns;
 pub(crate) mod dock_back;
+pub(crate) mod documents;
 pub(crate) mod group_view;
 pub(crate) mod host_body;
 pub(crate) mod host_keys;
