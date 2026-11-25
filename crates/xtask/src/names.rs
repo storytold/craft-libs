@@ -294,8 +294,9 @@ impl From<Error> for String {
 ///
 /// A file is identified by its path joined to `base`, and a relative `base` is joined to the
 /// current folder (on Windows, a drive-relative `base` such as `C:src` to the current folder of
-/// its drive) before any input is listed. A drive-relative input (`C:a.rs`) is joined to the
-/// current folder of its drive instead. A relative and an absolute path to a file are one file,
+/// its drive) before any input is listed. A drive-relative input (`C:a.rs`, `C:src`) is joined to
+/// the current folder of its drive instead, once, before it is listed, and the files of a folder
+/// input are opened under that path. A relative and an absolute path to a file are one file,
 /// read once and reported by the input path that sorts first; `..` and links are not resolved.
 ///
 /// A [`Kind::Rust`] folder is read recursively for `.rs` files that [`Policy::skip`] keeps; links to
@@ -306,16 +307,17 @@ pub fn scan(base: &Path, inputs: &[Input<'_>], policy: &Policy<'_>) -> Result<Ve
     policy.validate()?;
     // The base is made absolute once, so that every input is listed and read under one folder.
     let root = absolute_base(base)?;
+    // Each input is resolved once, before it is listed: the path that is opened, its kind, and the
+    // path that is reported.
     let mut files = Vec::new();
     for input in inputs {
         if input.kind == Kind::Rust {
             collect_rust(&root, input.path, policy, &mut files)?;
         } else {
-            files.push((input.path.to_path_buf(), input.kind));
+            files.push((input_path(&root, input.path)?, input.kind, input.path.to_path_buf()));
         }
     }
     // A file is known by the path that is opened, so a relative and an absolute input for it are one.
-    let mut files = files.into_iter().map(|(path, kind)| Ok((input_path(&root, &path)?, kind, path))).collect::<Result<Vec<_>, Error>>()?;
     files.sort();
     files.dedup_by(|later, first| later.0 == first.0 && later.1 == first.1);
     if let Some(pair) = files.windows(2).find(|pair| pair[0].0 == pair[1].0) {
@@ -648,39 +650,43 @@ fn io_error(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
     move |source| Error::Io { path: path.to_path_buf(), source }
 }
 
-fn collect_rust(base: &Path, path: &Path, policy: &Policy<'_>, out: &mut Vec<(PathBuf, Kind)>) -> Result<(), Error> {
-    let full = base.join(path);
+/// The Rust files of the input `path` under the absolute `root`: the path that is opened, the kind,
+/// and the path that is reported. `path` is resolved once, so the folder that is listed is the
+/// folder whose files are read.
+fn collect_rust(root: &Path, path: &Path, policy: &Policy<'_>, out: &mut Vec<(PathBuf, Kind, PathBuf)>) -> Result<(), Error> {
+    let full = input_path(root, path)?;
     let link = fs::symlink_metadata(&full).map_err(io_error(path))?.file_type().is_symlink();
     let meta = fs::metadata(&full).map_err(io_error(path))?;
     if meta.is_dir() {
         // A link to a folder is not followed, also when it is an input.
-        if link { Ok(()) } else { walk(base, path, path, policy, 0, out) }
+        if link { Ok(()) } else { walk(&full, path, path, policy, 0, out) }
     } else {
-        out.push((path.to_path_buf(), Kind::Rust));
+        out.push((full, Kind::Rust, path.to_path_buf()));
         Ok(())
     }
 }
 
-fn walk(base: &Path, input: &Path, dir: &Path, policy: &Policy<'_>, depth: usize, out: &mut Vec<(PathBuf, Kind)>) -> Result<(), Error> {
+/// The Rust files in the folder `full`, which is reported as `dir`, under the input `input`.
+fn walk(full: &Path, input: &Path, dir: &Path, policy: &Policy<'_>, depth: usize, out: &mut Vec<(PathBuf, Kind, PathBuf)>) -> Result<(), Error> {
     if depth > policy.limits.max_depth {
         return Err(Error::TooDeep { path: dir.to_path_buf(), limit: policy.limits.max_depth });
     }
-    let mut entries = fs::read_dir(base.join(dir)).and_then(|entries| entries.collect::<io::Result<Vec<_>>>()).map_err(io_error(dir))?;
+    let mut entries = fs::read_dir(full).and_then(|entries| entries.collect::<io::Result<Vec<_>>>()).map_err(io_error(dir))?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for entry in entries {
-        let path = dir.join(entry.file_name());
+        let (opened, path) = (full.join(entry.file_name()), dir.join(entry.file_name()));
         let file_type = entry.file_type().map_err(io_error(&path))?;
         if file_type.is_dir() {
-            walk(base, input, &path, policy, depth + 1, out)?;
+            walk(&opened, input, &path, policy, depth + 1, out)?;
             continue;
         }
         if !path.extension().is_some_and(|ext| ext == "rs") || (policy.skip)(path.strip_prefix(input).unwrap_or(&path)) {
             continue;
         }
         // A link to a folder is not followed; a link to a file is read like the file.
-        let is_file = if file_type.is_symlink() { fs::metadata(base.join(&path)).map_err(io_error(&path))?.is_file() } else { file_type.is_file() };
+        let is_file = if file_type.is_symlink() { fs::metadata(&opened).map_err(io_error(&path))?.is_file() } else { file_type.is_file() };
         if is_file {
-            out.push((path, Kind::Rust));
+            out.push((opened, Kind::Rust, path));
         }
     }
     Ok(())
@@ -2844,6 +2850,25 @@ fn seven() { let _ = "seven"; }
             let mixed = [Input::text(&relative), Input::manifest(&absolute)];
             let err = scan(base, &mixed, &POLICY).unwrap_err();
             assert!(matches!(&err, Error::Conflict { path } if path.ends_with("Cargo.toml")), "{err}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_relative_rust_folder_is_resolved_before_it_is_listed() {
+        let current = std::env::current_dir().unwrap();
+        let Some(Component::Prefix(drive)) = current.components().next() else { panic!("no drive in {}", current.display()) };
+        let mut spelled = drive.as_os_str().to_os_string();
+        spelled.push("src");
+        let input = PathBuf::from(spelled);
+        let mut files = Vec::new();
+        collect_rust(&current, &input, &POLICY, &mut files).unwrap();
+        assert!(!files.is_empty());
+        for (opened, kind, path) in &files {
+            assert_eq!(*kind, Kind::Rust);
+            // The file is opened by the path that was listed, and reported by the input's spelling.
+            let rest = path.strip_prefix(&input).unwrap();
+            assert_eq!(opened, &current.join("src").join(rest), "{}", path.display());
         }
     }
 
