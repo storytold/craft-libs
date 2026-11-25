@@ -10,7 +10,7 @@ use super::{
     CardInset, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, FlyoutHeight, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag,
 };
 use crate::buttons::{ActiveLook, IconButton};
-use crate::contract::overlay::{Anchor, PopupLayer};
+use crate::contract::overlay::Anchor;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, HeaderEdge, HeaderParts, HeaderRegion,
     MeasureCx, Name, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, ShowContainer as _, Sizing,
@@ -250,10 +250,6 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// What the icons open: flyouts, or the column itself as a rail.
     #[prop]
     mode: IconicMode,
-    /// Where its flyouts stand against the floating windows: above them (the default), or below them, so a floating
-    /// window over a docked column's flyout stays in front ([`Flyout`]'s `popup_layer`).
-    #[prop]
-    flyout_layer: PopupLayer,
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column, and the rect its
     /// flyouts open in. Unset, the flyouts take the room layers opened there have (`overlay::layer_room`): around a
     /// palette window, the work area.
@@ -332,7 +328,6 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
             bar: ColumnBar::Own,
             auto_collapse: false,
             mode: IconicMode::Flyouts,
-            flyout_layer: PopupLayer::AboveWindows,
             within: Rect::NOTHING,
             card: None,
             tab_look: PanelTabLook::Plain,
@@ -793,7 +788,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         }
         let popup = cx.popup("flyout");
         let sizes = cx.style.sizes.column;
-        let (opens, auto_collapse, layer, column) = (self.opens, self.auto_collapse, self.flyout_layer, cx.rect);
+        let (opens, auto_collapse, column) = (self.opens, self.auto_collapse, cx.rect);
         // The screen side the flyouts open on, mirrored in a right-to-left layout.
         let right = (opens == Side::End) != cx.flow.is_rtl();
         let within = if self.within.is_positive() { self.within } else { crate::contract::overlay::layer_room(&cx.core.ctx) };
@@ -811,7 +806,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let mut resized = None;
         for (at, plan) in plans.into_iter().enumerate() {
             let Some(FlyoutPlan { group, top_left, size, fixed, icons_top }) = plan else { continue };
-            let shown = Flyout::new(opens, size, auto_collapse).within(bounds).least(least).popup_layer(layer).docked(self.framed).show_popup(
+            let shown = Flyout::new(opens, size, auto_collapse).within(bounds).least(least).docked(self.framed).show_popup(
                 ui,
                 popup.at(at),
                 Anchor::Point(top_left),

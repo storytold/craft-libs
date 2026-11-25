@@ -251,7 +251,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.exiting = layer.exiting;
     entry.cover = cover;
     entry.region = layer.region;
-    entry.below_windows = overlay.rank == Rank::Popup && tier == areas::Tier::BelowWindows;
+    entry.among_windows = overlay.among_windows;
     entry.scoped = scope.is_some();
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     entry.closes_on_commands = overlay.dismiss.commands;

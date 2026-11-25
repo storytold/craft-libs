@@ -216,7 +216,6 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `PointerButton`, `Buttons` | Pointer buttons, egui-free | craft-behavior | 8.1 |
 | `Politeness` | An announcement's or live region's urgency | `craft_ui::runtime::access` | 12.1 |
 | `PopupHandle` | A `Copy` id and name for one of a component's own popups, from `cx.popup(name)`, with `trigger`, `open`, `close` and `is_open` | `craft_ui::contract` | 15.5 |
-| `PopupLayer` | Where a popup stands against the floating windows: above them, or below them for one opened outside every layer (a dock column's flyout) | `craft_ui::runtime` (layer stack) | 15.2 |
 | Prelude | The stable surface of a crate | each crate | 1.11 |
 | Press-target rule | Exactly one root starts each press: on the topmost layer under it, the root whose press-taking shape is painted on top there; none when egui's hit test names a raw egui widget | `craft_ui::primitives` (sensing core) | 8.3 |
 | `PressPhase`, `PressState` | A press lifecycle's phase, and its state with mods, sample and capture | craft-behavior | 8.2 |

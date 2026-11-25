@@ -112,7 +112,6 @@ The host handles these `DockEvent`s:
 | `panel_menu_always` | off | Every group shows its panel menu button, with the dock's own rows when the shown panel has none. Off: only a panel with rows of its own (`DockPanels::panel_rows`) gets the button. |
 | `panel_menu_icon` | `more` | The panel menu button's icon; `menu` gives the three-line mark. |
 | `native_windows` | on | Floating windows open as OS windows where the window host opens them and reports their positions (not on Wayland) and `PanelSpec::allow_native` allows. |
-| `flyout_layer` | `PopupLayer::AboveWindows` | Where docked columns' flyouts stand against the floating windows. `PopupLayer::BelowWindows` keeps a floating window in front of a docked flyout it overlaps: drawn over it and taking the presses there. The flyout still closes by its rules, and menus opened from it stand above everything. A floating window's own flyouts stand above it either way. |
 
 The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords` holds the words.
 
@@ -131,7 +130,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A flyout is as tall as its group measures, within the room below its top, and at least the `DockHeights::default` of each of its panels whose `PanelSpec::flyout_height` is `FlyoutHeight::Docked`, the default. A panel with `FlyoutHeight::Content` opens a flyout as tall as its body measures, while its `DockHeights` still size its group docked in a column. A group the user sized keeps that height.
 - Split handles are Tab stops, and the arrow keys move them. A pointer press or drag on a handle leaves key focus where it was, so the arrows after a drag still reach the app; only a handle reached by Tab takes them. A divider drag is one gesture in `DockAreaOutput::edit`.
 - A pointer press on a panel tab (a click, a drag's press, the tab menu's secondary press) leaves key focus where it was, so the document's keys keep working; Tab still reaches the tab row.
-- Floating windows stack with the app's own egui windows in egui's area order: the one shown, pressed or raised last (`FloatingGroup::raise`, which the host's `DockArea::focus` request sets on the window holding the panel) is on top, so a dialog the app opens over a floating panel shows above it. A docked flyout with `DockConfig::flyout_layer(PopupLayer::BelowWindows)` stands below all of them.
+- Floating windows stack with the app's own egui windows in egui's area order: the one shown, pressed or raised last (`FloatingGroup::raise`, which the host's `DockArea::focus` request sets on the window holding the panel) is on top, so a dialog the app opens over a floating panel shows above it. A collapsed column's flyout stands in that order too: one opened after a window is over it, and a press on either brings it in front, while the menus opened from a flyout stand above every window.
 - A panel command (`DockCommands`) acts on the shown panel of the group that takes it. A menu row, a key and the command palette run the same code: `actions` turns the command into `Action`s.
 
 ## Commands and workspaces
