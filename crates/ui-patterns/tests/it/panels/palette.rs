@@ -546,8 +546,9 @@ fn enter_on_a_disabled_first_match_runs_nothing() {
 
 /// The dialog face is a steady, readable width: over short labels it opens at least the palette's least width, typing a
 /// query that drops the widest rows leaves its width as it was, and in a narrow window it keeps to its share of it,
-/// where a least width wider than that share gives way to it. Guards against a box as wide as its widest row, which
-/// opened narrow and jumped as the results changed.
+/// where a least width wider than that share gives way to it. The search field and the rows span the box's inner
+/// width at either width. Guards against a box as wide as its widest row, which opened narrow and jumped as the results
+/// changed, and against a field and rows left at the widest row's width, in the start half of the wider box.
 #[trial]
 fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
     let entries = || vec![entry("cut", "Cut"), entry("copy", "Copy"), entry("paste", "Paste"), entry("pasteInside", "Paste Inside")];
@@ -562,14 +563,33 @@ fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
     };
     let (mut rig, least) = rigged(None);
     let width = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the palette's box shows").rect.width();
+    // The field and every row run from the box's start, less its padding, to its end, less the same padding.
+    let spans = |fixture: &Fixture, when: &str| {
+        let frame = fixture.by_role(Role::DIALOG).first().expect("the palette's box shows").rect;
+        let field = fixture.by_role(Role::TEXT_INPUT).first().expect("the search field shows").rect;
+        let pad = field.left() - frame.left();
+        assert!(pad >= 0.0 && pad < frame.width() / 10.0, "{when}: the field starts inside the box's padding: {field:?} in {frame:?}");
+        assert!((frame.right() - field.right() - pad).abs() <= 1.0, "{when}: the field spans the box's inner width: {field:?} in {frame:?}");
+        let listed = fixture.by_role(Role::LIST_BOX_OPTION);
+        assert!(!listed.is_empty(), "{when}: the box lists rows");
+        for row in listed {
+            let row = row.rect;
+            assert!(
+                (row.left() - field.left()).abs() <= 1.0 && (row.right() - field.right()).abs() <= 1.0,
+                "{when}: a row spans the box's inner width, as the field does: {row:?} under {field:?} in {frame:?}"
+            );
+        }
+    };
     rig.fixture.room(Vec2::new(1400.0, 900.0)).settle();
     let opened = width(&rig.fixture);
     assert!(opened >= least.get(), "short labels open the box at its least width: {opened} against {}", least.get());
+    spans(&rig.fixture, "opened");
 
     rig.fixture.type_text("cut").settle();
     assert_eq!(names(&rig.fixture).len(), 1, "the query lists one short row: {:?}", names(&rig.fixture));
     let typed = width(&rig.fixture);
     assert!((typed - opened).abs() <= 0.5, "the box keeps its width as the rows change: {typed} against {opened}");
+    spans(&rig.fixture, "typed");
 
     // The box's share is of the window, and a fixture's window is never narrower than 800 points, whatever the room
     // (`Frames::screen`): the share is read from the window the layer shows in, not from the room.

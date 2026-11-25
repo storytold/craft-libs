@@ -232,8 +232,11 @@ impl<'a> CommandPalette<'a> {
                 let status = RefCell::new(Status::Quiet);
                 // The field is the stack's header and the status its footer, so the list takes the room left in
                 // the capped box and scrolls inside it. The three regions share the stack's memory, which is kept by
-                // its id across a close, so each opening starts a fresh session in the header, the first region.
+                // its id across a close, so each opening starts a fresh session in the header, the first region. The
+                // stack, the field and the list span the box's width, which its least width can make wider than its
+                // widest row: a content-sized stack left them at that row's width, in the box's start half.
                 Stack::new()
+                    .fill_width()
                     .header(|ui, stack| {
                         let state = stack.memory::<Session>();
                         if opening {
@@ -242,6 +245,7 @@ impl<'a> CommandPalette<'a> {
                         TextField::search(words.palette_search.clone(), Bind::bound(&mut state.query))
                             .placeholder(hint.clone())
                             .drives(list_id)
+                            .sizing(Sizing::FillWidth)
                             .show(ui);
                     })
                     .footer(|ui, stack| {
