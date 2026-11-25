@@ -501,6 +501,14 @@ Two features, both off by default, change what every craft-ui user draws, so the
   `SystemFonts::Off` drops system fonts.
 - `color_fonts`: colour glyphs (COLR, sbix, CBDT), for colour emoji.
 
+Apps that already own their font definitions and theme can call
+`fonts::install_font_providers(ctx, Some(locale), fallbacks)` to install the same
+nonblocking system lookup without rebuilding their stack. It replaces the provider list
+and reloads the latest list when indexing finishes, clearing cached misses and temporary
+fallback choices. Call it again on a locale change. Pass `None` and an empty fallback list
+to disable providers, including while indexing is still pending. It does not load fonts
+on the web; explicitly supplied fallback providers still work there.
+
 egui 0.37's default faces have only a few monochrome emoji and lack symbols such as ⊞ ☰ 🔍. On
 the web there are no system fonts, so emoji draw as boxes unless the app sets an `Emoji` face.
 `UiFonts::egui_face` puts one of egui's own faces into a family, e.g. Hack in the proportional

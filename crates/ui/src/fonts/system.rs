@@ -2,8 +2,8 @@
 //!
 //! Lookups that may not block (the UI thread's) find nothing until the index is built: egui
 //! draws with the faces it has, and every context that was turned away reloads its fonts when the
-//! index arrives, which forgets egui's cached misses and repaints. If the build panics, every
-//! lookup finds nothing from then on and egui keeps the faces it has.
+//! index arrives, which forgets egui's cached misses and repaints. If the worker cannot start or
+//! the build panics, every lookup finds nothing from then on and egui keeps the faces it has.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -44,6 +44,10 @@ impl<T: FontIndex> Shared<T> {
     /// Start building the index on a background thread unless it is built or building. `ctx`
     /// reloads its fonts when the index arrives if a lookup was turned away meanwhile.
     pub(super) fn start(&'static self, ctx: Option<&egui::Context>) {
+        self.start_with(ctx, || std::thread::Builder::new().name("craft-ui system fonts".into()).spawn(|| self.finish()).map(|_| ()));
+    }
+
+    fn start_with(&'static self, ctx: Option<&egui::Context>, spawn: impl FnOnce() -> std::io::Result<()>) {
         let idle = {
             let mut state = self.lock();
             let idle = matches!(*state, State::Idle);
@@ -55,8 +59,12 @@ impl<T: FontIndex> Shared<T> {
             }
             idle
         };
-        if idle && std::thread::Builder::new().name("craft-ui system fonts".into()).spawn(|| self.finish()).is_err() {
-            self.finish();
+        if idle && let Err(error) = spawn() {
+            // Never fall back to indexing on the caller: this may be the UI thread.
+            // Wake blocking lookups too, and retain the existing faces and fallbacks.
+            *self.lock() = State::Failed;
+            self.built.notify_all();
+            eprintln!("craft-ui: starting the system font index failed, so it adds no fonts: {error}");
         }
     }
 
@@ -165,6 +173,50 @@ mod tests {
     static GATED: Shared<Gated> = Shared::new(build_when_open);
 
     #[test]
+    fn thread_creation_failure_wakes_waiters_without_building_and_preserves_fallbacks() {
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        fn build() -> Gated {
+            BUILDS.fetch_add(1, Ordering::Relaxed);
+            Gated
+        }
+        static INDEX: Shared<Gated> = Shared::new(build);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let system: Arc<dyn FontProvider> = Arc::new(Lookup::new(&INDEX, (), false));
+        let fallback: Arc<dyn FontProvider> =
+            Arc::new(|_: &FallbackRequest<'_>| Some(FontInsert::new("fallback", FontData::from_static(ARABIC), vec![])));
+        super::super::providers::set_font_providers(&ctx, vec![system, fallback]);
+        let (waiting, ready) = std::sync::mpsc::channel();
+        let (finished, done) = std::sync::mpsc::channel();
+        let mut worker = None;
+        INDEX.start_with(Some(&ctx), || {
+            worker = Some(std::thread::spawn(move || {
+                let mut state = INDEX.lock();
+                waiting.send(()).unwrap();
+                // Holding the mutex until wait releases it ensures failure notification
+                // cannot race ahead of this waiter actually waiting.
+                while matches!(*state, State::Building { .. }) {
+                    state = INDEX.built.wait(state).unwrap();
+                }
+                finished.send(matches!(*state, State::Failed)).unwrap();
+            }));
+            ready.recv_timeout(Duration::from_secs(10)).unwrap();
+            Err(std::io::Error::other("injected thread creation failure"))
+        });
+        assert_eq!(done.recv_timeout(Duration::from_secs(10)), Ok(true), "failure must wake existing waiters");
+        worker.unwrap().join().unwrap();
+        assert_eq!(BUILDS.load(Ordering::Relaxed), 0, "never build the index on the caller's thread");
+        assert!(INDEX.get(false).is_none());
+        assert!(INDEX.get(true).is_none());
+        INDEX.start_with(None, || panic!("failed indexing must not retry on every lookup"));
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            assert!(fonts.has_glyph(&FontId::proportional(14.0), 'ع'));
+            assert_eq!(fonts.discovered_fonts().last().unwrap().name, "fallback");
+        });
+    }
+
+    #[test]
     fn ui_lookups_skip_the_index_until_it_is_built_then_the_context_reloads() {
         let ctx = egui::Context::default();
         let font_id = FontId::new(14.0, FontFamily::Proportional);
@@ -191,6 +243,80 @@ mod tests {
         }
         assert!(other_locale.font_for(&request).is_some());
         assert_eq!(BUILDS.load(Ordering::Relaxed), 1, "every locale shares one index");
+    }
+
+    #[test]
+    fn index_completion_before_registration_does_not_leave_cached_fallback() {
+        static INDEX: Shared<Gated> = Shared::new(|| Gated);
+        fn selected(ctx: &egui::Context) -> Option<String> {
+            ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            ctx.fonts_mut(|fonts| {
+                fonts.has_glyph(&FontId::proportional(14.0), 'ع');
+                fonts.discovered_fonts().last().map(|font| font.name.clone())
+            })
+        }
+        fn start(ctx: &egui::Context) {
+            // Model another thread using any already-visible providers, then the worker
+            // finishing just before this context can register for completion reloads.
+            selected(ctx);
+            INDEX.finish();
+            INDEX.start(Some(ctx));
+        }
+        *INDEX.lock() = State::Building { turned_away: false, contexts: Vec::new() };
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let system: Arc<dyn FontProvider> = Arc::new(Lookup::new(&INDEX, (), false));
+        let fallback: Arc<dyn FontProvider> =
+            Arc::new(|_: &FallbackRequest<'_>| Some(FontInsert::new("temporary", FontData::from_static(ARABIC), vec![])));
+        super::super::install_context_providers(&ctx, Some((system, start)), vec![fallback]);
+        assert_eq!(selected(&ctx).as_deref(), Some("index:Arabic"), "completion before registration must not leave a cached fallback");
+    }
+
+    #[test]
+    fn custom_provider_install_reloads_fallbacks_and_preserves_opt_out() {
+        static OPEN_CUSTOM: AtomicBool = AtomicBool::new(false);
+        fn build() -> Gated {
+            while !OPEN_CUSTOM.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Gated
+        }
+        static INDEX: Shared<Gated> = Shared::new(build);
+        // Own the worker in this test so its completion means every context has reloaded,
+        // not just that the index was published or the first context started drawing it.
+        *INDEX.lock() = State::Building { turned_away: false, contexts: Vec::new() };
+        let (finished, all_reloaded) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            INDEX.finish();
+            finished.send(()).unwrap();
+        });
+        fn start(ctx: &egui::Context) {
+            INDEX.start(Some(ctx));
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let disabled = egui::Context::default();
+        disabled.set_fonts(egui::FontDefinitions::empty());
+        let fallback: Arc<dyn FontProvider> =
+            Arc::new(|_: &FallbackRequest<'_>| Some(FontInsert::new("temporary", FontData::from_static(ARABIC), vec![])));
+        let ui = || Arc::new(Lookup::new(&INDEX, (), false)) as Arc<dyn FontProvider>;
+        super::super::install_context_providers(&ctx, Some((ui(), start)), vec![fallback]);
+        super::super::install_context_providers(&disabled, Some((ui(), start)), vec![]);
+        let selected = |ctx: &egui::Context| {
+            ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&FontId::proportional(14.0), 'ع');
+                f.discovered_fonts().last().map(|f| f.name.clone())
+            })
+        };
+        assert_eq!(selected(&ctx).as_deref(), Some("temporary"));
+        assert!(selected(&disabled).is_none());
+        super::super::install_font_providers(&disabled, None, vec![]);
+        OPEN_CUSTOM.store(true, Ordering::Release);
+        all_reloaded.recv_timeout(Duration::from_secs(10)).expect("worker must finish reloading both contexts");
+        worker.join().unwrap();
+        assert_eq!(selected(&ctx).as_deref(), Some("index:Arabic"), "temporary fallback must be forgotten");
+        assert!(selected(&disabled).is_none(), "index completion must not restore disabled providers");
     }
 
     fn build_panics() -> Gated {
