@@ -85,6 +85,19 @@ impl CanvasView {
         if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 }
     }
 
+    /// Where the reference application reads the pointer in the document, from the document point under it: half a
+    /// document pixel up and left along an axis the canvas draws at its nominal zoom, and the point itself along an
+    /// axis it stretches over whole device pixels ([`stretch`](Self::stretch) not 1). Measured 2026-11-25 with Warp
+    /// anchor drags on a 600 × 450 document: at 100 % the anchor lands half a pixel up and left of the pointer, at
+    /// 66.7 and 33.3 % (both axes stretched) and on the stretched axis at 25 % on the pointer's own point, to 1e-6.
+    /// Along an unstretched axis at 50 and 25 % the reference read further back (half a screen pixel); kept at half a
+    /// document pixel there until that is probed on its own.
+    pub fn pointer_offset(&self) -> Vec2 {
+        let off = |k: f64| if (k - 1.0).abs() > 1e-9 { 0.0 } else { -0.5 };
+        let [kx, ky] = self.stretched();
+        Vec2::new(off(kx), off(ky))
+    }
+
     /// `stretch`, each axis 1 when it is not a positive number.
     fn stretched(&self) -> [f64; 2] {
         self.stretch.map(|k| if k.is_finite() && k > 0.0 { k } else { 1.0 })
