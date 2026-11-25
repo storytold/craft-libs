@@ -777,6 +777,15 @@ pub(crate) fn absorbed_press_raw(ctx: &Context) -> Option<Pos2> {
     with_persist(ctx, pass::current_viewport(ctx), |persist| persist.outside_press)
 }
 
+/// A test hook (`testing::overlay::press_judgement`): what the running viewport's stack judges this pass's presses
+/// by, read in the pass without noting a tracked input. The zone the last pass left (`absorb_zone`), the outside press
+/// the input hook recorded for this pass (`absorbed_press`) and the layers the last pass showed, parent first.
+#[cfg(feature = "testing")]
+pub(crate) fn press_judgement(ctx: &Context) -> (Option<Vec<Rect>>, Option<Pos2>, Vec<OpenEntry>) {
+    let (zone, press) = with_persist(ctx, pass::current_viewport(ctx), |persist| (persist.absorb_zone.clone(), persist.outside_press));
+    (zone, press, with_pass(ctx, |pass| pass.last.clone()))
+}
+
 /// Whether a close is queued for one of the layers `ids`: only a run of the layer's owner takes it, so a memoized view
 /// that showed one of them runs while it waits.
 pub(crate) fn close_queued(ctx: &Context, ids: &[Id]) -> bool {
