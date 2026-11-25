@@ -227,6 +227,8 @@ struct CardMenu<'a> {
     target: &'a RefCell<Option<Rect>>,
     /// The card's own body, which a press the menu takes should not reach.
     inside: &'a RefCell<Seen>,
+    /// The card body's response, as it showed last.
+    body: &'a Cell<Option<Id>>,
     /// How the card's menu closed, in the order it closed.
     menus: &'a RefCell<Vec<CloseReason>>,
 }
@@ -258,7 +260,7 @@ impl Component for CardMenu<'_> {
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("dialog");
-        let (dialog, target, inside, menus) = (self.dialog, self.target, self.inside, self.menus);
+        let (dialog, target, inside, body, menus) = (self.dialog, self.target, self.inside, self.body, self.menus);
         let shown = ui.show(popup, modal_on_first(), |ui, _| {
             let live = !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx());
             let opener = Button::new("Target").show(ui);
@@ -274,7 +276,10 @@ impl Component for CardMenu<'_> {
             // The card's body stands well below the button, so a press on it lands beside the menu that hangs from the
             // button, and beside that menu's anchor.
             ui.add_space(120.0);
-            Leaf::new(inside, Vec2::new(220.0, 120.0)).id_salt("card-body").show(ui);
+            let leaf = Leaf::new(inside, Vec2::new(220.0, 120.0)).id_salt("card-body").show(ui);
+            if live {
+                body.set(Some(leaf.id));
+            }
         });
         if shown.is_some() {
             dialog.shown.set(true);
@@ -293,12 +298,13 @@ impl Component for CardMenu<'_> {
 fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_dialog() {
     let mut frames = Frames::new();
     let (dialog, inside, below) = (Opened::default(), RefCell::new(Seen::default()), RefCell::new(Seen::default()));
-    let (target, menus) = (RefCell::new(None), RefCell::new(Vec::new()));
+    let (target, body, menus) = (RefCell::new(None), Cell::new(None), RefCell::new(Vec::new()));
     let judged = RefCell::new(PressJudgement::default());
     let open = Cell::new(false);
     let mut show = |ui: &mut Ui| {
         dialog.shown.set(false);
-        let card = CardMenu { common: Common::new(), open: open.get(), dialog: &dialog, target: &target, inside: &inside, menus: &menus };
+        let card =
+            CardMenu { common: Common::new(), open: open.get(), dialog: &dialog, target: &target, inside: &inside, body: &body, menus: &menus };
         card.id_salt("dialog").show_at(ui, OPENER);
         Leaf::new(&below, Vec2::new(60.0, 30.0)).id_salt("below").show_at(ui, BELOW);
         // The press zone and the layers the layer stack judged the last pass by, for the trial's preconditions.
@@ -335,7 +341,7 @@ fn a_press_beside_a_menu_inside_a_modal_dialog_closes_the_menu_and_leaves_the_di
         judged.layers.iter().find(|entry| matches!(entry.rank, Rank::Popup)).map(|entry| entry.rect).expect("the card's menu is a popup layer");
     assert!(menus.borrow().is_empty(), "the click that opened the menu leaves it open");
     // A press elsewhere on the card, away from the menu and its anchor, closes the menu and nothing else.
-    let body = inside.borrow().id.and_then(|id| frames.ctx.read_response(id)).map(|response| response.rect).expect("the card's body shows");
+    let body = body.get().and_then(|id| frames.ctx.read_response(id)).map(|response| response.rect).expect("the card's body shows");
     let at = body.center_bottom() - Vec2::new(0.0, 8.0);
     assert!(card.contains(at) && !menu.contains(at), "the press at {at:?} lands on the card {card:?}, beside the menu {menu:?}");
     assert!(
