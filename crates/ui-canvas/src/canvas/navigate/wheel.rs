@@ -22,10 +22,10 @@ pub enum WheelAction {
     SnapZoom(i32),
     /// Move the image by this many screen points: the content follows the delta.
     Pan(Vec2),
-    /// Page the view up or down by this many notches: one page is the canvas's height less one wheel line
-    /// ([`WheelNavigation::LINE`]), so a page leaves one line of the page before it in sight. A page is a screen
-    /// distance, like a pan, so it holds at every zoom.
-    Page(f32),
+    /// Page the view up or down by this many notches, whose wheel line in points is the second value: one page
+    /// is the canvas's height less that line, so a page leaves one line of the page before it in sight. A page is a
+    /// screen distance, like a pan, so it holds at every zoom.
+    Page(f32, f32),
 }
 
 /// One pass of wheel input over the canvas: the wheel share without the service's bookkeeping.
@@ -191,7 +191,7 @@ impl WheelNavigation {
             && input.scroll.x == 0.0
         {
             // The count comes from scroll over the line the taker reads with, so a taker of another line pages by its own notch.
-            return Some(WheelAction::Page(input.scroll.y / notch));
+            return Some(WheelAction::Page(input.scroll.y / notch, notch));
         }
         let sideways = (input.mods.shift || input.mods.cmd || input.mods.ctrl) && input.scroll.x == 0.0;
         let scroll = if sideways { Vec2::new(input.scroll.y, 0.0) } else { input.scroll };
@@ -230,8 +230,8 @@ impl WheelNavigation {
 
     /// Applies `action` to `view` with the pointer at `pointer`, for a document of `size`: a factor zoom anchors at
     /// [`zoom::wheel_anchor`], a ladder step at the pointer, both clamped to the ladder; a pan moves the view; a page
-    /// moves it up or down by the view's height less one wheel line ([`WheelAction::Page`]). At a zoom limit the view
-    /// stays put. With Overscroll off the canvas clamps the result to the document. Returns whether the view changed.
+    /// moves it up or down by the view's height less the action's wheel line ([`WheelAction::Page`]). At a zoom
+    /// limit the view stays put; Overscroll off clamps the result to the document. Returns if the view changed.
     pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
         let before = *view;
         match action {
@@ -252,8 +252,8 @@ impl WheelNavigation {
                 }
             }
             WheelAction::Pan(delta) => super::pan(view, delta),
-            WheelAction::Page(notches) => {
-                let page = (view.rect.height() - Self::LINE).max(0.0);
+            WheelAction::Page(notches, line) => {
+                let page = (view.rect.height() - line).max(0.0);
                 let step = page * notches;
                 if step.is_finite() && step != 0.0 {
                     super::pan(view, Vec2::new(0.0, step));
@@ -269,7 +269,7 @@ impl WheelNavigation {
         match action {
             WheelAction::Zoom(_) => Some(zoom::wheel_anchor(view, pointer, size)),
             WheelAction::SnapZoom(_) => Some(pointer),
-            WheelAction::Pan(_) | WheelAction::Page(_) => None,
+            WheelAction::Pan(_) | WheelAction::Page(_, _) => None,
         }
     }
 }
