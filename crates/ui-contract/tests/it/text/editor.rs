@@ -31,6 +31,8 @@ const EDITOR: PartKey = PartKey::new("editor");
 thread_local! {
     /// Whether the probe's editor part held the key focus in its last pass.
     static EDITOR_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
+    /// The window focus the pass's input reported, so a trial can tell a window in the background from one with focus.
+    static WINDOW_FOCUSED: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
 /// An editor that logs the inputs it receives and, while `report` is set, reports its one line: `TEXT`, or the text
@@ -86,6 +88,7 @@ impl Component for Probe<'_> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         EDITOR_FOCUSED.set(cx.editor_handle().map(|handle| handle.focused()));
+        WINDOW_FOCUSED.set(Some(cx.core.ctx.input(|input| input.focused)));
         let inputs: Vec<EditorInput> = cx.editor_input().collect();
         if let Some(doc) = self.doc {
             doc.apply(cx, &inputs);
@@ -354,10 +357,12 @@ fn switching_apps_keeps_the_editor_focused_and_its_input_method_context() {
     rig.frame(vec![craft_ui::testing::pointer::window_blurred()]);
     for _ in 0..3 {
         rig.frame(Vec::new());
+        assert_eq!(WINDOW_FOCUSED.get(), Some(false), "the window's input reports the background, as a host's does");
         assert_eq!(EDITOR_FOCUSED.get(), Some(true), "the editor keeps the key focus while the window is in the background");
     }
     rig.frame(vec![Event::WindowFocused(true)]);
     rig.frame(Vec::new());
+    assert_eq!(WINDOW_FOCUSED.get(), Some(true), "the window has the focus again");
     assert_eq!(rig.ime().generation, generation, "the input method's context ran on through the switch");
     rig.frame(vec![Event::Text("x".into())]);
     assert!(rig.take().iter().any(|input| matches!(input, EditorInput::Text(text) if &**text == "x")), "typing goes on in the editor");
