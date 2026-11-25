@@ -878,15 +878,23 @@ fn copy_in(folder: &OsFontFolder, p: &Planned, found: Option<&str>) -> Result<()
     }
     let part = aside(&p.path, "part");
     let _ = std::fs::remove_file(&part);
-    std::fs::copy(&p.source, &part).map_err(io(what()))?;
-    folder.unload(&p.path);
-    let checked = File::open(&part).and_then(|f| f.sync_all()).map_err(io(what())).and_then(|()| {
-        if file_sha256(&part).as_ref() == Some(&p.sha256) {
-            Ok(())
-        } else {
-            Err(Error::Verify { file: p.store_file.clone(), error: VerifyError::Sha256 })
-        }
+    // One writable handle writes and flushes the copy: Windows flushes only through a handle that can write, and the
+    // copy doesn't take the source's permissions (`std::fs::copy` would), so a read-only store file still copies.
+    let copied = File::open(&p.source).and_then(|mut source| {
+        let mut copy = File::create(&part)?;
+        std::io::copy(&mut source, &mut copy)?;
+        copy.sync_all()
     });
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&part);
+        return Err(io(what())(e));
+    }
+    folder.unload(&p.path);
+    let checked = if file_sha256(&part).as_ref() == Some(&p.sha256) {
+        Ok(())
+    } else {
+        Err(Error::Verify { file: p.store_file.clone(), error: VerifyError::Sha256 })
+    };
     if let Err(e) = checked.and_then(|()| publish(&part, p, found)) {
         let _ = std::fs::remove_file(&part);
         return Err(e);
