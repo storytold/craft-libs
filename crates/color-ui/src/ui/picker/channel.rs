@@ -3,12 +3,14 @@
 
 use std::ops::RangeInclusive;
 
-use craft_behavior::{Axis, Sense};
+use craft_behavior::{Axis, Metrics, PartKey, PressPhase, Sense};
 use craft_theme::{Channel, ColorModel, Srgba};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
+    Bind, Common, Component, Cx, DisabledLook, EditResponse, Gap, GlyphLabel, LabelKind, MeasureCx, NoValue, Outcome, PartsCx, Pointer as _, Role,
+    Show as _, ShowContainer as _, SideLabel, Sizing,
 };
 use craft_ui::form::{Field, SliderField, SliderFieldLayout};
+use craft_ui::layout_components::Row;
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -181,12 +183,45 @@ pub struct ChannelRow<'a> {
     checker: bool,
     unit: ChannelUnit,
     marks: &'a [f64],
+    /// Whether a units cell follows the number field.
+    units_cell: bool,
+}
+
+/// What a [`ChannelRow`] reports.
+#[non_exhaustive]
+pub struct ChannelRowOutput {
+    /// The edit of the slider or the field, `None` when the row did not run.
+    pub edit: Option<EditResponse<f64>>,
+    /// The units cell ([`ChannelRow::units_cell`]) was double-clicked in this pass: the host switches the units the
+    /// row counts in.
+    pub units_double_clicked: bool,
 }
 
 impl<'a> ChannelRow<'a> {
     /// A row named `label` over `value`, ruled by `rule`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, f64>, rule: ChannelRule) -> Self {
-        ChannelRow { label: label.into(), short: None, value, rule, track: None, checker: false, unit: ChannelUnit::None, marks: &[] }
+        ChannelRow {
+            label: label.into(),
+            short: None,
+            value,
+            rule,
+            track: None,
+            checker: false,
+            unit: ChannelUnit::None,
+            marks: &[],
+            units_cell: false,
+        }
+    }
+
+    /// A blank cell after the number field whose double click reports
+    /// [`units_double_clicked`](ChannelRowOutput::units_double_clicked), for a row whose host can switch the units the
+    /// value counts in. The cell is highlighted under the pointer and takes no keyboard focus, so the host offers the
+    /// same switch as a command; in a disabled container it does not report a double click. The slider gives up the
+    /// cell's width, so the row keeps its width.
+    #[must_use]
+    pub fn units_cell(mut self, on: bool) -> Self {
+        self.units_cell = on;
+        self
     }
 
     /// Shows `short` at the line's start in place of the label, which stays the row's name.
@@ -221,24 +256,114 @@ impl<'a> ChannelRow<'a> {
         self
     }
 
-    /// Shows the row; the edit of the slider or the field, `None` when the row did not run.
-    pub fn show(self, ui: &mut Ui) -> Option<EditResponse<f64>> {
-        let ChannelRow { label, short, mut value, rule, track, checker, unit, marks } = self;
+    /// Shows the row: the edit of the slider or the field, and a double click on the units cell.
+    pub fn show(self, ui: &mut Ui) -> ChannelRowOutput {
+        let ChannelRow { label, short, mut value, rule, track, checker, unit, marks, units_cell } = self;
         let side = match short {
             Some(short) => SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(short)))),
             None => SideLabel::new(),
         };
-        Field::new(label.clone())
-            .side(side.scrub(true))
-            .show(ui, |ui, _| {
-                channel_slider(label.clone(), value.reborrowed(), &rule, unit, track.clone().map(|stops| (stops, checker)))
-                    .marks(marks)
-                    .layout(SliderFieldLayout::Inline)
-                    .field_sizing(Sizing::Content)
-                    .thumb(SliderThumb::Triangle)
-                    .show(ui)
-                    .edit
-            })
-            .inner
+        let mut field = |ui: &mut Ui| {
+            Field::new(label.clone())
+                .side(side.clone().scrub(true))
+                .show(ui, |ui, _| {
+                    channel_slider(label.clone(), value.reborrowed(), &rule, unit, track.clone().map(|stops| (stops, checker)))
+                        .marks(marks)
+                        .layout(SliderFieldLayout::Inline)
+                        .field_sizing(Sizing::Content)
+                        .thumb(SliderThumb::Triangle)
+                        .show(ui)
+                        .edit
+                })
+                .inner
+        };
+        if !units_cell {
+            return ChannelRowOutput { edit: field(ui), units_double_clicked: false };
+        }
+        let shown = Row::new().fill_width().gap(Gap::Tight).show(ui, |ui, _| {
+            let edit = field(ui);
+            let cell = UnitsCell::new().show(ui);
+            (edit, cell.double_clicked)
+        });
+        let (edit, units_double_clicked) = shown.inner.unwrap_or((None, false));
+        ChannelRowOutput { edit, units_double_clicked }
+    }
+}
+
+/// The units cell's one part, which takes the pointer.
+const UNITS: PartKey = PartKey::new("units");
+
+/// The style of a units cell: its size.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct UnitsCellStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    /// The cell's size: `size.icon.glyph_sm` wide, a control high, so it fills the row's line.
+    size: Vec2,
+}
+
+/// The blank cell after a channel row's number field ([`ChannelRow::units_cell`]): highlighted under the pointer, it
+/// reports a double click. It has no keyboard stop and no node: the host's command that switches the units is its
+/// keyboard path.
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
+#[component(sample = UnitsCell::new)]
+struct UnitsCell {
+    #[common]
+    common: Common,
+    double_clicked: bool,
+}
+
+impl UnitsCell {
+    fn new() -> Self {
+        UnitsCell { common: Common::new(), double_clicked: false }
+    }
+}
+
+/// What a units cell reports: its response and whether it was double-clicked in this pass.
+struct UnitsCellOutput {
+    response: egui::Response,
+    double_clicked: bool,
+}
+
+impl Outcome for UnitsCellOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &egui::Response {
+        &self.response
+    }
+}
+
+impl Component for UnitsCell {
+    const ROLE: Role = Role::None;
+    const OVERLAYS: bool = false;
+    const STOPS: bool = false;
+    type Style = UnitsCellStyle;
+    type Output = UnitsCellOutput;
+
+    fn style(cx: &StyleCx<'_>, _: UnitsCellStyleKey) -> UnitsCellStyle {
+        UnitsCellStyle { metrics: Metrics::new(), size: Vec2::new(cx.tokens.size.icon.glyph_sm, cx.control().height) }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        cx.style.size
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.part(UNITS, rect).sense(Sense::CLICK).state_layer().pointer_only("the host's command switches the units");
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let PressPhase::Release { start, click: true, .. } = cx.part(UNITS).press.phase {
+            self.double_clicked = start.clicks >= 2;
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> UnitsCellOutput {
+        UnitsCellOutput { response: cx.response.clone(), double_clicked: self.double_clicked }
     }
 }

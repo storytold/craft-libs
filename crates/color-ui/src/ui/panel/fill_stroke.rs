@@ -87,7 +87,7 @@ impl Body<'_> {
                     .unit(ChannelUnit::Percent)
                     .track(vec![Srgba::rgb(1.0, 1.0, 1.0), tint.base])
                     .show(ui);
-                events.extend(row.into_iter().flat_map(|row| row.events));
+                events.extend(row.edit.into_iter().flat_map(|row| row.events));
             });
         });
         // A pass has one tint edit: the last of its events.

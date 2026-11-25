@@ -229,7 +229,7 @@ fn row_output(edit: Option<EditResponse<f64>>) -> StoryOutput {
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("value", 40.0_f64);
-    row_output(saturation_row(value_at.bind(value)).show(ui))
+    row_output(saturation_row(value_at.bind(value)).show(ui).edit)
 }
 
 /// Rows whose number counts percent, degrees and a model's own unit text.
@@ -238,7 +238,7 @@ fn channel_row_units(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("value", 40.0_f64);
     let mut edit = None;
     for unit in [ChannelUnit::Percent, ChannelUnit::Degrees, ChannelUnit::Text("pt")] {
-        edit = edit.or(saturation_row(value_at.bind(&mut *value)).unit(unit).show(ui));
+        edit = edit.or(saturation_row(value_at.bind(&mut *value)).unit(unit).show(ui).edit);
     }
     row_output(edit)
 }
@@ -246,14 +246,14 @@ fn channel_row_units(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A row over a mixed value: the field shows the mixed readout until an edit makes it concrete.
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row_mixed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    row_output(saturation_row(Bind::given(Mixed::<f64>::Mixed)).show(ui))
+    row_output(saturation_row(Bind::given(Mixed::<f64>::Mixed)).show(ui).edit)
 }
 
 /// A row in a disabled container.
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("value", 40.0_f64);
-    let shown = Stack::new().enabled(false).show(ui, |ui, _| saturation_row(value_at.bind(value)).show(ui));
+    let shown = Stack::new().enabled(false).show(ui, |ui, _| saturation_row(value_at.bind(value)).show(ui).edit);
     row_output(shown.inner.flatten())
 }
 
@@ -261,5 +261,5 @@ fn channel_row_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row_marks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let marks = [0.0, 50.0, 100.0];
-    row_output(saturation_row(data.bind("value", 40.0_f64)).marks(&marks).show(ui))
+    row_output(saturation_row(data.bind("value", 40.0_f64)).marks(&marks).show(ui).edit)
 }
