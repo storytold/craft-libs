@@ -37,6 +37,7 @@ for i in 0..file.frames.len() {
   Which frames are key frames, and the frame rate, come from the container.
 - A `Picture` holds the samples as coded. The decoder makes no statement about their colour
   matrix or range: nothing in the stream says, and comparing with ffmpeg cannot tell.
+  `VideoFrame::try_from(picture)` leaves them unspecified.
 - After an error the decoder keeps the last picture that decoded.
 - `reset()` forgets the previous picture, for decoding from a key frame after a seek.
 
