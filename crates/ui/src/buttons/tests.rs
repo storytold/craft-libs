@@ -22,6 +22,8 @@ struct ButtonTest {
     size: Vec2,
     clicks: usize,
     tint: Option<Color32>,
+    animated_hover: bool,
+    time: f64,
 }
 
 impl ButtonTest {
@@ -29,26 +31,43 @@ impl ButtonTest {
         let ctx = Context::default();
         ctx.enable_accesskit();
         ctx.global_style_mut(|s| s.animation_time = 0.0);
-        Self { ctx, style: style(), enabled: true, selected: false, label: "Inspect layers".into(), size: vec2(32.0, 32.0), clicks: 0, tint: None }
+        Self {
+            ctx,
+            style: style(),
+            enabled: true,
+            selected: false,
+            label: "Inspect layers".into(),
+            size: vec2(32.0, 32.0),
+            clicks: 0,
+            tint: None,
+            animated_hover: false,
+            time: 0.0,
+        }
     }
 
     fn frame(&mut self, events: Vec<Event>) -> (Response, FullOutput) {
         let ctx = self.ctx.clone();
         let mut response = None;
         self.tint = None;
-        let mut output =
-            ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), events, ..Default::default() }, |ui| {
+        self.time += 1.0 / 60.0;
+        let mut output = ctx.run_ui(
+            RawInput { time: Some(self.time), screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))), events, ..Default::default() },
+            |ui| {
                 let r = ui
                     .add_enabled_ui(self.enabled, |ui| {
-                        IconButton::new(&self.label, self.size, &self.style).selected(self.selected).show(ui, |ui, rect, tint| {
-                            self.tint = Some(tint);
-                            ui.painter().circle_filled(rect.center(), 3.0, tint);
-                        })
+                        IconButton::new(&self.label, self.size, &self.style).selected(self.selected).animated_hover(self.animated_hover).show(
+                            ui,
+                            |ui, rect, tint| {
+                                self.tint = Some(tint);
+                                ui.painter().circle_filled(rect.center(), 3.0, tint);
+                            },
+                        )
                     })
                     .inner;
                 self.clicks += usize::from(r.clicked());
                 response = Some(r);
-            });
+            },
+        );
         output.textures_delta.clear();
         (response.unwrap(), output)
     }
@@ -57,6 +76,53 @@ impl ButtonTest {
         self.frame(vec![]);
         self.frame(vec![]).0
     }
+}
+
+#[test]
+fn opt_in_hover_fades_both_ways_but_press_and_selection_are_immediate() {
+    let mut h = ButtonTest::new();
+    h.animated_hover = true;
+    h.ctx.global_style_mut(|s| s.animation_time = 0.3);
+    let inside = h.settle().rect.center();
+    h.frame(vec![Event::PointerMoved(inside)]);
+    assert_ne!(h.tint, Some(Color32::GREEN), "hover must not jump directly to its target");
+    for _ in 0..24 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.tint, Some(Color32::GREEN));
+    h.frame(vec![pointer(inside, true)]);
+    assert_eq!(h.tint, Some(Color32::RED));
+    h.selected = true;
+    h.frame(vec![]);
+    assert_eq!(h.tint, Some(Color32::YELLOW));
+    h.selected = false;
+    h.frame(vec![pointer(inside, false), Event::PointerMoved(pos2(300.0, 150.0))]);
+    assert_ne!(h.tint, Some(Color32::WHITE), "leaving should fade instead of jumping");
+    for _ in 0..24 {
+        h.frame(vec![]);
+    }
+    assert_eq!(h.tint, Some(Color32::WHITE));
+}
+
+#[test]
+fn motion_off_and_disabling_snap_even_in_the_middle_of_a_hover() {
+    let mut h = ButtonTest::new();
+    h.animated_hover = true;
+    h.ctx.global_style_mut(|s| s.animation_time = 0.3);
+    let inside = h.settle().rect.center();
+    h.frame(vec![Event::PointerMoved(inside)]);
+    h.enabled = false;
+    h.frame(vec![]);
+    assert_eq!(h.tint, Some(Color32::WHITE));
+    h.enabled = true;
+    // egui's hover hit testing uses the previous pass: register the re-enabled target first.
+    h.frame(vec![]);
+    h.ctx.global_style_mut(|s| s.animation_time = 0.0);
+    let (response, _) = h.frame(vec![Event::PointerMoved(inside)]);
+    assert!(response.hovered());
+    assert_eq!(h.tint, Some(Color32::GREEN));
+    h.frame(vec![Event::PointerMoved(pos2(300.0, 150.0))]);
+    assert_eq!(h.tint, Some(Color32::WHITE));
 }
 
 fn pointer(pos: Pos2, pressed: bool) -> Event {
