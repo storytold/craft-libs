@@ -9,7 +9,7 @@ use craft_ui::primitives::{TextKey, TextOptions};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 const TEXT: PartKey = PartKey::new("text");
@@ -104,7 +104,7 @@ fn shown_editor(text: &str, size: Option<f32>, top: bool) -> (Fixture, Rc<RefCel
     let (shown, read) = (value.clone(), painted.clone());
     let mut fixture = Fixture::new(move |ui| {
         let mut held = shown.borrow_mut();
-        Editor { common: Common::new(), value: Bind::bound(&mut *held), size, top, painted: &*read }.id_salt("editor").show(ui);
+        Editor { common: Common::new(), value: Bind::bound(&mut *held), size, top, painted: &read }.id_salt("editor").show(ui);
     });
     fixture.settle();
     (fixture, value, painted)
