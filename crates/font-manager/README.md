@@ -21,7 +21,7 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
 - **Across the top**: Browse and Installed, with their counts, and one search field.
 - **Filters** at the reading start, each under its label: category, language (searchable by its
   English name or its own, "Japanese · 日本語"), script, source, and installed or not; each option
-  with its count.
+  with its count. The script menu leaves out scripts no family has for the other filters.
 - **Family cards**, one per row: the name, style count, category and source on one line with the
   card's state at its end (Install, whose menu installs for all apps or for Craft apps only, and
   Preview, Installed, a progress bar while downloading,
@@ -33,9 +33,10 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   characters once typing pauses. A card the service draws offers no Preview; one whose subset
   failed does, and so does its details sheet. The arrow keys step through the cards and Enter
   opens one.
-- **Sample toolbar**: a preset (a sentence in the language filtered by, else the family's own
-  sample from the index, by its `sample_script`; the alphabet; numerals), the sample text, and the
-  size.
+- **Sample toolbar**: a preset (a sentence in the script filtered by: the language's when it is
+  written in that script, else the index's sample for the script; without a script, in the language
+  filtered by; else the family's own sample from the index, by its `sample_script`; the alphabet;
+  numerals), the sample text, and the size.
 - **Details sheet** over the list: every style in its own face with Install or Remove for each,
   Install all (with the same menu) and Remove all, whether the family is available to all apps
   with the switch that changes it, the source, scripts and languages, and what a preview downloads.

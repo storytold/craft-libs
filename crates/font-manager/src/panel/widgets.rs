@@ -244,6 +244,22 @@ pub fn cells_column<T: PartialEq + Clone>(ui: &mut Ui, s: &Skin, value: &mut T, 
     changed
 }
 
+/// An option of a drop-down menu the width of `ui`, with its count at the reading end. Returns
+/// whether the choice changed.
+pub fn menu_option<T: PartialEq + Clone>(ui: &mut Ui, s: &Skin, value: &mut T, cell: &Cell<'_, T>) -> bool {
+    let on = *value == cell.value;
+    let mut button = egui::Button::selectable(on, cell.label).min_size(vec2(ui.available_width(), 0.0));
+    if let Some(n) = cell.count {
+        let count = egui::RichText::new(count_text(n));
+        button = button.right_text(if on { count } else { count.color(s.p.muted) });
+    }
+    if ui.add(button).clicked() && !on {
+        *value = cell.value.clone();
+        return true;
+    }
+    false
+}
+
 /// Options side by side in hairline cells, in reading order; the chosen one inverted.
 pub fn cells_row<T: PartialEq + Clone>(ui: &mut Ui, s: &Skin, value: &mut T, options: &[Cell<'_, T>]) -> bool {
     let p = s.p;

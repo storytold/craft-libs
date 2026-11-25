@@ -182,6 +182,9 @@ pub struct FontsPanel {
     /// Families per category (all first) and per install state, for the other filters as set.
     pub(crate) category_counts: [usize; 6],
     pub(crate) show_counts: [usize; 3],
+    /// Families of any script (first) and per script, in [`Index::scripts`] order, for the other
+    /// filters as set.
+    pub(crate) script_counts: Vec<usize>,
     pub(crate) language_text: String,
     pub(crate) installed: Vec<InstalledFamily>,
     /// Installed faces by lower-case family name, every source together.
@@ -316,6 +319,7 @@ impl FontsPanel {
             source_message: None,
             category_counts: [0; 6],
             show_counts: [0; 3],
+            script_counts: Vec::new(),
             language_text: String::new(),
             installed: Vec::new(),
             installed_by_name: HashMap::new(),
@@ -690,20 +694,35 @@ impl FontsPanel {
             Show::Installed => installed(i),
             Show::NotInstalled => !installed(i),
         };
-        let any_category = Query { category: None, ..self.query.clone() };
+        let others = Query { category: None, script: None, ..self.query.clone() };
+        let script_position: HashMap<&str, usize> = c.index.scripts().iter().enumerate().map(|(n, s)| (s.id.as_str(), n)).collect();
         let mut by_category = [0usize; 6];
         let mut by_state = [0usize; 3];
         let mut by_source: Vec<usize> = vec![0; c.index.sources().len()];
-        for i in c.search.families(&c.index, &any_category) {
+        let mut by_script: Vec<usize> = vec![0; c.index.scripts().len() + 1];
+        for i in c.search.families(&c.index, &others) {
             let Some(f) = c.index.families().get(i) else { continue };
             let in_category = self.query.category.is_none_or(|q| categories(f).any(|fc| fc == q));
+            let in_script = self.query.script.as_ref().is_none_or(|s| f.scripts.contains(s));
             if in_category
+                && in_script
                 && shows(self.show, i)
                 && let Some(n) = c.index.sources().iter().position(|s| s.id == f.source).and_then(|n| by_source.get_mut(n))
             {
                 *n += 1;
             }
             if !from(i, &self.source) {
+                continue;
+            }
+            if in_category && shows(self.show, i) {
+                by_script[0] += 1;
+                for n in f.scripts.iter().filter_map(|s| script_position.get(s.as_str())) {
+                    if let Some(count) = by_script.get_mut(n + 1) {
+                        *count += 1;
+                    }
+                }
+            }
+            if !in_script {
                 continue;
             }
             if shows(self.show, i) {
@@ -722,6 +741,7 @@ impl FontsPanel {
         self.category_counts = by_category;
         self.show_counts = by_state;
         self.source_counts = by_source;
+        self.script_counts = by_script;
         self.results = c.search.families(&c.index, &self.query).into_iter().filter(|&i| shows(self.show, i) && from(i, &self.source)).collect();
         self.results_for = Some(key);
     }
@@ -748,7 +768,8 @@ impl FontsPanel {
     }
 
     /// The sample for a family with `scripts` and the index sample `own` ([`samples::of_family`]):
-    /// what the user typed, else the preset.
+    /// what the user typed, else the preset; the Sentence preset in the script filtered by, else
+    /// in the language ([`samples::sentence`]).
     pub(crate) fn sample_for<'a>(&self, own: Option<&str>, scripts: impl IntoIterator<Item = &'a str>) -> String {
         if !self.settings.sample.trim().is_empty() {
             return self.settings.sample.clone();
@@ -756,10 +777,13 @@ impl FontsPanel {
         match self.settings.preset {
             Preset::Alphabet => samples::ALPHABET.to_owned(),
             Preset::Numerals => samples::NUMERALS.to_owned(),
-            Preset::Sentence => {
-                let language = self.catalogue.as_ref().ok().zip(self.query.language).and_then(|(c, l)| c.index.languages().get(l));
-                language.and_then(|l| samples::for_language(&l.id)).or(own).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
-            }
+            Preset::Sentence => match &self.catalogue {
+                Ok(c) => {
+                    let language = self.query.language.and_then(|l| c.index.languages().get(l));
+                    samples::sentence(&c.index, language, self.query.script.as_deref(), own, scripts).to_owned()
+                }
+                Err(_) => own.unwrap_or_else(|| samples::for_scripts(scripts)).to_owned(),
+            },
         }
     }
 
@@ -858,5 +882,95 @@ impl FontsPanel {
 
     pub(crate) fn index(&self) -> Option<Arc<Index>> {
         self.catalogue.as_ref().ok().map(|c| Arc::clone(&c.index))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::NoStore;
+
+    /// Arabic, Cyrillic and Latin sans families, a Cyrillic serif, and Greek that no family has;
+    /// index samples for Arabic and Cyrillic.
+    fn panel() -> FontsPanel {
+        let family = |name: &str, category: &str, languages: &str, scripts: &str| {
+            format!(
+                r#"{{"family":"{name}","categories":["{category}"],"languages":[{languages}],"scripts":[{scripts}],"license":"OFL","license_path":null,
+                "files":[{{"path":"ofl/{}/{}.ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}]}}"#,
+                name.replace(' ', "").to_lowercase(),
+                name.replace(' ', ""),
+                "0a".repeat(32)
+            )
+        };
+        let json = format!(
+            r#"{{"schema":1,"version":"1.2","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
+            "languages":[
+              {{"id":"ar_Arab","name":"Arabic","script":"Arab","population":1}},
+              {{"id":"en_Latn","name":"English","script":"Latn","population":1}},
+              {{"id":"ru_Cyrl","name":"Russian","script":"Cyrl","population":1}}],
+            "scripts":[{{"id":"Arab","name":"Arabic"}},{{"id":"Cyrl","name":"Cyrillic"}},{{"id":"Grek","name":"Greek"}},{{"id":"Latn","name":"Latin"}}],
+            "samples":{{"Arab":{{"text":"نص عربي من الفهرس","method":"udhr","language":"ar_Arab"}},"Cyrl":{{"text":"Текст из индекса","method":"udhr","language":"ru_Cyrl"}}}},
+            "families":[{},{},{},{}]}}"#,
+            family("Sans Arabic", "SANS_SERIF", "0,1", r#""Arab","Latn""#),
+            family("Sans Cyrillic", "SANS_SERIF", "1,2", r#""Cyrl","Latn""#),
+            family("Serif Cyrillic", "SERIF", "1,2", r#""Cyrl","Latn""#),
+            family("Sans Latin", "SANS_SERIF", "1", r#""Latn""#),
+        );
+        let options = Options {
+            catalog: Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() })),
+            installer: Arc::new(NoStore),
+            index: Ok(Index::from_json(json.as_bytes()).unwrap()),
+            runner: Runner::Inline,
+        };
+        let mut panel = FontsPanel::new(options, Settings::default());
+        panel.use_default_filters("en");
+        panel.refresh_results();
+        panel
+    }
+
+    #[test]
+    fn a_chosen_script_previews_in_that_script() {
+        let mut panel = panel();
+        let latin_family = |panel: &FontsPanel| panel.sample_for(None, ["Cyrl", "Latn"]);
+        assert_eq!(latin_family(&panel), samples::PANGRAM, "the language's sentence without a script");
+
+        let index = panel.index().unwrap();
+        let russian = index.languages().iter().position(|l| l.id == "ru_Cyrl");
+        panel.query.script = Some("Arab".into());
+        assert_eq!(panel.sample_for(Some(samples::PANGRAM), ["Arab", "Latn"]), index.sample("Arab").unwrap().text, "the index's sample over English");
+        panel.query.script = Some("Grek".into());
+        assert_eq!(latin_family(&panel), samples::for_script("Grek").unwrap(), "a built-in sentence where the index has none");
+        panel.query.script = Some("Cyrl".into());
+        assert_eq!(latin_family(&panel), index.sample("Cyrl").unwrap().text);
+        panel.query.language = russian;
+        assert_eq!(latin_family(&panel), samples::for_language("ru_Cyrl").unwrap(), "the language's own sentence in its script");
+
+        panel.settings.preset = Preset::Numerals;
+        assert_eq!(latin_family(&panel), samples::NUMERALS);
+        panel.settings.sample = "typed".into();
+        assert_eq!(latin_family(&panel), "typed");
+    }
+
+    #[test]
+    fn script_counts_are_what_choosing_the_script_shows() {
+        let mut panel = panel();
+        let index = panel.index().unwrap();
+        let counts = panel.script_counts.clone();
+        assert_eq!(counts.first().copied(), Some(panel.results.len()), "any script: the list as it is");
+        let greek = index.scripts().iter().position(|s| s.id == "Grek").unwrap();
+        assert_eq!(counts.get(greek + 1).copied(), Some(0), "no family has Greek");
+        for (n, script) in index.scripts().iter().enumerate() {
+            panel.query.script = Some(script.id.clone());
+            panel.refresh_results();
+            assert_eq!(counts.get(n + 1).copied(), Some(panel.results.len()), "{}", script.name);
+            assert_eq!(panel.script_counts, counts, "choosing a script leaves the counts be");
+        }
+
+        // The other counts still follow the script.
+        panel.query.script = Some("Cyrl".into());
+        panel.query.category = None;
+        panel.refresh_results();
+        assert_eq!(panel.category_counts[0], panel.results.len());
+        assert_eq!(panel.show_counts[0], panel.results.len());
     }
 }

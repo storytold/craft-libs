@@ -2,7 +2,7 @@
 //! one the preview service's sample subsets hold; a sentence in the language the catalogue is
 //! filtered by; and built-in sentences by script for families the index has no sample for.
 
-use crate::index::{Family, Index};
+use crate::index::{Family, Index, Language};
 use crate::panel::app::list_file;
 
 /// The English pangram, the sample for Latin.
@@ -87,6 +87,31 @@ pub fn for_script(script: &str) -> Option<&'static str> {
 /// face's `sample_script` (else the family's), or the face's own text.
 pub fn of_family<'a>(index: &'a Index, family: &'a Family) -> Option<&'a str> {
     list_file(family).and_then(|file| index.sample_text(family, file))
+}
+
+/// The Sentence preset for a family with `scripts` and the index sample `own`, in a catalogue
+/// filtered by `language` and `script`. With a script chosen the family shows that script: the
+/// language's sentence when the language is written in it, else the index's sample for the
+/// script, else a built-in one. Without one, the language's sentence. Then the family's own
+/// sample, then [`for_scripts`].
+pub fn sentence<'a, 's>(
+    index: &'a Index,
+    language: Option<&'a Language>,
+    script: Option<&str>,
+    own: Option<&'a str>,
+    scripts: impl IntoIterator<Item = &'s str>,
+) -> &'a str {
+    let in_language = language.filter(|l| script.is_none_or(|s| language_script(l) == s)).and_then(|l| for_language(&l.id));
+    let in_script = || script.and_then(|s| index.sample(s).map(|sample| sample.text.as_str()).or_else(|| for_script(s)));
+    in_language.or_else(in_script).or(own).unwrap_or_else(|| for_scripts(scripts))
+}
+
+/// The ISO 15924 script `language` is written in: its own, else the one in its id.
+fn language_script(language: &Language) -> &str {
+    match language.script.as_str() {
+        "" => language.id.split('_').nth(1).unwrap_or(""),
+        script => script,
+    }
 }
 
 /// The sample for a family with `scripts`: the pangram when it has Latin, else a sentence in the
