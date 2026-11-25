@@ -32,8 +32,10 @@
 //!
 //! When the app draws the frame, [`Frame::App`] carries the [`Layout`] of window buttons the
 //! desktop names (GNOME's `button-layout`), so the app's header bar puts minimize, maximize and
-//! close where that desktop puts them. This crate decides *whether* and *where*; drawing the
-//! buttons stays with each app (their title bars differ).
+//! close where that desktop puts them. This crate decides *whether* and *where*; with the `egui`
+//! feature, [`controls`] also draws the buttons and the resize edges, so they look and behave the
+//! same in every app. Where the buttons go in the header bar stays with each app (their title
+//! bars differ).
 //!
 //! # With egui
 //!
@@ -137,6 +139,8 @@
 //! The `restore` feature (no egui) adds [`restore`]: where a window opens, from the last session's
 //! geometry and the connected monitors, and the `window.json` store beside `config.toml`.
 
+#[cfg(feature = "egui")]
+pub mod controls;
 mod desktop;
 mod layout;
 mod list;
@@ -339,13 +343,14 @@ impl Layout {
     }
 }
 
-/// GNOME's button layout where `gsettings` can read it, else the default. Returns the default on
-/// any platform without `gsettings` or when the value names no usable button.
+/// GNOME's button layout, else the default. It is read from the XDG Desktop Portal first, which
+/// answers inside a Flatpak sandbox too (where `gsettings` reads the sandbox's own settings, not
+/// the desktop's), then from `gsettings`. Returns the default on any platform without either, or
+/// when the value names no usable button.
 fn desktop_button_layout() -> Layout {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-    if let Some(value) = platform::gsettings_button_layout() {
-        let layout = Layout::parse(&value);
-        if layout.is_usable() {
+    for read in [platform::portal_button_layout, platform::gsettings_button_layout] {
+        if let Some(layout) = read().map(|value| Layout::parse(&value)).filter(Layout::is_usable) {
             return layout;
         }
     }
@@ -394,20 +399,20 @@ mod platform {
     /// compositor that never answers would leave that one worker parked for the process's life;
     /// acceptable because this is a single, one-shot call, not a repeated one.)
     pub(super) fn wayland_leaves_frame_to_app() -> bool {
-        bounded(registry_leaves_frame_to_app).flatten().unwrap_or(false)
+        bounded(PROBE_TIMEOUT, registry_leaves_frame_to_app).flatten().unwrap_or(false)
     }
 
     /// Whether the Wayland compositor offers server-side decorations: `None` when there is no
     /// answer (no compositor, an inherited socket, a stalled registry), same deadline as above.
     pub(super) fn wayland_offers_ssd() -> Option<bool> {
-        bounded(registry_leaves_frame_to_app).flatten().map(|leaves| !leaves)
+        bounded(PROBE_TIMEOUT, registry_leaves_frame_to_app).flatten().map(|leaves| !leaves)
     }
 
     /// Run `f` on a short-lived worker thread with a 500 ms deadline, so a stalled dependency can't
     /// block window startup. `None` when the thread can't be spawned or `f` doesn't finish in time;
     /// otherwise `f`'s return value. For a child process, prefer [`gsettings_button_layout`], which
     /// also kills and reaps the child on timeout; this helper only bounds the caller's wait.
-    fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    fn bounded<T: Send + 'static>(timeout: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
         let (send, receive) = mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new().name("craft-window-probe".into()).spawn(move || {
             let _ = send.send(f());
@@ -415,7 +420,53 @@ mod platform {
         if spawned.is_err() {
             return None;
         }
-        receive.recv_timeout(Duration::from_millis(500)).ok()
+        receive.recv_timeout(timeout).ok()
+    }
+
+    /// How long the compositor probe and `gsettings` may take.
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// How long the portal may take. Longer than the probe: it may be starting on demand when an
+    /// app is opened right after login.
+    const PORTAL_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// GNOME's `button-layout`, read through the XDG Desktop Portal's Settings interface:
+    /// `ReadOne`, or the older `Read` on portals before xdg-desktop-portal 1.17.1, which offer only
+    /// that (as `craft-platform`'s appearance reader does). `None` when there is no session bus or
+    /// portal, the portal doesn't know the key, or it doesn't answer within [`PORTAL_TIMEOUT`].
+    pub(super) fn portal_button_layout() -> Option<String> {
+        bounded(PORTAL_TIMEOUT, || {
+            let connection = zbus::blocking::connection::Builder::session().ok()?.method_timeout(PORTAL_TIMEOUT).build().ok()?;
+            [("ReadOne", false), ("Read", true)].into_iter().find_map(|(method, legacy)| {
+                let reply = connection
+                    .call_method(
+                        Some("org.freedesktop.portal.Desktop"),
+                        "/org/freedesktop/portal/desktop",
+                        Some("org.freedesktop.portal.Settings"),
+                        method,
+                        &("org.gnome.desktop.wm.preferences", "button-layout"),
+                    )
+                    .ok()?;
+                // The reply's body is the one variant itself, read as a bare value.
+                let value = reply.body().deserialize::<zbus::zvariant::OwnedValue>().ok()?;
+                portal_reply(&value, legacy)
+            })
+        })
+        .flatten()
+    }
+
+    /// The layout string in a Settings portal reply: `ReadOne`'s value is the setting's own, and
+    /// `Read` wraps it in one more variant. `None` for anything else, or an empty string.
+    pub(super) fn portal_reply(value: &zbus::zvariant::Value<'_>, legacy: bool) -> Option<String> {
+        use zbus::zvariant::Value;
+        let value = match (value, legacy) {
+            (Value::Value(inner), true) => &**inner,
+            (value, false) => value,
+            _ => return None,
+        };
+        let Value::Str(s) = value else { return None };
+        let s = s.as_str().trim();
+        if s.is_empty() { None } else { Some(s.to_string()) }
     }
 
     /// A fresh connection (never winit's inherited one): `None` when there is no Wayland
@@ -462,7 +513,7 @@ mod platform {
             let _ = child.wait();
             return None;
         }
-        let output = receive.recv_timeout(Duration::from_millis(500));
+        let output = receive.recv_timeout(PROBE_TIMEOUT);
         // Kill-and-reap whether it finished or timed out: a finished child still needs reaping, and
         // a timed-out one must not linger. `kill` on an exited child is a harmless error.
         let _ = child.kill();
@@ -563,5 +614,40 @@ mod tests {
         let choice = super::Choice::probe(Prefix::new("CRAFT_WINDOW_UNSET_FOR_TEST"));
         assert_eq!(choice.frame(), &Frame::Desktop);
         assert_eq!(choice.overridden(), None);
+    }
+
+    /// `ReadOne` answers with the setting's value; the older `Read` wraps it in one more variant.
+    /// Either way the layout is the string itself, which `Layout::parse` reads.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn the_portal_reply_is_read_as_the_layout_string() {
+        use super::platform::portal_reply;
+        use zbus::zvariant::Value;
+        let layout = Value::from("appmenu:minimize,maximize,close");
+        let wrapped = Value::Value(Box::new(layout.try_clone().unwrap()));
+        assert_eq!(portal_reply(&layout, false).as_deref(), Some("appmenu:minimize,maximize,close"));
+        assert_eq!(portal_reply(&wrapped, true).as_deref(), Some("appmenu:minimize,maximize,close"));
+        assert!(Layout::parse(&portal_reply(&layout, false).unwrap()).is_usable());
+        // Read's reply without its wrapper, a wrapped ReadOne reply, another type or a blank: none.
+        assert_eq!(portal_reply(&layout, true), None);
+        assert_eq!(portal_reply(&Value::Value(Box::new(Value::Value(Box::new(layout.try_clone().unwrap())))), true), None);
+        assert_eq!(portal_reply(&Value::U32(1), false), None);
+        assert_eq!(portal_reply(&Value::from("  "), false), None);
+    }
+
+    /// The body of a `ReadOne` reply (signature `v`) deserializes to the setting's value itself, not
+    /// a variant of its signature, so the bare `OwnedValue` read is the right one.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn a_read_one_reply_body_is_the_value() {
+        use zbus::zvariant::{OwnedValue, Value};
+        let reply = zbus::message::Message::method_return(
+            &zbus::message::Message::method_call("/org/freedesktop/portal/desktop", "ReadOne").unwrap().build(&()).unwrap().header(),
+        )
+        .unwrap()
+        .build(&Value::from("close:"))
+        .unwrap();
+        let value = reply.body().deserialize::<OwnedValue>().unwrap();
+        assert_eq!(super::platform::portal_reply(&value, false).as_deref(), Some("close:"));
     }
 }
