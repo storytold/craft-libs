@@ -9,6 +9,19 @@ use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Area, Id, LayerId, Order, Pos2, Rect, emath::TSTransform};
 
+/// How a sibling leaves a sweep in the pass a drag crosses it.
+#[derive(Clone, Copy, Debug)]
+enum Leaving {
+    /// Disabled before the crossing pass.
+    Disabled,
+    /// Clipped away before the crossing pass, so no part of it shows.
+    Hidden,
+    /// Laid out lower in the crossing pass, away from the drag.
+    Moved,
+    /// Left out of the layout in the crossing pass.
+    Removed,
+}
+
 #[trial]
 fn a_checkbox_sweep_keeps_its_group_and_skips_disabled_boxes() {
     let values = Rc::new(RefCell::new([true, false, true, true, true]));
@@ -119,6 +132,56 @@ fn a_checkbox_that_becomes_enabled_during_a_sweep_and_is_crossed_engages_the_own
             *values.borrow(),
             [true, true],
             "the sibling enabled during the press takes the sweep, so its owner does too (released with the move: {released_with_the_move})"
+        );
+    }
+}
+
+#[trial]
+fn a_checkbox_sibling_that_leaves_the_sweep_in_the_crossing_pass_does_not_engage_its_owner() {
+    for leaving in [Leaving::Disabled, Leaving::Hidden, Leaving::Moved, Leaving::Removed] {
+        let values = Rc::new(RefCell::new([false; 2]));
+        let left = Rc::new(Cell::new(false));
+        let (shown, left_before_the_crossing) = (values.clone(), left.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut values = shown.borrow_mut();
+            Checkbox::new(Bind::bound(&mut values[0])).label("Owner").show(ui);
+            let left = left_before_the_crossing.get();
+            match leaving {
+                Leaving::Disabled => {
+                    Checkbox::new(Bind::bound(&mut values[1])).label("Sibling").enabled(!left).show(ui);
+                }
+                Leaving::Hidden => {
+                    let clip = ui.clip_rect();
+                    ui.set_clip_rect(if left { Rect::from_min_max(clip.min, clip.min) } else { clip });
+                    Checkbox::new(Bind::bound(&mut values[1])).label("Sibling").show(ui);
+                    ui.set_clip_rect(clip);
+                }
+                Leaving::Moved => {
+                    if left {
+                        ui.add_space(80.0);
+                    }
+                    Checkbox::new(Bind::bound(&mut values[1])).label("Sibling").show(ui);
+                }
+                Leaving::Removed => {
+                    if !left {
+                        Checkbox::new(Bind::bound(&mut values[1])).label("Sibling").show(ui);
+                    }
+                }
+            }
+        });
+        fixture.settle();
+        let owner = fixture.by_label("Owner").expect("owner");
+        // The drag crosses the sibling by its box: a disabled box offers no action, so `by_label` would find the text
+        // of its label beside it. The press on the owner goes up there, off the owner.
+        let sibling = fixture.by_role(Role::CHECK_BOX).get(1).expect("the sibling's box").center();
+        fixture.press(&owner);
+        left.set(true);
+        fixture.frame(vec![pointer::moved(sibling), pointer::release(sibling)]);
+        fixture.idle(2);
+        assert_eq!(
+            *values.borrow(),
+            [false, false],
+            "a sibling the crossing pass leaves takes no sweep, so the press is one released outside the owner and neither box changes (leaving: {leaving:?})"
         );
     }
 }

@@ -1,7 +1,9 @@
 //! A primary press on a standalone toggle can set the other toggles of its layout as it sweeps.
 //!
 //! A drag from a toggle that crosses no other toggle of its layout and does not end on the toggle itself is not a sweep:
-//! it cancels, as a press released outside a control does, and the pressed toggle keeps its value.
+//! it cancels, as a press released outside a control does, and the pressed toggle keeps its value. Only a toggle that
+//! takes the sweep in the pass the drag reaches it counts as crossed: one that pass disables, hides, moves or leaves out
+//! takes nothing, so the press stays one released outside the control.
 
 use std::sync::Arc;
 
@@ -72,39 +74,37 @@ struct Sweep {
     on: bool,
     travel: Travel,
     visited: IdSet,
-    /// The drag has crossed another toggle of the group or ended on the owner, so the owner takes the value too.
+    /// A sibling of the group took the sweep's value in a pass, or the button went up over the owner: the owner takes
+    /// the value too, in this pass or the next.
     engaged: bool,
 }
 
-/// A toggle that asked for the sweep's value in one pass: where it was and whether a sweep may set it.
-#[derive(Clone)]
-struct Member {
-    id: Id,
-    group: Id,
-    layer: areas::Layer,
-    visible: Rect,
-    enabled: bool,
-}
-
-/// What the owner needs to find out whether its drag has become a sweep.
-struct Probe {
-    path: Arc<Vec<Segment>>,
+/// What a sweep shows its owner: it has engaged, or the button went up over the owner itself.
+#[derive(Clone, Copy)]
+struct Gives {
+    /// The sweep has engaged: a sibling took its value in a pass, or the button went up over the owner.
+    engaged: bool,
     /// Where the button went up, when it went up in this pass.
     end: Option<Pos2>,
-    others: Vec<Member>,
 }
 
-impl Probe {
-    /// Whether the drag crossed another enabled toggle of the group or went up over the owner at `layer` and `visible`.
-    fn engages(&self, ctx: &Context, layer: areas::Layer, visible: Rect) -> bool {
-        let ends_here = self.end.is_some_and(|end| crosses_visible(ctx, layer, visible, &[(end, end)]));
-        ends_here || self.others.iter().any(|other| crosses_visible(ctx, other.layer, other.visible, &self.path))
+impl Gives {
+    /// What `sweep` shows its owner so far.
+    fn of(sweep: &Sweep) -> Self {
+        Gives { engaged: sweep.engaged, end: sweep.travel.released.then_some(sweep.travel.last).flatten() }
+    }
+
+    /// Whether the sweep gives the owner the value at `layer` and `visible`: it has engaged, or the button went up over
+    /// the owner, which is a click rather than a sweep. The last pass's layout says nothing here: a sibling the crossing
+    /// pass disables, hides, moves or leaves out takes no sweep.
+    fn takes(self, ctx: &Context, layer: areas::Layer, visible: Rect) -> bool {
+        self.engaged || self.end.is_some_and(|end| crosses_visible(ctx, layer, visible, &[(end, end)]))
     }
 }
 
 /// What a pass's records say about the toggle asking.
 enum Ready {
-    Owner { on: bool, replay: bool, probe: Option<Probe> },
+    Owner { on: bool, replay: bool, gives: Gives },
     Sibling { on: bool, path: Arc<Vec<Segment>> },
 }
 
@@ -124,10 +124,9 @@ struct Record {
     replay_first_path: bool,
     // The replay survives opening another gesture in the same pass.
     completed: Option<CompletedSweep>,
-    /// The toggles that asked in this pass, and in the last pass that had any: a drag from one of them is a sweep
-    /// only when it reaches another, and the layout of the last pass is the one under the pointer.
-    members: Vec<Member>,
-    earlier: Vec<Member>,
+    /// The toggles that asked in this pass: an owner among them read the sweep before a sibling took it, so it takes the
+    /// value in the next pass.
+    asked: IdSet,
 }
 
 impl Stored for Record {}
@@ -137,9 +136,7 @@ impl Record {
         if self.pass == pass {
             return;
         }
-        if !self.members.is_empty() {
-            self.earlier = std::mem::take(&mut self.members);
-        }
+        self.asked.clear();
         self.completed = None;
         if !self.replay_first_path {
             Arc::make_mut(&mut self.path).clear();
@@ -173,19 +170,14 @@ impl Record {
         }
     }
 
-    /// The other enabled toggles of `group` that asked in the last pass with any: the ones a drag from `owner` can reach.
-    fn others(&self, owner: Id, group: Id) -> Vec<Member> {
-        self.earlier.iter().filter(|other| other.group == group && other.enabled && other.id != owner).cloned().collect()
-    }
-
-    /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group
-    /// and the owner takes the value too: the sibling's own state in this pass decides, not the last pass's layout
-    /// the owner's probe reads. An owner that asked in this pass before the sibling gets the value in the next pass;
-    /// a sweep released in this pass is kept for it then. Returns whether that next pass must run.
+    /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group and the
+    /// owner takes the value too: only a toggle that takes the sweep in this pass counts as crossed. An owner that asked
+    /// in this pass before the sibling gets the value in the next pass; a sweep released in this pass is kept for it then.
+    /// Returns whether that next pass must run.
     fn accept(&mut self, sibling: Id) -> bool {
         let Some(sweep) = &mut self.sweep else { return false };
         sweep.visited.insert(sibling);
-        let late = !sweep.engaged && sweep.travel.released && self.members.iter().any(|member| member.id == sweep.owner);
+        let late = !sweep.engaged && sweep.travel.released && self.asked.contains(&sweep.owner);
         sweep.engaged = true;
         self.replay_first_path |= late;
         late
@@ -222,32 +214,25 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
     let eligible = |sweep: &Sweep| enabled && sweep.group == group && sweep.travel.dragging;
     let completed = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.advance(pass, &input, cancelled);
-        record.members.push(Member { id, group, layer, visible, enabled });
+        record.asked.insert(id);
         let finished = record.completed.as_ref().filter(|finished| eligible(&finished.sweep))?;
         let sweep = &finished.sweep;
         if sweep.owner == id {
-            // A sweep that finished with the next press never ran its owner's probe, so it runs now, over the finished path.
-            let probe = (!sweep.engaged).then(|| Probe {
-                path: Arc::clone(&finished.path),
-                end: sweep.travel.released.then_some(sweep.travel.last).flatten(),
-                others: record.others(id, group),
-            });
-            return Some(Ready::Owner { on: sweep.on, replay: false, probe });
+            // A sweep that finished with the next press never ran its owner's check, so it runs now, over the finished path.
+            return Some(Ready::Owner { on: sweep.on, replay: false, gives: Gives::of(sweep) });
         }
         (!sweep.visited.contains(&id)).then(|| Ready::Sibling { on: sweep.on, path: Arc::clone(&finished.path) })
     })
     .and_then(|ready| match ready {
-        Ready::Owner { on, probe, .. } => {
-            if let Some(probe) = probe {
-                if !probe.engages(ctx, layer, visible) {
-                    return None;
-                }
-                PerViewport::<Record>::with(ctx, viewport, |record| {
-                    if let Some(finished) = record.completed.as_mut().filter(|finished| finished.sweep.owner == id) {
-                        finished.sweep.engaged = true;
-                    }
-                });
+        Ready::Owner { on, gives, .. } => {
+            if !gives.takes(ctx, layer, visible) {
+                return None;
             }
+            PerViewport::<Record>::with(ctx, viewport, |record| {
+                if let Some(finished) = record.completed.as_mut().filter(|finished| finished.sweep.owner == id) {
+                    finished.sweep.engaged = true;
+                }
+            });
             Some(on)
         }
         Ready::Sibling { on, path } => {
@@ -273,28 +258,21 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
         }
         let sweep = record.sweep.as_ref().filter(|sweep| eligible(sweep))?;
         if sweep.owner == id {
-            let probe = (!sweep.engaged).then(|| Probe {
-                path: Arc::clone(&record.path),
-                end: sweep.travel.released.then_some(sweep.travel.last).flatten(),
-                others: record.others(id, group),
-            });
-            return Some(Ready::Owner { on: sweep.on, replay: record.replay_first_path, probe });
+            return Some(Ready::Owner { on: sweep.on, replay: record.replay_first_path, gives: Gives::of(sweep) });
         }
         (!record.path.is_empty() && !sweep.visited.contains(&id)).then(|| Ready::Sibling { on: sweep.on, path: Arc::clone(&record.path) })
     });
     let Some(ready) = ready else { return completed };
     match ready {
-        Ready::Owner { on, replay, probe } => {
-            if let Some(probe) = probe {
-                if !probe.engages(ctx, layer, visible) {
-                    return completed;
-                }
-                PerViewport::<Record>::with(ctx, viewport, |record| {
-                    if let Some(sweep) = record.sweep.as_mut().filter(|sweep| sweep.owner == id) {
-                        sweep.engaged = true;
-                    }
-                });
+        Ready::Owner { on, replay, gives } => {
+            if !gives.takes(ctx, layer, visible) {
+                return completed;
             }
+            PerViewport::<Record>::with(ctx, viewport, |record| {
+                if let Some(sweep) = record.sweep.as_mut().filter(|sweep| sweep.owner == id) {
+                    sweep.engaged = true;
+                }
+            });
             if replay {
                 ctx.request_repaint();
             }
