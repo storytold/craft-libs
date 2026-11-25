@@ -5,9 +5,9 @@
 //! Applications own their assets, themes, layouts, commands and document semantics. Components
 //! accept focused style values and return egui responses; no application engine is required.
 
-pub mod anchor;
 #[cfg(feature = "share")]
 pub mod account;
+pub mod anchor;
 pub mod backdrop;
 pub mod buttons;
 pub mod capture;
