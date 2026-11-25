@@ -688,6 +688,13 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
+    /// Whether the focus ring goes around the lead item while the collection has keyboard-visible focus: the item step
+    /// gives the ring the lead's rect (`Cx::focus_shape`), or the collection's own rect while it has no lead or its
+    /// lead is not shown. Off by default.
+    fn rings_lead(&self) -> bool {
+        false
+    }
+
     /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
     /// makes, under the row-hook contract on `ItemCx`.
     fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r> {
