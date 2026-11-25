@@ -617,9 +617,10 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     let mut clips = clips.into_iter().peekable();
     let events = ctx.input(|input| input.events.clone());
     let mut left = Vec::with_capacity(events.len());
-    // Where each event the input still holds stood among the events the strip left, found from the end: a widget that
-    // takes an event from egui's input reads it in order and takes the first it meets, so where events are equal the
-    // one still here is the last of them, and each event takes its own entry.
+    // Where each event the input still holds stood among the events the strip left, found from the end, so each event
+    // takes its own entry. egui's own consumers take every equal event, so equal events either all stay or all go; for
+    // one an app takes by hand from a run of equal events, the one still here is taken to be the last of them, as a
+    // widget that reads the input in order takes the first it meets. An event carries no identity to do better.
     let mut places = vec![0; events.len()];
     let mut from = passed.len();
     for (index, event) in events.iter().enumerate().rev() {

@@ -106,8 +106,8 @@ fn a_fresh_press_ends_a_fired_key_hold_after_the_events_before_it() {
 fn a_clip_keeps_its_place_beside_equal_events_a_widget_took() {
     let mut frames = Frames::new();
     let left = RefCell::new(Vec::new());
-    // A widget of the app's own takes the first of the two texts in the one frame below, as a widget that reads an
-    // event takes the first match it meets.
+    // A widget of the app's own takes the first of the two texts in the one frame below by hand, as one that reads
+    // the input in order takes the first match it meets (egui's own consumers take every equal event).
     let take = Cell::new(false);
     let mut show = |ui: &mut Ui| {
         if take.replace(false) {
