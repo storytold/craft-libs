@@ -1107,7 +1107,8 @@ impl TransformCache {
     /// Transform compilation happens outside the cache lock to avoid blocking concurrent lookups.
     /// If multiple threads concurrently request the same uncached transform, each may compile it;
     /// the first completion is cached, subsequent completions return the cached transform, and all callers
-    /// receive valid transforms.
+    /// receive valid transforms. A transform larger than the byte limit is returned uncached,
+    /// so a later request computes it again. Existing entries stay in the cache.
     pub fn get(&self, src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
         let key = (src.content_hash(), dst.content_hash(), opts);
         let (src_bytes, dst_bytes) = (src.to_bytes(), dst.to_bytes());
@@ -1187,7 +1188,8 @@ pub fn clear_cache() {
 ///
 /// Retrieves an existing transform or precomputes and caches a new one, evicting
 /// least recently used entries when limits are exceeded. Profile bytes are compared
-/// on a hash hit, and a colliding pair gets its own uncached transform.
+/// on a hash hit, and a colliding pair gets its own uncached transform. A transform
+/// larger than the byte limit is returned uncached and is computed again on the next call.
 pub fn cached(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
     TransformCache::global().get(src, dst, opts)
 }

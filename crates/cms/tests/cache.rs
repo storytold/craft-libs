@@ -212,7 +212,7 @@ fn test_retained_pipeline_clut_memory_accounting_and_eviction() {
     // Verify accounting includes the retained 65^3 * 3 * 4 = 3,295,500 bytes CLUT from the pipeline
     assert!(table_bytes >= 3_295_500, "table_bytes ({table_bytes}) must account for retained pipeline CLUT data (at least 3,295,500 bytes)");
 
-    // Cache with configured limit of 1 MiB (1,048,576 bytes) as reported by @euisuh
+    // A 1 MiB budget fits the small transform but not the retained CLUT.
     let limit_bytes = 1_048_576;
     let cache = TransformCache::with_limits(CacheLimits { max_entries: 10, max_bytes: limit_bytes });
 
