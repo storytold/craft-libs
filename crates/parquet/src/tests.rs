@@ -1,6 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
-use parquet::{data_type::Int64Type, file::properties::WriterProperties, schema::parser::parse_message_type};
+use parquet::{
+    data_type::{ByteArray, ByteArrayType, Int64Type},
+    file::properties::WriterProperties,
+    schema::parser::parse_message_type,
+};
 
 /// A spreadsheet's limits: 1,048,576 rows including the header, 16,384 columns, 5,000,000 cells.
 pub(crate) const LIMITS: TableLimits = TableLimits { max_rows: 1_048_575, max_columns: 16_384, max_cells: 5_000_000 };
@@ -156,3 +160,31 @@ fn mutated_real_envelopes_do_not_panic() {
         assert!(owned.is_ok(), "owned panic at mutated byte {at}");
     }
 }
+
+#[test]
+fn a_repeated_dictionary_entry_cannot_grow_a_table_past_the_text_budget() {
+    let field = Type::primitive_type_builder("text", Physical::BYTE_ARRAY)
+        .with_repetition(Repetition::REQUIRED)
+        .with_converted_type(ConvertedType::UTF8)
+        .build()
+        .unwrap();
+    let schema = Arc::new(Type::group_type_builder("test").with_fields(vec![Arc::new(field)]).build().unwrap());
+    let properties = Arc::new(WriterProperties::builder().set_dictionary_enabled(true).build());
+    let mut writer = SerializedFileWriter::new(Vec::new(), schema, properties).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut col = group.next_column().unwrap().unwrap();
+    let entry = "x".repeat(64 << 10);
+    let values = vec![ByteArray::from(entry.as_str()); 64];
+    col.typed::<ByteArrayType>().write_batch(&values, None, None).unwrap();
+    col.close().unwrap();
+    group.close().unwrap();
+    let bytes = writer.into_inner().unwrap();
+    // 64 rows of one 64 KiB entry decode to 4 MiB from a file a small fraction of that size.
+    assert!(bytes.len() < 256 << 10, "{} bytes", bytes.len());
+    let footer_start = limits::footer(&bytes, &LIMITS).unwrap();
+    let table = |budget| collect(Bytes::from(bytes.clone()), footer_start, &LIMITS, budget);
+    assert!(table(1 << 20).unwrap_err().to_string().contains("decoded-data budget"));
+    assert_eq!(table(4 << 20).unwrap().rows.len(), 64);
+    assert_eq!(read(&bytes).unwrap().rows.len(), 64);
+}
+

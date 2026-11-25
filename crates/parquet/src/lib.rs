@@ -97,33 +97,60 @@ pub struct Table {
 
 /// Reads a borrowed buffer, calling `on_row` once per row after every check on the file's
 /// metadata has passed. Call [`read_owned_rows`] when the input is already owned to avoid a copy.
-pub fn read_rows(bytes: &[u8], limits: &TableLimits, on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
+pub fn read_rows(bytes: &[u8], limits: &TableLimits, mut on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
     let footer_start = limits::footer(bytes, limits)?;
-    read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, on_row)
+    read_buffer(Bytes::copy_from_slice(bytes), footer_start, limits, |row| {
+        on_row(row);
+        Ok(())
+    })
 }
 
 /// Reads an owned buffer, transferring its allocation to the decoder without copying its payload.
-pub fn read_owned_rows(bytes: Vec<u8>, limits: &TableLimits, on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
+pub fn read_owned_rows(bytes: Vec<u8>, limits: &TableLimits, mut on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
     let footer_start = limits::footer(&bytes, limits)?;
-    read_buffer(Bytes::from(bytes), footer_start, limits, on_row)
+    read_buffer(Bytes::from(bytes), footer_start, limits, |row| {
+        on_row(row);
+        Ok(())
+    })
 }
 
 /// Reads a borrowed buffer into a [`Table`]. The table holds a second copy of the data; callers
-/// that store rows elsewhere should use [`read_rows`].
+/// that store rows elsewhere should use [`read_rows`]. The text and decimal values the table keeps
+/// share the 512 MiB decoded-data budget, so a dictionary entry repeated across many rows cannot
+/// grow the table past it.
 pub fn read(bytes: &[u8], limits: &TableLimits) -> Result<Table> {
-    let mut rows = Vec::new();
-    let summary = read_rows(bytes, limits, |row| rows.push(row.to_vec()))?;
-    Ok(Table { columns: summary.columns, rows })
+    let footer_start = limits::footer(bytes, limits)?;
+    collect(Bytes::copy_from_slice(bytes), footer_start, limits, limits::MAX_DECODED)
 }
 
-/// Reads an owned buffer into a [`Table`] without copying the input.
+/// Reads an owned buffer into a [`Table`] without copying the input, under the same text budget
+/// as [`read`].
 pub fn read_owned(bytes: Vec<u8>, limits: &TableLimits) -> Result<Table> {
+    let footer_start = limits::footer(&bytes, limits)?;
+    collect(Bytes::from(bytes), footer_start, limits, limits::MAX_DECODED)
+}
+
+/// Collects every row, stopping with an error once the kept text and decimal values pass
+/// `text_budget` bytes.
+fn collect(bytes: Bytes, footer_start: usize, limits: &TableLimits, text_budget: usize) -> Result<Table> {
     let mut rows = Vec::new();
-    let summary = read_owned_rows(bytes, limits, |row| rows.push(row.to_vec()))?;
+    let mut text_bytes = 0usize;
+    let summary = read_buffer(bytes, footer_start, limits, |row| {
+        for value in row {
+            if let Value::Text(s) | Value::Decimal(s) = value {
+                text_bytes = text_bytes.saturating_add(s.len());
+            }
+        }
+        if text_bytes > text_budget {
+            return Err(invalid("Parquet text exceeds the 512 MiB decoded-data budget; select a smaller table first"));
+        }
+        rows.push(row.to_vec());
+        Ok(())
+    })?;
     Ok(Table { columns: summary.columns, rows })
 }
 
-fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_row: impl FnMut(&[Value])) -> Result<ReadSummary> {
+fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_row: impl FnMut(&[Value]) -> Result<()>) -> Result<ReadSummary> {
     let reader = SerializedFileReader::new(bytes.clone())?;
     let metadata = reader.metadata();
     let info = metadata.file_metadata();
@@ -181,7 +208,7 @@ fn read_buffer(bytes: Bytes, footer_start: usize, limits: &TableLimits, mut on_r
         for (_, field) in row.into_columns() {
             values.push(value(field)?);
         }
-        on_row(&values);
+        on_row(&values)?;
         count += 1;
     }
     if count != rows {

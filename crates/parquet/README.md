@@ -46,6 +46,7 @@ and page headers:
 | one page | 64 MiB |
 | decoded page data | 512 MiB |
 | one text value or field name | 1 MiB |
+| text a `Table` keeps | 512 MiB |
 | text written | 512 MiB |
 
 These are expansion budgets, not a cap on file size. Input files still sit in memory; this is not
