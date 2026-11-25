@@ -729,6 +729,48 @@ fn a_ribbons_font_box_is_short_and_keeps_its_width() {
     assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
 }
 
+/// In a toolbar (`InBar`) or when `compact` is set, the font box is held at the small field length,
+/// narrower than in a form, and keeps its width whichever family it shows.
+#[trial]
+fn a_bars_font_box_is_short_and_keeps_its_width() {
+    let bar_width = |family: &'static str, in_bar: bool, compact: bool| {
+        let catalog = catalog_of(&[INTER_REGULAR]);
+        let mut fx = Fixture::new(move |ui| {
+            let mut family = family.to_owned();
+            let mut show = |ui: &mut egui::Ui| {
+                let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain);
+                if compact {
+                    picker = picker.compact(true);
+                }
+                let _ = picker.show(ui);
+            };
+            if in_bar {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(craft_ui::contract::InBar(true));
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fx.in_room(Room::Window);
+        fx.settle();
+        fx.by_label("Font family").expect("the picker").rect.width()
+    };
+    let standard = bar_width("Inter", false, false);
+    let bar = bar_width("Inter", true, false);
+    let opt_in = bar_width("Inter", false, true);
+    assert!(bar < standard - 0.5, "the bar's font box is narrower: {bar} against {standard}");
+    assert!((bar - opt_in).abs() < 0.5, "the opt-in compact picker matches the bar picker: {opt_in} against {bar}");
+    let length = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.field.sm;
+    assert!((bar - length).abs() < 0.5, "the bar's font box is the small field length {length}: {bar}");
+    let long = bar_width("Source Sans Pro Semibold Condensed Extra", true, false);
+    assert!((long - bar).abs() < 0.5, "a long family name leaves its width in a bar: {long} against {bar}");
+}
+
 /// The width of a plain picker over "Inter" in a ribbon group's place, in a row beside a block that leaves it 60 pt of
 /// the window, so the row shrinks it to its least.
 fn squeezed_ribbon_picker_width() -> f32 {

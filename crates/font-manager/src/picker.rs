@@ -19,7 +19,7 @@ use craft_host::Section;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, InBar, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _, step_stop,
 };
 use craft_ui::controls::disclosure::{DisclosureGlyph, DropdownArrow};
@@ -732,6 +732,9 @@ pub struct FontPicker<'a> {
     #[prop]
     current_host: Option<String>,
     host_picked: Option<String>,
+    /// Whether the font picker uses compact bar sizing (`size.length.field.sm` / `size.length.short`).
+    #[style_key]
+    compact: bool,
 }
 
 /// How many times a closed [`FontPicker`] built its stop list on `ctx`, for regression trials.
@@ -778,9 +781,17 @@ impl<'a> FontPicker<'a> {
             host: &[],
             current_host: None,
             host_picked: None,
+            compact: false,
         }
         .label(label)
         .enabled(catalog.is_ready())
+    }
+
+    /// Sets whether the font picker uses compact bar sizing (`size.length.field.sm` / `size.length.short`).
+    #[must_use]
+    pub fn compact(mut self, compact: bool) -> Self {
+        self.compact = compact;
+        self
     }
 
     /// The adornments at the end of the field: the missing mark when `missing`, then the chevron. The mark is a glyph
@@ -897,11 +908,14 @@ impl Component for FontPicker<'_> {
     type Style = FontPickerStyle;
     type Output = FontPickerOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) held at the small field length (`size.length.field.sm`), as a
-    /// ribbon's font box is: wide enough for a family name and its menu arrow, the same width whichever it shows.
-    fn style(cx: &StyleCx<'_>, _: FontPickerStyleKey) -> FontPickerStyle {
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) or toolbar (`InBar`), or when `compact` is set,
+    /// held at the small field length (`size.length.field.sm`), as a ribbon's font box is:
+    /// wide enough for a family name and its menu arrow, the same width whichever it shows.
+    fn style(cx: &StyleCx<'_>, key: FontPickerStyleKey) -> FontPickerStyle {
         let field = FieldStyle::at(cx);
-        let field = if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.held_at(cx.tokens.size.length.field.sm) } else { field };
+        let in_bar = cx.env::<InBar>().0;
+        let ribbon = cx.env::<ControlPlace>() == ControlPlace::Ribbon;
+        let field = if key.compact || ribbon || in_bar { field.held_at(cx.tokens.size.length.field.sm) } else { field };
         let warn = cx.tone(Tone::Warn);
         let off = cx.color(cx.tokens.color.text.disabled);
         let thumb = &cx.tokens.size.thumb;
@@ -923,7 +937,7 @@ impl Component for FontPicker<'_> {
     }
 
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.
-    /// In a ribbon the name field is the short field length (`size.length.short`) wide whichever family it shows, a
+    /// In a ribbon or toolbar the name field is the short field length (`size.length.short`) wide whichever family it shows, a
     /// longer name scrolling in it as in a word processor's font box: that is its least, about the old ribbon's font
     /// name, so a row short of room never narrows the box to its menu arrow; where the room allows the style holds
     /// the box at the small field length (`FieldStyle::held_at`).
@@ -931,8 +945,8 @@ impl Component for FontPicker<'_> {
         let host = self.host_name();
         let current = host.as_deref().or(cx.value().map(String::as_str)).unwrap_or("");
         let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
-        let ribbon = cx.env.get::<ControlPlace>() == ControlPlace::Ribbon;
-        let widest = if ribbon { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
+        let compact = self.compact || cx.env.get::<ControlPlace>() == ControlPlace::Ribbon || cx.env.get::<InBar>().0;
+        let widest = if compact { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
         let name = cx.words::<FontPickerWords>().list.clone();
         let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
         Vec2::new(widest.x + reserve(&cx.style.field, &[], &Self::trailing(name, note.is_some(), cx.env.get())), widest.y)
