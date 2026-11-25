@@ -214,6 +214,11 @@ pub struct BoxRules {
     /// far past its ends: a paragraph frame whose edges rewrap it. Inside the box the band reaches at most a quarter of
     /// the way across, so a narrow box keeps its middle. 0, the default, leaves each side its band outside the box.
     pub edge_band: f32,
+    /// Where a turn reads the pointer in the document, from the pointer's own document point: half a pixel up and
+    /// left at 100 %, as the reference application does; a host passes its view's reading
+    /// ([`CanvasView::pointer_offset`](crate::CanvasView::pointer_offset): the pointer itself along an axis the canvas
+    /// stretches, as at 33.3 %, measured 2026-11-25 on two turns there to 0.0001°).
+    pub turn_offset: Vec2,
 }
 
 /// Which handles of a box are shown.
@@ -240,6 +245,7 @@ impl Default for BoxRules {
             min_side: 0.0,
             handles: BoxHandles::default(),
             edge_band: 0.0,
+            turn_offset: TURN_POINTER_OFFSET,
         }
     }
 }
@@ -295,6 +301,12 @@ impl BoxRules {
             (BoxHandles::Sides, BoxPart::Edge(k)) => k % 2 == 1,
             _ => true,
         }
+    }
+
+    /// The rules with `offset` as where a turn reads the pointer ([`turn_offset`](Self::turn_offset)).
+    pub fn with_turn_offset(mut self, offset: Vec2) -> BoxRules {
+        self.turn_offset = offset;
+        self
     }
 
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.
@@ -503,9 +515,9 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
         }
         BoxPart::Pivot => BoxState { quad: q0, pivot: p },
         BoxPart::Outside => {
-            // Both angles are read where the pointer acts in the document: half a pixel up and left of it.
-            let a0 = (g.start + TURN_POINTER_OFFSET - c).atan2();
-            let a1 = (p + TURN_POINTER_OFFSET - c).atan2();
+            // Both angles are read where the pointer acts in the document (the rules' turn offset).
+            let a0 = (g.start + rules.turn_offset - c).atan2();
+            let a1 = (p + rules.turn_offset - c).atan2();
             let mut da = a1 - a0;
             if mods.shift && rules.rotate_step > 0.0 {
                 // Snap the turn of this drag; the angle the box started at is kept.
@@ -576,8 +588,8 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
     }
 }
 
-/// Where a turn reads the pointer, as the reference application does: half a document pixel up and left of it
-/// (measured on four turns of a 302 × 202 box, within 0.005°).
+/// Where a turn reads the pointer at 100 %, as the reference application does: half a document pixel up and left of
+/// it (measured on four turns of a 302 × 202 box, within 0.005°); the default [`BoxRules::turn_offset`].
 const TURN_POINTER_OFFSET: Vec2 = Vec2::new(-0.5, -0.5);
 
 /// A corner's handle, or an edge's: the middle between its two corners (on a box in perspective the reference

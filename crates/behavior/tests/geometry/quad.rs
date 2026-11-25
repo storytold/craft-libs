@@ -1183,3 +1183,25 @@ fn a_distort_corner_goes_past_the_diagonal_into_a_concave_box() {
     let moved = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(331.0, 246.0), Mods::NONE, &distort);
     assert_eq!(moved.quad[0], p(331.0, 246.0), "Distort mode: {:?}", moved.quad);
 }
+
+/// A turn reads the pointer at the rules' turn offset: half a pixel up and left by default (100 %), the pointer itself
+/// with a zero offset (a stretched canvas, as at 33.3 %; the reference application, 2026-11-25: two turns there matched
+/// to 0.0001° only so).
+#[test]
+fn a_turn_reads_the_pointer_at_the_rules_turn_offset() {
+    let start = BoxState::from_rect(Rect::new(0.0, 0.0, 600.0, 450.0));
+    let (from, to) = (p(-45.0, -45.0), p(-45.0, 150.0));
+    let angle = |rules: &BoxRules| {
+        let q = drag(&start, &start, BoxPart::Outside, from, to, Mods::NONE, rules).quad;
+        (q[1] - q[0]).atan2().to_degrees()
+    };
+    let read = |offset: Vec2| {
+        let c = p(300.0, 225.0);
+        ((to + offset - c).atan2() - (from + offset - c).atan2()).to_degrees()
+    };
+    let default = BoxRules::default();
+    assert!((angle(&default) - read(Vec2::new(-0.5, -0.5))).abs() < 1e-9);
+    let on_pointer = BoxRules::default().with_turn_offset(Vec2::ZERO);
+    assert!((angle(&on_pointer) - read(Vec2::ZERO)).abs() < 1e-9);
+    assert!((angle(&on_pointer) - angle(&default)).abs() > 0.01, "the offset matters");
+}

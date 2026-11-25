@@ -714,14 +714,12 @@ impl<'a> TransformBox<'a> {
             }
             _ => (to, Vec::new()),
         };
-        // A turn from outside the box reads the pointer half a pixel up and left, as measured on the reference
-        // application's; the rotate handle is a control of its own and turns with the pointer as it is.
-        let (from, to) = if grip.part == BoxPart::Outside && self.rotate_zone == RotateZone::Handle {
-            (grip.from + HANDLE_TURN_UNDO, to + HANDLE_TURN_UNDO)
-        } else {
-            (grip.from, to)
-        };
-        let dragged = quad::drag(&grip.start, &grip.last, grip.part, from, to, acting, &self.rules);
+        // A turn from outside the box reads the pointer where the view does (half a pixel up and left, or the pointer
+        // itself on a stretched canvas); the rotate handle and the knob are controls of their own and turn with the
+        // pointer as it is.
+        let on_control = grip.part == BoxPart::Outside && matches!(self.rotate_zone, RotateZone::Handle | RotateZone::Knob);
+        let rules = self.rules.with_turn_offset(if on_control { DocVec::ZERO } else { space.view.pointer_offset() });
+        let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, acting, &rules);
         // The canvas's pixel grid rounds an upright box and its corners to whole document units; keys are not rounded.
         let dragged = if snap.is_some_and(Snap::rounds_to_pixels) { on_pixel_grid(dragged) } else { dragged };
         if kind == Some(BoxDrag::Distort)
@@ -1603,9 +1601,6 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
 /// Where an ⌥ press puts the reference point, from the press: half a document pixel up and left, as the reference
 /// application does (an ⌥ click at (250, 200) puts it at (249.5, 199.5)).
 const ALT_PRESS_PIVOT: DocVec = DocVec::new(-0.5, -0.5);
-
-/// Undoes [`quad::drag`]'s half-pixel turn offset for the rotate handle ([`RotateZone::Handle`]).
-const HANDLE_TURN_UNDO: DocVec = DocVec::new(0.5, 0.5);
 
 /// The direction an edge of `quad` is dragged along: the top edge's direction for a side, its normal for the top or
 /// bottom edge; `None` for another part or a collapsed top edge.
