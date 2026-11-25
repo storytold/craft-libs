@@ -756,8 +756,21 @@ enum TestRegion {
     /// expression, or in the type after `typed` is set), or while `params` is set (between the `|`s
     /// of a closure that starts the expression). A `,` does not end it while `angle` or `params` is
     /// set either. `typed` is set at the `:` after the name of a field or the pattern of a parameter
-    /// (`name: Type`, `mut p: Type`).
-    Item { level: usize, start: usize, opened: bool, item: bool, semi: bool, block: bool, pattern: bool, angle: usize, params: bool, typed: bool },
+    /// (`name: Type`, `mut p: Type`), and `cast` at an `as` until the token that ends its type
+    /// (`ptr as *const Pair<A, B>`).
+    Item {
+        level: usize,
+        start: usize,
+        opened: bool,
+        item: bool,
+        semi: bool,
+        block: bool,
+        pattern: bool,
+        angle: usize,
+        params: bool,
+        typed: bool,
+        cast: bool,
+    },
     /// The rest of the module that `#![cfg(test)]` starts, at this delimiter depth.
     Inner { level: usize },
 }
@@ -776,6 +789,7 @@ impl TestRegion {
             angle: 0,
             params: false,
             typed: false,
+            cast: false,
         }
     }
 }
@@ -886,6 +900,9 @@ impl Lexer<'_> {
         while let Some(c) = self.peek(0) {
             let begin = self.at;
             let token = !c.is_whitespace() && !(c == '/' && matches!(self.peek(1), Some('/' | '*')));
+            if token {
+                self.cast_token(c);
+            }
             match c {
                 '\n' => {
                     self.line += 1;
@@ -1115,6 +1132,13 @@ impl Lexer<'_> {
         }
         let word: String = self.chars.get(start..self.at).unwrap_or_default().iter().collect();
         self.header_word(start, &word);
+        let level = self.delims.len();
+        if word == "as"
+            && let Some(TestRegion::Item { level: at, item: false, angle: 0, cast, .. }) = &mut self.test
+            && *at == level
+        {
+            *cast = true;
+        }
         // `union` is a keyword only before the union's name.
         let named = word != "union" || !self.word_at(self.skip_space(self.at)).is_empty();
         let keyword = ["struct", "union", "enum", "fn"].into_iter().find(|&k| k == word);
@@ -1208,8 +1232,8 @@ impl Lexer<'_> {
         let tuple = self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Tuple);
         let generic = c == '<'
             && match self.test {
-                Some(TestRegion::Item { level, start, item: false, angle: 0, typed, .. }) if level == level_now => {
-                    self.operand_starts(start) || ((typed || tuple) && self.after_word && self.angle_closes())
+                Some(TestRegion::Item { level, start, item: false, angle: 0, typed, cast, .. }) if level == level_now => {
+                    self.operand_starts(start) || ((typed || tuple || cast) && self.after_word && self.angle_closes())
                 }
                 _ => false,
             };
@@ -1230,6 +1254,25 @@ impl Lexer<'_> {
             return matches!(self.word_at(self.last_word).as_str(), "as" | "break" | "if" | "in" | "match" | "return" | "while");
         }
         self.code_start(start) == self.at || matches!(self.prev, Some('=' | '!' | '&' | '|' | '+' | '-' | '*' | '/' | '%' | '^' | ':'))
+    }
+
+    /// Reads the token that starts with `c` at the current index against the type of a cast in
+    /// test-only code: outside its generic brackets and other delimiters, the type holds words (with
+    /// `::` and lifetimes), `&`, `*`, `(` and `[` after `as`, `const`, `mut`, `dyn` or `fn` (or
+    /// another of them), the `->` of a function pointer's return type, and `<` and the `>` that close
+    /// them, and any other token ends it.
+    fn cast_token(&mut self, c: char) {
+        let level = self.delims.len();
+        let Some(TestRegion::Item { level: at, angle: 0, cast: true, .. }) = self.test else { return };
+        if at != level {
+            return;
+        }
+        let prefix = !self.after_word || matches!(self.word_at(self.last_word).as_str(), "as" | "const" | "mut" | "dyn" | "fn");
+        let arrow = (c == '-' && self.peek(1) == Some('>')) || (c == '>' && self.at.checked_sub(1).and_then(|i| self.chars.get(i)) == Some(&'-'));
+        let keeps = is_word(c) || arrow || matches!(c, ':' | '\'' | '<') || (matches!(c, '&' | '*' | '(' | '[') && prefix);
+        if !keeps && let Some(TestRegion::Item { cast, .. }) = &mut self.test {
+            *cast = false;
+        }
     }
 
     /// Whether the `<` at the current index has its `>` before a `;`, a `=>`, a closing delimiter of
@@ -2469,6 +2512,57 @@ struct Outer<const N: usize = { struct Inner { #[cfg(test)] field: Pair<u8, Tag<
 }
 "#;
         assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six"]);
+    }
+
+    #[test]
+    fn test_only_cast_types_keep_their_generic_commas() {
+        let source = r#"fn arms(x: u8, a: u8, b: u8, ptr: *const u8) {
+    match x {
+        #[cfg(test)]
+        0 => ptr as *const Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        1 => ptr as Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        2 => ptr as &'static dyn Foo<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        3 => ptr as ::std::ptr::NonNull<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        4 => ptr as *mut m::Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        6 => ptr as *const <T as Trait>::Assoc<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        7 => ptr as <T as Trait<u8>>::Assoc<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        8 => ptr as m::Pair<u8, fn() -> u8>::Assoc<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        9 => ptr as Vec::<u8>::Assoc<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        10 => ptr as Pair<{ 1 > 0 }>::Assoc<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        11 => ptr as m::r#Pair<u8>::Assoc<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        12 => ptr as /* type */ Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        13 => f as fn() -> Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        14 => f as unsafe fn(u8, &[u8]) -> &'static Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        15 => f as fn() -> (u8, Pair<u8, u16>),
+        #[cfg(test)]
+        16 => f as fn() -> m::Pair<u8, Tag<{ "AzureKit".len() }>>,
+        #[cfg(test)]
+        5 => a < b,
+        _ => "one",
+    }
+    call(#[cfg(test)] (a as u8) < b, "two");
+    call(#[cfg(test)] a < b, "three");
+    call(#[cfg(test)] a as u8 + a < b, "four");
+    call(#[cfg(test)] a as u8 > b && a < b, "five");
+    call(#[cfg(test)] a as u8 == b || a < b, "six");
+    call(#[cfg(test)] a as u8 - b < b, "seven");
+}
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six", "seven"]);
     }
 
     #[test]
