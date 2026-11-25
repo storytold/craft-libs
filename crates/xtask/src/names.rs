@@ -755,7 +755,8 @@ enum TestRegion {
     /// generic brackets are open (of an item's header, after a `::` or where an operand starts in an
     /// expression, or in the type after `typed` is set), or while `params` is set (between the `|`s
     /// of a closure that starts the expression). A `,` does not end it while `angle` or `params` is
-    /// set either. `typed` is set at the `:` after the name of a field or parameter (`name: Type`).
+    /// set either. `typed` is set at the `:` after the name of a field or the pattern of a parameter
+    /// (`name: Type`, `mut p: Type`).
     Item { level: usize, start: usize, opened: bool, item: bool, semi: bool, block: bool, pattern: bool, angle: usize, params: bool, typed: bool },
     /// The rest of the module that `#![cfg(test)]` starts, at this delimiter depth.
     Inner { level: usize },
@@ -1269,37 +1270,23 @@ impl Lexer<'_> {
         }
     }
 
-    /// A `:` (not part of a `::`) right after the name that starts a test-only field or parameter,
-    /// after any `pub`, starts its type (`name: Type`) in the fields of a struct, union or variant
-    /// and in a function's parameters, not in a struct expression.
+    /// A `:` (not part of a `::`) at the level of a test-only field or parameter, after its name
+    /// (and any `pub`) or its pattern (`mut p`, `(a, b)`, `P { x, .. }`), starts its type
+    /// (`name: Type`) in the fields of a struct, union or variant and in a function's parameters,
+    /// not in a struct expression. A `:` inside the pattern's own delimiters is at a deeper level.
     fn colon(&mut self) {
         let single = self.peek(1) != Some(':') && self.at.checked_sub(1).and_then(|i| self.chars.get(i)) != Some(&':');
         let declared = self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Typed);
         if single
             && declared
-            && let Some(TestRegion::Item { level, start, item: false, typed: false, .. }) = self.test
+            && let Some(TestRegion::Item { level, start, item: false, typed: false, angle: 0, .. }) = self.test
             && level == self.delims.len()
-            && self.name_before(start)
+            && self.code_start(start) < self.at
             && let Some(TestRegion::Item { typed, .. }) = &mut self.test
         {
             *typed = true;
         }
         self.at += 1;
-    }
-
-    /// Whether the code at `start` is one name, after any `pub` and its `(..)`, that ends at the
-    /// current index.
-    fn name_before(&self, start: usize) -> bool {
-        let mut at = self.code_start(start);
-        if self.word_at(at) == "pub" {
-            at = self.skip_space(at + 3);
-            if self.chars.get(at) == Some(&'(') {
-                let Some(end) = self.group_end(at) else { return false };
-                at = self.skip_space(end);
-            }
-        }
-        let len = self.word_at(at).chars().count();
-        len > 0 && self.skip_space(at + len) == self.at
     }
 
     /// A `|` at the start of a test-only expression, after any `async`, `move` and borrow (`&`,
@@ -2441,6 +2428,18 @@ fn returns(x: u8) -> &'static str {
             "sixteen",
         ];
         assert_eq!(literals(source), expected);
+    }
+
+    #[test]
+    fn test_only_parameter_patterns_keep_their_generic_commas() {
+        let source = r#"fn mutable(#[cfg(test)] mut p: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "one".len() }>) {}
+fn tuple(#[cfg(test)] (a, b): Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "two".len() }>) {}
+fn borrowed(#[cfg(test)] &(a, b): &Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "three".len() }>) {}
+fn fields(#[cfg(test)] P { x, .. }: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "four".len() }>) {}
+fn by_ref(#[cfg(test)] ref mut p: Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "five".len() }>) {}
+fn paths(#[cfg(test)] m::P(x): Pair<u8, Tag<{ "AzureKit".len() }>>, q: Tag<{ "six".len() }>) {}
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "four", "five", "six"]);
     }
 
     #[test]
