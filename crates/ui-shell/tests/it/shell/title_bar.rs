@@ -388,6 +388,42 @@ fn whole_bar(_: &mut WholeBar, ui: &mut Ui) {
     );
 }
 
+/// The cursor over the File title and over the band of the whole bar in a window, with the band's cursor `look`.
+fn cursors_over_the_bar(look: craft_ui::contract::MoveBandCursor) -> (Option<craft_behavior::Cursor>, Option<craft_behavior::Cursor>) {
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let mut root = craft_ui::runtime::env::RootEnv::default();
+    root.values.set(look);
+    windows.root_env(root);
+    let show = |ui: &mut Ui| whole_bar(&mut WholeBar { version: 0 }, ui);
+    windows.frame(vec![], vec![], show);
+    let settled = windows.frame(vec![], vec![], show);
+    let tree = &settled.trees.iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    let title = |name: &str| {
+        tree.with_role(Role::MENU_ITEM).into_iter().find(|key| tree.name_of(*key) == Some(name)).and_then(|key| tree.bounds_of(key)).expect("a title")
+    };
+    let (file, help) = (title("File"), title("Help"));
+    let over = |at: Pos2| {
+        windows.frame(vec![moved(at)], vec![], show);
+        windows.frame(vec![], vec![], show);
+        craft_ui::runtime::cursor::current(&windows.ctx)
+    };
+    (over(file.center()), over(Pos2::new(help.right() + 40.0, help.center().y)))
+}
+
+/// A title bar's move band shows the open hand by default, also through the menu titles on it, which sense clicks
+/// only; under `MoveBandCursor::Arrow` the band and the titles show the arrow, as an OS title bar does.
+#[trial]
+fn a_move_band_shows_the_arrow_when_the_app_asks() {
+    use craft_behavior::{Cursor, CursorIcon};
+    use craft_ui::contract::MoveBandCursor;
+    let grab = Some(Cursor::System(CursorIcon::Grab));
+    assert_eq!(cursors_over_the_bar(MoveBandCursor::Hand), (grab.clone(), grab), "the hand over the band and the titles on it");
+    assert_eq!(cursors_over_the_bar(MoveBandCursor::Arrow), (None, None), "the arrow over the band and the titles on it");
+}
+
 /// A whole title bar an app shows through a memoized view in the shell's title slot (1600 × 1000 px at 125 %) fills
 /// the slot as the bar shown directly does: the captions end at the slot's end edge and the document title is drawn
 /// whole after the last menu.

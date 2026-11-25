@@ -4,10 +4,10 @@
 #   run      one leg builds and runs every test: each macOS and Windows leg, and the Linux leg when
 #            the selection reaches no replay-audit crate
 #   archive  the Linux build job (gate.yml `archive-command`) builds once and writes one nextest
-#            archive per shard: 1 every selected test outside the replay audit's crates, 2 those
-#            crates, 3 the default-feature crate
-#   shard    a Linux shard leg runs its archive ($GATE_SHARD); shard 2 runs it plainly, then with
-#            the audit on
+#            archive per shard: 1 every selected test outside the replay audit's crates and the
+#            crates shard 2 also takes, 2 those crates, 3 the default-feature crate
+#   shard    a Linux shard leg runs its archive ($GATE_SHARD); shard 2 runs it plainly, then the
+#            audit crates' tests again with the audit on
 #   doctest  the doctests, in the build job after the archives (`after-archive-command`)
 #   audit    prints whether the selection reaches a replay-audit crate (`true` or `false`)
 #   full     the nightly run: every test, at the full sweep and proptest counts nightly.yml leaves set
@@ -34,10 +34,15 @@ default_features=(-p craft-image-codecs --locked --profile ci "${config[@]}")
 audit_packages=(craft-ui-contract craft-ui-widgets craft-ui-panels craft-ui-patterns craft-ui-shell craft-ui-gallery craft-menu)
 audit_crates=$(printf ' | package(%s)' "${audit_packages[@]}")
 audit_crates=${audit_crates:3}
+# Crates outside the audit whose tests shard 2 runs too (plainly only), so that shards 1 and 2 end
+# together: shard 1 holds the other UI crates and every non-UI test.
+shard_2_packages=(craft-draw)
+shard_2_crates=$audit_crates$(printf ' | package(%s)' "${shard_2_packages[@]}")
 filter=${CRAFT_TEST_FILTER:-all()}
-# Shard 1 leaves the audit crates to shard 2, which runs them plainly and with the audit on.
-plain_filter="($filter) & !($audit_crates)"
-audit_filter="($filter) & ($audit_crates)"
+# Shard 1 leaves the audit crates and shard 2's own to shard 2, which runs them plainly and then
+# the audit crates with the audit on.
+plain_filter="($filter) & !($shard_2_crates)"
+shard_2_filter="($filter) & ($shard_2_crates)"
 
 doctests() {
   # Whole-workspace: `cargo test -p <selected>` would resolve features over the selected crates
@@ -65,9 +70,9 @@ case "${1:-}" in
     # The examples' two packages join the one build here, so their tests are in shard 1's archive.
     cargo nextest archive "${all_features[@]}" "${targets[@]}" --example stubicc --example h264_h264enc_bench \
       -E "$plain_filter" --archive-file "$NEXTEST_ARCHIVE_DIR/1/$NEXTEST_ARCHIVE_NAME"
-    # The same build, so nothing compiles again; only the audit crates' binaries.
+    # The same build, so nothing compiles again; only shard 2's crates' binaries.
     cargo nextest archive "${all_features[@]}" "${targets[@]}" --example stubicc --example h264_h264enc_bench \
-      -E "$audit_filter" --archive-file "$NEXTEST_ARCHIVE_DIR/2/$NEXTEST_ARCHIVE_NAME"
+      -E "$shard_2_filter" --archive-file "$NEXTEST_ARCHIVE_DIR/2/$NEXTEST_ARCHIVE_NAME"
     cargo nextest archive "${default_features[@]}" "${targets[@]}" \
       -E "$filter" --archive-file "$NEXTEST_ARCHIVE_DIR/3/$NEXTEST_ARCHIVE_NAME"
     ;;
@@ -75,7 +80,7 @@ case "${1:-}" in
     run=(cargo nextest run --archive-file "$NEXTEST_ARCHIVE_FILE" --workspace-remap . --profile ci --no-tests=warn)
     case "${GATE_SHARD:-}" in
       1 | 3) "${run[@]}" ;;
-      2) "${run[@]}"; CRAFT_UI_AUDIT_REPLAY=1 "${run[@]}" ;;
+      2) "${run[@]}"; CRAFT_UI_AUDIT_REPLAY=1 "${run[@]}" -E "$audit_crates" ;;
       *) echo "unknown shard: '${GATE_SHARD:-}'" >&2; exit 2 ;;
     esac
     ;;

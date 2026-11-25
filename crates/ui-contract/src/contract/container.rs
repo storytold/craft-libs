@@ -337,6 +337,20 @@ pub enum QuietHeader {
     Heads,
 }
 
+/// The cursor over a header's move band ([`DragBand::Move`]). An app sets it once at its root (`RootEnv::values`); the
+/// default is `Hand`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MoveBandCursor {
+    /// The open hand, and the closed hand while the band is dragged.
+    #[default]
+    Hand,
+    /// The arrow, as an OS title bar shows, also over the click-only controls on the band (menu titles, buttons):
+    /// production VectorCraft's title bar and panel headers.
+    Arrow,
+}
+
 /// A header region, filled by `Container::header`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
