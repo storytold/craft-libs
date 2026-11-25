@@ -9,6 +9,11 @@ const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingm
 
 #[test]
 fn a_file_of_element_budget_parts_still_reads() {
+    // 18M elements: nightly only. `the_xml_element_budget_is_package_wide` (in `package.rs`) proves
+    // the package-wide budget with a small one at the gate.
+    if craft_testkit::hostile::divisor() > 1 {
+        return;
+    }
     // Nine chart parts of 2M elements each: 18M over the package's 16M budget. The later
     // parts are skipped with a warning instead of built, and the file still reads. Before
     // the budget, every part's whole tree was parsed and the chart trees stayed cached for

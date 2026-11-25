@@ -28,8 +28,7 @@ impl Placement {
 
     /// The placement the caller of `overlay` gives, when it places the layer.
     fn given(overlay: &crate::contract::Overlay) -> Option<Placement> {
-        let kept = |rect: Rect| overlay.bounds.map_or(rect, |bounds| super::window::keep_inside(rect, bounds));
-        overlay.placed.map(|rect| Placement::at(kept(rect))).or_else(|| overlay.placed_at.map(Placement::at_pos))
+        overlay.placed.map(|rect| Placement::at(super::window::kept_in(rect, overlay.bounds))).or_else(|| overlay.placed_at.map(Placement::at_pos))
     }
 
     /// The rect it names, taking the position and size it lacks from `rect`.
@@ -46,7 +45,9 @@ pub(crate) fn placement_id(id: Id) -> Id {
 /// is `placed` has the caller's rect instead: the slot reads it and writes nothing, since the caller owns the
 /// placement and learns of the user's changes from `PlacementChange` reports. A layer hung from its anchor keeps only
 /// its size, whether or not the user can move it: each opening places it from its anchor at that size, and a caller
-/// that keeps a moved layer where it was dropped places it (`placed_at`) from the change it was told of.
+/// that keeps a moved layer where it was dropped places it (`placed_at`) from the change it was told of. While the
+/// user drags the move band, the layer host shows the layer at the drag's rect whatever the slot holds
+/// ([`shown_placement`]), so a caller places it from the drag's `Commit` alone.
 pub(super) struct PlacementSlot<'s> {
     stage: &'s mut MemoryStage,
     id: Id,
@@ -96,7 +97,28 @@ fn placement_of(ctx: &Context, id: Id, save: Option<&SaveKey>) -> Placement {
 /// floating resizable layer with a default size (`Overlay::size`) that size, within the screen less `screen_inset` on
 /// each side, centred or at the overlay's float position. A saved size and position win over the default. A size with
 /// no position places an anchored layer from its anchor at that size.
+///
+/// While a drag of the layer's move band runs, `moving` is the rect it puts the layer at in this pass
+/// (`WindowMode::running_move`): the layer shows there, within its bounds, at the size the placement gives. The
+/// caller's place, the stored one or the anchor applies again once the drag ends.
 pub(crate) fn shown_placement(
+    ctx: &Context,
+    id: Id,
+    save: Option<&SaveKey>,
+    overlay: &crate::contract::Overlay,
+    moving: Option<Rect>,
+    screen: Rect,
+    screen_inset: f32,
+) -> Placement {
+    let mut placement = resting_placement(ctx, id, save, overlay, screen, screen_inset);
+    if let Some(moving) = moving {
+        placement.pos = Some(super::window::kept_in(moving, overlay.bounds).min.into());
+    }
+    placement
+}
+
+/// The placement a layer is shown at while no drag moves it ([`shown_placement`]).
+fn resting_placement(
     ctx: &Context,
     id: Id,
     save: Option<&SaveKey>,

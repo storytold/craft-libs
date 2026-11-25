@@ -4,12 +4,14 @@ use craft_behavior::CanvasView;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Vec2 as DocVec;
 use craft_behavior::kurbo::{Point, Rect, Size};
+use craft_keymap::Mods;
 use craft_ui::canvas::{
-    Canvas, CanvasTool, HandTool, LayerBounds, NavigationOptions, RotateViewTool, ToolHost, ViewCommands, ViewTarget, ZoomTool, tool_pass,
+    Canvas, CanvasTool, HandTool, LayerBounds, Momentary, MomentaryCommands, MomentaryShift, MomentaryTool, NavigationOptions, RotateViewTool,
+    ToolHost, ViewCommands, ViewTarget, ZoomTool, tool_pass,
 };
 use craft_ui::contract::{Bind, ShowContainer as _};
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::commands::{self, FireSource};
+use craft_ui::runtime::commands::{self, FirePhase, FireSource};
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
 use egui::{Event, Modifiers, Pos2};
 use std::cell::{Cell, RefCell};
@@ -86,7 +88,7 @@ impl Rig {
     /// Hovers and presses at `at` in separate frames.
     fn press(&mut self, at: Pos2) {
         self.tick(FRAME, vec![pointer::moved(at)]);
-        self.tick(FRAME, vec![pointer::press(at)]);
+        self.fixture.frame_held(vec![pointer::press(at)]);
     }
 
     /// Moves from `from` to `to` in `steps` frames of `dt` seconds.
@@ -167,15 +169,18 @@ fn view_commands_run_with_their_facts_and_are_disabled_without() {
     ];
     for (command, owed) in rows {
         let mut view = start;
-        assert!(command.available(&start, &full, given, ppp), "{command:?} runs with its fact");
-        assert!(command.apply(&mut view, &full, given, ppp) && owed(&view), "{command:?} gives {view:?}");
+        assert!(command.available(&start, &full, given, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP), "{command:?} runs with its fact");
+        assert!(command.apply(&mut view, &full, given, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP) && owed(&view), "{command:?} gives {view:?}");
         if command == ViewCommands::TwoHundredPercent {
-            assert!(command.available(&start, &bare, None, ppp), "200% needs no fact");
+            assert!(command.available(&start, &bare, None, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP), "200% needs no fact");
             continue;
         }
         let mut view = start;
-        assert!(!command.available(&start, &bare, None, ppp), "{command:?} is disabled without its fact");
-        assert!(!command.apply(&mut view, &bare, None, ppp) && view == start, "{command:?} leaves the view without its fact");
+        assert!(!command.available(&start, &bare, None, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP), "{command:?} is disabled without its fact");
+        assert!(
+            !command.apply(&mut view, &bare, None, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP) && view == start,
+            "{command:?} leaves the view without its fact"
+        );
     }
 }
 
@@ -298,7 +303,7 @@ fn the_rotate_commands_step_fifteen_degrees_on_screen_in_a_flipped_view_too() {
         for (command, screen_turn) in [(ViewCommands::RotateClockwise, 15.0), (ViewCommands::RotateCounterclockwise, -15.0)] {
             let before = turned(room, 20.0, flip_x);
             let mut view = before;
-            assert!(command.apply(&mut view, &target, None, 1.0), "{command:?} turns the view");
+            assert!(command.apply(&mut view, &target, None, 1.0, &craft_behavior::ZoomScheme::PHOTOSHOP), "{command:?} turns the view");
             let turned_by = (angle(&view) - angle(&before) + 540.0).rem_euclid(360.0) - 180.0;
             assert!(
                 (turned_by - screen_turn).abs() < 0.01,
@@ -415,6 +420,32 @@ fn a_held_zoom_press_zooms_about_its_point_at_a_frame_rate_independent_rate() {
     rig.drag_to(at, at + egui::vec2(100.0, 0.0), 4, FRAME);
     rig.release(at + egui::vec2(100.0, 0.0), FRAME);
     assert!((rig.device() / device - 2.0).abs() < 1e-3, "a drag scrubs one doubling per 100 points: {}", rig.device() / device);
+}
+
+#[trial]
+fn space_then_shift_turns_the_view_only_where_the_app_asks_for_it() {
+    let shift = Mods { shift: true, ..Mods::NONE };
+    let cmd_shift = Mods { cmd: true, shift: true, ..Mods::NONE };
+    let hand = |momentary: Momentary| {
+        let mut momentary = momentary;
+        momentary.fired(MomentaryCommands::Hand, FirePhase::Press);
+        momentary
+    };
+
+    let mut plain = hand(Momentary::new(NavigationOptions::default()));
+    assert_eq!(plain.tool(shift, false), Some(MomentaryTool::Hand), "by default Space+Shift pans");
+
+    let mut turning = hand(Momentary::new(NavigationOptions::default()).shift(MomentaryShift::RotateView));
+    assert_eq!(turning.tool(Mods::NONE, false), Some(MomentaryTool::Hand), "Space alone pans");
+    assert_eq!(turning.tool(shift, false), Some(MomentaryTool::RotateView), "Space then Shift turns the view");
+    assert_eq!(turning.tool(Mods::NONE, true), Some(MomentaryTool::RotateView), "a drag keeps its tool when Shift is let go");
+    assert_eq!(turning.tool(cmd_shift, false), Some(MomentaryTool::ZoomIn), "Cmd is checked before Shift");
+    assert_eq!(turning.tool(Mods { alt: true, shift: true, ..Mods::NONE }, false), Some(MomentaryTool::ZoomOut), "Alt is checked before Shift");
+
+    let mut bound = Momentary::new(NavigationOptions::default());
+    bound.fired(MomentaryCommands::RotateView, FirePhase::Press);
+    assert_eq!(bound.tool(Mods::NONE, false), Some(MomentaryTool::RotateView), "a bound Rotate View command turns the view");
+    assert_eq!(bound.tool(Mods::ALT, false), Some(MomentaryTool::RotateView), "the held command comes first");
 }
 
 /// A canvas asks the app for the layers' bounds only in the pass that runs Fit Layers: passes that only show the

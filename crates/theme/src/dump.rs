@@ -7,9 +7,9 @@ use std::fmt::Write as _;
 
 use crate::{
     BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
-    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet,
-    RailSizes, RampSizes, Rgba, RowSizes, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSamples,
-    ThumbSizes, Tokens, TypeStyle, TypeTokens, WellShape, WindowSizes,
+    GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PageSizes, PaneSizes, PlotSizes,
+    RadiusSet, RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens, TypeStyle,
+    TypeTokens, WellShape, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -66,7 +66,7 @@ fn edge(e: Edge) -> String {
 }
 
 fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
-    let ShapeTokens { radius, edge: e, knob, wells } = shape;
+    let ShapeTokens { radius, edge: e, knob, wells, grip, locator } = shape;
     let RadiusSet { sm, control, surface, window, panel, button, pill } = radius;
     for (k, v) in [("sm", sm), ("control", control), ("surface", surface), ("window", window), ("panel", panel), ("button", button), ("pill", pill)] {
         out.line(&format!("shape.radius.{k}"), len(*v));
@@ -75,11 +75,19 @@ fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
 
     out.line("shape.knob", if *knob == KnobShape::Round { "round" } else { "tab" });
     out.line("shape.wells", if *wells == WellShape::Square { "square" } else { "round" });
+    let GripShape { mark, count, length, width, gap } = grip;
+    out.line("shape.grip.mark", mark.name());
+    out.line("shape.grip.count", count.to_string());
+    for (k, v) in [("length", length), ("width", width), ("gap", gap)] {
+        out.line(&format!("shape.grip.{k}"), len(*v));
+    }
+    out.line("shape.locator.cell", len(locator.cell));
+    out.line("shape.locator.square", len(locator.square));
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
-    let StrokeTokens { thin, medium, thick, heavy, dash, dash_gap, icon } = stroke;
-    for (k, v) in [("thin", thin), ("medium", medium), ("thick", thick), ("heavy", heavy), ("dash", dash), ("dash_gap", dash_gap)] {
+    let StrokeTokens { thin, medium, thick, heavy, focus, dash, dash_gap, icon } = stroke;
+    for (k, v) in [("thin", thin), ("medium", medium), ("thick", thick), ("heavy", heavy), ("focus", focus), ("dash", dash), ("dash_gap", dash_gap)] {
         out.line(&format!("stroke.{k}"), len(*v));
     }
     out.line("stroke.icon", decimals(*icon, 4));
@@ -104,19 +112,22 @@ fn space_lines(out: &mut Lines, space: &SpaceTokens) {
     for (k, v) in [("control", control), ("regular", regular), ("roomy", roomy), ("chip", chip), ("segment", segment)] {
         out.line(&format!("space.pad.{k}"), len(*v));
     }
-    let Insets { screen } = inset;
+    let Insets { screen, page_side, page_margin, page_gap } = inset;
     out.line("space.inset.screen", len(*screen));
+    out.line("space.inset.page_side", len(*page_side));
+    out.line("space.inset.page_margin", len(*page_margin));
+    out.line("space.inset.page_gap", len(*page_gap));
 }
 
 fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let SizeTokens {
         control,
+        button,
         icon,
         rail,
         bar,
         panel_header,
         popup_min,
-        scroll_fade,
         thumb: thumbs,
         handle,
         hit,
@@ -130,15 +141,14 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         float,
         window,
         pane,
-        ruler,
         dock,
-        notice,
         dialog,
-        story,
+        page,
     } = size;
     let ControlSizes { sm, md } = control;
     out.line("size.control.sm", len(*sm));
     out.line("size.control.md", len(*md));
+    out.line("size.button", len(*button));
     let IconSizes { sm, md, lg, glyph_sm, glyph_md } = icon;
     out.line("size.icon.sm", len(*sm));
     out.line("size.icon.md", len(*md));
@@ -148,13 +158,20 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let RailSizes { width, button } = rail;
     out.line("size.rail.width", len(*width));
     out.line("size.rail.button", len(*button));
-    let BarSizes { title, tab, status, options, options_narrow } = bar;
-    for (k, v) in [("title", title), ("tab", tab), ("status", status), ("options", options), ("options_narrow", options_narrow)] {
+    let BarSizes { title, tab, tab_large, status, options, options_narrow, column } = bar;
+    for (k, v) in [
+        ("title", title),
+        ("tab", tab),
+        ("tab_large", tab_large),
+        ("status", status),
+        ("options", options),
+        ("options_narrow", options_narrow),
+        ("column", column),
+    ] {
         out.line(&format!("size.bar.{k}"), len(*v));
     }
     out.line("size.panel_header", len(*panel_header));
     out.line("size.popup_min", len(*popup_min));
-    out.line("size.scroll_fade", len(*scroll_fade));
     let ThumbSizes { sm, md, lg, card, sample } = thumbs;
     out.line("size.thumb.sm", len(*sm));
     out.line("size.thumb.md", len(*md));
@@ -198,23 +215,17 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.window.cascade", len(*cascade));
     let PaneSizes { least } = pane;
     out.line("size.pane.least", len(*least));
-    let RulerSizes { tick } = ruler;
-    let RulerTickSizes { mid, minor } = tick;
-    out.line("size.ruler.tick.mid", len(*mid));
-    out.line("size.ruler.tick.minor", len(*minor));
     let DockColumnSizes { column } = dock;
     out.line("size.dock.column", len(*column));
-    let NoticeSizes { width } = notice;
-    out.line("size.notice.width", len(*width));
     let DialogSizes { least, wrap, button, side_button } = dialog;
     out.line("size.dialog.least", len(*least));
     out.line("size.dialog.wrap", len(*wrap));
     out.line("size.dialog.button", len(*button));
     out.line("size.dialog.side_button", len(*side_button));
-    let StorySizes { height, width_min, width_max } = story;
-    out.line("size.story.height", len(*height));
-    out.line("size.story.width_min", len(*width_min));
-    out.line("size.story.width_max", len(*width_max));
+    let PageSizes { column, margin, action } = page;
+    out.line("size.page.column", len(*column));
+    out.line("size.page.margin", len(*margin));
+    out.line("size.page.action", len(*action));
 }
 
 fn slot(s: FontSlot) -> &'static str {

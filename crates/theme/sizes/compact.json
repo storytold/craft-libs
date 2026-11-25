@@ -15,12 +15,15 @@
     },
     "size": {
       "bar": {
+        "column": 20.0,
         "options": 36.0,
         "options_narrow": 28.0,
         "status": 24.0,
         "tab": 26.0,
+        "tab_large": 32.0,
         "title": 32.0
       },
+      "button": 24.0,
       "checker": 4.0,
       "control": {
         "md": 24.0,
@@ -69,8 +72,10 @@
         "short": 96.0,
         "track": 128.0
       },
-      "notice": {
-        "width": 360.0
+      "page": {
+        "action": 24.0,
+        "column": 820.0,
+        "margin": 40.0
       },
       "pane": {
         "least": 40.0
@@ -95,18 +100,6 @@
       },
       "row": {
         "text": 18.0
-      },
-      "ruler": {
-        "tick": {
-          "mid": 6.0,
-          "minor": 3.0
-        }
-      },
-      "scroll_fade": 20.0,
-      "story": {
-        "height": 360.0,
-        "width_max": 720.0,
-        "width_min": 240.0
       },
       "thumb": {
         "card": 128.0,
@@ -135,6 +128,9 @@
         "tight": 2.0
       },
       "inset": {
+        "page_gap": 12.0,
+        "page_margin": 24.0,
+        "page_side": 56.0,
         "screen": 16.0
       },
       "pad": {
@@ -148,6 +144,7 @@
     "stroke": {
       "dash": 4.0,
       "dash_gap": 3.0,
+      "focus": 2.0,
       "heavy": 3.0,
       "icon": 0.0729,
       "medium": 1.5,

@@ -78,6 +78,9 @@ pub struct RecoveryMeta {
     pub extension: String,
     /// The edit revision the copy holds.
     pub revision: u64,
+    /// The recovered copy needs a password to open. Old sidecars read as `false`.
+    #[serde(default)]
+    pub protected: bool,
 }
 
 /// A copy an earlier run left.
@@ -165,8 +168,11 @@ impl RecoveryStore {
         adopted.get(&id).cloned().unwrap_or_else(|| format!("doc-{}-{id}", self.session))
     }
 
-    /// Writes a copy of document `id`; call from a job.
+    /// Writes a copy of document `id`; call from a job. Makes the folder again if it was removed
+    /// since the store opened.
+    // pdfcraft: crates/ui-egui/src/persist/recovery.rs:215 (create_dir before the write)
     pub fn write(&self, id: u64, meta: &RecoveryMeta, bytes: &[u8]) -> std::io::Result<()> {
+        create_private_dir(&self.dir)?;
         let key = self.key(id);
         let mut meta = meta.clone();
         meta.extension = sanitize_extension(&meta.extension);
@@ -225,7 +231,7 @@ impl RecoveryStore {
                 None if self.owns_key(&key) || self.other_instance_alive() => None,
                 None => copies.first().map(|(ext, path)| {
                     let saved = std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                    let meta = RecoveryMeta { name: key.clone(), original: None, extension: ext.clone(), revision: 0 };
+                    let meta = RecoveryMeta { name: key.clone(), original: None, extension: ext.clone(), revision: 0, protected: false };
                     RecoveryEntry { key: key.clone(), meta, saved, path: path.clone() }
                 }),
             };
@@ -309,7 +315,7 @@ pub(super) struct Sidecar {
 
 /// A sidecar larger than this is not read.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) const MAX_SIDECAR: u64 = 1 << 20;
+pub(crate) const MAX_SIDECAR: u64 = 1 << 20;
 
 /// How long a temp file of an interrupted write must have been left before it is removed, far
 /// longer than any write, so another run's write in progress is never touched.

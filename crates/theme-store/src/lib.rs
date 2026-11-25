@@ -15,7 +15,7 @@
 //! `craft-theme`.
 //!
 //! ```
-//! use craft_theme::{ThemeId, AppDefaults, ModeChoice, Size, ThemePair};
+//! use craft_theme::{ThemeId, AppDefaults, ComponentSet, ModeChoice, Size, ThemePair};
 //! use craft_theme_store::{SelectionChange, Store, StoreOptions, SuiteDir};
 //!
 //! let mut store = Store::open(&SuiteDir::memory(), StoreOptions::new("doc 1.0"));
@@ -30,7 +30,8 @@
 //! assert_eq!((accepted.suite.theme_dark.as_ref(), accepted.suite.mode, accepted.revision), (Some(&graphite.id), None, 1));
 //!
 //! let artcraft = ThemeId::parse("craft.artcraft").unwrap();
-//! let defaults = AppDefaults { theme: ThemePair::same(artcraft), mode: ModeChoice::Dark, size: Size::Compact, sizes: Default::default() };
+//! let defaults =
+//!     AppDefaults { theme: ThemePair::same(artcraft), mode: ModeChoice::Dark, size: Size::Compact, sizes: Default::default(), set: ComponentSet::Productivity };
 //! let selection = accepted.suite.with_defaults(&defaults);
 //! assert_eq!((selection.theme.light, selection.mode), (graphite.id, ModeChoice::Dark));
 //! ```

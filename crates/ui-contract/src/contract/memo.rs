@@ -843,6 +843,16 @@ impl<T: MemoProps> MemoProps for craft_behavior::Mixed<T> {
 }
 
 /// The translator (`Words::generation`): words with the same generation read every word the same.
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the selected keys, the lead and
+/// the anchor.
+impl<K: MemoProps> MemoProps for craft_behavior::Selection<K> {
+    fn key(&self, key: &mut MemoKey) {
+        self.items.key(key);
+        self.lead.key(key);
+        self.anchor.key(key);
+    }
+}
+
 impl MemoProps for craft_i18n::Words {
     fn key(&self, key: &mut MemoKey) {
         self.generation().key(key);
@@ -951,8 +961,36 @@ impl MemoProps for craft_theme::Srgba {
     }
 }
 
+impl MemoProps for craft_theme::Rgba {
+    fn key(&self, key: &mut MemoKey) {
+        let craft_theme::Rgba(channels) = *self;
+        channels.key(key);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::TypeRole {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_theme::variant::Tone {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::LabelColor {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash`.
+impl MemoProps for craft_theme::ComponentSet {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }
@@ -975,6 +1013,27 @@ impl MemoProps for craft_behavior::canvas::CanvasView {
             value.key(key);
         }
         self.flip_x.key(key);
+    }
+}
+
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the rungs, the greatest zoom, the
+/// least zoom and the device zoom of 100 %.
+impl MemoProps for craft_behavior::ZoomScheme {
+    fn key(&self, key: &mut MemoKey) {
+        self.rungs.key(key);
+        self.max.key(key);
+        match self.floor {
+            craft_behavior::ZoomFloor::ShorterSide(side) => {
+                key.write_u32(0);
+                side.key(key);
+            }
+            craft_behavior::ZoomFloor::Fixed(zoom) => {
+                key.write_u32(1);
+                zoom.key(key);
+            }
+            other => format!("{other:?}").key(key),
+        }
+        self.hundred.key(key);
     }
 }
 
@@ -1014,7 +1073,21 @@ impl MemoProps for craft_behavior::fit::FitKeep {
 }
 
 /// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_host::target::Os {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_host::target::WindowKind {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (the layer's order and id).
+impl MemoProps for crate::runtime::egui::areas::LayerKey {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }

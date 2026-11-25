@@ -49,6 +49,9 @@ pub enum TabKey {
     Reports,
 }
 
+/// Whether a pasted text is whole ([`TextOptions::whole_paste`]).
+type WholePaste = dyn Fn(&str) -> bool;
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
@@ -64,6 +67,10 @@ pub struct TextOptions {
     pub live: bool,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
+    /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
+    /// goes on to the enclosing scope. A live filter keeps its query this way. Ignored with `clear_on_escape`, and on a
+    /// disabled or read-only part.
+    pub keep_on_escape: bool,
     /// Monospace text.
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
@@ -90,6 +97,11 @@ pub struct TextOptions {
     pub steps_value: bool,
     /// The whole text is selected when the field takes focus, whatever the codec's caret rule says.
     pub select_on_focus: bool,
+    /// A layer that opens on the field (`FocusOrigin::Open`) leaves the caret where the codec's rule puts it instead
+    /// of selecting the whole text: a field that opens to add to its text (an edited comment) rather than replace it.
+    pub keep_caret_on_open: bool,
+    /// Selects the current text before this pass's typing, unless an IME composition is active.
+    pub select_all: bool,
     /// Enter does something in the field itself (it saves or runs a search): the field takes the `Submit` intent, so the
     /// enclosing dialog's default button does not act on it.
     pub submits: bool,
@@ -99,6 +111,9 @@ pub struct TextOptions {
     pub mixed: bool,
     /// The text sits in the middle of the part instead of at its start (numbers).
     pub centred: bool,
+    /// The text sits at the part's end edge, against what follows it (a number and its attached unit sign). Ignored
+    /// while `centred`.
+    pub end_aligned: bool,
     /// A plain Left or Right with the whole text selected starts from the end of the text, not from the selection's
     /// start: a field whose last digits are what the user edits (a timecode's frames).
     pub arrows_from_end: bool,
@@ -111,6 +126,28 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// Set from the codec by `PartsCx::text`, never by hosts: a pasted text that this says is whole replaces all the
+    /// text instead of the selection. It gets the paste as copied; the codec trims it.
+    // PLAN: no `Send + Sync`: `Codec` and `PartsCx::text`'s codec are not `Send`.
+    pub whole_paste: Option<Arc<WholePaste>>,
+    /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
+    /// the line.
+    pub submit_key: SubmitKey,
+    /// The text shown, and exposed as the part's accessible value, instead of the value's own text while the part has
+    /// neither focus nor a draft (a derived number in parentheses). Focus, and any typing, start from the value's own
+    /// text: this changes only what an idle part shows, never what the codec formats or parses.
+    pub resting: Option<String>,
+}
+
+/// Which Enter chord submits a multi-line text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SubmitKey {
+    /// Cmd or Ctrl+Enter submits; plain Enter breaks the line.
+    #[default]
+    CommandEnter,
+    /// Plain, Cmd and Ctrl+Enter submit; Shift+Enter breaks the line.
+    Enter,
 }
 
 impl Default for TextOptions {
@@ -122,6 +159,7 @@ impl Default for TextOptions {
             mask: false,
             live: false,
             clear_on_escape: false,
+            keep_on_escape: false,
             mono: false,
             role: TypeRole::Body,
             ink: None,
@@ -134,13 +172,19 @@ impl Default for TextOptions {
             enabled: true,
             steps_value: false,
             select_on_focus: false,
+            keep_caret_on_open: false,
+            select_all: false,
             submits: false,
             mixed: false,
             centred: false,
+            end_aligned: false,
             arrows_from_end: false,
             unparsed: None,
             own_menu: false,
             holds_drafts: false,
+            whole_paste: None,
+            submit_key: SubmitKey::CommandEnter,
+            resting: None,
         }
     }
 }

@@ -50,13 +50,16 @@ fn host_with(sections: Arc<MemorySections>, jobs: Arc<dyn Jobs>) -> Arc<Host> {
 
 type Task = Box<dyn FnOnce() + Send>;
 
+// The job name of the framework's document-face loads (`craft_ui::fonts`), which the panel's specimens start.
+const FACE_JOBS: &str = "craft-document-faces";
+
 /// Keeps the spawned jobs until the test runs them.
 #[derive(Default)]
-struct Deferred(Mutex<Vec<Task>>);
+struct Deferred(Mutex<Vec<(String, Task)>>);
 
 impl Jobs for Deferred {
-    fn spawn(&self, _: &str, job: Task) {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).push(job);
+    fn spawn(&self, name: &str, job: Task) {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).push((name.to_owned(), job));
     }
 }
 
@@ -206,7 +209,12 @@ fn queued_installs_run_one_runner_in_request_order() {
     rig.click("Install");
     rig.click("Install");
 
-    let mut spawned = std::mem::take(&mut *deferred.0.lock().unwrap_or_else(PoisonError::into_inner));
+    // The cards' specimens load their faces through the same jobs; only the install runners count here.
+    let mut spawned: Vec<Task> = std::mem::take(&mut *deferred.0.lock().unwrap_or_else(PoisonError::into_inner))
+        .into_iter()
+        .filter(|(name, _)| name != FACE_JOBS)
+        .map(|(_, job)| job)
+        .collect();
     assert_eq!(spawned.len(), 1, "one runner drains the queue");
     assert!(rig.store.calls().is_empty(), "nothing runs before the runner does");
     spawned.remove(0)();

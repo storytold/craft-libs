@@ -12,7 +12,7 @@ use craft_ui::runtime::commands::Commands as _;
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Event, Key, Modifiers, Ui};
+use egui::{Event, Key, Modifiers, Ui, Vec2};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -296,4 +296,84 @@ fn the_wheel_steps_the_open_select_a_line_an_entry_and_commits_when_it_stops() {
     assert_eq!(steps.iter().filter(|step| **step == "commit").count(), 1, "the wheel's end commits the run once: {steps:?}");
     assert!(!steps.contains(&"cancel"), "and puts nothing back: {steps:?}");
     assert_eq!(*value.borrow(), 4);
+}
+
+/// The entry a long select holds.
+const HELD: u8 = 40;
+
+/// A select over sixty entries, holding `HELD`.
+fn long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries: Vec<Entry<u8>> = (0..60u8).map(|at| Entry::new(at, format!("Item {at}"))).collect();
+    Select::new("Pick", data.bind("value", HELD), &entries).show(ui).into()
+}
+
+#[trial]
+fn a_long_list_in_a_short_window_opens_on_the_roomier_side_with_the_pick_in_view() {
+    let mut fixture = Fixture::story(&Story::new("select_long", long));
+    fixture.room(Vec2::new(400.0, 240.0)).settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    let window = fixture.ctx().content_rect();
+    let list = fixture.by_role(Role::LIST_BOX).first().expect("Alt+Down opens the list").rect;
+    assert!(window.contains_rect(list), "the list {list:?} stays inside the window {window:?}");
+    let held = fixture.by_label(&format!("Item {HELD}")).expect("the held entry shows").rect;
+    assert!(list.expand(0.5).contains_rect(held), "the held entry {held:?} is in view in the list {list:?}");
+    fixture.key(Key::Space, Modifiers::NONE);
+    fixture.settle();
+    assert!(!list_open(&mut fixture), "Space on the lead picks and closes the list");
+    assert_eq!(*fixture.data().value("value", HELD), HELD, "the lead the list opened on is the held entry");
+}
+
+/// The pointer over a row of an open list moves the lead only: the held value stays the selected option in every
+/// frame, and Enter then chooses the row the pointer is on.
+#[trial]
+fn hovering_a_row_moves_the_lead_and_leaves_the_selected_option_held() {
+    use craft_ui::testing::pointer::moved;
+    let mut fixture = focused();
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    let options = fixture.by_role(Role::LIST_BOX_OPTION);
+    assert_eq!(options.len(), 4, "the list shows its four options");
+    let held = options[0].node;
+    let under_pointer = options[2].center();
+    for step in 0..3 {
+        fixture.frame(if step == 0 { vec![moved(under_pointer)] } else { Vec::new() });
+        let selected: Vec<_> =
+            fixture.by_role(Role::LIST_BOX_OPTION).into_iter().filter(|row| fixture.tree().selected_of(row.node) == Some(true)).collect();
+        assert!(selected.len() == 1 && selected[0].node == held, "frame {step}: the held row stays the selected option");
+    }
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(value(&mut fixture), 3, "the lead followed the pointer, so Enter chooses the row under it");
+}
+
+/// One to Four with a separator between Two and Three.
+fn separated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::separator(), Entry::new(3u8, "Three"), Entry::new(4u8, "Four")];
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
+}
+
+/// A separator draws a rule between the rows around it, lower than a row, and the keys pass over it (FW-319: it drew
+/// blank room).
+#[trial]
+fn a_separator_in_the_list_draws_a_rule_and_the_keys_pass_over_it() {
+    let mut fixture = Fixture::story(&Story::new("select_separated", separated));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    let two = fixture.by_label("Two").expect("the Two row").rect;
+    let three = fixture.by_label("Three").expect("the Three row").rect;
+    let gap = three.top() - two.bottom();
+    assert!(gap > 0.0 && gap < two.height(), "the separator is lower than a row: {gap} between rows {} high", two.height());
+    let rule = fixture.shape_bounds().iter().any(|shape| {
+        shape.top() >= two.bottom() - 0.5 && shape.bottom() <= three.top() + 0.5 && shape.width() > two.width() / 2.0 && shape.height() < gap
+    });
+    assert!(rule, "a rule across the list between Two and Three");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(value(&mut fixture), 3, "Down from Two lands on Three");
 }

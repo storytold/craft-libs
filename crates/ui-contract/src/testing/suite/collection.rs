@@ -251,6 +251,37 @@ pub(super) fn rename_commits_and_cancels_once(subject: &Subject) -> Result<(), S
     Ok(())
 }
 
+/// F2 on the first row of a collection that renames, nothing typed, then a click on the second row: the editor lost the
+/// focus to the rows, so the rename ends once with a blur cancel and no commit, and the editor closes (a typed name commits
+/// by the same loss; an unedited one gave the text field no event to end the rename by).
+pub(super) fn rename_ends_when_the_editor_loses_focus(subject: &Subject) -> Result<(), String> {
+    if !is_items(subject) {
+        return Ok(());
+    }
+    let rename = |kinds: &[CollectionKind], edit: EditKind| kinds.iter().filter(|kind| **kind == CollectionKind::Rename(edit)).count();
+    for story in &subject.stories {
+        let Some((mut fixture, _, shown)) = with_rows(story, 2) else { continue };
+        row_click::click(&mut fixture, &shown[0]);
+        fixture.take_outputs();
+        fixture.key(Key::F2, Modifiers::NONE);
+        fixture.settle();
+        if rename(&events(&mut fixture), EditKind::Begin) == 0 {
+            continue;
+        }
+        row_click::click(&mut fixture, &shown[1]);
+        fixture.settle();
+        let ended = events(&mut fixture);
+        let name = story.name;
+        if rename(&ended, EditKind::Cancel) != 1 || rename(&ended, EditKind::Commit) != 0 {
+            return Err(format!("{name}: a click on another row gave {ended:?}, expected one rename cancel"));
+        }
+        if fixture.tree().role_of(fixture.tree().focused_key()) == Some(Role::TEXT_INPUT) {
+            return Err(format!("{name}: the rename ended and the editor still holds the focus"));
+        }
+    }
+    Ok(())
+}
+
 /// A stacking key on the first row, for a reorderable collection: one end event and no cancel. Cmd+[ moves the row
 /// toward the back, the end of a vertical order; a horizontal order (a strip) moves it later with Cmd+].
 pub(super) fn keyboard_reorder_ends_once(subject: &Subject) -> Result<(), String> {

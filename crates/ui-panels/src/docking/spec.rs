@@ -1,9 +1,13 @@
 //! `PanelSpec`: what the dock asks of a panel before it shows its body.
 
+use super::DockSizes;
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
+use crate::rails::RailDensity;
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
+use craft_theme::Srgba;
 use egui::Vec2;
 
 /// Body heights a panel asks for in a dock column while the user has not resized its group. Like [`SizeLimits`]
@@ -52,26 +56,72 @@ impl DockHeights {
 /// whole number of content columns wide, its steps ([`Column::steps`](craft_behavior::dock::Column::steps)), and as
 /// tall as the content measures at that width: docked from the top of the dock, floating under the title row. A drag
 /// of the column's edge sets whole steps; the content lays out as many columns as fit the width it gets.
+///
+/// A tool rail's grid is [`DockGrid::rail`]: the dock computes its widths from its own style
+/// ([`resolved`](Self::resolved)), so the grid follows the theme and density without the panel's spec reading them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DockGrid {
-    /// The content's width at one column: a cell and the content's own padding on both sides.
-    pub first: f32,
-    /// The width each further column adds: a cell and the gap before it.
-    pub step: f32,
+    widths: GridWidths,
     /// The most columns the content fills, its cell count: more steps show it no wider.
     pub most: u16,
+}
+
+/// The widths of a [`DockGrid`]'s columns.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GridWidths {
+    /// `first`: the content's width at one column, a cell and the content's own padding on both sides; `step`: the
+    /// width each further column adds, a cell and the gap before it.
+    Content { first: f32, step: f32 },
+    /// A tool rail's cells at a density, sized by the dock's style.
+    Rail(RailDensity),
 }
 
 impl DockGrid {
     /// A grid `first` wide at one column, `step` wider for each further column, up to `most` columns.
     pub const fn new(first: f32, step: f32, most: u16) -> Self {
-        DockGrid { first, step, most }
+        DockGrid { widths: GridWidths::Content { first, step }, most }
     }
 
-    /// Whether the widths are finite and positive and the grid has a column.
+    /// The grid of a tool rail of `cells` cells: a rail button and the control padding on both sides at one column,
+    /// a button and the tight gap for each further column, in the style the dock shows it in.
+    pub fn rail(cells: usize) -> Self {
+        DockGrid { widths: GridWidths::Rail(RailDensity::Regular), most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+    }
+
+    /// A [`rail`](Self::rail) grid whose cells are the buttons of a rail at `density`, as the rail shows them
+    /// ([`ToolRail::density`](crate::rails::ToolRail::density)); a content grid is left as it is.
+    #[must_use]
+    pub fn density(mut self, density: RailDensity) -> Self {
+        if let GridWidths::Rail(at) = &mut self.widths {
+            *at = density;
+        }
+        self
+    }
+
+    /// The grid with its widths in points: a [`rail`](Self::rail) grid takes the rail widths of `sizes`.
+    pub fn resolved(self, sizes: &DockSizes) -> Self {
+        match self.widths {
+            GridWidths::Content { .. } => self,
+            GridWidths::Rail(RailDensity::Regular) => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Dense) => DockGrid::new(sizes.dense_rail_first, sizes.dense_rail_step, self.most),
+        }
+    }
+
+    /// The content's width at one column and the width each further column adds; zero for a rail grid not yet
+    /// [`resolved`](Self::resolved).
+    fn first_step(self) -> (f32, f32) {
+        match self.widths {
+            GridWidths::Content { first, step } => (first, step),
+            GridWidths::Rail(_) => (0.0, 0.0),
+        }
+    }
+
+    /// Whether the widths are finite and positive and the grid has a column. A rail grid not yet
+    /// [`resolved`](Self::resolved) is not.
     pub fn valid(self) -> bool {
-        self.first.is_finite() && self.first > 0.0 && self.step.is_finite() && self.step > 0.0 && self.most > 0
+        let (first, step) = self.first_step();
+        first.is_finite() && first > 0.0 && step.is_finite() && step > 0.0 && self.most > 0
     }
 
     /// `steps` kept between one column and [`most`](Self::most).
@@ -81,7 +131,8 @@ impl DockGrid {
 
     /// The content's width at `steps` columns, kept within the grid's columns.
     pub fn width(self, steps: u16) -> f32 {
-        self.first + f32::from(self.clamp(steps) - 1) * self.step
+        let (first, step) = self.first_step();
+        first + f32::from(self.clamp(steps) - 1) * step
     }
 
     /// The most columns whose width fits `width`, at least one.
@@ -99,6 +150,54 @@ impl DockGrid {
 
 /// How far a width or height may pass the room and still fit it: the rounding of laid-out sizes.
 const WIDTH_SLACK: f32 = 0.5;
+
+/// A document a panel shows (a composition in a Timeline): a tab of the panel's group after the group's panel tabs,
+/// whichever panel the group shows. Picking the tab shows the panel and reports
+/// [`DockEvent::DocumentPicked`](super::DockEvent::DocumentPicked); its close button and a middle click report
+/// [`DockEvent::DocumentClosed`](super::DockEvent::DocumentClosed). The host opens, shows and closes documents by editing
+/// the panel's spec; the dock never changes them. A document tab is not dragged and takes no tab drop.
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub struct PanelDocument {
+    /// The document's id, unique among the panel's documents.
+    pub id: u64,
+    /// The tab's text.
+    pub label: Label,
+    /// The data colour shown before the label ([`PanelSpec::swatch`]).
+    pub swatch: Option<Option<Srgba>>,
+    /// The tab shows a close button, where the group's tabs close.
+    pub closable: bool,
+    /// The panel shows this document: its tab is the selected tab while the panel is the one its group shows.
+    pub shown: bool,
+}
+
+impl PanelDocument {
+    /// The document `id` titled `label`: no swatch, not closable, not shown.
+    pub fn new(id: u64, label: impl Into<Label>) -> Self {
+        PanelDocument { id, label: label.into(), swatch: None, closable: false, shown: false }
+    }
+
+    /// The data colour before the label; `None` is the theme's empty swatch.
+    #[must_use]
+    pub fn swatch(mut self, color: Option<Srgba>) -> Self {
+        self.swatch = Some(color);
+        self
+    }
+
+    /// Whether the tab shows a close button.
+    #[must_use]
+    pub fn closable(mut self, closable: bool) -> Self {
+        self.closable = closable;
+        self
+    }
+
+    /// Whether the panel shows this document.
+    #[must_use]
+    pub fn shown(mut self, shown: bool) -> Self {
+        self.shown = shown;
+        self
+    }
+}
 
 /// What the dock reads of a panel: its name and icon, its size policy and how its floating window behaves. The
 /// permissions of a panel (movable, floatable, closable, takes tabs, takes splits) belong to the dock model, not
@@ -130,6 +229,30 @@ pub struct PanelSpec {
     /// The grid the panel lays its content in, which makes a column with steps whole content columns wide and as
     /// tall as its content. `None` for a panel that fills the width it gets.
     pub grid: Option<DockGrid>,
+    /// The panel's toggle command: an iconic cell's face is `IconButton::command` of it, so the marker and the hint
+    /// follow the command.
+    pub command: Option<CommandRef>,
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills: it stays in view while the
+    /// body scrolls.
+    pub footer: bool,
+    /// A number after the panel's name on its tab, in faint type and in its accessible name ("Comments, 3"): what
+    /// the panel lists.
+    pub count: Option<usize>,
+    /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
+    pub caption: Option<Label>,
+    /// A data colour shown as a swatch before the name on the panel's tab: what the panel shows is labelled with it
+    /// (a composition's label colour). `Some(None)` is the theme's empty swatch, for something without a colour; the
+    /// swatch is not part of the tab's accessible name.
+    pub swatch: Option<Option<Srgba>>,
+    /// The documents the panel shows, as tabs of its group after the panel tabs ([`PanelDocument`]).
+    pub documents: Vec<PanelDocument>,
+    /// The panel's body is the app's own egui code: the dock hands `DockPanels::body`, `footer`, `group_header`,
+    /// `rail_footer` and the group's `group_view` (while the panel is the one its group shows) a `Ui` with the style
+    /// of the `Ui` the dock was shown in, so the code lays out as it does outside the dock, and runs them once per pass,
+    /// in the pass's real run (a measuring run takes the size they last took). Other bodies lay out with
+    /// the group's spacing, which framework components expect. An app moves onto the framework panel by panel by
+    /// clearing it on each panel it ports.
+    pub host_body: bool,
 }
 
 impl PanelSpec {
@@ -145,7 +268,56 @@ impl PanelSpec {
             window_kind: WindowKind::Tool,
             canvas: false,
             grid: None,
+            command: None,
+            footer: false,
+            count: None,
+            caption: None,
+            swatch: None,
+            documents: Vec::new(),
+            host_body: false,
         }
+    }
+
+    /// Shows `n` after the panel's name on its tab.
+    #[must_use]
+    pub fn count(mut self, n: usize) -> Self {
+        self.count = Some(n);
+        self
+    }
+
+    /// Shows `text` under the header row while the panel is shown.
+    #[must_use]
+    pub fn caption(mut self, text: impl Into<Label>) -> Self {
+        self.caption = Some(text.into());
+        self
+    }
+
+    /// Shows a swatch of `color` before the panel's name on its tab; `None` is the theme's empty swatch.
+    #[must_use]
+    pub fn swatch(mut self, color: Option<Srgba>) -> Self {
+        self.swatch = Some(color);
+        self
+    }
+
+    /// The documents the panel shows, as tabs of its group after the panel tabs.
+    #[must_use]
+    pub fn documents(mut self, documents: Vec<PanelDocument>) -> Self {
+        self.documents = documents;
+        self
+    }
+
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills.
+    #[must_use]
+    pub fn footer(mut self) -> Self {
+        self.footer = true;
+        self
+    }
+
+    /// The panel's toggle command.
+    #[must_use]
+    pub fn command(mut self, command: impl Into<CommandRef>) -> Self {
+        self.command = Some(command.into());
+        self
     }
 
     /// The panel's icon.
@@ -194,6 +366,13 @@ impl PanelSpec {
     #[must_use]
     pub fn canvas(mut self) -> Self {
         self.canvas = true;
+        self
+    }
+
+    /// The panel's body is the app's own egui code (`host_body`).
+    #[must_use]
+    pub fn host_body(mut self) -> Self {
+        self.host_body = true;
         self
     }
 

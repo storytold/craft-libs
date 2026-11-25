@@ -72,7 +72,68 @@ pub enum WellShape {
     Round,
 }
 
-/// Corner radii, edge style, knob shape and well shape.
+/// The marks a dock grip's row is made of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GripMark {
+    /// Upright ticks, [`GripShape::width`] wide and [`GripShape::length`] tall.
+    #[default]
+    Ticks,
+    /// Square dots, [`GripShape::width`] on a side.
+    Dots,
+    /// One level bar, [`GripShape::length`] long and [`GripShape::width`] thick: a tick turned on its side. The count
+    /// and the gap do not apply.
+    Bar,
+}
+
+impl GripMark {
+    /// The mark's name in a theme file and a token dump.
+    pub fn name(self) -> &'static str {
+        match self {
+            GripMark::Ticks => "ticks",
+            GripMark::Dots => "dots",
+            GripMark::Bar => "bar",
+        }
+    }
+}
+
+/// The row of marks a dock grip shows (the grip above an icon group, under a tool rail's column bar, at a floating
+/// panel's edge): what the marks are, how many, how large and how far apart, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GripShape {
+    /// Ticks, dots or a bar.
+    pub mark: GripMark,
+    /// How many marks the row has, at every display scale.
+    pub count: u16,
+    /// How tall a tick is, or how long the bar is; dots ignore it.
+    pub length: f32,
+    /// How wide a tick is, a dot's side, or how thick the bar is.
+    pub width: f32,
+    /// The space between two marks.
+    pub gap: f32,
+}
+
+impl GripShape {
+    /// Eleven upright ticks, 1 point wide, 5 points tall and 1 point apart.
+    pub const DEFAULT: GripShape = GripShape { mark: GripMark::Ticks, count: 11, length: 5.0, width: 1.0, gap: 1.0 };
+}
+
+impl Default for GripShape {
+    fn default() -> Self {
+        GripShape::DEFAULT
+    }
+}
+
+/// The squares of a reference point picker's square look: the step from one square's centre to the next and a
+/// square's side, in points. The picker is two steps and a square wide.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorShape {
+    /// The step from one square's centre to the next.
+    pub cell: f32,
+    /// A square's side.
+    pub square: f32,
+}
+
+/// Corner radii, edge style, knob shape, well shape, grip marks and the reference point's squares.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -83,6 +144,10 @@ pub struct ShapeTokens {
     pub knob: KnobShape,
     /// How colour wells that stand on their own are drawn.
     pub wells: WellShape,
+    /// The marks of the dock grips.
+    pub grip: GripShape,
+    /// The squares of a reference point picker's square look.
+    pub locator: LocatorShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.
@@ -137,6 +202,13 @@ pub struct SpaceTokens {
 pub struct Insets {
     /// The gap a floating layer (a dialog, a floating window) keeps from the screen edge.
     pub screen: f32,
+    /// The page view's side margin: kept clear at each side of the pages, so a page fitted to the width stands this far
+    /// from the view's edges.
+    pub page_side: f32,
+    /// The page view's margin above the first and below the last row of pages.
+    pub page_margin: f32,
+    /// The gap between pages and rows of pages.
+    pub page_gap: f32,
 }
 
 /// One length per control size, in logical pixels: control heights, field widths.
@@ -179,12 +251,16 @@ pub struct BarSizes {
     pub title: f32,
     /// Tab strip.
     pub tab: f32,
+    /// Tab strip in its large form: large document tabs.
+    pub tab_large: f32,
     /// Status bar.
     pub status: f32,
     /// Tool options bar.
     pub options: f32,
     /// Tool options bar in its narrow form, for a window too small for the full bar.
     pub options_narrow: f32,
+    /// A dock column's bar, with its collapse chevron: a small control's height in the built-in sets.
+    pub column: f32,
 }
 
 /// Fixed sizes of controls and chrome.
@@ -192,6 +268,9 @@ pub struct BarSizes {
 pub struct SizeTokens {
     /// Control heights.
     pub control: ControlSizes,
+    /// The height of a standard push button, a text button's face (a small one stands `control.sm` high). An app that
+    /// sets `size.control.md` and not this keeps its buttons a control high.
+    pub button: f32,
     /// Icon sizes.
     pub icon: IconSizes,
     /// Tool rail.
@@ -202,8 +281,6 @@ pub struct SizeTokens {
     pub panel_header: f32,
     /// Least width of a popup surface: a menu or a popup list.
     pub popup_min: f32,
-    /// The length of the fade at an edge of a scroll region past which its content continues.
-    pub scroll_fade: f32,
     /// Thumbnail sides.
     pub thumb: ThumbSizes,
     /// Canvas drag handles.
@@ -233,41 +310,21 @@ pub struct SizeTokens {
     pub pane: PaneSizes,
     /// The docks' columns.
     pub dock: DockColumnSizes,
-    /// Notice cards: toasts.
-    pub notice: NoticeSizes,
     /// Dialogs: their content width and their buttons.
     pub dialog: DialogSizes,
-    /// The rulers of a canvas.
-    pub ruler: RulerSizes,
-    /// The stage a story draws on.
-    pub story: StorySizes,
+    /// Full-window pages.
+    pub page: PageSizes,
 }
 
-/// The stage a story draws on, in logical pixels: a story of a canvas control, and each column of a story grid.
+/// The sizes of a full-window page (a start page), in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct StorySizes {
-    /// The height of the stage a story of a canvas control shows its canvas on.
-    pub height: f32,
-    /// The least width of a story: of that stage, and of a column of a story grid.
-    pub width_min: f32,
-    /// The greatest width of that stage.
-    pub width_max: f32,
-}
-
-/// The sizes of a canvas ruler, in logical pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct RulerSizes {
-    /// The tick marks.
-    pub tick: RulerTickSizes,
-}
-
-/// The lengths of a ruler's tick marks, in logical pixels. The major tick spans the ruler's depth.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct RulerTickSizes {
-    /// The tick halfway between two labelled ticks.
-    pub mid: f32,
-    /// The tick between two other ticks.
-    pub minor: f32,
+pub struct PageSizes {
+    /// The widest a page's centred column of content grows; a narrower room keeps the page's margin at each side.
+    pub column: f32,
+    /// The room above and below a page's centred column.
+    pub margin: f32,
+    /// The height of a page's call to action (`ControlPlace::CallToAction`).
+    pub action: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.
@@ -284,13 +341,6 @@ pub struct PaneSizes {
 pub struct DockColumnSizes {
     /// The width an expanded column has until the user resizes it.
     pub column: f32,
-}
-
-/// The sizes of a notice card, in logical pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct NoticeSizes {
-    /// The width every card of a toast stack has where the room allows.
-    pub width: f32,
 }
 
 /// The sizes of a dialog, in logical pixels.
@@ -417,6 +467,8 @@ pub struct StrokeTokens {
     pub thick: f32,
     /// Heaviest line: an arc or indicator that must read at a glance.
     pub heavy: f32,
+    /// The keyboard focus ring.
+    pub focus: f32,
     /// Length of a dash.
     pub dash: f32,
     /// Gap between dashes.

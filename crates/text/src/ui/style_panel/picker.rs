@@ -1,13 +1,14 @@
-//! The rows of the style picker: the document's named styles as the rows of a `PresetPicker`.
+//! The presets of the style picker: the document's named styles as the source of a `PresetPicker`.
 
 use crate::styles::{group_by_folder, style_leaf};
 use craft_behavior::IconId;
 use craft_theme::Rgba;
-use craft_ui::patterns::presets::{PresetKey, PresetRow};
+use craft_ui::patterns::presets::{PresetFns, PresetKey, PresetRow, PresetSource};
+use craft_ui::runtime::env::Env;
 use craft_ui::style::TypeRole;
 
 /// What a style row shows before its name.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum StylePreview {
     /// A swatch (colour and fill styles).
@@ -25,7 +26,7 @@ pub enum StylePreview {
 }
 
 /// One style in the picker; its folder is the name's ([`crate::styles::style_folder`]).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct NamedStyleRow {
     /// The style's id.
@@ -59,11 +60,15 @@ impl NamedStyleRow {
     }
 }
 
-/// The picker's rows: styles with no folder first, then each folder as a group row over its styles, in order of
+/// The picker's presets: styles with no folder first, then each folder as a group row over its styles, in order of
 /// first appearance. A style's key is `PresetKey::Item(id)`.
-pub fn style_rows(styles: &[NamedStyleRow]) -> Vec<PresetRow<PresetKey<u64>>> {
+pub fn style_source(styles: &[NamedStyleRow]) -> PresetSource<'_, PresetKey<u64>> {
+    PresetSource::new(styles, PresetFns::new(style_rows))
+}
+
+fn style_rows(styles: &&[NamedStyleRow], _: &Env) -> Vec<PresetRow<PresetKey<u64>>> {
     let mut rows = Vec::new();
-    for (folder, group) in group_by_folder(styles, |style: &NamedStyleRow| style.name.as_str()) {
+    for (folder, group) in group_by_folder(*styles, |style: &NamedStyleRow| style.name.as_str()) {
         let depth = usize::from(!folder.is_empty());
         if depth == 1 {
             rows.push(PresetRow::group(PresetKey::group([folder.clone()]), folder.clone(), 0).count(group.len()));

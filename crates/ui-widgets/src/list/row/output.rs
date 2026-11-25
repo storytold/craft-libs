@@ -7,6 +7,7 @@ use super::thumb::ThumbTarget;
 use super::trailing::TrailingPart;
 use crate::contract::{ItemOutput, NoValue, OpenChange, Outcome};
 use crate::runtime::commands::FireSource;
+use craft_behavior::ColumnKey;
 use craft_keymap::Mods;
 use egui::{Rect, Response};
 
@@ -58,6 +59,12 @@ pub enum RowEvent {
         mods: Mods,
         /// The press count of the click, as [`ThumbClicked`](Self::ThumbClicked) counts it.
         clicks: u32,
+    },
+    /// The action of a status cell ([`ListRow::cell_status`]) was activated.
+    #[non_exhaustive]
+    CellAction {
+        /// The column of the cell.
+        column: ColumnKey,
     },
 }
 

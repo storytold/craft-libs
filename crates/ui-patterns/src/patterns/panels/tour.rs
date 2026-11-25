@@ -186,7 +186,7 @@ impl<'a> Tour<'a> {
 
 /// The card's layer: a popup beside `anchor` (the step's target with a panel's padding around it, clear of its mark),
 /// else in the middle of the window. It blocks nothing and dims nothing; a press outside leaves it open.
-fn layer(anchor: Option<Rect>) -> Overlay {
+pub(super) fn layer(anchor: Option<Rect>) -> Overlay {
     let mut overlay = Overlay::popover().dismiss(Dismiss::new().outside(Outside::Keep));
     overlay.fit = OverlayFit::ContentCapped(CARD_SHARE);
     overlay.place = match anchor {

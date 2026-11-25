@@ -6,7 +6,7 @@ use std::sync::Arc;
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
-use craft_ui::choice::{Checkbox, Swatch};
+use craft_ui::choice::{Checkbox, Swatch, SwatchFill, SwatchImage};
 use craft_ui::contract::{
     Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger, clicked,
 };
@@ -30,7 +30,7 @@ pub use words::PaintBarWords;
 const PRESSURE: &str = "target";
 
 /// The painting tools the bar serves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PaintTool {
     /// The Brush tool.
@@ -43,14 +43,10 @@ pub enum PaintTool {
     MixerBrush,
 }
 
-/// The bar's values.
-#[derive(Clone, Debug, PartialEq)]
+/// The bar's values. The size and the hardness are the preset picker's, which comes before the bar.
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PaintValues<M> {
-    /// The brush size.
-    pub size: f64,
-    /// The brush hardness.
-    pub hardness: f64,
     /// The opacity.
     pub opacity: f64,
     /// The flow.
@@ -78,8 +74,6 @@ impl<M> PaintValues<M> {
     /// options overwrites every field.
     pub fn new(mode: M) -> Self {
         PaintValues {
-            size: 30.0,
-            hardness: 0.5,
             opacity: 1.0,
             flow: 1.0,
             smoothing: Smoothing::default(),
@@ -95,7 +89,7 @@ impl<M> PaintValues<M> {
 }
 
 /// The stroke smoothing options.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Smoothing {
     /// The amount, 0 to 1.
@@ -117,8 +111,21 @@ impl Default for Smoothing {
     }
 }
 
+/// What the Mixer Brush holds: the paint its next stroke starts with.
+#[derive(Clone, Debug, Default, PartialEq, craft_ui::contract::MemoProps)]
+#[non_exhaustive]
+pub enum MixerLoad {
+    /// Nothing: the brush is clean.
+    #[default]
+    Clean,
+    /// One colour.
+    Color(Srgba),
+    /// The tip image an Alt-click sampled.
+    Image(SwatchImage),
+}
+
 /// The Mixer Brush's values.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct MixerValues {
     /// Load the brush after each stroke.
@@ -137,8 +144,8 @@ pub struct MixerValues {
     pub sample_all_layers: bool,
     /// The index into [`MIXER_COMBINATIONS`].
     pub combination: usize,
-    /// The colour the brush is loaded with, if any.
-    pub load_color: Option<Srgba>,
+    /// What the brush holds, which the load swatch shows.
+    pub current_load: MixerLoad,
     /// Only solid colours load.
     pub solid_colors_only: bool,
 }
@@ -155,14 +162,14 @@ impl Default for MixerValues {
             flow: 1.0,
             sample_all_layers: false,
             combination: 0,
-            load_color: None,
+            current_load: MixerLoad::Clean,
             solid_colors_only: false,
         }
     }
 }
 
 /// What the Eraser tool erases with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum EraserMode {
     /// A brush.
@@ -448,12 +455,15 @@ impl<M: Value> Pass<'_, M> {
         cx.memory::<SmoothingOpen>().0 = open;
     }
 
-    /// The Mixer Brush's load swatch and its menu.
+    /// The Mixer Brush's load swatch, showing what the brush holds (a checkerboard when it is clean), and its menu.
     fn mixer_load(&mut self, ui: &mut Ui, words: &PaintBarWords) {
-        let color = self.values.mixer.load_color;
+        let fill = match &self.values.mixer.current_load {
+            MixerLoad::Clean => SwatchFill::Empty,
+            MixerLoad::Color(color) => SwatchFill::Color(Mixed::Same(*color)),
+            MixerLoad::Image(image) => SwatchFill::Image(image.clone()),
+        };
         let solid = self.values.mixer.solid_colors_only;
-        // `Swatch` has no empty face, so a brush with no load shows the mixed face.
-        let swatch = Swatch::new(words.load_swatch.clone(), color.map_or(Mixed::Mixed, Mixed::Same)).show(ui).response;
+        let swatch = Swatch::with_fill(words.load_swatch.clone(), fill).show(ui).response;
         let (mut load, mut clean, mut next_solid) = (false, false, None);
         let _ = Menu::new(words.load_swatch.clone()).opened_by(&swatch, Trigger::Click).show(ui, |ui, _| {
             load = MenuItem::new(words.load_brush.clone()).show(ui).ran;

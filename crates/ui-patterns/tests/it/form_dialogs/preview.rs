@@ -40,6 +40,9 @@ fn a_typed_zoom_sets_the_preview_zoom_inside_its_range() {
     type_zoom(&mut fixture, "5000");
     let end = *view.borrow().range.end();
     assert!((view.borrow().transform.scale - end).abs() < SAME, "a zoom past the range stops at its end: {:?}", view.borrow().transform);
+
+    type_zoom(&mut fixture, "-50");
+    assert!((view.borrow().transform.scale - 0.5).abs() < SAME, "the preview filters the minus sign");
 }
 
 /// The picture the click trials show.

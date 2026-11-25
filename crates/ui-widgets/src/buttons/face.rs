@@ -1,7 +1,7 @@
 //! What a push or toggle button shows: a leading icon (or spinner), a label and a trailing icon, centred in the
 //! button unless it aligns them to an edge, and the look parts the buttons share.
 
-use super::{ControlPlace, GroupLevel, RibbonLook};
+use super::{ActiveLook, ControlPlace, GroupLevel, RibbonLook};
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
@@ -18,6 +18,8 @@ use egui::{Rect, Vec2, pos2};
 pub(crate) struct FaceLook {
     /// The gap between icon and label.
     pub gap: f32,
+    /// The colour of the chord and of the detail line: the variant's muted ink, as a `Kbd` chord is muted.
+    pub muted: Stateful<StyleColor>,
     /// The side of a stacked face's leading icon (`stacked_side`).
     pub stacked_icon: f32,
     /// How far under a stacked face's leading icon the split button's parts meet.
@@ -29,11 +31,12 @@ pub(crate) struct FaceLook {
 }
 
 impl FaceLook {
-    /// The face look of the instance's variant: the control's gap and the stacked icon side.
+    /// The face look of the instance's variant: the control's gap, the variant's muted ink and the stacked icon side.
     pub(crate) fn of(cx: &StyleCx<'_>) -> FaceLook {
         let control = cx.control();
         FaceLook {
             gap: control.gap,
+            muted: cx.variant_look().muted,
             stacked_icon: stacked_side(cx.tokens, control.icon, cx.env::<ControlPlace>(), cx.env::<RibbonLook>()),
             divide_gap: cx.tokens.space.gap.tight,
             stacked_top: stacked_lines(cx.env::<ControlPlace>()) > 0,
@@ -101,6 +104,10 @@ pub(crate) struct FaceSpec<'a> {
     pub mnemonic: Option<usize>,
     /// Where the icons and the label sit along the area when it is wider than they are.
     pub align: HAlign,
+    /// The command's chord, shown after the label of an inline face and dropped before the label elides.
+    pub chord: Option<&'a str>,
+    /// A caption-role second line under the icon and label of an inline face, wrapped to the face's width.
+    pub detail: Option<&'a str>,
 }
 
 impl FaceSpec<'_> {
@@ -135,6 +142,47 @@ impl FaceSpec<'_> {
     /// The gaps between the parts that are shown.
     fn gaps(&self) -> usize {
         (usize::from(self.leads()) + usize::from(self.trail.is_some()) + usize::from(!self.label.is_empty())).saturating_sub(1)
+    }
+
+    /// The chord as a run: only after a label, and not while the face is busy. It keeps its left-to-right order under
+    /// right-to-left, as `ChordText` lays a chord out.
+    fn chord_run(&self) -> Option<TextRun<'_>> {
+        self.chord.filter(|chord| !chord.is_empty() && !self.loading && !self.label.is_empty()).map(|chord| {
+            let mut run = TextRun::new(chord).role(TypeRole::Caption);
+            run.ltr = true;
+            run
+        })
+    }
+
+    fn detail_run(&self) -> Option<TextRun<'_>> {
+        self.detail.filter(|detail| !detail.is_empty()).map(|detail| TextRun::new(detail).role(TypeRole::Caption))
+    }
+}
+
+/// Whether the chord, `chord` wide after a gap, fits with the whole label (`label` wide) and the icons and gaps (`fixed`)
+/// in `room`: the chord is dropped before the label elides.
+fn chord_fits(label: f32, chord: f32, fixed: f32, gap: f32, room: f32) -> bool {
+    fixed + label + gap + chord <= room
+}
+
+/// How far the parts start from the reading start of a row with `free` room to spare.
+fn lead_offset(align: HAlign, free: f32) -> f32 {
+    match align {
+        HAlign::Start => 0.0,
+        HAlign::Center => free / 2.0,
+        HAlign::End => free,
+    }
+}
+
+/// The row of icons, label and chord, `row_height` tall: all of `area` without a detail line; with one `detail_height`
+/// tall, the top of the block the two make, centred in `area`.
+fn row_rect(area: Rect, row_height: f32, detail_height: Option<f32>, gap: f32) -> Rect {
+    match detail_height {
+        Some(detail) => {
+            let block = row_height + gap + detail;
+            Rect::from_min_size(pos2(area.min.x, area.center().y - block / 2.0), Vec2::new(area.width(), row_height))
+        }
+        None => area,
     }
 }
 
@@ -274,16 +322,16 @@ fn stacked_sizes<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, lines
         .collect()
 }
 
-/// The metrics of a button with a face: the control's, with the horizontal padding at least the corner radius plus
-/// the gap, so the label and icons of a capsule clear its round ends.
+/// The metrics of a button with a face: a button high (`StyleCx::button_height`), with the control's horizontal padding
+/// at least the corner radius plus the gap, so the label and icons of a capsule clear its round ends.
 pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
-    let control = cx.control();
-    let round = f32::from(parts.radius.nw).min(control.height / 2.0);
+    let (control, height) = (cx.control(), cx.button_height());
+    let round = f32::from(parts.radius.nw).min(height / 2.0);
     // The sides clear the corner round, so an edge never crosses the label. A ribbon's flat button has no edge at rest
     // (`ControlPlace::Ribbon`): its sides take the control's padding, as a ribbon's controls sit close.
     let side = if super::flat_in_ribbon(cx) { control.pad_x } else { control.pad_x.max(round + control.gap) };
-    // A ribbon look's row height (`RibbonLook::row`) stands in for the control's.
-    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, control.height))).gap(control.gap)
+    // A ribbon look's row height (`RibbonLook::row`) stands in for the button's.
+    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, height))).gap(control.gap)
 }
 
 /// The metrics of a stacked face: `metrics`, with the control's gap above and below the stack, so its height is the
@@ -337,7 +385,7 @@ pub(super) fn on_surface(cx: &StyleCx<'_>, off: &VariantParts, on: &VariantParts
 }
 
 /// The look of a button that shows only its icon: an icon button, or a toggle button that is `icon_only`.
-pub(super) struct IconFace {
+pub(crate) struct IconFace {
     pub surface: SurfaceLook,
     pub metrics: Metrics,
     /// The glyph at the side of the scope's glyph role, in the on look's text colour while on.
@@ -347,8 +395,13 @@ pub(super) struct IconFace {
 /// The icon-only look of the instance's variant: a square of the control height with control corners, as a ghost
 /// button of the old look (a capsule would round the on plate), showing the on look while on. The scope's glyph role
 /// sets the glyph's side and, in a rail, the quieter ink it rests in.
-pub(super) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
-    let (off, on) = (cx.variant_look(), on_parts(cx));
+pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
+    let on = match cx.env::<ActiveLook>() {
+        ActiveLook::Accent => on_parts(cx),
+        ActiveLook::Pressed => filled_parts(cx, cx.tokens.color.state.pressed),
+        ActiveLook::Control => filled_parts(cx, cx.tokens.color.surface.control),
+    };
+    let off = cx.variant_look();
     let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
     let (side, rest) = match cx.glyph_role() {
         GlyphRole::Tool => (icon.md, None),
@@ -378,6 +431,13 @@ pub(super) fn on_parts(cx: &StyleCx<'_>) -> VariantParts {
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), ..soft }
 }
 
+/// The on look under `ActiveLook::Pressed` and `ActiveLook::Control`: `fill` with no edge, the normal text colour.
+fn filled_parts(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> VariantParts {
+    let soft = on_parts(cx);
+    let (fill, ink) = (cx.color(fill), cx.color(cx.tokens.color.text.normal));
+    VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), edge: None, ..soft }
+}
+
 /// The focus ring of a button.
 pub(crate) fn focus(cx: &StyleCx<'_>) -> FocusLook {
     cx.focus_look()
@@ -390,10 +450,11 @@ pub(crate) fn measured_icon<C: Component>(cx: &MeasureCx<'_, C>) -> f32 {
     if small > 0 && cx.env.get::<ControlPlace>() == ControlPlace::Ribbon { f32::from(small) } else { cx.icon() }
 }
 
-/// The size of the face: its parts and the gaps between them.
-/// The label elides in the room the icons and gaps leave, so a squeezed face is as wide as its room; at its least
-/// the label is at its readable least. The group level comes from the env (`GroupLevel` is a style value, so the
-/// measurement is keyed on it): a compact group's inline face measures without its label.
+/// The size of the face: its parts and the gaps between them, the detail line under them.
+/// The chord is dropped before the label elides; the label then elides in the room the icons and gaps leave, so a
+/// squeezed face is as wide as its room; at its least the label is at its readable least and the chord is dropped.
+/// The group level comes from the env (`GroupLevel` is a style value, so the measurement is keyed on it): a compact
+/// group's inline face measures without its label.
 pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> Vec2 {
     let spec = &spec.at(cx.env.get::<GroupLevel>());
     if spec.arrangement == Arrangement::Stacked {
@@ -411,18 +472,29 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         let icon = if spec.leads() { lead_side + cx.gap() } else { 0.0 };
         return Vec2::new(size.x, size.y.max(icon + keep as f32 * line.max(if spec.trail.is_some() { side } else { 0.0 })));
     }
-    let icon = measured_icon(cx);
+    let (icon, gap) = (measured_icon(cx), cx.gap());
     let trail = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonLook>()).unwrap_or(icon);
-    let fixed = spec.icons_width(icon, trail) + cx.gap() * spec.gaps() as f32;
-    let text = if spec.label.is_empty() {
-        Vec2::ZERO
+    let fixed = spec.icons_width(icon, trail) + gap * spec.gaps() as f32;
+    let room = cx.room.unwrap_or(f32::INFINITY);
+    let (text, chord) = if spec.label.is_empty() {
+        (Vec2::ZERO, None)
     } else if cx.proposal == Proposal::Min {
-        let run = spec.run();
-        cx.least(&run).size()
+        (cx.least(&spec.run()).size(), None)
     } else {
-        cx.layout_at(&spec.run(), cx.room.map_or(f32::INFINITY, |room| (room - fixed).max(0.0))).size()
+        let beside = spec.chord_run().and_then(|chord| {
+            let label = cx.layout_at(&spec.run(), f32::INFINITY).size();
+            let chord = cx.layout_at(&chord, f32::INFINITY).size();
+            chord_fits(label.x, chord.x, fixed, gap, room).then_some((label, chord))
+        });
+        match beside {
+            Some((label, chord)) => (Vec2::new(label.x, label.y.max(chord.y)), Some(chord.x)),
+            None => (cx.layout_at(&spec.run(), (room - fixed).max(0.0)).size(), None),
+        }
     };
-    Vec2::new(text.x + fixed, text.y.max(icon))
+    let row = Vec2::new(text.x + fixed + chord.map_or(0.0, |width| width + gap), text.y.max(icon));
+    let Some(detail) = spec.detail_run() else { return row };
+    let detail = if cx.proposal == Proposal::Min { cx.least(&detail).size() } else { cx.layout_at(&detail, room).size() };
+    Vec2::new(row.x.max(detail.x), row.y + gap + detail.y)
 }
 
 /// `icon` in `color`, unless the spec names a colour of its own.
@@ -435,26 +507,23 @@ pub(super) fn tinted<'a>(icon: &IconSpec<'a>, color: StyleColor) -> IconSpec<'a>
 struct Slots {
     lead: Option<Rect>,
     text: Option<Rect>,
+    chord: Option<Rect>,
     trail: Option<Rect>,
 }
 
-/// Places the icons of `side` and a label `text_width` wide with `gap` between them, in `area` by `spec.align`: the leading
-/// icon (or picture) at the reading start, the trailing icon at the reading end.
-fn slots(spec: &FaceSpec<'_>, (side, trail): (f32, f32), gap: f32, text_width: f32, area: Rect, rtl: bool) -> Slots {
-    let width = spec.icons_width(side, trail) + gap * spec.gaps() as f32 + text_width;
-    let free = (area.width() - width).max(0.0);
-    let lead = match spec.align {
-        HAlign::Start => 0.0,
-        HAlign::Center => free / 2.0,
-        HAlign::End => free,
-    };
+/// Places the leading icon (or picture) of `side` and the trailing icon of `trail`, a label `text_width` wide and the
+/// chord of `chord` width after the label, with `gap` between them, in `area` by `spec.align`: the leading part at the
+/// reading start, the trailing icon at the reading end.
+fn slots(spec: &FaceSpec<'_>, (side, trail): (f32, f32), gap: f32, text_width: f32, chord: Option<f32>, area: Rect, rtl: bool) -> Slots {
+    let width = spec.icons_width(side, trail) + gap * spec.gaps() as f32 + text_width + chord.map_or(0.0, |width| width + gap);
+    let lead = lead_offset(spec.align, (area.width() - width).max(0.0));
     let (_, mut rest) = Flow::new(area, rtl).take_start(lead);
     let mut take = |extent: f32| {
         let (slot, next) = rest.take_start(extent);
         rest = next;
         slot
     };
-    let mut slots = Slots { lead: None, text: None, trail: None };
+    let mut slots = Slots { lead: None, text: None, chord: None, trail: None };
     let mut gapped = false;
     if spec.leads() {
         slots.lead = Some(take(spec.lead_width(side)));
@@ -466,6 +535,10 @@ fn slots(spec: &FaceSpec<'_>, (side, trail): (f32, f32), gap: f32, text_width: f
         }
         slots.text = Some(take(text_width));
         gapped = true;
+        if let Some(width) = chord {
+            take(gap);
+            slots.chord = Some(take(width));
+        }
     }
     if spec.trail.is_some() {
         if gapped {
@@ -488,8 +561,10 @@ fn text_top(draw: &crate::primitives::Draw<'_>, area: Rect, text: &crate::primit
     area.center().y - body.size().y / 2.0 + body.first_baseline - text.first_baseline
 }
 
-/// Paints the face in `area`, placed by `spec.align`: the leading icon at the reading start, the trailing icon at the reading end.
-/// A face that drops its label (`FaceSpec::drops_label`) says so in the paint record, so the tooltip shows the label.
+/// Paints the face in `area`, placed by `spec.align`: the leading icon at the reading start, the trailing icon at the
+/// reading end, the chord after the label when it fits beside the whole label, the detail line centred in `area` with
+/// them as one block. A face that drops its label (`FaceSpec::drops_label`) says so in the paint record, so the
+/// tooltip shows the label.
 pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextLook, &IconLook), look: &FaceLook, spec: &FaceSpec<'_>, area: Rect) {
     let level = cx.env.get::<GroupLevel>();
     if spec.drops_label(level) {
@@ -506,21 +581,44 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
     let trail_side = look.arrow.unwrap_or(side);
     let fixed = spec.icons_width(side, trail_side) + look.gap * spec.gaps() as f32;
     let run = spec.run().color(text_color);
-    let text = if spec.label.is_empty() { None } else { Some(draw.layout(&run, (area.width() - fixed).max(0.0))) };
+    let muted = cx.resolve(&look.muted);
+    let beside = spec.chord_run().and_then(|chord| {
+        let label = draw.layout(&run, f32::INFINITY);
+        let chord = draw.layout(&chord.color(muted), f32::INFINITY);
+        chord_fits(label.size().x, chord.size().x, fixed, look.gap, area.width()).then_some((label, chord))
+    });
+    let (text, chord) = match beside {
+        Some((label, chord)) => (Some(label), Some(chord)),
+        None if spec.label.is_empty() => (None, None),
+        None => (Some(draw.layout(&run, (area.width() - fixed).max(0.0))), None),
+    };
+    let detail = spec.detail_run().map(|detail| draw.layout(&detail.color(muted), area.width()));
+    let height = |layout: &Option<TextLayout>| layout.as_ref().map_or(0.0, |layout| layout.size().y);
+    let row = row_rect(area, height(&text).max(height(&chord)).max(side), detail.as_ref().map(|detail| detail.size().y), look.gap);
+    let rtl = cx.flow.is_rtl();
     let text_width = text.as_ref().map_or(0.0, |text| text.size().x);
-    let slots = slots(spec, (side, trail_side), look.gap, text_width, area, cx.flow.is_rtl());
+    let slots = slots(spec, (side, trail_side), look.gap, text_width, chord.as_ref().map(|chord| chord.size().x), row, rtl);
     if let (Some(lead), Some(slot)) = (spec.lead, slots.lead)
         && !spec.loading
     {
-        draw.icon(icon_at(slot, area, side), &tinted(lead, icon_color));
+        draw.icon(icon_at(slot, row, side), &tinted(lead, icon_color));
     }
     if let (Some(text), Some(slot)) = (&text, slots.text)
         && !(spec.loading && !spec.leads())
     {
-        draw.galley(pos2(slot.min.x, text_top(&draw, area, text)), text);
+        draw.galley(pos2(slot.min.x, text_top(&draw, row, text)), text);
+    }
+    if let (Some(chord), Some(slot)) = (&chord, slots.chord) {
+        draw.galley(pos2(slot.min.x, text_top(&draw, row, chord)), chord);
     }
     if let (Some(trail), Some(slot)) = (spec.trail, slots.trail) {
-        draw.icon(icon_at(slot, area, trail_side), &tinted(trail, icon_color));
+        draw.icon(icon_at(slot, row, trail_side), &tinted(trail, icon_color));
+    }
+    if let Some(detail) = &detail {
+        let width = detail.size().x;
+        let (_, rest) = Flow::new(area, rtl).take_start(lead_offset(spec.align, (area.width() - width).max(0.0)));
+        let (slot, _) = rest.take_start(width);
+        draw.galley(pos2(slot.min.x, row.max.y + look.gap), detail);
     }
 }
 
@@ -591,17 +689,29 @@ pub(super) fn spinner_rect<C: Component>(
             None => placed.lines.first().map(|line| Rect::from_center_size(line.center(), Vec2::splat(side))),
         };
     }
-    let slots = inline_slots(cx, spec, look, side, area, rtl);
+    let (slots, row) = inline_slots(cx, spec, look, side, area, rtl);
     let slot = if spec.leads() { slots.lead } else { slots.text }?;
-    Some(icon_at(slot, area, side))
+    Some(icon_at(slot, row, side))
 }
 
-/// The slots of an inline face in `area`, its label laid out in the room the icons and gaps leave.
-fn inline_slots<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &FaceLook, side: f32, area: Rect, rtl: bool) -> Slots {
+/// The slots of an inline face in `area` as `paint` places them, and the row of icons, label and chord they sit on:
+/// the chord beside the whole label when it fits, else the label laid out in the room the icons and gaps leave.
+fn inline_slots<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &FaceLook, side: f32, area: Rect, rtl: bool) -> (Slots, Rect) {
     let trail = look.arrow.unwrap_or(side);
     let fixed = spec.icons_width(side, trail) + look.gap * spec.gaps() as f32;
-    let text_width = if spec.label.is_empty() { 0.0 } else { cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size().x };
-    slots(spec, (side, trail), look.gap, text_width, area, rtl)
+    let beside = spec.chord_run().and_then(|chord| {
+        let label = cx.layout_at(&spec.run(), f32::INFINITY).size();
+        let chord = cx.layout_at(&chord, f32::INFINITY).size();
+        chord_fits(label.x, chord.x, fixed, look.gap, area.width()).then_some((label, chord))
+    });
+    let (text, chord) = match beside {
+        Some((label, chord)) => (label, Some(chord)),
+        None if spec.label.is_empty() => (Vec2::ZERO, None),
+        None => (cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size(), None),
+    };
+    let detail = spec.detail_run().map(|detail| cx.layout_at(&detail, area.width()).size().y);
+    let row = row_rect(area, text.y.max(chord.map_or(0.0, |chord| chord.y)).max(side), detail, look.gap);
+    (slots(spec, (side, trail), look.gap, text.x, chord.map(|chord| chord.x), row, rtl), row)
 }
 
 /// The box of the face's leading part in `area`, as `paint` places it: the leading icon's square, or the picture's
@@ -611,6 +721,7 @@ pub(super) fn lead_rect<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>
     if spec.arrangement == Arrangement::Stacked {
         return stacked_in(cx, spec, look, look.arrow.unwrap_or(side), area, rtl).lead;
     }
-    let slot = inline_slots(cx, spec, look, side, area, rtl).lead?;
-    Some(Rect::from_center_size(pos2(slot.center().x, area.center().y), Vec2::new(slot.width(), side)))
+    let (slots, row) = inline_slots(cx, spec, look, side, area, rtl);
+    let slot = slots.lead?;
+    Some(Rect::from_center_size(pos2(slot.center().x, row.center().y), Vec2::new(slot.width(), side)))
 }

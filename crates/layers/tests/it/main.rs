@@ -3,8 +3,10 @@
 pub(crate) mod blend_rows;
 pub(crate) mod comps;
 pub(crate) mod panel_drag_menu;
+pub(crate) mod panel_eye;
 pub(crate) mod panel_filter;
 pub(crate) mod panel_input;
+pub(crate) mod panel_memo;
 pub(crate) mod panel_order;
 pub(crate) mod panel_reveal;
 pub(crate) mod panel_rows;

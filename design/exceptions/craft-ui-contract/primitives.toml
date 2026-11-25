@@ -6,7 +6,7 @@ kind = "marker"
 rule = "literal-size/vec2"
 path = "crates/ui-contract/src/primitives/pointer_art.rs"
 reason = "Painted pointers are drawn in points around the hotspot like an OS cursor bitmap; their sides are art data, not layout sizes."
-count = 2
+count = 1
 
 [[exception]]
 name = "icon-fixed-layer-tint"

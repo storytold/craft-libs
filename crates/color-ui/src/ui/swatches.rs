@@ -11,7 +11,7 @@ pub(crate) mod panel;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows};
+pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows, swatch_source};
 pub use menu::{SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput};
 pub use panel::{SwatchesPanel, SwatchesPanelOutput};
 
@@ -50,6 +50,7 @@ craft_ui::words! {
         skipped: count "swatches.skipped" = "{n} color in a model that cannot be read was skipped." | "{n} colors in a model that cannot be read were skipped.";
         converted: count "swatches.converted" = "{n} color was converted to RGB." | "{n} colors were converted to RGB.";
         kinds_dropped: count "swatches.kindsDropped" = "{n} spot or global color was written as a process color." | "{n} spot or global colors were written as process colors.";
+        paints_skipped: count "swatches.paintsSkipped" = "{n} gradient, pattern or None swatch was not written." | "{n} gradient, pattern or None swatches were not written.";
         truncated: count "swatches.truncated" = "{n} color past the 256 the format holds was left out." | "{n} colors past the 256 the format holds were left out.";
         transparent_kept: count "swatches.transparentKept" = "{n} color was kept transparent." | "{n} colors were kept transparent.";
         names_cut: count "swatches.namesCut" = "{n} name was cut to the length the format holds." | "{n} names were cut to the length the format holds.";

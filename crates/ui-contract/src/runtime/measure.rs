@@ -52,6 +52,17 @@ struct BodyRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// The derived values built in a pass, by component id, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+pub(crate) struct DerivedBuilds {
+    pass: u64,
+    builds: Vec<(Id, u32)>,
+    /// The frame `frame_builds` counts, and the builds of every pass of it.
+    frame: u64,
+    frame_builds: Vec<(Id, u32)>,
+}
+
 /// How many contributions the measuring runs of a pass made that stand, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -349,6 +360,30 @@ pub fn chord_texts(ctx: &Context) -> u32 {
     last_totals(ctx, |log| log.chord_texts, 0)
 }
 
+/// Counts a component's `Access` built for its report in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_access_build(ctx: &Context) {
+    totals(ctx, |log| log.access_builds += 1);
+}
+
+/// The `Access` values the reports of the last pass built: none for a component whose report has no reader of them.
+#[cfg(feature = "testing")]
+pub fn last_pass_access_builds(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.access_builds, 0)
+}
+
+/// Counts a tooltip text built in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_tip_text(ctx: &Context) {
+    totals(ctx, |log| log.tip_texts += 1);
+}
+
+/// The tooltip texts built in the last pass: only for a tooltip the pointer or the keyboard wants, or one still shown.
+#[cfg(feature = "testing")]
+pub fn last_pass_tip_texts(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.tip_texts, 0)
+}
+
 /// What a command resolution was for.
 #[cfg(feature = "testing")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -477,7 +512,8 @@ pub fn last_frame_memo_runs(ctx: &Context) -> Vec<(&'static str, Id, MemoRun)> {
     pass_state::with::<MemoLog, _>(ctx, |log| if log.frame == last { log.frame_runs.clone() } else { Vec::new() })
 }
 
-/// Bytes fed into memo keys in one pass, and the layouts, measure asks and chord texts of that pass.
+/// Bytes fed into memo keys in one pass, and the layouts, measure asks, chord texts, `Access` values and tooltip texts
+/// of that pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
 pub(crate) struct Totals {
@@ -485,6 +521,8 @@ pub(crate) struct Totals {
     key_bytes: usize,
     text_layouts: u32,
     chord_texts: u32,
+    access_builds: u32,
+    tip_texts: u32,
     resolves: [u32; 3],
     wake_walks: u32,
     asks: Vec<(&'static str, u32)>,
@@ -538,6 +576,47 @@ pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
 #[cfg(feature = "testing")]
 pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
     last_totals(ctx, |log| log.key_bytes, 0)
+}
+
+/// Counts a build of a derived value of the component `id` in this pass (`runtime::derived`).
+#[cfg(feature = "testing")]
+pub(crate) fn count_derived(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| {
+        if log.frame != frame {
+            log.frame = frame;
+            log.frame_builds.clear();
+        }
+        if log.pass != pass {
+            log.pass = pass;
+            log.builds.clear();
+        }
+        for builds in [&mut log.builds, &mut log.frame_builds] {
+            match builds.iter_mut().find(|(of, _)| *of == id) {
+                Some((_, count)) => *count += 1,
+                None => builds.push((id, 1)),
+            }
+        }
+    });
+}
+
+/// The components that built a derived value in any pass of the last frame, and how many builds each.
+#[cfg(feature = "testing")]
+pub fn last_frame_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx)).saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.frame == last { log.frame_builds.clone() } else { Vec::new() })
+}
+
+/// The components that built a derived value in the last pass, and how many builds each; empty when that pass built
+/// none.
+#[cfg(feature = "testing")]
+pub fn last_pass_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.pass == last { log.builds.clone() } else { Vec::new() })
 }
 
 /// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.

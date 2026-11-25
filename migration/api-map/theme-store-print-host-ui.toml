@@ -75,7 +75,7 @@ name = "Printer"
 old = "craft_print::ui::Printer"
 new = "craft_print::ui::Printer"
 status = "same"
-note = "`#[non_exhaustive]`: `Printer::new(name)`, `label(..)` and `is_default(..)`."
+note = "`#[non_exhaustive]`: `Printer::new(name)`, `label(..)`, `is_default(..)` and `own_dialog(note)`, for a printer whose driver shows its own dialog: the panel disables its job controls and shows the note."
 
 [[type]]
 name = "Duplex"
@@ -89,7 +89,14 @@ name = "Settings"
 old = "craft_print::ui::Settings"
 new = "craft_print::ui::Settings"
 status = "same"
-note = "`#[non_exhaustive]`: start from `Settings::default()` and set the fields."
+note = "`#[non_exhaustive]`: start from `Settings::default()` and set the fields. `printer: String` is `destination: Destination` (`Printer(name)` or `File`, Save as PDF); `collate: bool` is new."
+
+[[type]]
+name = "Destination"
+old = ""
+new = "craft_print::ui::Destination"
+status = "replaced"
+note = "Where a job goes: `Printer(name)` or `File` (Save as PDF). `File` is ready while no job runs and `poll` keeps it."
 
 [[type]]
 name = "Discover"
@@ -156,14 +163,28 @@ name = "PrintPanel"
 old = ""
 new = "craft_print::ui::PrintPanel"
 status = "replaced"
-note = "A pattern on `FieldGroup`: `PrintPanel::new(Bind<Settings>, &[Printer])` with `discovering(bool)` and `busy(bool)`; `State::run` shows it. The 32 to 230 width clamp is gone: the panel sizes from its content."
+note = "A pattern on `FieldGroup`: `PrintPanel::new(Bind<Settings>, &[Printer])` with `discovering(bool)`, `busy(bool)`, `driver(DriverControls)`, `destinations(Destinations)`, `duplex_by_layout(bool)`, `page(Option<Vec2>)` and `page_error(Option<String>)`; `State::run` shows it. The list edits `Settings::destination`; Copies, Collate and Grayscale share a row. The 32 to 230 width clamp is gone: the panel sizes from its content."
+
+[[type]]
+name = "DriverControls"
+old = ""
+new = "craft_print::ui::DriverControls"
+status = "replaced"
+note = "`#[non_exhaustive]`, replaces the panel's `driver: bool`: `None`, `Properties` (Properties… after Refresh) or `Page` (Print Settings…, Portrait/Landscape and the page line)."
+
+[[type]]
+name = "Destinations"
+old = ""
+new = "craft_print::ui::Destinations"
+status = "replaced"
+note = "`#[non_exhaustive]`: `Printers`, or `PrintersAndFile` with Save as PDF after the printers."
 
 [[type]]
 name = "PrintPanelOutput"
 old = ""
 new = "craft_print::ui::PrintPanelOutput"
 status = "replaced"
-note = "`{ response, refresh }`; `refresh` is the Refresh button pressed this pass."
+note = "`#[non_exhaustive]` `{ response, refresh, printer_chosen, settings_clicked, turned }`; `refresh` is the Refresh button pressed this pass, `printer_chosen: Option<Destination>` the destination picked this pass."
 
 # One entry per renamed, removed or reshaped setter or constructor.
 

@@ -6,25 +6,35 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, BodyCx, MemoProps, MemoView, Role, Show as _};
-use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec};
+use craft_ui::contract::{Bind, BodyCx, MemoProps, MemoView, PlainData, Role, Show as _, Tracked};
+use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec, PanelSpecs};
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press};
-use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, trial};
+use craft_ui::testing::{
+    Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, trial,
+};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+
+/// Panels named by their number, which count the specs the dock reads.
+#[derive(PlainData)]
+struct Named;
+
+impl PanelSpecs<usize> for Named {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        SPEC_READS.with(|reads| reads.set(reads.get() + 1));
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+}
 
 struct Panels;
 
 impl DockPanels<usize> for Panels {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
-    }
-
     fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
 
     /// A host row, so each group shows its panel menu button and its menu.
@@ -37,9 +47,10 @@ impl DockPanels<usize> for Panels {
 fn settled_runs(groups: usize, tabs: usize) -> Vec<(&'static str, u32)> {
     let group = |at: usize| Node::tabs((tabs * at..tabs * (at + 1)).collect(), 0);
     let root = (1..groups).fold(group(0), |left, at| Node::split(Axis::X, SplitSize::Ratio(0.5), left, group(at)));
-    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let specs = Tracked::new(Named);
     let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut workspace), &mut Panels, DockConfig::default()).show(ui);
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
     last_pass_runs(fixture.ctx())
@@ -82,6 +93,13 @@ fn a_settled_dock_group_runs_the_same_whatever_its_tab_count() {
 thread_local! {
     /// The panels whose memoized bodies ran on this trial's thread, in order.
     static BODY_RUNS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// The panel specs the docks read on this trial's thread.
+    static SPEC_READS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Takes the count of specs the docks read since the last call.
+fn spec_reads() -> u32 {
+    SPEC_READS.with(|reads| reads.replace(0))
 }
 
 /// Takes the panels whose bodies ran since the last call.
@@ -103,19 +121,25 @@ fn panel_body(props: &mut BodyProps, ui: &mut Ui) {
     Button::new(format!("Body {}", props.panel)).show(ui);
 }
 
-/// Panels whose bodies are memoized views, named by `labels`; `plain` is a panel whose body is not, which counts its
-/// runs in `plain_runs`.
+/// The panels' names, by panel; the specs count their reads.
+#[derive(PlainData)]
+struct Labels(Vec<String>);
+
+impl PanelSpecs<usize> for Labels {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        SPEC_READS.with(|reads| reads.set(reads.get() + 1));
+        PanelSpec::new(self.0[*panel].clone())
+    }
+}
+
+/// Panels whose bodies are memoized views; `plain` is a panel whose body is not, which counts its runs in
+/// `plain_runs`.
 struct Memo {
-    labels: Rc<RefCell<Vec<String>>>,
     plain: Option<usize>,
     plain_runs: Rc<Cell<u32>>,
 }
 
 impl DockPanels<usize> for Memo {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(self.labels.borrow()[*panel].clone())
-    }
-
     fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
         if self.plain == Some(*panel) {
             self.plain_runs.set(self.plain_runs.get() + 1);
@@ -133,27 +157,29 @@ impl DockPanels<usize> for Memo {
 /// A settled dock whose panels are [`Memo`].
 struct MemoDock {
     fixture: Fixture,
-    labels: Rc<RefCell<Vec<String>>>,
+    labels: Rc<RefCell<Tracked<Labels>>>,
     plain_runs: Rc<Cell<u32>>,
-    workspace: Rc<RefCell<Workspace<usize>>>,
+    workspace: Rc<RefCell<Arc<Workspace<usize>>>>,
     /// The panel each pass of the dock reported picked.
     picked: Rc<RefCell<Vec<usize>>>,
 }
 
 /// A settled dock over `layout` whose panels are [`Memo`], with `plain` a body that is not memoized.
 fn memo_dock(layout: Layout<usize>, plain: Option<usize>) -> MemoDock {
-    let labels = Rc::new(RefCell::new((0..32).map(|panel| format!("Panel {panel}")).collect::<Vec<_>>()));
+    let labels = Rc::new(RefCell::new(Tracked::new(Labels((0..32).map(|panel| format!("Panel {panel}")).collect()))));
     let plain_runs = Rc::new(Cell::new(0));
-    let workspace = Rc::new(RefCell::new(Workspace::new(layout)));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
     let picked = Rc::new(RefCell::new(Vec::new()));
-    let mut panels = Memo { labels: Rc::clone(&labels), plain, plain_runs: Rc::clone(&plain_runs) };
-    let (shown, seen) = (Rc::clone(&workspace), Rc::clone(&picked));
+    let mut panels = Memo { plain, plain_runs: Rc::clone(&plain_runs) };
+    let (shown, seen, named) = (Rc::clone(&workspace), Rc::clone(&picked), Rc::clone(&labels));
     let mut fixture = Fixture::new(move |ui| {
-        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &mut panels, DockConfig::default()).show(ui);
+        let specs = named.borrow();
+        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &*specs, &mut panels, DockConfig::default()).show(ui);
         seen.borrow_mut().extend(output.picked);
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
     body_runs();
+    spec_reads();
     picked.borrow_mut().clear();
     MemoDock { fixture, labels, plain_runs, workspace, picked }
 }
@@ -176,7 +202,7 @@ fn full(groups: usize) -> Layout<usize> {
     let columns = vec![Column::new(vec![Group::new(vec![20], 0)]).with_width(240.0), iconic];
     let root = side_by_side(groups).root.expect("the groups");
     let root = Node::split(Axis::X, SplitSize::Ratio(0.7), root, Node::dock(DockEdge::End, columns));
-    let window = Floating::single(vec![22], 0, Rect::from_min_size(Pos2::new(200.0, 300.0), Vec2::new(300.0, 200.0)));
+    let window = Floating::single(100, vec![22], 0, Rect::from_min_size(Pos2::new(200.0, 300.0), Vec2::new(300.0, 200.0)));
     Layout::new(Some(root), vec![window])
 }
 
@@ -275,7 +301,7 @@ fn the_pointer_over_a_body_runs_only_that_body() {
 #[trial]
 fn a_tab_switch_runs_only_its_group() {
     let MemoDock { mut fixture, workspace, .. } = memo_dock(side_by_side(3), None);
-    workspace.borrow_mut().apply(Action::activate(3), false, |_| Permissions::ALL).expect("panel 3 is shown");
+    Arc::make_mut(&mut workspace.borrow_mut()).apply(Action::activate(3), false, |_| Permissions::ALL).expect("panel 3 is shown");
     fixture.frame(Vec::new());
     let rows_ran = frame_ran_ids(&fixture, "TabRow");
     // The changed row runs in the real run; the discard pass its new size asks for measures it once (no measure of the
@@ -304,7 +330,7 @@ fn a_label_change_runs_only_its_groups_chrome() {
     const RENAMED: &str = "A renamed panel whose title is far too long to share its group's tab row with the other panel";
     let MemoDock { mut fixture, labels, .. } = memo_dock(side_by_side(3), None);
     assert!(fixture.by_label("More tabs").is_none(), "every group's tabs fit before the change");
-    labels.borrow_mut()[4] = RENAMED.to_owned();
+    labels.borrow_mut().edit(|labels| labels.0[4] = RENAMED.to_owned());
     fixture.frame(Vec::new());
     let rows_ran = frame_ran_ids(&fixture, "TabRow");
     assert_eq!(
@@ -352,7 +378,8 @@ fn a_click_on_a_replayed_tab_row_is_picked_once() {
     assert_eq!(*picked.borrow(), vec![1], "the click picked panel 1 once");
     fixture.frame(vec![egui::Event::PointerGone]).idle(SETTLE);
     assert_eq!(*picked.borrow(), vec![1], "no frame after the click picks again");
-    let layout = &workspace.borrow().layout;
+    let shown = workspace.borrow();
+    let layout = shown.layout();
     assert!(matches!(layout.root.as_ref(), Some(Node::Split { first, .. }) if matches!(&**first, Node::Tabs { active: 1, .. })), "panel 1 is shown");
 }
 
@@ -367,7 +394,8 @@ fn a_double_click_on_a_replayed_column_bar_collapses_its_column() {
     assert_eq!(memo_of(&fixture, "BarProps"), (0, 1), "the bar replays before the click");
     let band = fixture.by_label("Move panel column").expect("the column's band").center();
     fixture.click_at(band).click_at(band).settle();
-    let layout = &workspace.borrow().layout;
+    let shown = workspace.borrow();
+    let layout = shown.layout();
     let Some(Node::Split { second, .. }) = layout.root.as_ref() else { panic!("the split") };
     assert!(matches!(&**second, Node::Dock { columns, .. } if columns[0].iconic), "the column collapsed to icons: {layout:?}");
 }
@@ -383,7 +411,8 @@ fn a_tab_dropped_on_a_settled_group_lands_there() {
     fixture.frame(vec![moved(to)]);
     assert!(drag::mark(fixture.ctx()).is_some(), "the settled group's strip takes the drop in the frame the pointer arrives");
     fixture.release_at(to).idle(1);
-    let layout = &workspace.borrow().layout;
+    let shown = workspace.borrow();
+    let layout = shown.layout();
     let group = layout.place(&4).and_then(|place| layout.node_of(&place));
     assert!(matches!(group, Some(Node::Tabs { panels, .. }) if panels.contains(&0)), "the tab joined the third group: {group:?}");
 }
@@ -400,7 +429,7 @@ fn close_in_a_settled_groups_panel_menu_closes_the_panel() {
     let close = fixture.by_label("Close").expect("the menu's Close row");
     fixture.click(&close);
     fixture.frame(vec![egui::Event::PointerGone]);
-    assert!(workspace.borrow().layout.place(&2).is_none(), "Close closed the second group's panel");
+    assert!(workspace.borrow().layout().place(&2).is_none(), "Close closed the second group's panel");
 }
 
 /// Panels without versions whose bodies note the id of the `Ui` they run in.
@@ -409,10 +438,6 @@ struct Noted {
 }
 
 impl DockPanels<usize> for Noted {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
-    }
-
     fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
         self.ids.borrow_mut().push((*panel, ui.scope_id()));
     }
@@ -423,16 +448,101 @@ impl DockPanels<usize> for Noted {
 #[trial]
 fn a_tab_moved_to_the_front_keeps_the_shown_bodys_ids() {
     let ids: Rc<RefCell<Vec<(usize, egui::Id)>>> = Rc::default();
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(Node::tabs(vec![0, 1], 0)), Vec::new()))));
-    let (shown, mut panels) = (Rc::clone(&workspace), Noted { ids: Rc::clone(&ids) });
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![0, 1], 0)), Vec::new())))));
+    let (shown, mut panels, specs) = (Rc::clone(&workspace), Noted { ids: Rc::clone(&ids) }, Tracked::new(Named));
     let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &mut panels, DockConfig::default()).show(ui);
+        DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &specs, &mut panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(800.0, 600.0)).settle();
     let body_id = |ids: &RefCell<Vec<(usize, egui::Id)>>| ids.borrow().iter().rev().find(|(panel, _)| *panel == 0).map(|(_, id)| *id);
     let before = body_id(&ids).expect("panel 0's body ran");
-    workspace.borrow_mut().layout.root = Some(Node::tabs(vec![1, 0], 1));
+    *workspace.borrow_mut() = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![1, 0], 1)), Vec::new())));
     ids.borrow_mut().clear();
     fixture.frame(Vec::new());
     assert_eq!(body_id(&ids), Some(before), "the shown body keeps its id when another tab moves to the front");
+}
+
+/// An idle dock reads no panel spec and builds nothing it derives: its specs, permissions and keys are kept while the
+/// workspace, the spec model and the lock are unchanged. That holds for a read-only dock too.
+#[trial]
+fn an_idle_dock_reads_no_spec_and_builds_nothing() {
+    let MemoDock { mut fixture, .. } = memo_dock(side_by_side(4), None);
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "an idle pass of a dock of 8 panels builds nothing");
+    }
+    assert_eq!(spec_reads(), 0, "and reads no spec");
+
+    let shown = Arc::new(Workspace::new(side_by_side(4)));
+    let specs = Tracked::new(Named);
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::read_only("Shown", &shown, &specs, &mut Panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
+    spec_reads();
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "an idle pass of a read-only dock builds nothing");
+    }
+    assert_eq!(spec_reads(), 0, "and reads no spec");
+}
+
+/// One workspace edit reads the specs once, in the frame of the edit, and none after.
+#[trial]
+fn one_workspace_edit_reads_the_specs_once() {
+    let MemoDock { mut fixture, workspace, .. } = memo_dock(side_by_side(4), None);
+    Arc::make_mut(&mut workspace.borrow_mut()).apply(Action::activate(3), false, |_| Permissions::ALL).expect("panel 3 is shown");
+    fixture.frame(Vec::new());
+    assert_eq!(spec_reads(), 8, "the edit reads each of the 8 panels' specs once: one build");
+    fixture.frame(Vec::new());
+    assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "the next pass builds nothing");
+    assert_eq!(spec_reads(), 0, "and reads no spec");
+}
+
+/// The key bytes of an idle pass of a dock whose single group holds `tabs` panels.
+fn idle_key_bytes(tabs: usize) -> usize {
+    let MemoDock { mut fixture, .. } = memo_dock(Layout::new(Some(Node::tabs((0..tabs).collect(), 0)), Vec::new()), None);
+    fixture.frame(Vec::new());
+    assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "an idle pass builds no derived value");
+    last_pass_memo_key_bytes(fixture.ctx())
+}
+
+/// An idle dock feeds the same key bytes whatever the number of its panels.
+#[trial]
+fn a_docks_idle_key_bytes_do_not_grow_with_its_panels() {
+    assert_eq!(idle_key_bytes(4), idle_key_bytes(32), "the tab row's key follows the dock's revisions, not its titles");
+}
+
+/// In the pass a click on another tab of the focused group picks its panel, `focused` names that panel, and so do the
+/// passes after it. Guards against a dock that named the panel the group drew in that pass, the one before the click.
+#[trial]
+fn a_tab_picked_in_the_focused_group_is_the_focused_panel() {
+    let labels = Tracked::new(Labels((0..32).map(|panel| format!("Panel {panel}")).collect()));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(side_by_side(2)))));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let (shown, seen) = (Rc::clone(&workspace), Rc::clone(&reported));
+    let mut panels = Memo { plain: None, plain_runs: Rc::new(Cell::new(0)) };
+    let mut fixture = Fixture::new(move |ui| {
+        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &labels, &mut panels, DockConfig::default()).show(ui);
+        seen.borrow_mut().push((output.focused, output.picked));
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
+    // A click on a tab leaves key focus where it is: Tab moves it into the first group, whose shown panel is panel 0.
+    for _ in 0..4 {
+        if reported.borrow().last() == Some(&(Some(0), None)) {
+            break;
+        }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(1);
+    }
+    assert_eq!(reported.borrow().last(), Some(&(Some(0), None)), "Tab reaches the first group");
+    let tab = |fixture: &Fixture, name: &str| fixture.by_label(name).expect("the first group's tab");
+    let second = tab(&fixture, "Panel 1");
+    fixture.click(&second).idle(3);
+    assert_eq!(reported.borrow().last(), Some(&(Some(1), None)), "the clicked tab's group holds the focus");
+    reported.borrow_mut().clear();
+    let first = tab(&fixture, "Panel 0");
+    fixture.click(&first).idle(3);
+    let reported = reported.borrow();
+    let at = reported.iter().position(|(_, picked)| *picked == Some(0)).expect("the click picks panel 0");
+    assert!(reported[at..].iter().all(|(focused, _)| *focused == Some(0)), "from the pick on, panel 0 is focused: {reported:?}");
 }

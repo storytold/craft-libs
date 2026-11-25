@@ -1,7 +1,9 @@
 //! `DockEvent`, `FloatSpace` and `HidePanels`: what a dock reports to the host and the host tells a dock.
 
-use super::{DockCommands, DockSizes, DragUnit};
+use super::{DockCommands, DockSizes, DragUnit, PanelKey};
+use crate::contract::{MemoProps, Tracked};
 use egui::{Rect, Vec2};
+use std::collections::BTreeSet;
 
 /// A request for host state outside the layout, or a report of where something ended up.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +32,22 @@ pub enum DockEvent<P> {
         /// The command.
         command: DockCommands,
     },
+    /// The tab of a panel's document was picked ([`PanelDocument`](super::PanelDocument)): the host shows the document
+    /// in the panel. The area also activates the panel, as a pick of its own tab does.
+    DocumentPicked {
+        /// The panel whose document it is.
+        panel: P,
+        /// The document's id.
+        document: u64,
+    },
+    /// The close button or a middle click on the tab of a panel's document asked to close it. The host closes it by
+    /// removing it from the panel's spec; the layout does not change.
+    DocumentClosed {
+        /// The panel whose document it is.
+        panel: P,
+        /// The document's id.
+        document: u64,
+    },
     /// A floating frame holding `panel` was moved or resized to `rect`.
     FloatPlaced {
         /// A panel of the frame.
@@ -42,23 +60,19 @@ pub enum DockEvent<P> {
 /// Which panels the host hides. Protected panels always stay. While the shell hides the panels and keeps the tools
 /// (Shift+Tab), the panels `Except` names stay and every other panel hides; while it hides the dock (Tab), every panel
 /// hides.
+///
+/// The set is a `Tracked` value, so a dock keys what it shows by the set's revision and keeps the pruned layout until
+/// the set, the workspace or the shell's visibility changes.
+#[derive(Clone, Copy, MemoProps)]
 #[non_exhaustive]
-pub enum HidePanels<'a, P> {
+pub enum HidePanels<'a> {
     /// Hides none.
     None,
     /// Hides every panel.
     All,
-    /// Every panel except those for which the function returns true.
-    Except(&'a dyn Fn(&P) -> bool),
+    /// Every panel except those whose [`PanelKey`] the set holds.
+    Except(&'a Tracked<BTreeSet<PanelKey>>),
 }
-
-impl<P> Clone for HidePanels<'_, P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<P> Copy for HidePanels<'_, P> {}
 
 /// Where a docking command floats a panel, group or column when it gives no rect. A dock records one each pass;
 /// the host reads it to turn a command into placements.

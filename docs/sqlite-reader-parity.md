@@ -21,7 +21,18 @@ The scalar values other than the updated label agreed across every view. Both pi
 
 ## Candidate shared boundary
 
-Start with bounded varint decoding and serial-type widths over borrowed bytes. The reader sources already have independently implemented versions of these mechanics. Before adopting a helper, add boundary fixtures for ninth-byte varints, failed reads and offset handling, reserved serial types, and truncated values. Both readers assemble overflow data, but their caps and treatment of partial data need separate parity evidence before that code moves. [LightCraft reader](https://github.com/storytold/lightcraft/blob/78b575658a61d17bd392b4b81b64c92c8beecbac/crates/engine/src/lightroom_sqlite.rs) · [Craft Anything reader](https://github.com/storytold/craft-anything/blob/df2270904c36d6904883ba4442fb80fb383ed350/crates/formats/src/sqlite.rs)
+Shared wire mechanics in `craft-sqlite` (`crates/sqlite/src/lib.rs`) cover only the parts that genuinely match across both readers:
+- `read_varint` — bounded 1..=9-byte SQLite varint decoding
+- `serial_type_len` — SQLite record serial-type body width (refusing reserved codes 10 and 11)
+- `local_payload_len` and `PayloadKind` (#2696) — SQLite B-tree local payload formula (`TableLeaf` and `Index`) before overflow spilling
+- `page_size_from_raw` and `usable_page_size` — 16-bit header page-size decoding (`1` -> `65_536`, power of two in `512..=65_536`) and `usable >= 480` validation
+- `parse_btree_page_header` and `btree_cell_offset` — B-tree page header (`0x02`/`0x05`/`0x0a`/`0x0d`) and cell-pointer array bounds within a usable page
+- `decode_signed_be_int` — 1..=8-byte big-endian signed integer decoding
+
+### Intentional app-specific differences (kept local)
+- **WAL & snapshot policy:** LightCraft (`lightroom_catalog.rs` + `lightroom_sqlite.rs`) validates the `-wal` checksum chain and overlays the committed prefix onto the main image (including multi-commit growth, shrink over a larger main file, and page-1 header/schema overrides). Craft Anything (`crates/formats/src/sqlite.rs`) inspects the main database file only and discloses `wal_mode` / `db_size_pages` mismatches in `overview().integrity_notes` (and `-wal` sidecar presence in `database_tools.rs`).
+- **Error & truncation policy:** LightCraft is strict for catalog import (errors on reserved serial types, non-finite `f64`, invalid UTF-8/UTF-16, or truncated payloads/pages). Craft Anything is best-effort for inspection (`CellValue::NotRead`, `CellValue::PartialBlob`, lossy/capped `MAX_TEXT` / `4096`-byte `CellValue::Text { truncated: true, .. }`, SHA-256 blob digests).
+- **Schema & table support:** LightCraft handles table B-trees (`0x05`/`0x0d`) and Lightroom `sqlite_schema` / `rowid` alias resolution. Craft Anything additionally inspects index B-trees (`0x02`/`0x0a`), `WITHOUT ROWID` tables, `STRICT` affinities (including `Affinity::Real` promotion), `GENERATED` columns, and `DEFAULT` column fill.
 
 Keep snapshot selection and caller validation with the Lightroom importer. Keep schema defaults, pagination, text previews and BLOB presentation with Craft Anything. Coordinate a consumer change against the current catalog bounds and old-row default work. [LightCraft #3674](https://github.com/storytold/lightcraft/pull/3674) · [Craft Anything #1349](https://github.com/storytold/craft-anything/pull/1349)
 

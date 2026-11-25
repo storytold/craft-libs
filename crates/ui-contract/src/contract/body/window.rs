@@ -124,6 +124,9 @@ pub(super) struct WindowMode {
     kind: Option<WindowModeKind>,
     restore: Placement,
     began: Option<Rect>,
+    /// The rect the layer had when a press went down on its move band or a grip, until the press ends: a drag that
+    /// starts from the press runs from it.
+    pressed: Option<Rect>,
     moving: Option<WindowMove>,
     sizing: Option<WindowSize>,
     /// The index in `GRIPS` of the grip a drag holds, from its `DragStart` to its release: `move_parts` keeps it
@@ -135,6 +138,23 @@ impl WindowMode {
     /// The grip a drag holds, for `move_parts`.
     pub(super) fn held(&self) -> Option<usize> {
         self.held
+    }
+
+    /// The rect a drag of the move band of the layer `id` puts the layer at in this pass, before the bounds keep it:
+    /// the rect the layer had when the press went down, moved by the pointer's travel since. `window_drag` reports the
+    /// same rect for the step. `None` while no move by the band runs. The layer host shows the layer there
+    /// (`shown_placement`) before the container's pass runs, so the layer stands under the pointer in the frame of
+    /// each step, whoever owns its placement.
+    pub(super) fn running_move(&self, ctx: &Context, id: Id) -> Option<Rect> {
+        if self.pressed.is_none() && self.began.is_none() {
+            return None;
+        }
+        let (began, start, pos) = match crate::primitives::sensing::part_press(ctx, id, MOVE_BAND.into()).press.phase {
+            PressPhase::DragStart { start, pos, .. } => (self.pressed?, start, pos),
+            PressPhase::Drag { start, pos, .. } | PressPhase::Release { start, pos, .. } => (self.began?, start, pos),
+            _ => return None,
+        };
+        Some(began.translate(pos - start.origin))
     }
 }
 
@@ -200,6 +220,11 @@ pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
     rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
 }
 
+/// `rect` kept inside `bounds`, when the layer has bounds.
+pub(super) fn kept_in(rect: Rect, bounds: Option<Rect>) -> Rect {
+    bounds.map_or(rect, |bounds| keep_inside(rect, bounds))
+}
+
 /// What every change of a layer's rect keeps to: the least and most size, and the rect it stays inside.
 struct Limits {
     min: Vec2,
@@ -214,8 +239,7 @@ impl Limits {
 
     /// `rect` moved by `delta`, kept inside the bounds.
     fn moved(&self, rect: Rect, delta: Vec2) -> Rect {
-        let rect = rect.translate(delta);
-        self.bounds.map_or(rect, |bounds| keep_inside(rect, bounds))
+        kept_in(rect.translate(delta), self.bounds)
     }
 
     /// `rect` with the edges `dx` and `dy` (-1: low edge, 1: high edge, 0: none) moved by `delta`, within the size
@@ -246,6 +270,31 @@ fn edge_of(dx: i8, dy: i8) -> ResizeEdge {
         (-1, 1) => ResizeEdge::BottomLeft,
         (1, 1) => ResizeEdge::BottomRight,
         _ => ResizeEdge::Bottom,
+    }
+}
+
+/// The move band and the resize grips the body step declared for a container this pass, for a host that names them
+/// (an automation interface that drives a window by its grips). Each comes with the id of its accessibility node, the
+/// id [`focused_node`](crate::runtime::access::focused_node) reports while it holds focus.
+impl<C: Container> Cx<'_, C> {
+    /// The band the container is moved by, `None` when it has none this pass (no header, not movable).
+    pub fn move_band(&self) -> Option<(Rect, Id)> {
+        let band = self.core.results.get(&(MOVE_BAND, None))?;
+        Some((band.rect, crate::runtime::access::sub_node_id(self.core.id, MOVE_BAND.into())))
+    }
+
+    /// The edge and corner grips the container is resized by, each with the edge or corner it moves; none when it does
+    /// not resize this pass (minimized, maximized, or a window the platform resizes from its own frame).
+    pub fn resize_grips(&self) -> Vec<(ResizeEdge, Rect, Id)> {
+        GRIPS
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, (dx, dy, _))| {
+                let part = GRIP.at(index as u64);
+                let grip = self.core.results.get(&(GRIP, Some(index as u64)))?;
+                Some((edge_of(dx, dy), grip.rect, crate::runtime::access::sub_node_id(self.core.id, part)))
+            })
+            .collect()
     }
 }
 
@@ -363,7 +412,7 @@ impl BodyHooks<'_> {
         let rtl = cx.core.env.direction().is_rtl();
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
-        let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard };
+        let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard, continued: false };
         let started = commands::take_for_instance(&ctx, Some(window), false, WindowCommand::from_ref).map(|(command, _)| command);
         let mut mode = self.mode.clone();
         if let Some(command) = started {
@@ -377,14 +426,7 @@ impl BodyHooks<'_> {
             if mode.kind == Some(kind) {
                 mode = WindowMode::default();
             } else {
-                mode = WindowMode {
-                    kind: Some(kind),
-                    restore: current.clone(),
-                    began: Some(current.rect_over(rect)),
-                    moving: None,
-                    sizing: None,
-                    held: None,
-                };
+                mode = WindowMode { kind: Some(kind), restore: current.clone(), began: Some(current.rect_over(rect)), ..WindowMode::default() };
                 self.reports.push(step(current.rect_over(rect), GesturePhase::Begin));
             }
         }
@@ -436,7 +478,8 @@ impl BodyHooks<'_> {
     }
 
     /// A drag of the move band or a grip of a layer (not an OS window): the layer follows the pointer within the
-    /// limits, and each step is reported. Escape, which cancels the press, restores the placement from before.
+    /// limits, and each step is reported. The drag runs from the rect the layer had when the press went down. Escape,
+    /// which cancels the press, restores the placement from before.
     pub(super) fn window_drag<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
         let Some(overlay) = overlay_of(props) else { return };
         // A band that moves the window below starts the OS move of the window the layer is shown in.
@@ -455,27 +498,39 @@ impl BodyHooks<'_> {
         let mut pressed = vec![(None, phase((MOVE_BAND, None)))];
         pressed.extend((0..GRIPS.len()).map(|index| (Some(index), phase((GRIP, Some(index as u64))))));
         let Some((grip, phase)) = pressed.into_iter().find_map(|(grip, phase)| match phase? {
-            phase @ (PressPhase::DragStart { .. } | PressPhase::Drag { .. } | PressPhase::Release { .. } | PressPhase::Cancel { .. }) => {
-                Some((grip, phase))
-            }
+            phase @ (PressPhase::Down { .. }
+            | PressPhase::DragStart { .. }
+            | PressPhase::Drag { .. }
+            | PressPhase::Release { .. }
+            | PressPhase::Cancel { .. }) => Some((grip, phase)),
             _ => None,
         }) else {
             return;
         };
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
-        let (origin, pos, gesture) = match phase {
+        let (start, pos, gesture) = match phase {
+            PressPhase::Down { .. } => {
+                self.mode.pressed = Some(current.rect_over(rect));
+                return;
+            }
             PressPhase::DragStart { start, pos, .. } => {
-                self.mode.began = Some(current.rect_over(rect));
+                // The layer host shows this pass at the step's rect already (`running_move`): the drag runs from where
+                // the layer stood at the press.
+                self.mode.began = Some(self.mode.pressed.unwrap_or_else(|| current.rect_over(rect)));
                 self.mode.restore = current.clone();
                 self.mode.held = grip;
-                (start.origin, Some(pos), GesturePhase::Begin)
+                (start, Some(pos), GesturePhase::Begin)
             }
-            PressPhase::Drag { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Update),
-            PressPhase::Release { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Commit),
-            PressPhase::Cancel { start, .. } => (start.origin, None, GesturePhase::Cancel),
+            PressPhase::Drag { start, pos, .. } => (start, Some(pos), GesturePhase::Update),
+            PressPhase::Release { start, pos, .. } => (start, Some(pos), GesturePhase::Commit),
+            PressPhase::Cancel { start, .. } => (start, None, GesturePhase::Cancel),
             _ => return,
         };
+        let origin = start.origin;
+        if matches!(gesture, GesturePhase::Commit | GesturePhase::Cancel) {
+            self.mode.pressed = None;
+        }
         let Some(began) = self.mode.began else { return };
         let (dx, dy, _) = grip.map_or((0, 0, CursorIcon::Grab), |index| GRIPS[index]);
         let kind = if grip.is_some() { PlacementKind::Size(edge_of(dx, dy)) } else { PlacementKind::Move };
@@ -484,7 +539,9 @@ impl BodyHooks<'_> {
             Some(pos) => limits.moved(began, pos - origin),
             None => began,
         };
-        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind };
+        // A move band press another component handed over (`Overlay::continue_move`) continues that component's drag.
+        let continued = grip.is_none() && start.handed;
+        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind, continued };
         if gesture == GesturePhase::Begin {
             self.reports.push(change(began, GesturePhase::Begin));
         }
@@ -546,7 +603,7 @@ impl BodyHooks<'_> {
         let phase = |index: usize| core.results.get(&(GRIP, Some(index as u64))).map(|result| result.press.phase);
         let change = |rect: Rect, phase: GesturePhase, grip: usize| {
             let (dx, dy, _) = GRIPS[grip];
-            PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Size(edge_of(dx, dy)) }
+            PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Size(edge_of(dx, dy)), continued: false }
         };
         let resized = |sizing: &WindowSize, desktop: Pos2| {
             let (dx, dy, _) = GRIPS[sizing.grip];
@@ -607,7 +664,7 @@ impl BodyHooks<'_> {
         let outer = facts.outer.unwrap_or(facts.inner);
         // Where the inner area lies in the outer rect.
         let inset = facts.inner.min - outer.min;
-        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Move };
+        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Move, continued: false };
         let pointer_of = |moving: &WindowMove| moving.at.min + inset + moving.grab;
         let Some(mut moving) = self.mode.moving else {
             let tracked = windows::shell_of(&ctx, viewport).caps.contains(Caps::OS_MOVES_TRACKED);
@@ -718,7 +775,7 @@ impl BodyHooks<'_> {
         if matches!(kind, PlacementKind::Size(_)) && overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller) {
             return;
         }
-        self.reports.push(PlacementChange { rect: now, phase: GesturePhase::Commit, pointer: None, kind });
+        self.reports.push(PlacementChange { rect: now, phase: GesturePhase::Commit, pointer: None, kind, continued: false });
     }
 
     /// The move band and the grips (16.3). A layer's move and resize the layer; those of an OS window (`os_window`)
@@ -760,6 +817,12 @@ impl BodyHooks<'_> {
             if let Some(hit) = exclusive(WindowHit::Move).or(moves_window.then_some(WindowHit::Move)) {
                 part.exclusive(hit);
             }
+            // A layer that continues a press begun elsewhere takes it before step 8 reads this pass's presses, so its
+            // move begins in this pass from the window's own rect (`window_drag`). Only a layer can: the OS gives an
+            // OS window no press that went down in another window.
+            if let Some(grab) = overlay_of(props).and_then(|overlay| overlay.continue_move).filter(|_| os.is_none() && !moves_window) {
+                crate::primitives::sensing::hand_over_press(&ctx, pcx.id, MOVE_BAND.into(), rect.min + grab);
+            }
         }
         let edges = match &props.mount {
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.resize.edges,
@@ -779,6 +842,7 @@ impl BodyHooks<'_> {
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
         let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
+        let grip_name = props.resize_name.as_ref().map(|name| pcx.env.resolve(name).as_str().to_owned());
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
             if held != Some(index) && !grip_stands(edges, pinned, dx, dy) {
                 continue;
@@ -802,6 +866,10 @@ impl BodyHooks<'_> {
                 .pointer_only(reason)
                 .exact_hit()
                 .over();
+            let part = match &grip_name {
+                Some(name) => part.node(crate::runtime::access::Role::SPLITTER, name.as_str()),
+                None => part,
+            };
             // The grips of a window its caller sizes are the app's (`window_resize`), never the platform's.
             if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))).filter(|_| !caller_sizes) {
                 part.exclusive(hit);
