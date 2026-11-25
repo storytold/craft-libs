@@ -4,8 +4,8 @@ use serde_json::{Map, Number, Value};
 
 use super::{FormatErrors, SCHEMA, SCHEMA_VERSION, ThemeFile};
 use crate::scale::Radius;
-use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, GripSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
-use crate::tokens::{GripMark, KnobShape, WellShape};
+use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, GripSeed, LocatorSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
+use crate::tokens::{KnobShape, WellShape};
 
 /// Top-level keys in the order a file lists them; other keys follow, sorted.
 const TOP_ORDER: [&str; 14] = [
@@ -167,13 +167,26 @@ fn update_shape(shape: &mut Map<String, Value>, s: &ShapeSeed) {
             shape.insert("grip".to_owned(), Value::Object(obj));
         }
     }
+    match s.locator {
+        None => {
+            shape.remove("locator");
+        }
+        Some(l) => {
+            let mut obj = match shape.remove("locator") {
+                Some(Value::Object(m)) => m,
+                _ => Map::new(),
+            };
+            locator(&mut obj, &l);
+            shape.insert("locator".to_owned(), Value::Object(obj));
+        }
+    }
 }
 
 /// Updates the `shape.grip` object `out` to the values the theme sets: a set value is written, an unset one removed.
 fn grip(out: &mut Map<String, Value>, g: &GripSeed) {
     match g.mark {
         Some(mark) => {
-            out.insert("mark".to_owned(), Value::String(if mark == GripMark::Ticks { "ticks" } else { "dots" }.to_owned()));
+            out.insert("mark".to_owned(), Value::String(mark.name().to_owned()));
         }
         None => {
             out.remove("mark");
@@ -187,13 +200,23 @@ fn grip(out: &mut Map<String, Value>, g: &GripSeed) {
             out.remove("count");
         }
     }
-    for (key, v) in [("length", g.length), ("width", g.width), ("gap", g.gap)] {
+    numbers(out, &[("length", g.length), ("width", g.width), ("gap", g.gap)]);
+}
+
+/// Updates the `shape.locator` object `out` to the values the theme sets: a set value is written, an unset one removed.
+fn locator(out: &mut Map<String, Value>, l: &LocatorSeed) {
+    numbers(out, &[("cell", l.cell), ("square", l.square)]);
+}
+
+/// Writes each set number of `values` into `out` and removes each unset one.
+fn numbers(out: &mut Map<String, Value>, values: &[(&str, Option<f32>)]) {
+    for (key, v) in values {
         match v.and_then(|v| Number::from_f64(f64::from(v))) {
             Some(n) => {
-                out.insert(key.to_owned(), Value::Number(n));
+                out.insert((*key).to_owned(), Value::Number(n));
             }
             None => {
-                out.remove(key);
+                out.remove(*key);
             }
         }
     }

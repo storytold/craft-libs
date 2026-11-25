@@ -104,10 +104,13 @@ mod tests {
         // faster and using less temporary memory.
         let exact = encoded_zero_bytes(MAX_DECODED_BYTES);
         assert_eq!(decode(&exact).map(|bytes| bytes.len()), Some(MAX_DECODED_BYTES), "padded boundary");
-        assert_eq!(decode(exact.trim_end_matches('=')).map(|bytes| bytes.len()), Some(MAX_DECODED_BYTES), "unpadded boundary");
-
         let too_large = encoded_zero_bytes(MAX_DECODED_BYTES + 1);
         assert!(decode(&too_large).is_none(), "padded over boundary");
+        // Each case decodes tens of MiB: the gate runs the two above, nightly the rest.
+        if craft_testkit::hostile::divisor() > 1 {
+            return;
+        }
+        assert_eq!(decode(exact.trim_end_matches('=')).map(|bytes| bytes.len()), Some(MAX_DECODED_BYTES), "unpadded boundary");
         let spaced = format!("{}\n {}", &too_large[..8], &too_large[8..]);
         assert!(decode(&spaced).is_none(), "whitespace over boundary");
     }

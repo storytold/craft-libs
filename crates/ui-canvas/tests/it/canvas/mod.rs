@@ -4,6 +4,8 @@ pub(crate) mod crop;
 
 pub(crate) mod editor;
 
+pub(crate) mod modal_wheel;
+
 pub(crate) mod navigate;
 
 pub(crate) mod navigator;

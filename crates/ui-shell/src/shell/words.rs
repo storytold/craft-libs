@@ -9,6 +9,8 @@ craft_ui::words! {
         document: "appShell.document" = "Document";
         document_tabs: "appShell.documentTabs" = "Document Tabs";
         options: "appShell.options" = "Options";
+        /// The access name of the options bar grip.
+        move_bar: "appShell.moveBar" = "Move bar";
         status: "appShell.status" = "Status";
         screen_mode: "appShell.screenMode" = "Screen Mode";
 
@@ -20,11 +22,30 @@ craft_ui::words! {
         grid_view: "startScreen.gridView" = "Grid";
         list_view: "startScreen.listView" = "List";
         sort: "startScreen.sort" = "Sort";
+        /// The button at the Recent heading's end that empties the list.
+        clear_recent: "startScreen.clearRecent" = "Clear";
         sort_opened: "startScreen.sortOpened" = "Last Opened";
         sort_name: "startScreen.sortName" = "Name";
         sort_created: "startScreen.sortCreated" = "Created";
         pinned: "startScreen.pinned" = "Pinned Folders";
         no_pinned: "startScreen.noPinned" = "Pin the folders you open often.";
+        /// The note on a pinned folder the app is still listing.
+        looking_for_files: "startScreen.lookingForFiles" = "Looking for files…";
+        /// The note on a pinned folder the app cannot list.
+        folder_unavailable: "startScreen.folderUnavailable" = "Folder unavailable";
+        /// The note on a pinned folder that holds no files.
+        folder_empty: "startScreen.folderEmpty" = "No files";
+        /// The row under a pinned folder's first files that lists the rest.
+        show_more: "startScreen.showMore" = "Show more";
+        /// The row under an expanded pinned folder's files that lists only the first again.
+        show_less: "startScreen.showLess" = "Show less";
+        /// The note on a pinned folder the app kept only the newest files of.
+        newest_of: template "startScreen.newestOf" = "The newest {shown} of {total}";
+        /// A pinned folder's Unpin button.
+        unpin: "startScreen.unpin" = "Unpin";
+        /// The accessible name of a pinned folder's Unpin part.
+        unpin_folder: template "startScreen.unpinFolder" = "Unpin {name}";
+
         pin_folder: "startScreen.pinFolder" = "Pin Folder…";
         templates: "startScreen.templates" = "Templates";
         recent_menu: "startScreen.recentMenu" = "Recent file";

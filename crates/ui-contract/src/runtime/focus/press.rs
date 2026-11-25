@@ -107,8 +107,21 @@ impl State {
         let text_stop = text_rec.as_ref().map(|stop| stop.stop.id);
         let held = !on_focused && text_rec.as_ref().is_some_and(|stop| stop.stop.keys.holds_drafts) && (at.over_focus || self.press.holds(&at.under));
         self.press.held_draft = text_stop.filter(|_| held);
-        let kind = if on_focused || held { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
-        let (owner, part) = winner.map_or((None, None), |winner| (Some(winner.owner), winner.part));
+        // A press no shape wins that egui gives to the widget of a press-only stop (a selection part's text, which egui
+        // selects in) takes focus for that stop, as a press on any stop's shape does.
+        let widget_stop = at.target.filter(|_| winner.is_none()).and_then(|target| self.press_only_stop(target));
+        let kind = if on_focused || held {
+            PressFocus::Keep
+        } else if widget_stop.is_some() {
+            PressFocus::Take
+        } else {
+            classify_press(winner.map(|winner| winner.sense))
+        };
+        let (owner, part) = match (winner, widget_stop) {
+            (Some(winner), _) => (Some(winner.owner), winner.part),
+            (None, Some(rec)) => (Some(rec.stop.id), rec.stop.part),
+            (None, None) => (None, None),
+        };
         let was_text = text_stop.is_some() && kind.commits_draft();
         // A press that takes focus for another component commits too: the page that component switches may remove the
         // field in the same pass, so a later focus loss would never reach it.
@@ -128,6 +141,11 @@ impl State {
     /// The stop a press on `part` of `owner` takes focus for: the part's own stop, else the owner's.
     fn press_stop(&self, owner: Id, part: Option<PartRef>) -> Option<super::StopRec> {
         self.find_stop((owner, part)).or_else(|| self.find_stop((owner, None)))
+    }
+
+    /// The press-only stop whose egui widget is `widget`.
+    fn press_only_stop(&self, widget: Id) -> Option<super::StopRec> {
+        self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.press_only && rec.stop.root == widget).cloned()
     }
 
     /// The press's focus move at the end hook; `focused` is egui's focus now. The press moves the framework's focus

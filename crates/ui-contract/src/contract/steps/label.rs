@@ -3,22 +3,34 @@
 use crate::contract::cx::CxCore;
 use crate::contract::{Component, Cx};
 use crate::runtime::access::scope;
+use crate::runtime::env::ScrubDrags;
 use crate::runtime::memory::sub;
 use crate::runtime::windows::WindowHost;
 use craft_behavior::{CancelReason, Cursor, CursorPriority, DragWarp, GesturePhase, PaintedCursor, ValueDrag};
 use egui::{Pos2, Vec2};
 
+/// Which of a scrub's label and body sources the root's `ScrubDrags` leaves on, as `(label, field)`. A part's source
+/// is the component's own and is never gated.
+fn scrub_sources<C: Component>(cx: &Cx<'_, C>) -> (bool, bool) {
+    match cx.core.env.get::<ScrubDrags>() {
+        ScrubDrags::FieldAndLabel => (true, true),
+        ScrubDrags::LabelOnly => (true, false),
+        _ => (false, false),
+    }
+}
+
 /// The press that carries a scrub and the drag it scrubs by: a scrub part's, the side label's, or the field's own
 /// while its text part leaves it the pointer.
 pub(super) fn scrub_press<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Option<(craft_behavior::PressState, ValueDrag)> {
     let scrub = comp.scrub()?;
+    let (label_on, field_on) = scrub_sources(cx);
     let pressed = |press: &craft_behavior::PressState| press.phase.is_press();
     let part = scrub.parts.iter().find_map(|(part, drag)| {
         let press = cx.core.results.get(&(part.key, part.index)).map(|result| result.press)?;
         pressed(&press).then(|| (press, drag.clone()))
     });
-    let label = || scrub.by_label.then(|| side_label(cx.core)).flatten().map(|(press, _)| press).filter(pressed);
-    let field = || (scrub.on_field && !cx.core.text_takes_pointer).then_some(cx.core.press).filter(pressed);
+    let label = || (scrub.by_label && label_on).then(|| side_label(cx.core)).flatten().map(|(press, _)| press).filter(pressed);
+    let field = || (scrub.on_field && field_on && !cx.core.text_takes_pointer).then_some(cx.core.press).filter(pressed);
     part.or_else(|| label().or_else(field).map(|press| (press, scrub.drag.clone())))
 }
 
@@ -77,13 +89,15 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
         }
         return;
     }
-    if scrub.by_label && scope::field_label(&cx.core.ctx).is_some() {
+    let (label_on, field_on) = scrub_sources(cx);
+    let by_label = scrub.by_label && label_on;
+    if by_label && scope::field_label(&cx.core.ctx).is_some() {
         scope::register_scrub(&cx.core.ctx);
     }
-    let label = scrub.by_label.then(|| side_label(cx.core)).flatten();
+    let label = by_label.then(|| side_label(cx.core)).flatten();
     // A scrub's source shows the horizontal resize cursor under the pointer.
     let part_hovered = scrub.parts.iter().any(|(part, _)| cx.core.results.get(&(part.key, part.index)).is_some_and(|result| result.hovered));
-    let field_hovered = scrub.on_field && !cx.core.text_takes_pointer && cx.core.response.hovered();
+    let field_hovered = scrub.on_field && field_on && !cx.core.text_takes_pointer && cx.core.response.hovered();
     if part_hovered || field_hovered || label.is_some_and(|(_, hovered)| hovered) {
         crate::runtime::cursor::request(&cx.core.ctx, Cursor::System(craft_behavior::CursorIcon::ResizeHorizontal), CursorPriority::Part);
     }

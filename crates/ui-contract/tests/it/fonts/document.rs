@@ -1,6 +1,6 @@
 //! Document faces read from a catalog: loaded off the pass, ready from the pass after, kept across a definitions
 //! replacement and while drawn lately (a settled view's replay counts), served to egui without making its fonts again,
-//! and held within one budget.
+//! and held within one budget; and a face's chain of sibling subsets.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,9 +14,10 @@ use craft_ui::fonts::{self, FaceBytes, FaceState};
 use craft_ui::primitives::{DocRun, DocText};
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
 use craft_ui::testing::{Frames, MemoRun, document_face_budget, last_frame_memo_runs, trial};
-use egui::{Color32, Response, Vec2};
+use egui::{Color32, FontId, Response, Vec2};
 
 const FONT: &[u8] = include_bytes!("../../fonts/NotoSans-test.ttf");
+const ARABIC: &[u8] = include_bytes!("../../fonts/NotoSansArabic-test.ttf");
 
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -47,15 +48,26 @@ impl Tally {
     }
 }
 
+/// The face `key` loads: "split" is a Latin subset chained to the Arabic subset "arabic"; every other key loads the
+/// Latin subset alone.
+fn face_of(key: &str) -> FaceBytes {
+    match key {
+        "split" => FaceBytes::new(Arc::from(FONT), 0).chain(["arabic"]),
+        "arabic" => FaceBytes::new(Arc::from(ARABIC), 0),
+        _ => FaceBytes::new(Arc::from(FONT), 0),
+    }
+}
+
 /// Asks for the face `key`, whose load counts itself in `tally`; a key starting with `panic` names a load that panics.
 fn ask(cx: &impl FacesCx, key: &str, tally: &Tally) -> FaceState {
     cx.document_face(key, || {
         let (loads, threads, panics) = (Arc::clone(&tally.loads), Arc::clone(&tally.threads), key.starts_with("panic"));
+        let face = face_of(key);
         move || {
             loads.fetch_add(1, Ordering::Relaxed);
             threads.lock().expect("the threads").push(std::thread::current().id());
             assert!(!panics, "a load that panics");
-            Some(FaceBytes::new(Arc::from(FONT), 0))
+            Some(face)
         }
     })
 }
@@ -282,4 +294,34 @@ fn past_the_budget_the_faces_drawn_longest_ago_go_and_the_fonts_are_made_again_o
     assert!(ready("keep"), "a face drawn in the last frame stays, the first loaded included");
     assert!(["k0", "k1", "k2", "k3"].iter().all(|key| !ready(key)), "the faces drawn longest ago went");
     assert!(ready("k4") && ready("k5"), "down to half the budget, the faces drawn last stay");
+}
+
+/// Whether the ready face `key` draws an Arabic letter.
+fn draws_arabic(frames: &Frames, tally: &Tally, key: &str) -> bool {
+    let FaceState::Ready(face) = tally.state(key) else { panic!("{key} is ready") };
+    frames.ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::new(14.0, face.family()), '\u{639}'))
+}
+
+/// A face split over subsets (Word) draws a character its own subset lacks from the subset its chain names, not from
+/// the interface family; the same subset without a chain has no glyph for it.
+#[trial]
+fn a_chained_face_draws_what_it_lacks_from_its_sibling_subset() {
+    let (mut frames, jobs, tally) = rig();
+    let wanted: Vec<String> = ["split", "arabic", "alone"].iter().map(|key| (*key).to_owned()).collect();
+    shown(&mut frames, &jobs, &tally, &wanted);
+    frame(&mut frames, &tally, &wanted);
+    assert!(!draws_arabic(&frames, &tally, "alone"), "the Latin subset alone has no Arabic glyph");
+    assert!(draws_arabic(&frames, &tally, "split"), "the chain draws the Arabic glyph from the sibling subset");
+}
+
+/// A sibling subset that lands after the face it follows was laid out still joins its chain.
+#[trial]
+fn a_sibling_that_lands_late_joins_the_chain() {
+    let (mut frames, jobs, tally) = rig();
+    shown(&mut frames, &jobs, &tally, &["split".to_owned()]);
+    assert!(!draws_arabic(&frames, &tally, "split"), "no sibling yet");
+    let both = vec!["split".to_owned(), "arabic".to_owned()];
+    shown(&mut frames, &jobs, &tally, &both);
+    frame(&mut frames, &tally, &both);
+    assert!(draws_arabic(&frames, &tally, "split"), "the late sibling draws the Arabic glyph");
 }

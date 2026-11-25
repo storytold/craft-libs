@@ -2,14 +2,17 @@
 
 use craft_theme::LabelColor;
 use craft_ui::contract::{Entry, PlainData};
+use craft_ui::list::LabelUnderline;
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut as S, blend_entries};
 use craft_ui::runtime::env::Label;
+use craft_ui::style::DataColor;
+use egui::Color32;
 
 use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind, SmartSource};
 use super::tree::LayerRowKey;
 use super::tree::{
-    LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayersFooterState, MaskInfo, SubRow, SubRowGroup,
-    SubRows, ThumbBadge,
+    LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayerView, LayersFooterState, MaskInfo, SubRow,
+    SubRowGroup, SubRows, ThumbBadge,
 };
 
 /// One layer of a [`FakeLayers`] tree.
@@ -293,6 +296,51 @@ impl FakeLayers {
         );
         tree.selection = LayerSelection::new(vec![smart], Some(smart), LayerPart::Pixels);
         tree.selection.sub_row = Some(LayerRowKey::Filters(smart, Some(0)));
+        tree
+    }
+
+    /// VectorCraft's rows (story `composites/layers-panel/color-bar`): a layer holding a sublayer, which holds a group
+    /// and a template path, the group holding a path with an italic solid-underlined label and an outline path with a
+    /// dashed one (neither shows a thumbnail), a horizontal and a vertical guide, and a spine; the sublayer is active.
+    pub fn row_looks() -> Self {
+        let mut tree = Self::default();
+        let tint = |red: u8, green: u8, blue: u8| Some(DataColor::new(Color32::from_rgb(red, green, blue)));
+        let layer = tree.add(None, named("Layer 1", LayerKind::Layer, |i| i.color = tint(0x4f, 0x80, 0xff)), true);
+        let sub = tree.add(Some(layer), named("Sublayer", LayerKind::Layer, |i| i.color = tint(0x2e, 0xb8, 0x5c)), true);
+        let group = tree.add(Some(sub), named("Group", LayerKind::Group, |i| i.color = tint(0xe0, 0x8a, 0x1e)), true);
+        tree.add(
+            Some(group),
+            named("Path", LayerKind::Path, |i| {
+                i.color = tint(0xe0, 0x8a, 0x1e);
+                i.thumbnail = false;
+                i.italic = true;
+                i.underline = LabelUnderline::Solid;
+            }),
+            false,
+        );
+        tree.add(
+            Some(group),
+            named("Outline Path", LayerKind::Path, |i| {
+                i.color = tint(0xe0, 0x8a, 0x1e);
+                i.thumbnail = false;
+                i.view = LayerView::Outline;
+                i.underline = LabelUnderline::Dashed;
+            }),
+            false,
+        );
+        tree.add(
+            Some(sub),
+            named("Template Path", LayerKind::Path, |i| {
+                i.color = tint(0x2e, 0xb8, 0x5c);
+                i.thumbnail = false;
+                i.view = LayerView::Template;
+            }),
+            false,
+        );
+        tree.add(Some(sub), named("Horizontal Guide", LayerKind::Guide, |i| i.color = tint(0x2e, 0xb8, 0x5c)), false);
+        tree.add(Some(sub), named("Vertical Guide", LayerKind::Guide, |i| i.color = tint(0x2e, 0xb8, 0x5c)), false);
+        tree.add(Some(layer), named("Spine", LayerKind::Spine, |i| i.color = tint(0x4f, 0x80, 0xff)), false);
+        tree.selection = LayerSelection::new(vec![sub], Some(sub), LayerPart::Pixels);
         tree
     }
 }

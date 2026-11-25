@@ -33,8 +33,13 @@ parameter carries it in the `CommandRef`:
 `CommandRef::with_params("file.open_recent", json!({"index": 3}))`. Items built directly use
 `Item::new(command, label)` with `.shortcut(chord)`, `.enabled(..)`, `.check(..)` or
 `.radio(..)` (the item's `ItemKind`), `.role(..)`, `.platforms(..)`, `.tint(colour)` and
-`.tooltip(text)` (both for the in-window bar only; the native macOS menu ignores them); submenus use
-`Node::submenu(label, children)`, with `.role(..)` for a tagged one. A shortcut is a
+`.tooltip(text)` and `.sample(aspect, face)` (a `craft_ui::primitives::FacePaint` painted in a
+column of its own between the label and the shortcut, `aspect` times as wide as the row's text
+line is high: a font menu's samples) (all three for the in-window bar only; the native macOS menu
+ignores them); submenus use `Node::submenu(label, children)`, with `.role(..)` for a tagged one.
+`Node::heading(label)` (`Node::Heading`) is a caption over the rows after it and never a command:
+it takes no mnemonic letter and no help-search entry, the native menu shows it as a disabled
+item, and `tidy` drops one with no item after it before the next separator. A shortcut is a
 `craft_keymap::Chord`: `cmd` is ⌘ and `ctrl` the Control key. macOS shows radio items as check
 items. The app's open documents go in `MenuBar::documents` (`Document::new(command, name)`,
 `.active(..)` for the one in front, `hidden` for one kept open but not listed), and the layouts
@@ -158,9 +163,11 @@ egui::Panel::top("menu-bar").show(ui, |ui| {
   and leaves Alt alone; F10 still reaches the in-window bar of a browser. `.keyboard(false)`
   turns the bar's keys off (a modal dialog or the shortcut recorder has them); on `Target::Mac`
   they are off unless set. `.mnemonics(&[("View", 'W'), ("file.open", 'P')])` names preferred
-  letters by title as shown or by command id. A label without an ASCII letter or digit shows its
-  English label's letter after it, "文件(F)", before a trailing ellipsis ("開く(O)…"), when
-  the item, submenu or menu carries that English label (`Item::english`, `Node::english`, `Menu::english`).
+  letters by title as shown or by command id. A label without an ASCII letter or digit takes its
+  English label's letter when the item, submenu or menu carries that English label
+  (`Item::english`, `Node::english`, `Menu::english`). In a CJK interface language the letter
+  shows after the label, "文件(F)", before a trailing ellipsis ("開く(O)…"); in any other script
+  it is hidden ("Файл" stays as written) and still opens or runs the entry.
 - **Items:** a command the runtime's gate forbids, or whose state is disabled, is greyed and never
   fires. A submenu whose items are all disabled is greyed. The shortcut column shows the command's
   chord, else the item's own shortcut, in the shell's names (⌘ glyphs on a Mac). `.target(..)`
@@ -219,7 +226,14 @@ sets it back to the app's state, so the app's state always wins.
 While a menu is open, a click or Escape in the window closes it and does not reach egui (no
 canvas gesture, no tool action); pointer moves pass through. Only one click is kept this way
 until the menu reports closed, so a menu wrongly reported open costs one click. Menu updates wait
-until the menu closes. A rebuild that fails keeps the menus as they were.
+until the menu closes; the end of tracking wakes egui, and that frame applies them. A rebuild that
+fails keeps the menus as they were.
+
+AppKit's `NSMenuDidBeginTracking` and `NSMenuDidEndTracking` notifications say whether a menu is
+open (`craft_window::native_menu::menu_tracking()`, safe from any thread). Each begin comes back
+once as `Event::Opened`, and `NativeMenu::take_opened` reports it once, for an app that refreshes
+what a menu lists (a scripts folder) as it opens. It changes nothing the menus show, so it does
+not re-sync them.
 
 ## Per frame
 

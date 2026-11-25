@@ -122,6 +122,8 @@ struct Asked {
     priority: Priority,
     /// The last frame a painter asked for the key.
     frame: u64,
+    /// The pass time the job was queued, for `TextureLoader::waited`.
+    queued: f64,
 }
 
 type Finished<K> = (K, Revision, LoadResult);
@@ -178,6 +180,13 @@ impl<K: TextureKey> Clone for TextureLoader<K> {
 }
 
 impl<K: TextureKey> TextureLoader<K> {
+    /// Seconds `key` has waited for its picture since its job was queued, by the pass clock; `None` when no job of
+    /// the key is queued or running.
+    pub fn waited(&self, ctx: &Context, key: &K) -> Option<f64> {
+        let now = pass::now(ctx);
+        self.with(ctx, |pool| pool.asked.get(key).map(|asked| (now - asked.queued).max(0.0)))
+    }
+
     /// The loader of `ctx` under `salt`, made with `options` the first time; its store is
     /// `TextureStore::in_context` under the same salt. Later calls with the same salt get the same loader and
     /// ignore `options`.
@@ -193,7 +202,8 @@ impl<K: TextureKey> TextureLoader<K> {
                     let ctx = ctx.clone();
                     Wake::new(move || repaint::request(&ctx))
                 };
-                let queue = Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes: options.lanes, name: "craft-textures" }));
+                let queue =
+                    Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes: options.lanes, name: "craft-textures", ..QueueOptions::default() }));
                 memory::with(ctx, |pools: &mut Pools<K>| {
                     let pool = pools.by_salt.entry(id).or_insert_with(|| Pool::new(queue, options.lanes));
                     (Arc::clone(&pool.queue), pool.lanes)
@@ -238,7 +248,7 @@ impl<K: TextureKey> TextureLoader<K> {
             Some(())
         })?;
         replay::note_unsettled(ctx);
-        Some(TextureState::Loading { stand_in: state.shown() })
+        Some(TextureState::Loading { stand_in: state.shown(), waited: None })
     }
 
     /// Queues `job` making `key`'s picture at `revision`, replacing a queued job of the key, and returns `Loading`
@@ -257,7 +267,8 @@ impl<K: TextureKey> TextureLoader<K> {
         self.run_frame_work(ctx);
         let stand_in = self.store.state(ctx, &key, revision).shown();
         let frame = pass::root_frame_nr(ctx);
-        self.with(ctx, |pool| pool.asked.insert(key.clone(), Asked { revision, priority, frame }));
+        let queued = pass::now(ctx);
+        self.with(ctx, |pool| pool.asked.insert(key.clone(), Asked { revision, priority, frame, queued }));
         // A panicking job is a failure, not a key that stays Loading for good.
         self.queue.submit(key, priority, move |cancel| {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(cancel))).unwrap_or(Err(LoadFailure::Panicked));
@@ -268,7 +279,7 @@ impl<K: TextureKey> TextureLoader<K> {
             repaint::request(ctx);
         }
         replay::note_unsettled(ctx);
-        TextureState::Loading { stand_in }
+        TextureState::Loading { stand_in, waited: None }
     }
 
     /// Stops the loader's queue: waiting jobs are dropped, running ones are cancelled, and the call waits up to

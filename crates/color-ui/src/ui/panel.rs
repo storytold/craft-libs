@@ -3,6 +3,7 @@
 //! sliders; the panel menu chooses the view and the ramp and copies the colour.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 use craft_behavior::{EditEvent, GesturePhase, IconId, Mixed};
 use craft_cms::convert::CmykConverter;
@@ -25,10 +26,11 @@ use super::channels::finite_values;
 use super::picker::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::{
     AreaMode, ColorArea, ColorPickerDialogWords, ColorRamp, ColorReadout, ColorStrip, ColorWarning, ColorWarningArrangement, ColorWarningChip,
-    ColorWheel, PairWell, PickedColor, RampKind, SwatchPair, Well,
+    ColorWheel, Gamut, PairWell, PickedColor, RampKind, RampPick, RampRecolor, SwatchPair, SwatchPairOutput, SwatchPalette, Well,
 };
 use crate::{CmykModel, GrayModel, not_web_safe};
 
+mod fill_stroke;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
@@ -57,6 +59,15 @@ craft_ui::words! {
         add_to_swatches: "colorPanel.addToSwatches" = "Add to Swatches";
         create_swatch: "colorPanel.createSwatch" = "Create new swatch";
         hex_color: "colorPanel.hexColor" = "Hex color";
+        swap_colors: "colorPanel.swapColors" = "Swap fill and stroke";
+        default_colors: "colorPanel.defaultColors" = "Default fill and stroke";
+        none: "colorPanel.none" = "None";
+        black: "colorPanel.black" = "Black";
+        white: "colorPanel.white" = "White";
+        recent_colors: "colorPanel.recentColors" = "Recent Colors";
+        tint: "colorPanel.tint" = "Tint";
+        global: "colorPanel.global" = "Global";
+        spot: "colorPanel.spot" = "Spot";
     }
 }
 
@@ -100,6 +111,21 @@ pub enum ColorPanelMode {
 }
 
 impl ColorPanelMode {
+    /// The modes of the FillStroke layout's menu, in its order; the Shift-click on the spectrum cycles through them.
+    pub const FILL_STROKE: [ColorPanelMode; 5] = [
+        ColorPanelMode::GrayscaleSlider,
+        ColorPanelMode::RgbSliders,
+        ColorPanelMode::HsbSliders,
+        ColorPanelMode::CmykSliders,
+        ColorPanelMode::WebColorSliders,
+    ];
+
+    /// The mode after this one in [`FILL_STROKE`](Self::FILL_STROKE); a mode outside the list goes to the first.
+    pub fn fill_stroke_next(self) -> ColorPanelMode {
+        let next = Self::FILL_STROKE.iter().position(|mode| *mode == self).and_then(|at| Self::FILL_STROKE.get(at + 1));
+        next.copied().unwrap_or(ColorPanelMode::GrayscaleSlider)
+    }
+
     /// Every mode, in the panel menu's order (one section, no separator).
     pub const ALL: [ColorPanelMode; 9] = [
         ColorPanelMode::HueCube,
@@ -203,9 +229,7 @@ impl ColorPanelRamp {
 }
 
 /// The Color panel's settings, kept across runs (settings section `color_panel`).
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorPanelState {
@@ -217,6 +241,91 @@ pub struct ColorPanelState {
     pub ramp: ColorPanelRamp,
     /// Make Ramp Web Safe: the ramp shows and picks web colours only.
     pub web_safe_ramp: bool,
+    /// Hide Options: the FillStroke layout keeps the proxy and the spectrum only.
+    pub hide_options: bool,
+    /// The FillStroke layout shows the Recent Colors slot.
+    pub recent_colors: bool,
+    /// The R, G and B rows count percents, 0 to 100, in place of 0 to 255.
+    pub rgb_percent: bool,
+}
+
+impl Default for ColorPanelState {
+    fn default() -> Self {
+        ColorPanelState {
+            background: false,
+            mode: ColorPanelMode::default(),
+            ramp: ColorPanelRamp::default(),
+            web_safe_ramp: false,
+            hide_options: false,
+            recent_colors: true,
+            rgb_percent: false,
+        }
+    }
+}
+
+/// How a [`ColorPanel`] arranges its body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColorPanelLayout {
+    /// The foreground over the background wells with one view of the edited colour (Photoshop's panel).
+    #[default]
+    ForegroundBackground,
+    /// The fill and stroke proxy, the rows of the shown mode, the Spectrum ramp and the Recent Colors slot.
+    ///
+    /// The rows come from [`ColorPanel::shown`]. [`ColorPanelState::mode`] counts only when it is one of
+    /// [`ColorPanelMode::FILL_STROKE`]: any other value means no mode was picked, and the host's `shown` decides.
+    FillStroke,
+}
+
+/// What rows a [`ColorPanel`] shows: the host's model rule.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ColorPanelShown {
+    /// The channel rows of this mode.
+    Mode(ColorPanelMode),
+    /// The Tint row of a swatch-linked colour.
+    Tint(TintRow),
+    /// No rows.
+    Empty,
+}
+
+/// The Tint row of a swatch-linked colour: a chip with the global corner and the spot dot, the name and the T row.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TintRow {
+    /// The swatch's name.
+    pub name: Label,
+    /// The swatch's colour at full strength.
+    pub base: Srgba,
+    /// The swatch is global: the chip has the global corner.
+    pub global: bool,
+    /// The swatch is a spot colour: the chip has the spot dot.
+    pub spot: bool,
+    /// The tint, 0 to 100.
+    pub tint: f32,
+}
+
+impl TintRow {
+    /// A tint of `base` named `name`, neither global nor spot.
+    pub fn new(name: impl Into<Label>, base: Srgba, tint: f32) -> Self {
+        TintRow { name: name.into(), base, global: false, spot: false, tint }
+    }
+}
+
+/// What a [`ColorPanelMenu`] command asks the host to do.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ColorPanelAction {
+    /// Show this mode.
+    Mode(ColorPanelMode),
+    /// Put this text on the clipboard.
+    Copy(String),
+    /// Invert the edited colour.
+    Invert,
+    /// Replace the edited colour by its complement.
+    Complement,
+    /// Create a swatch of the edited colour.
+    NewSwatch,
 }
 
 impl craft_host::Section for ColorPanelState {
@@ -279,6 +388,14 @@ pub struct ColorPanelOutput {
     /// The Add to Swatches button under the Color Wheel was pressed: the app adds the colour of this well to the
     /// swatches.
     pub add_to_swatches: Option<PanelTarget>,
+    /// The output of the proxy wells (the swap and default buttons, the clicks), for the host to read.
+    pub pair: Option<SwatchPairOutput>,
+    /// The edit of the Tint row.
+    pub tint: Option<EditEvent<f32>>,
+    /// The None well was pressed: the target to set to no paint.
+    pub none: Option<PanelTarget>,
+    /// A recolour click on the Spectrum ramp, with nothing picked.
+    pub recolor: Option<RampRecolor>,
 }
 
 impl Outcome for ColorPanelOutput {
@@ -315,6 +432,9 @@ struct Kept {
 /// - Ramp: in the slider modes, a `ColorRamp` of the chosen kind; a press picks for the edited well, Alt picks for the
 ///   other; Shift-click cycles the kind. A drag keeps the Current Colors ends it began with. A secondary click opens
 ///   the ramp rows as a context menu.
+/// - Layouts: [`ColorPanelLayout::FillStroke`] shows the host's wells, the rows the host's model rule picks, the
+///   Spectrum ramp and the Recent Colors instead. In both layouts [`PanelTarget::Foreground`] is the edited well
+///   (`Well::Primary`) and [`PanelTarget::Background`] the other.
 /// - Focus: the panel never takes the focus when shown.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
@@ -322,19 +442,69 @@ pub struct ColorPanel<'a> {
     state: Bind<'a, ColorPanelState>,
     colors: [Srgba; 2],
     cmyk: Option<&'a CmykConverter>,
+    rgb: Option<&'a dyn ColorModel>,
     dynamic: bool,
+    layout: ColorPanelLayout,
+    wells: Option<([PairWell; 2], Bind<'a, Well>)>,
+    edited: Option<Option<PickedColor>>,
+    shown: Option<ColorPanelShown>,
+    recent: &'a [Srgba],
+    recent_setup: Option<RecentSetup>,
+    gamut: Option<Gamut<'a>>,
+}
+
+/// Sets up the Recent Colors palette: the payload its chips drag.
+type RecentSetup = Box<dyn for<'p> Fn(SwatchPalette<'p>) -> SwatchPalette<'p>>;
+
+/// The palette setup that drags `map`'s payload for the chip under the pointer.
+fn recent_setup<P: Send + Sync + 'static>(map: impl Fn(usize) -> Option<P> + Send + Sync + 'static) -> RecentSetup {
+    let map = Arc::new(map);
+    Box::new(move |palette| {
+        let map = Arc::clone(&map);
+        palette.drag_payload(move |drag| map(drag.grabbed))
+    })
+}
+
+/// What the host gave the pass, borrowed from the panel.
+#[derive(Clone, Copy)]
+struct Inputs<'a> {
+    wells: Option<&'a [PairWell; 2]>,
+    edited: Option<&'a Option<PickedColor>>,
+    shown: &'a ColorPanelShown,
+    recent: &'a [Srgba],
+    recent_setup: Option<&'a RecentSetup>,
 }
 
 impl<'a> ColorPanel<'a> {
     /// The panel on the app's `[foreground, background]`.
     pub fn new(state: Bind<'a, ColorPanelState>, colors: [Srgba; 2]) -> Self {
-        ColorPanel { state, colors, cmyk: None, dynamic: true }
+        ColorPanel {
+            state,
+            colors,
+            cmyk: None,
+            rgb: None,
+            dynamic: true,
+            layout: ColorPanelLayout::default(),
+            wells: None,
+            edited: None,
+            shown: None,
+            recent: &[],
+            recent_setup: None,
+            gamut: None,
+        }
     }
 
     /// The document's CMYK converter, for the CMYK sliders, the CMYK Spectrum ramp and the gamut warning; without it
     /// they use the built-in coated CMYK.
     pub fn cmyk(mut self, converter: &'a CmykConverter) -> Self {
         self.cmyk = Some(converter);
+        self
+    }
+
+    /// The host's working-RGB colour model, whose channels replace the built-in `rgb` rows (wide working spaces show
+    /// their own numbers).
+    pub fn working_rgb(mut self, model: &'a dyn ColorModel) -> Self {
+        self.rgb = Some(model);
         self
     }
 
@@ -345,45 +515,131 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
+    /// How the panel arranges its body; the Photoshop foreground and background arrangement by default.
+    pub fn layout(mut self, layout: ColorPanelLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// The host's wells (paints) and the active well; `active` replaces `ColorPanelState::background` as the edited
+    /// well.
+    pub fn wells(mut self, wells: [PairWell; 2], active: Bind<'a, Well>) -> Self {
+        self.wells = Some((wells, active));
+        self
+    }
+
+    /// The colour the rows edit, with its model values; `None` disables the rows (mixed, None, a pattern). The edited
+    /// well's colour by default.
+    pub fn edited(mut self, color: Option<PickedColor>) -> Self {
+        self.edited = Some(color);
+        self
+    }
+
+    /// Which rows show, by the host's model rule; `Mode(state.mode)` by default.
+    pub fn shown(mut self, shown: ColorPanelShown) -> Self {
+        self.shown = Some(shown);
+        self
+    }
+
+    /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags.
+    pub fn recent(mut self, colors: &'a [Srgba]) -> Self {
+        self.recent = colors;
+        self
+    }
+
+    /// The payload a Recent Colors chip drags.
+    pub fn recent_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(usize) -> Option<P> + Send + Sync + 'static) -> Self {
+        self.recent_setup = Some(recent_setup(map));
+        self
+    }
+
+    /// The host's gamut for the out-of-gamut chip and the spectrum.
+    pub fn gamut(mut self, gamut: Gamut<'a>) -> Self {
+        self.gamut = Some(gamut);
+        self
+    }
+
     /// Shows the panel and returns this pass's edits and requests.
     pub fn show(self, ui: &mut Ui) -> ColorPanelOutput {
-        let ColorPanel { state, colors, cmyk, dynamic } = self;
+        let ColorPanel { state, colors, cmyk, rgb, dynamic, layout, wells, edited, shown: rows, recent, recent_setup, gamut } = self;
         let env = Env::of(ui);
         let (words, dialog) = (env.words::<ColorPanelWords>(), env.words::<ColorPickerDialogWords>());
         let mut held = Held::new(state);
+        let (wells, active) = match wells {
+            Some((wells, active)) => (Some(wells), Some(Held::new(active))),
+            None => (None, None),
+        };
+        let mut active = active;
+        let converter = cmyk.unwrap_or_else(|| CmykConverter::coated());
+        let gamut = gamut.unwrap_or_else(|| Gamut::cmyk(converter.clone()));
+        let rgb: &dyn ColorModel = rgb.unwrap_or(&RgbModel);
         let (mut edits, mut pick_color, mut add_to_swatches) = (Vec::new(), None, None);
+        let (mut pair, mut tint, mut none, mut recolor) = (None, None, None, None);
         let mut shown = Stack::new().label(words.title.clone()).fill().show(ui, |ui, cx| {
             let before = held.read(cx)?;
-            let target = if before.background { PanelTarget::Background } else { PanelTarget::Foreground };
+            let was = match active.as_mut() {
+                Some(active) => active.read(cx)?,
+                None if before.background => Well::Secondary,
+                None => Well::Primary,
+            };
+            let target = if was == Well::Secondary { PanelTarget::Background } else { PanelTarget::Foreground };
+            let default_rows = ColorPanelShown::Mode(before.mode);
             let body = Body {
                 target,
+                active: was,
+                layout,
                 colors,
-                converter: cmyk.unwrap_or_else(|| CmykConverter::coated()),
+                converter,
+                rgb,
+                gamut: &gamut,
                 dynamic,
                 words: &words,
                 dialog: &dialog,
+                inputs: Inputs {
+                    wells: wells.as_ref(),
+                    edited: edited.as_ref(),
+                    shown: rows.as_ref().unwrap_or(&default_rows),
+                    recent,
+                    recent_setup: recent_setup.as_ref(),
+                },
                 now: before,
                 kept: cx.memory::<Kept>().clone(),
                 events: Vec::new(),
                 pick_color: None,
                 add_to_swatches: None,
+                pair: None,
+                tint: None,
+                none: None,
+                recolor: None,
             };
-            let mut body = body.show(ui);
+            let mut body = match layout {
+                ColorPanelLayout::ForegroundBackground => body.show(ui),
+                ColorPanelLayout::FillStroke => body.fill_stroke(ui),
+            };
             *cx.memory::<Kept>() = std::mem::take(&mut body.kept);
             edits = body.events;
             pick_color = body.pick_color;
             add_to_swatches = body.add_to_swatches;
-            Some((before, body.now))
+            pair = body.pair;
+            tint = body.tint;
+            none = body.none;
+            recolor = body.recolor;
+            Some((before, body.now, was, body.active))
         });
-        // Once per pass, after the real run: the edited state is stored.
+        // Once per pass, after the real run: the edited state and the host's active well are stored.
         shown.settle(|cx, state| {
-            if let Some((before, now)) = state.take()
-                && now != before
-            {
-                held.write(cx, &before, now, words.title.as_str());
+            if let Some((before, now, was, now_active)) = state.take() {
+                if now != before {
+                    held.write(cx, &before, now, words.title.as_str());
+                }
+                if let Some(active) = active.as_mut()
+                    && now_active != was
+                {
+                    active.write(cx, &was, now_active, words.title.as_str());
+                }
             }
         });
-        ColorPanelOutput { response: shown.output, edits, pick_color, add_to_swatches }
+        ColorPanelOutput { response: shown.output, edits, pick_color, add_to_swatches, pair, tint, none, recolor }
     }
 }
 
@@ -440,6 +696,21 @@ pub enum ColorPanelCommand {
     /// The ramp shows and picks web colours only.
     #[command(label = "Make Ramp Web Safe", kind = "toggle")]
     WebSafeRamp,
+    /// Hide or show the options of the FillStroke layout.
+    #[command(label = "Hide Options")]
+    ToggleOptions,
+    /// Show the Recent Colors slot.
+    #[command(label = "Show Recent Colors", kind = "toggle")]
+    ShowRecentColors,
+    /// Invert the edited colour.
+    #[command(label = "Invert")]
+    Invert,
+    /// Replace the edited colour by its complement.
+    #[command(label = "Complement")]
+    Complement,
+    /// Create a swatch of the edited colour.
+    #[command(label = "Create New Swatch…")]
+    NewSwatch,
 }
 
 impl ColorPanelMode {
@@ -476,14 +747,49 @@ impl ColorPanelRamp {
 pub struct ColorPanelMenu;
 
 impl ColorPanelMenu {
-    /// The rows: the nine views, a separator, Copy Color as HTML and Copy Color's Hex Code, a separator, the four ramps,
-    /// a separator, Make Ramp Web Safe.
-    pub fn rows() -> Vec<PanelRow> {
+    /// The rows. `ForegroundBackground`: the nine views, a separator, Copy Color as HTML and Copy Color's Hex Code, a
+    /// separator, the four ramps, a separator, Make Ramp Web Safe. `FillStroke`: Hide Options and Show Recent Colors, a
+    /// separator, the five modes, a separator, Invert, Complement and Create New Swatch…, a separator, Copy Color Value
+    /// (Hex).
+    pub fn rows(layout: ColorPanelLayout) -> Vec<PanelRow> {
         let row = |command: ColorPanelCommand| PanelRow::Command(CommandRef::from(command));
-        let mut rows: Vec<PanelRow> = ColorPanelMode::ALL.iter().map(|mode| row(mode.command())).collect();
-        rows.extend([PanelRow::Separator, row(ColorPanelCommand::CopyHtml), row(ColorPanelCommand::CopyHex), PanelRow::Separator]);
-        rows.extend(Self::ramp_rows());
-        rows
+        match layout {
+            ColorPanelLayout::ForegroundBackground => {
+                let mut rows: Vec<PanelRow> = ColorPanelMode::ALL.iter().map(|mode| row(mode.command())).collect();
+                rows.extend([PanelRow::Separator, row(ColorPanelCommand::CopyHtml), row(ColorPanelCommand::CopyHex), PanelRow::Separator]);
+                rows.extend(Self::ramp_rows());
+                rows
+            }
+            ColorPanelLayout::FillStroke => {
+                let mut rows = vec![row(ColorPanelCommand::ToggleOptions), row(ColorPanelCommand::ShowRecentColors), PanelRow::Separator];
+                rows.extend(ColorPanelMode::FILL_STROKE.iter().map(|mode| row(mode.command())));
+                rows.extend([
+                    PanelRow::Separator,
+                    row(ColorPanelCommand::Invert),
+                    row(ColorPanelCommand::Complement),
+                    row(ColorPanelCommand::NewSwatch),
+                    PanelRow::Separator,
+                    row(ColorPanelCommand::CopyHex),
+                ]);
+                rows
+            }
+        }
+    }
+
+    /// The commands of `layout`'s rows, in their order.
+    fn commands(layout: ColorPanelLayout) -> Vec<ColorPanelCommand> {
+        match layout {
+            ColorPanelLayout::ForegroundBackground => {
+                let commands = ColorPanelMode::ALL.iter().map(|mode| mode.command());
+                let commands = commands.chain([ColorPanelCommand::CopyHtml, ColorPanelCommand::CopyHex]);
+                commands.chain(ColorPanelRamp::ALL.iter().map(|ramp| ramp.command())).chain([ColorPanelCommand::WebSafeRamp]).collect()
+            }
+            ColorPanelLayout::FillStroke => [ColorPanelCommand::ToggleOptions, ColorPanelCommand::ShowRecentColors]
+                .into_iter()
+                .chain(ColorPanelMode::FILL_STROKE.iter().map(|mode| mode.command()))
+                .chain([ColorPanelCommand::Invert, ColorPanelCommand::Complement, ColorPanelCommand::NewSwatch, ColorPanelCommand::CopyHex])
+                .collect(),
+        }
     }
 
     /// The ramps, a separator and Make Ramp Web Safe: the last rows of the menu and the ramp's context menu.
@@ -494,47 +800,79 @@ impl ColorPanelMenu {
         rows
     }
 
-    /// The state of each command: the current view and ramp checked, Make Ramp Web Safe checked when on.
-    pub fn states(state: &ColorPanelState) -> Vec<(ColorPanelCommand, CommandState)> {
-        let commands = ColorPanelMode::ALL.iter().map(|mode| mode.command());
-        let commands = commands.chain([ColorPanelCommand::CopyHtml, ColorPanelCommand::CopyHex]);
-        let commands = commands.chain(ColorPanelRamp::ALL.iter().map(|ramp| ramp.command())).chain([ColorPanelCommand::WebSafeRamp]);
-        commands
+    /// The state of each command of `layout`: the current view (under `FillStroke`, the one `shown` shows; a tint checks
+    /// none) and ramp checked, the toggles checked when on, and the commands that need a colour disabled without one.
+    /// Show Options is titled so while the options are hidden.
+    pub fn states(
+        layout: ColorPanelLayout,
+        state: &ColorPanelState,
+        shown: &ColorPanelShown,
+        has_color: bool,
+    ) -> Vec<(ColorPanelCommand, CommandState)> {
+        let needs_color = [
+            ColorPanelCommand::CopyHtml,
+            ColorPanelCommand::CopyHex,
+            ColorPanelCommand::Invert,
+            ColorPanelCommand::Complement,
+            ColorPanelCommand::NewSwatch,
+        ];
+        Self::commands(layout)
+            .into_iter()
             .map(|command| {
-                let checked = Self::checked(state, command);
-                (command, checked.map_or_else(CommandState::new, |on| CommandState::new().checked(on)))
+                let mut flag = Self::checked(layout, state, shown, command).map_or_else(CommandState::new, |on| CommandState::new().checked(on));
+                if !has_color && needs_color.contains(&command) {
+                    flag = flag.enabled(false);
+                }
+                if command == ColorPanelCommand::ToggleOptions && state.hide_options {
+                    flag = flag.title("Show Options");
+                }
+                (command, flag)
             })
             .collect()
     }
 
-    /// Whether `command`'s row is checked: `Some` for the views, the ramps and Make Ramp Web Safe, `None` for the copy
-    /// commands, which have no check.
-    pub fn checked(state: &ColorPanelState, command: ColorPanelCommand) -> Option<bool> {
+    /// Whether `command`'s row is checked: `Some` for the views (by `state` under `ForegroundBackground`, by `shown`
+    /// under `FillStroke`), the ramps and the toggles, `None` for the other commands, which have no check.
+    pub fn checked(layout: ColorPanelLayout, state: &ColorPanelState, shown: &ColorPanelShown, command: ColorPanelCommand) -> Option<bool> {
         if let Some(mode) = ColorPanelMode::ALL.into_iter().find(|mode| mode.command() == command) {
-            return Some(state.mode == mode);
+            return Some(match layout {
+                ColorPanelLayout::ForegroundBackground => state.mode == mode,
+                ColorPanelLayout::FillStroke => matches!(shown, ColorPanelShown::Mode(shown) if *shown == mode),
+            });
         }
         if let Some(ramp) = ColorPanelRamp::ALL.into_iter().find(|ramp| ramp.command() == command) {
             return Some(state.ramp == ramp);
         }
-        (command == ColorPanelCommand::WebSafeRamp).then_some(state.web_safe_ramp)
+        match command {
+            ColorPanelCommand::WebSafeRamp => Some(state.web_safe_ramp),
+            ColorPanelCommand::ShowRecentColors => Some(state.recent_colors),
+            _ => None,
+        }
     }
 
-    /// Carries out `command`: sets the view or the ramp, toggles Make Ramp Web Safe, or returns the text of `edited`
-    /// for the clipboard, as HTML (`color="#rrggbb"`) or as a hex code (`rrggbb`).
-    pub fn run_command(state: &mut ColorPanelState, command: ColorPanelCommand, edited: Srgba) -> Option<String> {
+    /// Carries out `command`: sets the view or the ramp, toggles the options, Recent Colors or Make Ramp Web Safe, or
+    /// answers what the host does: show a mode, copy the text of `edited` (as HTML, `color="#rrggbb"`, or as a hex code,
+    /// `rrggbb`), invert, complement, create a swatch.
+    pub fn run_command(state: &mut ColorPanelState, command: ColorPanelCommand, edited: Srgba) -> Option<ColorPanelAction> {
         if let Some(mode) = ColorPanelMode::ALL.into_iter().find(|mode| mode.command() == command) {
             state.mode = mode;
-        } else if let Some(ramp) = ColorPanelRamp::ALL.into_iter().find(|ramp| ramp.command() == command) {
+            return Some(ColorPanelAction::Mode(mode));
+        }
+        if let Some(ramp) = ColorPanelRamp::ALL.into_iter().find(|ramp| ramp.command() == command) {
             state.ramp = ramp;
-        } else {
-            match command {
-                ColorPanelCommand::WebSafeRamp => state.web_safe_ramp = !state.web_safe_ramp,
-                ColorPanelCommand::CopyHtml => return Some(format!("color=\"{}\"", Srgba::from_rgb_array([edited.r, edited.g, edited.b]).to_hex())),
-                ColorPanelCommand::CopyHex => {
-                    return Some(Srgba::from_rgb_array([edited.r, edited.g, edited.b]).to_hex().trim_start_matches('#').to_owned());
-                }
-                _ => {}
-            }
+            return None;
+        }
+        let hex = || Srgba::from_rgb_array([edited.r, edited.g, edited.b]).to_hex();
+        match command {
+            ColorPanelCommand::WebSafeRamp => state.web_safe_ramp = !state.web_safe_ramp,
+            ColorPanelCommand::ToggleOptions => state.hide_options = !state.hide_options,
+            ColorPanelCommand::ShowRecentColors => state.recent_colors = !state.recent_colors,
+            ColorPanelCommand::CopyHtml => return Some(ColorPanelAction::Copy(format!("color=\"{}\"", hex()))),
+            ColorPanelCommand::CopyHex => return Some(ColorPanelAction::Copy(hex().trim_start_matches('#').to_owned())),
+            ColorPanelCommand::Invert => return Some(ColorPanelAction::Invert),
+            ColorPanelCommand::Complement => return Some(ColorPanelAction::Complement),
+            ColorPanelCommand::NewSwatch => return Some(ColorPanelAction::NewSwatch),
+            _ => {}
         }
         None
     }
@@ -544,22 +882,44 @@ impl ColorPanelMenu {
 struct Body<'a> {
     /// The colour the panel edits.
     target: PanelTarget,
+    /// The well in front, which `target` follows.
+    active: Well,
+    layout: ColorPanelLayout,
     colors: [Srgba; 2],
     converter: &'a CmykConverter,
+    /// The model of the R, G and B rows: the host's working RGB, else sRGB.
+    rgb: &'a dyn ColorModel,
+    gamut: &'a Gamut<'a>,
     dynamic: bool,
     words: &'a ColorPanelWords,
     dialog: &'a ColorPickerDialogWords,
     /// The state as this pass leaves it.
     now: ColorPanelState,
     kept: Kept,
+    inputs: Inputs<'a>,
     events: Vec<(PanelTarget, EditEvent<PickedColor>)>,
     pick_color: Option<ColorRequest>,
     add_to_swatches: Option<PanelTarget>,
+    pair: Option<SwatchPairOutput>,
+    tint: Option<EditEvent<f32>>,
+    none: Option<PanelTarget>,
+    recolor: Option<RampRecolor>,
 }
 
 impl Body<'_> {
+    /// The colour the rows edit: the host's `edited` colour, else the edited well's.
     fn color(&self) -> Srgba {
-        self.colors[self.target.index()]
+        self.picked().map_or(self.colors[self.target.index()], |picked| picked.color)
+    }
+
+    /// The host's colour with its model values, when it gave one.
+    fn picked(&self) -> Option<&PickedColor> {
+        self.inputs.edited.and_then(Option::as_ref)
+    }
+
+    /// Whether the rows edit anything: the host gave no `edited(None)`.
+    fn enabled(&self) -> bool {
+        self.inputs.edited.is_none_or(Option::is_some)
     }
 
     fn push(&mut self, target: PanelTarget, event: EditEvent<PickedColor>) {
@@ -596,17 +956,7 @@ impl Body<'_> {
             match mode {
                 ColorPanelMode::HueCube => self.cube(ui, AreaMode::Hue),
                 ColorPanelMode::BrightnessCube => self.cube(ui, AreaMode::Brightness),
-                _ => {
-                    // The channel rows stand as close as Photoshop's, their letters, fields and units in shared columns.
-                    FieldGroup::new(mode.label(self.words)).labels(LabelScheme::Inspector).gap(Gap::Tight).show(ui, |ui, _| match mode {
-                        ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
-                        ColorPanelMode::RgbSliders => self.rows(ui, &RgbModel, false),
-                        ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
-                        ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
-                        ColorPanelMode::WebColorSliders => self.rows(ui, &RgbModel, true),
-                        _ => self.rows(ui, &HsbModel, false),
-                    });
-                }
+                _ => self.mode_rows(ui, mode),
             }
         });
         match mode {
@@ -616,21 +966,46 @@ impl Body<'_> {
         }
     }
 
-    /// The foreground over the background: a click on the other well edits it, a click on the edited one asks for the
-    /// picker.
+    /// The channel rows of the slider `mode`. They stand as close as Photoshop's, their letters, fields and units in
+    /// shared columns.
+    fn mode_rows(&mut self, ui: &mut Ui, mode: ColorPanelMode) {
+        let rgb = self.rgb;
+        FieldGroup::new(mode.label(self.words)).labels(LabelScheme::Inspector).gap(Gap::Tight).show(ui, |ui, _| match mode {
+            ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
+            ColorPanelMode::RgbSliders => self.rows(ui, rgb, false),
+            ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
+            ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
+            ColorPanelMode::WebColorSliders => self.rows(ui, rgb, true),
+            _ => self.rows(ui, &HsbModel, false),
+        });
+    }
+
+    /// The foreground over the background (the host's wells when it gave them): a click on the other well edits it, a
+    /// click on the edited one asks for the picker. `FillStroke` adds the pair's swap and default buttons.
     fn wells(&mut self, ui: &mut Ui) {
-        let was = if self.now.background { Well::Secondary } else { Well::Primary };
+        let was = self.active;
         let mut active = was;
-        let wells = [PairWell::new(self.words.foreground.clone(), self.colors[0]), PairWell::new(self.words.background.clone(), self.colors[1])];
-        let pair = SwatchPair::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).frame_active(true).show(ui);
-        self.now.background = active == Well::Secondary;
-        if pair.clicked.as_ref() == Some(&was) {
+        let wells = self.inputs.wells.cloned().unwrap_or_else(|| {
+            [PairWell::new(self.words.foreground.clone(), self.colors[0]), PairWell::new(self.words.background.clone(), self.colors[1])]
+        });
+        let pair = SwatchPair::<()>::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).frame_active(true);
+        let pair = match self.layout {
+            ColorPanelLayout::ForegroundBackground => pair,
+            ColorPanelLayout::FillStroke => pair.swap_button(self.words.swap_colors.clone()).default_button(self.words.default_colors.clone()),
+        };
+        let pair = pair.show(ui);
+        self.active = active;
+        if self.inputs.wells.is_none() {
+            self.now.background = active == Well::Secondary;
+        }
+        if pair.clicked == Some(was) {
             let title = match self.target {
                 PanelTarget::Foreground => self.dialog.foreground_title.clone(),
                 PanelTarget::Background => self.dialog.background_title.clone(),
             };
             self.pick_color = Some(ColorRequest::new(self.target.key(), self.color()).title(title));
         }
+        self.pair = Some(pair);
     }
 
     /// The out-of-gamut chip and, for Web Color, the web-colour chip under the wells, each its icon beside a small swatch.
@@ -639,8 +1014,8 @@ impl Body<'_> {
         let rgb = [color.r, color.g, color.b];
         let nearest = |near: [f32; 3]| Srgba::rgb(near[0], near[1], near[2]);
         let mut warnings = Vec::new();
-        if let Some(near) = self.converter.nearest_in_gamut(rgb, CmykConverter::PICKER_GAMUT_DE) {
-            warnings.push(ColorWarning::new(self.dialog.out_of_gamut.clone(), nearest(near)));
+        if let Some(near) = self.gamut.nearest(color) {
+            warnings.push(ColorWarning::new(self.dialog.out_of_gamut.clone(), near));
         }
         if web && let Some(near) = not_web_safe(rgb) {
             warnings.push(ColorWarning::web_colors(self.dialog.not_web_color.clone(), nearest(near)));
@@ -656,16 +1031,16 @@ impl Body<'_> {
         });
     }
 
-    /// The model's values for the edited colour, whole numbers as Photoshop's fields.
+    /// The model's values for the edited colour, unrounded: an edit of one channel leaves the others as they are.
     fn values(&self, model: &dyn ColorModel) -> ModelValues {
         let color = self.color();
-        let kept = self.kept.values[self.target.index()].iter().find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
-        let mut values = kept.copied().unwrap_or_else(|| self.read(model, color));
-        for (slot, ch) in values.values.iter_mut().zip(model.channels()) {
-            let scale = 10f32.powi(i32::from(ch.decimals));
-            *slot = if slot.is_finite() { (*slot * scale).round() / scale } else { 0.0 };
-        }
-        values
+        // The host's own values of the colour (typed CMYK, a working space's numbers) stand when they give the colour.
+        let given = self.picked().and_then(|picked| picked.model);
+        let kept = self.kept.values[self.target.index()]
+            .iter()
+            .chain(given.as_ref())
+            .find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
+        finite_values(kept.copied().unwrap_or_else(|| self.read(model, color)))
     }
 
     /// `color` in `model`. HSB takes the hue of a grey, and the hue and saturation of black, from the last HSB values
@@ -740,6 +1115,15 @@ impl Body<'_> {
             if web {
                 rule.step = WEB_STEP;
             }
+            // The R, G and B rows count percents of the channel's range; an edit goes back through `scale`.
+            // PLAN: a double click on the units cell flips `rgb_percent` while the rows are enabled; `ChannelRow`
+            // (color-w2) reports no signal for its units cell, so the panel cannot read it.
+            let percent = self.now.rgb_percent && model.id() == self.rgb.id();
+            let scale = if percent { 100.0 / *rule.range.end() } else { 1.0 };
+            let unit = if percent { ChannelUnit::Percent } else { ChannelUnit::of(ch.unit) };
+            if percent {
+                rule = ChannelRule { range: 0.0..=100.0, step: (rule.step * scale).max(1.0), decimals: 0 };
+            }
             let mut track_values = basis;
             // The hue track is the whole spectrum, whatever the saturation and brightness.
             if model.id() == HsbModel.id() && i == 0 {
@@ -747,13 +1131,12 @@ impl Body<'_> {
                 track_values.values[2] = 100.0;
             }
             let track = model.track(i, &track_values);
-            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(f64::from(current.values[i])), rule)
-                .short(ch.label)
-                .unit(ChannelUnit::of(ch.unit))
-                .track(track)
-                .show(ui);
+            // The field shows the channel's places, as Photoshop's; the edits start from the unrounded values.
+            let places = 10f64.powi(i32::from(rule.decimals));
+            let shown = (f64::from(current.values[i]) * scale * places).round() / places;
+            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track).show(ui);
             for event in row.into_iter().flat_map(|row| row.events) {
-                self.channel_event(model, current, i, event);
+                self.channel_event(model, current, i, event.map(|x| x / scale));
             }
         }
     }
@@ -792,7 +1175,7 @@ impl Body<'_> {
     fn wheel(&mut self, ui: &mut Ui) {
         let values = self.values(&HsbModel);
         let wheel = ColorWheel::new(self.words.color_wheel.clone(), Bind::given(values)).show(ui);
-        for event in wheel.events {
+        for event in wheel.edit.events {
             self.model_event(&HsbModel, event);
         }
         let add = Row::new().align(RowAlign::End).show(ui, |ui, _| {
@@ -803,26 +1186,20 @@ impl Body<'_> {
         }
     }
 
-    /// The ramp; Alt picks for the colour not edited, Shift-click cycles the kind, a secondary click opens the ramp
-    /// menu.
-    fn ramp(&mut self, ui: &mut Ui) {
-        let converter = self.converter;
-        let gamut = |c: Srgba| {
-            let back = converter.to_srgb(converter.from_srgb([c.r, c.g, c.b]));
-            Srgba::new(back[0], back[1], back[2], c.a)
-        };
+    /// The ramp's map into the host's gamut, and the counter that recomputes the ramp's colours when the CMYK working
+    /// space changes. The map is the gamut's own `nearest`, so the warning chip and the ramp agree.
+    // PLAN: `Gamut` has no identity of its own; a host gamut that changes while the converter stays the same needs a
+    // revision on `Gamut` (color-w1).
+    fn ramp_gamut(&self) -> (Gamut<'_>, u64) {
+        let gamut = self.gamut;
         let mut hasher = DefaultHasher::new();
-        std::sync::Arc::as_ptr(converter.profile()).hash(&mut hasher);
-        let ramp = ColorRamp::new(self.words.color_ramp.clone(), self.now.ramp.kind(), Bind::kept())
-            .kind_name(self.now.ramp.label(self.words))
-            .ends([self.colors[0], self.colors[1]])
-            .gamut(gamut)
-            .gamut_revision(hasher.finish())
-            .web_safe(self.now.web_safe_ramp)
-            .sizing(Sizing::Fill)
-            .show(ui);
-        // Alt is on every event of a gesture that has a value; the others go where it went.
-        for event in ramp.edit.events {
+        Arc::as_ptr(self.converter.profile()).hash(&mut hasher);
+        (Gamut::new(move |color| gamut.nearest(color).unwrap_or(color)), hasher.finish())
+    }
+
+    /// The picks of a ramp as edits. Alt is on every event of a gesture that has a value; the others go where it went.
+    fn ramp_events(&mut self, events: impl IntoIterator<Item = EditEvent<RampPick>>) {
+        for event in events {
             if let Some(pick) = event.value() {
                 self.kept.other = pick.other;
             }
@@ -830,6 +1207,21 @@ impl Body<'_> {
             let alpha = self.colors[target.index()].a;
             self.push(target, event.map(|pick| PickedColor { color: pick.color.with_alpha(alpha), model: None }));
         }
+    }
+
+    /// The ramp; Alt picks for the colour not edited, Shift-click cycles the kind, a secondary click opens the ramp
+    /// menu.
+    fn ramp(&mut self, ui: &mut Ui) {
+        let (gamut, revision) = self.ramp_gamut();
+        let ramp = ColorRamp::new(self.words.color_ramp.clone(), self.now.ramp.kind(), Bind::kept())
+            .kind_name(self.now.ramp.label(self.words))
+            .ends([self.colors[0], self.colors[1]])
+            .gamut(gamut)
+            .gamut_revision(revision)
+            .web_safe(self.now.web_safe_ramp)
+            .sizing(Sizing::Fill)
+            .show(ui);
+        self.ramp_events(ramp.edit.events);
         if ramp.cycle {
             self.now.ramp = self.now.ramp.next();
         }
@@ -852,22 +1244,37 @@ pub(crate) mod tests {
 
     use super::*;
 
-    /// The checks a host draws (`checked`) and the ones it publishes (`states`) agree: the view, the ramp and Make Ramp
-    /// Web Safe are checked as the state says, the copy commands carry no check.
+    /// The checks a host draws (`checked`) and the ones it publishes (`states`) agree in every layout: under
+    /// `ForegroundBackground` the state says which view is checked, under `FillStroke` the shown rows do (a tint checks
+    /// none), and the copy commands carry no check.
     #[trial]
     fn color_panel_menu_checks_follow_the_state() {
         let state =
             ColorPanelState { mode: ColorPanelMode::CmykSliders, ramp: ColorPanelRamp::GrayscaleRamp, web_safe_ramp: true, ..Default::default() };
-        let checked: Vec<ColorPanelCommand> = ColorPanelMenu::states(&state)
-            .into_iter()
-            .map(|(command, _)| command)
-            .filter(|c| ColorPanelMenu::checked(&state, *c) == Some(true))
-            .collect();
-        assert_eq!(checked, [ColorPanelCommand::CmykSliders, ColorPanelCommand::GrayscaleRamp, ColorPanelCommand::WebSafeRamp]);
-        assert_eq!(ColorPanelMenu::checked(&state, ColorPanelCommand::CopyHex), None);
-        for (command, published) in ColorPanelMenu::states(&state) {
-            let expected = ColorPanelMenu::checked(&state, command).map_or_else(CommandState::new, |on| CommandState::new().checked(on));
-            assert_eq!(published, expected, "{command:?}");
+        let shown = ColorPanelShown::Mode(ColorPanelMode::HsbSliders);
+        for layout in [ColorPanelLayout::ForegroundBackground, ColorPanelLayout::FillStroke] {
+            for (command, published) in ColorPanelMenu::states(layout, &state, &shown, true) {
+                let expected =
+                    ColorPanelMenu::checked(layout, &state, &shown, command).map_or_else(CommandState::new, |on| CommandState::new().checked(on));
+                assert_eq!(published, expected, "{layout:?} {command:?}");
+            }
+            assert_eq!(ColorPanelMenu::checked(layout, &state, &shown, ColorPanelCommand::CopyHex), None, "{layout:?}");
         }
+        let checked = |layout: ColorPanelLayout, shown: &ColorPanelShown| -> Vec<ColorPanelCommand> {
+            ColorPanelMenu::states(layout, &state, shown, true)
+                .into_iter()
+                .map(|(command, _)| command)
+                .filter(|c| ColorPanelMenu::checked(layout, &state, shown, *c) == Some(true))
+                .collect()
+        };
+        assert_eq!(
+            checked(ColorPanelLayout::ForegroundBackground, &shown),
+            [ColorPanelCommand::CmykSliders, ColorPanelCommand::GrayscaleRamp, ColorPanelCommand::WebSafeRamp]
+        );
+        assert_eq!(checked(ColorPanelLayout::FillStroke, &shown), [ColorPanelCommand::ShowRecentColors, ColorPanelCommand::HsbSliders]);
+        let tint = ColorPanelShown::Tint(TintRow::new("Brand", Srgba::rgb(1.0, 0.0, 0.0), 50.0));
+        assert_eq!(checked(ColorPanelLayout::FillStroke, &tint), [ColorPanelCommand::ShowRecentColors]);
+        let without = ColorPanelMenu::states(ColorPanelLayout::FillStroke, &state, &shown, false);
+        assert!(without.contains(&(ColorPanelCommand::Invert, CommandState::new().enabled(false))), "no colour, nothing to invert");
     }
 }

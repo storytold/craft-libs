@@ -47,8 +47,25 @@ struct Engine {
     preedit: String,
     caret: Option<(Id, Rect, Rect, bool)>,
     interrupt: Option<Id>,
+    /// An interrupt asked the platform to discard its marked text; `take_discard` reads it once.
+    discard: bool,
     /// What the editor that owns the IME reported at its last pass.
     editor: Option<EditorFacts>,
+    /// The app's own editor that wrote the IME output of the last pass while no framework editor owned the IME.
+    host: Option<HostIme>,
+    /// The reset requests the app's own editor wrote in its IME output, unanswered yet: their completions and
+    /// retirements are the app's and stay in egui's input for it, fence or not. One of them is the fence's `reset`
+    /// when the app asked for its reset in the pass the engine interrupted its composition.
+    host_resets: Vec<egui::ImeResetId>,
+}
+
+/// An app's own editor holding the IME: the owner and context generation of the IME output it wrote, and whether it
+/// is composing, as the IME events left to it in egui's input say.
+#[derive(Clone, Copy)]
+struct HostIme {
+    owner: Id,
+    generation: u64,
+    composing: bool,
 }
 
 impl Stored for Engine {}
@@ -157,6 +174,23 @@ impl Engine {
         self.observed.map(|(target, _)| target).filter(|target| target.owner == owner)
     }
 
+    /// Hands the IME to `owner`. The old owner, if it was composing, keeps its preedit for its adapter and is
+    /// interrupted. The tracker starts the new owner's context when the end hook observes it.
+    fn set_owner(&mut self, owner: Option<Id>) {
+        if self.owner == owner {
+            return;
+        }
+        if self.composing
+            && let Some(old) = self.owner
+        {
+            self.leaving = Some((old, std::mem::take(&mut self.preedit)));
+            self.interrupt(old);
+        }
+        self.composing = false;
+        self.edits.clear();
+        self.owner = owner;
+    }
+
     /// Ends the composition of `owner` here and has the end hook interrupt the OS composition; its late events are
     /// dropped until the reset completes.
     fn interrupt(&mut self, owner: Id) {
@@ -164,6 +198,42 @@ impl Engine {
         self.preedit.clear();
         self.stale = true;
         self.interrupt = Some(owner);
+        self.discard = true;
+    }
+
+    /// Notes an answer to one of the app's own reset requests: the request is answered, and a completion of the one the
+    /// fence waits for ends the fence; a retirement leaves the end hook to ask again.
+    fn host_answered(&mut self, event: &Event) {
+        let (Event::ImeResetCompleted { request_id: id } | Event::ImeResetRetired { request_id: id }) = event else { return };
+        let Some(at) = self.host_resets.iter().position(|own| own == id) else { return };
+        self.host_resets.remove(at);
+        if self.reset == Some(*id) {
+            self.reset = None;
+            if matches!(event, Event::ImeResetCompleted { .. }) {
+                self.stale = false;
+            }
+        }
+    }
+
+    /// Follows the composition of the app's own editor through the IME events left to it in egui's input, and
+    /// interrupts it at a pointer press, as a press ends a framework editor's composition. The one-press rule (H0)
+    /// holds the events after the press for the next frame, where the fence drops the composition's late deletions and
+    /// commits until the reset completes.
+    fn watch_host(&mut self, events: &[Arrived]) {
+        let Some(host) = self.host.as_mut() else { return };
+        for arrived in events {
+            match (os::read(&arrived.event), &arrived.event) {
+                (Some(os::Raw::Preedit { text, .. }), _) => host.composing = !text.is_empty(),
+                (Some(os::Raw::Commit(_)), _) => host.composing = false,
+                (None, Event::PointerButton { pressed: true, .. }) if host.composing => {
+                    host.composing = false;
+                    let owner = host.owner;
+                    self.interrupt(owner);
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -177,35 +247,59 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
 
 /// The input hook: takes the IME events out of raw input while a framework editor owns the IME, or while the reset
 /// the engine asked for is pending (the late events of the interrupted composition, and the OS's answer), and removes
-/// the keys that would end the composition.
+/// the keys that would end the composition. With no framework editor, the events after the reset's completion are
+/// the app's own editor's again, and the hook follows that editor's composition (`Engine::watch_host`). The answers to
+/// the app's own reset requests always stay in egui's input for it; when the fence waits for one of them, its
+/// completion ends the fence too.
 pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: ViewportId) {
     with(ctx, viewport, |engine| {
         let take = engine.owner.is_some() || engine.reset.is_some();
+        let host_resets = engine.host_resets.clone();
+        let host_answer = |event: &Event| match event {
+            Event::ImeResetCompleted { request_id } | Event::ImeResetRetired { request_id } => host_resets.contains(request_id),
+            _ => false,
+        };
+        let completed =
+            |id: egui::ImeResetId| move |arrived: &Arrived| matches!(arrived.event, Event::ImeResetCompleted { request_id } if request_id == id);
+        // The events after the completion are the app's; the completion too when it answers the app's own request.
+        let mut after = match engine.reset {
+            Some(id) if engine.owner.is_none() => {
+                let own = host_resets.contains(&id);
+                events.iter().position(completed(id)).map(|at| events.split_off(if own { at } else { at + 1 }))
+            }
+            _ => None,
+        };
         let guarded = engine.composing || engine.guard > 0;
         let ends_composition = |event: &Event| {
             matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. })
         };
-        let taken = os::take_events(events, take, |event| guarded && ends_composition(event));
+        let taken = os::take_events(events, |event| take && !host_answer(event), |event| guarded && ends_composition(event));
         engine.queue.extend(taken);
         engine.guard = engine.guard.saturating_sub(1);
+        for arrived in events.iter().chain(after.iter().flatten()) {
+            engine.host_answered(&arrived.event);
+        }
+        if engine.owner.is_none() {
+            match &mut after {
+                Some(after) => engine.watch_host(after),
+                None if !take => engine.watch_host(events),
+                None => {}
+            }
+        }
+        events.extend(after.into_iter().flatten());
     });
+}
+
+/// Whether an `interrupt` of the engine of `viewport` asks the platform to discard the marked text: once for each
+/// interrupt. The engine is per viewport and the caller runs before any pass, so it names the viewport.
+pub(crate) fn take_discard(ctx: &Context, viewport: ViewportId) -> bool {
+    with(ctx, viewport, |engine| std::mem::take(&mut engine.discard))
 }
 
 /// The begin hook, after pending focus moves are applied: resolves the owner and turns the queue into edits.
 pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
     current(ctx, |engine| {
-        if engine.owner != owner {
-            if engine.composing
-                && let Some(old) = engine.owner
-            {
-                engine.leaving = Some((old, std::mem::take(&mut engine.preedit)));
-                engine.interrupt(old);
-            }
-            engine.composing = false;
-            engine.edits.clear();
-            // The tracker starts the new owner's context when the end hook observes it.
-            engine.owner = owner;
-        }
+        engine.set_owner(owner);
         for (raw, place) in std::mem::take(&mut engine.queue) {
             match raw {
                 // A completion of an earlier request is stale: the latest request still fences.
@@ -390,28 +484,55 @@ pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, pas
 }
 
 /// The end hook: observes the owner on the tracker, then writes the pass's IME output while a framework editor owns the
-/// IME or an interrupt is due. Otherwise the output is egui's: an app's own `TextEdit` or IME reader writes it.
+/// IME or an interrupt is due. Otherwise the output is egui's: an app's own `TextEdit` or IME reader writes it, and the
+/// engine records that editor (`Engine::host`). An interrupt of the app's editor rides on the output it wrote this
+/// pass, so its context does not change.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (frame_nr, pass_nr) = (ctx.cumulative_frame_nr_for(viewport), ctx.cumulative_pass_nr_for(viewport));
-    let (owner, interrupt, caret, update, published) = with(ctx, viewport, |engine| {
-        if !std::mem::take(&mut engine.ran) {
+    let app_ime = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation, ime.reset_request)));
+    let app_wrote = app_ime.map(|(owner, generation, _)| (owner, generation));
+    let (owner, interrupt, caret, update, published, host) = with(ctx, viewport, |engine| {
+        let ran = std::mem::take(&mut engine.ran);
+        if !ran {
             engine.edits.clear();
         }
-        // The fence has no request the integration can answer: the owner's output asks again.
+        // An owner that neither took its edits nor noted its caret was not shown this pass (a replay notes the caret
+        // again). egui keeps its focus until after this hook, so it loses the IME here: the interrupt goes out in the
+        // pass it vanished, not at the next begin.
+        if let Some(owner) = engine.owner
+            && !ran
+            && engine.caret.is_none_or(|(id, ..)| id != owner)
+        {
+            engine.set_owner(None);
+        }
+        // The app's editor as the last pass recorded it: an interrupt in a pass it wrote nothing names its context.
+        let last_host = engine.host;
+        let kept = engine.host.filter(|host| app_wrote.is_some_and(|(owner, _)| owner == host.owner)).is_some_and(|host| host.composing);
+        engine.host = app_wrote.filter(|_| engine.owner.is_none()).map(|(owner, generation)| HostIme { owner, generation, composing: kept });
+        if let Some(id) = app_ime.filter(|_| engine.owner.is_none()).and_then(|(.., reset)| reset)
+            && !engine.host_resets.contains(&id)
+        {
+            engine.host_resets.push(id);
+        }
+        // The fence has no request the integration can answer: the owner's output asks again, a framework editor's
+        // or the app's own.
         if engine.stale
             && engine.reset.is_none()
-            && let Some(owner) = engine.owner
+            && let Some(owner) = engine.owner.or(engine.host.map(|host| host.owner))
         {
             engine.interrupt.get_or_insert(owner);
         }
         let caret = engine.caret.take();
         let password = caret.filter(|(id, ..)| Some(*id) == engine.owner).map(|(.., password)| password);
         let update = engine.observe(viewport, frame_nr, pass_nr, password);
-        (engine.owner, engine.interrupt.take(), caret, update, engine.published)
+        (engine.owner, engine.interrupt.take(), caret, update, engine.published, last_host)
     });
+    let host_interrupt = interrupt.filter(|old| owner.is_none() && app_wrote.is_some_and(|(id, _)| id == *old));
     let written = if owner.is_none() && interrupt.is_none() {
         None
+    } else if host_interrupt.is_some() {
+        Some((os::interrupt_written(ctx, viewport), None))
     } else {
         os::clear(ctx);
         match (caret, interrupt, update) {
@@ -430,14 +551,15 @@ pub(crate) fn end_pass(ctx: &Context) {
                 Some((os::write(ctx, viewport, out), Some(generation)))
             }
             // The old owner still gets an output in the pass it lost focus, or the OS never interrupts. It names the
-            // context the OS composes in, the last one published.
+            // context the OS composes in: the last one published, or the one the app's editor wrote last.
             (_, Some(old), _) => {
+                let generation = host.filter(|host| host.owner == old).map_or(published.unwrap_or_default(), |host| host.generation);
                 let out = os::Output {
                     owner: old,
                     field: Rect::NOTHING,
                     caret: Rect::NOTHING,
                     interrupt: true,
-                    generation: published.unwrap_or_default(),
+                    generation,
                     password: false,
                     surrounding: IMESurroundingText::Unavailable,
                     cause: ImeChangeCause::Other,

@@ -1,10 +1,10 @@
 //! `StyleCx`: what `style` and the app colour hooks get. Tokens are readable only through it.
 
 use super::key::{EnvKey, Ink};
-use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
+use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackFill, TrackLook};
 use super::paint::{
-    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
-    scroll_bar_look_of,
+    AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, auto_scroll_mark_look, handle_look,
+    marker_look, reset_mark_look, rule_look, scroll_bar_look_of,
 };
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
@@ -198,8 +198,23 @@ impl<'a> StyleCx<'a> {
     /// Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
     /// component's style, such as the dock's sizes outside a style pass.
     pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
-        let env = crate::runtime::env::Env::of_root(ctx);
+        Self::with_root_scoped(ctx, &crate::runtime::env::ThemeScope::new(), f)
+    }
+
+    /// Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
+    pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
+        let env = crate::runtime::env::Env::of_root(ctx).derive_local(|scoped| scope.apply(ctx, scoped));
         f(&StyleCx::of_env(ctx, &env))
+    }
+
+    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+    /// not `enabled`.
+    pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
+        let colors = &self.tokens.color;
+        let accent = if self.contrast() == Contrast::High { colors.accent.text } else { colors.accent.solid };
+        let (ink, off) = (self.color(accent), self.color(colors.text.disabled));
+        let rest = if enabled { ink } else { off };
+        super::look::TextLook::new(craft_theme::TypeRole::Body, Stateful::new(rest).off(States::new(rest, rest, rest, off)))
     }
 
     /// The same context measuring faces in `ui`; the collection hook calls it before it asks for a layout.
@@ -255,7 +270,8 @@ impl<'a> StyleCx<'a> {
         self.values.get::<T>()
     }
 
-    /// The one constructor of `StyleColor`: a semantic token read or a token-group field becomes a style colour here.
+    /// The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
+    /// here. Content paint picks a role through `Draw::role`.
     pub fn color(&self, color: Rgba) -> StyleColor {
         StyleColor(egui_color(color))
     }
@@ -273,9 +289,15 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
+    /// needs: the inverse of [`ink_on`](Self::ink_on).
+    pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
+        self.color(craft_theme::ensure_contrast(Rgba::from(color.0), on, craft_theme::text_contrast_min(self.contrast())))
+    }
+
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
     pub fn focus_look(&self) -> FocusLook {
-        FocusLook::new(egui::Stroke::new(self.tokens.stroke.medium, self.color(self.tokens.color.line.focus).egui()), 0.0)
+        FocusLook::new(egui::Stroke::new(self.tokens.stroke.focus, self.color(self.tokens.color.line.focus).egui()), 0.0)
     }
 
     /// The colour text and icons of `tone` read in.
@@ -328,14 +350,18 @@ impl<'a> StyleCx<'a> {
         ))
     }
 
-    /// The look of a value track: a groove of `size.groove` with the part a value fills over it, and its marks.
+    /// The look of a value track: a groove of `size.groove` with the part a value fills over it, in the scope's
+    /// [`TrackFill`], and its marks.
     pub fn track(&self) -> TrackLook {
         let colors = &self.tokens.color;
-        let groove = self.color(colors.line.control_edge);
-        let muted = self.color(colors.text.muted);
+        let (groove, fill) = match self.env::<TrackFill>() {
+            TrackFill::Muted => (colors.line.control_edge, colors.text.muted),
+            TrackFill::Accent => (colors.line.outline, colors.accent.solid),
+        };
+        let (groove, fill) = (self.color(groove), self.color(fill));
         TrackLook {
             unfilled: Stateful::new(groove),
-            filled: Stateful::new(muted).off(States::new(muted, muted, muted, self.color(colors.text.disabled))),
+            filled: Stateful::new(fill).off(States::new(fill, fill, fill, self.color(colors.text.disabled))),
             edge: Stateful::new(self.color(colors.line.control_edge)),
             edge_width: self.tokens.stroke.thin,
             thickness: self.tokens.size.groove,
@@ -473,6 +499,11 @@ impl<'a> StyleCx<'a> {
     /// `PartBuilder::state_layer` gets it from the paint step; a look built over it reads it here.
     pub fn state_layer(&self) -> Stateful<StyleColor> {
         super::paint::state_layer_look(self.tokens)
+    }
+
+    /// The look of the auto-scroll mark.
+    pub fn auto_scroll_mark(&self) -> AutoScrollMarkLook {
+        auto_scroll_mark_look(self.tokens)
     }
 
     /// The look of the reset mark.
