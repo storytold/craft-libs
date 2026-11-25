@@ -254,6 +254,13 @@ impl Fixture {
         self
     }
 
+    /// The window whose keys go to the app's own egui code in every following frame (`FrameInput::keys_to_app`): no
+    /// component gets them, and they stay in egui's input. `None` gives them back to the key stage.
+    pub fn keys_to_app(&mut self, viewport: Option<egui::ViewportId>) -> &mut Self {
+        self.frames.keys_to_app(viewport);
+        self
+    }
+
     /// The root values of every following frame, whole: the env an app's settings restore.
     pub fn root(&mut self, root: RootEnv) -> &mut Self {
         self.set_root(|held| *held = root)

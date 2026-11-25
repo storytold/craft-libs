@@ -5,6 +5,7 @@ pub(crate) mod edit_menu;
 pub(crate) mod edit_run;
 pub(crate) mod fields;
 pub(crate) mod hex;
+pub(crate) mod keys_to_app;
 mod kit;
 pub(crate) mod linked;
 pub(crate) mod mixed_blank;

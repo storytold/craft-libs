@@ -648,6 +648,17 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         });
         return (removed || trimmed, Vec::new());
     }
+    // The app holds this window's keys for its own egui code (`FrameInput::keys_to_app`): the stage reads none of them,
+    // and every event stays in egui's input where the app reads it.
+    if crate::runtime::frame::keys_to_app(ctx) == Some(viewport) {
+        with(ctx, viewport, |stage| {
+            stage.keyed = false;
+            stage.stirred = false;
+            stage.textless_paste = false;
+            stage.batch = Batch::default();
+        });
+        return (trimmed, Vec::new());
+    }
     let os = crate::runtime::windows::os_of(ctx);
     let record = focus::record(ctx, viewport);
     let keys = record.keys;

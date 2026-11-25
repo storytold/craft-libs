@@ -30,6 +30,8 @@ pub struct Frames {
     commands: CommandInput,
     /// The modifiers the app holds down for the user in every following frame.
     latched: craft_keymap::Mods,
+    /// The window whose keys go to the app's own egui code in every following frame (`FrameInput::keys_to_app`).
+    keys_to_app: Option<egui::ViewportId>,
     tree: Option<AccessTree>,
     ime: Option<fixture::ImeSeen>,
     copied: Vec<String>,
@@ -130,6 +132,7 @@ impl Frames {
             host: None,
             commands: CommandInput::new(),
             latched: craft_keymap::Mods::NONE,
+            keys_to_app: None,
             tree: None,
             ime: None,
             copied: Vec::new(),
@@ -158,7 +161,7 @@ impl Frames {
     }
 
     fn input(&self) -> FrameInput {
-        let input = FrameInput::new(self.root.clone()).commands(self.commands.clone()).latched(self.latched);
+        let input = FrameInput::new(self.root.clone()).commands(self.commands.clone()).latched(self.latched).keys_to_app(self.keys_to_app);
         match &self.host {
             Some(host) => input.host(host.clone()),
             None => input,
@@ -173,6 +176,12 @@ impl Frames {
     /// The modifiers the app holds down for the user in every following frame.
     pub fn latched(&mut self, mods: craft_keymap::Mods) {
         self.latched = mods;
+    }
+
+    /// The window whose keys go to the app's own egui code in every following frame, as an app's
+    /// `FrameInput::keys_to_app` gives it; `None` gives them back to the key stage.
+    pub fn keys_to_app(&mut self, viewport: Option<egui::ViewportId>) {
+        self.keys_to_app = viewport;
     }
 
     /// The command input every following frame is given.
