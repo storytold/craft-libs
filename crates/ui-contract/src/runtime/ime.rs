@@ -497,7 +497,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     let app_wrote = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation)));
     // egui publishes the app's request only in a pass that has an IME output.
     let app_reset = app_wrote.and(os::app_reset(ctx, viewport));
-    let (owner, interrupt, caret, update, published, host) = with(ctx, viewport, |engine| {
+    let (owner, interrupt, caret, update, published, host, app_request) = with(ctx, viewport, |engine| {
         let ran = std::mem::take(&mut engine.ran);
         if !ran {
             engine.edits.clear();
@@ -515,20 +515,15 @@ pub(crate) fn end_pass(ctx: &Context) {
         let last_host = engine.host;
         let kept = engine.host.filter(|host| app_wrote.is_some_and(|(owner, _)| owner == host.owner)).is_some_and(|host| host.composing);
         engine.host = app_wrote.filter(|_| engine.owner.is_none()).map(|(owner, generation)| HostIme { owner, generation, composing: kept });
-        if let Some(id) = app_reset.filter(|_| engine.owner.is_none())
-            && !engine.host_resets.contains(&id)
-        {
-            engine.host_resets.push(id);
-            // Completions arrive in request order: the latest request's completion ends the interrupted composition,
-            // whichever request the fence waited for.
-            if engine.stale {
-                engine.reset = Some(id);
-            }
-        }
+        // The app's request while no framework editor owns the IME: every output this pass publishes carries it, the
+        // app's own or the engine's interrupt, and a new one becomes the fence's request below.
+        let app_request = app_reset.filter(|_| engine.owner.is_none());
+        let fresh = app_request.filter(|id| !engine.host_resets.contains(id));
         // The fence has no request the integration can answer: the owner's output asks again, a framework editor's
         // or the app's own.
         if engine.stale
             && engine.reset.is_none()
+            && fresh.is_none()
             && let Some(owner) = engine.owner.or(engine.host.map(|host| host.owner))
         {
             engine.interrupt.get_or_insert(owner);
@@ -536,13 +531,13 @@ pub(crate) fn end_pass(ctx: &Context) {
         let caret = engine.caret.take();
         let password = caret.filter(|(id, ..)| Some(*id) == engine.owner).map(|(.., password)| password);
         let update = engine.observe(viewport, frame_nr, pass_nr, password);
-        (engine.owner, engine.interrupt.take(), caret, update, engine.published, last_host)
+        (engine.owner, engine.interrupt.take(), caret, update, engine.published, last_host, app_request)
     });
     let host_interrupt = interrupt.filter(|old| owner.is_none() && app_wrote.is_some_and(|(id, _)| id == *old));
     let written = if owner.is_none() && interrupt.is_none() {
         None
     } else if host_interrupt.is_some() {
-        Some((os::interrupt_written(ctx, viewport), None))
+        Some((os::interrupt_written(ctx, viewport, app_request), None))
     } else {
         os::clear(ctx);
         match (caret, interrupt, update) {
@@ -553,6 +548,7 @@ pub(crate) fn end_pass(ctx: &Context) {
                     field,
                     caret,
                     interrupt: interrupt.is_some(),
+                    app_reset: app_request,
                     generation,
                     password,
                     surrounding: update.surrounding_text,
@@ -569,6 +565,7 @@ pub(crate) fn end_pass(ctx: &Context) {
                     field: Rect::NOTHING,
                     caret: Rect::NOTHING,
                     interrupt: true,
+                    app_reset: app_request,
                     generation,
                     password: false,
                     surrounding: IMESurroundingText::Unavailable,
@@ -579,14 +576,27 @@ pub(crate) fn end_pass(ctx: &Context) {
             _ => None,
         }
     };
-    if let Some((reset, generation)) = written {
-        with(ctx, viewport, |engine| {
+    // The app's request counts as its own only when the published output carries it: egui's own output when the
+    // engine wrote none, else the engine's.
+    let carried = app_request.filter(|id| written.as_ref().is_none_or(|(reset, _)| *reset == Some(*id)));
+    with(ctx, viewport, |engine| {
+        if let Some((reset, generation)) = written {
             if generation.is_some() {
                 engine.published = generation;
             }
             if interrupt.is_some() {
                 engine.reset = reset;
             }
-        });
-    }
+        }
+        if let Some(id) = carried
+            && !engine.host_resets.contains(&id)
+        {
+            engine.host_resets.push(id);
+            // Completions arrive in request order: the latest request's completion ends the interrupted composition,
+            // whichever request the fence waited for.
+            if engine.stale {
+                engine.reset = Some(id);
+            }
+        }
+    });
 }
