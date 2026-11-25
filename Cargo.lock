@@ -2563,6 +2563,7 @@ dependencies = [
  "craft-markdown",
  "craft-math",
  "craft-mime",
+ "craft-svg",
  "craft-wordmodel",
  "proptest",
 ]

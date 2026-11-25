@@ -15,6 +15,18 @@ craft-wordmodel `Document`.
   special characters and ligatures. It is not a TeX engine: macros are not expanded. Unknown
   commands are dropped with their braced arguments kept as text; layout commands are dropped
   with their arguments. Bytes that name no encoding are decoded by `craft_mime::detect`.
+- **Pictures** (`import_with`, `parse_with`): `\includegraphics` pictures load through the caller's
+  `ImageLoader` (the shape `craft-html` takes), so the crate itself reads no files. A name without
+  an extension is tried with `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp` and `.webp`, and under each
+  `\graphicspath` folder; `width`, `height`, `scale` and `keepaspectratio` size the picture, with
+  `\textwidth` taken as the column it is shown in. Without a loader, or when a file is missing or
+  isn't a picture this crate can decode (PDF and EPS figures), the picture stays the italic text
+  `[Picture: file]`. Loader calls per document are bounded.
+- **SVG pictures** (the `svg` feature): `\includegraphics` and `\includesvg` also load SVG and SVGZ
+  files (`\includesvg` tries `.svg` first). Each is drawn through `craft-svg`'s bounded renderer
+  to a PNG at 4 pixels per point of the size it is shown at (longest side at most 4096 px), so it
+  stays sharp when zoomed or printed. Text in an SVG is drawn only when it is already outlines (no
+  fonts are loaded); an SVG that doesn't parse or draw within the limits stays placeholder text.
 
 ```rust
 let doc = craft_latex::import(br"\section*{Intro} Some \textbf{bold} text and $x^2$.");

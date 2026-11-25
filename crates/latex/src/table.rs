@@ -1,3 +1,4 @@
+use super::images::Images;
 use super::lex::{Tok, text_symbol};
 use super::limits::MAX_NEST;
 use super::parser::Parser;
@@ -59,7 +60,7 @@ pub(super) fn source_text(toks: &[Tok]) -> String {
 }
 
 /// A `tabular` body as a table.
-pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
+pub(super) fn table<'a>(toks: &'a [Tok], spec: &str, depth: usize, images: Option<&'a Images<'a>>) -> FTable {
     let (spec_cols, widths) = spec_widths(spec);
     let mut has_rules = spec.contains('|');
     // Split rows at `\\` and cells at `&`, outside braces and nested environments.
@@ -113,6 +114,7 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
             // rescans its content, so only MAX_NEST of them are unwrapped (a cell nests one or
             // two); further ones stay in the content.
             let mut sub = Parser::new(content, depth + 1);
+            sub.images = images;
             let mut wrappers = 0usize;
             loop {
                 sub.skip_spaces();
@@ -124,6 +126,7 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
                         let _ = sub.arg_raw();
                         content = sub.arg_tokens();
                         sub = Parser::new(content, depth + 1);
+                        sub.images = images;
                     }
                     Some(Tok::Cmd(c)) if (c == "multirow" || c == "multirow*") && wrappers < MAX_NEST => {
                         wrappers += 1;
@@ -135,6 +138,7 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
                         let _ = sub.opt_arg();
                         content = sub.arg_tokens();
                         sub = Parser::new(content, depth + 1);
+                        sub.images = images;
                     }
                     Some(Tok::Cmd(c)) if c == "cellcolor" => {
                         sub.pos += 1;
@@ -149,7 +153,12 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
                 cell.covered = true;
             }
             if !cell.covered && depth < MAX_NEST {
+                // Each cell is a group: a `\graphicspath` in it ends with it.
+                let saved_paths = images.map(Images::saved_paths);
                 sub.run(None);
+                if let (Some(i), Some(paths)) = (images, saved_paths) {
+                    i.restore_paths(paths);
+                }
                 let (blocks, _) = sub.finish();
                 cell.blocks = blocks;
             }

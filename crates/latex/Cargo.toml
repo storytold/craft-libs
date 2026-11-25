@@ -16,6 +16,12 @@ craft-math = { workspace = true }
 # Text that names no encoding: BOM, UTF-16, UTF-8, else the legacy encoding it looks like.
 craft-mime = { workspace = true, features = ["detect"] }
 craft-wordmodel = { workspace = true }
+# SVG pictures, drawn to PNG when loaded (the `svg` feature).
+craft-svg = { workspace = true, optional = true, features = ["tree-render"] }
+
+[features]
+# `\includegraphics` and `\includesvg` also load SVG and SVGZ pictures, drawn at print resolution.
+svg = ["dep:craft-svg"]
 
 [dev-dependencies]
 craft-markdown = { workspace = true }
