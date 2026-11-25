@@ -115,6 +115,19 @@ fn a_manifest_full_of_nulls_is_refused_within_bounds() {
 }
 
 #[test]
+fn unreferenced_zip_members_count_toward_the_package_limit() {
+    let bytes = package(&[Member { name: "notes", content_type: "text/plain", bytes: b"notes" }]);
+    // A tiny package with a ZIP64 end record can hold the same three members.
+    let mut zip64 = zip::ZipWriter::new_append(Cursor::new(bytes.clone())).unwrap();
+    zip64.set_raw_zip64_extensible_data_sector(Box::new([]));
+    for bytes in [bytes, zip64.finish().unwrap().into_inner()] {
+        let mut package = Package::open_with_entry_limit(&bytes, 3).unwrap();
+        assert_eq!(package.read_max("notes", 5).unwrap(), b"notes");
+        assert!(matches!(Package::open_with_entry_limit(&bytes, 2), Err(FormatError::Damaged(message)) if message.contains("entries")));
+    }
+}
+
+#[test]
 fn what_is_not_a_package_is_not_ours() {
     for bytes in [&b""[..], b"PK\x03\x04garbage", &[0u8; 1000]] {
         assert!(matches!(Package::open_manifest::<Deck>(bytes, MAX_MANIFEST), Err(FormatError::NotOurs(_))));
