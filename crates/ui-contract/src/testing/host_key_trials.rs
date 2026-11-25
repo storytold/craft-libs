@@ -707,6 +707,28 @@ fn an_open_app_popup_keeps_tab() {
     assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "the framework moved no focus");
 }
 
+/// The scan that makes the app's egui widgets Tab stops classifies each focus candidate of a pass once, however many
+/// registrations take candidates in between: the pass's lookups grow with its widgets, one per app widget.
+#[trial]
+fn each_focus_candidate_of_a_pass_is_classified_once() {
+    let lookups = |n: usize| {
+        let mut show = move |ui: &mut Ui| {
+            for at in 0..n {
+                fixture::host_button(ui, Id::new(("app", at)), Rect::from_min_size(Pos2::new(10.0, 30.0 * at as f32), egui::vec2(60.0, 20.0)));
+                widget(ui, Id::new(("framework", at)));
+                register_stop(ui.ctx(), Stop::new(Id::new(("framework", at)), KeyUse::of(Input::Pointer)));
+            }
+        };
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show);
+        crate::runtime::pointer::made_lookups(&frames.ctx, ViewportId::ROOT) as usize
+    };
+    // The framework widget is the root of the stop registered after it, so only the app's widgets need a lookup.
+    let (small, large) = (lookups(8), lookups(16));
+    assert!(small >= 8, "every app widget is looked up: {small}");
+    assert_eq!(large - small, 8, "eight more app widgets cost one lookup each: {small} then {large}");
+}
+
 /// A Tab in a window with no stop and nothing focused moves no focus, so it stays in egui's input for the app's own
 /// binding (EffectCraft's Tab for the timeline's mini flowchart), from the window's first pass on. Once the app draws a
 /// focusable widget, that widget is a stop and the Tab is the framework's move to it.

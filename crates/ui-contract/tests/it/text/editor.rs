@@ -1029,3 +1029,30 @@ fn an_alt_chord_bound_only_out_of_scope_leaves_its_text_typed() {
     let fired: Vec<String> = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
     assert!(fired.is_empty(), "nothing ran: {fired:?}");
 }
+
+/// A disabled editor registers no stop, and its focus widget is still the component's own: it never becomes a Tab stop
+/// of the app's own widgets. With every control in Tab order, Tab and Shift+Tab land on the button beside it each time.
+#[trial]
+fn tab_never_focuses_a_disabled_editor_s_widget() {
+    let log = RefCell::new(Vec::new());
+    let seen = RefCell::new(Seen::default());
+    let (editor, button) = (Cell::new(Id::NULL), Cell::new(Id::NULL));
+    let mut show = |ui: &mut egui::Ui| {
+        editor.set(Probe::new(&log, true).label("Source").enabled(false).id_salt("code").show_at(ui, AT).id);
+        button.set(Button::new(&seen).id_salt("next").show_at(ui, NEXT).id);
+    };
+    let mut frames = Frames::new();
+    frames.root({
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.tab_all_controls = true;
+        root
+    });
+    frames.idle(3, &mut show);
+    for shift in [false, false, true, true] {
+        let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        frames.frame(vec![key_press(Key::Tab, mods), key_release(Key::Tab, mods)], &mut show);
+        frames.frame(Vec::new(), &mut show);
+        let focused = craft_ui::testing::focus::egui_focused(&frames.ctx);
+        assert_eq!(focused, Some(button.get()), "Tab (shift {shift}) lands on the button, never on the disabled editor {:?}", editor.get());
+    }
+}

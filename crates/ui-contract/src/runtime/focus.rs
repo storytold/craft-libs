@@ -149,6 +149,8 @@ pub(crate) struct RowGroups {
 pub(crate) struct State {
     pub(crate) stops: Vec<StopRec>,
     stop_ids: IdSet,
+    /// The egui roots of `stops`.
+    stop_roots: IdSet,
     pub(crate) last_stops: Vec<StopRec>,
     pub(crate) scopes: FastMap<Id, ScopeRec>,
     pub(crate) last_scopes: FastMap<Id, ScopeRec>,
@@ -241,6 +243,7 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
         if stop.host
             && let Some(rec) = state.stops.iter_mut().find(|rec| rec.stop.host && rec.stop.id == stop.id)
         {
+            state.stop_roots.insert(stop.root);
             rec.stop = stop;
             return Vec::new();
         }
@@ -255,6 +258,7 @@ impl State {
     fn push_stop(&mut self, stop: Stop) -> Vec<Act> {
         let scope = self.open.last().map(|(id, _)| *id);
         self.stop_ids.insert(stop.id);
+        self.stop_roots.insert(stop.root);
         let rec = StopRec { stop, scope, group_position: false };
         let acts = if self.awaited == Some(rec.stop.key()) {
             self.awaited = None;
@@ -290,7 +294,7 @@ fn take_app_widgets(ctx: &Context, except: Option<Id>) {
         state.candidates_seen = seen + fresh.len();
         let mut acts = Vec::new();
         for candidate in app {
-            if state.stops.iter().any(|rec| rec.stop.root == candidate.id) {
+            if state.stop_roots.contains(&candidate.id) {
                 continue;
             }
             let stop = Stop::new(candidate.id, KeyUse::of(craft_behavior::Input::Pointer)).host();
@@ -488,6 +492,7 @@ pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
         }
         for rec in placed.stops {
             state.stop_ids.insert(rec.stop.id);
+            state.stop_roots.insert(rec.stop.root);
             state.stops.push(rec);
         }
         for group in placed.groups {
