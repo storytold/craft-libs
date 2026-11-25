@@ -180,11 +180,13 @@ impl WheelNavigation {
         if !scroll_finite || input.scroll == Vec2::ZERO {
             return None;
         }
-        // Shift alone on a wheel that reports notches pages the view (production's #12029). Cmd/Ctrl keeps the
-        // sideways scroll below; so does macOS, where the system already sends Shift + wheel sideways, and so does
-        // any scroll the device reports across (a trackpad's points, a pre-folded wheel), which the reference
-        // application was not measured with.
-        if input.mods.shift
+        // Shift alone on a wheel that reports notches pages the view in the Photoshop (Scroll) scheme (production's
+        // #12029): the Zoom scheme took its ladder step above, and the Acrobat scheme keeps Shift sideways below, as
+        // next pinned it. Cmd/Ctrl keeps the sideways scroll below; so does macOS, where the system already sends
+        // Shift + wheel sideways, and so does any scroll the device reports across (a trackpad's points, a
+        // pre-folded wheel), which the reference application was not measured with.
+        if matches!(options.wheel, WheelScheme::Scroll)
+            && input.mods.shift
             && !(input.mods.cmd || input.mods.ctrl || input.mods.alt)
             && input.unit == WheelUnit::Line
             && !input.os.is_mac()
