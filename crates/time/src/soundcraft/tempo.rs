@@ -207,7 +207,9 @@ impl TempoMap {
         if !valid_meter(numerator, denominator) {
             return Err(TimeError::Meter(numerator, denominator));
         }
-        let tick = if tick <= 0 { 0 } else { self.bar_start_tick(self.bar_beat_at_tick(tick).bar) };
+        // Snap in physical bar space: a displayed bar number is lossy where `first_bar`
+        // saturates (two physical bars can show one label and the inverse maps to the first).
+        let tick = if tick <= 0 { 0 } else { self.physical_bar_start_tick(self.physical_bar_at_tick(tick)) };
         let later = self.take_meters_after(tick);
         self.put_meter(MeterEvent { tick, numerator, denominator });
         self.restore_meters_at_bars(later);
@@ -370,6 +372,32 @@ impl TempoMap {
             }
         }
         cur_tick
+    }
+
+    /// Physical bar containing `tick`, counting the session's first bar as 1 and ignoring
+    /// `first_bar` renumbering: exact under extreme offsets where the displayed number saturates.
+    fn physical_bar_at_tick(&self, tick: i64) -> i64 {
+        let first = self.meter_at_tick(0);
+        if tick < 0 {
+            let tpb_u = first.ticks_per_bar().unsigned_abs();
+            let abs = tick.unsigned_abs();
+            let bars_back_u = abs / tpb_u + u64::from(!abs.is_multiple_of(tpb_u));
+            return 1i64.saturating_sub(i64::try_from(bars_back_u).unwrap_or(i64::MAX));
+        }
+        let mut bar = 1i64;
+        let mut seg_tick = 0i64;
+        for (i, m) in self.meters.iter().enumerate() {
+            let tpb = m.ticks_per_bar();
+            if let Some(n) = self.meters.get(i + 1)
+                && tick >= n.tick
+            {
+                bar = bar.saturating_add(ceil_div(n.tick.saturating_sub(seg_tick), tpb));
+                seg_tick = n.tick;
+                continue;
+            }
+            return bar.saturating_add((tick - seg_tick) / tpb);
+        }
+        bar
     }
 
     /// Bar|beat|tick at `tick`.
@@ -569,6 +597,17 @@ mod tests {
         assert_eq!(m.tick_at_bar_beat(BarBeat { bar: i64::MIN, beat: 1, tick: 0 }), 0);
         m.set_first_bar(i64::MAX);
         assert_eq!(m.bar_beat_at_tick(0).bar, i64::MAX);
+        // Physical bars 1 and 2 both display as i64::MAX (saturated). Editing the second bar's
+        // meter must still land on that bar, not replace the first bar's through the label.
+        assert_eq!(m.bar_beat_at_tick(TICKS_PER_QUARTER * 4).bar, i64::MAX);
+        m.set_meter(TICKS_PER_QUARTER * 4, 3, 4).unwrap();
+        assert_eq!(
+            m.meters(),
+            [MeterEvent { tick: 0, numerator: 4, denominator: 4 }, MeterEvent { tick: TICKS_PER_QUARTER * 4, numerator: 3, denominator: 4 }],
+            "the original meter stays put and the new meter lands on the requested bar"
+        );
+        assert_eq!(m.meter_at_tick(0).numerator, 4);
+        assert_eq!(m.meter_at_tick(TICKS_PER_QUARTER * 4).numerator, 3);
     }
 
     #[test]
