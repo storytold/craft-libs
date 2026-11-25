@@ -27,6 +27,6 @@ pgp = { version = "=0.21.0", default-features = false, features = ["wasm"] }
 proptest = { workspace = true }
 # Keys and signatures made in the tests, from a seed: the random numbers rPGP 0.21 takes.
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-sha1 = { version = "0.10", default-features = false }
+sha1 = { version = "0.11", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 rsa = { version = "0.9", default-features = false }

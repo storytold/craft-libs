@@ -32,7 +32,7 @@ sys-locale = { version = "0.3", features = ["js"] }
 
 # The regional format (Region::system); safe registry reads, MIT OR Apache-2.0.
 [target.'cfg(windows)'.dependencies]
-windows-registry = "0.6"
+windows-registry = "0.100"
 
 # The current locale (Region::system); already in the apps' Cargo.lock through eframe.
 [target.'cfg(target_vendor = "apple")'.dependencies]

@@ -13,7 +13,7 @@ repository.workspace = true
 [dependencies]
 # Calendar checks only (AGENTS.md: all date logic goes through chrono).
 chrono.workspace = true
-getrandom = "0.2.15"
+getrandom = "0.4.3"
 interprocess = "=2.4.4"
 serde.workspace = true
 serde_json.workspace = true
