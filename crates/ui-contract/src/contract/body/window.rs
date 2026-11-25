@@ -795,11 +795,16 @@ impl BodyHooks<'_> {
         };
         let exclusive = |hit: WindowHit| os.is_some().then_some(hit);
         let moves_window = matches!(&props.mount, Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } if overlay.moves_window);
+        // A full-window container in an OS window of its own: its fallback layer covers the main window, so neither
+        // moves nor resizes, but the window is one the user moves by its title row and sizes by its edges, as any
+        // window. Without them a window the app frames had no band and no grips (photocraft#16905).
+        let own_full_window = os.is_some() && matches!(&props.mount, Mount::Viewport { fallback, .. } if fallback.is_full_window());
         // A layer moves when its overlay says so; other mounts follow the header's band.
         let movable = match &props.mount {
             // A band that moves the window below follows the rule of the window's own band (a title bar's); where the
             // platform answers the hit test, the sink reads it from the exclusive list.
             _ if moves_window => WindowParts::of(&ctx, pass::current_viewport(&ctx)).band,
+            _ if own_full_window => stands.band,
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.movable && stands.band,
             _ => props.header.is_some_and(|header| header.band == crate::contract::DragBand::Move) && stands.band,
         };
@@ -826,6 +831,7 @@ impl BodyHooks<'_> {
             }
         }
         let edges = match &props.mount {
+            _ if own_full_window => ResizeEdges::ALL,
             Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.resize.edges,
             Mount::Window { resize } => resize.edges,
             _ => ResizeEdges::NONE,
