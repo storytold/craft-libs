@@ -4131,6 +4131,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
 
 - `craft_ui::runtime::focus::FocusMove`: `pub enum FocusMove { Keys, Other }`. What moved the key focus.
 - `craft_ui::runtime::focus::FocusShape`: `pub enum FocusShape { Rect, Circle, Polygon(Vec<egui::Pos2>) }`. The shape the focus ring takes around a part.
+- `craft_ui::runtime::focus::focus_came_with_open`: `pub fn focus_came_with_open(ctx: &Context) -> bool`. Whether the focused stop took the focus when its scope opened (a menu's first row as the menu showed) and has kept
 - `craft_ui::runtime::focus::has`: `pub fn has(ctx: &Context, id: Id) -> bool`. Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
 - `craft_ui::runtime::focus::host_canvas`: `pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse)`. Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: its focus stop
 - `craft_ui::runtime::focus::is_focused`: `pub fn is_focused(ctx: &Context, id: Id) -> bool`. Whether the focus stop is the component `id`: the focused member or item of its arena, or a root that

@@ -449,6 +449,12 @@ pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
     })
 }
 
+/// Whether a popup or a modal of the running viewport was shown last frame: the layers whose rank takes keys, which the
+/// window of a dock is not.
+pub(crate) fn popup_or_modal_open(ctx: &Context) -> bool {
+    with_pass(ctx, |pass| pass.last.iter().any(|entry| !entry.exiting && entry.rank.takes_keys()))
+}
+
 /// The layer that receives Cancel: the newest member of the topmost family that takes keys.
 pub fn top(ctx: &Context) -> Option<Id> {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
