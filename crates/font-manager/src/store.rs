@@ -12,7 +12,7 @@ use std::sync::{Condvar, Mutex};
 
 use craft_font_catalog::Catalog;
 use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
-pub use craft_font_store::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
+pub use craft_font_store::{Conflict, LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
 
 use crate::index::{Family, Index};
 
@@ -51,6 +51,15 @@ impl std::fmt::Display for StoreError {
 }
 
 impl std::error::Error for StoreError {}
+
+/// What [`Installer::make_available`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MadeAvailable {
+    Done,
+    /// Refused, changing nothing: fonts on the system already have the family's PostScript
+    /// names, or sit where its copies would go.
+    Refused(Vec<Conflict>),
+}
 
 fn err(e: impl std::fmt::Display) -> StoreError {
     StoreError(e.to_string())
@@ -153,9 +162,64 @@ pub trait Installer: Send + Sync {
     fn legal_text(&self, _index: &Index, _family: &Family, _which: LegalText) -> Result<Option<String>, StoreError> {
         Err(StoreError(NO_FOLDER.into()))
     }
+
+    /// Whether store families can be made available to all apps (copied into the OS user font
+    /// folder). The interface offers the action only when this is true.
+    fn available_to_all_supported(&self) -> bool {
+        false
+    }
+
+    /// Why store families can't be made available to all apps here, in English; `None` when they
+    /// can.
+    fn available_to_all_unsupported(&self) -> Option<String> {
+        (!self.available_to_all_supported()).then(|| NOT_HERE.to_owned())
+    }
+
+    /// Whether the user keeps store fonts in Craft apps only (a setting of the font store, off by
+    /// default). While it is off, the interface makes every family it installs available to all
+    /// apps.
+    fn craft_apps_only(&self) -> bool {
+        false
+    }
+
+    /// Sets [`Installer::craft_apps_only`], as the user's own action, then withdraws every store
+    /// family's copies from the OS user font folder (on) or copies every installed family there
+    /// (off). Returns the families a conflict refused, with the conflicts. It blocks: call it on
+    /// a worker thread.
+    fn set_craft_apps_only(&self, _on: bool) -> Result<Vec<(String, Vec<Conflict>)>, StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
+    }
+
+    /// Whether the store family `family` (its name, and the files the catalog found for it in
+    /// the font store) is available to all apps. Cheap enough to call for every row.
+    fn is_available_to_all(&self, _family: &str, _files: &[PathBuf]) -> bool {
+        false
+    }
+
+    /// The files of an available store family not available to all apps yet (styles an agent
+    /// installed, say), by their names in the store, for the interface to offer copying them.
+    fn not_yet_available(&self, _family: &str, _files: &[PathBuf]) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Makes a store family available to all apps, as the user's own action; calling it again
+    /// copies the styles [`Installer::not_yet_available`] lists. A font on the system with one of
+    /// its PostScript names refuses it ([`MadeAvailable::Refused`]). It blocks (hashing, copying,
+    /// a catalog rescan): call it on a worker thread.
+    fn make_available(&self, _family: &str, _files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
+
+    /// Takes a store family's copies out of the OS user font folder, as the user's own action.
+    /// Returns the copies left in place because they changed since. It blocks: call it on a
+    /// worker thread.
+    fn withdraw(&self, _family: &str, _files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        Err(StoreError(NOT_HERE.into()))
+    }
 }
 
 const NO_FOLDER: &str = "there is no folder for the font store";
+const NOT_HERE: &str = "fonts can't be made available to all apps here";
 
 /// craft-font-store's store, in the user's font store folder.
 pub struct SuiteStore {
@@ -187,17 +251,21 @@ impl SuiteStore {
         self.store.client()
     }
 
-    /// The store's source and name for the family holding `files`, which can differ from the
-    /// name in the fonts themselves.
-    fn installed_name(&self, request: &RemoveRequest) -> Option<(String, String)> {
+    /// The store's source and name for the family `family` holding `files`, which can differ
+    /// from the name in the fonts themselves.
+    fn installed_name(&self, family: &str, files: &[PathBuf]) -> Option<(String, String)> {
         let dir = self.store.dir();
         let installed = self.store.installed();
-        let lower = request.family.to_lowercase();
+        let lower = family.to_lowercase();
         installed
             .iter()
-            .find(|f| request.files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
+            .find(|f| files.iter().any(|path| path.starts_with(dir.join(&f.dir))))
             .or_else(|| installed.iter().find(|f| f.family.to_lowercase() == lower))
             .map(|f| (f.source.clone(), f.family.clone()))
+    }
+
+    fn found(&self, family: &str, files: &[PathBuf]) -> Result<(String, String), StoreError> {
+        self.installed_name(family, files).ok_or_else(|| err(craft_font_store::Error::NotInstalled(family.to_owned())))
     }
 }
 
@@ -222,7 +290,7 @@ impl Installer for SuiteStore {
     }
 
     fn remove(&self, request: &RemoveRequest) -> Result<(), StoreError> {
-        let (source, name) = self.installed_name(request).ok_or_else(|| err(craft_font_store::Error::NotInstalled(request.family.clone())))?;
+        let (source, name) = self.found(&request.family, &request.files)?;
         if request.whole {
             return self.store.remove_family(&source, &name).map_err(err);
         }
@@ -313,6 +381,58 @@ impl Installer for SuiteStore {
     fn legal_text(&self, index: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
         self.store.legal_text(index, family, which, &Cancel::new()).map_err(err)
     }
+
+    fn available_to_all_supported(&self) -> bool {
+        self.store.available_to_all_supported()
+    }
+
+    fn available_to_all_unsupported(&self) -> Option<String> {
+        self.store.available_to_all_unsupported().map(str::to_owned)
+    }
+
+    fn craft_apps_only(&self) -> bool {
+        self.store.craft_apps_only()
+    }
+
+    fn set_craft_apps_only(&self, on: bool) -> Result<Vec<(String, Vec<Conflict>)>, StoreError> {
+        self.store.set_craft_apps_only(on).map_err(err)?;
+        let mut refused = Vec::new();
+        for f in self.store.installed() {
+            if on {
+                self.store.withdraw(&f.source, &f.family).map_err(err)?;
+                continue;
+            }
+            match self.store.make_available(&f.source, &f.family) {
+                Ok(_) => {}
+                Err(craft_font_store::Error::Conflict(conflicts)) => refused.push((f.family, conflicts)),
+                Err(e) => return Err(err(e)),
+            }
+        }
+        Ok(refused)
+    }
+
+    fn is_available_to_all(&self, family: &str, files: &[PathBuf]) -> bool {
+        self.store.available_family_holding(family, files).is_some()
+    }
+
+    fn not_yet_available(&self, family: &str, files: &[PathBuf]) -> Vec<String> {
+        self.installed_name(family, files).map(|(source, name)| self.store.pending_files(&source, &name)).unwrap_or_default()
+    }
+
+    fn make_available(&self, family: &str, files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {
+        let (source, name) = self.found(family, files)?;
+        match self.store.make_available(&source, &name) {
+            Ok(_) => Ok(MadeAvailable::Done),
+            Err(craft_font_store::Error::Conflict(conflicts)) => Ok(MadeAvailable::Refused(conflicts)),
+            Err(e) => Err(err(e)),
+        }
+    }
+
+    fn withdraw(&self, family: &str, files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        // A family an unsupported build removed keeps its ledger entry and copies.
+        let (source, name) = self.found(family, files).or_else(|e| self.store.available_family_holding(family, files).ok_or(e))?;
+        self.store.withdraw(&source, &name).map_err(err)
+    }
 }
 
 /// The store when the system names no folder for it (no home folder): nothing installs.
@@ -352,6 +472,8 @@ pub enum Call {
     InstallFile(String, String),
     Remove(String),
     Download(String),
+    MakeAvailable(String),
+    Withdraw(String),
 }
 
 /// A font store without a network: "downloads" come from a table of file bytes by index path,
@@ -377,6 +499,11 @@ pub struct FakeStore {
     changed: Mutex<Vec<String>>,
     /// Downloads stop halfway while this is true.
     held: (Mutex<bool>, Condvar),
+    /// Families made available to all apps, by name.
+    available: Mutex<Vec<String>>,
+    craft_apps_only: AtomicBool,
+    /// What the next [`Installer::make_available`] refuses with.
+    refusal: Mutex<Option<Vec<Conflict>>>,
 }
 
 impl FakeStore {
@@ -396,6 +523,9 @@ impl FakeStore {
             fetched: Mutex::new(Vec::new()),
             changed: Mutex::new(Vec::new()),
             held: (Mutex::new(false), Condvar::new()),
+            available: Mutex::new(Vec::new()),
+            craft_apps_only: AtomicBool::new(false),
+            refusal: Mutex::new(None),
         }
     }
 
@@ -428,6 +558,13 @@ impl FakeStore {
     pub fn fail_next(&self, error: &str) {
         if let Ok(mut failure) = self.failure.lock() {
             *failure = Some(error.to_owned());
+        }
+    }
+
+    /// The next [`Installer::make_available`] is refused for `conflicts`.
+    pub fn refuse_next(&self, conflicts: Vec<Conflict>) {
+        if let Ok(mut refusal) = self.refusal.lock() {
+            *refusal = Some(conflicts);
         }
     }
 
@@ -532,6 +669,9 @@ impl Installer for FakeStore {
         self.record(Call::Remove(request.family.clone()));
         if let Some(outside) = request.files.iter().find(|f| !self.in_store(f)) {
             return Err(StoreError(format!("{} isn't in the font store", outside.display())));
+        }
+        if request.whole {
+            self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(&request.family));
         }
         for file in &request.files {
             std::fs::remove_file(file).map_err(err)?;
@@ -642,5 +782,51 @@ impl Installer for FakeStore {
         }
         let bytes = self.files.get(path).ok_or_else(|| StoreError(format!("{path} isn't available")))?;
         Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
+    }
+
+    fn available_to_all_supported(&self) -> bool {
+        true
+    }
+
+    fn is_available_to_all(&self, family: &str, _files: &[PathBuf]) -> bool {
+        self.available.lock().is_ok_and(|a| a.iter().any(|f| f.eq_ignore_ascii_case(family)))
+    }
+
+    fn craft_apps_only(&self) -> bool {
+        self.craft_apps_only.load(Ordering::SeqCst)
+    }
+
+    fn set_craft_apps_only(&self, on: bool) -> Result<Vec<(String, Vec<Conflict>)>, StoreError> {
+        self.craft_apps_only.store(on, Ordering::SeqCst);
+        if on {
+            self.available.lock().map_err(err)?.clear();
+            return Ok(Vec::new());
+        }
+        let mut refused = Vec::new();
+        for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+            let family = entry.file_name().to_string_lossy().into_owned();
+            if let MadeAvailable::Refused(conflicts) = self.make_available(&family, &[])? {
+                refused.push((family, conflicts));
+            }
+        }
+        Ok(refused)
+    }
+
+    fn make_available(&self, family: &str, _files: &[PathBuf]) -> Result<MadeAvailable, StoreError> {
+        self.record(Call::MakeAvailable(family.to_owned()));
+        if let Some(conflicts) = self.refusal.lock().map_err(err)?.take() {
+            return Ok(MadeAvailable::Refused(conflicts));
+        }
+        let mut available = self.available.lock().map_err(err)?;
+        if !available.iter().any(|f| f.eq_ignore_ascii_case(family)) {
+            available.push(family.to_owned());
+        }
+        Ok(MadeAvailable::Done)
+    }
+
+    fn withdraw(&self, family: &str, _files: &[PathBuf]) -> Result<Vec<PathBuf>, StoreError> {
+        self.record(Call::Withdraw(family.to_owned()));
+        self.available.lock().map_err(err)?.retain(|f| !f.eq_ignore_ascii_case(family));
+        Ok(Vec::new())
     }
 }

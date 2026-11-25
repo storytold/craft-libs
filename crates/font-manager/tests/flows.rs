@@ -11,7 +11,7 @@ use std::sync::Arc;
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::index::Index;
 use craft_font_manager::remote::{Fetch, Previews};
-use craft_font_manager::store::{Call, FakeStore, Installer};
+use craft_font_manager::store::{Call, Conflict, FakeStore, Installer};
 use craft_font_manager::{Catalog, FontEnv, Source};
 use craft_font_manager::{FontsPanel, Look, Options, Palette, Runner, Settings, Tab, install_interface_fonts};
 use craft_font_store::{Cancel, FetchError};
@@ -186,7 +186,7 @@ fn install_a_family_then_remove_it_from_its_card() {
     assert_eq!(h.state().details_family().as_deref(), Some("Hack"));
     click(&mut h, "Install all");
     click(&mut h, "Download");
-    assert_eq!(store.calls(), [Call::Install("Hack".into())]);
+    assert_eq!(store.calls(), [Call::Install("Hack".into()), Call::MakeAvailable("Hack".into())]);
     assert!(h.state().downloads_allowed());
     let hack = h.state().installed().iter().find(|f| f.name == "Hack").cloned().expect("Hack is listed");
     assert_eq!(hack.source, Source::Store);
@@ -207,12 +207,45 @@ fn install_and_remove_one_style() {
     allow(&mut h);
     click(&mut h, "Hack");
     click(&mut h, "Install Regular");
-    assert_eq!(store.calls(), [Call::InstallFile("Hack".into(), HACK.into())]);
+    assert_eq!(store.calls(), [Call::InstallFile("Hack".into(), HACK.into()), Call::MakeAvailable("Hack".into())]);
     assert!(has_installed(&h, "Hack"));
 
     click(&mut h, "Remove Regular");
     assert_eq!(store.calls().last(), Some(&Call::Remove("Hack".into())));
     assert!(!has_installed(&h, "Hack"));
+}
+
+/// Clicks "Keep fonts in Craft apps only", at the end of the sidebar.
+fn craft_apps_only_switch(h: &mut Harness<'_, FontsPanel>) {
+    h.get_by_role_and_label(Role::CheckBox, "Keep fonts in Craft apps only").scroll_to_me();
+    settle(h);
+    click_role(h, Role::CheckBox, "Keep fonts in Craft apps only");
+}
+
+#[test]
+fn installs_are_copied_to_the_system_fonts_folder_unless_kept_in_craft_apps() {
+    let (mut h, store) = setup("os-copy", Settings::default());
+    allow(&mut h);
+    let conflict = Conflict { postscript: Some("Hack-Regular".into()), path: PathBuf::from("/fonts/Hack-Regular.ttf") };
+    store.refuse_next(vec![conflict]);
+    click(&mut h, "Hack");
+    click(&mut h, "Install all");
+    assert_eq!(store.calls(), [Call::Install("Hack".into()), Call::MakeAvailable("Hack".into())]);
+    assert!(has_installed(&h, "Hack"));
+    assert!(h.query_by_label_contains("/fonts/Hack-Regular.ttf already has the font name Hack-Regular").is_some());
+
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+    craft_apps_only_switch(&mut h);
+    assert!(store.craft_apps_only());
+    click(&mut h, "Hack");
+    assert!(h.query_by_label("Kept in Craft apps only").is_some());
+
+    h.key_press(egui::Key::Escape);
+    settle(&mut h);
+    craft_apps_only_switch(&mut h);
+    click(&mut h, "Hack");
+    assert!(h.query_by_label("Available to all apps").is_some());
 }
 
 #[test]

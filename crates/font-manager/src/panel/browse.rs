@@ -99,8 +99,25 @@ impl FontsPanel {
                     let note = tl!("From each font's source, only when you install or preview a font.");
                     ui.add(egui::Label::new(egui::RichText::new(note).size(12.0).color(s.p.muted)).wrap());
                 }
+                if self.installer.available_to_all_supported() {
+                    self.craft_apps_only_switch(ui, &s);
+                }
             });
         });
+    }
+
+    fn craft_apps_only_switch(&mut self, ui: &mut Ui, s: &Skin) {
+        ui.add_space(14.0);
+        ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), s.hairline());
+        ui.add_space(14.0);
+        widgets::label(ui, s, tl!("System fonts"), s.p.faint);
+        let mut on = self.craft_apps_only;
+        let idle = !self.jobs.runs(Kind::CraftAppsOnly);
+        if ui.add_enabled(idle, egui::Checkbox::new(&mut on, tl!("Keep fonts in Craft apps only"))).changed() {
+            self.set_craft_apps_only(ui.ctx(), on);
+        }
+        let note = tl!("Off: fonts you install here are also copied to your system's fonts folder, for all apps.");
+        ui.add(egui::Label::new(egui::RichText::new(note).size(12.0).color(s.p.muted)).wrap());
     }
 
     fn catalogue_filters(&mut self, ui: &mut Ui, s: &Skin) {
@@ -661,6 +678,7 @@ impl FontsPanel {
                     Kind::Install => tl!("Installing"),
                     Kind::Remove => tl!("Removing"),
                     Kind::Preview => tl!("Downloading"),
+                    Kind::CraftAppsOnly => tl!("Updating system fonts"),
                 };
                 let text = match fraction {
                     Some(f) => format!("{what} {}", fmt("{percent} %", &[("percent", &i18n::number((f * 100.0).round() as u64))])),
@@ -683,6 +701,7 @@ impl FontsPanel {
                     Kind::Install => tl!("Couldn't install"),
                     Kind::Remove => tl!("Couldn't remove"),
                     Kind::Preview => tl!("Couldn't download"),
+                    Kind::CraftAppsOnly => tl!("Couldn't update system fonts"),
                 };
                 widgets::label(ui, s, what, p.bad).on_hover_text(error);
             }

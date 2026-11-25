@@ -1,4 +1,5 @@
-//! Installs, removals and preview downloads, one at a time on a worker thread.
+//! Installs, removals, preview downloads and the "Keep fonts in Craft apps only" setting, one at
+//! a time on a worker thread.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -6,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::Catalog;
 use crate::index::Index;
-use crate::store::{Downloaded, Installer, Progress, RemoveRequest, StoreError};
+use crate::store::{Conflict, Downloaded, Installer, MadeAvailable, Progress, RemoveRequest, StoreError};
 
 type Task = Box<dyn FnOnce() + Send>;
 
@@ -24,6 +25,8 @@ pub enum Kind {
     Install,
     Remove,
     Preview,
+    /// Changing "Keep fonts in Craft apps only"; it has no family.
+    CraftAppsOnly,
 }
 
 pub struct Running {
@@ -44,9 +47,12 @@ impl Running {
 }
 
 pub enum Finished {
-    Installed,
+    /// With what copying the family into the OS user font folder did, when it was copied.
+    Installed(Option<Result<MadeAvailable, StoreError>>),
     Removed,
     Previewed(Vec<Downloaded>),
+    /// The families a conflict kept out of the OS user font folder.
+    CraftAppsOnly(Vec<(String, Vec<Conflict>)>),
 }
 
 enum Msg {
@@ -62,6 +68,8 @@ pub enum Request {
     Remove(RemoveRequest),
     /// A family of the index, by position.
     Preview(Arc<Index>, usize),
+    /// Sets "Keep fonts in Craft apps only".
+    CraftAppsOnly(bool),
 }
 
 pub struct Jobs {
@@ -93,12 +101,19 @@ impl Jobs {
         Jobs { worker, tx, rx, next: 0, running: BTreeMap::new() }
     }
 
+    /// Whether a job of `kind` runs or waits.
+    pub fn runs(&self, kind: Kind) -> bool {
+        self.running.values().any(|r| r.kind == kind)
+    }
+
     /// The job running for `family` of `source` (any source when empty), if any.
     pub fn of(&self, source: &str, family: &str) -> Option<&Running> {
         self.running.values().find(|r| r.family.eq_ignore_ascii_case(family) && (source.is_empty() || r.source.is_empty() || r.source == source))
     }
 
-    /// Runs `request` through `installer`, then rescans `catalog` after an install or removal.
+    /// Runs `request` through `installer`, then rescans `catalog` after an install or removal. An
+    /// install also copies the family into the OS user font folder, unless the user keeps fonts in
+    /// Craft apps only.
     pub fn start(&mut self, ctx: &egui::Context, installer: Arc<dyn Installer>, catalog: Arc<Catalog>, request: Request) {
         let id = self.next;
         self.next += 1;
@@ -117,6 +132,7 @@ impl Jobs {
                 let file = if r.whole { None } else { r.files.first().map(|p| p.display().to_string()) };
                 (String::new(), r.family.clone(), Kind::Remove, file, 0)
             }
+            Request::CraftAppsOnly(_) => (String::new(), String::new(), Kind::CraftAppsOnly, None, 0),
         };
         self.running.insert(id, Running { source, family, kind, file, progress: Progress { done: 0, total } });
         let tx = self.tx.clone();
@@ -127,17 +143,20 @@ impl Jobs {
                 ctx.request_repaint();
             };
             let family = |index: &Index, i: usize| index.families().get(i).cloned().ok_or_else(|| StoreError("no such family".into()));
+            let copy = |name: &str| {
+                let copy = installer.available_to_all_supported() && !installer.craft_apps_only();
+                Finished::Installed(copy.then(|| installer.make_available(name, &[])))
+            };
             let result = match request {
-                Request::Install(index, i) => {
-                    family(&index, i).and_then(|f| installer.install(&index, &f, &mut progress)).map(|()| Finished::Installed)
-                }
+                Request::Install(index, i) => family(&index, i).and_then(|f| installer.install(&index, &f, &mut progress).map(|()| copy(&f.family))),
                 Request::InstallFile(index, i, path) => {
-                    family(&index, i).and_then(|f| installer.install_file(&index, &f, &path, &mut progress)).map(|()| Finished::Installed)
+                    family(&index, i).and_then(|f| installer.install_file(&index, &f, &path, &mut progress).map(|()| copy(&f.family)))
                 }
                 Request::Remove(r) => installer.remove(&r).map(|()| Finished::Removed),
                 Request::Preview(index, i) => family(&index, i).and_then(|f| installer.download(&index, &f, &mut progress)).map(Finished::Previewed),
+                Request::CraftAppsOnly(on) => installer.set_craft_apps_only(on).map(Finished::CraftAppsOnly),
             };
-            if matches!(result, Ok(Finished::Installed | Finished::Removed)) {
+            if matches!(result, Ok(Finished::Installed(_) | Finished::Removed)) {
                 catalog.rescan();
             }
             let _ = tx.send(Msg::Done(id, result));
