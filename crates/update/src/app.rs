@@ -25,10 +25,19 @@ pub struct App {
     pub developer: &'static str,
     /// Existing package identity when it differs from the suite's `ai.storyteller.<id>` convention.
     pub bundle_id_override: Option<&'static str>,
+    /// The Apple Developer team whose Developer ID signature its macOS app must carry before an
+    /// update replaces it: [`APPLE_TEAM`] unless the app says otherwise. `None`: no team signs it,
+    /// so its macOS app is never replaced in place, and the update offers the release page
+    /// instead.
+    pub apple_team: Option<&'static str>,
 }
 
 /// The developer of every app in the storytold organisation.
 pub const DEVELOPER: &str = "ArtCraft";
+
+/// The Apple Developer team that signs every Craft App and ArtCraft Launcher (Learning Machines
+/// LLC): the macOS side of the Windows publisher check.
+pub const APPLE_TEAM: &str = "DJ6XS33FX8";
 
 impl App {
     /// An app with no former names and no icon.
@@ -44,6 +53,7 @@ impl App {
             accent: None,
             developer: DEVELOPER,
             bundle_id_override: None,
+            apple_team: Some(APPLE_TEAM),
         }
     }
 

@@ -238,8 +238,9 @@ fn is_signed(_exe: &Path) -> bool {
     true
 }
 
-/// Whether `release` has a file the self-update can install this copy from. Only a standalone
-/// program on macOS is checked, against the release's macOS `.tar.gz`, with or without
+/// Whether `release` has a file the self-update can install this copy from. On macOS a standalone
+/// program is checked against the release's `.tar.gz`, and an app bundle against its app's
+/// [`App::apple_team`], with or without
 /// [`DEV_VAR`]. Call it together with [`is_self_updating`], which answers for every other reason
 /// a copy can't update itself.
 pub fn release_installs(app: &App, release: &Release) -> bool {
@@ -258,9 +259,11 @@ fn release_installs_at(app: &App, exe: &Path, opted_in: bool, release: &Release,
 
 /// Whether the update can install `install` from `release` on `platform`. Only a standalone
 /// program on macOS is checked against the release's files. A release without its file list
-/// passes: `updater::install` fetches the full release before it picks the file.
+/// passes: `updater::install` fetches the full release before it picks the file. A macOS app
+/// bundle is replaced only for an app that names the team signing it ([`App::apple_team`]).
 fn installs_from(app: &App, install: &Install, release: &Release, platform: Option<Platform>) -> bool {
     match (install, platform) {
+        (Install::MacApp(_), _) => app.apple_team.is_some(),
         (Install::Standalone(_), Some(platform)) if platform.os == crate::Os::MacOs => {
             release.assets.is_empty() || pick_asset(release, &[app.id], platform, &[install.kind()]).is_some()
         }
@@ -888,8 +891,8 @@ pub fn prepare_update_with_options(
                     installation: None,
                 };
                 let wait = install::macos::CheckTurn { stop, phase: &mut *phase };
-                let placed =
-                    install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &install::macos::Expect::self_update(release), wait);
+                let placed = install::macos::Expect::self_update(app, release)
+                    .and_then(|expect| install::macos::install_dmg(app, &file, Some(&existing), None, false, paths, &expect, wait));
                 after_install(paths, &file, recorded, &placed);
                 let placed = placed?;
                 Ok(relaunch_after_exit(app, pid, &[Path::new("/usr/bin/open").as_os_str(), placed.as_os_str()]))
@@ -4079,6 +4082,24 @@ mod tests {
             // the bundle installs from the disk image
             assert!(installs_from(app, &Install::MacApp(PathBuf::from("/Applications/SoundCraft.app")), &release, mac), "{arch:?}");
         }
+    }
+
+    /// An app that names no team signing its macOS app has its bundle sent to the release page,
+    /// whatever the release holds; an app that names one, its own or the suite's, is offered the
+    /// update.
+    #[test]
+    fn a_macos_app_without_a_signing_team_gets_the_download_link() {
+        let release = release_with(&["example-0.2.0-macos-universal.dmg"]);
+        let bundle = Install::MacApp(PathBuf::from("/Applications/Example.app"));
+        let mac = Some(Platform { os: crate::Os::MacOs, arch: crate::Arch::Arm64 });
+        let base = App::new("example", "Example", "Examples", "someone/example");
+        assert!(!installs_from(&App { apple_team: None, ..base }, &bundle, &release, mac));
+        assert!(installs_from(&App { apple_team: Some("ABCDE12345"), ..base }, &bundle, &release, mac));
+        assert!(installs_from(&base, &bundle, &release, mac));
+        // Other kinds of install aren't signed by an Apple team.
+        let standalone = Install::Standalone(PathBuf::from("example"));
+        let linux = Some(Platform { os: crate::Os::Linux, arch: crate::Arch::X64 });
+        assert!(installs_from(&App { apple_team: None, ..base }, &standalone, &release_with(&[]), linux));
     }
 
     /// A release that adds a macOS `.tar.gz` is offered to the standalone program again.
