@@ -3,7 +3,7 @@
 
 use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks, HEADER, SIDE_BUTTONS};
 use crate::contract::Remember as _;
-use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
+use crate::contract::overlay::{DragBounds, FloatPlace, OverlayFit, Place};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
     Props as _, Role, SaveKey, Show as _, ShowContainer as _,
@@ -194,6 +194,14 @@ impl<'a> Dialog<'a> {
     #[must_use]
     pub fn modeless(self) -> Self {
         self.overlay(Overlay::modeless)
+    }
+
+    /// How much of the dialog stays inside the window when the user moves it by its title band: the whole dialog
+    /// ([`DragBounds::Inside`], the default), or only a strip of its title ([`DragBounds::TitleVisible`]), so a dialog
+    /// that previews its change in the document behind it moves mostly aside and is taken back by its title.
+    #[must_use]
+    pub fn drag_bounds(self, bounds: DragBounds) -> Self {
+        self.overlay(|overlay| overlay.drag_bounds(bounds))
     }
 
     /// What is drawn behind a modal dialog.

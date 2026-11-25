@@ -213,7 +213,8 @@ fn resized_edge(before: Rect, after: Rect) -> Option<ResizeEdge> {
 }
 
 /// `rect` moved, at its size, the least distance that puts it inside `bounds`: the one keep rule for a layer's
-/// bounds, whether the user moves the layer or the host places it. On an axis where it is longer than the bounds, its
+/// bounds, whether the user moves the layer or the host places it, and the window's under the default
+/// [`DragBounds::Inside`](crate::contract::overlay::DragBounds::Inside). On an axis where it is longer than the bounds, its
 /// low edge sits on theirs.
 pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
     let keep = |low: f32, high: f32, bounds_low: f32, bounds_high: f32| low.min(bounds_high - (high - low)).max(bounds_low) - low;
@@ -509,15 +510,18 @@ impl BodyHooks<'_> {
         };
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
+        // Where the layer stands: at the placement's size, where it is shown, which the window's keep rule
+        // (`Overlay::drag_bounds`) may have moved from the stored position a drag past the window's edge left.
+        let shown = Rect::from_min_size(rect.min, current.rect_over(rect).size());
         let (origin, pos, gesture) = match phase {
             PressPhase::Down { .. } => {
-                self.mode.pressed = Some(current.rect_over(rect));
+                self.mode.pressed = Some(shown);
                 return;
             }
             PressPhase::DragStart { start, pos, .. } => {
                 // The layer host shows this pass at the step's rect already (`running_move`): the drag runs from where
                 // the layer stood at the press.
-                self.mode.began = Some(self.mode.pressed.unwrap_or_else(|| current.rect_over(rect)));
+                self.mode.began = Some(self.mode.pressed.unwrap_or(shown));
                 self.mode.restore = current.clone();
                 self.mode.held = grip;
                 (start.origin, Some(pos), GesturePhase::Begin)
