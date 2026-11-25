@@ -859,26 +859,77 @@ fn a_press_on_a_component_takes_the_focus_tab_gave_an_app_field() {
     assert_eq!(lost.get(), 1, "the field sees its focus lost once");
 }
 
-/// A focus request that a click makes for an app's own widget drawn later in the same pass stands: the click, which is
-/// elsewhere for that widget, does not take the focus back. The next click elsewhere does.
+/// What gives an app's field the focus during a click elsewhere.
+#[derive(Clone, Copy, Debug)]
+enum GivenAt {
+    /// The press closes a popup, which gives the focus back to the field it opened from.
+    PopupPress,
+    /// The app's request at the press.
+    Press,
+    /// The app's request at the release, in a pass that draws the field later.
+    Release,
+}
+
+/// Focus the runtime gives an app's own widget during a click elsewhere stands: neither the press nor its release takes
+/// it back. The next click elsewhere does, by egui's rule.
 #[trial]
-fn a_request_at_a_click_gives_an_app_field_drawn_later_the_focus() {
-    let field = named_id("app field");
-    let asking = Rc::new(Cell::new(false));
-    let ask = Rc::clone(&asking);
-    let mut base = mixed_window();
-    let mut show = move |ui: &mut Ui| {
-        if ui.input(|input| input.pointer.any_click()) && ask.take() {
-            request(ui.ctx(), FocusTarget::Id(field));
+fn a_click_that_gives_an_app_field_the_focus_does_not_take_it_back() {
+    for at in [GivenAt::PopupPress, GivenAt::Press, GivenAt::Release] {
+        let field = named_id("app field");
+        let (asking, popup) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let (ask, open) = (Rc::clone(&asking), Rc::clone(&popup));
+        let mut base = mixed_window();
+        let mut show = move |ui: &mut Ui| {
+            let (pressed, clicked) = ui.input(|input| (input.pointer.primary_pressed(), input.pointer.any_click()));
+            let now = if matches!(at, GivenAt::Release) { clicked } else { pressed };
+            if now && ask.take() {
+                match at {
+                    GivenAt::PopupPress => open.set(false),
+                    GivenAt::Press | GivenAt::Release => _ = request(ui.ctx(), FocusTarget::Id(field)),
+                }
+            }
+            base(ui);
+            if open.get() {
+                push_scope(ui.ctx(), named_id("popup"), FocusPolicy::POPUP, None);
+                widget(ui, named_id("popup button"));
+                register_stop(ui.ctx(), Stop::new(named_id("popup button"), KeyUse::of(Input::Pointer)));
+                pop_scope(ui.ctx());
+            }
+        };
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show);
+        if matches!(at, GivenAt::PopupPress) {
+            fixture::host_focus(&frames.ctx, field);
+            frames.idle(1, &mut show);
+            popup.set(true);
+            frames.idle(2, &mut show);
+            assert_eq!(egui_focused(&frames.ctx), Some(named_id("popup button")), "the popup takes the focus");
         }
-        base(ui);
+        asking.set(true);
+        let empty = Pos2::new(300.0, 450.0);
+        assert_eq!(click_focus(&mut frames, &mut show, empty).1, Some(field), "{at:?}: the focus stands over the release");
+        assert_eq!(click_focus(&mut frames, &mut show, empty).1, None, "{at:?}: the next click elsewhere takes it");
+    }
+}
+
+/// A canvas declared after a component registered behind it is first taken as one of the app's widgets: focus the runtime
+/// gave it there follows the canvas's rules, which keep it over Escape.
+#[trial]
+fn focus_given_to_a_canvas_before_its_declaration_is_the_canvas_s() {
+    let canvas = named_id("host canvas");
+    let mut show = move |ui: &mut Ui| {
+        fixture::host_button(ui, canvas, Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)));
+        widget(ui, named_id("button"));
+        register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
+        host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
     };
     let mut frames = Frames::new();
+    frames.frame(Vec::new(), |_| {});
+    request(&frames.ctx, FocusTarget::Id(canvas));
     frames.idle(2, &mut show);
-    asking.set(true);
-    let empty = Pos2::new(300.0, 450.0);
-    assert_eq!(click_focus(&mut frames, &mut show, empty).1, Some(field), "the requested focus stands");
-    assert_eq!(click_focus(&mut frames, &mut show, empty).1, None, "the next click elsewhere takes it by egui's rule");
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas));
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(egui_focused(&frames.ctx), Some(canvas), "egui keeps the focus on the canvas over its Escape");
 }
 
 /// Where Tab reaches only text fields (the Mac's default), it reaches the app's own text field and skips the app's
@@ -1139,6 +1190,8 @@ enum Shown {
     Drag,
     /// Declared, and drawn with a widget that senses drags and is not focusable.
     Unfocusable,
+    /// Declared, and drawn in a disabled `Ui`.
+    Disabled,
     /// Declared and not drawn.
     Undrawn,
 }
@@ -1157,6 +1210,7 @@ fn host_canvas_findings(shown: Shown) -> (bool, Vec<String>) {
             Shown::Click => _ = fixture::host_button(ui, canvas, rect),
             Shown::Drag => _ = fixture::host_drag_area(ui, canvas, rect),
             Shown::Unfocusable => fixture::host_unfocusable_area(ui, canvas, rect),
+            Shown::Disabled => fixture::host_disabled_button(ui, canvas, rect),
         }
     };
     let mut frames = Frames::new();
@@ -1175,7 +1229,7 @@ fn a_host_canvas_no_focusable_widget_draws_is_a_finding() {
         assert_eq!(host_canvas_findings(shown), (true, Vec::new()), "{shown:?}: Tab stays at a canvas with a focusable widget");
     }
     assert_eq!(host_canvas_findings(Shown::Hidden).1, Vec::<String>::new(), "a hidden canvas makes no call");
-    for (shown, says) in [(Shown::Undrawn, "no egui widget"), (Shown::Unfocusable, "Sense")] {
+    for (shown, says) in [(Shown::Undrawn, "no egui widget"), (Shown::Unfocusable, "sense"), (Shown::Disabled, "disabled")] {
         let (focused, found) = host_canvas_findings(shown);
         assert!(!focused, "{shown:?}: egui drops the focus Tab gave the canvas");
         assert!(matches!(found.as_slice(), [only] if only.contains(says)), "{shown:?}: {found:?}");

@@ -33,10 +33,11 @@ pub(crate) fn candidates_since(ctx: &Context, seen: usize) -> Vec<egui::FocusCan
     ctx.memory(|memory| memory.focus_candidates().get(seen..).map(<[_]>::to_vec).unwrap_or_default())
 }
 
-/// What the widget `id` drawn so far in the running pass senses; `None` when no widget has the id. egui takes the focus
-/// from a widget that is not focusable when it is drawn, and from an id no interactive widget has at the pass's end.
-pub(crate) fn drawn_sense(ctx: &Context, id: Id) -> Option<egui::Sense> {
-    ctx.viewport(|viewport| viewport.this_pass.widgets.get(id).map(|widget| widget.sense))
+/// The widget `id` as drawn so far in the running pass; `None` when no widget has the id. egui takes the focus from a
+/// widget that is not focusable or not enabled when it is drawn, and from an id no interactive widget has at the pass's
+/// end.
+pub(crate) fn drawn_widget(ctx: &Context, id: Id) -> Option<egui::WidgetRect> {
+    ctx.viewport(|viewport| viewport.this_pass.widgets.get(id).copied())
 }
 
 /// Whether the widget egui holds key focus on keeps Tab by its event filter (`Memory::focus_lock_filter`).

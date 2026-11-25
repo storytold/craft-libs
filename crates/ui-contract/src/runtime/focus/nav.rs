@@ -195,6 +195,7 @@ impl State {
         self.entered = false;
         self.asked = false;
         self.candidates_seen = 0;
+        self.host_canvases.clear();
     }
 
     /// The registrations of last pass, which Tab and the arrows move over.
@@ -261,7 +262,7 @@ impl State {
         self.enter_stop(rec, FocusOrigin::Press)
     }
 
-    fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
+    pub(super) fn enter_stop(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         self.note_entry(&rec);
         let stop = &rec.stop;
         let roving = stop.group.is_some();
