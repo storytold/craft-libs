@@ -91,9 +91,9 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     }
 
     /// Free Transform's pointer for the reference point: on, before a drag, with Alt held inside the box and outside
-    /// it where the outside takes a press, and over the shown reference point, the pointer is the system arrow with
-    /// the target mark beside it, where a press places the reference point. Off (the default) keeps the pointers of
-    /// the drags there.
+    /// it where the outside takes a press, and over the shown reference point with or without Alt, the pointer is the
+    /// system arrow with the target mark beside it, where a press places the reference point. Off (the default) keeps
+    /// the pointers of the drags there.
     #[must_use]
     pub fn reference_point_pointer(mut self, on: bool) -> Self {
         self.reference_point_pointer = on;

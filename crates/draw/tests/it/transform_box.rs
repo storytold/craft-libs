@@ -1564,14 +1564,16 @@ fn turns(cursor: &Option<Cursor>) -> bool {
 }
 
 /// A scale-only session overlay (rotate, skew and distort refused, as Content-Aware Scale has it), Alt held in the
-/// frames: `Move` inside, the plain arrow outside.
+/// frames: `Move` inside, and outside the box sets no pointer at all: a box that refuses rotation declares no
+/// outside part, the same rule `a_sides_only_box_takes_presses_on_its_side_edges_only` pins for presses. What this
+/// trial pins is that the reference point's pointer shows on neither half.
 #[trial]
 fn alt_keeps_todays_pointers_on_a_scale_only_overlay() {
     let scale_only = TransformSession::new(RECT).allow(BoxAllow::new(false, false, false).with_warp(false));
     let (mut fixture, view) = overlay(scale_only, TransformReach::Box, false);
     let alt = egui::Modifiers::ALT;
     assert_eq!(overlay_cursor(&mut fixture, &view, INSIDE, alt), Some(Cursor::System(CursorIcon::Move)), "Alt inside");
-    assert_eq!(overlay_cursor(&mut fixture, &view, NEAR, alt), Some(Cursor::System(CursorIcon::Default)), "Alt outside");
+    assert_eq!(overlay_cursor(&mut fixture, &view, NEAR, alt), None, "Alt outside");
 }
 
 /// A box without the reference point and the inside move (the Frame tool's), Alt held: the turn arrow near a corner,
