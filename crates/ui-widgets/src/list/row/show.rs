@@ -28,7 +28,7 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 pub(super) const TOGGLE: PartKey = PartKey::new("toggle");
 pub(super) const TEXT_CELL: PartKey = PartKey::new("text-cell");
-const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
+pub(super) const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
 const LABEL_CELL: PartKey = PartKey::new("label-cell");
 const DISCLOSURE: PartKey = PartKey::new("disclosure");
 
@@ -491,6 +491,12 @@ impl Component for ListRow<'_> {
             cell.name = Name::Text(label.to_owned());
             cell.grid.column_index = column_of(&toggle.column);
             cell.flags.set(Flags::SELECTED, selected);
+            // The collection reports the toggle of its own toggle column under this cell, with its state and click: the
+            // painted toggle adds no node of its own.
+            if self.toggle_columns.contains(&toggle.column) {
+                access.node(TOGGLE.at(at as u64), Role::None);
+                continue;
+            }
             let role = if toggle.check_box { Role::CHECK_BOX } else { Role::BUTTON };
             let node = access.node(TOGGLE.at(at as u64), role);
             node.name = Name::Text(named(toggle.name_pattern(&words), label));

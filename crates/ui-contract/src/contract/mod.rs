@@ -87,9 +87,9 @@ pub use held::Held;
 pub use hosted::{Hosted, HostedKey, Hosting};
 pub use items::item_node;
 pub use items::lead_position;
-#[doc(hidden)]
-pub use items::put_toggle_names;
 pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_rename, section_part};
+#[doc(hidden)]
+pub use items::{RowToggle, put_toggle_names};
 pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
