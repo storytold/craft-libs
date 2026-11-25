@@ -1647,10 +1647,7 @@ fn check_skins(scene: &Scene) -> Result<()> {
     if let Some(m) = scene.meshes.iter().find(|m| m.joints.is_empty() != m.weights.is_empty()) {
         return Err(malformed(KIND, format!("mesh `{}` has joints without weights or weights without joints", m.name)));
     }
-    let repeated = |j: &[u16; 4], w: &[f32; 4]| {
-        let used: Vec<u16> = j.iter().zip(w).filter(|(_, w)| **w != 0.0).map(|(j, _)| *j).collect();
-        used.iter().enumerate().any(|(k, j)| used.get(k + 1..).is_some_and(|rest| rest.contains(j)))
-    };
+    let repeated = |j: &[u16; 4], w: &[f32; 4]| (0..4).any(|a| (a + 1..4).any(|b| w[a] != 0.0 && w[b] != 0.0 && j[a] == j[b]));
     if let Some(m) = scene.meshes.iter().find(|m| m.joints.iter().zip(&m.weights).any(|(j, w)| repeated(j, w))) {
         return Err(malformed(KIND, format!("mesh `{}` has a vertex that names a joint with a weight twice", m.name)));
     }

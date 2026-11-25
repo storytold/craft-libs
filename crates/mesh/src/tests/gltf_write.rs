@@ -466,6 +466,10 @@ fn writer_refuses_rigging_that_is_not_gltf() {
     s.meshes[0].joints[0] = [0; 4];
     assert!(refused(&s), "a joint named twice with weights other than 0");
     let mut s = rig();
+    s.meshes[0].joints[1] = [0, 1, 0, 1];
+    s.meshes[0].weights[1] = [0.5, 0.25, 0.0, 0.25];
+    assert!(refused(&s), "a joint named twice in slots that are not next to each other");
+    let mut s = rig();
     s.skins[0].joints = vec![2, 2];
     assert!(refused(&s), "a joint node named twice in a skin");
     let mut s = rig();
