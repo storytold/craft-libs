@@ -5,10 +5,20 @@ use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput,
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::keys::leftover_events;
 use craft_ui::testing::focus::key_release;
-use craft_ui::testing::input::key_press;
+use craft_ui::testing::input::{key_press, key_repeat, text};
 use craft_ui::testing::{Frames, trial};
 use egui::{Event, Key, Modifiers, Ui};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+
+/// The presses and releases of `events`, in order, each with whether it is a press.
+fn key_events(events: Vec<Event>) -> Vec<(Key, bool)> {
+    events.into_iter().filter_map(|event| if let Event::Key { key, pressed, .. } = event { Some((key, pressed)) } else { None }).collect()
+}
+
+/// The texts of `events` the host pastes, in order.
+fn pasted(events: Vec<Event>) -> Vec<String> {
+    events.into_iter().filter_map(|event| if let Event::Paste(text) = event { Some(text) } else { None }).collect()
+}
 
 /// With nothing focused, a host reading the leftover events after the window's content gets the press and release of
 /// a key no command is bound to, and neither the press nor the release of a key whose command fired.
@@ -37,4 +47,21 @@ fn leftover_events_holds_the_keys_no_command_took() {
     frames.frame(vec![key_press(Key::F4, Modifiers::NONE)], &mut show);
     frames.frame(vec![key_release(Key::F4, Modifiers::NONE)], &mut show);
     assert_eq!(keys(left.take()), [(Key::F4, true), (Key::F4, false)], "an unbound key's are left over");
+}
+
+/// With nothing focused and nothing bound, both pastes of a pass are the host's: the second one reaches it as the first
+/// does, though its chord is the shortcut the first one made.
+#[trial]
+fn leftover_events_holds_both_pastes_of_a_pass() {
+    let mut frames = Frames::new();
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+
+    frames.frame(vec![Event::Paste("a".to_owned()), Event::Paste("b".to_owned())], &mut show);
+    assert_eq!(pasted(left.take()), ["a".to_owned(), "b".to_owned()], "both pastes are left over, in the order they arrived");
 }

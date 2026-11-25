@@ -225,7 +225,8 @@ impl Strip<'_> {
             KeyEvent::Clip { .. } if self.in_menu => false,
             KeyEvent::Clip { command, pasted, mods } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
-                // web sends the chord's press as well. A paste's content goes with the command the chord fires.
+                // web sends the chord's press as well, so one event is one shortcut, at the press the web sent or at
+                // the event. A paste's content goes with the command the chord fires.
                 let left = pasted.clone();
                 if let Some(pasted) = pasted.filter(|_| command == EditCommand::Paste) {
                     let content = batch.app_paste.get_or_insert_default();
@@ -237,13 +238,17 @@ impl Strip<'_> {
                     .shortcuts
                     .iter()
                     .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == input.mods && shortcut.input.typed == Some(key));
-                if !sent && self.records {
-                    // A component that reads every chord gets the event as the chord's press, the way the key made it.
+                // A component that reads every chord gets the event as the chord's press, the way the key made it.
+                if self.records && !sent {
                     self.press(batch, key, &input, false, at);
-                } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at, place: batch.place });
+                }
+                if !self.records {
+                    if !sent {
+                        batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at, place: batch.place });
+                    }
                     // No component took it, so a host that reads what is left over (`leftover_events`) gets the event back,
-                    // in its place among the events egui keeps.
+                    // in its place among the events egui keeps. Every such event stays, whatever shortcut it shares with
+                    // another: two pastes of one pass are two pastes, and the second one's chord is the first one's.
                     let text = left.as_ref().and_then(|left| left.text.as_deref());
                     let event = match (command, left.as_ref().and_then(|left| left.image.as_ref())) {
                         (EditCommand::Cut, _) => Event::Cut,
