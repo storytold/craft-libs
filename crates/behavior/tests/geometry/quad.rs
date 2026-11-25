@@ -1201,6 +1201,30 @@ fn perspective_corners_pass_through_each_other() {
     assert_eq!(moved.quad, [p(150.0, 425.0), p(452.0, 125.0), p(452.0, 327.0), p(150.0, 27.0)]);
 }
 
+/// A Perspective corner keeps to its own sides on a box that isn't a rectangle (the reference application,
+/// 2026-11-25): on the 302 × 202 box skewed 92 px along its top edge, the bottom-right corner dragged by (-15, 189)
+/// went down the slanted right side and the top-right corner up it. Read off its shots to a few pixels, a quarter of
+/// the way the two corners were at (430, 366) and (560, 86), halfway at (411, 406) and (578, 46), at the end the
+/// bottom-right one at (380, 489). Across the top edge the corner would have gone straight down, to (452, 516).
+#[test]
+fn a_perspective_corner_on_a_skewed_box_moves_along_its_own_side() {
+    let skewed = BoxState::new([p(242.0, 125.0), p(544.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)], p(347.0, 226.0));
+    let perspective = BoxRules::in_mode(TransformMode::Perspective);
+    let pulled = |to: Point| drag(&skewed, &skewed, BoxPart::Corner(2), p(452.0, 327.0), to, Mods::NONE, &perspective);
+    let got = pulled(p(437.0, 516.0));
+    assert!(within(&got, [(242.0, 125.0), (617.87, -37.19), (378.13, 489.19), (150.0, 327.0)], 0.01), "{:?}", got.quad);
+    // The reference's corners, within what its shots resolve.
+    let close = |a: Point, x: f64, y: f64| (a.x - x).abs() < 5.0 && (a.y - y).abs() < 5.0;
+    assert!(close(got.quad[2], 380.0, 489.0), "{:?}", got.quad[2]);
+    let quarter = pulled(p(448.0, 374.0));
+    assert!(close(quarter.quad[2], 430.0, 366.0) && close(quarter.quad[1], 560.0, 86.0), "{:?}", quarter.quad);
+    let half = pulled(p(444.5, 421.5));
+    assert!(close(half.quad[2], 411.0, 406.0) && close(half.quad[1], 578.0, 46.0), "{:?}", half.quad);
+    // Along the bottom edge when the drag mostly follows it: the bottom corners part or meet on the bottom edge's line.
+    let wide = pulled(p(492.0, 337.0));
+    assert!(within(&wide, [(242.0, 125.0), (544.0, 125.0), (492.0, 327.0), (110.0, 327.0)], 1e-9), "{:?}", wide.quad);
+}
+
 /// A turn reads the pointer at the rules' turn offset: half a pixel up and left by default (100 %), the pointer itself
 /// with a zero offset (a stretched canvas, as at 33.3 %; the reference application, 2026-11-25: two turns there matched
 /// to 0.0001° only so).

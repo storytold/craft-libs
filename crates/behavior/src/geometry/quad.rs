@@ -528,29 +528,30 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             BoxState { quad: q0.map(|q| turn * q), pivot: c }
         }
         BoxPart::Corner(i) if mods.cmd && mods.alt && mods.shift => {
-            // Perspective: the corner moves along the box's dominant axis (along its top edge or
-            // across it, as on the reference: a turned box keeps its top edge's direction) and the
-            // corner sharing that side moves the opposite way. Nothing stops the two where they meet: the
-            // reference lets them pass through each other into an hourglass (2026-11-25: the top-left corner of
-            // a 302 × 202 box dragged 343.5 px right put the top corners at x 493.5 and 108.5, the box crossed).
+            // Perspective: the corner moves along one of its own two sides, whichever the drag mostly follows, by the
+            // drag's run along it, and the corner at that side's other end moves the opposite way (measured on the
+            // reference: on a turned box the corner keeps to the box's sides, not the document's axes; on a skewed
+            // box, 2026-11-25, the bottom-right corner dragged down went along the slanted right side, (452, 327) to
+            // (380, 489) for a drag of (-15, 189), the top-right corner up the same side; across the top edge it
+            // would have gone straight down). Nothing stops the two where they meet: the reference lets them pass
+            // through each other into an hourglass (2026-11-25: the top-left corner of a 302 × 202 box dragged
+            // 343.5 px right put the top corners at x 493.5 and 108.5, the box crossed).
             let i = usize::from(i) % 4;
+            // A side collapsed to a point has no direction: the top edge's (or level) stands in, and the line across it.
             let top = q0[1] - q0[0];
             let len = top.hypot();
             let uh = if len.is_finite() && len > 1e-9 { top / len } else { Vec2::new(1.0, 0.0) };
             let nh = Vec2::new(-uh.y, uh.x);
-            let (along, across) = (d.dot(uh), d.dot(nh));
-            let horizontal = along.abs() >= across.abs();
-            let j = match (i, horizontal) {
-                (0, true) => 1,
-                (1, true) => 0,
-                (2, true) => 3,
-                (3, true) => 2,
-                (0, false) => 3,
-                (3, false) => 0,
-                (1, false) => 2,
-                _ => 1,
+            let run = |j: usize, fallback: Vec2| {
+                let e = q0[i] - q0[j];
+                let l = e.hypot();
+                let u = if l.is_finite() && l > 1e-9 { e / l } else { fallback };
+                u * d.dot(u)
             };
-            let m = if horizontal { uh * along } else { nh * across };
+            // The neighbour along the top or bottom edge, and along the left or right one.
+            let (hn, vn) = ([1, 0, 3, 2][i], [3, 2, 1, 0][i]);
+            let (h, v) = (run(hn, uh), run(vn, nh));
+            let (m, j) = if h.hypot() >= v.hypot() { (h, hn) } else { (v, vn) };
             let mut q = q0;
             q[i] = q0[i] + m;
             q[j] = q0[j] - m;
