@@ -156,6 +156,32 @@ fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
     }
 }
 
+/// A rail too short for its rows shows its bar in the end padding beside the buttons while the pointer is away only
+/// with `bar_at_rest`.
+#[trial]
+fn a_short_rail_shows_its_bar_at_rest_only_with_bar_at_rest() {
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
+    for at_rest in [false, true] {
+        let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
+        let mut fixture = Fixture::new(move |ui| {
+            let rail = ToolRail::new("Tools", &slots, &0, &last);
+            let rail = if at_rest { rail.bar_at_rest() } else { rail };
+            rail.show_rail(ui, |ui, _| {
+                Button::new("Foot").show(ui);
+            });
+        });
+        fixture.room(Vec2::new(grid.width(1), 100.0)).settle();
+        let (rail, first, foot) = (rect(&fixture, "Tools"), rect(&fixture, "Move"), rect(&fixture, "Foot"));
+        assert!(rect(&fixture, "Clone Stamp").bottom() > foot.top(), "at rest {at_rest}: the rows do not fit the room");
+        let band = Rect::from_x_y_ranges(first.right()..=rail.right(), rail.top()..=foot.top());
+        fixture.frame(vec![moved(rail.right_bottom() + Vec2::splat(200.0))]);
+        fixture.settle();
+        let shapes = fixture.frame_shapes();
+        let paints = shapes.iter().map(egui::Shape::visual_bounding_rect).any(|b| b.is_positive() && band.expand(0.5).contains_rect(b));
+        assert_eq!(paints, at_rest, "at rest {at_rest}: a bar shows in the end padding with the pointer away: {band:?}");
+    }
+}
+
 /// The tool rail's buttons are larger than a lone icon button's and rest in a quieter ink than they show under the
 /// pointer.
 #[trial]

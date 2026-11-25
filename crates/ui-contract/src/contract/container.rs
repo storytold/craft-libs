@@ -603,7 +603,8 @@ pub enum ScrollIndicator {
     Strips,
     /// A bar that takes no room from the content, as a tool rail or an options bar shows its overflow: it lies in the
     /// container's end padding (its bottom padding for x), over the content where the container has none, and shows
-    /// only while the pointer is over the container or presses the bar.
+    /// only while the pointer is over the container or presses the bar, or while the content overflows when the scroll
+    /// shows it at rest ([`Scroll::at_rest`]).
     Overlay,
 }
 
@@ -619,11 +620,13 @@ pub struct Scroll {
     pub notch: Notch,
     /// How the overflow shows.
     pub indicator: ScrollIndicator,
+    /// Whether an overlay bar also shows while the pointer is away from the container.
+    pub at_rest: bool,
 }
 
 impl Scroll {
     const fn on(axes: ScrollAxes) -> Scroll {
-        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar }
+        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar, at_rest: false }
     }
 
     /// Shows the overflow along y as scroll strips instead of a bar.
@@ -647,6 +650,18 @@ impl Scroll {
     /// Whether the overflow shows as an overlay bar.
     pub const fn has_overlay(&self) -> bool {
         matches!(self.indicator, ScrollIndicator::Overlay)
+    }
+
+    /// Shows an overlay bar whenever the content overflows, also while the pointer is away from the container. A bar of
+    /// another indicator already shows at rest.
+    pub const fn at_rest(mut self) -> Scroll {
+        self.at_rest = true;
+        self
+    }
+
+    /// Whether the overlay bar shows only while the pointer is over the container or presses the bar.
+    pub const fn overlay_hides_at_rest(&self) -> bool {
+        self.has_overlay() && !self.at_rest
     }
 
     /// Scrolls along y.
