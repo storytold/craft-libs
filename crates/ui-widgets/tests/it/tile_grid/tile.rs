@@ -151,29 +151,6 @@ fn a_selected_band_tile_is_outlined() {
     assert!(edges(true) > edges(false), "selected {} against unselected {}", edges(true), edges(false));
 }
 
-/// A selected card with a pick ring (the New Document presets) is outlined as a whole, over the fill its flat thumbnail marks
-/// a pick with: it paints an edge that the same card unselected, or selected without the ring, does not.
-#[trial]
-fn a_selected_card_with_a_pick_ring_is_outlined() {
-    let edges = |selected: bool, ring: bool| {
-        let mut frames = Frames::new();
-        let mut shapes = Vec::new();
-        for _ in 0..3 {
-            shapes = frames.frame_shapes(|ui| {
-                let tile = Tile::new("Letter").detail("51p0 x 66p0").card().card_text(CardText::Preset).flat_thumbnail().selected(selected);
-                if ring {
-                    tile.pick_ring().show(ui);
-                } else {
-                    tile.show(ui);
-                }
-            });
-        }
-        shapes.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.stroke.width > 0.0 && rect.stroke.color.a() > 0)).count()
-    };
-    assert!(edges(true, true) > edges(true, false), "selected with the ring {} against without it {}", edges(true, true), edges(true, false));
-    assert!(edges(true, true) > edges(false, true), "selected {} against unselected {}", edges(true, true), edges(false, true));
-}
-
 /// A card of a preset centres its name; a card of a file sets it at the reading start.
 #[trial]
 fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {

@@ -387,12 +387,6 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop(flag)]
     flat_thumbnail: bool,
-    /// A picked card is outlined in the accent round the whole card, over the fill it is marked with: a flat card's pick
-    /// is a fill alone, and a card that is one of a few choices (the New Document presets) reads better with the line,
-    /// which is the same width in every state it shows in. Only a card shows it.
-    #[style_key]
-    #[prop(flag)]
-    pick_ring: bool,
     /// The paper colour of a page card (document data); replaces the sunken well and draws a crisp frame border.
     #[prop(into)]
     paper: Option<DataColor>,
@@ -493,7 +487,6 @@ impl<'a> Tile<'a> {
             card: false,
             card_text: CardText::File,
             flat_thumbnail: false,
-            pick_ring: false,
             paper: None,
             icon_zoom: None,
             detail: None,
@@ -882,11 +875,6 @@ impl Component for Tile<'_> {
         let page_card = key.card && key.card_text == CardText::Page;
         if key.action_place == TileActionPlace::Band || page_card {
             // A band tile or a page card has no ring round its picture: the selected tile is outlined as a whole.
-            let (line, accent) = (c(clear), c(colors.accent.solid));
-            surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
-        }
-        if key.card && key.pick_ring && key.action_place != TileActionPlace::Band && !page_card {
-            // A picked card is outlined as a whole, as a band tile and a page card are.
             let (line, accent) = (c(clear), c(colors.accent.solid));
             surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
         }
