@@ -177,14 +177,15 @@ impl Record {
 
     /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group and the
     /// owner takes the value too: only a toggle that takes the sweep in this pass counts as crossed. An owner that asked
-    /// in this pass before the sibling gets the value in the next pass; a sweep released in this pass is kept for it then.
-    /// Returns whether that next pass must run.
+    /// in this pass before the sibling gets the value in the next pass, which the caller repaints to run; a sweep released
+    /// before then is kept for the owner's check in that pass. Returns whether to repaint for that pass.
     fn accept(&mut self, sibling: Id) -> bool {
         let Some(sweep) = &mut self.sweep else { return false };
         sweep.visited.insert(sibling);
-        let late = !sweep.engaged && sweep.travel.released && self.asked.contains(&sweep.owner);
+        let late = !sweep.engaged && self.asked.contains(&sweep.owner);
         sweep.engaged = true;
-        self.replay_first_path |= late;
+        // A sweep still held keeps its path for the siblings it has yet to reach: only one released in this pass replays it.
+        self.replay_first_path |= late && sweep.travel.released;
         late
     }
 

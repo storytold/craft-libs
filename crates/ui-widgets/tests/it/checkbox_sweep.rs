@@ -137,6 +137,34 @@ fn a_checkbox_that_becomes_enabled_during_a_sweep_and_is_crossed_engages_the_own
 }
 
 #[trial]
+fn a_checkbox_sweep_held_over_a_crossed_box_sets_the_box_before_it() {
+    let values = Rc::new(RefCell::new([false; 2]));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut values = shown.borrow_mut();
+        for (value, label) in values.iter_mut().zip(["Owner", "Crossed"]) {
+            Checkbox::new(Bind::bound(value)).label(label).show(ui);
+        }
+    });
+    fixture.settle();
+    let owner = fixture.by_label("Owner").expect("owner");
+    let crossed = fixture.by_label("Crossed").expect("crossed").center();
+
+    fixture.press(&owner);
+    fixture.frame(vec![pointer::moved(crossed)]);
+    fixture.settle();
+    assert_eq!(
+        *values.borrow(),
+        [true, true],
+        "the drag pauses over the crossed box with the button still held, and the box drawn before it takes the value in the pass the sweep asks for"
+    );
+
+    fixture.release_at(crossed);
+    fixture.settle();
+    assert_eq!(*values.borrow(), [true, true], "a release over the crossed box leaves both boxes set");
+}
+
+#[trial]
 fn a_checkbox_sibling_that_leaves_the_sweep_in_the_crossing_pass_does_not_engage_its_owner() {
     for leaving in [Leaving::Disabled, Leaving::Hidden, Leaving::Moved, Leaving::Removed] {
         let values = Rc::new(RefCell::new([false; 2]));
