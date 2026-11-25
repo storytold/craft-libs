@@ -16,7 +16,7 @@ and command handling remain in each application. No icons, fonts or application 
 
 Iconic flyouts resize from their canvas-side edge, top, bottom and the two
 canvas-side corners, keeping the edge against the icon column anchored. Resizing
-saves the group's `height` and `flyout_width`, and a top-edge resize saves
+saves the group's `flyout_height` and `flyout_width`, apart from its docked `height`, and a top-edge resize saves
 `flyout_offset`, the top's distance from the group's icons, so workspaces retain
 independent sizes and placement for each group. Without an offset a flyout aligns
 with its icons, and a saved one stays inside the float bounds. The top handle is a

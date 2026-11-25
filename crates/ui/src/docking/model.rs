@@ -472,6 +472,12 @@ pub enum Action<P> {
         panel: P,
         height: Option<f32>,
     },
+    /// Preferred flyout height of the dock group holding `panel`, apart from its docked
+    /// [`ResizeGroup`](Action::ResizeGroup) height; `None` fits the content.
+    ResizeFlyoutHeight {
+        panel: P,
+        height: Option<f32>,
+    },
     /// Preferred flyout width of the dock group holding `panel`; `None` uses its column.
     ResizeFlyoutWidth {
         panel: P,
@@ -771,6 +777,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         location.group = Some(GroupLocation {
             minimized: own.minimized,
             height: own.height,
+            flyout_height: own.flyout_height,
             flyout_width: own.flyout_width,
             flyout_offset: own.flyout_offset,
             column,
@@ -838,6 +845,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         let state = location.group.as_ref();
         if state.is_some_and(|s| {
             !valid_height(s.height)
+                || !valid_height(s.flyout_height)
                 || s.flyout_width.is_some_and(|w| !valid_width(w))
                 || s.flyout_offset.is_some_and(|o| !valid_offset(o))
                 || s.column.is_some_and(|c| !valid_width(c.width) || c.iconic_width.is_some_and(|w| !valid_width(w)))
@@ -851,6 +859,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 active: 0,
                 minimized: state.is_some_and(|s| s.minimized),
                 height: state.and_then(|s| s.height),
+                flyout_height: state.and_then(|s| s.flyout_height),
                 flyout_width: state.and_then(|s| s.flyout_width),
                 flyout_offset: state.and_then(|s| s.flyout_offset),
             };
@@ -1247,6 +1256,15 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 entry.height = height;
                 Ok(())
             }
+            Action::ResizeFlyoutHeight { panel, height } => {
+                if !valid_height(height) {
+                    return Err(DockError::InvalidGeometry);
+                }
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                let group = self.group_mut(&place).ok_or(DockError::InvalidPlacement)?;
+                group.flyout_height = height;
+                Ok(())
+            }
             Action::ResizeFlyoutWidth { panel, width } => {
                 if width.is_some_and(|w| !valid_width(w)) {
                     return Err(DockError::InvalidGeometry);
@@ -1453,6 +1471,7 @@ fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet<&'a P>) ->
 fn check_group<'a, P: Eq + Hash>(group: &'a Group<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
     if group.panels.is_empty()
         || !valid_height(group.height)
+        || !valid_height(group.flyout_height)
         || group.flyout_width.is_some_and(|w| !valid_width(w))
         || group.flyout_offset.is_some_and(|o| !valid_offset(o))
     {
