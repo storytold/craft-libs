@@ -120,7 +120,8 @@ fn every_truncation_and_flipped_byte_is_an_error_not_a_panic() {
     let m = surface("Grayscale", "U8", false, &[255], &[(0, 0, &hash(&mask_tile))]);
     let file = bundle(3, 2, "Rgb", &[layer(&raster(&s), Some(&m))], &[&tile, &mask_tile]);
     assert!(read(&file, &[0]).mask.is_some());
-    for n in 0..file.len() {
+    // The gate runs every divisor-th truncation and flip; nightly runs every one.
+    for n in (0..file.len()).step_by(craft_testkit::hostile::divisor()) {
         let _ = pcraft_layer_rgba(&file[..n], &[0], &Limits::default());
         let mut flipped = file.clone();
         flipped[n] ^= 0xff;

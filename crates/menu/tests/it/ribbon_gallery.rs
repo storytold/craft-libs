@@ -138,3 +138,56 @@ fn a_wide_captioned_gallery_names_its_tiles_under_wide_pictures() {
     assert!(name.min.y >= wide.min.y + square.width() / 2.0, "the name {name:?} is under the picture in {wide:?}");
     assert!(!plain.iter().any(|(text, _)| text == "Tile 0"), "a plain tile paints no name: {plain:?}");
 }
+
+/// A framed gallery paints a sunken well fill over its bounds, and a panel fill over its stepper button track.
+#[trial]
+fn a_framed_gallery_paints_sunken_well_and_stepper_track() {
+    use craft_ui::runtime::env::Env;
+    use egui::Color32;
+
+    fn fills(shapes: &[egui::Shape], out: &mut Vec<(egui::Rect, egui::Color32)>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Vec(inner) => fills(inner, out),
+                egui::Shape::Rect(rect) => out.push((rect.rect, rect.fill)),
+                _ => {}
+            }
+        }
+    }
+
+    let colors_and_rect = Rc::new(Cell::new((Rect::NOTHING, Color32::TRANSPARENT, Color32::TRANSPARENT)));
+    let held = colors_and_rect.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let [sr, sg, sb, sa] = Env::of(ui).tokens.tokens().color.surface.sunken.0;
+        let [pr, pg, pb, pa] = Env::of(ui).tokens.tokens().color.surface.panel.0;
+        let sunken = Color32::from_rgba_unmultiplied(sr, sg, sb, sa);
+        let panel = Color32::from_rgba_unmultiplied(pr, pg, pb, pa);
+
+        let paint = |_: &ContentPainterCx, _: Rect| {};
+        let items: Vec<GalleryItem<'_, usize>> =
+            (0..10).map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) }).collect();
+        let out = Gallery::new("Styles", &items, None).tiles(6, 3).framed().show(ui);
+        held.set((out.response.rect, sunken, panel));
+    });
+    fixture.settle();
+
+    let (gallery_rect, sunken, panel) = colors_and_rect.get();
+    assert!(gallery_rect.is_positive(), "the gallery paints a positive rect");
+
+    let mut seen = Vec::new();
+    fills(&fixture.frame_shapes(), &mut seen);
+
+    assert!(
+        seen.iter()
+            .any(|(rect, fill)| *fill == sunken && rect.contains_rect(gallery_rect.shrink(1.0)) && gallery_rect.expand(1.0).contains_rect(*rect)),
+        "a sunken fill covers the gallery {gallery_rect:?}: {seen:?}"
+    );
+
+    let up = fixture.by_label("Previous row").expect("the up button shows");
+    let down = fixture.by_label("Next row").expect("the down button shows");
+    let more = fixture.by_label("More").expect("the more button shows");
+    let column = up.rect.union(down.rect).union(more.rect);
+    let stepper_track =
+        seen.iter().find(|(rect, fill)| *fill == panel && rect.contains_rect(column.shrink(1.0)) && gallery_rect.contains_rect(*rect));
+    assert!(stepper_track.is_some(), "a panel fill covers the stepper track column {column:?}: {seen:?}");
+}

@@ -13,7 +13,9 @@ use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, show_as_only_ite
 use egui::{Key, Modifiers, Rect, Ui, Vec2, pos2, vec2};
 
 use super::row::GridRow;
-use super::{CellAt, CellGrid, CellProblem, CellRange, ColumnFilter, GridModel, GridOutput, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS};
+use super::{
+    CellAt, CellGrid, CellProblem, CellRange, ColumnEdges, ColumnFilter, GridModel, GridOutput, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS,
+};
 use crate::ui::outline::{OutlineAxis, OutlineGroup};
 
 /// A cell's text, and whether it holds a number (drawn at the cell's end edge).
@@ -278,6 +280,17 @@ fn cell_grid_chrome(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .show_sheet(ui);
     *data.value("state", GridState::default()) = state;
     out.into()
+}
+
+/// No headings; each column's end edge also resizes it over the cells.
+#[story(CellGrid<'static>, covers = [], drive = Drive::Never)]
+fn cell_grid_headless_column_edges(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let model = StorySheet::numbered(ui, SHEET_ROWS, false);
+    let mut state = data.value("state", GridState::default()).clone();
+    let out = CellGrid::new("Sheet", &model, &mut state).headings(false).column_edges(ColumnEdges::Cells).show_sheet(ui);
+    *data.value("state", GridState::default()) = state;
+    let readout = last_event(data, &out);
+    StoryOutput::from(out).readout(readout)
 }
 
 const STORY_ROW_CELLS: u32 = 4;

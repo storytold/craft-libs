@@ -136,6 +136,10 @@ pub struct SliceOverlay<'a> {
     /// Which product's rules the control follows.
     #[prop]
     rules: SliceRules,
+    /// The other selected slices' numbers, drawn in the selected colour beside the `selected_slice`.
+    #[prop]
+    #[allow(dead_code)] // P3(object-dialogs-w2): cv.F44
+    also_selected: &'a [usize],
     events: Vec<SliceEvent>,
 }
 
@@ -152,6 +156,7 @@ impl<'a> SliceOverlay<'a> {
             hide_auto: false,
             locked: false,
             rules: SliceRules::PHOTOSHOP,
+            also_selected: &[],
             events: Vec::new(),
         }
         .label(label)

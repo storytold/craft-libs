@@ -76,6 +76,14 @@ pub enum Place {
         /// Beside the anchor, it lines up with the anchor's other end when that fits and the aligned end does not,
         /// instead of sliding inside the bounds: a submenu of a low row opens upward.
         flips_across: bool,
+        /// Where the layer sits from the place it would take: shifts it by this much.
+        offset: egui::Vec2,
+        /// A rect the layer keeps clear of, in the layer's own space.
+        clear: Option<egui::Rect>,
+        /// Below or above the anchor, a layer that fits on neither side keeps its size and slides over the anchor,
+        /// inside its bounds, instead of being cut to the room left beside it: a task bar under a crop frame that
+        /// fills the canvas.
+        covers: bool,
     },
     /// Free-standing.
     Float(FloatPlace),
@@ -84,15 +92,42 @@ pub enum Place {
 impl Place {
     /// An anchored place.
     pub const fn anchored(anchor: Anchor, side: Side, align: Align) -> Self {
-        Place::Anchored { anchor, side, align, flips_across: false }
+        Place::Anchored { anchor, side, align, flips_across: false, offset: egui::Vec2::ZERO, clear: None, covers: false }
     }
 
     /// The place, beside its anchor, lining up with the anchor's other end when that fits and the aligned end does not.
     pub const fn flipping_across(self) -> Self {
         match self {
-            Place::Anchored { anchor, side, align, .. } => Place::Anchored { anchor, side, align, flips_across: true },
+            Place::Anchored { anchor, side, align, offset, clear, covers, .. } => {
+                Place::Anchored { anchor, side, align, flips_across: true, offset, clear, covers }
+            }
             float => float,
         }
+    }
+
+    /// The place shifted by `by` from where it would sit; no change off `Anchored`.
+    pub fn offset(mut self, by: egui::Vec2) -> Self {
+        if let Place::Anchored { offset, .. } = &mut self {
+            *offset = by;
+        }
+        self
+    }
+
+    /// The place, below or above its anchor, sliding over the anchor when it fits on neither side; no change off
+    /// `Anchored`.
+    pub fn covering_anchor(mut self) -> Self {
+        if let Place::Anchored { covers, .. } = &mut self {
+            *covers = true;
+        }
+        self
+    }
+
+    /// The place keeping clear of `rect`; no change off `Anchored`.
+    pub fn clear_of(mut self, rect: egui::Rect) -> Self {
+        if let Place::Anchored { clear, .. } = &mut self {
+            *clear = Some(rect);
+        }
+        self
     }
 }
 

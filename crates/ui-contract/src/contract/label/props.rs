@@ -48,17 +48,26 @@ pub(super) enum Glyph {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphLabel {
     shown: Glyph,
+    /// The text stands for a word caption ([`GlyphLabel::caption`]).
+    pub(super) caption: bool,
 }
 
 impl GlyphLabel {
     /// Shows `icon`, as large as the control's icons.
     pub fn icon(icon: impl Into<IconSpec<'static>>) -> Self {
-        GlyphLabel { shown: Glyph::Icon(icon.into()) }
+        GlyphLabel { shown: Glyph::Icon(icon.into()), caption: false }
     }
 
     /// Shows `text`, resolved in the scope's language.
     pub fn text(text: impl Into<Label>) -> Self {
-        GlyphLabel { shown: Glyph::Text(text.into()) }
+        GlyphLabel { shown: Glyph::Text(text.into()), caption: false }
+    }
+
+    /// Shows `text` that stands for a word caption: X for the horizontal position, W for the width. It is a glyph text
+    /// in every way, and under [`GlyphColon::Form`] it takes a form's colon as a word label does ("X:"). A glyph that
+    /// is a mark of its own ("#" before a hex value, a colour channel's letter) is [`GlyphLabel::text`].
+    pub fn caption(text: impl Into<Label>) -> Self {
+        GlyphLabel { caption: true, ..GlyphLabel::text(text) }
     }
 
     /// What the label leaf draws: the icon, or the text resolved in `env`.
@@ -76,16 +85,109 @@ impl GlyphLabel {
 #[non_exhaustive]
 pub enum LabelScheme {
     /// A dialog or a form: a beside label sits against its control and ends with a colon; the control keeps its own
-    /// width. In a bar a glyph text takes the colon as well ("X:").
+    /// width. In a bar a glyph text takes the colon as well ("X:"), and so does a glyph caption under
+    /// [`GlyphColon::Form`].
     #[default]
     Form,
     /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
     Inspector,
+    /// A document dialog: a beside label starts at the row's start and ends with a colon, and its control follows it
+    /// at once, at the control's own width. Labels share no column, so each row reads as one line.
+    Inline,
 }
 
 impl crate::runtime::env::EnvValue for LabelScheme {
     fn root() -> Self {
         LabelScheme::Form
+    }
+}
+
+/// Which glyph labels take the colon of a scheme whose word labels take one. An app sets it once at its root
+/// (`RootEnv::values`); the default is [`GlyphColon::Bar`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum GlyphColon {
+    /// A glyph text takes the colon in a bar only ("X:"), and shows bare elsewhere.
+    #[default]
+    Bar,
+    /// A glyph caption ([`GlyphLabel::caption`]) takes the colon wherever a word label does, so a form's X/Y/W/H read
+    /// "X:"; every other glyph text keeps the bar's rule. VectorCraft's panels.
+    Form,
+}
+
+impl crate::runtime::env::EnvValue for GlyphColon {
+    fn root() -> Self {
+        GlyphColon::Bar
+    }
+}
+
+/// The ink of a field's label shown as a link ([`SideLabel::link`]), which opens its control's options. An app sets it
+/// once at its root (`RootEnv::values`); the default is the link look's accent. Either way it stays underlined, so
+/// colour is not its only cue. A free `Link` keeps the accent: one that opens options asks for `Tone::Neutral`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum LinkLabelInk {
+    /// The link look (`StyleCx::link_look`): `accent.solid`, `accent.text` at high contrast.
+    #[default]
+    Accent,
+    /// `text.normal`, the ink of a `Link` in `Tone::Neutral`: VectorCraft's "Opacity:" and "Stroke" labels, as
+    /// production drew them.
+    Neutral,
+}
+
+/// Where a one-line link label ([`SideLabel::link`]) draws its underline. An app sets it once at its root
+/// (`RootEnv::values`); the default is `Edge`. Neither changes the label's rect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum LinkLabelUnderline {
+    /// On the name's text box's bottom edge, where egui strokes an underlined span. The label's rect, which clips its
+    /// paint, can stand shorter than that box, and then it cuts the underline away.
+    #[default]
+    Edge,
+    /// On the text box's bottom edge or the rect's, whichever is higher, so the rect always holds it: VectorCraft's
+    /// "Stroke" and "Opacity:" links, as production drew them.
+    Inside,
+}
+
+/// The ink of a side label's name, other than a link's ([`LinkLabelInk`]) and the text after a check box or a radio,
+/// which reads at full ink. An app sets it once at its root (`RootEnv::values`); the default is the muted ink of a
+/// caption that reads as secondary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum CaptionInk {
+    /// `text.muted`.
+    #[default]
+    Muted,
+    /// `text.normal`, the ink of the values beside it: VectorCraft's field labels ("X:", "Angle:", "Opacity"), as
+    /// production drew them.
+    Normal,
+}
+
+/// Whether the beside captions of a [`LabelScheme::Inline`] form share one column. Off (the default), each caption is
+/// as wide as its own text and its control follows it at once. On, the captions keep to the row start in one column as
+/// wide as the widest, so the controls after them line up (production's Rotate Pages dialog: Direction:, Pages: and
+/// Rotate: in a column). Other schemes always share their column.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+pub struct CaptionColumn(bool);
+
+impl CaptionColumn {
+    /// The captions share one column.
+    pub const SHARED: CaptionColumn = CaptionColumn(true);
+    /// Each caption is as wide as its own text (the default).
+    pub const OWN: CaptionColumn = CaptionColumn(false);
+
+    /// Whether the captions share one column.
+    pub const fn shared(self) -> bool {
+        self.0
+    }
+}
+
+impl crate::runtime::env::EnvValue for CaptionColumn {
+    fn root() -> Self {
+        CaptionColumn::OWN
     }
 }
 
@@ -172,6 +274,18 @@ pub(crate) fn inside(env: EnvView<'_>, side: &SideLabel, enabled: bool) -> Optio
 /// The width of a caption's cell.
 pub type CellWidth = ColumnWidth;
 
+/// What a click on a control's side label does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LabelPress {
+    /// A click focuses the control.
+    #[default]
+    Focus,
+    /// The label shows in the link look, and a click reports to the control's host and leaves focus alone. It is no
+    /// Tab stop of its own, and a drag still scrubs when `scrub` is on.
+    Link,
+}
+
 /// What `ContainerProps.label` holds: how the label is shown and what it does. The text is `Common.label`.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -192,6 +306,8 @@ pub struct SideLabel {
     pub detail: Option<Label>,
     /// The label's tooltip, in place of its text: a hint a short or glyph label has no room for.
     pub tooltip: Option<Tooltip>,
+    /// What a click on the label does.
+    pub press: LabelPress,
 }
 
 impl SideLabel {
@@ -218,6 +334,7 @@ impl SideLabel {
             icon: None,
             detail: None,
             tooltip: None,
+            press: LabelPress::Focus,
         }
     }
 
@@ -239,6 +356,13 @@ impl SideLabel {
     #[must_use]
     pub const fn role(mut self, role: FieldLabelRole) -> Self {
         self.role = role;
+        self
+    }
+
+    /// Shows the label as a link: a click reports to the control's host (`Cx::link_activated`) and leaves focus alone.
+    #[must_use]
+    pub const fn link(mut self) -> Self {
+        self.press = LabelPress::Link;
         self
     }
 

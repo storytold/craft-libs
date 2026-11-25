@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-android-res = { path = "crates/android-res" }
 craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
@@ -37,9 +38,13 @@ log = "0.4"
 craft-plist = { path = "crates/plist" }
 craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
+craft-png = { path = "crates/png" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-win32 = { path = "crates/win32" }
+craft-appkit = { path = "crates/appkit" }
+craft-wayland = { path = "crates/wayland" }
+craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
@@ -165,6 +170,7 @@ craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
+craft-material-graph = { path = "crates/material-graph" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-sf2 = { path = "crates/sf2" }
@@ -310,20 +316,20 @@ hayro-postscript = { path = "vendor/hayro-postscript" }
 linesweeper = { path = "vendor/linesweeper" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "72cb386ac73dc0ade2b2d15cc8314e236a8e5eb1" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b15ffe9bfc2c8e6748533b32b708e10abaf2afec" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 # symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid

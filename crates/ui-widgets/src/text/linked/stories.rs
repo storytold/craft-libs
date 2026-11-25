@@ -1,8 +1,8 @@
 //! Stories of `LinkedFields`.
 
 use super::{LinkMode, LinkedFields, LinkedLayout};
-use crate::contract::{Bind, Props as _, Show as _, Validity};
-use crate::runtime::env::Message;
+use crate::contract::{Bind, Props as _, Show as _, SideLabel, Validity};
+use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
 use craft_theme::ControlSize;
@@ -29,6 +29,28 @@ fn linked_fields_equal_columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
         .captions(["Inside", "Outside"])
         .mode(LinkMode::Equal)
         .layout(LinkedLayout::Columns)
+        .show(ui)
+        .into()
+}
+
+#[story(LinkedFields<'static, 2>, covers = [], drive = Drive::Never)]
+fn linked_fields_percent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let linked = *data.value("linked", true);
+    LinkedFields::new("Scale", data.bind("scale", Mixed::each([Some(100.0); 2])), Bind::given(linked))
+        .captions(["W", "H"])
+        .range(1.0..=1000.0)
+        .unit_kind(UnitKind::Percent)
+        .show(ui)
+        .into()
+}
+
+#[story(LinkedFields<'static, 2>, covers = [], drive = Drive::Never)]
+fn linked_fields_link_caption(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let linked = *data.value("linked", true);
+    LinkedFields::new("Margins", data.bind("link caption", Mixed::each([Some(12.0); 2])), Bind::given(linked))
+        .captions(["Inside", "Outside"])
+        .caption_with(1, SideLabel::new().link())
+        .layout(LinkedLayout::Column)
         .show(ui)
         .into()
 }

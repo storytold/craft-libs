@@ -2,7 +2,7 @@
 //! one at its size, and is painted at the pointer otherwise.
 
 use craft_behavior::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor, PointerGlyph};
-use craft_host::target::{Backend, Os, Runtime, ShellInfo};
+use craft_host::target::{Backend, Caps, Os, Runtime, ShellInfo};
 use craft_ui::runtime::cursor;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Frames, install_spec, trial};
@@ -159,6 +159,26 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
     assert!(hidden.image.is_none() && hidden.shapes == 0 && hidden.icon == egui::CursorIcon::None);
 }
 
+/// Sa-9 (4): a shell that cannot set the system cursor (Wayland with no cursor theme, where a hidden pointer never
+/// comes back) keeps the system pointer under every painted cursor and paints none, in the main window and another.
+#[trial]
+fn a_shell_that_cannot_set_the_system_cursor_keeps_the_system_pointer() {
+    let wayland = linux().backend(Backend::Wayland);
+    let without = wayland.clone().caps(wayland.caps.difference(Caps::SYSTEM_CURSOR));
+    for cursor in [PaintedCursor::circle(20.0), PaintedCursor::circle(300.0), PaintedCursor::Hand, PaintedCursor::Hidden] {
+        let mut with = frames(wayland.clone(), 1.25);
+        let seen = painted(&mut with, cursor.clone());
+        assert_eq!(seen.icon, egui::CursorIcon::None, "{cursor:?}: with the system cursor the painted one stands in for it");
+
+        let mut kept = frames(without.clone(), 1.0);
+        for viewport in [ViewportId::ROOT, ViewportId::from_hash_of("child window")] {
+            let seen = frame_in(&mut kept, viewport, &[(Cursor::Painted(cursor.clone()), CursorPriority::Tool)]);
+            assert_ne!(seen.icon, egui::CursorIcon::None, "{cursor:?} in {viewport:?}: the system pointer stays");
+            assert!(seen.image.is_none() && seen.shapes == 0, "{cursor:?} in {viewport:?}: no tool cursor is drawn");
+        }
+    }
+}
+
 /// A tool icon rides below and right of its pointer: beside the plain pointer, the image's marks reach as far left and up
 /// from the hotspot (the arrow's tip, the crosshair's centre) and farther right and down; an icon the catalog lacks
 /// leaves the plain pointer.
@@ -186,6 +206,41 @@ fn a_tool_icon_rides_below_right_of_its_pointer() {
         }
         let missing = reach(&painted(&mut frames, PaintedCursor::pointer_tool(pointer, IconId::new("no_such_icon"))).image.unwrap());
         assert_eq!(missing, plain, "{pointer:?}: only the pointer");
+    }
+}
+
+/// An arrow with a tool icon keeps ink on its hotspot (the arrow's tip), and a badge lands below right of the icon: the
+/// marks reach no farther left or up than without it, and farther right (photocraft#16671).
+#[trial]
+fn a_badged_tool_pointer_keeps_its_tip_on_the_hotspot_and_the_badge_below_right() {
+    fn reach(image: &CustomCursorImage) -> [i32; 4] {
+        let (side, [hx, hy]) = (i32::from(image.size[0]), image.hotspot.map(i32::from));
+        let mut reach = [0; 4];
+        for (i, px) in image.rgba.chunks(4).enumerate() {
+            if px[3] > 0 {
+                let (dx, dy) = (i as i32 % side - hx, i as i32 / side - hy);
+                reach = [reach[0].max(-dx), reach[1].max(-dy), reach[2].max(dx), reach[3].max(dy)];
+            }
+        }
+        reach
+    }
+    for scale in [1.0, 1.25, 2.0] {
+        let mut frames = frames(linux(), scale);
+        let plain = painted(&mut frames, PaintedCursor::pointer_tool(PointerGlyph::Arrow, IconId::new("lasso"))).image.unwrap();
+        let [hx, hy] = plain.hotspot.map(i32::from);
+        assert!(pixel(&plain, hx, hy)[3] > 0, "{scale}: the arrow's tip is on the hotspot");
+        for badge in [CursorBadge::Add, CursorBadge::Subtract, CursorBadge::Intersect] {
+            let badged = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), Some(badge));
+            let image = painted(&mut frames, badged).image.unwrap();
+            let [hx, hy] = image.hotspot.map(i32::from);
+            assert!(pixel(&image, hx, hy)[3] > 0, "{scale} {badge:?}: the arrow's tip is on the hotspot");
+            let (with, without) = (reach(&image), reach(&plain));
+            assert_eq!(with[..2], without[..2], "{scale} {badge:?}: nothing reaches farther left or up");
+            // A minus lies on the icon's bottom edge, so only the plus and the cross reach lower.
+            assert!(with[2] > without[2] && with[3] >= without[3], "{scale} {badge:?}: the badge lies at the icon's lower right");
+        }
+        let none = PaintedCursor::pointer_tool_badged(PointerGlyph::Arrow, IconId::new("lasso"), None);
+        assert_eq!(reach(&painted(&mut frames, none).image.unwrap()), reach(&plain), "{scale}: no badge is the plain pointer");
     }
 }
 

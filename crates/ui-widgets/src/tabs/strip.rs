@@ -21,7 +21,8 @@ use crate::buttons::IconButton;
 use crate::contract::{
     Access, Animate as _, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps,
     ContextMenuRequest, Cx, DropKind, DropMark, Entry, ListDrag, Meta, Name, NoValue, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, PopupKind, Props as _, Role, RowState, SelectMode, ShowContainer as _, ShowShape, Sizing, WindowDropTarget, WordSetCx as _, spec,
+    Pointer as _, PopupKind, Props as _, Remember as _, Role, RowState, SelectMode, ShowContainer as _, ShowShape, Sizing, WindowDropTarget,
+    WordSetCx as _, spec,
 };
 use crate::list::{DropTest, RowTest};
 use crate::menu::Menu;
@@ -51,7 +52,8 @@ const ENDS: &str = "ends";
 /// is painted on.
 const GHOST: PartKey = PartKey::new("ghost");
 
-/// A tab dragged away from every strip and released: the tabs the drag carried and where the pointer was.
+/// A tab dragged away from every strip and released: the tabs the drag carried and where the pointer was. A tool rail
+/// reports a group torn off a flyout as one too, its slot as both `keys` and `grabbed`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TornOff<K> {
@@ -63,6 +65,14 @@ pub struct TornOff<K> {
     pub pointer: Pos2,
 }
 
+impl<K> TornOff<K> {
+    /// A tear-off of `keys`, the tab `grabbed` among them, released with the pointer at `pointer`. The struct is
+    /// `#[non_exhaustive]`, so this is how another crate (a tool rail) reports one.
+    pub fn new(keys: Vec<K>, grabbed: K, pointer: Pos2) -> Self {
+        TornOff { keys, grabbed, pointer }
+    }
+}
+
 /// What a `TabStrip` reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -72,7 +82,8 @@ pub struct TabStripOutput<K> {
     /// double click as `Activate`, a reorder or a drop from another strip. Close and context-menu events are in the
     /// fields below.
     pub response: CollectionResponse<K, TabPartEvent>,
-    /// The tabs whose close button was pressed, or that a middle click closed where the kind closes on it.
+    /// The tabs whose close button was pressed, or that a middle click closed where the kind closes on it
+    /// (`TabStrip::can_close`).
     pub closed: Vec<K>,
     /// The tab context menu is asked for: a secondary click, the context-menu key or Shift+F10.
     pub menu: Option<ContextMenuRequest<K>>,
@@ -88,6 +99,8 @@ pub struct TabStripOutput<K> {
     pub empty_drag: bool,
     /// The second press of a double click went down on the strip's empty room this pass.
     pub empty_double: bool,
+    /// The overflow button, when some tabs do not fit: its rect in screen space and the id of its accessibility node.
+    pub overflow: Option<(Rect, Id)>,
 }
 
 impl<K> Outcome for TabStripOutput<K> {
@@ -176,6 +189,19 @@ enum Lane {
     Ghost(usize),
 }
 
+/// The wheel scroll a strip has taken but not yet turned into a step, and the tab the strip left shown.
+#[derive(Clone)]
+struct WheelCarry<K> {
+    owed: f32,
+    left: Option<K>,
+}
+
+impl<K> Default for WheelCarry<K> {
+    fn default() -> Self {
+        Self { owed: 0.0, left: None }
+    }
+}
+
 /// What the fit reads besides the tabs' widths: the shown tab, the kind's rule, the tabs kept ahead of the others and
 /// the end items.
 #[derive(Clone, Debug)]
@@ -202,6 +228,8 @@ pub struct StripLayout {
     min: Vec<f32>,
     width: f32,
     height: f32,
+    /// Space between document tabs; included in the fit budget but not in their hit rectangles.
+    tab_gap: f32,
     measured_height: bool,
     fitting: Fitting,
     shown: Vec<bool>,
@@ -213,13 +241,15 @@ pub struct StripLayout {
 }
 
 impl StripLayout {
-    fn new(count: usize, width: f32, height: f32, fitting: Fitting, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
+    fn new(count: usize, size: Vec2, tab_gap: f32, fitting: Fitting, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
+        let (width, height) = (size.x, size.y);
         let each = if count == 0 { 0.0 } else { width / count as f32 };
         let mut layout = StripLayout {
             ideal: vec![each; count],
             min: vec![0.0; count],
             width,
             height,
+            tab_gap,
             measured_height: false,
             fitting,
             shown: Vec::new(),
@@ -240,7 +270,9 @@ impl StripLayout {
         if ends.is_empty() {
             return (0.0, Vec::new());
         }
-        let natural = self.ideal.iter().sum::<f32>() + ghosts.iter().map(|ghost| ghost.width).sum::<f32>();
+        let places = self.ideal.len() + ghosts.len();
+        let natural =
+            self.ideal.iter().sum::<f32>() + ghosts.iter().map(|ghost| ghost.width).sum::<f32>() + self.tab_gap * places.saturating_sub(1) as f32;
         let fit = fit_items(ends, self.width - natural - gap, *gap, *gap, 0.0);
         let sized: Vec<(usize, f32, bool)> = fit
             .shown
@@ -271,7 +303,8 @@ impl StripLayout {
     fn refit(&mut self) {
         let count = self.ideal.len();
         let (ends_room, ends) = self.fit_ends();
-        let StripLayout { ideal, min, width, height, fitting, shown, left, wide, report, ctx, .. } = self;
+        let StripLayout { ideal, min, width, height, tab_gap, fitting, shown, left, wide, report, ctx, .. } = self;
+        let tab_gap = *tab_gap;
         let Fitting { selected, mode, kept, ghosts, departed, .. } = &*fitting;
         let mut lane = Vec::with_capacity(count + ghosts.len());
         for at in 0..=count {
@@ -280,12 +313,15 @@ impl StripLayout {
                 lane.push(Lane::Tab(at));
             }
         }
-        let natural: Vec<f32> = lane
+        // Every place in the lane takes a trailing gap, and the last gap goes back to the available width: the spaces
+        // are in the shrink and overflow budget without one after the last tab.
+        let padded: Vec<f32> = lane
             .iter()
             .map(|place| match *place {
                 Lane::Tab(at) => ideal.get(at).copied().unwrap_or(0.0),
                 Lane::Ghost(k) => ghosts.get(k).map_or(0.0, |ghost| ghost.width),
             })
+            .map(|width| width + tab_gap)
             .collect();
         let held: Vec<bool> = lane
             .iter()
@@ -296,14 +332,15 @@ impl StripLayout {
             .collect();
         let selected = lane.iter().position(|place| matches!(*place, Lane::Tab(at) if at == *selected)).unwrap_or(usize::MAX);
         let minimum = min.iter().copied().fold(0.0, f32::max);
-        let fit = mode.fit(&natural, selected, &held, (*width - ends_room).max(0.0), minimum, *height);
+        let fit = mode.fit(&padded, selected, &held, (*width - ends_room).max(0.0) + tab_gap, minimum + tab_gap, *height);
         *shown = vec![false; count];
         *left = vec![*width; count];
         *wide = vec![0.0; count];
         let mut at = 0.0;
         let mut placed = Vec::with_capacity(fit.shown.len());
         let mut slots: Vec<Option<(f32, f32)>> = vec![None; *departed];
-        for &(position, extent) in &fit.shown {
+        for &(position, padded_extent) in &fit.shown {
+            let extent = (padded_extent - tab_gap).max(0.0);
             match lane.get(position) {
                 Some(&Lane::Tab(index)) => {
                     shown[index] = true;
@@ -318,7 +355,10 @@ impl StripLayout {
                 }
                 None => {}
             }
-            at += extent;
+            at += extent + tab_gap;
+        }
+        if !fit.shown.is_empty() {
+            at -= tab_gap;
         }
         let hidden: Vec<usize> = fit
             .overflow
@@ -336,6 +376,13 @@ impl StripLayout {
 }
 
 impl ItemLayout for StripLayout {
+    fn set_view(&mut self, viewport: Vec2, _: ScrollPos) {
+        if self.width != viewport.x {
+            self.width = viewport.x;
+            self.refit();
+        }
+    }
+
     fn content_size(&self) -> ScrollPos {
         ScrollPos { x: f64::from(self.width), y: f64::from(self.height) }
     }
@@ -350,6 +397,18 @@ impl ItemLayout for StripLayout {
 
     fn hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
         (0..self.ideal.len()).find(|&at| self.shown[at] && self.rect(at, offset).contains(point))
+    }
+
+    fn drop_hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
+        self.hit(point, offset).or_else(|| {
+            (0..self.ideal.len()).find(|&at| {
+                if !self.shown[at] || self.left[at] <= 0.0 {
+                    return false;
+                }
+                let rect = self.rect(at, offset);
+                point.y >= rect.top() && point.y <= rect.bottom() && point.x >= rect.left() - self.tab_gap && point.x < rect.left()
+            })
+        })
     }
 
     fn nav(&self) -> NavShape {
@@ -473,6 +532,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// The strip's taller form with the body type.
     #[prop(flag)]
     large: bool,
+    /// The look of a panel strip's tabs ([`TabKind::Panel`]).
+    #[prop]
+    panel_look: super::PanelTabLook,
     /// The tab the host shows. A click, Space, Enter or a drop reports the new one in the output.
     #[prop]
     shown: Option<K>,
@@ -486,6 +548,11 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
+    /// Which tabs a middle click closes, where the kind closes on one (`TabKind::middle_click_closes`). Unset, the
+    /// kind's default (`TabKind::closes_by_default`): every document tab, no panel tab. A host whose tabs differ from
+    /// that default (`Tab::closable`) names the ones that close.
+    #[prop(func = "Fn(&K) -> bool")]
+    can_close: Option<RowTest<'a, K>>,
     /// The role of each tab, an input of the fit: contextual tabs are kept ahead of plain tabs.
     #[prop(func = "Fn(&K) -> TabRole")]
     roles: Option<TabRoles<'a, K>>,
@@ -521,7 +588,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     #[must_use]
     pub fn kind(mut self, kind: TabKind) -> Self {
         self.kind = kind;
-        self.items = self.items.select_under_drag(kind.selects_under_drag());
+        self.items = self.items.select_under_drag(kind.selects_under_drag()).primary_picks(kind.primary_shows());
         self
     }
 
@@ -535,13 +602,16 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
                 .pages(true)
                 .arrows_select(false)
                 .overflow(craft_behavior::Axis::X)
-                .select_under_drag(true),
+                .select_under_drag(TabKind::Document.selects_under_drag())
+                .primary_picks(TabKind::Document.primary_shows()),
             kind: TabKind::Document,
             large: false,
+            panel_look: super::PanelTabLook::Plain,
             shown: None,
             tear_off: false,
             wheel_selects: false,
             can_drag: None,
+            can_close: None,
             roles: None,
             drops: Vec::new(),
             accepts: None,
@@ -560,6 +630,14 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         .label(label)
     }
 
+    /// A pointer press on a tab (primary or secondary, a drag's press too) leaves key focus where it is; the keyboard
+    /// still reaches the strip by Tab. A dock's panel tabs: clicking one leaves the document's keys working.
+    #[must_use]
+    pub fn keeps_focus(mut self) -> Self {
+        self.items = self.items.focus_on_press(false);
+        self
+    }
+
     /// A tab drag carries `map` of it, for the drop targets of type `P`; a tab the map gives `None` for does not drag
     /// unless a reorder rule is set. The drag stays one session with one ghost.
     #[must_use]
@@ -576,24 +654,40 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     }
 
     /// With `wheel_selects`, the wheel's whole notches step the shown tab through the tabs in the source's order:
-    /// down to later tabs, up to earlier ones.
+    /// down to later tabs, up to earlier ones. The scroll short of a notch is kept for the next pass, so a trackpad's
+    /// small deltas add up; it is dropped when the scroll reverses, when the strip stops at an end, and when the
+    /// shown tab is not the one the last step left.
     fn wheel_step(&mut self, cx: &mut Cx<'_, Self>) {
         if !self.wheel_selects {
             return;
         }
         let Some(wheel) = cx.take_wheel().filter(|wheel| !wheel.mods.cmd && !wheel.mods.ctrl) else { return };
         let notch = self.items.wheel_notch(cx.style.line).points(cx.rect.height());
-        let steps = if notch > 0.0 { (wheel.scroll.y / notch).trunc() } else { 0.0 };
-        if steps == 0.0 || !steps.is_finite() {
+        if !notch.is_finite() || notch <= 0.0 || !wheel.scroll.y.is_finite() {
             return;
         }
-        let texts = self.texts.borrow();
-        let Some(at) = self.shown.as_ref().and_then(|shown| texts.iter().position(|(key, _)| key == shown)) else { return };
-        let last = texts.len().saturating_sub(1) as i64;
-        let to = (at as i64 - steps as i64).clamp(0, last) as usize;
-        if to != at {
-            self.wheeled = Some(texts[to].0.clone());
+        let mut carry = cx.memory::<WheelCarry<K>>().clone();
+        if carry.left != self.shown || carry.owed * wheel.scroll.y < 0.0 {
+            carry.owed = 0.0;
         }
+        carry.owed += wheel.scroll.y;
+        let steps = (carry.owed / notch).trunc();
+        carry.owed -= steps * notch;
+        let texts = self.texts.borrow();
+        let at = self.shown.as_ref().and_then(|shown| texts.iter().position(|(key, _)| key == shown));
+        if let Some(at) = at
+            && steps != 0.0
+        {
+            let last = texts.len().saturating_sub(1) as i64;
+            let to = (at as i64 - steps as i64).clamp(0, last) as usize;
+            if to == at {
+                carry.owed = 0.0;
+            } else {
+                self.wheeled = Some(texts[to].0.clone());
+            }
+        }
+        carry.left = self.wheeled.clone().or_else(|| self.shown.clone());
+        *cx.memory::<WheelCarry<K>>() = carry;
     }
 
     fn report(&self) -> Report {
@@ -745,8 +839,15 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
     }
 
     fn sense(&self) -> Sense {
-        let sense = <<Self as Meta>::Shape as ShowShape>::DEFAULT_SENSE;
-        if self.wheel_selects { sense | Sense::WHEEL_Y } else { sense }
+        let mut sense = <<Self as Meta>::Shape as ShowShape>::DEFAULT_SENSE;
+        if self.wheel_selects {
+            sense |= Sense::WHEEL_Y;
+        }
+        // A middle click on a tab closes it where the kind closes on one: the collection reports it on the tab.
+        if self.kind.middle_click_closes() {
+            sense |= Sense::MIDDLE_CLICK;
+        }
+        sense
     }
 
     /// The end items at the end of the row, a focus stop each, and the overflow button, at the end of the room the
@@ -889,20 +990,30 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
-        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, .. } = self;
+        let overflow = self.more.map(|rect| (rect, crate::runtime::access::sub_node_id(cx.core.id, OVERFLOW.into())));
+        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, can_close, kind, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
         let mut kept = Vec::with_capacity(response.events.len());
         for event in std::mem::take(&mut response.events) {
             match event {
                 CollectionEvent::Item(key, TabPartEvent::Close) => closed.push(key),
+                CollectionEvent::MiddleClick(key) => {
+                    if can_close.as_ref().map_or(kind.closes_by_default(), |test| test.passes(&key)) {
+                        closed.push(key);
+                    }
+                }
                 CollectionEvent::ContextMenu(request) => menu = Some(request),
                 other => kept.push(other),
             }
         }
-        kept.extend(wheeled.map(|key| CollectionEvent::Selection(SelectionChange::Set(vec![key]))));
+        kept.extend(wheeled.map(|key| CollectionEvent::Selection {
+            change: SelectionChange::Set(vec![key]),
+            by: crate::contract::LeadSource::Pointer,
+            mods: craft_keymap::Mods::NONE,
+        }));
         response.events = kept;
-        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
+        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double, overflow }
     }
 }
 
@@ -951,13 +1062,16 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         let (ghosts, departed) = self.reserved(cx, &keys);
         // Each end item is measured in this pass, with its label and icon only.
         let ends = self.trailing.iter().map(|end| end.fit_item(cx)).collect();
-        let fitting = Fitting { selected, mode: self.kind.fit_mode(), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
-        StripLayout::new(count, width, cx.tokens.size.bar.tab, fitting, self.report.clone(), cx.frame_ctx().clone())
+        let look = cx.env::<super::DocumentTabLook>();
+        let fitting = Fitting { selected, mode: self.kind.fit_mode_in(look), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
+        // Shrinking document tabs stand apart by the inline gap; the other kinds and looks touch.
+        let tab_gap = if self.kind.shrinks_in(look) { cx.tokens.space.gap.inline } else { 0.0 };
+        StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 
-    /// Every tab takes the strip's kind and size.
+    /// Every tab takes the strip's kind, panel look and size.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
-        let tab = tab.kind(self.kind);
+        let tab = tab.kind(self.kind).panel_look(self.panel_look);
         if self.large { tab.large() } else { tab }
     }
 

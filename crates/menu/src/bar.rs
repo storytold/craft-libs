@@ -20,8 +20,8 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Rect, Ui};
 
 use crate::context::Rows;
-use crate::layout::Target;
-use crate::model::{MenuBar, MenuRole};
+use crate::layout::{Target, node_commands};
+use crate::model::{Builtin, MenuBar, MenuRole};
 use crate::palette::entries_of;
 
 /// Whether a menu of the bar is open; the app's single-key shortcuts wait while it is true.
@@ -48,11 +48,11 @@ pub(crate) fn keymap_platform(target: Target, os: Platform) -> Platform {
 /// A replay at another place moves the titles' rect with the bar.
 impl craft_ui::runtime::Shift for MenuBarOutput {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
-        MenuBarOutput { titles: by.rect(self.titles) }
+        MenuBarOutput { titles: by.rect(self.titles), opened: self.opened }
     }
 
     fn snapped(&self, to: &Self, within: f32) -> Self {
-        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within) }
+        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within), opened: self.opened }
     }
 }
 
@@ -63,6 +63,9 @@ pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
     /// ([`craft_ui::menu::MenuBarOutput::titles`]).
     pub titles: Rect,
+    /// True in the one pass where a menu of the bar opened while none was open
+    /// ([`craft_ui::menu::MenuBarOutput::opened`]).
+    pub opened: bool,
 }
 
 /// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, inside a `Stack` (a top
@@ -79,6 +82,8 @@ pub struct MenuBarUi<'a> {
     preferred: &'a [(&'a str, char)],
     keyboard: Option<bool>,
     help_search: bool,
+    icons: bool,
+    compact: bool,
 }
 
 /// Every input of the bar's view.
@@ -90,12 +95,14 @@ struct BarProps<'a> {
     keyboard: bool,
     help: Option<usize>,
     label: Label,
+    icons: bool,
+    compact: bool,
 }
 
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
     pub fn new(bar: &'a Tracked<MenuBar>) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: None, preferred: &[], keyboard: None, help_search: false }
+        MenuBarUi { bar, target: None, preferred: &[], keyboard: None, help_search: false, icons: true, compact: false }
     }
 }
 
@@ -130,8 +137,21 @@ impl<'a> MenuBarUi<'a> {
         self
     }
 
+    /// Whether the rows show their commands' icons (on by default). Off, the menus are text only and their rows a
+    /// line shorter, as a classic menu bar's.
+    pub fn icons(mut self, on: bool) -> MenuBarUi<'a> {
+        self.icons = on;
+        self
+    }
+
+    /// Whether the rows are a line of text tall instead of a control's height (off by default): a dense classic menu.
+    pub fn compact(mut self, on: bool) -> MenuBarUi<'a> {
+        self.compact = on;
+        self
+    }
+
     /// Draws the bar and its open menu. Disabled rows never run. A chosen item is a fired command in the frame's
-    /// output; [`Builtin::Quit`](crate::Builtin::Quit) and [`Builtin::Minimize`](crate::Builtin::Minimize) act on
+    /// output; [`Builtin::Quit`] and [`Builtin::Minimize`] act on
     /// the root window instead.
     pub fn show(self, ui: &mut Ui) -> MenuBarOutput {
         let env = Env::of(ui);
@@ -144,15 +164,18 @@ impl<'a> MenuBarUi<'a> {
             keyboard: self.keyboard.unwrap_or(target != Target::Mac),
             help,
             label: env.words::<BarWords>().label.clone(),
+            icons: self.icons,
+            compact: self.compact,
         };
-        MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING })
+        MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING, opened: false })
     }
 }
 
 /// The bar's view: the titles through [`craft_ui::menu::MenuBar`], each menu's rows as command rows.
 fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
-    let rows = Rows::new(props.target).preferred(props.preferred);
     let env = Env::of(ui);
+    let cjk = crate::context::cjk(&env);
+    let rows = Rows::new(props.target).cjk(cjk).preferred(props.preferred).icons(props.icons).compact(props.compact);
     let os = env.view().shell().os;
     // The text of every menu is worked out once for these inputs and kept: a pass that shows an open menu again writes none of it.
     let key = LabelKey {
@@ -160,6 +183,7 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
         target: props.target,
         os,
         preferred: props.preferred,
+        cjk,
         words: &env.words,
         keymap: craft_ui::runtime::commands::keymap_generation(ui.ctx()),
     };
@@ -173,7 +197,15 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
         .iter()
         .zip(&labels.titles)
         .zip(&labels.menus)
-        .map(|((menu, title), level)| MenuTitle::new(title.clone(), move |ui| shared.show(ui, &menu.children, level)))
+        .map(|((menu, title), level)| {
+            // The commands the title holds, for the palette's callout; a built-in has no command of the app.
+            let held = menu.children.iter().flat_map(node_commands).filter(|command| Builtin::of(command).is_none()).collect();
+            let row = MenuTitle::new(title.label.clone(), move |ui| shared.show(ui, &menu.children, level)).holds(held);
+            match title.hidden {
+                Some(letter) => row.mnemonic(letter),
+                None => row,
+            }
+        })
         .collect();
     // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
     let bar_model: &MenuBar = props.bar;
@@ -182,17 +214,19 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
     if let Some(menu) = props.help {
         bar = bar.help(MenuHelp::new(menu, &entries));
     }
-    MenuBarOutput { titles: bar.show(ui).titles }
+    let out = bar.show(ui);
+    MenuBarOutput { titles: out.titles, opened: out.opened }
 }
 
 /// What the kept text of a bar is made of: the model, the platform that names its shortcuts, the preferred mnemonics,
-/// the language and the keymap. The English names are part of the model.
+/// the language (its words, and whether it is CJK) and the keymap. The English names are part of the model.
 #[derive(MemoProps)]
 struct LabelKey<'a> {
     bar: &'a Tracked<MenuBar>,
     target: Target,
     os: Os,
     preferred: &'a [(&'a str, char)],
+    cjk: bool,
     words: &'a Words,
     keymap: u64,
 }

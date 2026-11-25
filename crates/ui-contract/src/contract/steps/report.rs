@@ -11,7 +11,7 @@ use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
 use crate::runtime::{inspect, keys, pass_state};
 use crate::style::Flags;
-use craft_behavior::Sense;
+use craft_behavior::{PartRef, Sense};
 use egui::Id;
 
 /// What step 16 reads that the pass computed before: the part declarations, the sense and the container facts.
@@ -58,6 +58,7 @@ pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)>
 /// own tooltip shows it.
 pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) -> Option<String> {
     let validity = register_validity(p);
+    register_shown(p.core_ref());
     report_access(p, facts, input, validity.as_ref().map(|(text, _)| text.clone()));
     // The body's members have run and reported: each that left its place to the group takes it among this pass's
     // members.
@@ -69,6 +70,14 @@ pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn
     }
     crate::contract::cx::write_cursor(p.core_ref());
     validity.filter(|(_, shown)| !shown).map(|(text, _)| text)
+}
+
+/// Registers a component bound to a command as where that command is shown, for `commands::shown`. A measuring run
+/// or a layer that shows nothing records nothing (`parted`), and a component the clip cuts is not shown whole.
+fn register_shown(core: &CxCore<'_>) {
+    let Some(command) = core.command.as_deref().filter(|_| core.parted && core.visible == core.rect) else { return };
+    let label = if *core.resolved.label == *command.label { Label::from(command.label.clone()) } else { Label::from(core.resolved.label.to_owned()) };
+    crate::runtime::commands::note_shown(&core.ctx, core.response.layer_id, core.visible, label, &command.command);
 }
 
 /// The message of a validity that warns or refuses as text, registered with the innermost label scope, and whether
@@ -171,6 +180,11 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         access.value = folded.as_ref().and_then(|folded| folded.value.clone());
     }
     let focusable = takes_focus(resolved) && (input.sense.contains(Sense::FOCUS) || folded.is_some());
+    // A button over a two-state value (a shown `bool`, a toggle command's checked state) is pressed or not, and says
+    // so off as well as on.
+    let two_state = (role == crate::runtime::egui::access::NodeRole::Button)
+        .then(|| p.shown_bool().or_else(|| core.command.as_deref().and_then(|command| command.checked)))
+        .flatten();
     let own = Own {
         id,
         component: facts.name,
@@ -186,10 +200,12 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         shortcut,
         display: facts.input == craft_behavior::Input::Display,
         flags,
+        selected: resolved.selected.or(two_state),
         enabled: resolved.enabled,
         read_only: resolved.read_only,
         focusable,
         clickable: resolved.enabled && input.sense.contains(Sense::CLICK),
+        context_menu: crate::runtime::egui::access::offers_context_menu(ctx, id),
         keeps_name: resolved.keeps_name,
         scrolls: input.scrolls,
         access: &access,
@@ -219,7 +235,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
     };
     if let Some(facts) = core.text_access.take().or_else(editor_record) {
-        crate::runtime::access::text::report_text(ctx, id, &facts);
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.unit.as_deref(), access.value.as_deref());
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
@@ -259,6 +275,16 @@ pub(crate) fn report_parts(core: &CxCore<'_>, decls: &Decls, nodes: &[SubNode], 
     }
     for face in faces.iter().filter(|face| !seen.contains(&face.part)) {
         report_sub(core, decls, &SubNode::new(face.part, face.role), Some(face), parent);
+    }
+    for (decl, extras) in decls {
+        let part = PartRef { key: decl.key, index: decl.index };
+        let Some((role, name)) = &extras.node else { continue };
+        if seen.contains(&part) || faces.iter().any(|face| face.part == part) {
+            continue;
+        }
+        let mut node = SubNode::new(part, *role);
+        node.name = access::Name::Text(name.clone());
+        report_sub(core, decls, &node, None, parent);
     }
 }
 
@@ -313,10 +339,12 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             shortcut: None,
             display: false,
             flags: Flags::empty(),
+            selected: None,
             enabled: core.resolved.enabled,
             read_only: core.resolved.read_only,
             focusable: false,
             clickable: false,
+            context_menu: false,
             keeps_name: false,
             scrolls: (false, false),
             access: &access,

@@ -5,12 +5,12 @@ use super::place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, S
 use crate::runtime::access::PopupKind;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::motion::{MotionSpec, spec};
-use crate::runtime::overlay::{Backdrop, Rank};
+use crate::runtime::overlay::{Backdrop, LayerRole, Rank};
 use crate::runtime::windows::ResizeEdge;
 use craft_behavior::overlay::{Align, MinWidth, Side};
 use craft_behavior::{GesturePhase, OwnerClass};
 use egui::emath::TSTransform;
-use egui::{Align2, Pos2, Rect, Response, Vec2};
+use egui::{Align2, Id, Pos2, Rect, Response, Vec2};
 use std::borrow::Cow;
 
 /// What a press outside the layer and its anchor does.
@@ -41,14 +41,16 @@ pub struct Dismiss {
     pub on_activate: bool,
     /// The anchor is no longer shown.
     pub anchor_gone: bool,
+    /// A command a key, a native menu pick or the palette ran, from outside the layer and the layers opened from it.
+    pub commands: bool,
     /// Seconds after opening.
     pub timeout: Option<f32>,
 }
 
 impl Dismiss {
-    /// An outside press closes; nothing else does.
+    /// An outside press or a command closes; nothing else does.
     pub const fn new() -> Self {
-        Dismiss { outside: Outside::Close, enter: false, focus_left: false, on_activate: false, anchor_gone: true, timeout: None }
+        Dismiss { outside: Outside::Close, enter: false, focus_left: false, on_activate: false, anchor_gone: true, commands: true, timeout: None }
     }
 
     /// Sets what an outside press does.
@@ -72,6 +74,13 @@ impl Dismiss {
     /// Closes when a component inside is activated, except an opener toggling its popup.
     pub const fn on_activate(mut self, on: bool) -> Self {
         self.on_activate = on;
+        self
+    }
+
+    /// Closes when a key, a native menu pick or the palette runs a command from outside it; off for a layer its host
+    /// opens and closes, as a dock panel's flyout.
+    pub const fn commands(mut self, on: bool) -> Self {
+        self.commands = on;
         self
     }
 
@@ -142,6 +151,14 @@ pub struct Overlay {
     /// title row, whose move docks the window). The window is opened knowing it, so its hit test never hands the band
     /// to the system. A layer is always moved by the app.
     pub moved_by_app: bool,
+    /// A request of the pass for a movable layer: its move band takes over the primary press that is held, with the
+    /// pointer at this point inside the layer, so the layer follows a press that began elsewhere (a group torn off a
+    /// tool rail's flyout). With no press held it does nothing.
+    // PLAN: the sheet's Files table has no row for this file; `FloatingGroup::continue_move` (ch.K16) reaches the move
+    // band only through the layer it mounts, as sheet note 6 says ("sets that state through the overlay").
+    pub continue_move: Option<Vec2>,
+    /// What the layer is for; a progress window is left out of `any_open`.
+    pub role: LayerRole,
     /// Set only by [`Overlay::full_window`].
     full_window: bool,
 }
@@ -180,6 +197,8 @@ impl Overlay {
             body_scroll: true,
             moves_window: false,
             moved_by_app: false,
+            continue_move: None,
+            role: LayerRole::default(),
             full_window: false,
         }
     }
@@ -195,8 +214,14 @@ impl Overlay {
         mapped.placed = mapped.placed.map(|rect| to_screen * rect);
         mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
         mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
-        if let Place::Float(FloatPlace { pos: Some(pos), .. }) = &mut mapped.place {
-            *pos = to_screen * *pos;
+        match &mut mapped.place {
+            Place::Float(FloatPlace { pos: Some(pos), .. }) => *pos = to_screen * *pos,
+            // An offset is a vector: it scales with the layer's space and does not translate.
+            Place::Anchored { offset, clear, .. } => {
+                *offset = to_screen.scaling * *offset;
+                *clear = clear.map(|rect| to_screen * rect);
+            }
+            _ => {}
         }
         Cow::Owned(mapped)
     }
@@ -215,7 +240,8 @@ impl Overlay {
     }
 
     /// A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
-    /// closes when a row is activated or the focus leaves the anchor.
+    /// closes when a row is activated or the focus leaves the anchor. The opener's list keys go to the collection
+    /// [`Overlay::list`] names.
     pub fn dropdown() -> Overlay {
         let focus = FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor);
         let mut overlay = Overlay::base(Rank::Popup, Overlay::below(), OverlayFit::ContentCapped(DROPDOWN_SHARE), OwnerClass::PassivePopup, focus);
@@ -246,11 +272,11 @@ impl Overlay {
         overlay
     }
 
-    /// A dialog: modal with no backdrop (the window behind stays at true contrast), floating, movable and resizable.
+    /// A dialog: modal with a dimmed backdrop, floating, movable and resizable.
     /// `.modeless()` gives rank `Window`.
     pub fn dialog() -> Overlay {
         let mut overlay = Overlay::base(
-            Rank::modal(Backdrop::None),
+            Rank::modal(Backdrop::Scrim),
             Place::Float(FloatPlace::centred()),
             OverlayFit::ContentCapped(DIALOG_SHARE),
             OwnerClass::Dialog,
@@ -278,6 +304,7 @@ impl Overlay {
     /// A modal: centred, content capped.
     pub fn modal() -> Overlay {
         let mut overlay = Overlay::dialog();
+        overlay.rank = Rank::modal(Backdrop::None);
         overlay.movable = false;
         overlay.resize = Resize::NONE;
         overlay
@@ -298,7 +325,8 @@ impl Overlay {
     /// A toast stack at `corner` of `body`, a rect in the opener's layer space: the end-bottom corner of a window's body.
     /// Tab reaches its cards, and focus returns from them to where it came from when the last one ends.
     pub fn toast(body: Rect, corner: Align2) -> Overlay {
-        let place = Place::anchored(Anchor::Corner(body, corner), Side::Above, Align::End);
+        let align = if corner == Align2::CENTER_BOTTOM { Align::Center } else { Align::End };
+        let place = Place::anchored(Anchor::Corner(body, corner), Side::Above, align);
         let mut overlay = Overlay::base(Rank::Toast, place, OverlayFit::ContentCapped(NOTE_SHARE), OwnerClass::Widget, FocusPolicy::TAB_LAYER);
         overlay.dismiss = Dismiss::new().outside(Outside::Keep);
         overlay
@@ -433,6 +461,12 @@ impl Overlay {
         self
     }
 
+    /// Sets what the layer is for ([`Overlay::role`]).
+    pub fn role(mut self, role: LayerRole) -> Overlay {
+        self.role = role;
+        self
+    }
+
     /// Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
     pub fn moves_window(mut self, on: bool) -> Overlay {
         self.moves_window = on;
@@ -445,9 +479,24 @@ impl Overlay {
         self
     }
 
+    /// The move band takes over the held primary press in this pass, with the pointer at `grab` inside the layer
+    /// ([`Overlay::continue_move`]).
+    pub fn continue_move(mut self, grab: Vec2) -> Overlay {
+        self.continue_move = Some(grab);
+        self
+    }
+
     /// Sets the focus scope.
     pub fn focus(mut self, focus: FocusPolicy) -> Overlay {
         self.focus = focus;
+        self
+    }
+
+    /// The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
+    /// list names it each pass it is shown; the opener keeps the keys while the named list is not shown, and in a
+    /// dropdown that names none.
+    pub fn list(mut self, list: Id) -> Overlay {
+        self.focus = self.focus.list(list);
         self
     }
 
@@ -516,4 +565,7 @@ pub struct PlacementChange {
     pub pointer: Option<Pos2>,
     /// What changed the rect.
     pub kind: PlacementKind,
+    /// The move continues a press that went down outside the overlay and was handed to its move band
+    /// ([`Overlay::continue_move`]): a drag the host began elsewhere (a panel's tab) that the layer carries on.
+    pub continued: bool,
 }

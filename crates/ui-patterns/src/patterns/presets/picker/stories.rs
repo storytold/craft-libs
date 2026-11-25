@@ -6,6 +6,7 @@ use crate::choice::SwatchFace;
 use crate::contract::{Role, ShowContainer as _, Validity};
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PresetFns, PresetRow, PresetSource, PresetState};
+use crate::primitives::FacePaint;
 use crate::runtime::env::Env;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -21,7 +22,8 @@ const TEAL: u32 = 21;
 fn rows(_: &(), _: &Env) -> Vec<PresetRow<u32>> {
     let thumb = |row: PresetRow<u32>, hex: &str| {
         let color = Srgba::from_hex(hex).unwrap_or(Srgba::BLACK);
-        row.preview(ThumbAspect::SQUARE, move |cx, rect| SwatchFace::new(color).paint(cx, rect))
+        let key = row.key.into();
+        row.preview_face(ThumbAspect::SQUARE, FacePaint::new(key, move |cx, rect| SwatchFace::new(color).paint(cx, rect)))
     };
     vec![
         PresetRow::group(10, "Warm", 0).count(2),

@@ -36,6 +36,75 @@ pub fn parse_transform(s: &str) -> Affine {
     m
 }
 
+/// Convert a CSS `transform` declaration value into SVG `transform` attribute syntax.
+///
+/// Rewrites CSS units (`px`, `deg`, `rad`, `grad`, `turn`) and CSS-only functions (`translateX`,
+/// `translateY`, `scaleX`, `scaleY`, `skew`, `none`) into SVG syntax. Returns `None` when the
+/// value already uses SVG syntax or cannot be expressed (e.g. percentages, `em`, 3D functions).
+pub fn css_transform_to_svg(value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some("matrix(1 0 0 1 0 0)".into());
+    }
+    let mut out = Vec::new();
+    let mut rest = v;
+    while !rest.trim_start().is_empty() {
+        rest = rest.trim_start();
+        let open = rest.find('(')?;
+        let close = rest.find(')')?;
+        let name = rest.get(..open)?.trim().to_ascii_lowercase();
+        let args: Vec<&str> = rest.get(open + 1..close)?.split(|c: char| c == ',' || c.is_whitespace()).filter(|a| !a.is_empty()).collect();
+        let len = |i: usize| args.get(i).and_then(|a| css_length(a));
+        let ang = |i: usize| args.get(i).and_then(|a| css_angle(a));
+        let num = |i: usize| args.get(i).and_then(|a| a.parse::<f64>().ok()).filter(|n| n.is_finite());
+        let f = match (name.as_str(), args.len()) {
+            ("matrix", 6) => format!("matrix({} {} {} {} {} {})", num(0)?, num(1)?, num(2)?, num(3)?, len(4)?, len(5)?),
+            ("translate", 1) => format!("translate({} 0)", len(0)?),
+            ("translate", 2) => format!("translate({} {})", len(0)?, len(1)?),
+            ("translatex", 1) => format!("translate({} 0)", len(0)?),
+            ("translatey", 1) => format!("translate(0 {})", len(0)?),
+            ("scale", 1) => format!("scale({})", num(0)?),
+            ("scale", 2) => format!("scale({} {})", num(0)?, num(1)?),
+            ("scalex", 1) => format!("scale({} 1)", num(0)?),
+            ("scaley", 1) => format!("scale(1 {})", num(0)?),
+            ("rotate", 1) => format!("rotate({})", ang(0)?),
+            ("skewx", 1) => format!("skewX({})", ang(0)?),
+            ("skewy", 1) => format!("skewY({})", ang(0)?),
+            ("skew", 1) => format!("skewX({})", ang(0)?),
+            ("skew", 2) => format!("matrix(1 {} {} 1 0 0)", ang(1)?.to_radians().tan(), ang(0)?.to_radians().tan()),
+            _ => return None,
+        };
+        out.push(f);
+        rest = rest.get(close + 1..)?;
+    }
+    let svg = out.join(" ");
+    (!out.is_empty() && svg != v).then_some(svg)
+}
+
+/// A CSS transform length in user units: `px` or unitless.
+fn css_length(a: &str) -> Option<f64> {
+    let n = a.strip_suffix("px").unwrap_or(a).parse::<f64>().ok()?;
+    n.is_finite().then_some(n)
+}
+
+/// A CSS angle in degrees.
+fn css_angle(a: &str) -> Option<f64> {
+    let a = a.to_ascii_lowercase();
+    let (n, k) = if let Some(n) = a.strip_suffix("deg") {
+        (n, 1.0)
+    } else if let Some(n) = a.strip_suffix("grad") {
+        (n, 0.9)
+    } else if let Some(n) = a.strip_suffix("rad") {
+        (n, 180.0 / std::f64::consts::PI)
+    } else if let Some(n) = a.strip_suffix("turn") {
+        (n, 360.0)
+    } else {
+        (a.as_str(), 1.0)
+    };
+    let d = n.parse::<f64>().ok()? * k;
+    d.is_finite().then_some(d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +140,19 @@ mod tests {
         assert_eq!(parse_transform("translate(3 4oops)"), Affine::translate((3., 4.)));
         let huge = format!("scale({}) translate(2)", "1 ".repeat(10_000));
         assert_eq!(parse_transform(&huge), Affine::translate((2., 0.)));
+    }
+
+    #[test]
+    fn css_transforms_convert_to_svg_syntax() {
+        assert_eq!(css_transform_to_svg("translate(100px, 100px)").as_deref(), Some("translate(100 100)"));
+        assert_eq!(css_transform_to_svg(" translateX(5px) rotate(0.25turn) ").as_deref(), Some("translate(5 0) rotate(90)"));
+        assert_eq!(css_transform_to_svg("rotate(1.5707963267948966rad) scaleY(2)").as_deref(), Some("rotate(90) scale(1 2)"));
+        assert_eq!(css_transform_to_svg("skew(45deg)").as_deref(), Some("skewX(45)"));
+        assert_eq!(css_transform_to_svg("matrix(1, 0, 0, 1, 10px, 20px)").as_deref(), Some("matrix(1 0 0 1 10 20)"));
+        assert_eq!(css_transform_to_svg("none").as_deref(), Some("matrix(1 0 0 1 0 0)"));
+        assert_eq!(css_transform_to_svg("translate(10 20)"), None);
+        assert_eq!(css_transform_to_svg("translate(50%, 0)"), None);
+        assert_eq!(css_transform_to_svg("rotate3d(1, 0, 0, 45deg)"), None);
+        assert_eq!(css_transform_to_svg("translate(1px"), None);
     }
 }

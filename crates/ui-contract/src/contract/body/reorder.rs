@@ -5,7 +5,7 @@ use crate::contract::cx::CxCore;
 use crate::contract::{ContainerProps, DragBand};
 use crate::runtime::commands;
 use crate::runtime::keys;
-use craft_behavior::{PartKey, keys as key_table};
+use craft_behavior::{Axis, PartKey, ReorderKeys, keys as key_table};
 
 #[doc(hidden)]
 pub const REORDER_BAND: PartKey = PartKey::new("reorder_band");
@@ -29,7 +29,8 @@ impl BodyHooks<'_> {
                 keys::capture(&ctx, id, chord);
             }
             while keys::take_claimed(&ctx, id, chord) {
-                if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods) {
+                // A section's order is a vertical stack, moved by the stacking keys whatever scheme its rows use.
+                if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods, ReorderKeys::Stacking, Axis::Y) {
                     core.intents.push(intent);
                 }
             }

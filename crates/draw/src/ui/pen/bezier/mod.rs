@@ -33,7 +33,7 @@ use craft_ui::style::{Flags, StyleCx};
 use egui::{Pos2, Rect, Response};
 use kurbo::ParamCurve as _;
 
-use hit_test::{Shown, nearest_on_screen, shown_handles};
+use hit_test::{Shown, nearest_on_screen, other_handles, shown_handles};
 pub(crate) use mark::paint_mark;
 pub use mark::{AnchorsShown, HitMark, SegmentMark};
 use mark::{Fill, paint_handle, segment_path, stroke};
@@ -42,7 +42,7 @@ pub use style::BezierStyle;
 pub use words::BezierWords;
 
 use super::anchor_tool::cursor_of;
-use super::{PathOptionsSettings, PathTool};
+use super::{HandleStyle, PathOptionsSettings, PathTool};
 
 /// Insert on a picked anchor adds one halfway along the segment leaving it.
 const INSERT: Chord = Chord::plain(Key::Insert);
@@ -106,6 +106,8 @@ pub enum HandlesShown {
     Selected,
     /// Every anchor's (DesignCraft).
     All,
+    /// Handles only while one anchor is selected over all paths.
+    OneAnchor,
 }
 
 /// A part of a path under the pointer.
@@ -210,6 +212,8 @@ enum Target {
         knot: KnotRef,
         side: HandleSide,
         from: Point,
+        /// The handle's anchor at the press: ⇧ turns the handle about it.
+        anchor: Point,
     },
     /// A curved segment, grabbed at `t` where it passes `from`.
     Bend {
@@ -469,7 +473,7 @@ impl<'a> BezierOverlay<'a> {
             return Scene { items, limited };
         }
         let near = rect.expand(reach);
-        let shown = shown_handles(paths, self.selection, self.handles, view);
+        let shown = if self.anchors == AnchorsShown::Curvature { Vec::new() } else { shown_handles(paths, self.selection, self.handles, view) };
         let mut handles = shown.iter().peekable();
         for (at, path) in paths.iter().enumerate() {
             let count = path.anchor_count();
@@ -633,7 +637,8 @@ impl<'a> BezierOverlay<'a> {
         let knot_at = |path: u64, knot: KnotRef| Self::path(paths, path).and_then(|p| p.knot(knot));
         match (self.tool, hit) {
             (_, BezierHit::Handle { path, knot, side }) if self.tool != BezierTool::Curvature => {
-                Target::Handle { path, knot, side, from: knot_at(path, knot).map_or(Point::ZERO, |k| k.handle(side)) }
+                let at = knot_at(path, knot);
+                Target::Handle { path, knot, side, from: at.map_or(Point::ZERO, |k| k.handle(side)), anchor: at.map_or(Point::ZERO, |k| k.anchor) }
             }
             (BezierTool::Curvature, BezierHit::Anchor { path, knot }) => {
                 self.report.select = Some(self.selecting(path, vec![knot], None));
@@ -726,8 +731,10 @@ impl<'a> BezierOverlay<'a> {
             Target::Anchors { path, anchors, from } => {
                 PathEdit::MoveAnchors { path: *path, anchors: anchors.clone(), by: snapped(*from + locked(delta)) - *from }
             }
-            &Target::Handle { path, knot, side, from } => {
-                PathEdit::MoveHandle { path, knot, side, to: snapped(from + delta), alone: tool == BezierTool::Convert || mods.alt }
+            &Target::Handle { path, knot, side, from, anchor } => {
+                // ⇧ turns the handle to the nearest 45° about its anchor, as the Pen's pull does.
+                let to = if mods.shift { handle_45(anchor, from + delta) } else { snapped(from + delta) };
+                PathEdit::MoveHandle { path, knot, side, to, alone: tool == BezierTool::Convert || mods.alt }
             }
             &Target::Bend { path, segment, t, from } => PathEdit::BendSegment { path, segment, t, by: snapped(from + delta) - from },
             &Target::Convert { path, knot } => PathEdit::Convert { path, knot, out: Some(snapped(view.to_doc(pointer))) },
@@ -1342,6 +1349,25 @@ impl Component for BezierOverlay<'_> {
             options.and_then(|options| options.color).map(|[r, g, b]| Srgba::rgb(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0));
         let painter = ui.content_painter(cx);
         let draw = ui.draw();
+        let handle_style = options.map_or(HandleStyle::Solid, |options| options.handles);
+        let mut anchor_look = style.anchor.clone();
+        if let Some(side) = options.and_then(|options| options.anchor_size) {
+            anchor_look.side = side;
+        }
+        let mut control_look = style.control.clone();
+        if handle_style == HandleStyle::Large {
+            control_look.side = style.close.side;
+        }
+        let handle_fill = if handle_style == HandleStyle::Hollow { &style.anchor.fill } else { &style.control.fill };
+        let circles = self.anchors == AnchorsShown::Curvature;
+        // A direction handle: its line from the anchor and its end dot.
+        let draw_end = |path: &EditPath, knot: KnotRef, end: Pos2, fill: Fill| {
+            if let Some(knot) = path.knot(knot) {
+                let shape = PaintShape::Path(vec![view.to_screen(knot.anchor), end]);
+                stroke(&draw, &shape, StrokeWidth::Thin, path.color, style.line);
+            }
+            paint_handle(&draw, &control_look, true, end, fill, path.color);
+        };
         // The path's thickness is a document width; without one the lines take the theme's widths. A path with a
         // thickness and no colour of its own keeps that width in the theme's line colour.
         let line = |points: Vec<Pos2>, closed: bool, segment: bool, color: Option<Srgba>| {
@@ -1382,19 +1408,15 @@ impl Component for BezierOverlay<'_> {
             let path = &paths[item.path];
             match item.kind {
                 Kind::Handle(_) => {
-                    if let Some(knot) = path.knot(item.knot) {
-                        let shape = PaintShape::Path(vec![view.to_screen(knot.anchor), item.at]);
-                        stroke(&draw, &shape, StrokeWidth::Thin, path.color, style.line);
-                    }
                     let fill = Fill::Style(if cx.part_if_declared(item.part()).is_some() {
-                        cx.resolve_part(item.part(), &style.control.fill)
+                        cx.resolve_part(item.part(), handle_fill)
                     } else {
-                        cx.resolve(&style.control.fill)
+                        cx.resolve(handle_fill)
                     });
-                    paint_handle(&draw, &style.control, true, item.at, fill, path.color);
+                    draw_end(path, item.knot, item.at, fill);
                 }
                 Kind::Anchor if item.shown => {
-                    let fill = if self.selection.has_anchor(path.key, item.knot) {
+                    let fill = if self.selection.draws_selected(path.key, item.knot) {
                         Fill::Path(style.line)
                     } else {
                         Fill::Style(if cx.part_if_declared(item.part()).is_some() {
@@ -1403,9 +1425,17 @@ impl Component for BezierOverlay<'_> {
                             cx.resolve(&style.anchor.fill)
                         })
                     };
-                    paint_handle(&draw, &style.anchor, false, item.at, fill, path.color);
+                    paint_handle(&draw, &anchor_look, circles, item.at, fill, path.color);
                 }
                 Kind::Anchor | Kind::Segment => {}
+            }
+        }
+        // The handles of anchors selected in paths the overlay does not edit: drawn, never parts.
+        if !circles {
+            for (at, path) in paths.iter().enumerate() {
+                for shown in other_handles(paths, at, self.selection, self.handles, &view) {
+                    draw_end(path, shown.knot, shown.at, Fill::Style(cx.resolve(handle_fill)));
+                }
             }
         }
         if let Some(hit) = self.hover_mark
@@ -1417,7 +1447,7 @@ impl Component for BezierOverlay<'_> {
             && let Some(part) = cx.active_part()
             && let Some(item) = scene.items.iter().find(|item| item.part() == part)
         {
-            let side = if item.kind == Kind::Anchor { style.anchor.side } else { style.control.side };
+            let side = if item.kind == Kind::Anchor { anchor_look.side } else { control_look.side };
             let ring = mark::square(item.at, side);
             painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &ring, painter.pixels_per_point()));
         }

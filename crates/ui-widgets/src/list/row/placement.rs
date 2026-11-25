@@ -2,9 +2,10 @@
 
 use super::ListRow;
 use super::show::named;
-use super::style::ListRowStyle;
+use super::style::{ListRowStyle, ThumbRows};
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
+use crate::buttons::Link;
 use crate::contract::{ColumnAlign, PartsCx, RowHeight, WordSetCx as _};
 use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
@@ -23,8 +24,10 @@ const MIN_LABEL_HEIGHTS: f32 = 3.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Sizes {
     pub(super) row: f32,
-    /// The slot of an icon, a toggle cell's mark or a step of indent.
+    /// The slot of an icon or a toggle cell's mark.
     pub(super) icon: f32,
+    /// A level of indent (`ThumbRows`).
+    indent: f32,
     /// The side the row's icon and its toggle marks draw at in their slots: the control's icon side, the small
     /// control's in a sub-row.
     pub(super) mark: f32,
@@ -45,6 +48,8 @@ pub(super) struct Sizes {
     pub(super) cell_inset: f32,
     /// The vertical room around a wrapped cell's text, in total.
     pub(super) cell_pad: f32,
+    /// The side of a corner mark: `size.handle.sm`.
+    pub(super) handle: f32,
 }
 
 impl Sizes {
@@ -52,18 +57,21 @@ impl Sizes {
         let (control, tokens) = (cx.control(), cx.tokens);
         let thumbs = &tokens.size.thumb;
         let small = cx.control_of(ControlSize::Sm);
+        let row = if sub_row { small.height } else { rows.of(cx) };
+        let tight = cx.env::<ThumbRows>() == ThumbRows::Tight;
         Sizes {
-            row: if sub_row { small.height } else { rows.of(cx) },
+            row,
             icon: control.icon,
+            indent: if tight { small.icon + tokens.space.gap.tight } else { control.icon },
             mark: if sub_row { small.icon } else { control.icon },
             pad: control.pad_x,
             gap: control.gap,
             trailing_pad: tokens.space.pad.regular,
             min_label: MIN_LABEL_HEIGHTS * control.height,
             thumbs: [thumbs.sm, thumbs.md, thumbs.lg],
-            thumb_pad: tokens.space.gap.stack,
+            thumb_pad: if tight { tokens.space.gap.tight } else { tokens.space.gap.stack },
             // A standard control and the panel padding, as the old `thumb_row_min`.
-            thumb_row: tokens.size.control.md + tokens.space.pad.regular,
+            thumb_row: if tight { row } else { tokens.size.control.md + tokens.space.pad.regular },
             tight: tokens.space.gap.tight,
             gap_row: tokens.space.gap.row,
             label_line: tokens.typography.get(role).line_height,
@@ -71,6 +79,7 @@ impl Sizes {
             cell_inset: control.pad_x,
             // A text row's wrapped cell keeps the room a text row has around its line.
             cell_pad: if rows == RowHeight::Text { tokens.space.gap.tight } else { control.gap },
+            handle: tokens.size.handle.sm,
         }
     }
 
@@ -145,6 +154,22 @@ struct Bands {
     toggles: Vec<(usize, Rect, bool)>,
     /// Index into `texts`, the column's position in the row's cells, the cell's rect, whether it leads.
     texts: Vec<(usize, usize, Rect, bool)>,
+    /// Index into `statuses`, the column's position in the row's cells, the cell's rect.
+    statuses: Vec<(usize, usize, Rect)>,
+}
+
+/// Where the pieces of a status cell lie in its cell, in reading order: the tone icon's slot, the text and the action
+/// link.
+pub(super) struct StatusSlots {
+    pub(super) icon: Option<Rect>,
+    pub(super) text: Rect,
+    pub(super) action: Option<Rect>,
+}
+
+/// The framework link a status cell's action is: the face of its part, in the cell's type role and cut at its end
+/// where the slot is short.
+pub(super) fn action_link(text: &Label, role: TypeRole) -> Link {
+    Link::new(text.clone()).role(role).wrap(Wrap::Elide)
 }
 
 /// Where the parts of a row lie in its rect.
@@ -152,8 +177,12 @@ pub(super) struct Placed {
     pub(super) toggles: Vec<(usize, Rect)>,
     /// The text cells by index into `texts`, with the column's position in the row's cells.
     pub(super) texts: Vec<(usize, usize, Rect)>,
+    /// The status cells by index into `statuses`, with the column's position in the row's cells.
+    pub(super) statuses: Vec<(usize, usize, Rect)>,
     pub(super) dividers: Vec<f32>,
     pub(super) disclosure: Option<Rect>,
+    /// The row's content past its leading toggle cells and before its trailing ones.
+    pub(super) band: Rect,
     pub(super) marker: Option<Rect>,
     /// The mark column of an option of a value list.
     pub(super) check: Option<Rect>,
@@ -177,6 +206,11 @@ impl ListRow<'_> {
     /// Whether the leading part holds thumbnails; without a first thumbnail or a thumbnail side none are placed.
     fn shows_thumbs(&self, sizes: &Sizes) -> bool {
         self.first.is_some() && sizes.side(self.thumb) > 0.0
+    }
+
+    /// The size of a row that is its thumbnails (`thumbnails_only`): the leading part wide, a thumbnail high.
+    pub(super) fn thumbs_extent(&self, sizes: &Sizes, widths: &Widths) -> Vec2 {
+        Vec2::new(self.leading(sizes, widths).unwrap_or(0.0), self.thumb_size(sizes).y)
     }
 
     /// The width of the leading part: every thumbnail and what is between them, the leading text's slot, or the icon;
@@ -271,6 +305,12 @@ impl ListRow<'_> {
         self.depth.map_or(0, |depth| tree_steps(depth, self.group.is_some()))
     }
 
+    /// Whether the row holds the disclosure column: a group, and under [`TreeLeaves::Aligned`] a top-level leaf, whose
+    /// column stays empty. The column is room the label never gives up, as an indent does.
+    fn keeps_disclosure(&self) -> bool {
+        self.group.is_some() || (self.leaves == TreeLeaves::Aligned && self.depth == Some(0) && !self.sub_row)
+    }
+
     /// The widths of the trailing items and the leading text's slot: as `text_width` measures a text, the icon side for
     /// icons and parts, and a hosted component's measured width.
     pub(super) fn widths(&self, sizes: &Sizes, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Widths {
@@ -298,7 +338,11 @@ impl ListRow<'_> {
 
     /// The indent a row asks for before it gives way to the label's least width.
     pub(super) fn indent_full(&self, sizes: &Sizes) -> f32 {
-        (self.steps() + usize::from(self.clipped)) as f32 * sizes.icon
+        // A leaf's extra step (`tree_steps`) passes its parent's disclosure column, an icon slot wide; the others are
+        // levels.
+        let steps = self.steps();
+        let past_disclosure = usize::from(steps > 0 && self.group.is_none());
+        (steps - past_disclosure + usize::from(self.clipped)) as f32 * sizes.indent + past_disclosure as f32 * sizes.icon
     }
 
     /// The column no text or toggle cell claims, which holds the label.
@@ -307,6 +351,7 @@ impl ListRow<'_> {
             self.toggle_columns.contains(key)
                 || self.toggles.iter().any(|toggle| toggle.column == *key)
                 || self.texts.iter().any(|text| text.column == *key)
+                || self.statuses.iter().any(|status| status.column == *key)
         };
         cells_of.iter().map(|(key, _)| key).find(|key| !claimed(key))
     }
@@ -359,7 +404,33 @@ impl ListRow<'_> {
             let Some(position) = cells_of.iter().position(|(column, _)| *column == text.column) else { continue };
             texts.push((at, position, cells_of[position].1, leads(position)));
         }
-        Bands { lead, trail, toggles, texts }
+        let mut statuses = Vec::new();
+        for (at, status) in self.statuses.iter().enumerate() {
+            let Some(position) = cells_of.iter().position(|(column, _)| *column == status.column) else { continue };
+            statuses.push((at, position, cells_of[position].1));
+        }
+        Bands { lead, trail, toggles, texts, statuses }
+    }
+
+    /// The pieces of the status cell `at` in its `cell`, inset as a text cell's text is, for a text and a link in
+    /// `role` as `measure` measures the text and the action's link. The action keeps its whole width
+    /// where the cell has room for it; the text
+    /// takes what the icon and the action leave and is cut there.
+    pub(super) fn status_slots(&self, at: usize, cell: Rect, sizes: &Sizes, rtl: bool, role: TypeRole, measure: StatusMeasure<'_>) -> StatusSlots {
+        let StatusMeasure { text_width, action_width } = measure;
+        let status = &self.statuses[at].status;
+        let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
+        let flow = Flow::new(room, rtl);
+        let icon = crate::notices::tone_icon(status.tone).map(|_| flow.span(0.0, sizes.icon.min(room.width())));
+        let from = icon.map_or(0.0, |icon| icon.width() + sizes.gap).min(room.width());
+        let action = status.action.as_ref().map(|action| action_width(action).min((room.width() - from).max(0.0)));
+        let free = (room.width() - from - action.map_or(0.0, |width| width + sizes.gap)).max(0.0);
+        let text = text_width(&TextRun::new(status.text.as_str()).role(role)).min(free);
+        StatusSlots {
+            icon,
+            text: flow.span(from, text),
+            action: action.map(|width| flow.span(from + text + if text > 0.0 { sizes.gap } else { 0.0 }, width)),
+        }
     }
 
     /// The alignment of a column's text and whether its figures are tabular.
@@ -382,25 +453,33 @@ impl ListRow<'_> {
     }
 
     pub(super) fn place_in(&self, columns: &[(ColumnKey, Rect)], sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
+        // A row that is its thumbnails has no padding, label room or trailing room.
+        let bare;
+        let sizes = if self.thumbnails_only {
+            bare = Sizes { pad: 0.0, min_label: 0.0, trailing_pad: 0.0, ..*sizes };
+            &bare
+        } else {
+            sizes
+        };
         let items = &widths.items;
         let moved;
         let cells_of = if self.sub_row {
             let toggle = |key: &ColumnKey| self.toggle_columns.contains(key) || self.toggles.iter().any(|toggle| toggle.column == *key);
             let mut cells = columns.to_vec();
-            craft_behavior::sub_row_cells(&mut cells, toggle, self.sub_steps as f32 * sizes.icon, rtl);
+            craft_behavior::sub_row_cells(&mut cells, toggle, self.sub_steps as f32 * sizes.indent, rtl);
             moved = cells;
             &moved[..]
         } else {
             columns
         };
-        let Bands { lead, trail, toggles: cells, texts } = self.bands(cells_of, rect, rtl);
+        let Bands { lead, trail, toggles: cells, texts, statuses } = self.bands(cells_of, rect, rtl);
         let flow = Flow::new(rect, rtl);
         let band_width = (rect.width() - lead - trail).max(0.0);
         let band = flow.span(lead, band_width);
         let inner = Flow::new(band, rtl);
         let leading = self.leading(sizes, widths);
         let leading_width = leading.map_or(0.0, |side| side + sizes.gap);
-        let disclosure = if self.group.is_some() { sizes.icon } else { 0.0 };
+        let disclosure = if self.keeps_disclosure() { sizes.icon } else { 0.0 };
         let marker = if self.clipped { sizes.icon } else { 0.0 };
         let check = if self.check.is_some() { sizes.icon + sizes.gap } else { 0.0 };
         let column = disclosure + marker + check;
@@ -452,7 +531,7 @@ impl ListRow<'_> {
         let column_start = base + indent + if self.leading_first { leading_width } else { 0.0 };
         let leading_start = base + indent + if self.leading_first { 0.0 } else { column };
         let label_start = base + indent + column + leading_width;
-        let disclosure_rect = (disclosure > 0.0).then(|| inner.span(column_start, disclosure));
+        let disclosure_rect = self.group.is_some().then(|| inner.span(column_start, disclosure));
         let marker_rect = (marker > 0.0).then(|| inner.span(column_start + disclosure, marker));
         let check_rect = (check > 0.0).then(|| inner.span(column_start + disclosure + marker, sizes.icon));
         let mut at = leading_start;
@@ -487,17 +566,29 @@ impl ListRow<'_> {
         // Every item, optional ones included: at its ideal width the row shows everything.
         let all: f32 = widths.items.iter().map(|item| item.width + sizes.gap).sum();
         let ideal_width = min_width - least + all;
+        let label = match &self.document {
+            // Centred document text centres on the row, not on what the leading parts leave it: the label keeps the same
+            // inset at both ends, the larger of the two, so it still clears the leading and trailing parts. End-aligned
+            // text already ends at the row's end before its trailing items.
+            Some(rows) if rows.align == HAlign::Center => {
+                let inset = label_start.max(band_width - label_end);
+                inner.span(inset, (band_width - 2.0 * inset).max(0.0))
+            }
+            _ => inner.span(label_start, (label_end - label_start).max(0.0)),
+        };
         Placed {
             toggles,
             texts,
+            statuses,
             dividers,
             disclosure: disclosure_rect,
+            band,
             marker: marker_rect,
             check: check_rect,
             icon,
             first,
             extras,
-            label: inner.span(label_start, (label_end - label_start).max(0.0)),
+            label,
             items,
             min_width,
             ideal_width,
@@ -509,6 +600,19 @@ impl ListRow<'_> {
 /// disclosure column. A source that indents a row's sub-rows (`ItemSource::sub_row`) counts from it.
 pub fn tree_steps(depth: usize, group: bool) -> usize {
     if depth > 0 && !group { depth + 1 } else { depth }
+}
+
+/// How a tree lines up its leaves with its groups.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TreeLeaves {
+    /// A leaf at the top level starts where a group's disclosure does: the Layers panel, whose top-level layers keep
+    /// no disclosure column.
+    #[default]
+    Compact,
+    /// A top-level leaf keeps an empty disclosure column, so its label lines up with the labels of the groups beside
+    /// it: a font menu's families with and without styles.
+    Aligned,
 }
 
 /// The width of a character of a trailing text under fixed sizes.
@@ -523,6 +627,7 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
     let sizes = Sizes {
         row: 20.0,
         icon: 16.0,
+        indent: 16.0,
         mark: 16.0,
         pad: 6.0,
         gap: 4.0,
@@ -537,6 +642,7 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
         detail_line: 12.0,
         cell_inset: 6.0,
         cell_pad: 4.0,
+        handle: 8.0,
     };
     let widths = row.widths(&sizes, &|run| FIXED_ADVANCE * run.full_text().chars().count() as f32);
     let placed = row.place(&sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, sizes.row)), rtl);
@@ -562,4 +668,10 @@ pub struct RowPlacement {
     pub disclosure: Option<Rect>,
     /// The label's least width under the fixed sizes.
     pub min_label: f32,
+}
+
+/// How a status cell's pieces measure: the text's width and the action link's.
+pub(super) struct StatusMeasure<'m> {
+    pub(super) text_width: &'m dyn Fn(&TextRun<'_>) -> f32,
+    pub(super) action_width: &'m dyn Fn(&Label) -> f32,
 }

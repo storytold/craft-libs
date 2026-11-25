@@ -78,7 +78,7 @@ fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 fn guides_over_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (guides, guides_at) = data.value_at("guides", guides());
     on_guides_canvas(ui, |ui, at, canvas| {
-        Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).selected_guide(GuideKey::new(2)).show_at(ui, at)
+        Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).selected_guides(&[GuideKey::new(2)]).show_at(ui, at)
     })
 }
 
@@ -108,4 +108,27 @@ fn bounded_guides(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (guides, guides_at) = data.value_at("guides", guides());
     let page = DocRect::new(120.0, 80.0, 520.0, 320.0);
     on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).bounds(page).show_at(ui, at))
+}
+
+#[story(Guides<'static>, covers = [Default], drive = Drive::Never)]
+fn guides_with_several_selected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (guides, guides_at) = data.value_at("guides", guides());
+    on_guides_canvas(ui, |ui, at, canvas| {
+        Guides::new("Guides", canvas, guides_at.bind(&mut *guides))
+            .interactive(true)
+            .selected_guides(&[GuideKey::new(1), GuideKey::new(2)])
+            .show_at(ui, at)
+    })
+}
+
+#[story(Guides<'static>, covers = [Default], drive = Drive::Never)]
+fn guides_with_a_key_guide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (guides, guides_at) = data.value_at("guides", guides());
+    on_guides_canvas(ui, |ui, at, canvas| {
+        Guides::new("Guides", canvas, guides_at.bind(&mut *guides))
+            .interactive(true)
+            .selected_guides(&[GuideKey::new(2)])
+            .key_guide(GuideKey::new(1))
+            .show_at(ui, at)
+    })
 }

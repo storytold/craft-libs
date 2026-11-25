@@ -57,7 +57,7 @@ impl<P, S: PanelSpecs<P>> SpecSource<P> for Tracked<S> {
 ///    itself: the dock shows no tab strip and no panel body for that group, and calls neither `group_header` nor `body`
 ///    for it. A flyout measures its group before it shows it, so a host view runs at `GroupAt::Measure` too.
 /// 2. Otherwise `group_header` once, inside the group's header before its tab strip, then `body` for the panels whose
-///    bodies are shown.
+///    bodies are shown, and `footer` under the body of a shown panel whose spec has `PanelSpec::footer`.
 ///
 /// Each of these runs every pass the group shows. A host memoizes inside them: a body or view shown through a
 /// [`MemoView`](crate::contract::MemoView) runs only when its props changed or input reached it, and otherwise repaints
@@ -69,8 +69,27 @@ pub trait DockPanels<P> {
     /// Shows `panel`'s body in `ui`: the group's body, inset from its edges by the panel padding. The group is the
     /// body's panel and its tab the body's title, so the body shows no framework `Panel` or padding of its own; content
     /// taller than the group scrolls in the body's own scrolling container. A document panel's body
-    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
+    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge. The body lays out with the group's
+    /// spacing, or with the style of the `Ui` the dock was shown in where the panel's body is the app's own egui code
+    /// (`PanelSpec::host_body`).
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
+
+    /// Shows the fixed trailing controls of the rail containing `panel`, in top-to-bottom order. The dock calls this
+    /// only when the area names a panel with `DockArea::rail_footer`; the controls remain in view while icons scroll.
+    fn rail_footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
+    /// Shows `panel`'s footer in `ui`: a footer bar pinned under the body, across the group, that stays in view while
+    /// the body scrolls (a panel's actions on everything its body lists). The dock calls it only for a panel whose
+    /// spec has `PanelSpec::footer` (the default shows nothing).
+    fn footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
+    /// The version of the app data `panel`'s body shows that the framework does not track (a document's revision, a
+    /// job's progress). With one, the body settles (`Lazy::settles` with `Lazy::content`): it runs only when its
+    /// version, its room or something the framework tracks in it changed, the pointer is over it or focus is in it, and
+    /// otherwise repaints its last run. `None` (the default) runs the body every pass.
+    fn content(&self, _panel: &P) -> Option<u64> {
+        None
+    }
 
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at
     /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at

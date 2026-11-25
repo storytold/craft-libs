@@ -16,6 +16,8 @@ pub use craft_affinity as affinity;
 pub use craft_ai as ai;
 #[cfg(feature = "ai-core")]
 pub use craft_ai_core as ai_core;
+#[cfg(feature = "android-res")]
+pub use craft_android_res as android_res;
 #[cfg(feature = "anicraft-format")]
 pub use craft_anicraft_format as anicraft_format;
 #[cfg(feature = "assuan")]
@@ -35,6 +37,8 @@ pub use craft_ber as ber;
 pub use craft_browse as browse;
 #[cfg(feature = "captions")]
 pub use craft_captions as captions;
+#[cfg(feature = "cdr")]
+pub use craft_cdr as cdr;
 #[cfg(feature = "cfb")]
 pub use craft_cfb as cfb;
 #[cfg(feature = "cloud")]
@@ -217,6 +221,8 @@ pub use craft_lottie as lottie;
 pub use craft_macho as macho;
 #[cfg(feature = "markdown")]
 pub use craft_markdown as markdown;
+#[cfg(feature = "material-graph")]
+pub use craft_material_graph as material_graph;
 #[cfg(feature = "materialx")]
 pub use craft_materialx as materialx;
 #[cfg(feature = "math")]
@@ -281,6 +287,8 @@ pub use craft_platform as platform;
 pub use craft_plist as plist;
 #[cfg(feature = "plotter")]
 pub use craft_plotter as plotter;
+#[cfg(feature = "png")]
+pub use craft_png as png;
 #[cfg(feature = "ppt-binary")]
 pub use craft_ppt_binary as ppt_binary;
 #[cfg(feature = "pptx")]
@@ -392,6 +400,8 @@ pub use craft_vectordrawable as vectordrawable;
 pub use craft_video as video;
 #[cfg(feature = "wasm")]
 pub use craft_wasm as wasm;
+#[cfg(feature = "wayland")]
+pub use craft_wayland as wayland;
 #[cfg(feature = "web-api")]
 pub use craft_web_api as web_api;
 #[cfg(feature = "web-host")]

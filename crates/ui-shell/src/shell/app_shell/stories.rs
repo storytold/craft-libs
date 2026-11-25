@@ -8,7 +8,7 @@ use crate::display::Text;
 use crate::layout_components::Grid;
 use crate::runtime::commands::CommandScope;
 use crate::runtime::env::WindowKey;
-use crate::shell::{CanvasPanel, ScreenMode, ScreenModeButton, ScreenModeSet, Slot};
+use crate::shell::{BarGrip, CanvasPanel, OptionsBarPlace, ScreenMode, ScreenModeButton, ScreenModeSet, Slot};
 use crate::testing::{Drive, StoryData, StoryOutput, stage, story};
 use craft_behavior::ColumnWidth;
 use egui::Ui;
@@ -178,4 +178,43 @@ fn app_shell_dialogs_in_regions(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
         *data.value("open_b", true) = open[1] || closed;
     }
     shown.pop().map_or_else(StoryOutput::default, StoryOutput::from)
+}
+
+#[story(BarGrip, covers = [Default], drive = Drive::Never)]
+fn bar_grip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    BarGrip::new().show(ui).into()
+}
+
+/// An embedded shell whose options bar starts at `home` and follows its grip: a drag of the grip docks or floats it on
+/// the release, and the story keeps the place under `key`.
+fn options_shell(ui: &mut Ui, data: &mut StoryData, key: &'static str, home: OptionsBarPlace) -> StoryOutput {
+    let room = stage(ui);
+    let mut place = *data.value(key, home);
+    let shown = AppShell::embedded(WindowKey::new(key.to_owned()))
+        .options_place(Bind::bound(&mut place))
+        .options_bar(true, |ui, _, _| {
+            BarGrip::new().show(ui);
+            Text::new("Options").show(ui);
+        })
+        .body(|ui, _, _| {
+            Text::new("Document").show(ui);
+        })
+        .show_at(ui, room, &mut ());
+    *data.value(key, home) = place;
+    shown.into()
+}
+
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_options_top(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    options_shell(ui, data, "options_top", OptionsBarPlace::default())
+}
+
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_options_bottom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    options_shell(ui, data, "options_bottom", OptionsBarPlace::new(true, false, None))
+}
+
+#[story(AppShell<'static, ()>, covers = [], drive = Drive::Never)]
+fn app_shell_options_floating(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    options_shell(ui, data, "options_floating", OptionsBarPlace::new(false, true, Some([24.0, 40.0])))
 }

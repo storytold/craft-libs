@@ -35,6 +35,17 @@ fn color_ramp_web_safe(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ColorRamp::new("Color ramp", RampKind::Spectrum, data.bind("pick", pick())).web_safe(true).kind_name("Web colors").show(ui).into()
 }
 
+#[story(ColorRamp<'static>, covers = [], drive = Drive::Never)]
+fn color_ramp_recolor_clicks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = ColorRamp::new("Color ramp", RampKind::Spectrum, data.bind("pick", pick())).recolor_clicks(true).kind_name("RGB Spectrum").show(ui);
+    let last = data.note("last", String::new());
+    if let Some(recolor) = shown.recolor {
+        *last = format!("{recolor:?}");
+    }
+    let readout = format!("Last recolor: {last}");
+    StoryOutput::from(shown).readout(readout)
+}
+
 #[story(ColorRamp<'static>, covers = [Invalid], drive = Drive::Never)]
 fn color_ramp_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_dark = |pick: &RampPick| if pick.color.b < 0.5 { Validity::Refuse(Message::new("Too dark")) } else { Validity::Ok };

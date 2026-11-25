@@ -8,4 +8,6 @@ mod dock_apply;
 mod fit;
 #[path = "geometry/main.rs"]
 mod geometry;
+mod hit_excluding;
 mod key_table;
+mod middle_scroll;

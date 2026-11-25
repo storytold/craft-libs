@@ -28,10 +28,10 @@ pub struct SelectableStyle {
 /// Read-only text the user focuses with a press to select and copy, which Tab passes over. Its node is a label named
 /// by `label`, with the text as its value.
 #[derive(crate::contract::Component, crate::contract::Props)]
-pub struct SelectableText {
+pub struct SelectableText<'a> {
     #[common]
     common: Common,
-    text: String,
+    spans: Vec<Span<'a>>,
     wrap: Wrap,
     mono: bool,
     /// The text is inset by the control padding, as the text of a field.
@@ -40,10 +40,15 @@ pub struct SelectableText {
     field_inset: bool,
 }
 
-impl SelectableText {
-    /// Selectable `text` named `label`.
-    pub fn new(label: impl Into<Label>, text: &str) -> Self {
-        SelectableText { common: Common::new(), text: text.to_owned(), wrap: Wrap::Line, mono: false, field_inset: false }.label(label)
+impl<'a> SelectableText<'a> {
+    /// Selectable `text` named `label`: one plain span, not copied.
+    pub fn new(label: impl Into<Label>, text: &'a str) -> Self {
+        Self::spans(label, vec![Span::new(text)])
+    }
+
+    /// Selectable text of styled `spans` named `label`, selected, copied and named as one text.
+    pub fn spans(label: impl Into<Label>, spans: Vec<Span<'a>>) -> Self {
+        SelectableText { common: Common::new(), spans, wrap: Wrap::Line, mono: false, field_inset: false }.label(label)
     }
 
     /// The text wraps over several lines.
@@ -61,12 +66,12 @@ impl SelectableText {
     }
 
     fn run(&self, role: TypeRole) -> TextRun<'_> {
-        let span = if self.mono { Span::new(self.text.as_str()).mono() } else { Span::new(self.text.as_str()) };
-        TextRun::spans(vec![span]).role(role).wrap(self.wrap)
+        let spans = if self.mono { self.spans.iter().cloned().map(Span::mono).collect() } else { self.spans.clone() };
+        TextRun::spans(spans).role(role).wrap(self.wrap)
     }
 }
 
-impl Component for SelectableText {
+impl Component for SelectableText<'_> {
     const ROLE: Role = Role::LABEL;
     const INPUT: crate::contract::Input = crate::contract::Input::Display;
     const OVERLAYS: bool = false;
@@ -94,7 +99,7 @@ impl Component for SelectableText {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        access.value(self.text.clone());
+        access.value(self.run(TypeRole::Body).full_text());
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
