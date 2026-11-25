@@ -378,7 +378,9 @@ pub(crate) fn para_key(rp: &ResolvedPara, font_size: f32) -> ParaKey {
         page_break_before: rp.page_break_before,
         widow: rp.widow_control,
         heading: NO_HEADING,
-        break_words: rp.keep_hangul_words == Some(false),
+        // unset is off (as the model has it, and as an app lays it out): Hangul words break
+        // between syllables unless asked to wrap whole
+        break_words: rp.keep_hangul_words != Some(true),
     }
 }
 

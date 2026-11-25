@@ -530,3 +530,23 @@ fn new_hwpx_leaves_out_characters_xml_cannot_hold() {
     }
     assert!(crate::read(&bytes).unwrap().core.title.starts_with("제목"));
 }
+
+/// A paragraph that doesn't say whether Hangul words wrap whole (one from another format, or a
+/// new one) is written breaking them between syllables, as the model has it and an app lays it
+/// out; one that says so keeps what it says. Before, unset was written as wrapping whole, and
+/// the document's lines broke otherwise in Hancom than where it was edited.
+#[test]
+fn new_hwpx_writes_hangul_word_wrapping_as_the_model_has_it() {
+    use craft_wordmodel::{CharProps, Paragraph, para_block};
+    let para = |text: &str, keep: Option<bool>| {
+        let mut p = Paragraph::with_text(text, CharProps::default());
+        p.props.keep_hangul_words = keep;
+        para_block(p)
+    };
+    let mut doc = craft_wordmodel::Document::from_text("");
+    doc.body = vec![para("비어 있음", None), para("어절", Some(true)), para("글자", Some(false))];
+    let (bytes, _) = new_hwpx(&doc).unwrap();
+    let back = crate::read(&bytes).unwrap();
+    let keep: Vec<Option<bool>> = back.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.keep_hangul_words).collect();
+    assert_eq!(keep, [Some(false), Some(true), Some(false)]);
+}
