@@ -91,16 +91,16 @@ pub use selection::{
 };
 pub use stateful::{FlagMask, Flags, Mix, Resolve, StateMix, Stateful};
 pub use theme::{
-    AppOverrides, Appearance, Contrast, ContrastIntent, EdgeSeed, GripSeed, InterfaceFont, ModePins, ModeSeeds, PinLayer, Pins, RadiusOffset,
-    SeedOverrides, Seeds, ShapeSeed, Size, TextSize, TextSizeSteps, ThemeDef, Variants,
+    AppOverrides, Appearance, Contrast, ContrastIntent, EdgeSeed, GripSeed, InterfaceFont, LocatorSeed, ModePins, ModeSeeds, PinLayer, Pins,
+    RadiusOffset, SeedOverrides, Seeds, ShapeSeed, Size, TextSize, TextSizeSteps, ThemeDef, Variants,
 };
 pub use token_group::{GroupValues, TokenGroup};
 pub use tokens::{
     AccentColors, BarSizes, CaptionColors, ColorToken, ColorTokens, ControlSizes, DataColors, DialogSizes, DockColumnSizes, Edge, EdgeColors,
     ElevationTokens, FloatSizes, FontSlot, Gaps, GripMark, GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LetterCase,
-    LineColors, Motion, MotionTokens, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes, ShapeTokens, SizeTokens,
-    SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors, ThumbSamples, ThumbSizes, Tokens, TypeRole,
-    TypeStyle, TypeTokens, WellShape, WindowSizes,
+    LineColors, LocatorShape, Motion, MotionTokens, OverlayColors, Pads, PageGaps, PageSizes, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes,
+    RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StrokeTokens, SurfaceColors, TextColors,
+    ThumbSamples, ThumbSizes, Tokens, TypeRole, TypeStyle, TypeTokens, WellShape, WindowSizes,
 };
 pub use values::ColorSource;
 pub use variant::{CustomVariant, Emphasis, RadiusStep, Variant, VariantLook};

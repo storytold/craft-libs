@@ -6,15 +6,17 @@
 //! user did; the dock decides what a drop changes.
 
 use super::divider::{self, Divider, Drag};
-use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
+use super::group::strip_surface;
+use super::{CardInset, DividerKind, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Props as _, Role, ShowContainer as _,
-    Sizing, WordSetCx as _,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::menu::GroupItem;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, UiTokens};
+use crate::tabs::PanelTabLook;
 use craft_behavior::divider::{self as push, Segment};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::{Axis, DockSide, Flow, Metrics, PartKey, Sense, Value};
@@ -139,6 +141,9 @@ pub struct DockColumnOutput<P> {
     pub resized: Vec<(P, f32)>,
     /// The width the user gave the column on its inner edge this pass.
     pub width: Option<f32>,
+    /// The dividers drawn this pass: between each two open groups and on the inner edge, each with the rect of its
+    /// handle and the id of the handle's accessibility node.
+    pub dividers: Vec<(DividerKind<P>, Rect, Id)>,
 }
 
 impl<P> Outcome for DockColumnOutput<P> {
@@ -197,11 +202,15 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
-    /// The inset on the outer side of the column's card, when it shows as one
-    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_inset`]): its bar and groups
+    /// Which inset the outer side of the column's card takes, when it shows as one
+    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_place`]): its bar and groups
     /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
     #[prop]
-    card: Option<f32>,
+    card: Option<CardInset>,
+    /// The look of the dock's panel tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)): the column's bar
+    /// lies on the surface the groups' tab strips do.
+    #[prop]
+    tab_look: PanelTabLook,
     /// The plan `parts` laid out this pass, which update, paint and access read.
     laid: Option<Plan>,
     resized: Vec<(P, f32)>,
@@ -226,6 +235,7 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
             arrow: ColumnArrow::Collapse,
             within: Rect::NOTHING,
             card: None,
+            tab_look: PanelTabLook::Plain,
             laid: None,
             resized: Vec::new(),
             width: None,
@@ -291,7 +301,7 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
     /// on top.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
         let (least, most) = sizes.shown_bounds(self.column, self.spec);
-        let inset = self.card.unwrap_or(0.0);
+        let inset = self.card.map_or(0.0, |place| sizes.inset(place));
         let (least, most) = (least + inset, most + inset);
         Divider::column_edge(rect, self.edge, (least, most.min((self.within.width() - sizes.least_pane).max(rect.width()))), sizes.reach)
     }
@@ -315,10 +325,10 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
 }
 
 /// The card of a docked column in `rect`, the column's rect in a dock on the window edge `edge`: `rect` inset by
-/// `card`, the card's outer inset ([`DockSizes::card_inset`]), on its outer side, the one towards `edge`, and by
+/// the card's outer inset at `card` ([`DockSizes::inset`]) on its outer side, the one towards `edge`, and by
 /// [`DockSizes::card`] on its top and bottom; `rect` for a column that is no card.
-pub(crate) fn card_rect(rect: Rect, card: Option<f32>, sizes: &DockSizes, edge: DockEdge, rtl: bool) -> Rect {
-    let Some(outer) = card else { return rect };
+pub(crate) fn card_rect(rect: Rect, card: Option<CardInset>, sizes: &DockSizes, edge: DockEdge, rtl: bool) -> Rect {
+    let Some(outer) = card.map(|place| sizes.inset(place)) else { return rect };
     let inner = rect.shrink2(egui::vec2(0.0, sizes.card));
     if (edge == DockEdge::Start) != rtl { inner.with_min_x(inner.left() + outer) } else { inner.with_max_x(inner.right() - outer) }
 }
@@ -329,14 +339,28 @@ pub(crate) fn card_style(cx: &StyleCx<'_>) -> SurfaceStyle {
     SurfaceStyle { radius: UiTokens::corner(cx.tokens.shape.radius.surface), edge: SurfaceEdge::None, shadow: None, ..cx.surface(SurfaceKind::Panel) }
 }
 
-/// Paints a column in `rect` whose content sits in `card`: the card over the dock's background where the column is
-/// one, else the column's panel surface.
-pub(crate) fn paint_card(ui: &mut PaintUi<'_>, rect: Rect, card: Rect, style: &SurfaceStyle) {
+/// Paints a column in `rect` whose content sits in `card`, with its own `bar` if it has one, beside tabs in `look`: the
+/// card over the dock's background where the column is one, else the column's panel surface; the bar on the surface
+/// of the dock's strips. A card's bar is part of the card, unless the strips have a surface of their own
+/// ([`PanelTabLook::Block`]): then it is a square strip across the card's top, and only the card's foot is rounded.
+pub(crate) fn paint_card(ui: &mut PaintUi<'_>, rect: Rect, card: Rect, style: &SurfaceStyle, bar: Option<Rect>, look: PanelTabLook) {
+    let strip = strip_surface(look);
     if card == rect {
         ui.draw().surface(rect, SurfaceKind::Panel, Corners::All);
-    } else {
-        ui.draw().surface(rect, SurfaceKind::Background, Corners::None);
-        ui.draw().surface_styled(card, style);
+        if let Some(bar) = bar {
+            ui.draw().surface(bar, strip, Corners::None);
+        }
+        return;
+    }
+    ui.draw().surface(rect, SurfaceKind::Background, Corners::None);
+    match bar.filter(|_| look == PanelTabLook::Block) {
+        Some(bar) => {
+            let mut foot = *style;
+            (foot.radius.nw, foot.radius.ne) = (0, 0);
+            ui.draw().surface_styled(card, &foot);
+            ui.draw().surface(bar, strip, Corners::None);
+        }
+        None => ui.draw().surface_styled(card, style),
     }
 }
 
@@ -512,15 +536,10 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
         let Some(plan) = self.laid.as_ref() else { return };
         // Painted here, not as the container's surface, which lies over what `paint` draws.
         let card = self.inner(cx.rect, cx.flow.is_rtl(), &cx.style.sizes);
-        paint_card(ui, cx.rect, card, &cx.style.card);
-        if self.bar == ColumnBar::Own {
-            // A card's bar is part of the card.
-            if card == cx.rect {
-                ui.draw().surface(plan.bar, SurfaceKind::Background, Corners::None);
-            }
-            if self.arrow.shown() {
-                paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
-            }
+        let bar = (self.bar == ColumnBar::Own).then_some(plan.bar);
+        paint_card(ui, cx.rect, card, &cx.style.card, bar, self.tab_look);
+        if self.bar == ColumnBar::Own && self.arrow.shown() {
+            paint_chevron(ui, self.edge, self.arrow, true, cx.flow.is_rtl(), &cx.words::<DockWords>());
         }
     }
 
@@ -563,7 +582,20 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> DockColumnOutput<P> {
+        let node = |part| crate::runtime::access::sub_node_id(cx.core.id, part);
+        let mut dividers = Vec::new();
+        for pair in self.laid.as_ref().map_or(&[][..], |plan| &plan.open[..]).windows(2) {
+            let part = DIVIDER.at(pair[0] as u64);
+            if let (Some(shown), Some(anchor)) = (cx.part_if_declared(part), self.anchor(pair[0])) {
+                dividers.push((DividerKind::Groups(anchor.clone()), shown.rect, node(part)));
+            }
+        }
+        let edge = EDGE.at(0);
+        if let (Some(shown), Some(first)) = (cx.part_if_declared(edge), self.anchor(0)) {
+            dividers.push((DividerKind::ColumnEdge(first.clone()), shown.rect, node(edge)));
+        }
         DockColumnOutput {
+            dividers,
             response: cx.response.clone(),
             placed: cx.rect,
             iconic: self.collapse.then_some(true),

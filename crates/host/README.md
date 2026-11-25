@@ -1,12 +1,13 @@
 # craft-host
 
-The services every Craft library feature reads from the app: who the app is (`AppInfo`), the
-catalogs and current language, settings sections, command words and background jobs. The app builds
+The services every Craft library feature reads from the app: who the app is (`AppInfo`, and its
+icon), the catalogs and current language, settings sections, command words and background jobs. The app builds
 one `Host` at startup and installs it on the egui context; features read it with `Host::of(ui)` and
 never take services as parameters.
 
 ```ignore
 let host = craft_host::Host::builder(craft_host::AppInfo { id: "photocraft", name: "PhotoCraft", version: "1.0" })
+    .icon_png(include_bytes!("../assets/icon-128.png"))
     .i18n(i18n)
     .settings(settings)
     .build();

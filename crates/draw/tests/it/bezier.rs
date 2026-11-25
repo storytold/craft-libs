@@ -739,6 +739,33 @@ fn shift_keeps_an_anchor_drag_on_the_axis_or_the_diagonal() {
     }
 }
 
+// ⇧ during a handle drag turns the handle to the nearest 45° about its anchor, also when pressed mid-drag: about 20°
+// lands on the axis, about 40° on the diagonal, and photocraft#15760's measured (-78, +140) on (-78, +78); without ⇧
+// the handle follows the pointer.
+#[trial]
+fn shift_locks_a_handle_drag_to_the_nearest_45_degrees() {
+    let anchor = p(260.0, 60.0);
+    let cases =
+        [(p(360.0, 96.0), p(360.0, 60.0)), (p(340.0, 127.0), p(327.0, 127.0)), (anchor + Vec2::new(-78.0, 140.0), anchor + Vec2::new(-78.0, 78.0))];
+    for (shift, (target, locked)) in cases.iter().flat_map(|c| [(true, *c), (false, *c)]) {
+        let mut h = two_paths();
+        h.update(|st| st.selection = sel(1, &[(0, 2)]));
+        let handle = h.screen(p(290.0, 100.0));
+        let to = h.screen(target);
+        h.press_at(handle);
+        h.move_to(handle + (to - handle) * 0.5);
+        if shift {
+            h.fixture.hold(egui::Modifiers::SHIFT);
+        }
+        h.move_to(to);
+        let Some(PathEdit::MoveHandle { to: got, .. }) = h.last_change() else { panic!("a handle move: {:?}", h.last_change()) };
+        h.release_at(to);
+        h.fixture.hold(egui::Modifiers::NONE);
+        let want = if shift { locked } else { target };
+        assert!(got.distance(want) < 1e-3, "shift {shift}: {target:?} gives {got:?}, wants {want:?}");
+    }
+}
+
 // Delete Anchor with only some subpaths' anchors shown (#12769): a click on a hidden anchor deletes nothing and
 // edits nothing, selects that anchor and shows only its subpath; the next click on it deletes it.
 #[trial]

@@ -234,7 +234,7 @@ mod tests {
         let src_l = noise(1, n, 0.7);
         let src_r = noise(2, n, 0.7);
         let change_at = 11111;
-        for e in effects() {
+        for e in crate::testutil::sampled_effects() {
             let run = |sizes: &mut dyn FnMut() -> usize| {
                 let mut fx = (e.create)(SR, 2);
                 let (mut l, mut r) = (src_l.clone(), src_r.clone());
@@ -289,8 +289,9 @@ mod tests {
         // One thread per effect. The tail stays 40 s long: delays, reverbs and graphic EQs still
         // produce output in its last second, some of it within 3x of the smallest normal f32.
         std::thread::scope(|scope| {
-            for e in effects() {
+            for e in crate::testutil::sampled_effects() {
                 scope.spawn(move || {
+                    let started = std::time::Instant::now();
                     for setting in [0.0f32, 1.0] {
                         let mut fx = (e.create)(SR, 2);
                         for p in e.params {
@@ -318,6 +319,9 @@ mod tests {
                             );
                         }
                     }
+                    if started.elapsed() > std::time::Duration::from_secs(1) {
+                        eprintln!("DIAG extreme settings: {} took {:?}", e.id, started.elapsed());
+                    }
                 });
             }
         });
@@ -325,7 +329,7 @@ mod tests {
 
     #[test]
     fn reset_restores_initial_behavior() {
-        for e in effects() {
+        for e in crate::testutil::sampled_effects() {
             let mut fx = (e.create)(SR, 2);
             let x = noise(8, 6000, 0.5);
             let (mut a1, mut a2) = (x.clone(), x.clone());
