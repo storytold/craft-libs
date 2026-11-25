@@ -19,6 +19,7 @@ use crate::primitives::{IconSpec, PaintShape};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusRequest, FocusTarget};
+use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
@@ -230,6 +231,12 @@ fn grip_least(tokens: &Tokens) -> f32 {
 /// How many of the shown tab's first letters the header keeps room for before the drag band narrows, as many as a
 /// shrunk panel tab shows.
 const SHOWN_TAB_LETTERS: usize = 3;
+/// Where the header hands forward the width the host's items took before the tab strip, with the gap after them
+/// (`layout_memory::emit_width`), keyed under the group's body id.
+fn host_items_key(body: Id) -> Id {
+    sub(body, "host_items")
+}
+
 /// The panel menu button at the header's end edge.
 pub(super) const MENU: PartKey = PartKey::new("panel_menu");
 /// Where the group menu hangs while a context request on a tab holds it open: the request's point.
@@ -720,11 +727,17 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     }
 
     /// The drag band, then the panel menu button when it shows, at the header's end edge. In a header too narrow for
-    /// them and the shown tab's least room, the band narrows to an icon's room, so the shown tab stays visible.
+    /// them, the host's items and the shown tab's least room, the band narrows to an icon's room, so the shown tab stays
+    /// visible. The host's items count with the width the header last handed forward for them; before it has, they
+    /// count as none.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let button = self.menu_room(cx);
         let parts = HeaderParts::NONE.end(grip_width(cx.tokens) + button);
-        if self.titled { parts } else { parts.end_narrows(grip_least(cx.tokens) + button, self.shown_tab_least(cx)) }
+        if self.titled {
+            return parts;
+        }
+        let host = self.extra.as_ref().and_then(|_| layout_memory::width(cx.ui.ctx(), host_items_key(sub(cx.id, "body")))).unwrap_or(0.0);
+        parts.end_narrows(grip_least(cx.tokens) + button, host + self.shown_tab_least(cx))
     }
 
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -773,7 +786,13 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     }
                 }
                 if let Some(hook) = extra.as_mut() {
+                    // The cursor moves past each item and the gap after it, so the distance it moves is the room the
+                    // items take before the tab row.
+                    let before = ui.cursor();
                     hook.run(ui, cx);
+                    let after = ui.cursor();
+                    let took = if rtl { before.max.x - after.max.x } else { after.min.x - before.min.x };
+                    layout_memory::emit_width(ui.ctx(), host_items_key(cx.id), took.max(0.0));
                 }
                 if titled {
                     let close_name = cx.words::<DockWords>().close_panel.clone();
