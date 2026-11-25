@@ -349,6 +349,68 @@ fn a_texture_of_a_webp_image_names_it_through_the_extension() {
 }
 
 #[test]
+fn a_named_image_keeps_its_media_type() {
+    // The URI has no extension, so only the media type says the image is WebP.
+    let mut s = rig();
+    s.images = vec![Image { uri: Some("asset?id=42".into()), mime_type: Some("image/webp".into()), ..Image::default() }];
+    s.materials[0].base_color_texture = Some(TextureRef::default());
+    let first = write_glb(&s, &Limits::default()).unwrap();
+    let j = json_of(&first);
+    assert_eq!((j["images"][0]["uri"].clone(), j["images"][0]["mimeType"].clone()), (json!("asset?id=42"), json!("image/webp")));
+    let back = parse(&first).unwrap();
+    assert_eq!(back.images[0].mime_type.as_deref(), Some("image/webp"));
+    let second = json_of(&write_glb(&back, &Limits::default()).unwrap());
+    assert_eq!(second["textures"][0]["extensions"]["EXT_texture_webp"]["source"], json!(0));
+    assert_eq!(second, j);
+    // A named image of no known type is written without one.
+    s.images[0].mime_type = None;
+    assert!(json_of(&write_glb(&s, &Limits::default()).unwrap())["images"][0].get("mimeType").is_none());
+}
+
+#[test]
+fn texture_slots_use_the_first_of_the_files_textures_that_match() {
+    let mut s = rig_with_extensions();
+    // The file holds the same texture three times; a material slot that matches uses the first.
+    s.texture_variants = vec![TextureRef { image: 0, ..TextureRef::default() }, TextureRef { image: 1, ..TextureRef::default() }];
+    s.texture_variants.extend([TextureRef { image: 1, ..TextureRef::default() }; 2]);
+    let j = json_of(&write_glb(&s, &Limits::default()).unwrap());
+    assert_eq!(j["textures"].as_array().unwrap().len(), 4);
+    assert_eq!(j["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"], json!(1));
+    // A slot that matches none of them adds one texture, which the next such slot uses again.
+    s.materials[0].normal_texture = Some(TextureRef { image: 1, wrap: [Wrap::Mirror; 2], ..TextureRef::default() });
+    s.materials[0].emissive_texture = s.materials[0].normal_texture;
+    let j = json_of(&write_glb(&s, &Limits::default()).unwrap());
+    assert_eq!(j["textures"].as_array().unwrap().len(), 5);
+    assert_eq!((j["materials"][0]["normalTexture"]["index"].clone(), j["materials"][0]["emissiveTexture"]["index"].clone()), (json!(4), json!(4)));
+}
+
+#[test]
+fn parts_with_and_without_normals_are_written_over_their_own_vertices() {
+    // A triangle without normals next to the quad, which has normals and a target that moves them.
+    let mut s = rig();
+    let corners = (0..3).map(|i| Corner { position: i, normal: crate::NONE, uv: crate::NONE }).collect();
+    s.meshes[0].parts.push(Part { material: Some(0), face_sizes: vec![3], corners, ..Part::default() });
+    let glb = write_glb(&s, &Limits::default()).unwrap();
+    let j = json_of(&glb);
+    let primitives = j["meshes"][0]["primitives"].as_array().unwrap();
+    assert_eq!(primitives.len(), 2);
+    assert!(primitives[0]["attributes"].get("NORMAL").is_some() && primitives[0]["targets"][0].get("NORMAL").is_some());
+    assert!(primitives[1]["attributes"].get("NORMAL").is_none() && primitives[1]["targets"][0].get("NORMAL").is_none());
+    let back = parse(&glb).unwrap();
+    back.validate().unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let read = &back.meshes[0];
+    assert!(read.parts[0].corners.iter().all(|c| c.normal != crate::NONE));
+    assert!(read.parts[1].corners.iter().all(|c| c.normal == crate::NONE));
+    // The quad moves as it did without the triangle.
+    let quad = |m: &Mesh| Mesh { parts: vec![m.parts[0].clone()], ..m.clone() };
+    assert_eq!(skinning(&quad(read)), skinning(&quad(&s.meshes[0])));
+    for weights in [&[1.0, 0.0, 0.0][..], &[0.5, 0.75, 1.0]] {
+        assert_eq!(shaped(&quad(read), weights), shaped(&quad(&s.meshes[0]), weights), "weights {weights:?}");
+    }
+}
+
+#[test]
 fn writing_a_written_file_again_gives_the_same_bytes() {
     let first = write_glb(&rig_with_extensions(), &Limits::default()).unwrap();
     let second = write_glb(&parse(&first).unwrap(), &Limits::default()).unwrap();
@@ -397,6 +459,24 @@ fn writer_refuses_rigging_that_is_not_gltf() {
     let mut s = rig();
     s.meshes[0].joints.clear();
     assert!(refused(&s), "weights without joints");
+    let mut s = rig();
+    s.meshes[0].weights[0] = [-0.25, 1.25, 0.0, 0.0];
+    assert!(refused(&s), "a negative skinning weight");
+    let mut s = rig();
+    s.meshes[0].joints[0] = [0; 4];
+    assert!(refused(&s), "a joint named twice with weights other than 0");
+    let mut s = rig();
+    s.skins[0].joints = vec![2, 2];
+    assert!(refused(&s), "a joint node named twice in a skin");
+    let mut s = rig();
+    s.skins[0].inverse_bind[0][3] = 1.0;
+    assert!(refused(&s), "an inverse bind matrix whose last row is not 0, 0, 0, 1");
+    let mut s = rig();
+    s.meshes[0].joints.clear();
+    s.meshes[0].weights.clear();
+    assert!(refused(&s), "a skin on a written mesh without joints and weights");
+    // `rig` names joint 0 again in the slots whose weight is 0, which glTF allows.
+    assert!(rig().meshes[0].joints[0][2..] == [0, 0] && write_glb(&rig(), &limits).is_ok());
     let mut s = rig();
     s.meshes[0].joints[3][1] = 2;
     assert!(refused(&s), "a joint the node's skin does not have");

@@ -504,8 +504,14 @@ fn morph_targets(
             [(base, "POSITION", &mut target.positions), (normal_base, "NORMAL", &mut target.normals), (tangent_base, "TANGENT", &mut target.tangents)]
         {
             let Some(a) = idx(t, key) else { continue };
+            // An offset of a pool the primitive does not fill is left out before its accessor
+            // is looked up.
+            if start == NONE {
+                skipped.unfit += 1;
+                continue;
+            }
             let vec3 = d.accessor(a)?.get("type").and_then(Value::as_str) == Some("VEC3");
-            if start == NONE || !vec3 || d.count(a) != Some(nv) {
+            if !vec3 || d.count(a) != Some(nv) {
                 skipped.unfit += 1;
                 continue;
             }
@@ -681,6 +687,7 @@ fn images(d: &Doc, limits: &Limits, scene: &mut Scene) -> Result<()> {
                 // An image that cannot be decoded is left without data, not an error.
                 Some(data) => {
                     if let Ok((mime, bytes)) = data {
+                        charge(&d.data_left, bytes.len(), "image bytes")?;
                         image.mime_type = image.mime_type.or(Some(mime).filter(|m| !m.is_empty()));
                         image.data = Some(bytes);
                     }
@@ -1142,10 +1149,74 @@ impl Writer {
     /// The glTF mesh of `mesh` and the highest joint its written vertices name, or `None` when
     /// it has no triangle.
     pub(crate) fn mesh(&mut self, mesh: &Mesh) -> Result<Option<(Value, Option<u16>)>> {
-        let u = mesh.unified();
-        if u.parts.iter().all(Vec::is_empty) {
+        // Parts whose corners all have normals (or UVs) and parts whose corners do not are
+        // written over separate vertices, so the first keep their normals, UVs and the morph
+        // targets' normal offsets.
+        let layout = |p: &Part| {
+            let all = |f: &dyn Fn(&Corner) -> bool| p.corners.iter().all(f);
+            (!mesh.normals.is_empty() && all(&|c| c.normal != NONE), !mesh.uv_sets.is_empty() && all(&|c| c.uv != NONE))
+        };
+        let keys: Vec<Option<(bool, bool)>> = mesh.parts.iter().map(|p| (!p.corners.is_empty()).then(|| layout(p))).collect();
+        let mut layouts = Vec::new();
+        for key in keys.iter().flatten() {
+            if !layouts.contains(key) {
+                layouts.push(*key);
+            }
+        }
+        let groups: Vec<Unified> = if layouts.len() <= 1 {
+            vec![mesh.unified()]
+        } else {
+            layouts.iter().map(|l| mesh.unified_parts(|k| keys.get(k).copied().flatten() == Some(*l))).collect()
+        };
+        if groups.iter().all(|u| u.parts.iter().all(Vec::is_empty)) {
             return Ok(None);
         }
+        let mut top = None;
+        let mut streams = Vec::with_capacity(groups.len());
+        for u in &groups {
+            if u.parts.iter().all(Vec::is_empty) {
+                streams.push(None);
+                continue;
+            }
+            let (attrs, highest) = self.vertices(mesh, u)?;
+            top = top.max(highest);
+            streams.push(Some((attrs, self.targets(mesh, u)?)));
+        }
+        let mut primitives = Vec::new();
+        for (k, part) in mesh.parts.iter().enumerate() {
+            for (u, stream) in groups.iter().zip(&streams) {
+                let (Some(triangles), Some((attrs, targets))) = (u.parts.get(k).filter(|t| !t.is_empty()), stream) else { continue };
+                let mut p =
+                    Map::from_iter([("attributes".to_string(), Value::Object(attrs.clone())), ("indices".into(), json!(self.indices(triangles)?))]);
+                if let Some(m) = part.material {
+                    p.insert("material".into(), json!(m));
+                }
+                // Every primitive of a mesh has the mesh's targets.
+                if !targets.is_empty() {
+                    p.insert("targets".into(), Value::Array(targets.clone()));
+                }
+                primitives.push(Value::Object(p));
+            }
+        }
+        let mut out = Map::from_iter([("primitives".to_string(), Value::Array(primitives))]);
+        if !mesh.name.is_empty() {
+            out.insert("name".into(), json!(mesh.name));
+        }
+        if !mesh.morph_targets.is_empty() && !mesh.morph_weights.is_empty() {
+            out.insert("weights".into(), json!(mesh.morph_weights));
+        }
+        if !mesh.extensions.is_empty() {
+            out.insert("extensions".into(), Value::Object(mesh.extensions.clone()));
+        }
+        if let Some(extras) = mesh_extras(mesh) {
+            out.insert("extras".into(), extras);
+        }
+        Ok(Some((Value::Object(out), top)))
+    }
+
+    /// The vertex attributes of `u`, the mesh's vertices for some of its parts, and the highest
+    /// joint they name.
+    fn vertices(&mut self, mesh: &Mesh, u: &Unified) -> Result<(Map<String, Value>, Option<u16>)> {
         let mut attrs = Map::new();
         attrs.insert("POSITION".into(), json!(self.floats(u.positions.iter().map(|p| p.map(|x| x as f32)), "VEC3", true)?));
         if !u.normals.is_empty() {
@@ -1168,34 +1239,7 @@ impl Writer {
             let weights = u.corners.iter().map(|c| mesh.weights.get(c.position as usize).copied().unwrap_or_default());
             attrs.insert("WEIGHTS_0".into(), json!(self.floats(weights, "VEC4", false)?));
         }
-        let targets = self.targets(mesh, &u)?;
-        let mut primitives = Vec::new();
-        for (part, triangles) in mesh.parts.iter().zip(&u.parts).filter(|(_, t)| !t.is_empty()) {
-            let mut p =
-                Map::from_iter([("attributes".to_string(), Value::Object(attrs.clone())), ("indices".into(), json!(self.indices(triangles)?))]);
-            if let Some(m) = part.material {
-                p.insert("material".into(), json!(m));
-            }
-            // Every primitive of a mesh has the mesh's targets.
-            if !targets.is_empty() {
-                p.insert("targets".into(), Value::Array(targets.clone()));
-            }
-            primitives.push(Value::Object(p));
-        }
-        let mut out = Map::from_iter([("primitives".to_string(), Value::Array(primitives))]);
-        if !mesh.name.is_empty() {
-            out.insert("name".into(), json!(mesh.name));
-        }
-        if !targets.is_empty() && !mesh.morph_weights.is_empty() {
-            out.insert("weights".into(), json!(mesh.morph_weights));
-        }
-        if !mesh.extensions.is_empty() {
-            out.insert("extensions".into(), Value::Object(mesh.extensions.clone()));
-        }
-        if let Some(extras) = mesh_extras(mesh) {
-            out.insert("extras".into(), extras);
-        }
-        Ok(Some((Value::Object(out), top)))
+        Ok((attrs, top))
     }
 
     /// `JOINTS_0`: four joint indices per vertex, as unsigned shorts.
@@ -1364,6 +1408,8 @@ struct Textures {
     samplers: Vec<[Wrap; 2]>,
     /// The written image (`None`: a texture of the file whose image is not written) and sampler.
     textures: Vec<(Option<usize>, usize)>,
+    /// The index of the first of `textures` with each image and sampler.
+    first: std::collections::HashMap<(Option<usize>, usize), usize>,
     /// Whether each written image is WebP.
     webp: Vec<bool>,
 }
@@ -1401,18 +1447,25 @@ impl Textures {
         for t in variants {
             let image = self.image_map.get(t.image).copied().flatten();
             let sampler = self.sampler(t.wrap);
-            self.textures.push((image, sampler));
+            self.push((image, sampler));
         }
+    }
+
+    /// Add a texture, and the index of the first texture with its image and sampler.
+    fn push(&mut self, texture: (Option<usize>, usize)) -> usize {
+        self.textures.push(texture);
+        *self.first.entry(texture).or_insert(self.textures.len() - 1)
     }
 
     fn slot(&mut self, t: Option<TextureRef>) -> Option<Value> {
         let t = t?;
         let image = (*self.image_map.get(t.image)?)?;
         let sampler = self.sampler(t.wrap);
-        let index = self.textures.iter().position(|x| *x == (Some(image), sampler)).unwrap_or_else(|| {
-            self.textures.push((Some(image), sampler));
-            self.textures.len() - 1
-        });
+        let key = (Some(image), sampler);
+        let index = match self.first.get(&key) {
+            Some(index) => *index,
+            None => self.push(key),
+        };
         let mut out = json!({ "index": index, "texCoord": t.uv_set });
         if let (Some(tt), Some(o)) = (t.transform, out.as_object_mut()) {
             let ext = json!({ "offset": tt.offset, "rotation": tt.rotation, "scale": tt.scale });
@@ -1568,11 +1621,18 @@ fn check_finite(scene: &Scene) -> Result<()> {
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
 }
 
-/// Every joint a written vertex names is in the skin of each node that places the mesh; `top`
-/// is the highest joint of each mesh's written vertices.
-fn check_joints(scene: &Scene, top: &[Option<u16>]) -> Result<()> {
+/// Every joint a written vertex names is in the skin of each node that places the mesh, and a
+/// node with a skin places only written meshes with joints and weights. `top` is the highest
+/// joint of each mesh's written vertices, and `written` the written index of each mesh.
+fn check_joints(scene: &Scene, top: &[Option<u16>], written: &[Option<usize>]) -> Result<()> {
     for n in &scene.nodes {
-        let (Some(Some(j)), Some(s)) = (n.mesh.and_then(|m| top.get(m)), n.skin.and_then(|s| scene.skins.get(s))) else { continue };
+        let (Some(m), Some(s)) = (n.mesh, n.skin.and_then(|s| scene.skins.get(s))) else { continue };
+        if written.get(m).copied().flatten().is_none() {
+            continue;
+        }
+        let Some(Some(j)) = top.get(m) else {
+            return Err(malformed(KIND, format!("node `{}` has skin `{}` and a mesh without joints and weights", n.name, s.name)));
+        };
         if usize::from(*j) >= s.joints.len() {
             return Err(malformed(KIND, format!("node `{}` names joint {j} of skin `{}`, which has {}", n.name, s.name, s.joints.len())));
         }
@@ -1580,15 +1640,31 @@ fn check_joints(scene: &Scene, top: &[Option<u16>]) -> Result<()> {
     Ok(())
 }
 
-/// Skins as glTF has them: a skin with joints and with one inverse bind matrix per joint when it
-/// has any, and a mesh with both joints and weights or neither.
+/// Skins as glTF has them: a skin with joints, each node once, and with one inverse bind matrix
+/// per joint when it has any, each with a last row of 0, 0, 0, 1; and a mesh with both joints
+/// and weights or neither, whose vertices name each joint with a weight other than 0 once.
 fn check_skins(scene: &Scene) -> Result<()> {
     if let Some(m) = scene.meshes.iter().find(|m| m.joints.is_empty() != m.weights.is_empty()) {
         return Err(malformed(KIND, format!("mesh `{}` has joints without weights or weights without joints", m.name)));
     }
+    let repeated = |j: &[u16; 4], w: &[f32; 4]| {
+        let used: Vec<u16> = j.iter().zip(w).filter(|(_, w)| **w != 0.0).map(|(j, _)| *j).collect();
+        used.iter().enumerate().any(|(k, j)| used.get(k + 1..).is_some_and(|rest| rest.contains(j)))
+    };
+    if let Some(m) = scene.meshes.iter().find(|m| m.joints.iter().zip(&m.weights).any(|(j, w)| repeated(j, w))) {
+        return Err(malformed(KIND, format!("mesh `{}` has a vertex that names a joint with a weight twice", m.name)));
+    }
     for s in &scene.skins {
         if s.joints.is_empty() {
             return Err(malformed(KIND, format!("skin `{}` has no joints", s.name)));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(s.joints.len());
+        if !s.joints.iter().all(|j| seen.insert(*j)) {
+            return Err(malformed(KIND, format!("skin `{}` names a joint node twice", s.name)));
+        }
+        // Column-major: the last row is entries 3, 7, 11 and 15, as written in `f32`.
+        if s.inverse_bind.iter().any(|m| [m[3], m[7], m[11], m[15]].map(|x| x as f32) != [0.0, 0.0, 0.0, 1.0]) {
+            return Err(malformed(KIND, format!("skin `{}` has an inverse bind matrix whose last row is not 0, 0, 0, 1", s.name)));
         }
         if !s.inverse_bind.is_empty() && s.inverse_bind.len() != s.joints.len() {
             return Err(malformed(
@@ -1607,6 +1683,10 @@ fn check_rigging(scene: &Scene) -> Result<()> {
     let targets = |n: &Node| n.mesh.and_then(|m| scene.meshes.get(m)).map_or(0, |m| m.morph_targets.len());
     if let Some(n) = scene.nodes.iter().find(|n| n.morph_weights.len() > targets(n)) {
         return Err(malformed(KIND, format!("node `{}` has {} morph weights for {} targets", n.name, n.morph_weights.len(), targets(n))));
+    }
+    // Morph target weights may be negative; skinning weights may not.
+    if let Some(m) = scene.meshes.iter().find(|m| m.weights.iter().flatten().any(|w| *w < 0.0)) {
+        return Err(malformed(KIND, format!("mesh `{}` has a negative skinning weight", m.name)));
     }
     let binds = scene.skins.iter().flat_map(|s| s.inverse_bind.iter().flatten()).all(|x| (*x as f32).is_finite());
     let offsets = scene
@@ -1660,10 +1740,12 @@ pub struct GlbWriteOptions {
 /// documentation). The binary chunk is limited to `limits.max_data_bytes`, and each mesh to
 /// `limits.max_morph_targets` morph targets; past either, the writer stops with
 /// [`Error::TooLarge`] before it writes more. A value that is not
-/// finite, a skin without joints or whose inverse bind matrices do not match its joints, a mesh
-/// with joints but no weights (or weights but no joints), a joint of a written vertex outside
-/// the skin of a node that places the mesh, and a node with more morph weights than its mesh has targets are
-/// [`Error::Malformed`].
+/// finite, a skin without joints, with a joint node named twice, or whose inverse bind matrices
+/// do not match its joints or have a last row other than 0, 0, 0, 1, a mesh with joints but no
+/// weights (or weights but no joints), a negative skinning weight, a vertex that names a joint
+/// with a weight other than 0 twice, a joint of a written vertex outside the skin of a node that
+/// places the mesh, a node with a skin that places a written mesh without joints and weights,
+/// and a node with more morph weights than its mesh has targets are [`Error::Malformed`].
 pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
     write_glb_with_options(scene, limits, &GlbWriteOptions::default())
 }
@@ -1689,7 +1771,7 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
             }))
         })
         .collect::<Result<_>>()?;
-    check_joints(scene, &top)?;
+    check_joints(scene, &top, &mesh_map)?;
     let mut textures = Textures::default();
     for image in &scene.images {
         let mut out = Map::new();
@@ -1708,7 +1790,15 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
                 // The path's extension, without a query or fragment.
                 let path = uri.split(['?', '#']).next().unwrap_or("");
                 let webp = path.rsplit_once('.').is_some_and(|(_, e)| e.eq_ignore_ascii_case("webp"));
-                image.mime_type.clone().unwrap_or_else(|| if webp { "image/webp".into() } else { String::new() })
+                match image.mime_type.clone().filter(|m| !m.is_empty()) {
+                    // A URI without the format's extension keeps its media type for the next reader.
+                    Some(mime) => {
+                        out.insert("mimeType".into(), json!(mime));
+                        mime
+                    }
+                    None if webp => "image/webp".into(),
+                    None => String::new(),
+                }
             }
             (None, None) => {
                 textures.image_map.push(None);

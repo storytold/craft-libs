@@ -95,8 +95,10 @@ their vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, c
 weights), skins with their inverse bind matrices, morph targets (POSITION and NORMAL offsets, the
 mesh's and each node's `weights`, names in `extras.targetNames`; a target that moves fewer than
 three quarters of the vertices as a sparse accessor), materials with their texture transforms and
-sampler wrap modes, and images; `write_glb_with_options` also writes each sampler's `magFilter` and
-`minFilter` when its `GlbWriteOptions` set them. The kept `extensions` and `extras` are written as
+sampler wrap modes, and images (with their `mimeType` when it is known); `write_glb_with_options`
+also writes each sampler's `magFilter` and `minFilter` when its `GlbWriteOptions` set them. Parts
+whose corners all have normals or UVs and parts whose corners do not are written as primitives over
+separate vertices. The kept `extensions` and `extras` are written as
 kept, except that the material extensions the reader reads into `Material` are written from its
 fields and `KHR_lights_punctual` is not written; `extensionsUsed` lists every extension in the
 file. The reader does not keep `extensionsRequired`; the writer requires only `EXT_texture_webp`,
@@ -156,7 +158,7 @@ mutations of every byte of good files.
 | `max_materials` | 100 000 | materials; images; OBJ material libraries; 3MF base materials and textures together |
 | `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles); 3MF placed objects, build items and components |
 | `max_depth` | 64 | node nesting; 3MF component nesting (ends cycles) |
-| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; morph targets and their offsets (8 bytes per value); the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; an FBX file's meshes, image bytes and parsed values (binary: 8 bytes per array element, and other values are not counted; ASCII: `size_of::<Prop>()` per value, each array element included, plus string bytes; record names and the overhead of records and their containers are not counted) |
+| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes (in buffer views and `data:` URIs); skin and animation values; morph targets and their offsets (8 bytes per value); the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; an FBX file's meshes, image bytes and parsed values (binary: 8 bytes per array element, and other values are not counted; ASCII: `size_of::<Prop>()` per value, each array element included, plus string bytes; record names and the overhead of records and their containers are not counted) |
 | `max_extras` | 10 000 | skins, animations, cameras, lights, buffers (each); channels of one animation |
 | `max_morph_targets` | 256 | morph targets of one glTF mesh; a mesh with more is read in its base shape with a warning, not refused |
 

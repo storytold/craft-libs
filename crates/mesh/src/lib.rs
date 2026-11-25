@@ -368,13 +368,24 @@ impl Mesh {
     /// The mesh as triangles ([`Part::triangles_in`]) with one vertex per distinct corner.
     /// Corners whose indices are out of range are dropped with their triangle.
     pub fn unified(&self) -> Unified {
+        self.unified_parts(|_| true)
+    }
+
+    /// [`Mesh::unified`] over the parts that `keep` takes by index. The others get no triangles,
+    /// and their corners do not decide whether the vertices have normals and UVs.
+    pub(crate) fn unified_parts(&self, keep: impl Fn(usize) -> bool) -> Unified {
         let mut out = Unified::default();
-        let all = |f: &dyn Fn(&Corner) -> bool| self.parts.iter().all(|p| p.corners.iter().all(f));
+        let kept = || self.parts.iter().enumerate().filter(|(k, _)| keep(*k)).map(|(_, p)| p);
+        let all = |f: &dyn Fn(&Corner) -> bool| kept().all(|p| p.corners.iter().all(f));
         let normals = !self.normals.is_empty() && all(&|c| c.normal != NONE);
         let uv_set = self.uv_sets.first().filter(|_| all(&|c| c.uv != NONE));
         let colors = self.colors.len() == self.positions.len() && !self.colors.is_empty();
         let mut ids: HashMap<Corner, u32> = HashMap::new();
-        for part in &self.parts {
+        for (k, part) in self.parts.iter().enumerate() {
+            if !keep(k) {
+                out.parts.push(Vec::new());
+                continue;
+            }
             let mut tris = Vec::with_capacity(part.triangle_count());
             'tri: for t in part.triangles_in(&self.positions) {
                 let mut tri = [0u32; 3];
