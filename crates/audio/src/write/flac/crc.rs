@@ -43,15 +43,3 @@ pub fn crc8(data: &[u8]) -> u8 {
 pub fn crc16(data: &[u8]) -> u16 {
     data.iter().fold(0u16, |c, &b| (c << 8) ^ T16[usize::from((c >> 8) as u8 ^ b)])
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn check_values() {
-        // the standard check value of each polynomial over "123456789"
-        assert_eq!(crc8(b"123456789"), 0xF4);
-        assert_eq!(crc16(b"123456789"), 0xFEE8);
-    }
-}

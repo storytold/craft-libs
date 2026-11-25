@@ -1,0 +1,23 @@
+[package]
+name = "craft-tracked"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Tracked<T>: app data whose every write moves a revision, so a reader compares two integers instead of the data"
+
+[lints]
+workspace = true
+
+# No dependencies but an optional serde, so engine crates can hold and move a revision without the UI.
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+# `Serialize` and `Deserialize` for `Tracked<T>`: saved as its value, loaded as a new source.
+serde = ["dep:serde"]
+
+[dev-dependencies]
+# `#[derive(PlainData)]` in the doc tests.
+craft-ui-macros = { workspace = true }
