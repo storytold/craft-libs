@@ -419,7 +419,21 @@ pub(crate) fn bare_context() -> Context {
 /// one build to the next.
 fn test_fonts() -> egui::FontDefinitions {
     static FONTS: std::sync::OnceLock<egui::FontDefinitions> = std::sync::OnceLock::new();
-    FONTS.get_or_init(crate::fonts::deflated_default_definitions).clone()
+    FONTS
+        .get_or_init(|| {
+            let mut definitions = crate::fonts::deflated_default_definitions();
+            // A fixture reads text through the AccessKit tree and the painted bounds, never the atlas pixels, and
+            // hinting changes only how outlines are rasterized (advances and layout do not read it). Without it no
+            // face builds a hinting instance and no glyph runs the hinter. An app's own stack (`UiFonts::install`)
+            // keeps hinting, which the review renders use.
+            for data in definitions.font_data.values_mut() {
+                let mut face = (**data).clone();
+                face.tweak.hinting = Some(false);
+                *data = Arc::new(face);
+            }
+            definitions
+        })
+        .clone()
 }
 
 /// A paragraph of `text` wrapped to the available width.

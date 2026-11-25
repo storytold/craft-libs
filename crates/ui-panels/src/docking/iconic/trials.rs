@@ -708,7 +708,8 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
     let between: Vec<_> = level.iter().filter(|(a, _, _)| a.y > last.bottom() && a.y < next.top()).collect();
     let [(a, b, ink)] = between.as_slice() else { panic!("one rule between the groups: {level:?}") };
     let (left, right) = (a.x.min(b.x), a.x.max(b.x));
-    assert!(left > 0.0 && right < RAIL && right - left > RAIL / 2.0, "the rule reaches across the column, short of its sides: {a:?} to {b:?}");
+    let span = right - left;
+    assert!(left > 0.0 && right < RAIL && span > RAIL - span, "the rule reaches across the column, short of its sides: {a:?} to {b:?}");
     let [r, g, bl, al] = border.0;
     assert_eq!(*ink, egui::Color32::from_rgba_unmultiplied(r, g, bl, al), "the rule is in line.border");
 }
