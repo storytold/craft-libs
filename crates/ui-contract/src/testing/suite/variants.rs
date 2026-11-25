@@ -36,12 +36,15 @@ fn acted(fixture: &mut Fixture, before: &crate::testing::story::StorySnapshot) -
 fn disabled_changes_nothing(subject: &Subject) -> Result<(), String> {
     for story in &subject.stories {
         let plan = subject.base(story).plan;
+        // One fixture takes every drive: a disabled story that acts on one is an error at once, so a drive that
+        // passes leaves it as it was for the next.
+        let mut driven = for_input(Fixture::story_scoped(story, |scope| scope.enabled = Some(false)));
         for variant in variants(plan, subject.probe).into_iter().filter(|variant| !cancels(plan, *variant)) {
-            let mut fixture = for_input(Fixture::story_scoped(story, |scope| scope.enabled = Some(false)));
+            let fixture = &mut driven;
             let before = fixture.data().snapshot();
             fixture.take_outputs();
-            run(&mut fixture, plan, variant);
-            if acted(&mut fixture, &before) {
+            run(fixture, plan, variant);
+            if acted(fixture, &before) {
                 return Err(format!("{}: a disabled story acted on drive {variant}", story.name));
             }
         }
@@ -87,12 +90,15 @@ fn read_only_changes_nothing(subject: &Subject) -> Result<(), String> {
     }
     for story in &subject.stories {
         let plan = subject.base(story).plan;
+        // One fixture takes every drive: a read-only story that acts on one is an error at once, so a drive that
+        // passes leaves it as it was for the next.
+        let mut driven = for_input(Fixture::story_scoped(story, |scope| scope.read_only = Some(true)));
         for variant in variants(plan, subject.probe).into_iter().filter(|variant| !cancels(plan, *variant)) {
-            let mut fixture = for_input(Fixture::story_scoped(story, |scope| scope.read_only = Some(true)));
+            let fixture = &mut driven;
             let before = fixture.data().snapshot();
             fixture.take_outputs();
-            run(&mut fixture, plan, variant);
-            if acted(&mut fixture, &before) {
+            run(fixture, plan, variant);
+            if acted(fixture, &before) {
                 return Err(format!("{}: a read-only story acted on drive {variant}", story.name));
             }
         }

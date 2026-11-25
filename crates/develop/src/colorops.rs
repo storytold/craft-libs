@@ -261,10 +261,10 @@ impl ColorOps {
         if self.mixer {
             let w = band_weights(h);
             let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
-            for i in 0..8 {
-                dh += w[i] * self.hue[i];
-                ds += w[i] * self.sat[i];
-                dl += w[i] * self.lum[i];
+            for (i, weight) in w.iter().enumerate() {
+                dh += weight * self.hue[i];
+                ds += weight * self.sat[i];
+                dl += weight * self.lum[i];
             }
             let chroma_w = (c / 0.12).min(1.0);
             h += dh * chroma_w;

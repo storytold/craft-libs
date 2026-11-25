@@ -3,7 +3,7 @@
 use egui::{Rect, Ui, Vec2};
 
 /// Takes `size` in the parent's layout and returns its rect. Registers no widget.
-pub(crate) fn space(ui: &mut Ui, size: Vec2) -> Rect {
+pub fn space(ui: &mut Ui, size: Vec2) -> Rect {
     ui.allocate_space(size).1
 }
 

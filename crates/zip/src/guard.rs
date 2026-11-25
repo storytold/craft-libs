@@ -127,7 +127,9 @@ pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u
                 if reader.read_exact(&mut head).is_err() {
                     continue;
                 }
-                let count = |at: usize| u64::from_le_bytes([head[at], head[at + 1], head[at + 2], head[at + 3], head[at + 4], head[at + 5], head[at + 6], head[at + 7]]);
+                let count = |at: usize| {
+                    u64::from_le_bytes([head[at], head[at + 1], head[at + 2], head[at + 3], head[at + 4], head[at + 5], head[at + 6], head[at + 7]])
+                };
                 refuse(count(24).max(count(32)))?;
             }
             continue;
@@ -306,10 +308,7 @@ mod tests {
         let mut zipped = vec![0x55u8; 70_000];
         zipped.extend_from_slice(&zip64_entry_count_sample(20_001));
         assert_eq!(check(&zipped, 20_000), Err(Error::TooManyEntries { declared: 20_001, limit: 20_000 }));
-        assert_eq!(
-            check_entry_count_seekable(&mut Cursor::new(&zipped), 20_000),
-            Err(Error::TooManyEntries { declared: 20_001, limit: 20_000 })
-        );
+        assert_eq!(check_entry_count_seekable(&mut Cursor::new(&zipped), 20_000), Err(Error::TooManyEntries { declared: 20_001, limit: 20_000 }));
 
         // A plain package whose directory offset points into that stub: the central header is further on.
         let mut plain_pkg = vec![0x55u8; 10];
@@ -318,10 +317,7 @@ mod tests {
         plain_pkg[eocd + 16..eocd + 20].copy_from_slice(&0u32.to_le_bytes());
         plain_pkg.splice(eocd..eocd, std::iter::repeat_n(0x55u8, 70_000));
         assert_eq!(check(&plain_pkg, 20_000), Err(Error::TooManyEntries { declared: 30_000, limit: 20_000 }));
-        assert_eq!(
-            check_entry_count_seekable(&mut Cursor::new(&plain_pkg), 20_000),
-            Err(Error::TooManyEntries { declared: 30_000, limit: 20_000 })
-        );
+        assert_eq!(check_entry_count_seekable(&mut Cursor::new(&plain_pkg), 20_000), Err(Error::TooManyEntries { declared: 30_000, limit: 20_000 }));
     }
 
     #[test]

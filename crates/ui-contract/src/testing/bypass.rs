@@ -1,7 +1,8 @@
 //! Bypass detection (24.2): the pass-end walk that finds what a component made without the runtime.
 //!
 //! Every interactive egui widget of the latest pass must be one a component registered (a root or one of its
-//! widgets, a focus stop's root) or one the runtime noted. Every AccessKit node that declares an action must
+//! widgets, the root of a focus stop that something registered: not the stop every focusable egui widget gets by
+//! itself, `Stop::automatic`) or one the runtime noted. Every AccessKit node that declares an action must
 //! come from the runtime's node writer. A raw `ui.interact`, `ui.button` or `ui.add(Slider)` in a component
 //! fails here, with the id of the offender.
 
@@ -24,7 +25,7 @@ pub fn findings(fixture: &Fixture) -> Vec<String> {
     let mut registered: HashSet<Id> = pointer::registered_widgets(ctx);
     registered.extend(noted_widgets);
     focus::with_viewport(ctx, egui::ViewportId::ROOT, |state| {
-        registered.extend(state.stops.iter().chain(&state.last_stops).map(|rec| rec.stop.root));
+        registered.extend(state.stops.iter().chain(&state.last_stops).filter(|rec| !rec.stop.automatic()).map(|rec| rec.stop.root));
     });
     let mut found: Vec<String> = widgets::interactive(ctx)
         .into_iter()

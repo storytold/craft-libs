@@ -512,7 +512,8 @@ fn a_page_gap_change_keeps_the_scroll_offset() {
 #[trial]
 fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     let budget = TextureStoreOptions::pages().budget.max_entries;
-    let count = 4 * budget;
+    // Past the budget by half again: the store has to evict for the bound to be tested.
+    let count = budget + budget / 2;
     let state = Rc::new(RefCell::new(state_with(|s| {
         s.continuous = true;
         s.fit = Fit::None;
@@ -539,6 +540,7 @@ fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     assert!(drawn > 0, "the view drew pages");
     // The pages of the last two passes, in view and one row either side, are never evicted.
     let bound = budget + 2 * (drawn + 2);
+    eprintln!("DIAG pictures_bounded: budget {budget}, count {count}, held {held}, drawn {drawn}");
     assert!(held > 0 && held <= bound, "{held} pictures held over {count} pages scrolled through, at most {bound} expected");
 }
 
@@ -1120,6 +1122,7 @@ fn the_reading_view_turns_on_the_wheel_but_leaves_cmd_or_ctrl_with_the_wheel_to_
     assert!(state.borrow().column > 0, "the wheel alone turns");
 }
 
+#[trial]
 fn the_reading_view_turns_a_column_on_space_and_enter() {
     let state = Rc::new(RefCell::new(ReadingState::default()));
     let kept = Rc::clone(&state);

@@ -37,8 +37,8 @@ pub struct Stop {
     /// The arena root the stop is shown in (a canvas whose body holds it), whether or not it joined the arena: a text
     /// stop keeps its own egui widget. A removed stop hands focus back to it.
     pub arena: Option<Id>,
-    /// The app's own egui widget (`focus::host_canvas`), which reads its keys from egui's input: the key stage leaves
-    /// the presses it routes to the stop there.
+    /// The app's own egui widget (`focus::host_canvas`, or any focusable egui widget the app draws), which reads its
+    /// keys from egui's input: the key stage leaves the presses it routes to the stop there.
     pub host: bool,
 }
 
@@ -133,6 +133,12 @@ impl Stop {
     pub fn host(mut self) -> Self {
         self.host = true;
         self
+    }
+
+    /// Whether this is the stop every focusable egui widget the app draws gets by itself (`focus::take_app_widgets`):
+    /// the app's own widget, not declared as its canvas (`KeyUse::chrome_key`). No component or app call registered it.
+    pub fn automatic(&self) -> bool {
+        self.host && !self.keys.chrome_key
     }
 
     pub(crate) fn key(&self) -> StopKey {

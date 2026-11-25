@@ -1,1 +1,17 @@
 config_version = 1
+
+[[exception]]
+name = "page-picture-paper"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/ui-widgets/src/tile_grid/tile.rs"
+reason = "The paper of a page picture is the document's blank page, data rather than a theme surface."
+count = 1
+
+[[exception]]
+name = "page-picture-size"
+kind = "marker"
+rule = "props/point-size"
+path = "crates/ui-widgets/src/tile_grid/tile.rs"
+reason = "A page picture takes the document's own width and height, in any one unit, for its shape only."
+count = 1

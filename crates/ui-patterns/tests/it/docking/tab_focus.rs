@@ -1,5 +1,6 @@
 //! A pointer press on a dock's panel tab leaves key focus where it was, so a hosted app's own shortcuts keep working
-//! after a tab click, a tab drag or the tab menu; a press on an app's own egui body is the app's.
+//! after a tab click, a tab drag or the tab menu; a press on an app's own egui body is the app's, and the area names
+//! the panel pressed into (`DockAreaOutput::pressed`).
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
@@ -29,21 +30,32 @@ impl PanelSpecs<usize> for Specs {
 struct Panels;
 
 impl DockPanels<usize> for Panels {
-    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
+    /// The hosted body holds an app's own egui button.
+    fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if *panel == HOSTED {
+            let _ = ui.button("App button");
+        }
+    }
 }
 
-/// A dock of the plain group [0, 1] beside the hosted group [2], and the workspace it edits.
-fn dock() -> (Fixture, Rc<RefCell<Arc<Workspace<usize>>>>) {
+/// The panels the area named as pressed into, one entry per pass that named one.
+type Pressed = Rc<RefCell<Vec<usize>>>;
+
+/// A dock of the plain group [0, 1] beside the hosted group [2], the workspace it edits and the panels it reported
+/// pressed.
+fn dock() -> (Fixture, Rc<RefCell<Arc<Workspace<usize>>>>, Pressed) {
     let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![HOSTED], 0));
     let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
-    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
+    let pressed: Pressed = Rc::default();
+    let (held, seen, specs) = (Rc::clone(&workspace), Rc::clone(&pressed), Tracked::new(Specs));
     let mut fixture = Fixture::new(move |ui| {
         let mut shown = held.borrow().clone();
-        DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Panels, DockConfig::default()).show(ui);
+        let out = DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Panels, DockConfig::default()).show(ui);
+        seen.borrow_mut().extend(out.pressed);
         *held.borrow_mut() = shown;
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle();
-    (fixture, workspace)
+    (fixture, workspace, pressed)
 }
 
 /// A secondary press and release at `at`, then an idle frame.
@@ -54,7 +66,7 @@ fn secondary_click(fixture: &mut Fixture, at: Pos2) {
 
 #[trial]
 fn a_press_on_a_panel_tab_leaves_key_focus_where_it_was() {
-    let (mut fixture, workspace) = dock();
+    let (mut fixture, workspace, _) = dock();
     let tab = fixture.by_label("Panel 1").expect("the first group's second tab");
     fixture.click(&tab).idle(1);
     let shows_one =
@@ -78,11 +90,29 @@ fn a_press_on_a_panel_tab_leaves_key_focus_where_it_was() {
 
 #[trial]
 fn a_press_on_an_app_body_is_the_apps_and_one_on_a_plain_body_focuses_its_panel() {
-    let (mut fixture, _) = dock();
+    let (mut fixture, ..) = dock();
     let hosted = fixture.by_label("Panel 2").expect("the hosted group's tab").rect;
     fixture.click_at(Pos2::new(hosted.center().x, hosted.bottom() + 200.0)).idle(1);
     assert!(fixture.focused_stop().is_none(), "a press on the app's own body takes no framework focus");
     let plain = fixture.by_label("Panel 0").expect("the plain group's tab").rect;
     fixture.click_at(Pos2::new(plain.center().x, plain.bottom() + 200.0)).idle(1);
     assert!(fixture.focused_stop().is_some(), "a press on a framework panel's empty body focuses its panel");
+}
+
+/// A press in a group's body names the group's shown panel, whatever takes it: the app's own button in a host body
+/// (which keeps the press and takes no framework focus) or a plain panel's empty body. A press on a tab is no body
+/// press.
+#[trial]
+fn a_press_in_a_groups_body_names_its_panel_whatever_takes_it() {
+    let (mut fixture, _, pressed) = dock();
+    let button = fixture.by_label("App button").expect("the app's own button in the hosted body");
+    fixture.click(&button).idle(1);
+    assert_eq!(pressed.borrow().as_slice(), [HOSTED], "a press on the app's own widget names the hosted panel");
+    pressed.borrow_mut().clear();
+    let plain = fixture.by_label("Panel 0").expect("the plain group's tab");
+    fixture.click_at(Pos2::new(plain.rect.center().x, plain.rect.bottom() + 200.0)).idle(1);
+    assert_eq!(pressed.borrow().as_slice(), [0], "a press on a plain body names its shown panel");
+    pressed.borrow_mut().clear();
+    fixture.click(&plain).idle(1);
+    assert!(pressed.borrow().is_empty(), "a press on a tab is no body press: {:?}", pressed.borrow());
 }

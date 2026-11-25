@@ -314,6 +314,20 @@ impl Component for Button<'_> {
         }
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
+            // A dialog's footer button stands a dialog button high.
+            if matches!(least, LeastWidth::DialogButton | LeastWidth::DialogSideButton) && key.arrangement == Arrangement::Inline {
+                style.metrics.min_size.y = cx.dialog_button_height();
+            }
+        }
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::CallToAction {
+            style.metrics.min_size.y = style.metrics.min_size.y.max(cx.tokens.size.page.action);
+            style.text.role = TypeRole::BodyStrong;
+        }
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::PageAction {
+            let page = &cx.tokens.size.page;
+            let padding = &mut style.metrics.padding;
+            style.metrics.min_size.y = style.metrics.min_size.y.max(page.button);
+            (padding.start, padding.end) = (padding.start.max(page.button_side), padding.end.max(page.button_side));
         }
         // A side menu's row: the large body text, padded as a list row of places, not as a control.
         if cx.env::<super::ControlPlace>() == super::ControlPlace::SideMenu && key.arrangement == Arrangement::Inline {

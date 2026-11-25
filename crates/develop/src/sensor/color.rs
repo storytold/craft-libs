@@ -42,9 +42,9 @@ pub fn illuminant_temperature(code: u16) -> Option<f64> {
 
 fn lerp(a: &Mat3, b: &Mat3, g: f64) -> Mat3 {
     let mut r = [[0.0; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            r[i][j] = g * a.0[i][j] + (1.0 - g) * b.0[i][j];
+    for (i, row) in r.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = g * a.0[i][j] + (1.0 - g) * b.0[i][j];
         }
     }
     Mat3(r)

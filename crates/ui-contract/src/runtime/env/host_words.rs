@@ -39,8 +39,7 @@ pub(super) fn host_format(ctx: &Context, host: Option<&Arc<Host>>) -> Arc<Format
     }
     #[derive(Default)]
     struct Default(Option<Arc<Format>>);
-    Service::<Default>::of(ctx)
-        .with(|default| Arc::clone(default.0.get_or_insert_with(|| Arc::new(Format::from_tag("en-US")))))
+    Service::<Default>::of(ctx).with(|default| Arc::clone(default.0.get_or_insert_with(|| Arc::new(Format::from_tag("en-US")))))
 }
 
 /// The date format of `host`'s catalogs, else English, built once: the same reason as the numbers

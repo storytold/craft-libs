@@ -198,6 +198,54 @@ fn start_screen_greeting(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// Templates that stand for page sizes: their cards show the pages.
+fn page_templates() -> Vec<Template> {
+    vec![
+        Template::new("letter", "Letter", "612 × 792 pt").page(612.0, 792.0),
+        Template::new("web", "Web 1920×1080", "1920 × 1080 px").page(1920.0, 1080.0),
+        Template::new("phone", "Phone 390×844", "390 × 844 px").page(390.0, 844.0),
+        Template::new("square", "Square 1080×1080", "1080 × 1080 px").page(1080.0, 1080.0),
+    ]
+}
+
+/// The links of the Column stories: a call to action and two plain links.
+fn column_links() -> [StartLink; 3] {
+    [
+        StartLink::url("Join the community", Some(IconId::new("link")), "https://example.com/chat").primary(),
+        StartLink::url("Website", Some(IconId::new("globe")), "https://example.com"),
+        StartLink::url("Source code", Some(IconId::new("open")), "https://example.com/source"),
+    ]
+}
+
+/// The Column page of `files`: title and subtitle, New and Open, the recent rows, the page templates and the links.
+fn column_screen(ui: &mut Ui, files: &[RecentFile]) -> StoryOutput {
+    let (templates, links) = (page_templates(), column_links());
+    let (mut view, mut sort) = (RecentView::default(), RecentSort::default());
+    StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), files)
+        .max_recent(6)
+        .templates(&templates)
+        .templates_title("Start a new file")
+        .links(&links)
+        .layout(StartLayout::Column)
+        .title("Welcome")
+        .subtitle("Make something today.")
+        .links_title("Community")
+        .show(ui)
+        .into()
+}
+
+/// One centred column, with recent files.
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_column(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    column_screen(ui, &plain_files())
+}
+
+/// One centred column with no recent files: no Recent section.
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_column_without_files(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    column_screen(ui, &[])
+}
+
 #[story(RecentList<'static>, covers = [], drive = Drive::Never)]
 fn recent_list(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let files = plain_files();

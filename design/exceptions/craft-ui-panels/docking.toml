@@ -23,3 +23,11 @@ rule = "literal-size"
 path = "crates/ui-panels/src/docking/iconic/trials.rs"
 reason = "Trial rooms, not looks."
 count = 1
+
+[[exception]]
+name = "iconic-trial-pixel-rounding"
+kind = "marker"
+rule = "test/literal-size"
+path = "crates/ui-panels/src/docking/iconic/trials.rs"
+reason = "Half a point of rounding in a trial's relation between two measured rects, not a token size."
+count = 2
