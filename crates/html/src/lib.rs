@@ -38,6 +38,8 @@ struct ReadmeExamples;
 pub mod doc;
 mod entity;
 mod lex;
+#[cfg(feature = "standalone")]
+pub mod standalone;
 
 pub use entity::{decode_entity, escape, escape_dq, reference, unescape, unescape_attr};
 pub use lex::{Lexer, Limits, Options, Tag, Token};
