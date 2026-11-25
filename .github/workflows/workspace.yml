@@ -42,6 +42,7 @@ jobs:
       tests: ${{ steps.select.outputs.tests }}
       filter: ${{ steps.select.outputs.filter }}
       profile: ${{ steps.profile.outputs.profile }}
+      deps-profile: ${{ steps.profile.outputs.deps-profile }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -70,8 +71,23 @@ jobs:
           persist-credentials: false
           sparse-checkout: .config/cargo-*.toml
           sparse-checkout-cone-mode: false
+      # The macOS and Windows legs cache dependencies only, so `deps-profile` hashes only the
+      # settings that reach a dependency: `[profile.dev]` and `[profile.dev.package."*"]`. Every
+      # other override names a workspace crate (scripts/test-workspace-tests.py), so changing one
+      # keeps those entries, and next's runs restore main's.
       - id: profile
-        run: echo "profile=$(cat .config/cargo-dev.toml .config/cargo-ci.toml | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "profile=$(cat .config/cargo-dev.toml .config/cargo-ci.toml | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "deps-profile=$(python3 -I - <<'PY'
+          import hashlib, json, tomllib
+          kept = []
+          for path in (".config/cargo-dev.toml", ".config/cargo-ci.toml"):
+              with open(path, "rb") as file:
+                  dev = tomllib.load(file)["profile"]["dev"]
+              kept.append([dev, dev.pop("package", {}).get("*", {})])
+          print(hashlib.sha256(json.dumps(kept, sort_keys=True).encode()).hexdigest()[:12])
+          PY
+          )" >> "$GITHUB_OUTPUT"
 
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
@@ -153,7 +169,8 @@ jobs:
     with:
       os: '["windows-latest","macos-latest"]'
       lint-cache: false
-      cache-version: *cache-version
+      # Named by the dependency settings alone (`deps-profile`), so next restores main's entries.
+      cache-version: v2-${{ needs.platforms.outputs.deps-profile }}
       timeout-minutes: *timeout
       tools: *tools
       craft-fonts-ref: *craft-fonts
