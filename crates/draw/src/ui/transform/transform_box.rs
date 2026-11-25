@@ -99,18 +99,21 @@ const NUDGE_FAR: f64 = 10.0;
 /// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a corner handle reaches 11 from
 /// its point and a side's midpoint handle 11, inside the box as outside; each side's band runs from its line where the
 /// view reads the pointer (from half a point inside it under the pointer itself, on a box whose inside is the tool's)
-/// to 12 outside, and the band's first quarter of the side from each corner, at most 13 along it, is that
-/// corner's; the reference point and the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate
-/// band runs from 5 to 18 outside it). The midpoint reach and the side band are measured on the reference application
-/// at 100 %: a press 10 points inside at a side's midpoint, or 10 along the side from it, takes the side, one 12 inside
-/// moves the box; away from the midpoint a press on the right or bottom side's line or inside it moves the box, one a
-/// point outside takes the side, and so does one 12 outside but not one 13 outside; a press on the top or left side's
-/// line takes the side, one a point inside it moves the box, and one 13 above the top side takes nothing (the sides
-/// are read where the view reads the pointer, half a pixel up and left of it at 100 %). The corner reach is measured
-/// too (the reach
-/// probe of 2026-11-23: a press 10 along an axis from the corner takes it, 12 not; 8.5 on the diagonal does, 11.3
-/// not: a circle of about 11). The corners' share of the bands is PhotoCraft's: inside the box only a handle's own reach is the box's, so a press there off the handles
-/// reaches what lies under the box (a text editor under a paragraph frame).
+/// to 12 outside; on a box whose inside is the tool's the band's first quarter of the side from each corner, at most 13
+/// along it, is that corner's; the reference point and the centre reach 12, the rotate pointer shows within 36 of a
+/// corner, the rotate band runs from 5 to 18 outside it). The midpoint reach and the side band are measured on the
+/// reference application at 100 %: a press 10 points inside at a side's midpoint, or 10 along the side from it, takes
+/// the side, one 12 inside moves the box; away from the midpoint a press on the right or bottom side's line or inside
+/// it moves the box, one a point outside takes the side, and so does one 12 outside but not one 13 outside; a press on
+/// the top or left side's line takes the side, one a point inside it moves the box, and one 13 above the top side
+/// takes nothing (the sides are read where the view reads the pointer, half a pixel up and left of it at 100 %). The
+/// corner reach is measured too (the reach probe of 2026-11-23: a press 10 along an axis from the corner takes it, 12
+/// not; 8.5 on the diagonal does, 11.3 not: a circle of about 11; 2026-11-25, outside the box beside the top-right
+/// corner, as far outside the right side and along it from the corner: 7 and 9, 3 and 11, 1 and 11, 10 and 5 take the
+/// corner, 7 and 11, 3 and 12, 1 and 13 the side: a circle of 11 where the view reads the pointer, and beyond it the
+/// side). On a box whose inside is the tool's the corners' share of the bands is PhotoCraft's: inside the box only a
+/// handle's own reach is the box's, so a press there off the handles reaches what lies under the box (a text editor
+/// under a paragraph frame).
 const HANDLE_REACH_IN_HANDLES: f32 = 1.375;
 const EDGE_REACH_IN_HANDLES: f32 = 1.375;
 const SIDE_BAND_IN_HANDLES: f32 = 1.5;
@@ -334,7 +337,8 @@ pub struct TransformBoxStyle {
     edge_reach: f32,
     /// How far a side's band reaches outside the box.
     side_band: f32,
-    /// How far along a side from a corner the corner's stretch of the side's band reaches at most.
+    /// How far along a side from a corner the corner's stretch of the side's band reaches at most, on a box whose inside
+    /// is the tool's.
     corner_along: f32,
     /// The hit radius of the reference point and of the centre.
     hit: f32,
@@ -1313,9 +1317,11 @@ impl Component for TransformBox<'_> {
     }
 
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
-    /// side as a pointer-only band outside it (either side of its line with the rules' edge band), each corner's stretch of the two bands beside it, the centre and the move
-    /// strips where declared, and the outside. A handle, a corner's stretch, the reference point and the centre rank
-    /// alike, so the nearest wins where they overlap on a small box;
+    /// side as a pointer-only band outside it (either side of its line with the rules' edge band), each corner's
+    /// reach where the view reads the pointer (on a box whose inside is the tool's: its stretch of the two bands
+    /// beside it), the centre and the move
+    /// strips where declared, and the outside. A handle, a corner's reach or stretch, the reference point and the centre
+    /// rank alike, so the nearest wins where they overlap on a small box;
     /// they rank above a side, which ranks above the inside, which ranks above the outside. Every part takes a press's
     /// click with its drag, so a press on the box is the box's alone, not split with what lies under it (8.3). A live
     /// line's controls declare its two ends only; free ends as points of their own. In [`RotateZone::Handle`] the
@@ -1402,6 +1408,15 @@ impl Component for TransformBox<'_> {
         }
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Corner(k))) {
             let corner = usize::from(k);
+            if self.inside_moves {
+                // The corner's own reach where the view reads the pointer, and no more of the bands: past it the side
+                // beside the corner takes the press, as in the reference application.
+                cx.part(CORNER_REACH.at(2 * u64::from(k)), HitShape::circle(sides[corner], style.handle_reach))
+                    .sense(Sense::DRAG | Sense::CLICK)
+                    .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
+                    .pointer_only(CORNER_BY_KEY);
+                continue;
+            }
             // The side that starts at the corner, then the one that ends there.
             for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
                 let Some(reach) = corner_reach(&sides, side, corner, line, style.side_band, style.corner_along) else { continue };

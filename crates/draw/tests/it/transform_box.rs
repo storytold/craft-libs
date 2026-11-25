@@ -477,6 +477,33 @@ fn a_sides_midpoint_reaches_into_the_box_and_its_band_starts_on_the_line_as_the_
     }
 }
 
+/// Outside the box beside a corner, the corner takes a press within its own reach, read where the view reads the
+/// pointer, and the side beside it takes one beyond (the reference application, 2026-11-25, at the top-right corner of
+/// a 302 × 202 box in Scale mode; a press o px outside the right side and a px along it from the corner: o 7 a 9, o 3
+/// a 11, o 1 a 11 and o 10 a 5 scaled the box from the corner, o 7 a 11, o 3 a 12 and o 1 a 13 from the right side.
+/// The corner's stretch of the side's band took all of them).
+#[trial]
+fn beyond_a_corners_own_reach_the_side_beside_it_takes_the_press() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    // The top-right corner is (300, 80); the right side runs down from it.
+    let cases = [
+        (7.0, 9.0, BoxPart::Corner(1)),
+        (3.0, 11.0, BoxPart::Corner(1)),
+        (1.0, 11.0, BoxPart::Corner(1)),
+        (10.0, 5.0, BoxPart::Corner(1)),
+        (7.0, 11.0, BoxPart::Edge(1)),
+        (3.0, 12.0, BoxPart::Edge(1)),
+        (1.0, 13.0, BoxPart::Edge(1)),
+    ];
+    for (outside, along, part) in cases {
+        hover(&mut h, Point::new(300.0 + outside, 80.0 + along));
+        assert_eq!(h.host.borrow().hovered, Some(part), "{outside} outside the right side, {along} along it");
+    }
+    // Above and right of the corner, within its reach (7 right, 7 up).
+    hover(&mut h, Point::new(307.0, 73.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(1)));
+}
+
 /// On a box crossed over itself (a bow tie: its top and bottom sides cross), each of the two sides that do not cross
 /// takes a press outside its own triangle, not inside it (the reference application, 2026-11-25: on an hourglass made
 /// by a Perspective corner dragged past its partner, a press 8 px outside the right side took the side; the winding of
