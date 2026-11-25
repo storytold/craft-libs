@@ -105,11 +105,21 @@ impl Encrypted {
 
 /// `META-INF/encryption.xml`: each `EncryptedData` with its algorithm and resource.
 pub fn parse_encryption(xml: &[u8]) -> Result<Vec<Encrypted>, Error> {
+    parse_encryption_telling(xml).map(|(list, _)| list)
+}
+
+/// [`parse_encryption`], and whether the list was cut at its limit (so it is not the whole of
+/// what is encrypted).
+pub(crate) fn parse_encryption_telling(xml: &[u8]) -> Result<(Vec<Encrypted>, bool), Error> {
     let root = parse_xml("META-INF/encryption.xml", xml, &Limits::DEFAULT)?;
     let one = |data: &El| {
         let path = resolve("", data.find(Local("CipherReference"))?.attr("URI")?);
         let algorithm = data.child_attr("EncryptionMethod", "Algorithm").unwrap_or_default().to_string();
         (!path.is_empty()).then_some(Encrypted { path, algorithm })
     };
-    Ok(root.find_all(Local("EncryptedData")).filter_map(one).take(Limits::DEFAULT.max_manifest).collect())
+    let max = Limits::DEFAULT.max_manifest;
+    let mut list: Vec<Encrypted> = root.find_all(Local("EncryptedData")).filter_map(one).take(max + 1).collect();
+    let cut = list.len() > max;
+    list.truncate(max);
+    Ok((list, cut))
 }

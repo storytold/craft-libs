@@ -2005,6 +2005,9 @@ dependencies = [
 name = "craft-epub"
 version = "0.1.0"
 dependencies = [
+ "craft-flow",
+ "craft-html",
+ "craft-wordmodel",
  "craft-xml",
  "craft-zip",
  "thiserror 2.0.21",

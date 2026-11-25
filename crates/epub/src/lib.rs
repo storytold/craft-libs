@@ -10,6 +10,8 @@
 //!   them, it does not make XHTML out of a document model ([`xhtml`] is only the shell).
 //! - [`Epub::open`] reads an EPUB 2 or 3 package: container, metadata, manifest and spine, with
 //!   every entry read inside byte budgets that don't trust the sizes the archive claims.
+//! - `doc` (feature `doc`) reads a book's content documents into the craft-flow model, through
+//!   craft-html.
 //!
 //! Written from the public EPUB 3.3, OCF 3.3 and OPF 2.0.1 specifications.
 
@@ -17,6 +19,8 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+#[cfg(feature = "doc")]
+pub mod doc;
 mod read;
 mod text;
 mod toc;
@@ -46,6 +50,11 @@ pub enum Error {
     /// The archive has more entries than [`Limits::max_entries`].
     #[error("the EPUB package has {found} entries (at most {limit})")]
     TooManyEntries { found: usize, limit: usize },
+    /// A resource is encrypted (DRM), or obfuscated without the manifest listing it as a font: its
+    /// content cannot be read. `doc::read_book` refuses such a package, and one whose
+    /// `encryption.xml` (then `path`) lists more than the crate reads of it.
+    #[error("EPUB part {path} is encrypted")]
+    Encrypted { path: String },
     /// The book given to [`write`] cannot be a valid package.
     #[error("invalid EPUB book: {0}")]
     Invalid(String),

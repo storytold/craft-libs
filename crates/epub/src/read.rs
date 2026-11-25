@@ -134,7 +134,7 @@ pub fn resolve(base_dir: &str, href: &str) -> String {
 }
 
 /// Decode `%XX` escapes; an invalid escape, or a result that is not UTF-8, is kept as written.
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let hex = |i: usize| b.get(i).and_then(|c| char::from(*c).to_digit(16));
     let mut out = Vec::with_capacity(b.len());
@@ -270,13 +270,21 @@ impl<'a> Epub<'a> {
     /// The bytes of archive entry `path`, or `None` when the archive has no such entry. An entry
     /// past the limits is an error, and so is one that expands to more than it declared.
     pub fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.read_telling(path).map_err(|(e, _)| e)
+    }
+
+    /// [`Epub::read`], its error paired with whether the entry alone is over
+    /// [`Limits::max_entry_bytes`] (rather than past what is left of the total budget).
+    pub(crate) fn read_telling(&mut self, path: &str) -> Result<Option<Vec<u8>>, (Error, bool)> {
         if path.ends_with('/') {
             return Ok(None);
         }
         let limit = self.limits.max_entry_bytes.min(self.zip.budget().remaining());
+        let too_large = || Error::TooLarge { part: path.to_string(), limit };
         self.zip.read(path, self.limits.max_entry_bytes).map_err(|e| match e {
-            craft_zip::Error::EntryTooLarge { .. } | craft_zip::Error::BudgetSpent { .. } => Error::TooLarge { part: path.to_string(), limit },
-            e => Error::Part { part: path.to_string(), msg: e.to_string() },
+            craft_zip::Error::EntryTooLarge { .. } => (too_large(), true),
+            craft_zip::Error::BudgetSpent { .. } => (too_large(), false),
+            e => (Error::Part { part: path.to_string(), msg: e.to_string() }, false),
         })
     }
 
@@ -312,9 +320,14 @@ impl<'a> Epub<'a> {
     /// resource listed here cannot be used as it is read: fonts are usually only obfuscated
     /// ([`crate::Encrypted::is_font_obfuscation`]), anything else is DRM.
     pub fn encryption(&mut self) -> Result<Vec<crate::Encrypted>, Error> {
+        self.encryption_telling().map(|(list, _)| list)
+    }
+
+    /// [`Epub::encryption`], and whether the list was cut at its limit.
+    pub(crate) fn encryption_telling(&mut self) -> Result<(Vec<crate::Encrypted>, bool), Error> {
         match self.read("META-INF/encryption.xml")? {
-            Some(xml) => crate::parse_encryption(&xml),
-            None => Ok(Vec::new()),
+            Some(xml) => crate::toc::parse_encryption_telling(&xml),
+            None => Ok((Vec::new(), false)),
         }
     }
 
