@@ -279,11 +279,18 @@ impl<'b> BodyHooks<'b> {
         }
     }
 
-    /// The width the regions ask for in a content-sized container: what they took together in this pass's measuring run.
+    /// The width the regions ask for in a content-sized container: what they took together in this pass's measuring
+    /// run, at least the least width.
     pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
+        self.content_width(props).map(|content| content.max(self.least_width))
+    }
+
+    /// The width the regions took together in this pass's measuring run, without the least width: what the content
+    /// itself needs, the width that may overflow the room. The least width gives way to the room.
+    pub(super) fn content_width(&self, props: &ContainerProps) -> Option<f32> {
         self.measured_body.map(|body| {
             let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
-            self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width)
+            self.regions_size(props, body, header, self.measured_footer, end).x
         })
     }
 

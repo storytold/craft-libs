@@ -318,7 +318,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
         let room = self.room.x - 2.0 * self.pads(props, scx.tokens).x;
         let width = if self.measured_body.is_some() { self.shared_width(room, props) } else { 0.0 };
-        self.overflow = self.wanted_width(props).map_or(0.0, |wanted| (wanted - room.max(0.0)).max(0.0));
+        // Only the content overflows the room: a least width wider than the room gives way to it (a palette's box in
+        // a narrow window keeps to its share), as `shared_width` already keeps the width to the room.
+        self.overflow = self.content_width(props).map_or(0.0, |content| (content - room.max(0.0)).max(0.0));
         let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
         let height = self.regions_size(props, body, header, self.measured_footer, end).y;
         Vec2::new(width, height) + self.frame_size(props, scx.tokens, top_band(props, ui.ctx(), id, scx.tokens))
@@ -2031,11 +2033,12 @@ impl BodyHooks<'_> {
         // A layer hung from an opener or a rect is at least as wide as its overlay asks for, in the measuring run too,
         // so the rows of a content-sized list inside it are placed at that width.
         let took = Vec2::new(overlay_of(&self.props).map_or(took.x, |overlay| took.x.max(crate::contract::overlay::anchor_floor(overlay))), took.y);
+        // Only the content overflows the room, as in `extent`: the least width gives way to it.
+        self.overflow = (took.x - self.room.x).max(0.0);
         // The least width holds in the measure a parent places it by, as in its own extent (`wanted_width`): a row
         // measuring a side menu among its children gave it only its content's width, so the menu shrank to its widest
         // row's name.
         let took = Vec2::new(took.x.max(self.least_width + pad.x), took.y);
-        self.overflow = (took.x - self.room.x).max(0.0);
         // A body wider than the room overflows it, or scrolls along it; either way the container keeps to the room.
         Vec2::new(took.x.min(self.room.x), if vertical { took.y.min(self.room.y) } else { took.y })
     }
