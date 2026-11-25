@@ -66,7 +66,8 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// (a find bar's): Escape still clears it.
     #[prop]
     clear_button: bool,
-    /// The look of a field in a bar: the bar's own fill and a quiet edge at rest ([`StyleCx::quiet_field`]).
+    /// The look of a field in a bar: the bar's own fill and a quiet edge at rest ([`StyleCx::quiet_field`]), and the
+    /// muted placeholder, which reads on the bar's fill where the faint one does not.
     #[prop]
     #[style_key]
     quiet: bool,
@@ -438,7 +439,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
                 Some(Mixed::Same(at)) => Some(at),
                 _ => None,
             });
-            let options = TextOptions { mixed: value.is_none(), limit, caret, ..self.options.clone() };
+            let options = TextOptions { mixed: value.is_none(), limit, caret, muted_placeholder: self.quiet, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }
