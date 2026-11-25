@@ -79,6 +79,8 @@ craft-color = { path = "crates/color" }
 craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
+craft-command = { path = "crates/command" }
+craft-command-derive = { path = "crates/command-derive" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
 craft-dav = { path = "crates/dav" }
