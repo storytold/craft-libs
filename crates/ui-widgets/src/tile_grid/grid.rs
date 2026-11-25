@@ -288,7 +288,7 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Tiles are framed cards: the picture inset in a raised surface with the name and detail under it as `card_text` sets them.
     #[prop(flag)]
     card: bool,
-    /// How framed cards set their name and detail: the strong, start-aligned name of a file, or the centred regular
+    /// How framed cards set their name and detail: the strong, start-aligned name of a file, or the centred strong
     /// name of a preset.
     #[prop]
     card_text: CardText,
