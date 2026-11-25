@@ -44,7 +44,10 @@ winsafe = { version = "0.0.29", default-features = false, features = ["winspool"
 tempfile = "3"
 # Reading the PrintTicket and PrintCapabilities the driver hands back.
 roxmltree = "0.21"
-# Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs).
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Inflating the print-ready PDF's cross-reference and object streams (src/sheets.rs): Windows
+# reads the sheets to set the job's paper, CUPS to tell Apple's filter which way they run.
 miniz_oxide = "0.9"
 
 [dev-dependencies]

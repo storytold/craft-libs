@@ -234,6 +234,21 @@ fn a_print_job_carries_the_pdf_and_the_options() {
 }
 
 #[test]
+fn a_print_job_asks_apples_cups_to_turn_landscape_sheets() {
+    // As `lp` asks it (`turns_landscape`): RFC 8011's `orientation-requested`, 4 (landscape).
+    use crate::tests::windows_native::{LETTER, LETTER_LANDSCAPE, test_pdf};
+    let landscape = attr(0x23, "orientation-requested", &4u32.to_be_bytes());
+    for (page, turned) in [(LETTER_LANDSCAPE, cfg!(target_os = "macos")), (LETTER, false)] {
+        let accepted = ipp_reply(0x0000, &[&group(0x01), &group(0x02), &attr(0x21, "job-id", &1u32.to_be_bytes())]);
+        let fake = FakeCups::on_tcp(vec![http_reply(&accepted)]).unwrap();
+        let job = spool::Job { printer: Some("Office".into()), ..Job::default() };
+        ipp::print_job_at(fake.endpoint(), &test_pdf(&[page], false), &job).unwrap();
+        let taken = fake.request().unwrap();
+        assert_eq!(has(ipp_body(&taken).unwrap(), &landscape), turned);
+    }
+}
+
+#[test]
 fn the_default_printer_is_used_when_the_job_has_none() {
     let fake = FakeCups::on_tcp(vec![
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Office")])),

@@ -34,21 +34,21 @@ fn windows_printers_are_sorted_once_with_their_default() {
 /// One page of a test PDF: its MediaBox (`None` = inherited from the page tree's root, which is
 /// Letter), CropBox and `/Rotate`.
 #[derive(Clone, Copy)]
-struct TestPage {
-    media: Option<[f64; 4]>,
-    crop: Option<[f64; 4]>,
-    rotate: Option<i32>,
+pub(crate) struct TestPage {
+    pub(crate) media: Option<[f64; 4]>,
+    pub(crate) crop: Option<[f64; 4]>,
+    pub(crate) rotate: Option<i32>,
 }
 
-const LETTER: TestPage = TestPage { media: Some([0.0, 0.0, 612.0, 792.0]), crop: None, rotate: None };
-const LETTER_LANDSCAPE: TestPage = TestPage { media: Some([0.0, 0.0, 792.0, 612.0]), crop: None, rotate: None };
+pub(crate) const LETTER: TestPage = TestPage { media: Some([0.0, 0.0, 612.0, 792.0]), crop: None, rotate: None };
+pub(crate) const LETTER_LANDSCAPE: TestPage = TestPage { media: Some([0.0, 0.0, 792.0, 612.0]), crop: None, rotate: None };
 const TABLOID: TestPage = TestPage { media: Some([0.0, 0.0, 792.0, 1224.0]), crop: None, rotate: None };
 
 /// A print-ready PDF of `pages`, each with a small black square: a classic cross-reference
 /// table, or (`compressed`) the pages inside a Flate object stream with a predicted
 /// cross-reference stream, as modern writers save. The root page node sets a Letter MediaBox
 /// for pages that inherit it.
-fn test_pdf(pages: &[TestPage], compressed: bool) -> Vec<u8> {
+pub(crate) fn test_pdf(pages: &[TestPage], compressed: bool) -> Vec<u8> {
     test_pdf_with_annotations(pages, compressed, None)
 }
 
