@@ -34,6 +34,7 @@ use crate::panel::browse::{FontsBrowseWords, Texts};
 use crate::panel::details::DetailsSheet;
 use crate::panel::i18n::LANGUAGES;
 use crate::panel::jobs::{self, Finished, Jobs, Kind, Request};
+use crate::panel::legal::LegalTexts;
 use crate::panel::samples;
 use crate::panel::subsets::Subsets;
 
@@ -295,6 +296,8 @@ pub struct FontsPanel {
     pub(crate) subsets: Subsets,
     /// The values the user set on the details sheet's axis sliders, by file sha256.
     pub(crate) detail_axes: HashMap<String, AxisValues>,
+    /// Licence and NOTICE texts, by family, text and file.
+    pub(crate) legal: LegalTexts,
     pub(crate) jobs: Jobs,
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
@@ -403,6 +406,7 @@ impl FontsPanel {
             previewed: HashMap::new(),
             subsets,
             detail_axes: HashMap::new(),
+            legal: LegalTexts::new(),
             jobs: Jobs::new(),
             asking: None,
             failed: HashMap::new(),
@@ -657,6 +661,7 @@ impl FontsPanel {
             }
         }
         self.poll_sources();
+        self.poll_legal();
     }
 
     fn record_copy(&mut self, family: &str, copied: Option<Result<MadeAvailable, StoreError>>) {

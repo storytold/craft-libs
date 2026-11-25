@@ -23,8 +23,10 @@ use craft_ui::dialog::Dialog;
 use craft_ui::display::{Badge, Progress, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::{Notice, NoticeAction};
+use craft_ui::primitives::Wrap;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::Variant;
+use craft_ui::text::TextField;
 use egui::{Response, Ui};
 
 use self::rows::{Action, Lines, StyleLine, StyleList, StyleRow};
@@ -35,8 +37,10 @@ use crate::panel::app::{
 };
 use crate::panel::faces::Owner;
 use crate::panel::jobs::Kind;
+use crate::panel::legal::{Legal, legal_key};
 use crate::panel::specimen::{FontSample, HeldFace};
 use crate::panel::subsets::SubsetFont;
+use crate::store::LegalText;
 use crate::{FaceInfo, Source};
 
 /// The sample is at least this many points: the sheet shows styles, not thumbnails.
@@ -45,6 +49,9 @@ const MIN_SAMPLE_POINTS: f32 = 24.0;
 const HERO_POINTS: f32 = 96.0;
 /// The most languages the sheet lists; the rest are counted.
 const LANGUAGES_SHOWN: usize = 60;
+
+/// The lines of a licence or NOTICE text in view; the rest scrolls.
+const LEGAL_LINES: usize = 10;
 
 /// The facts' labels over their values.
 const FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
@@ -81,6 +88,14 @@ craft_ui::words! {
         preview: "fontDetails.preview" = "Preview";
         install: "fontDetails.install" = "Install";
         remove: "fontDetails.remove" = "Remove";
+        copyright: "fontDetails.copyright" = "Copyright";
+        /// `{url}`.
+        upstream: template "fontDetails.upstream" = "Upstream: {url}";
+        show_licence: "fontDetails.showLicence" = "Show licence text";
+        show_notice: "fontDetails.showNotice" = "Show notice";
+        licence_text: "fontDetails.licenceText" = "Licence text";
+        notice_text: "fontDetails.noticeText" = "Notice";
+        loading_text: "fontDetails.loadingText" = "Loading…";
         /// The style of a variable file that names no instances.
         default_style: "fontDetails.defaultStyle" = "Default";
         /// `{style}`.
@@ -178,6 +193,34 @@ enum Do {
     Ask(Pending),
     Remove { faces: Vec<FaceInfo>, whole: bool },
     AvailableToAll { files: Vec<PathBuf>, on: bool },
+    ReadLegal(LegalText),
+}
+
+/// A licence or NOTICE text as the sheet shows it.
+enum LegalShown {
+    /// Not read yet.
+    Offer,
+    Loading,
+    Text(String),
+    Failed(String),
+}
+
+/// The licence and NOTICE texts `family` has, as far as they are read.
+fn legal_texts(panel: &FontsPanel, family: &Family) -> Vec<(LegalText, LegalShown)> {
+    let files = [(LegalText::Notice, family.notice_file.is_some()), (LegalText::License, family.license_file_name().is_some())];
+    files
+        .into_iter()
+        .filter(|(_, has)| *has)
+        .filter_map(|(which, _)| {
+            let shown = match panel.legal.get(&legal_key(family, which)) {
+                None => LegalShown::Offer,
+                Some(Legal::Loading(_)) => LegalShown::Loading,
+                Some(Legal::Ready(text)) => LegalShown::Text(text.clone()?),
+                Some(Legal::Failed(error)) => LegalShown::Failed(error.clone()),
+            };
+            Some((which, shown))
+        })
+        .collect()
 }
 
 /// The job running for the whole family, as the header shows it.
@@ -300,6 +343,9 @@ struct Sheet {
     axes: Vec<FileAxes>,
     facts: Vec<(Label, String)>,
     languages: Vec<String>,
+    /// The web page of the family's own project.
+    upstream: Option<String>,
+    legal: Vec<(LegalText, LegalShown)>,
     /// The family's position in the index; none for an installed family, whose styles cannot be installed.
     index: Option<usize>,
     sample: String,
@@ -342,6 +388,7 @@ impl<'a> DetailsSheet<'a> {
         let env = Env::of(ui);
         let words = env.words::<DetailsWords>();
         let host: Option<Arc<Host>> = env.view().host().cloned();
+        panel.read_notice(host.as_ref());
         let Some(sheet) = Sheet::read(panel, &env, &words) else {
             panel.detail = None;
             return DetailsOutput { response: ui.response(), closed: true };
@@ -372,6 +419,11 @@ impl<'a> DetailsSheet<'a> {
             match action {
                 Do::Ask(pending) => panel.ask(host.as_ref(), pending),
                 Do::Remove { faces, whole } => panel.remove(host.as_ref(), &sheet.title, &faces, whole),
+                Do::ReadLegal(which) => {
+                    if let Some(i) = sheet.index {
+                        panel.load_legal(host.as_ref(), i, which);
+                    }
+                }
                 Do::AvailableToAll { files, on } => panel.set_available_to_all(host.as_ref(), &sheet.title, files, on),
             }
         }
@@ -459,6 +511,8 @@ impl Sheet {
             axes,
             facts,
             languages: languages.into_iter().map(|l| l.name.clone()).collect(),
+            upstream: family.upstream.clone().filter(|url| url.starts_with("https://") || url.starts_with("http://")),
+            legal: legal_texts(panel, &family),
             index: Some(i),
             sample,
         })
@@ -512,6 +566,8 @@ impl Sheet {
             axes: Vec::new(),
             facts,
             languages: Vec::new(),
+            upstream: None,
+            legal: Vec::new(),
             index: None,
             sample: panel.installed_sample(&family.name),
         })
@@ -618,7 +674,10 @@ impl Sheet {
                     AxisSliders::new(file.label.clone(), &file.axes, Bind::bound(values)).show(ui);
                 }
             });
-            Stack::new().show(ui, |ui, _| self.side(ui, env, words));
+            Stack::new().show(ui, |ui, _| {
+                self.side(ui, env, words);
+                self.licence(ui, words, todo);
+            });
         });
     }
 
@@ -664,6 +723,47 @@ impl Sheet {
             text = words.languages_more.fill(&[("list", &text), ("n", &more)]);
         }
         Text::new(text).shade(Shade::Muted).show(ui);
+    }
+}
+
+impl Sheet {
+    /// The project's page, and the licence and NOTICE texts: each a button that reads it, then the text, or why it
+    /// couldn't be read.
+    fn licence(&self, ui: &mut Ui, words: &DetailsWords, todo: &mut Vec<Do>) {
+        if let Some(url) = &self.upstream {
+            let shown = url.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+            Link::new(shown.to_owned()).url(url.clone()).wrap(Wrap::Elide).description(words.upstream.fill(&[("url", url)])).show(ui);
+        }
+        for (at, (which, shown)) in self.legal.iter().enumerate() {
+            let (show, title) = match which {
+                LegalText::License => (&words.show_licence, &words.licence_text),
+                LegalText::Notice => (&words.show_notice, &words.notice_text),
+            };
+            let read = match shown {
+                LegalShown::Offer => clicked(&Button::new(show.clone()).variant(Variant::SECONDARY).show(ui)),
+                LegalShown::Loading => {
+                    Text::new(words.loading_text.clone()).shade(Shade::Muted).show(ui);
+                    false
+                }
+                LegalShown::Text(text) => {
+                    Text::new(title.clone()).shade(Shade::Faint).show(ui);
+                    TextField::new(title.clone(), Bind::given(text.clone()))
+                        .lines(LEGAL_LINES)
+                        .max_lines(LEGAL_LINES)
+                        .mono()
+                        .read_only(true)
+                        .show(ui);
+                    false
+                }
+                LegalShown::Failed(error) => {
+                    let retry = NoticeAction::new(words.retry.clone());
+                    Notice::new(Tone::Bad, error.clone()).id_salt(("legal", at)).title(title.clone()).action(retry).show(ui).action.is_some()
+                }
+            };
+            if read {
+                todo.push(Do::ReadLegal(*which));
+            }
+        }
     }
 }
 
@@ -819,6 +919,9 @@ fn family_facts(env: &Env, words: &DetailsWords, index: &Index, family: &Family,
         facts.push((words.designer.clone(), family.designer.clone()));
     }
     facts.push((words.licence.clone(), licence_name(&family.license).to_owned()));
+    if let Some(copyright) = family.copyright.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        facts.push((words.copyright.clone(), copyright.to_owned()));
+    }
     facts.push((words.styles_fact.clone(), format.integer(style_count(family) as u64)));
     facts.push((words.files_fact.clone(), format.integer(family.files.len() as u64)));
     facts.push((words.download_size.clone(), size.to_owned()));

@@ -48,6 +48,7 @@ pub(crate) fn story_catalog() -> Arc<Catalog> {
 }
 
 /// A variable font (`wght`), for the samples drawn at variation coordinates.
+#[cfg(feature = "suite")]
 pub(crate) const VARIABLE: &[u8] = include_bytes!("../../../font-subset/tests/data/orbitron/Orbitron[wght].ttf");
 
 /// The panel over the story catalog and index; its store is a fake that refuses downloads.

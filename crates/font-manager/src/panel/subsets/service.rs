@@ -272,7 +272,7 @@ impl Subsets {
         if self.fonts.contains_key(want) {
             return Some(want);
         }
-        self.shown.get(&face_of(want)).filter(|last| self.fonts.contains_key(last))
+        self.shown.get(&face_of(want)).filter(|last| self.fonts.contains_key(*last))
     }
 
     fn subset_font(&self, key: &PreviewKey) -> Option<SubsetFont> {
@@ -336,12 +336,13 @@ impl Subsets {
         let mut settled = true;
         let mut latin = Vec::new();
         for row in visible.clone().filter_map(row) {
+            let family = row.0;
             // A family without a sample text still gets the subset its row's text needs.
-            if let Some(sample) = list_file(row.family).and_then(|f| self.sample_key(index, row.family, f, Instance::List)) {
+            if let Some(sample) = list_file(family).and_then(|f| self.sample_key(index, family, f, Instance::List)) {
                 settled &= self.fonts.contains_key(&sample) || self.has_failed(&sample);
                 self.want(&mut wanted, sample, VISIBLE);
             }
-            if let Some(ascii) = covers_latin(row.family).then(|| subset_key(row.family, Subset::Ascii)).flatten() {
+            if let Some(ascii) = covers_latin(family).then(|| subset_key(family, Subset::Ascii)).flatten() {
                 latin.push(ascii);
             }
             let Some(key) = self.key(index, row) else { continue };
@@ -361,9 +362,9 @@ impl Subsets {
         }
         let above = visible.start.saturating_sub(screen)..visible.start;
         let below = visible.end..visible.end.saturating_add(2 * screen);
-        for row in above.chain(below).filter_map(row) {
+        for (family, _) in above.chain(below).filter_map(row) {
             if let Some(sample) =
-                list_file(row.family).and_then(|f| sample_subset(index, row.family, f, Instance::List)).filter(|k| !self.sample_missing.contains(k))
+                list_file(family).and_then(|f| sample_subset(index, family, f, Instance::List)).filter(|k| !self.sample_missing.contains(k))
             {
                 self.want(&mut wanted, sample, WINDOW);
             }
@@ -400,8 +401,8 @@ impl Subsets {
         if self.sample_missing.contains(&sample) { sample_fallback(index, family, file, instance) } else { Some(sample) }
     }
 
-    fn key(&self, index: &Index, row: &Row<'_>) -> Option<PreviewKey> {
-        text_key(index, row.family, list_file(row.family)?, Instance::List, &row.text, &self.sample_missing)
+    fn key(&self, index: &Index, (family, text): &Row<'_>) -> Option<PreviewKey> {
+        text_key(index, family, list_file(family)?, Instance::List, text, &self.sample_missing)
     }
 
     /// Adds `key` to `wanted` at `priority` unless it is here, failed lately, or can't load: with previews off, only

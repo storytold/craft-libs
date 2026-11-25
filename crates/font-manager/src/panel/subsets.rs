@@ -19,10 +19,7 @@ pub(crate) use none::Subsets;
 pub(crate) use service::Subsets;
 
 /// A row of the list: the family, whose list face draws it, and the text it shows.
-pub(crate) struct Row<'a> {
-    pub(crate) family: &'a Family,
-    pub(crate) text: String,
-}
+pub(crate) type Row<'a> = (&'a Family, String);
 
 /// A subset that is here: its key among the document faces, and the font.
 #[derive(Clone, Debug)]

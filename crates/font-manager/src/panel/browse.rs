@@ -468,7 +468,7 @@ impl FontsPanel {
         {
             return None;
         }
-        Some(SubsetRow { family, text: self.family_sample(index, family) })
+        Some((family, self.family_sample(index, family)))
     }
 
     /// The sample a family of the index shows.

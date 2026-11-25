@@ -10,6 +10,7 @@ pub(crate) mod faces;
 #[cfg(feature = "screen-testing")]
 pub(crate) mod fixtures;
 pub(crate) mod jobs;
+pub(crate) mod legal;
 pub(crate) mod samples;
 pub(crate) mod sources;
 pub(crate) mod specimen;
