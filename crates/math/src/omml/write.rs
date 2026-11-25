@@ -1,7 +1,7 @@
 //! The tree as OMML.
 
 use super::read::{lift_color, read_omath};
-use super::{W, is_well_formed, parse_kept, twips};
+use super::{Runs, W, hundredths, is_well_formed, parse_kept, twips};
 use crate::math::{
     Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MAX_MATRIX_COLS, MAX_MATRIX_ROWS, MNode, MRun, MScr, MSty, Math, MathJc, MathProps,
     ScriptKind, parse_linear,
@@ -54,13 +54,18 @@ pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math, color
         } else {
             &math.nodes
         };
-        w.open("m:oMath", &[]);
-        arg_inner(w, nodes, 0);
-        w.close("m:oMath");
+        write_omath(w, nodes);
     }
     if display {
         w.close("m:oMathPara");
     }
+}
+
+/// `nodes` as an `m:oMath` element.
+pub(super) fn write_omath(w: &mut W, nodes: &[MNode]) {
+    w.open("m:oMath", &[]);
+    arg_inner(w, nodes, 0);
+    w.close("m:oMath");
 }
 
 /// Count the equation's numbered rows; when some use an automatic number (`#` alone), a copy
@@ -162,11 +167,39 @@ fn arg_inner(w: &mut W, a: &[MNode], depth: usize) {
 
 fn ctrl(w: &mut W) {
     w.open("m:ctrlPr", &[]);
-    w.open("w:rPr", &[]);
-    w.empty("w:rFonts", &[("w:ascii", "Cambria Math"), ("w:hAnsi", "Cambria Math")]);
-    w.empty("w:i", &[]);
-    w.close("w:rPr");
+    match w.runs {
+        Runs::Word => {
+            w.open("w:rPr", &[]);
+            w.empty("w:rFonts", &[("w:ascii", "Cambria Math"), ("w:hAnsi", "Cambria Math")]);
+            w.empty("w:i", &[]);
+            w.close("w:rPr");
+        }
+        Runs::DrawingMl { size } => drawingml_rpr(w, size, false, true, None, "Cambria Math"),
+    }
     w.close("m:ctrlPr");
+}
+
+/// A DrawingML `a:rPr`: `size` in hundredths of a point, `color` as a solid fill.
+fn drawingml_rpr(w: &mut W, size: Option<u32>, bold: bool, italic: bool, color: Option<Rgb>, font: &str) {
+    let size = size.map(|s| s.to_string());
+    let mut attrs = vec![("lang", "en-US")];
+    if let Some(s) = &size {
+        attrs.push(("sz", s));
+    }
+    if bold {
+        attrs.push(("b", "1"));
+    }
+    if italic {
+        attrs.push(("i", "1"));
+    }
+    w.open("a:rPr", &attrs);
+    if let Some(c) = color {
+        w.open("a:solidFill", &[]);
+        w.empty("a:srgbClr", &[("val", &c.hex())]);
+        w.close("a:solidFill");
+    }
+    w.empty("a:latin", &[("typeface", font)]);
+    w.close("a:rPr");
 }
 
 fn char_prop(w: &mut W, name: &str, c: Option<char>) {
@@ -467,17 +500,25 @@ fn run(w: &mut W, r: &MRun) {
         }
         w.close("m:rPr");
     }
-    w.open("w:rPr", &[]);
     let font = r.font.as_deref().filter(|_| r.nor).unwrap_or("Cambria Math");
-    w.empty("w:rFonts", &[("w:ascii", font), ("w:hAnsi", font)]);
     // Normal text's bold and italic (see `sty` above).
-    if r.nor {
-        if matches!(r.sty, Some(MSty::Bold | MSty::BoldItalic)) {
-            w.empty("w:b", &[]);
-        }
-        if matches!(r.sty, Some(MSty::Italic | MSty::BoldItalic)) {
-            w.empty("w:i", &[]);
-        }
+    let bold = r.nor && matches!(r.sty, Some(MSty::Bold | MSty::BoldItalic));
+    let italic = r.nor && matches!(r.sty, Some(MSty::Italic | MSty::BoldItalic));
+    if let Runs::DrawingMl { size } = w.runs {
+        let size = r.size.and_then(hundredths).or(size);
+        drawingml_rpr(w, size, bold, italic, r.color, font);
+        w.leaf("m:t", &[("xml:space", "preserve")], &r.text);
+        w.close("m:r");
+        return;
+    }
+
+    w.open("w:rPr", &[]);
+    w.empty("w:rFonts", &[("w:ascii", font), ("w:hAnsi", font)]);
+    if bold {
+        w.empty("w:b", &[]);
+    }
+    if italic {
+        w.empty("w:i", &[]);
     }
     if let Some(c) = r.color {
         w.val("w:color", &c.hex());

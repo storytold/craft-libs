@@ -611,3 +611,26 @@ fn golden_helpers_match_the_writer() {
     assert_eq!(xml(&a("x")), format!("<m:oMath>{}</m:oMath>", rx("x")));
     assert!(expand("{C}").contains("m:ctrlPr"));
 }
+
+/// DrawingML runs carry size, colour and normal text's bold in `a:rPr` and nothing of
+/// WordprocessingML, and the equation reads back the same.
+#[test]
+fn drawingml_runs() {
+    let red = MNode::Run(MRun { color: Some(RED), ..MRun::new("x") });
+    let bold_text = MNode::Run(MRun { nor: true, sty: Some(MSty::Bold), ..MRun::new("if") });
+    let large = MNode::Run(MRun { size: Some(20.0), ..MRun::new("y") });
+    let nodes = vec![MNode::Frac { kind: FracKind::Bar, num: vec![red], den: vec![bold_text] }, large];
+
+    let out = crate::omml::write_omath_drawingml(&nodes, 11.0);
+
+    assert!(!out.contains("w:"), "{out}");
+    assert!(
+        out.contains(
+            r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:latin typeface="Cambria Math"/></a:rPr><m:t xml:space="preserve">x</m:t>"#
+        ),
+        "{out}"
+    );
+    assert!(out.contains(r#"sz="1100" b="1""#), "{out}");
+    assert!(out.contains(r#"sz="2000""#), "{out}");
+    assert_eq!(crate::omml::read_str(&out).map(|m| to_linear(&m.nodes)), Some(to_linear(&nodes)));
+}

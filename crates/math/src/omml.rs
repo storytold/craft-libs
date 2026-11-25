@@ -7,10 +7,13 @@
 //! the source XML in [`Math::omml`], and the writer writes that back unchanged while the
 //! equation's colour is the same, so a saved file carries the equation exactly as Word wrote it.
 //! The writer otherwise writes the tree: `m:oMath`, inside `m:oMathPara` for a display equation.
+//! Its runs carry WordprocessingML properties (`w:rPr`), as a DOCX body holds an equation, or
+//! DrawingML ones (`a:rPr`, [`write_omath_drawingml`]), as a spreadsheet or presentation shape
+//! holds it.
 
 use craft_xml::{Canonical, El, Options};
 
-use crate::math::{Math, MathJc};
+use crate::math::{MNode, Math, MathJc};
 use crate::rgb::Rgb;
 
 mod read;
@@ -106,6 +109,31 @@ pub fn write_str(linear: &str, display: bool, math: &Math, color: Option<Rgb>) -
     let mut w = W::default();
     write_equation(&mut w, linear, display, math, color);
     w.s
+}
+
+/// `nodes` as an `m:oMath` element whose runs carry DrawingML properties (`a:rPr`), the form a
+/// spreadsheet or presentation shape holds: a run's colour is an `a:solidFill`, and runs without
+/// a size of their own are `size_pt` points (none when it isn't finite). The caller declares the
+/// `m:` and `a:` prefixes.
+pub fn write_omath_drawingml(nodes: &[MNode], size_pt: f32) -> String {
+    let mut w = W { s: String::new(), runs: Runs::DrawingMl { size: hundredths(size_pt) } };
+    write::write_omath(&mut w, nodes);
+    w.s
+}
+
+/// A DrawingML size (`sz`, hundredths of a point) for `pt` points, `None` when not finite.
+fn hundredths(pt: f32) -> Option<u32> {
+    pt.is_finite().then(|| (pt * 100.0).round().clamp(100.0, 400_000.0) as u32)
+}
+
+/// The character properties a writer's runs carry.
+#[derive(Clone, Copy, Default)]
+enum Runs {
+    /// WordprocessingML `w:rPr`.
+    #[default]
+    Word,
+    /// DrawingML `a:rPr`, with the size of runs without their own (hundredths of a point).
+    DrawingMl { size: Option<u32> },
 }
 
 /// OMML on/off property of WordprocessingML (`w:b`, `w:i`): absent `w:val` = on.
@@ -208,6 +236,7 @@ fn esc(s: &str) -> String {
 #[derive(Default)]
 pub struct W {
     pub s: String,
+    runs: Runs,
 }
 
 impl W {
