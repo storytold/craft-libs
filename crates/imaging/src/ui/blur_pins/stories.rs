@@ -1,7 +1,7 @@
 //! Stories of the Blur Gallery's pins and the panel of the selected pin.
 
 use craft_ui::canvas::RasterSource as _;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::{Ui, vec2};
@@ -28,9 +28,9 @@ fn pin(x: f64, y: f64, amount: f64) -> BlurPin {
 /// The picture with the pins over it.
 fn on_picture(ui: &mut Ui, data: &mut StoryData, build: impl FnOnce(&MockImage) -> BlurPins) -> StoryOutput {
     let image = MockImage::default();
-    let pins = data.value(PINS, build(&image));
+    let (pins, pins_at) = data.value_at(PINS, build(&image));
     story_canvas(ui, Some(&image), StoryView::Fit, |ui, at| {
-        StoryOutput::from(BlurPinsOverlay::new("Blur pins", Bind::bound(&mut *pins)).show_at(ui, at))
+        StoryOutput::from(BlurPinsOverlay::new("Blur pins", pins_at.bind(&mut *pins)).show_at(ui, at))
     })
 }
 
@@ -48,7 +48,7 @@ fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(BlurPinsOverlay<'static>, covers = [Invalid], drive = Drive::Never)]
 fn too_many_pins(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let image = MockImage::default();
-    let pins = data.value(PINS, {
+    let (pins, pins_at) = data.value_at(PINS, {
         let mut pins = BlurPins::new(BlurKind::Field, bounds(&image), pin(0.5, 0.5, 30.0));
         pins.pins = vec![pin(0.22, 0.55, 8.0), pin(0.5, 0.4, 30.0), pin(0.78, 0.62, 30.0)];
         pins.selected = Some(1);
@@ -57,7 +57,7 @@ fn too_many_pins(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     });
     let few = |pins: &BlurPins| if pins.pins.len() > MOST_PINS { Validity::Refuse(Message::new("There are too many pins")) } else { Validity::Ok };
     story_canvas(ui, Some(&image), StoryView::Fit, |ui, at| {
-        StoryOutput::from(BlurPinsOverlay::new("Blur pins", Bind::bound(&mut *pins).check(few)).show_at(ui, at))
+        StoryOutput::from(BlurPinsOverlay::new("Blur pins", pins_at.bind(&mut *pins).check(few)).show_at(ui, at))
     })
 }
 

@@ -1,8 +1,8 @@
 //! `TimelineRuler`: the time ruler across the top of a timeline (N1.01), a leaf that reads the `TimeAxis` of the
 //! `TimelineView` around it.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{Axis, CursorIcon, HitLevel, HitPriority, Metrics, NavMove, PartKey, PointerButton, PressPhase, RulerUnits, Sense, Ticks};
 use craft_ui::canvas::{Rulers, StepLadder, TickRule};
@@ -11,7 +11,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
     Pointer as _, Props, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick as TickMark, TickEdge, TickRank};
+use craft_ui::primitives::{PaintShape, RulerFace, StrokeWidth, TextRun, Tick as TickMark, TickEdge, TickRank};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, Stateful, StyleColor, StyleCx, TextLook, TypeRole, UiTokens};
@@ -613,7 +613,7 @@ impl Component for TimelineRuler<'_> {
 
         let ticks = ruler_ticks(&axis, rect.width(), ruler_ladder(rate.timecode_base(), style.line));
         let marks: Vec<TickMark> = ticks.iter().map(|tick| TickMark::new(axis.x_of(tick.at, left) - left, tick.rank)).collect();
-        ui.content_painter(cx).ticks(body, TickEdge::Bottom, &marks);
+        ui.content_painter(cx).ticks(body, TickEdge::Bottom, RulerFace::Edge, &marks);
         let color = cx.resolve(&style.label.color);
         for (tick, text) in ticks.iter().filter_map(|tick| tick.label.as_ref().map(|text| (tick, text))) {
             let layout = draw.layout(&TextRun::new(text.as_str()).role(style.label.role).color(color), f32::INFINITY);

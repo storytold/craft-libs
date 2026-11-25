@@ -2,23 +2,27 @@
 //! focus trap, placement and size remembered under a `SaveKey`.
 
 use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks, HEADER, SIDE_BUTTONS};
+use crate::contract::Remember as _;
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
-    Props as _, Role, SaveKey, ShowContainer as _,
+    Props as _, Role, SaveKey, Show as _, ShowContainer as _,
 };
 use crate::edit::outer::{self, OuterEnd};
+use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::access::Access;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::{self, Backdrop, CloseReason, Rank};
 use crate::runtime::windows::{self, WindowHost};
+use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{CancelRule, Metrics, Sense};
 use craft_host::target::WindowState;
-use egui::{Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
+use craft_theme::variant::Tone;
+use egui::{Align2, Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
 
 /// The style of a dialog: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -33,6 +37,8 @@ type GuardFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) -> bool + 'a>;
 type OnPickFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) + 'a>;
 
 type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
+
+type RefusalFn<'a> = Box<dyn FnMut() -> Option<Label> + 'a>;
 
 /// Where a dialog's buttons stand. Wherever they stand, the dialog shows them: their roles, the platform's order,
 /// Enter and Escape, access keys, the close guard and `on_pick` are the dialog's.
@@ -57,9 +63,13 @@ pub enum ButtonPlace {
 ///   session slot that starts open. The close action, Escape and `BodyCx::request_close` write `false`.
 /// - Placement and size: saved across runs under [`remember`](Dialog::remember); a resizable dialog also saves the
 ///   size the user left it at.
-/// - A modal dialog blocks input below it in every window; a press outside does nothing.
+/// - A modal dialog blocks input below it in every window; a press outside nudges it (a short damped shake, or two
+///   accent edge flashes under reduced motion) and changes nothing else.
+/// - A refusal ([`refusal`](Dialog::refusal)) shows as a bad-tone notice under the body, above the footer.
 /// - Escape closes a modal dialog, and a modeless one with a footer; a modeless tool window without one ignores it.
 /// - Focus starts on the body's first text or number field, else on the default button, else nowhere.
+/// - A [`title_note`](Dialog::title_note) runs on after the title in muted text ("· 3 comments selected"), and is
+///   dropped before the title elides.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct Dialog<'a> {
@@ -93,11 +103,26 @@ pub struct Dialog<'a> {
     closable: bool,
     /// Where the buttons stand.
     place: ButtonPlace,
+    /// A muted note after the title.
+    #[prop(into)]
+    title_note: Option<Label>,
+    /// An icon of the catalog before the title, in the accent ink (a lock before "Password required").
+    #[prop]
+    title_icon: Option<craft_behavior::IconId>,
+    /// While the body reports its fields unchanged ([`Dialog::report_changed`]), a Close button stands in place of the
+    /// OK and Cancel pair.
+    #[prop]
+    close_unchanged: bool,
     closed: Option<CloseReason>,
     picked: Option<usize>,
     /// The body ran in this pass: the header region marks it.
     body_shown: bool,
     alert: bool,
+    /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
+    /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
+    /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
+    #[prop(boxed = "FnMut() -> Option<Label> + 'a")]
+    refusal: Option<RefusalFn<'a>>,
 }
 
 impl<'a> Dialog<'a> {
@@ -108,10 +133,10 @@ impl<'a> Dialog<'a> {
         Dialog::on(title, overlay, HEADER.band(DragBand::Move))
     }
 
-    /// A prompt titled `title`: a dialog on the modal preset, centred with its content capped, fixed in place and
+    /// A prompt titled `title`: a dialog centred with its content capped, fixed in place and
     /// not remembered.
     pub fn prompt(title: impl Into<Label>) -> Self {
-        Dialog::on(title, Overlay::modal(), HEADER)
+        Dialog::on(title, Overlay::dialog().movable(false).resizable(false), HEADER)
     }
 
     fn on(title: impl Into<Label>, overlay: Overlay, header: HeaderRegion) -> Self {
@@ -130,10 +155,14 @@ impl<'a> Dialog<'a> {
             enter: false,
             closable: true,
             place: ButtonPlace::Foot,
+            title_note: None,
+            title_icon: None,
+            close_unchanged: false,
             closed: None,
             picked: None,
             body_shown: false,
             alert: false,
+            refusal: None,
         }
         .label(title)
     }
@@ -193,11 +222,22 @@ impl<'a> Dialog<'a> {
         })
     }
 
-    /// Where the dialog first opens, as a screen position of its top-left corner; the middle of the window without
-    /// it. A saved placement comes first.
+    /// Whether Escape keeps the typing in the focused field: the field commits its draft and the dialog closes. Off
+    /// (the default), one Escape cancels the typing with the dialog. For a dialog that applies its fields as they
+    /// change, where the dialog's Escape takes nothing back (`FocusPolicy::escape_keeps_typing`).
     #[must_use]
-    pub fn first_place(self, at: Pos2) -> Self {
-        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::at(at))))
+    pub fn escape_keeps_typing(self, on: bool) -> Self {
+        self.overlay(|overlay| {
+            let focus = overlay.focus.escape_keeps_typing(on);
+            overlay.focus(focus)
+        })
+    }
+
+    /// Where the dialog first opens, as a screen position of its `corner`; the middle of the window without it. A saved
+    /// placement comes first.
+    #[must_use]
+    pub fn first_place(self, at: Pos2, corner: Align2) -> Self {
+        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::corner_at(at, corner))))
     }
 
     /// Saves the placement and size under `key`, so a reopened dialog sits where the user left it.
@@ -281,6 +321,12 @@ impl<'a> Dialog<'a> {
             self.props = self.props.footer(region);
         }
         self
+    }
+
+    /// Reports from the body whether the dialog's fields differ from the ones it opened with; read by a dialog that
+    /// [`close_unchanged`](Dialog::close_unchanged).
+    pub fn report_changed(cx: &mut BodyCx<'_>, changed: bool) {
+        cx.memory::<Reported>().unchanged = !changed;
     }
 
     /// The footer region: in the end region's column, in the body's slot, or across the foot.
@@ -482,20 +528,48 @@ impl Container for Dialog<'_> {
         if self.holds_outer_gesture() {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable));
+        frame::header(
+            ui,
+            cx,
+            frame::close_action(self.closable && frame::close_button(ui.ctx())),
+            self.title_note.as_ref(),
+            self.title_icon.as_ref(),
+        );
         self.keep_window_draggable(ui);
     }
 
+    /// The refusal notice, under the body and above the footer: the reason is read in every run, after the body ran.
+    fn body_end(&mut self, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
+        if let Some(reason) = self.refusal.as_mut().and_then(|reason| reason()) {
+            Notice::new(Tone::Bad, reason).layout(NoticeLayout::Inline).show(ui);
+        }
+    }
+
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
+        // An unchanged dialog has nothing to accept: one Close button answers as the Cancel button would.
+        let cancel_at = self.buttons.iter().position(|button| button.role() == DialogRole::Cancel);
+        let has_accept = self.buttons.iter().any(|button| button.role() == DialogRole::Accept);
+        let close = cancel_at.filter(|_| self.close_unchanged && has_accept && cx.memory::<Reported>().unchanged);
+        let closing;
+        let buttons = if close.is_some() {
+            let label = Env::of(ui).words::<CommonWords>().close.clone();
+            closing = [FooterButton::new(label, DialogRole::Cancel)];
+            &closing[..]
+        } else {
+            &self.buttons[..]
+        };
         frame::footer_in(
             ui,
             cx,
             &mut self.footer,
-            &self.buttons,
+            buttons,
             self.enter,
             frame::FooterHost { picked: &mut self.picked, guard: &mut self.guard, on_pick: &mut self.on_pick, settle: &mut self.settle },
             self.place != ButtonPlace::Foot,
         );
+        if let (Some(at), Some(0)) = (close, self.picked) {
+            self.picked = Some(at);
+        }
     }
 
     fn closed(&mut self, why: CloseReason) {
@@ -519,4 +593,10 @@ impl<'a> FooterHooks<'a> for Dialog<'a> {
     fn close_guard<T: FnMut(&FooterButton, &mut BodyCx<'_>) -> bool + 'a>(self, allows: T) -> Self {
         Dialog::close_guard(self, allows)
     }
+}
+
+/// What the body reported about its fields in this pass.
+#[derive(Clone, Copy, Default)]
+struct Reported {
+    unchanged: bool,
 }

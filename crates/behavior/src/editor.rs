@@ -52,6 +52,9 @@ pub enum EditorInput {
         forward: bool,
         /// How much to delete.
         by: Granularity,
+        /// Shift was held (`Intent::Delete::shift`): Shift+Delete is a word processor's Cut, which deletes nothing
+        /// without a selection, so an editor that gives it that meaning tells it from a plain Delete.
+        shift: bool,
     },
     /// Text around the caret or the marked text, deleted for the IME.
     #[non_exhaustive]
@@ -84,17 +87,34 @@ pub enum EditorInput {
     /// An edit command from the command queue.
     Edit(EditCommand),
     /// Enter.
-    Newline,
+    #[non_exhaustive]
+    Newline {
+        /// Shift was held: an editor that gives Shift+Enter its own meaning (a line break within the paragraph) tells
+        /// it from a plain Enter.
+        shift: bool,
+    },
     /// Tab.
     Tab,
+    /// Shift+Tab, which reaches only a document canvas's editor part that keeps Tab.
+    BackTab,
     /// Escape.
     Cancel,
 }
 
 impl EditorInput {
-    /// A `Delete` of `by`.
+    /// A `Delete` of `by`, without Shift.
     pub const fn delete(forward: bool, by: Granularity) -> Self {
-        EditorInput::Delete { forward, by }
+        EditorInput::Delete { forward, by, shift: false }
+    }
+
+    /// A `Delete` of `by` with Shift held when `shift`.
+    pub const fn delete_with_shift(forward: bool, by: Granularity, shift: bool) -> Self {
+        EditorInput::Delete { forward, by, shift }
+    }
+
+    /// A `Newline`, with Shift held when `shift`.
+    pub const fn newline(shift: bool) -> Self {
+        EditorInput::Newline { shift }
     }
 
     /// A `DeleteSurrounding` of `before` and `after` characters.

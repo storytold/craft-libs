@@ -3,15 +3,21 @@
 //! change as a resolved [`SwatchEdit`] (new, rename, delete, move, group edits, import) that the host runs, with
 //! [`SwatchLibrary::apply`] for an in-memory host.
 
-mod library;
-mod menu;
-mod panel;
-#[cfg(feature = "screen-testing")]
-mod stories;
+use craft_ui::tile_grid::TileZoom;
 
-pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows};
+pub(crate) mod library;
+mod menu;
+pub(crate) mod panel;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows, swatch_source};
 pub use menu::{SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput};
 pub use panel::{SwatchesPanel, SwatchesPanelOutput};
+
+/// Compact colour tiles at the default zoom, with the same upper limit as the preset browser.
+const SWATCH_MIN_ZOOM: f64 = 1.0 / 3.0;
+const SWATCH_ZOOM: TileZoom = TileZoom::bounded(SWATCH_MIN_ZOOM, 5.0, 1.0 / 12.0, SWATCH_MIN_ZOOM);
 
 /// The most swatches a library holds (PhotoCraft's `MAX_SWATCHES`).
 pub const MAX_SWATCHES: usize = 100_000;
@@ -44,6 +50,7 @@ craft_ui::words! {
         skipped: count "swatches.skipped" = "{n} color in a model that cannot be read was skipped." | "{n} colors in a model that cannot be read were skipped.";
         converted: count "swatches.converted" = "{n} color was converted to RGB." | "{n} colors were converted to RGB.";
         kinds_dropped: count "swatches.kindsDropped" = "{n} spot or global color was written as a process color." | "{n} spot or global colors were written as process colors.";
+        paints_skipped: count "swatches.paintsSkipped" = "{n} gradient, pattern or None swatch was not written." | "{n} gradient, pattern or None swatches were not written.";
         truncated: count "swatches.truncated" = "{n} color past the 256 the format holds was left out." | "{n} colors past the 256 the format holds were left out.";
         transparent_kept: count "swatches.transparentKept" = "{n} color was kept transparent." | "{n} colors were kept transparent.";
         names_cut: count "swatches.namesCut" = "{n} name was cut to the length the format holds." | "{n} names were cut to the length the format holds.";

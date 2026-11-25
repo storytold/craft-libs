@@ -546,6 +546,7 @@ fn codec_params_map_fourccs_and_format_tags() {
         (b"XVID", CodecId::Mpeg4Video),
         (b"apch", CodecId::ProRes),
         (b"AVdn", CodecId::Dnxhd),
+        (b"FFV1", CodecId::Ffv1),
         (b"YUY2", CodecId::Unknown),
         (&[0; 4], CodecId::Unknown),
     ] {

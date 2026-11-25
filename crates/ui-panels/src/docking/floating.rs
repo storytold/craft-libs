@@ -8,35 +8,37 @@
 //! A dock window's title row is also the bar of the column the window holds, with the column's double arrow.
 
 use super::dock_column::{CHEVRON, ColumnArrow, describe_chevron, paint_chevron};
-use super::drop::{DragUnit, start_group_drag};
-use super::{DockDropTarget, DockDropped, DockWords, GroupDrag, PanelDrag, PanelKey, native};
+use super::drop::start_window_drag;
+use super::{DockDropTarget, DockDropped, DockSizes, DockWords, GroupDrag, PanelDrag, PanelKey, native};
 use crate::contract::BodyCx;
 use crate::contract::SizeLimits;
-use crate::contract::overlay::{PlacementChange, PlacementKind, Popup};
+use crate::contract::overlay::{PlacementChange, PlacementKind, Popup, ResizeEdges};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderEdge, HeaderParts, HeaderRegion, Inner, MeasureCx,
     Mount, NoValue, OsFiles, Outcome, Overlay, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing,
     WordSetCx as _,
 };
+use crate::display::Icon;
+use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::WindowSpec;
+use crate::runtime::windows::{ResizeEdge, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
-use craft_behavior::{GesturePhase, Metrics, Sense};
+use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
-/// The height of a floating group's title row: a strong `TitleRow`, which is as tall as a panel header.
+/// The height of a floating group's title row: a `TitleRow` of the `Bar` strength, one text row high.
 pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
-    tokens.size.panel_header
+    tokens.size.row.text
 }
 
 /// The actions a floating group's title row shows unless `actions` says otherwise: Close alone, as a floating panel's
@@ -53,14 +55,24 @@ pub struct FloatingGroupStyle {
 
 /// The column a dock's floating window holds. The window's title row is the column's bar: it shows the column's
 /// double arrow at the end on `edge`, and a collapsed column shows against that edge of the window's rect.
+///
+/// A column whose content fixes its height ([`held`](Self::held)) shows at that height whatever the rect's, and the
+/// rect keeps its own height for when the content no longer fixes it: a column collapsed to icons, and one whose
+/// every group is minimized.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct WindowColumn {
     /// The edge of the float area, in reading order, that the window keeps to: the dock model's `Floating::edge`,
     /// else the one nearer the window.
     pub edge: DockEdge,
-    /// The size of the collapsed column under the title row; `None` while the column is expanded.
-    pub collapsed: Option<Vec2>,
+    /// The height of the column under the title row when its content fixes it: a collapsed column's icons, or the
+    /// tab strips of a column whose every group is minimized. `None` while the rect gives the height.
+    pub held: Option<f32>,
+    /// The width of the collapsed column; `None` while the column is expanded, and the rect gives the width.
+    pub collapsed: Option<f32>,
+    /// The least and most width the sides of a collapsed column's window resize it to
+    /// ([`DockSizes::iconic_bounds`](super::DockSizes::iconic_bounds)); unbounded while the column is expanded.
+    pub widths: (f32, f32),
     /// The size of an expanded column whose content sets it (a column with steps) under the title row; `None` for a
     /// column the rect sizes.
     pub fitted: Option<Vec2>,
@@ -71,19 +83,27 @@ pub struct WindowColumn {
 impl WindowColumn {
     /// An expanded column that keeps to `edge`.
     pub fn expanded(edge: DockEdge) -> Self {
-        WindowColumn { edge, collapsed: None, fitted: None, arrow: ColumnArrow::Collapse }
+        WindowColumn { edge, held: None, collapsed: None, widths: UNBOUNDED, fitted: None, arrow: ColumnArrow::Collapse }
     }
 
-    /// A column collapsed to icons, `size` under the title row, that keeps to `edge`.
-    pub fn collapsed(edge: DockEdge, size: Vec2) -> Self {
-        WindowColumn { edge, collapsed: Some(size), fitted: None, arrow: ColumnArrow::Collapse }
+    /// A column collapsed to icons, `size` under the title row, that keeps to `edge`. The window's sides resize its
+    /// width within `widths`, as a docked collapsed column's inner edge does; its height stays `size`'s.
+    pub fn collapsed(edge: DockEdge, size: Vec2, widths: (f32, f32)) -> Self {
+        WindowColumn { edge, held: Some(size.y), collapsed: Some(size.x), widths, fitted: None, arrow: ColumnArrow::Collapse }
+    }
+
+    /// An expanded column whose every group is minimized, their strips `height` under the title row, that keeps to
+    /// `edge`. The window shows at its rect's place and width and that height; its sides resize the width, and the
+    /// rect keeps its height, which the window takes back once a group is restored.
+    pub fn minimized(edge: DockEdge, height: f32) -> Self {
+        WindowColumn { edge, held: Some(height), collapsed: None, widths: UNBOUNDED, fitted: None, arrow: ColumnArrow::Collapse }
     }
 
     /// An expanded column whose content is `size` under the title row, that keeps to `edge`. The window shows at
     /// that size at its rect's place; a resize the user makes is reported for the host to turn into the column's
     /// steps, and a move keeps the rect's size.
     pub fn fitted(edge: DockEdge, size: Vec2) -> Self {
-        WindowColumn { edge, collapsed: None, fitted: Some(size), arrow: ColumnArrow::Collapse }
+        WindowColumn { edge, held: None, collapsed: None, widths: UNBOUNDED, fitted: Some(size), arrow: ColumnArrow::Collapse }
     }
 
     /// The column with the double arrow `arrow` ([`ColumnArrow::of`]).
@@ -92,19 +112,27 @@ impl WindowColumn {
         self
     }
 
-    /// Where a window that keeps `rect` shows while its column is collapsed: the collapsed column under a title row
-    /// `header` tall, at the top of `rect` and against the edge the window keeps to. `None` while the column is
-    /// expanded.
-    pub fn shown(self, rect: Rect, header: f32, rtl: bool) -> Option<Rect> {
-        let size = self.collapsed? + Vec2::new(0.0, header);
+    /// Where a window that keeps `rect` shows while its content fixes its height ([`Self::held`]): the column under
+    /// the window's chrome, `chrome` tall (`DockSizes::window_chrome`), at the top of `rect`, as wide as a collapsed
+    /// column or else as `rect`, and against the edge the window keeps to. `None` while the rect gives the height.
+    pub fn shown(self, rect: Rect, chrome: f32, rtl: bool) -> Option<Rect> {
+        let size = Vec2::new(self.collapsed.unwrap_or(rect.width()), self.held? + chrome);
         let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
         Some(Rect::from_min_size(Pos2::new(left, rect.top()), size))
     }
 
-    /// The rect a window that keeps `rect` keeps when it shows at `shown`: while collapsed, `rect` moved with the
-    /// collapsed column ([`Self::shown`]), so it keeps its expanded size; while expanded, `shown`.
-    pub fn kept(self, shown: Rect, rect: Rect, header: f32, rtl: bool) -> Rect {
-        self.shown(rect, header, rtl).map_or(shown, |at| rect.translate(shown.min - at.min))
+    /// The rect a window that keeps `rect` keeps when it shows at `shown`, so that it keeps its height while its
+    /// content fixes the shown one ([`Self::shown`]). While collapsed, `rect` moved with the collapsed column so that
+    /// the column's side on the edge the window keeps to stays on that side of `rect`, whatever width the column shows
+    /// at; `rect` keeps its expanded size. While every group is minimized, `shown`'s place and width with `rect`'s
+    /// height. Otherwise `shown`.
+    pub fn kept(self, shown: Rect, rect: Rect, chrome: f32, rtl: bool) -> Rect {
+        let Some(at) = self.shown(rect, chrome, rtl) else { return shown };
+        if self.collapsed.is_none() {
+            return Rect::from_min_size(shown.min, Vec2::new(shown.width(), rect.height()));
+        }
+        let dx = if at_left(self.edge, rtl) { shown.left() - at.left() } else { shown.right() - at.right() };
+        rect.translate(Vec2::new(dx, shown.top() - at.top()))
     }
 
     /// The edge of `bounds`, in reading order, nearer the window at `rect`: the start edge when the window's centre is
@@ -119,7 +147,8 @@ impl WindowColumn {
     /// at the same place against that edge ([`Self::around_strip`]); an expanded window keeps `rect`, and the edge
     /// nearer it (`None`).
     pub fn dropped(self, rect: Rect, bounds: Rect, rtl: bool) -> (Rect, Option<DockEdge>) {
-        let Some(size) = self.collapsed else { return (rect, None) };
+        let (Some(width), Some(height)) = (self.collapsed, self.held) else { return (rect, None) };
+        let size = Vec2::new(width, height);
         let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
         let (rect, edge) = Self::around_strip(Rect::from_min_size(Pos2::new(left, rect.top()), size), rect.size(), bounds, rtl);
         (rect, Some(edge))
@@ -133,6 +162,9 @@ impl WindowColumn {
         (Rect::from_min_size(Pos2::new(left, strip.top()), size), edge)
     }
 }
+
+/// The widths of a column that is not collapsed: its window's limits are the panels'.
+const UNBOUNDED: (f32, f32) = (0.0, f32::INFINITY);
 
 /// Whether `edge`, in reading order, is the left one of the screen.
 fn at_left(edge: DockEdge, rtl: bool) -> bool {
@@ -157,8 +189,18 @@ pub struct FloatingGroupOutput {
     /// The user asked to collapse the window's column to icons (`true`) or expand it (`false`): a click on the double
     /// arrow, or a double click on the title band. Only a group with a [`WindowColumn`] reports it.
     pub iconic: Option<bool>,
+    /// The width the user gave the collapsed column of the window this pass, by a side of the window or the keyboard
+    /// Size mode: the host keeps it as the column's iconic width. The rect in `placed` stays the expanded one.
+    pub collapsed_width: Option<f32>,
     /// The files dropped on the group's window that no target there took.
     pub files: Vec<OsFile>,
+    /// The band the group is moved by this pass, with the id of its accessibility node; `None` when it has none.
+    pub grip: Option<(Rect, Id)>,
+    /// The grips the group is resized by this pass, each with the edge or corner it moves and the id of its
+    /// accessibility node; none while it does not resize (minimized).
+    pub resize: Vec<(ResizeEdge, Rect, Id)>,
+    /// Where `files` were dropped, in the group's layer space, when the drop session knew the pointer.
+    pub files_at: Option<Pos2>,
 }
 
 impl Outcome for FloatingGroupOutput {
@@ -182,14 +224,17 @@ impl Outcome for FloatingGroupOutput {
 /// - Column: a dock window holds one column ([`column`](FloatingGroup::column)); its title row is the column's bar,
 ///   with the double arrow at the end the window keeps to. While the column is collapsed the group shows at the
 ///   collapsed size against that edge of the rect, its title row shows no actions (the band and the double arrow;
-///   a context request on the band opens the menu), the edges do not resize, and a move keeps the rect's size. A
+///   a context request on the band opens the menu), its sides resize its width within the column's widths (reported
+///   in [`FloatingGroupOutput::collapsed_width`]) while its height stays the icons', and the rect keeps its size. A
 ///   column its content sizes ([`WindowColumn::fitted`]) shows at that size at the rect's place; its resizes are
 ///   reported as the user makes them, and in an OS window the app runs them, so the window takes only the size the
-///   host gives it.
+///   host gives it. A column whose every group is minimized ([`WindowColumn::minimized`]) shows at the rect's place
+///   and width and its strips' height; its sides resize the width, and the rect keeps its height.
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
-///   the platform has no windows. The window comes to the front when the user begins to move or resize it.
+///   the platform has no windows. The window comes to the front when the user begins to move or resize it, and in
+///   the pass [`raise`](FloatingGroup::raise) is set.
 /// - Menu: the Menu action and a context request on the title row open the `menu` rows, under the action's part.
 /// - Show it with [`show_group`](FloatingGroup::show_group): the closure fills the body, and is not called while
 ///   the group is minimized.
@@ -226,6 +271,14 @@ pub struct FloatingGroup<'a> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
+    /// The title row is a bare grip (a small handle that moves the window), with no menu, float or close action, no
+    /// column arrow and no rule under it: a quick-action strip's look.
+    #[prop]
+    grip: bool,
+    /// The surfaces the body paints keep to the window's rounded lower corners (`frame_surfaces`), and the window's
+    /// edge is drawn again over the body, which covers it along the sides: the window reads as one rounded piece.
+    #[prop]
+    rounded_body: bool,
     /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
     open: Bind<'a, bool>,
     taken: Option<HeaderAction>,
@@ -234,21 +287,47 @@ pub struct FloatingGroup<'a> {
     /// The double arrow was declared this pass, and whether it was clicked.
     chevron_declared: bool,
     chevron: bool,
-    /// The title row's height and the layout direction, read when the group shows.
+    /// The title row's height, the height above the body (`DockSizes::window_chrome`) and the layout direction, read
+    /// when the group shows.
     header: f32,
+    chrome: f32,
     rtl: bool,
     placed: Option<PlacementChange>,
+    /// The width a resize gave the collapsed column this pass.
+    collapsed_width: Option<f32>,
+    /// The display scale of the OS window the group shows in (`native::pixels_per_point`), when it differs from the
+    /// running window's: its chrome, the rule under its title row included, is sized at that scale.
+    #[prop(quantity = "display scale, pixels per point")]
+    scale: Option<f32>,
     /// Starts the window-unit drag; set by `window_of`.
     start_drag: Option<StartDrag<'a>>,
     /// Takes the drops released on the group, on the group's own layer.
     take_drop: Option<TakeDrop<'a>>,
-    /// A move by the title began this pass.
+    /// A move of the window began this pass.
     moving: bool,
+    /// That move continues a press another component handed over (`continue_move`), not a press on the title row.
+    continued: bool,
+    /// The window takes over the held primary press in this pass: its own move gesture begins from that press with the
+    /// pointer at this point inside the window, so the window follows the pointer and, with
+    /// [`window_of`](FloatingGroup::window_of), docks where it would dock on release. A request of the pass, for the
+    /// pass after a rail's `torn_off`; without a held press it does nothing. Only a window on a layer takes the press:
+    /// the OS keeps a held button's moves with the window it went down in, so a group shown in an OS window
+    /// ([`native`](FloatingGroup::native)) moves only when pressed again.
+    #[prop(quantity = "grab point")]
+    continue_move: Option<Vec2>,
+    /// Brings the window to the front of the windows it overlaps in this pass: its layer above the other floating
+    /// layers, or its OS window raised and focused. A request of the pass, for the pass the host reveals a panel of the
+    /// window in.
+    #[prop(flag)]
+    raise: bool,
     /// The files dropped on the group's OS window that no target there took.
     files: Vec<OsFile>,
+    /// Where they were dropped.
+    files_at: Option<Pos2>,
 }
 
-type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
+/// Starts the window-unit drag: a move by the title row when the flag is set, else a drag the window took over.
+type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>, bool) + 'a>;
 
 type TakeDrop<'a> = Box<dyn for<'b, 'c> FnMut(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
 
@@ -260,6 +339,10 @@ impl<'a> FloatingGroup<'a> {
             .pad(Pad::None)
             .sizing(Sizing::Content)
             .header(HeaderRegion::new().band(DragBand::Move).rule(true));
+        let props = match <DockWords as craft_i18n::WordSet>::word("floatingGroup.resize") {
+            Some(word) => props.resize_name(Label::from(word)),
+            None => props,
+        };
         FloatingGroup {
             common: Common::new(),
             props,
@@ -273,6 +356,8 @@ impl<'a> FloatingGroup<'a> {
             native: None,
             menu: None,
             actions: ACTIONS.to_vec(),
+            grip: false,
+            rounded_body: false,
             open: Bind::given(true),
             taken: None,
             menu_opener: None,
@@ -280,12 +365,19 @@ impl<'a> FloatingGroup<'a> {
             chevron_declared: false,
             chevron: false,
             header: 0.0,
+            chrome: 0.0,
             rtl: false,
             placed: None,
+            collapsed_width: None,
+            scale: None,
             start_drag: None,
             take_drop: None,
             moving: false,
+            continued: false,
+            continue_move: None,
+            raise: false,
             files: Vec::new(),
+            files_at: None,
         }
         .label(title)
     }
@@ -296,7 +388,7 @@ impl<'a> FloatingGroup<'a> {
     pub fn window_of<P: Clone + Hash + Send + Sync + 'static>(mut self, anchor: P) -> Self {
         let active = PanelKey::of(&anchor);
         let size = self.rect.size();
-        self.start_drag = Some(Box::new(move |cx| start_group_drag(cx, DragUnit::Window(anchor), active, Some(size), None)));
+        self.start_drag = Some(Box::new(move |cx, title_row| start_window_drag(cx, anchor, active, size, title_row)));
         self
     }
 
@@ -328,30 +420,54 @@ impl<'a> FloatingGroup<'a> {
     /// Shows the group; `body` fills the area under the title row unless the group is minimized.
     pub fn show_group<R>(mut self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<FloatingGroupOutput, R> {
         let env = Env::of(ui);
-        let header = title_row(&env.tokens);
-        (self.header, self.rtl) = (header, env.direction.is_rtl());
-        let mount = self.mount(header);
+        // A window in the app window keeps the band over its title row that a layer the user moves keeps for its top
+        // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
+        let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
+        let sizes = self.scale.map_or(sizes, |scale| sizes.at_scale(scale));
+        // A grip title row has no rule under it, so the chrome keeps no band for one.
+        (self.header, self.chrome, self.rtl) =
+            (sizes.title_row, sizes.window_chrome_ruled(self.native.is_none(), !self.grip), env.direction.is_rtl());
+        if self.grip {
+            self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
+        }
+        let mount = self.mount();
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
-        let shown = self.show(ui, |ui, cx| (!minimized).then(|| body(ui, cx)));
+        // The window's lower corners: its body ends at the window's foot and sides.
+        let window = UiTokens::corner(env.tokens.shape.radius.window);
+        let lower = egui::CornerRadius { nw: 0, ne: 0, sw: window.sw, se: window.se };
+        let rounded = self.rounded_body;
+        let shown = self.show(ui, |ui, cx| {
+            if rounded {
+                crate::primitives::frame_surfaces(ui, cx.rect, lower);
+            }
+            (!minimized).then(|| body(ui, cx))
+        });
         Inner { output: shown.output, inner: shown.inner.flatten(), settle: shown.settle }
     }
 
-    /// The layer or window the group shows in. `header` is the height of the title row.
+    /// The layer or window the group shows in.
     ///
     /// A minimized group, and one with `Sizing::Content`, is placed by its position and width; its height is its
-    /// content's, which is the title row alone while minimized.
-    fn mount(&self, header: f32) -> Mount {
-        // The frame's limits are the body's with the title row on top.
-        let frame = self.limits.around(Vec2::new(0.0, header));
-        let collapsed = self.collapsed_rect();
-        let mut overlay =
-            Overlay::floating().movable(true).resizable(!self.minimized && collapsed.is_none()).opacity(self.opacity).body_scroll(false);
-        overlay = if let Some(shown) = collapsed {
-            overlay.placed(shown).size_limits(SizeLimits::new(shown.size(), shown.size()))
+    /// content's, which is the chrome alone while minimized.
+    fn mount(&self) -> Mount {
+        // The frame's limits are the body's with the chrome on top.
+        let frame = self.limits.around(Vec2::new(0.0, self.chrome));
+        // A collapsed column's width stays within its own bounds, a minimized one's within the panels' limits.
+        let widths = self.column.map(|column| match column.collapsed {
+            Some(_) => column.widths,
+            None => (frame.min.x, frame.max.map_or(f32::INFINITY, |max| max.x)),
+        });
+        let held = self.held_rect().zip(widths);
+        let mut overlay = Overlay::floating().movable(true).resizable(!self.minimized).opacity(self.opacity).body_scroll(false);
+        overlay = if let Some((shown, (least, most))) = held {
+            // The sides resize the column's width; its content fixes its height.
+            let height = shown.height();
+            let edges = if self.minimized { ResizeEdges::NONE } else { ResizeEdges::LEFT.union(ResizeEdges::RIGHT) };
+            overlay.placed(shown).resize_edges(edges).size_limits(SizeLimits::new(Vec2::new(least, height), Vec2::new(most.max(least), height)))
         } else if let Some(size) = self.column.and_then(|column| column.fitted) {
             // The host turns a resize into the column's steps, and the window takes the size they make.
-            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, header))).sized_by_caller()
+            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, self.chrome))).sized_by_caller()
         } else if self.minimized {
             let width = self.rect.width();
             overlay.placed_at(self.rect.min).size_limits(SizeLimits::new(Vec2::new(width, 0.0), Vec2::new(width, f32::INFINITY)))
@@ -368,21 +484,24 @@ impl<'a> FloatingGroup<'a> {
         if self.start_drag.is_some() {
             overlay = overlay.moved_by_app();
         }
+        if let Some(grab) = self.continue_move {
+            overlay = overlay.continue_move(grab);
+        }
         match &self.native {
             Some(spec) => Mount::viewport_with(overlay, spec.clone()),
             None => Mount::Layer(overlay),
         }
     }
 
-    /// Where the group shows while its column is collapsed: the collapsed column under the title row, at the top of
-    /// the rect and against its edge the window keeps to. `None` while the column is expanded.
-    fn collapsed_rect(&self) -> Option<Rect> {
-        self.column?.shown(self.rect, self.header, self.rtl)
+    /// Where the group shows while its column's content fixes its height ([`WindowColumn::shown`]). `None` while the
+    /// rect gives the height.
+    fn held_rect(&self) -> Option<Rect> {
+        self.column?.shown(self.rect, self.chrome, self.rtl)
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
     fn chevron_edge(&self) -> Option<HeaderEdge> {
-        let column = self.column.filter(|column| column.arrow.shown())?;
+        let column = self.column.filter(|column| column.arrow.shown() && !self.grip)?;
         Some(if column.edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start })
     }
 }
@@ -420,12 +539,17 @@ impl Component for FloatingGroup<'_> {
             let target = WholeWindow::new(cx.rect);
             if let Some(dropped) = cx.window_drop_target::<OsFiles, _>(&target) {
                 self.files = dropped.files;
+                // The drop session's pointer, which a drop the OS sent before any position waits for.
+                self.files_at = cx.dragging::<OsFiles>().map(|(_, at)| at);
             }
         }
     }
 
     /// The double arrow, over the title row's surface.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.rounded_body {
+            ui.draw().surface_edge(cx.rect, SurfaceKind::Floating);
+        }
         let Some(column) = self.column.filter(|_| self.chevron_declared) else { return };
         paint_chevron(ui, column.edge, column.arrow, column.collapsed.is_none(), cx.flow.is_rtl(), &cx.words::<DockWords>());
     }
@@ -440,7 +564,7 @@ impl Component for FloatingGroup<'_> {
         if self.moving
             && let Some(start) = self.start_drag.take()
         {
-            start(&mut cx);
+            start(&mut cx, !self.continued);
         }
         if let Some(opener) = self.menu_opener {
             Popup::toggle(opener, &mut cx);
@@ -454,9 +578,13 @@ impl Component for FloatingGroup<'_> {
             action: self.taken,
             minimized_toggled: self.toggled && self.column.is_none(),
             iconic,
+            collapsed_width: self.collapsed_width,
             files: self.files,
+            grip: cx.move_band(),
+            resize: cx.resize_grips(),
+            files_at: self.files_at,
         };
-        native::raise(&cx.core.ctx, &output);
+        native::raise(&cx.core.ctx, &output, self.raise);
         native::fade(&cx.core.ctx, &output);
         output
     }
@@ -486,8 +614,15 @@ impl Container for FloatingGroup<'_> {
         // A drag bar with no title: the tabs below name the panels. A collapsed column's title row is its bar alone,
         // the band and the double arrow; the menu, which a context request on the band opens, keeps its rows.
         let collapsed = self.column.is_some_and(|column| column.collapsed.is_some());
+        if self.grip {
+            ui.vertical_centered(|ui| {
+                let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(cx.words::<DockWords>().move_window.clone()).show(ui);
+            });
+            self.toggled |= cx.band_double_pressed();
+            return;
+        }
         let actions = if collapsed { &[][..] } else { &self.actions[..] };
-        let shown = TitleRow::new("").strength(HeaderStrength::Strong).actions(actions.iter().copied()).show(ui);
+        let shown = TitleRow::new("").strength(HeaderStrength::Bar).actions(actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);
         if let Some(rows) = self.menu.as_mut() {
             self.menu_opener = rows.hang(ui, &shown, cx.words::<DockWords>().panel_menu.clone());
@@ -498,16 +633,29 @@ impl Container for FloatingGroup<'_> {
     fn placement_changed(&mut self, change: &PlacementChange) {
         let mut change = *change;
         let fitted = self.column.is_some_and(|column| column.fitted.is_some());
-        if let Some(column) = self.column.filter(|column| column.collapsed.is_some()) {
-            // The collapsed window moves; the rect keeps its expanded size.
-            change.rect = column.kept(change.rect, self.rect, self.header, self.rtl);
-        } else if fitted && change.kind == PlacementKind::Move {
-            // A window its content sizes moves; the rect keeps its size.
+        if let Some(column) = self.column.filter(|column| column.held.is_some()) {
+            // A resize of the collapsed window sets the column's width; the rect keeps its expanded size. A minimized
+            // window's rect takes the width and keeps its height.
+            let resized = match change.kind {
+                PlacementKind::Size(_) => true,
+                PlacementKind::Keyboard => self.held_rect().is_some_and(|shown| change.rect.width() != shown.width()),
+                _ => false,
+            };
+            if resized && column.collapsed.is_some() {
+                self.collapsed_width = Some(change.rect.width());
+            }
+            change.rect = column.kept(change.rect, self.rect, self.chrome, self.rtl);
+        } else if (fitted || self.sized == Sizing::Content) && change.kind == PlacementKind::Move {
+            // A window its content sizes moves (a cancel too, which reports the rect from before the gesture); the
+            // rect keeps the size the caller gave, not the one measured from the body.
             change.rect = Rect::from_min_size(change.rect.min, self.rect.size());
         } else if self.minimized {
             change.rect = Rect::from_min_size(change.rect.min, Vec2::new(change.rect.width(), self.rect.height()));
         }
-        self.moving |= change.kind == PlacementKind::Move && change.phase == GesturePhase::Begin;
+        if change.kind == PlacementKind::Move && change.phase == GesturePhase::Begin {
+            self.moving = true;
+            self.continued = change.continued;
+        }
         self.placed = Some(change);
     }
 }

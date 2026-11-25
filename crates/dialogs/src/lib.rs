@@ -21,12 +21,12 @@
 
 mod filter;
 mod native;
-#[cfg(target_os = "linux")]
-mod portal;
-mod probe;
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+pub(crate) mod portal;
+pub(crate) mod probe;
 pub mod save;
 #[cfg(test)]
-mod save_tests;
+pub(crate) mod save_tests;
 pub mod service;
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -34,14 +34,16 @@ pub mod ui;
 /// The registrations of this crate's UI types, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(target_os = "macos")]
 mod macos;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -55,6 +57,10 @@ pub use filter::Filter;
 /// Wakes the app's event loop so it runs a frame (`ctx.request_repaint()` in an egui app). Called
 /// from any thread when a dialog has answered or stopped.
 pub use craft_host::Wake;
+
+/// Runs around a native dialog's blocking show: it gets the show as a closure and calls it once, so the app can mark
+/// the wait as waiting for the user.
+pub type ShowHook = Box<dyn FnMut(&mut dyn FnMut())>;
 
 /// Answers every request instead of a native dialog (tests and automation).
 pub type Override = Box<dyn FnMut(&Request) -> Answer>;
@@ -214,8 +220,16 @@ pub enum Request {
 pub enum Answer {
     /// The user closed a file dialog without choosing.
     Cancelled,
-    /// The chosen files, folder or save path.
+    /// The chosen files or folder.
     Paths(Vec<PathBuf>),
+    /// A Save panel's answer: the name as typed and the file type picked, when the panel reports it (the portal's
+    /// current filter; rfd reports `None`).
+    Saved {
+        /// The name as typed.
+        path: PathBuf,
+        /// The index of the picked filter, when the panel reports it.
+        filter: Option<usize>,
+    },
     /// The button a message box was closed with.
     Message(MessageResult),
     /// No dialog could be shown, or it stopped without an answer; the text says why. Report it as
@@ -257,14 +271,13 @@ enum Show {
     Override(Override),
     /// Tests: a stand-in for the native dialog that answers (or doesn't) through the reply.
     #[cfg(test)]
-    Custom(Box<dyn FnMut(Request, Reply)>),
+    Custom(Box<dyn FnMut(Request, Reply) -> native::Shown>),
 }
 
 /// The dialog on screen.
 struct Open<T> {
     then: T,
     answer: Receiver<Answer>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     shown: native::Shown,
 }
 
@@ -277,12 +290,18 @@ pub struct Dialogs<T> {
     open: Option<Open<T>>,
     answers: Vec<(T, Answer)>,
     show: Show,
+    hook: Option<ShowHook>,
 }
 
 impl<T> Dialogs<T> {
     /// A dialog queue that calls `wake` when an answer arrives.
     pub fn new(wake: Wake) -> Self {
-        Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native }
+        Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native, hook: None }
+    }
+
+    /// Runs `hook` around every native dialog's blocking show.
+    pub fn set_show_hook(&mut self, hook: ShowHook) {
+        self.hook = Some(hook);
     }
 
     /// Queues a file dialog. It shows at the next [`Self::show_pending`] once the dialogs asked
@@ -315,10 +334,24 @@ impl<T> Dialogs<T> {
             let reply = Reply { tx: Some(tx), wake: self.wake.clone() };
             // A panic while showing (rfd's own checks) must not unwind into winit's handler.
             let shown = match &mut self.show {
-                Show::Override(answer_with) => catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| None),
-                Show::Native => catch_unwind(AssertUnwindSafe(|| native::show(request, parent, reply))),
+                Show::Override(answer_with) => {
+                    catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| native::Shown::default())
+                }
+                Show::Native => catch_unwind(AssertUnwindSafe(|| {
+                    let (mut asked, mut shown) = (Some((request, reply)), None);
+                    let mut run = || {
+                        if let Some((request, reply)) = asked.take() {
+                            shown = Some(native::show(request, parent, reply));
+                        }
+                    };
+                    match &mut self.hook {
+                        Some(hook) => hook(&mut run),
+                        None => run(),
+                    }
+                    shown.unwrap_or_default()
+                })),
                 #[cfg(test)]
-                Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))).map(|()| None),
+                Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))),
             };
             let shown = match shown {
                 Ok(shown) => shown,
@@ -349,7 +382,7 @@ impl<T> Dialogs<T> {
     /// that would show it again. Does nothing elsewhere, where dialogs are modal to the window.
     pub fn raise(&self) {
         #[cfg(target_os = "macos")]
-        if let Some(panel) = self.open.as_ref().and_then(|open| open.shown.as_ref()) {
+        if let Some(panel) = self.open.as_ref().and_then(|open| open.shown.panel.as_ref()) {
             macos::raise(panel);
         }
     }
@@ -366,9 +399,20 @@ impl<T> Dialogs<T> {
         self.show = answer_with.map_or(Show::Native, Show::Override);
     }
 
+    /// Stops the open dialog when `gone` says nobody waits for its answer any more (its pick was
+    /// forgotten): a portal Save closes. Other dialogs cannot be closed from outside; their answer
+    /// comes as usual and the caller drops it.
+    pub(crate) fn cancel_open_if(&mut self, gone: impl FnOnce(&T) -> bool) {
+        if let Some(open) = &mut self.open
+            && gone(&open.then)
+        {
+            open.shown.cancel_save();
+        }
+    }
+
     /// Tests: show requests through `show` instead of a native dialog.
     #[cfg(test)]
-    fn set_custom(&mut self, show: impl FnMut(Request, Reply) + 'static) {
+    fn set_custom(&mut self, show: impl FnMut(Request, Reply) -> native::Shown + 'static) {
         self.show = Show::Custom(Box::new(show));
     }
 
@@ -394,9 +438,10 @@ fn panic_text(panic: &(dyn std::any::Any + Send)) -> Option<&str> {
 extern crate self as craft_dialogs;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

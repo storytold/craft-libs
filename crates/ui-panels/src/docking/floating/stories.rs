@@ -14,10 +14,13 @@ const START: Rect = Rect { min: Pos2::new(40.0, 40.0), max: Pos2::new(280.0, 220
 /// The icons a collapsed story column shows: three panels.
 const ICON_CELLS: f32 = 3.0;
 
-/// The size of a collapsed column of `ICON_CELLS` icon cells.
-fn icon_strip(ui: &Ui) -> Vec2 {
+/// A collapsed column of `ICON_CELLS` icon cells, `width` wide when the user resized it, else the rail's width: it
+/// resizes from the rail's width up to the width of the expanded story window.
+fn icon_strip(ui: &Ui, edge: DockEdge, width: Option<f32>) -> WindowColumn {
     let sizes = IconicSizes::of(ui.ctx());
-    Vec2::new(sizes.cell, sizes.cell * ICON_CELLS)
+    let widths = (sizes.column.iconic_least, START.width());
+    let width = width.unwrap_or(widths.0).clamp(widths.0, widths.1);
+    WindowColumn::collapsed(edge, Vec2::new(width, sizes.cell * ICON_CELLS), widths)
 }
 
 #[story(FloatingGroup<'static>, covers = [Default], drive = Drive::Never)]
@@ -42,7 +45,8 @@ fn floating_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn floating_dock_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = *data.value("rect", START);
     let collapsed = *data.value("collapsed", false);
-    let column = if collapsed { WindowColumn::collapsed(DockEdge::Start, icon_strip(ui)) } else { WindowColumn::expanded(DockEdge::Start) };
+    let width = *data.value("width", None::<f32>);
+    let column = if collapsed { icon_strip(ui, DockEdge::Start, width) } else { WindowColumn::expanded(DockEdge::Start) };
     let shown = FloatingGroup::new("Layers", rect).column(column).sized(crate::contract::Sizing::Fill).show_group(ui, |ui, _| {
         Button::new(if collapsed { "L" } else { "Add layer" }).show(ui);
     });
@@ -52,6 +56,9 @@ fn floating_dock_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     if let Some(iconic) = shown.output.iconic {
         *data.value("collapsed", false) = iconic;
     }
+    if let Some(width) = shown.output.collapsed_width {
+        *data.value("width", None::<f32>) = Some(width);
+    }
     shown.output.into()
 }
 
@@ -59,12 +66,16 @@ fn floating_dock_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FloatingGroup<'static>, covers = [Default], drive = Drive::Never)]
 fn floating_collapsed_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = *data.value("rect", START);
-    let column = WindowColumn::collapsed(DockEdge::End, icon_strip(ui));
+    let width = *data.value("width", None::<f32>);
+    let column = icon_strip(ui, DockEdge::End, width);
     let shown = FloatingGroup::new("Layers", rect).column(column).sized(crate::contract::Sizing::Fill).show_group(ui, |ui, _| {
         Button::new("L").show(ui);
     });
     if let Some(change) = shown.output.placed {
         *data.value("rect", START) = change.rect;
+    }
+    if let Some(width) = shown.output.collapsed_width {
+        *data.value("width", None::<f32>) = Some(width);
     }
     shown.output.into()
 }

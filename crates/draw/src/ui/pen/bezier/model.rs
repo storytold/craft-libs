@@ -205,12 +205,15 @@ pub struct PathSelection {
     /// The subpaths of that path whose anchors and handles show; `None` shows every subpath's. A Delete Anchor
     /// click narrows it to the subpath it acts on (Photoshop's Delete Anchor Point, #12769); the outlines always show.
     pub shown: Option<Vec<usize>>,
+    /// Anchors of other paths, by the host key of each path: they draw selected, with their handles under
+    /// [`HandlesShown`](super::HandlesShown), and declare no part: the overlay edits only `path`'s.
+    pub others: Vec<(u64, Vec<KnotRef>)>,
 }
 
 impl PathSelection {
     /// The selection of `anchors` of the path keyed `path`, and of a segment, with every subpath's anchors shown.
     pub fn new(path: Option<u64>, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> Self {
-        Self { path, anchors, segment, shown: None }
+        Self { path, anchors, segment, shown: None, others: Vec::new() }
     }
 
     /// The selection with the anchors of only the `shown` subpaths drawn (`None`: every subpath's).
@@ -218,6 +221,26 @@ impl PathSelection {
     pub fn shown(mut self, shown: Option<Vec<usize>>) -> Self {
         self.shown = shown;
         self
+    }
+
+    /// The selection with the anchors `anchors` of the other path keyed `path` drawn selected.
+    #[must_use]
+    pub fn also(mut self, path: u64, anchors: Vec<KnotRef>) -> Self {
+        match self.others.iter_mut().find(|(key, _)| *key == path) {
+            Some((_, held)) => held.extend(anchors),
+            None => self.others.push((path, anchors)),
+        }
+        self
+    }
+
+    /// Whether `knot` of `path` draws selected: a selected anchor of the path being edited, or one listed in `others`.
+    pub fn draws_selected(&self, path: u64, knot: KnotRef) -> bool {
+        self.has_anchor(path, knot) || self.others.iter().any(|(key, anchors)| *key == path && anchors.contains(&knot))
+    }
+
+    /// The number of selected anchors over the edited path and every path in `others`.
+    pub fn selected_len(&self) -> usize {
+        self.anchors.len() + self.others.iter().map(|(_, anchors)| anchors.len()).sum::<usize>()
     }
 
     /// Whether `knot` of `path` is a selected anchor.
@@ -348,6 +371,22 @@ pub enum PathEdit {
         /// The move of the new anchor, in document units.
         by: Vec2,
     },
+    /// Add Anchor's drag from a segment: add an anchor to the segment leaving `segment` at `t` and pull out its
+    /// handles, as the Pen does: the out handle at `out` and the in handle opposite it through the anchor, a smooth
+    /// knot; once Alt broke the pair, the in handle at `in_ctrl` and a corner knot.
+    #[non_exhaustive]
+    PullAnchor {
+        /// The path's host key.
+        path: u64,
+        /// The anchor the segment leaves.
+        segment: KnotRef,
+        /// Position along the segment, 0..=1.
+        t: f64,
+        /// The new anchor's out handle.
+        out: Point,
+        /// The new anchor's in handle once Alt broke the pair; `None` mirrors `out`.
+        in_ctrl: Option<Point>,
+    },
     /// The Curvature tool's double-click or Enter on an anchor: a smooth knot becomes a corner
     /// with retracted handles and a corner becomes smooth, then the subpath reflows.
     #[non_exhaustive]
@@ -425,6 +464,12 @@ impl PathEdit {
         PathEdit::InsertAnchor { path, segment, t, by }
     }
 
+    /// Add Anchor's insert into the segment leaving `segment` at `t` with the new anchor's handles pulled out to `out`
+    /// and mirrored, or with the in handle at `in_ctrl`.
+    pub fn pull_anchor(path: u64, segment: KnotRef, t: f64, out: Point, in_ctrl: Option<Point>) -> Self {
+        PathEdit::PullAnchor { path, segment, t, out, in_ctrl }
+    }
+
     /// The Curvature tool's toggle of `knot` between smooth and corner.
     pub fn toggle_curvature(path: u64, knot: KnotRef) -> Self {
         PathEdit::ToggleCurvature { path, knot }
@@ -445,6 +490,7 @@ impl PathEdit {
             | PathEdit::MoveCurvature { path, .. }
             | PathEdit::InsertCurvature { path, .. }
             | PathEdit::InsertAnchor { path, .. }
+            | PathEdit::PullAnchor { path, .. }
             | PathEdit::ToggleCurvature { path, .. }
             | PathEdit::DuplicateSubpath { path, .. } => path,
         }

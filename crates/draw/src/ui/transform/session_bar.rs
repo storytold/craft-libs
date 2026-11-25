@@ -1,7 +1,7 @@
 //! `TransformBar`: the options bar of an open Free Transform session.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::session::{TransformEdit, TransformPhase, TransformSession, TransformSettings, TransformWarp};
 use super::transform_fields::{TransformFields, TransformGroups, TransformRow, size_unit_of};
@@ -193,7 +193,7 @@ impl<'a, W: TransformWarp> TransformBar<'a, W> {
                     .bar()
                     .groups(groups)
                     .relative(Bind::given(current.relative_position))
-                    .units(units.0, units.1)
+                    .rulers(craft_ui::canvas::CanvasRulers::new(units.0, units.1, craft_behavior::kurbo::Point::ZERO))
                     .size_unit(size_unit_of(unit, units.0, points))
                     .interpolation(Bind::given(session.interpolation()));
                 if let Some(entries) = &entries {

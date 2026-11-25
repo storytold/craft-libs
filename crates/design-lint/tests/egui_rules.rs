@@ -35,7 +35,7 @@ fn rules_at(src: &str, path: &str, scope: &StaticScope) -> Vec<&'static str> {
 }
 
 /// Reject fixtures: file, the rule it must trigger, the path it is checked at.
-const REJECT: [(&str, &str, &str); 21] = [
+const REJECT: [(&str, &str, &str); 22] = [
     ("contract-egui-import.rs", "contract/egui-import", "src/ui/a.rs"),
     ("contract-allocate.rs", "contract/allocate", "src/ui/a.rs"),
     ("contract-egui-widget.rs", "contract/egui-widget", "src/ui/a.rs"),
@@ -47,6 +47,7 @@ const REJECT: [(&str, &str, &str); 21] = [
     ("contract-pointer.rs", "contract/pointer", "src/ui/a.rs"),
     ("contract-motion.rs", "contract/motion", "src/ui/a.rs"),
     ("contract-motion-clock.rs", "contract/motion", "src/ui/a.rs"),
+    ("contract-motion-clock-fn.rs", "contract/motion", "src/ui/a.rs"),
     ("contract-containers.rs", "contract/containers", "src/ui/a.rs"),
     ("contract-containers-scroll.rs", "contract/containers", "src/ui/a.rs"),
     ("contract-platform.rs", "contract/platform", "src/ui/a.rs"),

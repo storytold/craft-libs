@@ -4,9 +4,9 @@
 //! one. They come from the drag session's data and the cursor record; the layer takes no input. Value readouts beside
 //! the pointer during a gesture paint here too, for the pass that asks.
 
-use crate::primitives::pointer_art::{self as pointers, Art};
-
-use crate::primitives::{Draw, DrawEnv, Mirror, PaintRecord, PaintShape, RuleKind, Span, SvgIcon, TextRun, outline};
+use crate::primitives::pointer_art::Art;
+use crate::primitives::pointer_art::pointer_art;
+use crate::primitives::{Draw, DrawEnv, PaintRecord, PaintShape, RuleKind, Span, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
 use crate::runtime::env::{Env, EnvView, Label};
@@ -97,80 +97,57 @@ pub fn painter(ctx: &Context) -> egui::Painter {
 /// The painted pointer the cursor service settled on: the window's cursor image where the window takes one at its
 /// size, else painted at the pointer. A brush tip too large for an image hands its centre cross and badge to the
 /// window and paints only its ring, so the pointer itself still moves with the hardware. A badged system cursor keeps
-/// the system's arrow and has only its badge painted.
+/// the system's arrow and has only its badge painted. Where the shell cannot set the system cursor nothing is painted.
+///
+/// A tip outline requested within a region (`cursor::request_within`: a canvas's view on the canvas's layer) is a
+/// mark on that canvas: the whole outline goes to the window only while it lies inside the region with no layer above
+/// the region's over it. Otherwise its ring paints on the region's layer clipped to the region, under the panels,
+/// menus and dialogs above it, and the window takes its marks as a too large tip's.
 fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     use craft_behavior::{Cursor, PaintedCursor};
     let Some(at) = areas::pointer_pos(ctx) else { return };
-    let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
-    let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
+    let Some(Cursor::Painted(cursor)) = cursor::current(ctx).filter(|_| cursor::paints(ctx)) else { return };
+    let closed = pointer::frame_raw(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
+    let tip = matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. });
+    let whole = pointer_art(env, &cursor, closed, false);
+    let confined = cursor::current_region(ctx).filter(|region| tip && !shows_whole(ctx, region, &whole, at));
+    let ring = |painter: &egui::Painter| {
+        let art = pointer_art(env, &cursor.clone().marked(false, None), closed, false);
+        match confined {
+            Some(region) => paint_in_region(ctx, region, &art, at),
+            None => art.paint(painter, at),
+        }
+    };
     let target = cursor::image_target(ctx).filter(|_| !matches!(cursor, PaintedCursor::Badged { .. }));
     if let Some(target) = target {
-        if cursor::show_image(ctx, &pointer_art(env, &cursor, closed, false), target) {
+        if confined.is_none() && cursor::show_image(ctx, &whole, target) {
             return;
         }
-        if matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. })
-            && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target)
-        {
-            pointer_art(env, &cursor.marked(false, None), closed, false).paint(painter, at);
+        if tip && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target) {
+            ring(painter);
             return;
         }
     }
-    pointer_art(env, &cursor, closed, false).paint(painter, at);
+    match confined {
+        Some(_) => {
+            ring(painter);
+            pointer_art(env, &cursor, closed, true).paint(painter, at);
+        }
+        None => whole.paint(painter, at),
+    }
 }
 
-/// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge
-/// without its ring.
-fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, marks_only: bool) -> Art {
-    use craft_behavior::{PaintedCursor, PointerGlyph};
-    let overlay = &env.tokens.color.overlay;
-    let pen = pointers::Pen {
-        art: RefCell::new(Art::default()),
-        fill: crate::style::rgba_color(overlay.stroke),
-        halo: crate::style::rgba_color(overlay.halo),
-        thin: env.tokens.stroke.thin,
-        rtl: env.direction.is_rtl(),
-    };
-    let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
-    let edge = env.tokens.stroke.thin;
-    match cursor {
-        PaintedCursor::Outline { rings, centre, badge, .. } => {
-            if !marks_only {
-                pointers::outline(&pen, rings);
-            }
-            pointers::tip_marks(&pen, *centre || marks_only, *badge, pen.thin, pen.fill);
-        }
-        PaintedCursor::Circle { radius, centre, badge, .. } => {
-            if !marks_only {
-                pointers::circle(&pen, *radius, edge, ink);
-            }
-            pointers::tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
-        }
-        PaintedCursor::Crosshair => pointers::crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
-        PaintedCursor::Hand => pointers::hand(&pen, closed),
-        PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),
-        PaintedCursor::Tool { icon, hotspot, badge, .. } => {
-            let side = env.tokens.size.icon.md;
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
-            pointers::tool(&pen, icon, *hotspot, *badge, side);
-        }
-        PaintedCursor::Badged { badge, .. } => pointers::badge_beside(&pen, *badge),
-        PaintedCursor::Turn { toward, .. } => pointers::turn(&pen, *toward),
-        PaintedCursor::Distort { dir, .. } => pointers::distort(&pen, *dir),
-        PaintedCursor::Skew { dir, .. } => pointers::skew(&pen, *dir),
-        PaintedCursor::TypeOn { path, .. } => pointers::type_on(&pen, *path),
-        PaintedCursor::Locator => pointers::locator(&pen),
-        PaintedCursor::Arrow { hollow, .. } => pointers::arrow(&pen, *hollow),
-        PaintedCursor::PathText { start, end, .. } => pointers::path_text(&pen, *start, *end),
-        PaintedCursor::PointerTool { pointer, icon, .. } => {
-            // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
-            let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
-            pointers::pointer_tool(&pen, *pointer, icon, side, edge, ink);
-        }
-        // `Hidden` has no marks.
-        _ => {}
-    }
-    pen.art.into_inner()
+/// Whether `art` at the pointer `at` lies inside `region` with no layer above the region's layer over it.
+fn shows_whole(ctx: &Context, region: &cursor::CursorRegion, art: &Art, at: Pos2) -> bool {
+    let Some(bounds) = art.bounds().map(|bounds| bounds.translate(at.to_vec2())) else { return true };
+    region.clip.contains_rect(bounds) && !areas::rects_over(ctx, region.layer, None).iter().any(|over| over.intersects(bounds))
+}
+
+/// Paints `art` at the pointer `at` (screen space) on `region`'s layer, clipped to the region.
+fn paint_in_region(ctx: &Context, region: cursor::CursorRegion, art: &Art, at: Pos2) {
+    let to_layer = areas::layer_to_screen(ctx, region.layer).inverse();
+    let painter = egui::Painter::new(ctx.clone(), region.layer, to_layer * region.clip);
+    art.paint(&painter, to_layer * at);
 }
 
 /// The drag preview, in `env`, the source's, and the drop mark of the running drag, with the payload's name in it.
@@ -183,7 +160,7 @@ fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, session: &drag:
     }
     let record = RefCell::new(PaintRecord::default());
     let draw = &Draw::new(painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnPanel });
-    let Some(at) = pointer::frame(ctx).pos else { return };
+    let Some(at) = pointer::frame_raw(ctx).pos else { return };
     match &session.preview {
         DragPreview::Badge(label) => {
             let label = env.view().resolve(label);

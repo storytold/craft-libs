@@ -8,8 +8,8 @@
 //! [`Placement`](craft_behavior::placement::Placement) app windows keep, and opens where [`place`] puts it.
 
 use super::{DockConfig, FloatingGroupOutput, PanelSpec};
-use crate::runtime::drag;
 use crate::runtime::windows::{WindowAction, WindowHost, WindowSpec};
+use crate::runtime::{drag, overlay};
 use craft_behavior::GesturePhase;
 use craft_behavior::dock::{Action, Floating};
 use craft_behavior::placement::{Defaults, monitor_of, place};
@@ -35,8 +35,21 @@ pub struct Opening {
 /// them over the dock's window this pass (the rule the group's mount falls back to a layer by) and reports where they
 /// are, and every panel allows it.
 pub(crate) fn allowed(ctx: &Context, config: &DockConfig, specs: &[PanelSpec]) -> bool {
+    opens_os_windows(ctx, config) && specs.iter().all(|spec| spec.allow_native)
+}
+
+/// Whether the dock opens its floating windows in OS windows: `config` asks for them, and the window host opens OS
+/// windows and reports where they are. A panel may still keep to the app window (`PanelSpec::allow_native`).
+#[doc(hidden)]
+pub fn opens_os_windows(ctx: &Context, config: &DockConfig) -> bool {
     let host = WindowHost::of(ctx);
-    config.native_windows && host.opens_windows() && host.positions_reported() && specs.iter().all(|spec| spec.allow_native)
+    config.native_windows && host.opens_windows() && host.positions_reported()
+}
+
+/// The display scale the OS window `viewport` lays out at: its monitor's scale with the app's zoom, as the window
+/// reported it (`WindowHost::facts`). `None` before it reported one.
+pub fn pixels_per_point(ctx: &Context, viewport: ViewportId) -> Option<f32> {
+    WindowHost::of(ctx).facts(viewport)?.scale.map(|scale| scale * ctx.zoom_factor())
 }
 
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool
@@ -126,12 +139,22 @@ pub fn send_to(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) 
     }
 }
 
-/// Raises the window of the native group that `output` reports on when the user began moving or resizing it this
-/// pass, so a palette comes to the front of the windows it overlaps. False when nothing was raised.
-pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput) -> bool {
-    let began = output.placed.is_some_and(|change| change.phase == GesturePhase::Begin);
+/// Brings the group that `output` reports on to the front of the windows it overlaps when `asked`
+/// ([`FloatingGroup::raise`](super::FloatingGroup::raise)), and an OS window also when the user began moving or
+/// resizing it this pass (that press already brings a layer forward). An OS window is raised and focused; a layer's
+/// family comes in front of the other layers at the end of the pass.
+pub(crate) fn raise(ctx: &Context, output: &FloatingGroupOutput, asked: bool) {
     let host = WindowHost::of(ctx);
-    began && host.viewport_of(output.response.id).is_some_and(|viewport| host.act(viewport, WindowAction::Focus))
+    match host.viewport_of(output.response.id) {
+        Some(viewport) => {
+            let began = output.placed.is_some_and(|change| change.phase == GesturePhase::Begin);
+            if asked || began {
+                host.act(viewport, WindowAction::Focus);
+            }
+        }
+        None if asked => overlay::raise(ctx, output.response.id),
+        None => {}
+    }
 }
 
 /// Fades the native window of the group that `output` reports on while its drag highlights a drop target, and makes

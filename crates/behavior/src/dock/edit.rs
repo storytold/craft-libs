@@ -330,6 +330,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 .iter()
                 .map(|w| Floating { column: column_shape(&w.column), rect: Rect::ZERO, native: None, edge: None, ..w.clone() })
                 .collect(),
+            next_window: self.next_window,
         }
     }
 
@@ -512,9 +513,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     return Err(DockError::InvalidGeometry);
                 }
                 // A window's width is its rect's; only a collapsed column keeps to an edge of its own.
-                let window = Floating::new(Column { width: None, ..moving.column }, rect);
+                let id = match moving.id {
+                    Some(id) => id,
+                    None => self.fresh_window_id(),
+                };
+                let window = Floating::new(id, Column { width: None, ..moving.column }, rect);
                 let edge = edge.filter(|_| window.column.iconic);
-                self.floating.push(Floating { id: moving.id.unwrap_or(window.id), edge, ..window });
+                self.floating.push(Floating { edge, ..window });
                 Ok(())
             }
             Target::NewDock { side } => {

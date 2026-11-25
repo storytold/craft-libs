@@ -27,6 +27,8 @@ pub(crate) fn measure_content<C: Component>(
     value: Option<&ValueOf<C>>,
 ) -> (Vec2, Inputs) {
     let cx = measure_cx::<C>(input, style, resolved, value);
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_measure_ask(input.ui.ctx(), std::any::type_name::<C>());
     layout_memory::measure_call(input.ui.ctx(), || comp.measure(&cx))
 }
 

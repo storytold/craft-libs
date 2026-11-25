@@ -192,7 +192,7 @@ impl Writer<'_> {
             }
         }
 
-        let mut open_link: Option<String> = None;
+        let mut open_link = None;
         let mut i = 0;
         while i < pieces.len() {
             let Some((piece, props)) = pieces.get(i) else { break };
@@ -213,21 +213,31 @@ impl Writer<'_> {
                 i += 1;
                 continue;
             }
-            // Hyperlink grouping.
-            if props.link != open_link {
+            // Hyperlinks with different ScreenTips stay separate even if their target is shared.
+            let link = props
+                .link
+                .as_deref()
+                .filter(|target| !target.is_empty())
+                .map(|target| (target, props.link_tooltip.as_deref().and_then(crate::bounded_link_tooltip)));
+            if link != open_link {
                 if open_link.is_some() {
                     w.close("w:hyperlink");
                 }
-                open_link = None;
-                if let Some(l) = props.link.as_deref().filter(|l| !l.is_empty()) {
-                    if let Some(anchor) = l.strip_prefix('#') {
-                        w.open("w:hyperlink", &[("w:anchor", anchor), ("w:history", "1")]);
+                if let Some((link, tip)) = link {
+                    let id;
+                    let target = if let Some(anchor) = link.strip_prefix('#') {
+                        ("w:anchor", anchor)
                     } else {
-                        let id = rels.add(rt::HYPERLINK, l, true);
-                        w.open("w:hyperlink", &[("r:id", &id), ("w:history", "1")]);
+                        id = rels.add(rt::HYPERLINK, link, true);
+                        ("r:id", id.as_str())
+                    };
+                    if let Some(tip) = tip {
+                        w.open("w:hyperlink", &[target, ("w:history", "1"), ("w:tooltip", tip)]);
+                    } else {
+                        w.open("w:hyperlink", &[target, ("w:history", "1")]);
                     }
-                    open_link = Some(l.to_string());
                 }
+                open_link = link;
             }
             match piece {
                 Piece::Obj(o, _) => {

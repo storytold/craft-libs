@@ -62,7 +62,7 @@ fn shown(ui: &mut Ui, view: Bind<'_, TimeView>) -> StoryOutput {
 
 #[story(TimelineOverview<'static>, covers = [Default], drive = Drive::Custom(centre_the_window))]
 fn eight_tracks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    shown(ui, Bind::bound(data.value("view", TimeView::new(Tick::from_seconds_f64(VIEW_START), VIEW_ZOOM))))
+    shown(ui, data.bind("view", TimeView::new(Tick::from_seconds_f64(VIEW_START), VIEW_ZOOM)))
 }
 
 #[story(TimelineOverview<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -70,5 +70,5 @@ fn window_closer_than_the_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let not_too_close = |view: &TimeView| {
         if view.points_per_second > CLOSEST_ZOOM { Validity::Refuse(Message::new("The window cannot be that narrow")) } else { Validity::Ok }
     };
-    shown(ui, Bind::bound(data.value("close", TimeView::new(Tick::ZERO, CLOSEST_ZOOM * 2.0))).check(not_too_close))
+    shown(ui, data.bind("close", TimeView::new(Tick::ZERO, CLOSEST_ZOOM * 2.0)).check(not_too_close))
 }

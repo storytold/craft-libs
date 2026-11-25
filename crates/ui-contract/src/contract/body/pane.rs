@@ -1,9 +1,10 @@
 //! The grip of an edge pane and its drag.
 
 use super::BodyHooks;
+use crate::contract::cx::CxCore;
 use crate::contract::mount::{PaneGrip, pane_extent_id, pane_grip_id};
 use crate::contract::overlay::{PlacementChange, PlacementKind};
-use crate::contract::{Container, ContainerProps, Cx, Mount, PaneEdge, PartsCx};
+use crate::contract::{Container, ContainerProps, Mount, PaneEdge, PartsCx};
 use crate::runtime::layout_memory;
 use crate::runtime::windows::ResizeEdge;
 use craft_behavior::{CursorIcon, GesturePhase, HitLevel, HitPriority, PartKey, PressPhase};
@@ -41,6 +42,7 @@ impl BodyHooks<'_> {
             .sense(craft_behavior::Sense::DRAG)
             .priority(HitPriority::new(HitLevel::Edge, 0))
             .cursor(cursor)
+            .exact_hit()
             .pointer_only("no command resizes a docked pane; its extent is the app's layout");
         Some((edge, least))
     }
@@ -49,9 +51,9 @@ impl BodyHooks<'_> {
     /// is reported as a `PlacementKind::Size` change of the pane's rect. While the gesture runs the pane host shows its
     /// extent (`PaneGrip`); at the commit a pane with no fixed extent keeps it in pane memory, and one whose caller fixes
     /// the extent shows the caller's from the next pass. Escape, which cancels the press, restores the extent.
-    pub(super) fn pane_drag<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn pane_drag(&mut self, props: &ContainerProps, core: &mut CxCore<'_>) {
         let (Mount::Pane(pane), Some((edge, least))) = (&props.mount, self.pane_grip) else { return };
-        let Some(phase) = cx.core.results.get(&(PANE_GRIP, None)).map(|result| result.press.phase) else { return };
+        let Some(phase) = core.results.get(&(PANE_GRIP, None)).map(|result| result.press.phase) else { return };
         let (origin, pos, gesture) = match phase {
             PressPhase::DragStart { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Begin),
             PressPhase::Drag { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Update),
@@ -59,10 +61,10 @@ impl BodyHooks<'_> {
             PressPhase::Cancel { start, .. } => (start.origin, None, GesturePhase::Cancel),
             _ => return,
         };
-        let (ctx, id, rect) = (cx.core.ctx.clone(), cx.core.id, cx.core.rect);
+        let (ctx, id, rect) = (core.ctx.clone(), core.id, core.rect);
         let horizontal = matches!(edge, ResizeEdge::Left | ResizeEdge::Right);
         let along = |size: Vec2| if horizontal { size.x } else { size.y };
-        let slot = cx.core.memory.shown::<PaneGrip>(pane_grip_id(id));
+        let slot = core.memory.shown::<PaneGrip>(pane_grip_id(id));
         let shown = slot.extent;
         let began = match slot.began {
             Some(began) if gesture != GesturePhase::Begin => began,
@@ -81,7 +83,8 @@ impl BodyHooks<'_> {
             ResizeEdge::Bottom => Rect::from_min_size(rect.min, Vec2::new(rect.width(), extent)),
             _ => Rect::from_min_max(Pos2::new(rect.min.x, rect.max.y - extent), rect.max),
         };
-        let change = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind: PlacementKind::Size(edge) };
+        let change =
+            |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: pos, kind: PlacementKind::Size(edge), continued: false };
         if gesture == GesturePhase::Begin {
             self.reports.push(change(resized(began), GesturePhase::Begin));
         }

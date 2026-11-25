@@ -18,7 +18,7 @@ pub(crate) fn takes_activation(resolved: &Resolved<'_>) -> bool {
 /// `Intent::Activate` carries them, and the pass's pointer frame reads them from the same input a pointer activation's
 /// modifiers come from (Alt+Enter adds the way Alt+click does).
 pub(crate) fn key_activation(ctx: &egui::Context) -> crate::contract::Activation {
-    crate::contract::Activation { by_key: true, mods: crate::runtime::pointer::frame(ctx).mods }
+    crate::contract::Activation { by_key: true, mods: crate::runtime::pointer::frame_raw(ctx).mods }
 }
 
 /// Step 9, update, the part the library writes: the keyboard activation.
@@ -45,11 +45,28 @@ pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
 }
 
 /// Step 9, the edit intents the library takes before `C::update`: Escape or a cancelled press ends a running gesture
-/// (Escape as `C::ESCAPE` says), and a reset becomes a `Set` of the binding's reset value.
+/// (Escape as `C::ESCAPE` says), and a reset becomes a `Set` of the binding's reset value, unless the value is already
+/// that. In a dialog Escape is the dialog's Cancel, which discards the gesture with the dialog's other edits: a gesture
+/// there ends on a cancelled press only.
 pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     if cx.gesture().is_some_and(|phase| matches!(phase, GesturePhase::Begin | GesturePhase::Update)) {
-        let reason = if !cx.core.escape_to_list && cx.core.intents.take(Intent::Cancel) {
+        // Typing in a dialog whose Escape closes it ends with the dialog: the typing is cancelled and the Escape is
+        // left for the dialog, so one Escape cancels both (`focus::escape_closes_dialog`).
+        let dialog_escape = !cx.core.escape_to_list
+            && matches!(C::INPUT, Input::Text)
+            && cx.core.intents.untaken(&Intent::Cancel)
+            && focus::escape_closes_dialog(&cx.core.ctx);
+        let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_modal_dialog(&cx.core.ctx);
+        let reason = if dialog_escape {
+            // A dialog that keeps typing on Escape (`FocusPolicy::escape_keeps_typing`) commits it instead.
+            if focus::escape_keeps_typing(&cx.core.ctx) {
+                cx.commit();
+            } else {
+                cx.cancel(CancelReason::Escape);
+            }
+            None
+        } else if escapes && cx.core.intents.take(Intent::Cancel) {
             Some(CancelReason::Escape)
         } else {
             cx.core.press_cancelled().map(|reason| match reason {
@@ -74,7 +91,9 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
         };
         if let Some(part) = part.filter(|part| cx.core.own_reset_parts.contains(&(part.key, part.index))) {
             cx.core.reset_part = Some(part);
-        } else if let Some(reset) = comp.bind().and_then(|bind| bind.reset_value().cloned()) {
+        } else if let Some(reset) = comp.bind().and_then(|bind| bind.reset_value().cloned())
+            && cx.value() != Some(&reset)
+        {
             cx.set(reset);
         }
     }
@@ -95,7 +114,7 @@ fn double_click(core: &CxCore<'_>) -> Option<Option<PartRef>> {
 /// Whether this pass releases the secondary button over the component, its text part included (a widget of its own
 /// over it): a right click on it.
 pub(crate) fn secondary_click(core: &CxCore<'_>) -> bool {
-    crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
+    crate::runtime::pointer::frame_raw(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
         && (core.response.hovered()
             || core.texts.as_ref().is_some_and(|(key, _)| {
                 core.ctx.read_response(crate::primitives::text_adapter::text_id(core.id, *key)).is_some_and(|text| text.hovered())

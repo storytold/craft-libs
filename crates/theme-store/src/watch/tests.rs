@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Selection, Size, TextSize, ThemeId, ThemePair};
+use craft_theme::{ComponentSet, ContrastChoice, ModeChoice, MotionChoice, Selection, Size, TextSize, ThemeId, ThemePair};
 
 use super::SuiteWatch;
 use crate::{Accepted, SelectionChange, Store, StoreOptions, SuiteDir};
@@ -33,6 +33,7 @@ fn sel(theme: &str, mode: ModeChoice) -> Selection {
         motion: MotionChoice::System,
         size: Size::Compact,
         text_size: TextSize::Small,
+        set: ComponentSet::Creative,
     }
 }
 

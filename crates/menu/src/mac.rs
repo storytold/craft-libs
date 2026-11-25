@@ -32,12 +32,11 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
+use craft_ui::menu::Alternate;
 use craft_window::native_menu as native;
 
 use crate::driver::{Backend, Dispatch, Event, NativeMenu, native_ok};
-use crate::model::{
-    Alternate, Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, label_or_system, native_id, structure_key, window_key,
-};
+use crate::model::{Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, label_or_system, native_id, structure_key, window_key};
 
 /// Install the native menu bar for `bar` (a [`crate::mac_layout`] result) and return the driver
 /// for it. Call it once, on the main thread, in eframe's creator closure, so winit's default menu
@@ -78,7 +77,11 @@ impl MacOptions {
 /// [`install`] with `options`.
 pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> Option<NativeMenu> {
     let (spec, targets) = lower(bar);
-    let installed = native::NativeBar::install(&spec, native::Options::default().window_list(options.window_list))?;
+    let wake: native::Wake = Arc::new({
+        let ctx = ctx.clone();
+        move || ctx.request_repaint()
+    });
+    let installed = native::NativeBar::install(&spec, native::Options::default().window_list(options.window_list), wake)?;
     let (tx, rx) = channel();
     let backend = Native { ctx: ctx.clone(), bar: installed, targets: Arc::new(Mutex::new(targets)), tx, rx, pending: None };
     // `NativeMenu::new` attaches the driver's dispatch, which points the handler at this menu.
@@ -143,37 +146,45 @@ impl Native {
             *lock(&self.targets) = targets;
         }
     }
-
-    /// Nothing else may wake egui when the menu closes (Escape goes to the menu), so look again.
-    fn retry_later(&mut self, bar: MenuBar) {
-        self.pending = Some(bar);
-        craft_ui::runtime::frame::request_repaint_after(&self.ctx, 0.25);
-    }
 }
 
 /// The plain description of `bar` and what each of its native ids runs. The n-th item of a
-/// command, depth first, has the n-th native id of that command.
+/// command, depth first, has the n-th native id of that command; the n-th heading of the bar,
+/// depth first, has the id `heading#n`.
 fn lower(bar: &MenuBar) -> (native::Bar, HashMap<String, Target>) {
     let mut targets = HashMap::new();
-    let menus = bar.menus.iter().map(|m| lower_menu(m, &mut targets)).collect();
+    // One count for the whole bar: native ids are unique across menus, and a rebuild numbers the
+    // headings in the same order, so their ids stay while the structure does.
+    let mut headings = 0;
+    let menus = bar.menus.iter().map(|m| lower_menu(m, &mut targets, &mut headings)).collect();
     (native::Bar::new(menus, structure_key(bar), window_key(bar)), targets)
 }
 
-fn lower_menu(m: &Menu, targets: &mut HashMap<String, Target>) -> native::Menu {
+fn lower_menu(m: &Menu, targets: &mut HashMap<String, Target>, headings: &mut usize) -> native::Menu {
     let kind = match m.role {
         MenuRole::Window => native::MenuKind::Windows,
         MenuRole::Help => native::MenuKind::Help,
         _ => native::MenuKind::Plain,
     };
-    native::Menu::new(m.title.clone(), kind, lower_nodes(&m.children, targets))
+    native::Menu::new(m.title.clone(), kind, lower_nodes(&m.children, targets, headings))
 }
 
-fn lower_nodes(nodes: &[Node], targets: &mut HashMap<String, Target>) -> Vec<native::Node> {
+fn lower_nodes(nodes: &[Node], targets: &mut HashMap<String, Target>, headings: &mut usize) -> Vec<native::Node> {
     nodes
         .iter()
         .map(|n| match n {
             Node::Separator => native::Node::Separator,
-            Node::Submenu { label, children, .. } => native::Node::Submenu { label: label.clone(), children: lower_nodes(children, targets) },
+            // A native submenu is disabled while it has no children: a disabled one goes over empty.
+            Node::Submenu { label, children, enabled, .. } => {
+                native::Node::Submenu { label: label.clone(), children: if *enabled { lower_nodes(children, targets, headings) } else { Vec::new() } }
+            }
+            // A disabled item with no target: it shows the caption and nothing reports it. It has no command for
+            // `native_id` to key on, so its id is its place among the bar's headings.
+            Node::Heading(label) => {
+                let id = format!("heading#{headings}");
+                *headings += 1;
+                native::Node::Item(native::Item::new(id, label.clone()).enabled(false))
+            }
             Node::Standard { kind, label } => native::Node::Platform {
                 kind: match kind {
                     Standard::Services => native::Platform::Services,
@@ -216,8 +227,9 @@ fn native_label(it: &Item) -> String {
 impl Backend for Native {
     fn sync(&mut self, bar: &MenuBar) {
         if self.bar.tracking() {
-            // The driver counts this sync as done and may not send these menus again.
-            self.retry_later(bar.clone());
+            // The driver counts this sync as done and may not send these menus again: `drain` applies them in
+            // the frame the end of tracking wakes ([`native::Wake`]).
+            self.pending = Some(bar.clone());
             return;
         }
         self.pending = None;
@@ -243,13 +255,14 @@ impl Backend for Native {
             }
             out.push(event);
         }
+        if self.bar.take_began() {
+            out.push(Event::Opened);
+        }
         // After the events: they were chosen from the menus as they were.
-        if let Some(bar) = self.pending.take() {
-            if self.bar.tracking() {
-                self.retry_later(bar);
-            } else {
-                self.update(&bar);
-            }
+        if !self.bar.tracking()
+            && let Some(bar) = self.pending.take()
+        {
+            self.update(&bar);
         }
         out
     }

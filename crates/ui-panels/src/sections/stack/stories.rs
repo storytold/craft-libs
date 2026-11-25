@@ -1,7 +1,7 @@
 //! Stories of `SectionStack`.
 
 use super::SectionStack;
-use crate::contract::{Bind, Role, ShowContainer as _};
+use crate::contract::{Role, ShowContainer as _};
 use crate::sections::Section;
 use crate::sections::sample::body;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -48,7 +48,7 @@ fn section_stack_closed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     stack
         .show(ui, |ui, _| {
             rows.each(ui, |ui, key, slot| {
-                let open = Bind::bound(data.value(TITLES[usize::from(*key)], *key == 0));
+                let open = data.bind(TITLES[usize::from(*key)], *key == 0);
                 Section::new(TITLES[usize::from(*key)]).open(open).in_stack(slot).show(ui, |ui, _| body(ui)).output
             });
         })

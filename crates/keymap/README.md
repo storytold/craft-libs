@@ -73,7 +73,9 @@ the command modifier: ⌘ on macOS, Ctrl on Windows and Linux. `ctrl` is the Mac
 macOS it folds into `cmd` (`Chord::effective`).
 
 - Canonical text, as stored and sent: `Cmd+Ctrl+Alt+Shift+K`, `Cmd++` for Plus, `A A` for a
-  double press.
+  double press, `Hold H` for a hold (a chord that types a character, alone or with Shift).
+  Hold bindings count only after `Keymap::set_holds(true)`; while off they stay in the overrides
+  and no lookup, binding list, conflict or summary shows them.
 - `Chord::parse` also reads common aliases (`⇧⌘Z`, `opt+left`, `Ctrl+Cmd+M`).
 - `Chord::display(Platform)` gives `⇧⌘Z` on macOS and `Ctrl+Shift+Z` elsewhere.
 - `chord::foreign::read_foreign` reads key text written by other applications (Windows or Mac
@@ -266,6 +268,12 @@ assert_eq!(report.changed[0].to, ["Cmd+Alt+S"]);
 assert_eq!((report.unmatched[0].item.as_str(), report.unmatched[0].line), ("File > Frobnicate", Some(13)));
 ```
 
+- Undecided codes: a reader that cannot tell what a key or modifier code means builds the key with
+  `ForeignKey::code`. `plan` decodes a code when at least 2 matched commands' defaults vote for one
+  text and 4 in 5 agree, or when `ImportOptions.codes` answers it (`None` is "No equivalent": the
+  key is skipped). The decoded and answered codes are in `ImportReport.codes`; a key with an
+  undecided code stays in `unreadable`. `ImportOptions.remembered` holds `Option<CommandRef>`: `None`
+  is "No equivalent", and the entry is listed in `unmatched` with `UnmatchedReason::NoEquivalent`.
 - Matching, most specific first, each step needing exactly one command: the user's remembered
   answers, the full menu path, the joined submenu segments as a label or alias in that menu, the
   label in that menu, the joined segments as a label or alias anywhere, the label anywhere. An

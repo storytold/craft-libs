@@ -81,6 +81,33 @@ fn a_click_on_a_radio_label_picks_it_in_that_pass() {
     assert_eq!(picked.get(), 2, "the release on Medium's label picks it in its own pass");
 }
 
+/// A radio's detail line follows its label and is part of its hit area: a click on it picks the radio.
+#[trial]
+fn a_radio_detail_follows_its_label_and_a_click_on_it_picks_the_radio() {
+    let mut frames = Frames::new();
+    let picked = Cell::new(1u8);
+    let mut show = |ui: &mut Ui| {
+        let mut value = picked.get();
+        in_region(ui, REGION, |ui| {
+            RadioGroup::new("Quality", Bind::bound(&mut value)).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Radio::new(1u8).label("Fast").detail("Smaller file").show(ui);
+                    Radio::new(2u8).label("Best").detail("Largest file").show(ui);
+                });
+            })
+        });
+        picked.set(value);
+    };
+    frames.frame(vec![], &mut show);
+    let (label, detail) = (text_rect(&frames, "Best"), text_rect(&frames, "Largest file"));
+    let follows = detail.left() >= label.right() || detail.top() >= label.bottom();
+    assert!(follows, "the detail follows the label: {detail:?} after {label:?}");
+    for event in [moved(detail.center()), press(detail.center()), release(detail.center())] {
+        frames.frame(vec![event], &mut show);
+    }
+    assert_eq!(picked.get(), 2, "a click on the detail picks its radio");
+}
+
 #[trial]
 fn a_long_label_after_its_box_wraps_with_the_box_on_its_first_line() {
     const LONG: &str = "Show the transform controls on the selected layer whenever the move tool is active";
@@ -144,4 +171,57 @@ fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
     frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
     frames.frame(vec![], &mut show);
     assert_eq!(picked.get(), 2, "Enter picks the focused radio");
+}
+
+/// A quiet check box (a thumbnail tile's) is a smaller box than the standard one.
+#[trial]
+fn a_quiet_check_box_is_smaller_than_the_standard_one() {
+    let side = |quiet: bool| {
+        let mut frames = Frames::new();
+        let shown = Cell::new(Rect::NOTHING);
+        let mut show = |ui: &mut Ui| {
+            shown.set(in_region(ui, REGION, |ui| Checkbox::new(Bind::given(false)).quiet(quiet).show(ui).response.rect));
+        };
+        frames.frame(vec![], &mut show);
+        frames.frame(vec![], &mut show);
+        shown.get().height()
+    };
+    assert!(side(true) < side(false), "quiet {} against standard {}", side(true), side(false));
+}
+
+/// A click on a field's label focuses its one control when the control sits in an unlabelled row beside text that
+/// takes no focus (a unit after a number field). The row makes its node by its type's role but reports none, so the
+/// label scope must still see the number field. Before that, the scope saw no control and the click did nothing.
+#[trial]
+fn a_click_on_a_label_focuses_its_control_inside_an_unlabelled_row() {
+    use craft_ui::display::Text;
+    use craft_ui::form::Field;
+    use craft_ui::layout_components::Row;
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::access::NodeKey;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::text::{NumberField, UnitPlacement};
+    use std::rc::Rc;
+
+    let field = Rc::new(Cell::new(egui::Id::NULL));
+    let seen = field.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Field::new("Turn").id_salt("turn").show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                let mut value = Some(90.0);
+                let out = NumberField::new("Angle", Bind::bound(&mut value)).unit_placement(UnitPlacement::After).show(ui);
+                seen.set(out.response.id);
+                Text::new("deg").show(ui);
+            });
+        });
+    });
+    fixture.settle();
+    let control = NodeKey::of(field.get());
+    let tree = fixture.tree();
+    // The field's group is named "Turn" too and is labelled by the label: the label is the "Turn" node that no other
+    // node labels. Picking the first "Turn" node clicked the group whenever the tree listed it first.
+    let label = tree.keys().into_iter().find(|key| *key != control && tree.name_of(*key) == Some("Turn") && tree.labelled_by_key(*key).is_empty());
+    let label = label.and_then(|key| fixture.target(key)).expect("the field's label node");
+    fixture.access(AccessActionKind::Click, &label).settle();
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(field.get()), "the click on the label focuses the number field");
 }

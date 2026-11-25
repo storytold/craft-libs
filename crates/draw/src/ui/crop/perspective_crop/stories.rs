@@ -4,9 +4,9 @@
 use super::super::{PerspectiveCropTool, PerspectiveInput};
 use super::{CORNER, PerspectiveCropQuad, PerspectiveQuad};
 use craft_behavior::CanvasView;
-use craft_behavior::kurbo::{BezPath, Point};
+use craft_behavior::kurbo::{BezPath, Point, Rect as DocRect};
 use craft_ui::canvas::{CropShield, RasterSource as _};
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, on_picture, paint_shapes};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
@@ -16,6 +16,8 @@ use egui::{Color32, Ui};
 const PAGE: [Point; 4] = [Point::new(250.0, 110.0), Point::new(430.0, 130.0), Point::new(400.0, 290.0), Point::new(220.0, 250.0)];
 /// The same corners with the last one pulled in: the quad is not convex.
 const BENT: [Point; 4] = [Point::new(250.0, 110.0), Point::new(430.0, 130.0), Point::new(400.0, 290.0), Point::new(380.0, 150.0)];
+/// A frame a little larger than the page, inside the larger document: the corners of a bounded quad stay in it.
+const FRAME: DocRect = DocRect::new(200.0, 90.0, 450.0, 310.0);
 
 /// The story document with the page the quad is marked on, as the camera saw it: blue with a dark grey edge.
 fn paper() -> StoryPicture<impl Fn(Point) -> Color32> {
@@ -38,15 +40,32 @@ fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, mut quad: impl FnMut(&mut Ui, eg
 
 #[story(PerspectiveCropQuad<'static>, covers = [Default], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
 fn skewed_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let quad = data.value("quad", Some(PAGE));
-    on_canvas(ui, |ui, at| PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad)).shield(CropShield::PERSPECTIVE).show_at(ui, at).edit)
+    let (quad, quad_at) = data.value_at("quad", Some(PAGE));
+    on_canvas(ui, |ui, at| {
+        PerspectiveCropQuad::new("Perspective crop", quad_at.bind(&mut *quad)).shield(CropShield::PERSPECTIVE).show_at(ui, at).edit
+    })
+}
+
+/// The page's quad kept inside a frame around the page: a corner dragged past the frame stops at its edge, and the
+/// shield dims the frame outside the quad.
+#[story(PerspectiveCropQuad<'static>, covers = [], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
+fn bounded_quad(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (quad, quad_at) = data.value_at("quad", Some(PAGE));
+    on_canvas(ui, |ui, at| {
+        PerspectiveCropQuad::new("Perspective crop", quad_at.bind(&mut *quad))
+            .show_grid(false)
+            .shield(CropShield::PERSPECTIVE)
+            .bounds(FRAME)
+            .show_at(ui, at)
+            .edit
+    })
 }
 
 #[story(PerspectiveCropQuad<'static>, covers = [Invalid], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
 fn bent_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let quad = data.value("quad", Some(BENT));
+    let (quad, quad_at) = data.value_at("quad", Some(BENT));
     on_canvas(ui, |ui, at| {
-        let bind = Bind::bound(&mut *quad).check(|quad: &PerspectiveQuad| match quad {
+        let bind = quad_at.bind(&mut *quad).check(|quad: &PerspectiveQuad| match quad {
             Some(quad) if !super::is_valid(quad) => Validity::Refuse(Message::new("The corners do not make a convex quad")),
             _ => Validity::Ok,
         });

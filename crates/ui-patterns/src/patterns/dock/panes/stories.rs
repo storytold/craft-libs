@@ -1,6 +1,6 @@
 //! Stories of `PaneArea` and `PaneFrame`.
 
-use super::{PaneArea, PaneContent, PaneFrame, PaneSpec, PaneState};
+use super::{PaneArea, PaneContent, PaneEdges, PaneFrame, PaneSpec, PaneState};
 use crate::contract::{BodyCx, PaneEdge, Show as _, ShowCollection as _, ShowContainer as _};
 use crate::display::Text;
 use crate::list::{List, ListRow};
@@ -21,20 +21,27 @@ fn layer_list(ui: &mut Ui, names: &[String]) {
     List::<String>::new("Layers").show_items(ui, &source, &mut |key, _| ListRow::new(key.clone()));
 }
 
-/// Two panes: the first on the start edge with a scrolling body, the second on the bottom edge with a list.
+/// Two panes that dock at `edges`: the first on the start edge with a scrolling body, the second with a list on the
+/// bottom edge, or on the end edge when the bottom is not one of `edges`.
 struct Panes {
     float: Vec2,
     side: f32,
     layers: Vec<String>,
+    edges: PaneEdges,
 }
 
 const LIST_PANE: u32 = 1;
 
 impl PaneContent<u32> for Panes {
     fn spec(&self, pane: &u32) -> PaneSpec {
-        let edge = if *pane == 0 { PaneEdge::Start } else { PaneEdge::Bottom };
+        let edge = match *pane {
+            0 => PaneEdge::Start,
+            _ if self.edges.contains(PaneEdge::Bottom) => PaneEdge::Bottom,
+            _ => PaneEdge::End,
+        };
         let mut spec = PaneSpec::new(format!("Pane {pane}"), PaneState::docked(edge, self.side), self.float);
         spec.collection_body = *pane == LIST_PANE;
+        spec.edges = self.edges;
         spec
     }
 
@@ -47,16 +54,27 @@ impl PaneContent<u32> for Panes {
     }
 }
 
-#[story(PaneArea<'static, u32>, covers = [], drive = Drive::Never)]
-fn pane_area(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+/// The two panes around a document, each docking only at `edges`.
+fn area(ui: &mut Ui, edges: PaneEdges) -> StoryOutput {
     let size = &Env::of(ui).tokens.size;
-    let mut content = Panes { float: Vec2::new(size.float.width, size.float.height), side: size.length.field.md, layers: layer_names() };
+    let mut content = Panes { float: Vec2::new(size.float.width, size.float.height), side: size.length.field.md, layers: layer_names(), edges };
     let open = [0_u32, 1];
     PaneArea::new("Panes", &open, &mut content)
         .show(ui, |ui, _| {
             Text::new("Document").show(ui);
         })
         .into()
+}
+
+#[story(PaneArea<'static, u32>, covers = [], drive = Drive::Never)]
+fn pane_area(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    area(ui, PaneEdges::ALL)
+}
+
+/// Panes that dock beside the document only: their menus offer no Move to Top or Bottom.
+#[story(PaneArea<'static, u32>, covers = [], drive = Drive::Never)]
+fn pane_area_sides_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    area(ui, PaneEdges::SIDES)
 }
 
 fn spec(ui: &Ui, title: &str, collection_body: bool) -> PaneSpec {

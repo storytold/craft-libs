@@ -81,27 +81,35 @@ fn viewing(view: MaskViewMode) -> SelectMaskSettings {
     SelectMaskSettings { view, ..SelectMaskSettings::default() }
 }
 
-/// One story per view: the workspace with that view chosen.
-macro_rules! view_story {
-    ($name:ident, $view:expr) => {
-        #[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
-        fn $name(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-            show_workspace(ui, data, viewing($view), false)
-        }
-    };
-}
-
 #[story(SelectMaskWorkspace, covers = [Default], drive = Drive::Never)]
 fn workspace(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show_workspace(ui, data, SelectMaskSettings::default(), false)
 }
 
-view_story!(view_marching_ants, MaskViewMode::MarchingAnts);
-view_story!(view_overlay, MaskViewMode::Overlay);
-view_story!(view_on_black, MaskViewMode::OnBlack);
-view_story!(view_on_white, MaskViewMode::OnWhite);
-view_story!(view_black_and_white, MaskViewMode::BlackAndWhite);
-view_story!(view_on_layers, MaskViewMode::OnLayers);
+#[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
+fn view_marching_ants(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_workspace(ui, data, viewing(MaskViewMode::MarchingAnts), false)
+}
+#[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
+fn view_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_workspace(ui, data, viewing(MaskViewMode::Overlay), false)
+}
+#[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
+fn view_on_black(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_workspace(ui, data, viewing(MaskViewMode::OnBlack), false)
+}
+#[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
+fn view_on_white(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_workspace(ui, data, viewing(MaskViewMode::OnWhite), false)
+}
+#[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
+fn view_black_and_white(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_workspace(ui, data, viewing(MaskViewMode::BlackAndWhite), false)
+}
+#[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
+fn view_on_layers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_workspace(ui, data, viewing(MaskViewMode::OnLayers), false)
+}
 
 #[story(SelectMaskWorkspace, covers = [], drive = Drive::Never)]
 fn workspace_with_refinements(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

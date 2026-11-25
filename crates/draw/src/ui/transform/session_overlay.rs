@@ -1,8 +1,8 @@
 //! `TransformOverlay`: the open session's box on the canvas, which shows a [`TransformBox`](super::TransformBox)
 //! and turns its reports into [`TransformEdit`]s, and `TransformTool`: the canvas tool of the open session.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::CancelReason;
 use craft_behavior::geometry::SnapLine;
@@ -54,7 +54,8 @@ pub struct TransformOverlayOutput<W> {
 ///   [`discard`](TransformSession::discard) after the edits.
 /// - A secondary click on the canvas opens the session's mode menu; a pick reports as the edit it stands for.
 /// - [`TransformReach::MoveOnly`] offers only the move reach outside the frame: no handle, side, inside, outside, key
-///   or menu, and the box is drawn only while its drag runs.
+///   or menu, and the box is drawn only while its drag runs. [`TransformReach::Shown`] draws the box and takes
+///   nothing: every press and key is the host's.
 /// - Warp phase: draws nothing, senses nothing and claims nothing; the app's warp widgets own the canvas.
 /// - Keyboard, AccessKit and right-to-left are the box's. Undo and Redo are the app's Edit commands.
 #[derive(craft_ui::contract::Pattern)]
@@ -124,7 +125,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     /// What of the box takes the pointer and the keys: the whole box (the default), or only the move reach outside
     /// the frame ([`TransformReach::MoveOnly`]), where a plain press moves the box and reaches
     /// [`TransformOverlayOutput::edits`] as a [`TransformEdit::Box`]; every other press is the host's, and the box has
-    /// no menu.
+    /// no menu. [`TransformReach::Shown`] only draws the box: every press and key is the host's.
     #[must_use]
     pub fn reach(mut self, reach: TransformReach) -> Self {
         self.reach = reach;
@@ -172,6 +173,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .reach(self.reach)
             .rotate_zone(self.rotate_zone)
             .reference_point_pointer(self.reference_point_pointer)
+            .own_context_menu(self.reach == TransformReach::Box)
             .id_source(self.id);
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);

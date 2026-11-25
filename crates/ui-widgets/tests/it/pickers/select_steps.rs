@@ -10,7 +10,7 @@ use egui::{Key, Modifiers, Ui};
 /// Entries 1 to 4; 2 and 4 are reached from the open list only.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two").stepped(false), Entry::new(3u8, "Three"), Entry::new(4u8, "Four").stepped(false)];
-    Select::new("Pick", Bind::bound(data.value("value", 4u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 4u8), &entries).show(ui).into()
 }
 
 /// The value after `key` on the focused, closed field holding `held`, and whether it offered Increment and Decrement.
@@ -48,4 +48,22 @@ fn the_closed_face_shows_an_entrys_closed_label_and_the_accessible_value_keeps_i
     assert!(!texts.iter().any(|text| text == "1 Dots"), "and not the list text");
     let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
     assert_eq!(fixture.tree().value_of(node), Some("1 Dots"), "the accessible value is the full label");
+}
+
+/// A value that names no entry shows the placeholder on the face, and the field reads it as its value, as the face
+/// shows it; a value that names an entry reads that entry. Guards against the shown placeholder leaving the field
+/// with no value to read.
+#[trial]
+fn a_value_on_no_entry_reads_as_the_placeholder_the_face_shows() {
+    for (held, read) in [(9u8, "Custom"), (1u8, "One")] {
+        let mut fixture = Fixture::new(move |ui| {
+            let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two")];
+            Select::new("Preset", Bind::given(held), &entries).placeholder("Custom").show(ui);
+        });
+        fixture.settle();
+        let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+        assert!(texts.iter().any(|text| text == read), "the face shows {read}: {texts:?}");
+        let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
+        assert_eq!(fixture.tree().value_of(node), Some(read), "the field reads what its face shows");
+    }
 }

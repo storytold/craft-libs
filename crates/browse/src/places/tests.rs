@@ -163,3 +163,60 @@ fn a_listing_started_before_a_refresh_is_listed_again() {
     assert!(cache.roots().is_some());
     assert_eq!(jobs.waiting(), 0, "the refreshed roots landed fresh");
 }
+
+fn entries_of(entries: Entries<'_>) -> (Vec<(String, bool)>, bool) {
+    match entries {
+        Entries::Ready { entries, truncated } => (entries.iter().map(|e| (e.name.clone(), e.folder)).collect(), truncated),
+        other => panic!("not ready: {other:?}"),
+    }
+}
+
+// The listing half of WordCraft's `listing_filters_sorts_and_caps`: files and folders in one natural order, hidden ones out, a link to a folder is a folder, a limit cuts off and says so.
+#[trial]
+fn a_folder_listing_with_files_skips_hidden_entries_and_counts_links_to_folders() {
+    let fake = Arc::new(
+        FakeDirectories::new()
+            .folder("/d/zeta")
+            .folder("/d/.git")
+            .folder("/target")
+            .file("/d/file10.txt")
+            .file("/d/file2.txt")
+            .file("/d/.hidden.txt")
+            .file("/d/Alpha.txt")
+            .link("/d/shortcut", "/target")
+            .link("/d/doc-link", "/d/file2.txt"),
+    );
+    let jobs = Arc::new(ManualJobs::new());
+    let mut cache = FolderCache::new(fake.clone(), jobs.clone(), Wake::new(|| {}));
+    let dir = Path::new("/d");
+
+    assert_eq!(cache.entries(dir, 100), Entries::Loading, "nothing is read in the pass");
+    jobs.run_all();
+    let (listed, truncated) = entries_of(cache.entries(dir, 100));
+    let expected = [("Alpha.txt", false), ("doc-link", false), ("file2.txt", false), ("file10.txt", false), ("shortcut", true), ("zeta", true)];
+    assert_eq!(listed, expected.map(|(n, f)| (n.to_string(), f)));
+    assert!(!truncated, "eight entries read, none left over");
+
+    // Exactly the limit read: the folder ended, so nothing was cut off.
+    assert_eq!(cache.entries(dir, 8), Entries::Loading);
+    jobs.run_all();
+    assert!(!entries_of(cache.entries(dir, 8)).1);
+
+    // Hidden entries count as read: three read (`.git`, `zeta`, `.hidden.txt`), one shown.
+    assert_eq!(cache.entries(dir, 3), Entries::Loading, "another limit is another listing");
+    jobs.run_all();
+    let (listed, truncated) = entries_of(cache.entries(dir, 3));
+    assert_eq!(listed, [("zeta".to_string(), true)]);
+    assert!(truncated);
+
+    // A folder of files only lists them; an unreadable folder reports why.
+    let fake = Arc::new(FakeDirectories::new().file("/e/a.txt"));
+    let mut cache = FolderCache::new(fake, jobs.clone(), Wake::new(|| {}));
+    let failing = Arc::new(FakeDirectories::new().failing("/e"));
+    let mut broken = FolderCache::new(failing, jobs.clone(), Wake::new(|| {}));
+    assert_eq!(cache.entries(Path::new("/e"), 10), Entries::Loading);
+    assert_eq!(broken.entries(Path::new("/e"), 10), Entries::Loading);
+    jobs.run_all();
+    assert_eq!(entries_of(cache.entries(Path::new("/e"), 10)).0, [("a.txt".to_string(), false)]);
+    assert!(matches!(broken.entries(Path::new("/e"), 10), Entries::Failed(_)), "an unreadable folder fails, never panics");
+}

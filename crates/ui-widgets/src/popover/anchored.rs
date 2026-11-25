@@ -2,7 +2,8 @@
 
 use crate::contract::overlay::{Anchor, Dismiss, OverlayFit};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, POPUP_PAD, Props as _, Role, SaveKey, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, POPUP_PAD, Pad, Props as _, Role, SaveKey,
+    Trigger,
 };
 use crate::runtime::env::Label;
 use crate::runtime::focus::{FocusPolicy, Initial};
@@ -37,7 +38,7 @@ pub struct PopoverOutput {
 
 impl PopoverOutput {
     /// The output of the container `cx` that closed as `closed` in this pass, open while `open` holds true.
-    pub(super) fn of<C: Component>(mut cx: Cx<'_, C>, closed: Option<CloseReason>, mut open: Bind<'_, bool>) -> Self {
+    pub(crate) fn of<C: Component>(mut cx: Cx<'_, C>, closed: Option<CloseReason>, mut open: Bind<'_, bool>) -> Self {
         let pressed_outside = crate::runtime::overlay::pressed_outside(&cx.core.ctx, cx.core.id);
         let open = matches!(open.reborrow().read(&mut cx), Some(Mixed::Same(true)));
         PopoverOutput { response: cx.response.clone(), closed, open, pressed_outside }
@@ -60,7 +61,8 @@ impl Outcome for PopoverOutput {
 /// editor, a settings form).
 ///
 /// - Open state: the caller's binding. Escape, a press outside, the focus leaving and the other close rules write
-///   `false`, and the output's `closed` says which one.
+///   `false`, and the output's `closed` says which one. A [kept](Bind::kept) binding leaves it to the popover: its
+///   opener's trigger opens and closes it.
 /// - Opener: [`opened_by`](Popover::opened_by) names the control it hangs from; a press on it is not outside, and
 ///   focus returns to it on a close by key.
 /// - Focus moves into the popover on open, to [`initial_focus`](Popover::initial_focus) or the first stop.
@@ -84,6 +86,15 @@ impl<'a> Popover<'a> {
     pub fn new(label: impl Into<Label>, open: Bind<'a, bool>) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(Overlay::popover()));
         Popover { common: Common::new(), props, open, closed: None }.label(label)
+    }
+
+    /// The popover has no surface and no padding of its own: its content (a `Bar` with `surface(SurfaceKind::Floating)`)
+    /// is the one surface.
+    #[must_use]
+    pub fn content_surface(mut self) -> Self {
+        self.props.surface = None;
+        self.props.pad = Pad::None;
+        self
     }
 
     /// Changes the layer the popover shows in, for the settings without a setter of their own: the size a
@@ -206,5 +217,5 @@ impl Container for Popover<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

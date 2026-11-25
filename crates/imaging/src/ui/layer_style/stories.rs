@@ -7,10 +7,11 @@ use craft_theme::Srgba;
 use craft_ui::contract::Entry;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut, blend_entries};
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource, ThumbInfo};
+use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
-use egui::Ui;
+use egui::{Rect, Ui};
 
 use super::{HostedLayerStyle, LayerStyleDialog};
 use crate::layer_style::{BlendIf, Blending, EffectId, EffectInstance, EffectKind, EffectSpec, LayerStyle, LayerStyleDraft, LayerStylePage};
@@ -71,7 +72,8 @@ fn gradient_presets(words: &LayerStyleStoryWords) -> Vec<(String, GradientStops)
     ]
 }
 
-fn patterns(words: &LayerStyleStoryWords) -> Vec<PresetRow<String>> {
+fn pattern_rows(_: &(), env: &Env) -> Vec<PresetRow<String>> {
+    let words = env.words::<LayerStyleStoryWords>();
     vec![
         PresetRow::group("group".to_owned(), words.pattern_group.as_str(), 0),
         PresetRow::item("bubbles".to_owned(), words.pattern_bubbles.as_str(), 1),
@@ -79,12 +81,18 @@ fn patterns(words: &LayerStyleStoryWords) -> Vec<PresetRow<String>> {
     ]
 }
 
-fn style_rows(words: &LayerStyleStoryWords) -> Vec<PresetRow<String>> {
+fn style_rows(_: &(), env: &Env) -> Vec<PresetRow<String>> {
+    let words = env.words::<LayerStyleStoryWords>();
     vec![
         PresetRow::group("group".to_owned(), words.style_group.as_str(), 0),
         PresetRow::item("Soft".to_owned(), words.style_soft.as_str(), 1),
         PresetRow::item("Hard".to_owned(), words.style_hard.as_str(), 1),
     ]
+}
+
+/// The Styles page's fake thumbnails.
+fn checker(_: &(), cx: &ContentPainterCx<'_>, rect: Rect, _: ThumbInfo<'_, String>) {
+    cx.checker(rect);
 }
 
 /// A style with one instance of each of `kinds`, turned on, in `kinds` order.
@@ -105,9 +113,9 @@ fn host(ui: &mut Ui, data: &mut StoryData, start: impl FnOnce() -> LayerStyleDra
     hosted(ui, data, (), || {
         HostedLayerStyle::new("Layer Style", start(), names)
             .blend_modes(blend_modes(&words))
-            .patterns(patterns(&words))
+            .patterns(PresetSource::new((), PresetFns::new(pattern_rows)))
             .gradient_presets(gradient_presets(&words))
-            .style_presets(style_rows(&words), |cx, rect, _| cx.checker(rect))
+            .style_presets(PresetSource::new((), PresetFns::new(style_rows).thumb(checker)))
     })
 }
 
@@ -157,28 +165,62 @@ fn layer_style_styles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     host(ui, data, || page_of(&[EffectKind::DropShadow], Some(LayerStylePage::Styles)), &rgb(&words))
 }
 
-/// One story per effect kind: the dialog on that effect's page.
-macro_rules! effect_stories {
-    ($($name:ident => $kind:ident),* $(,)?) => {
-        $(
-            #[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
-            fn $name(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-                let words = Env::of(ui).words::<LayerStyleStoryWords>();
-                host(ui, data, || page_of(&[EffectKind::$kind], None), &rgb(&words))
-            }
-        )*
-    };
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_bevel_emboss(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::BevelEmboss], None), &rgb(&words))
 }
 
-effect_stories! {
-    layer_style_bevel_emboss => BevelEmboss,
-    layer_style_stroke => Stroke,
-    layer_style_inner_shadow => InnerShadow,
-    layer_style_inner_glow => InnerGlow,
-    layer_style_satin => Satin,
-    layer_style_color_overlay => ColorOverlay,
-    layer_style_gradient_overlay => GradientOverlay,
-    layer_style_pattern_overlay => PatternOverlay,
-    layer_style_outer_glow => OuterGlow,
-    layer_style_drop_shadow => DropShadow,
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_stroke(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::Stroke], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_inner_shadow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::InnerShadow], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_inner_glow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::InnerGlow], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_satin(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::Satin], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_color_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::ColorOverlay], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_gradient_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::GradientOverlay], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_pattern_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::PatternOverlay], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_outer_glow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::OuterGlow], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_drop_shadow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::DropShadow], None), &rgb(&words))
 }

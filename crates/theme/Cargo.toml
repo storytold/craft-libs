@@ -10,6 +10,8 @@ repository.workspace = true
 
 [dependencies]
 bitflags = { workspace = true }
+craft-tracked = { workspace = true }
+craft-ui-macros = { workspace = true }
 ecolor = { workspace = true }
 serde = { workspace = true }
 smallvec = { workspace = true }

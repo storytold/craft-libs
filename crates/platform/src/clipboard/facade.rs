@@ -3,8 +3,7 @@
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-use super::backend::{ClipboardBackend, Written};
-use super::convert::rgba8_flavor;
+use super::backend::{ClipboardBackend, LaterRead, Written};
 use super::types::{ClipboardError, ClipboardImage, ClipboardLimits, Flavor, SVG, TEXT};
 
 /// The app's clipboard: one per window, on the UI thread.
@@ -65,7 +64,7 @@ impl Clipboard {
         if !image.is_whole() {
             return Err(ClipboardError::BadImage);
         }
-        let written = self.write(&[rgba8_flavor(image)])?;
+        let written = self.write(&[Flavor::rgba8(image)])?;
         if written == Written::Written {
             self.ours = Some(Ours::Image(image_signature(image.width, image.height, &image.rgba)));
         }
@@ -92,13 +91,26 @@ impl Clipboard {
     /// The first of `mimes` the clipboard holds, within [`ClipboardLimits::text_bytes`] for text
     /// types and [`ClipboardLimits::image_bytes`] for the rest.
     pub fn read(&mut self, mimes: &[&str]) -> Result<Option<Flavor>, ClipboardError> {
-        let limit = if mimes.iter().all(|mime| is_text(mime)) { self.limits.text_bytes } else { self.limits.image_bytes };
-        let Some(flavor) = self.backend.read(mimes, limit)? else { return Ok(None) };
-        let cap = if is_text(&flavor.mime) { self.limits.text_bytes } else { self.limits.image_bytes };
+        let Some(flavor) = self.backend.read(mimes, read_limit(&self.limits, mimes))? else { return Ok(None) };
+        let cap = read_limit(&self.limits, &[&*flavor.mime]);
         if flavor.data.len() as u64 > cap {
             return Err(ClipboardError::TooLarge { limit: cap });
         }
         Ok(Some(flavor))
+    }
+
+    /// As [`read`](Self::read), with its limits and gates, but the slow part of the read is the returned closure,
+    /// which runs off the UI thread. A flavour over its limit, found only once the closure has made it, is `None`.
+    pub fn read_later(&mut self, mimes: &[&str]) -> Result<Option<LaterRead>, ClipboardError> {
+        let Some(make) = self.backend.read_later(mimes, read_limit(&self.limits, mimes))? else { return Ok(None) };
+        let limits = self.limits;
+        Ok(Some(Box::new(move || make().filter(|flavor| flavor.data.len() as u64 <= read_limit(&limits, &[&*flavor.mime])))))
+    }
+
+    /// Whether the clipboard can be read at any time; `false` where it can be read only inside a paste event (the
+    /// web).
+    pub fn readable_any_time(&self) -> bool {
+        self.backend.readable_any_time()
     }
 
     /// The clipboard's bitmap. An image that isn't [`ClipboardImage::is_whole`] reads as `None`.
@@ -122,9 +134,19 @@ impl Clipboard {
     }
 
     /// Does the clipboard hold one of `mimes`? For Paste's enabled state on the web and in
-    /// tests; on the desktop a [`ClipboardProbe`] asks off the UI thread.
+    /// tests; on the desktop a [`ClipboardProbe`](crate::clipboard::ClipboardProbe) asks off the UI thread.
     pub fn has(&mut self, mimes: &[&str]) -> bool {
         self.backend.has(mimes)
+    }
+
+    /// The MIME names of the formats on offer.
+    pub fn formats(&mut self) -> Vec<String> {
+        self.backend.formats()
+    }
+
+    /// Whether a late paste arrived since the last call.
+    pub fn take_arrived_paste(&mut self) -> bool {
+        self.backend.take_arrived()
     }
 
     /// Does the clipboard still hold what this app wrote last (nothing copied since, here or in
@@ -133,6 +155,13 @@ impl Clipboard {
     /// already read, [`is_ours`](Self::is_ours) answers without another read.
     // vectorcraft: crates/ui-egui/src/sysclip.rs:25 SystemClipboard::holds_ours
     pub fn holds_ours(&mut self) -> bool {
+        if self.ours.is_none() {
+            return false;
+        }
+        // The platform's owner marker answers without a read; content is compared only when it cannot tell.
+        if let Some(owned) = self.backend.owns() {
+            return owned;
+        }
         match &self.ours {
             None => false,
             Some(Ours::Image(signature)) => {
@@ -156,8 +185,8 @@ impl Clipboard {
         matches!(self.ours, Some(Ours::Image(signature)) if signature == image_signature(image.width, image.height, &image.rgba))
     }
 
-    /// A paste event's flavours for the backend ([`ClipboardBackend::offer`]); the web shell
-    /// calls it with [`flavors_from_event`] before the paste command runs.
+    /// A paste event's flavours for the backend ([`ClipboardBackend::offer`](crate::clipboard::ClipboardBackend::offer)); the web shell
+    /// calls it with `flavors_from_event` before the paste command runs.
     pub fn offer_paste(&mut self, flavors: Vec<Flavor>) {
         self.backend.offer(flavors);
     }
@@ -187,6 +216,11 @@ pub fn image_signature(width: u32, height: u32, rgba: &[u8]) -> u64 {
 /// Text types read under [`ClipboardLimits::text_bytes`]: plain, HTML and RTF text and SVG markup.
 pub(super) fn is_text(mime: &str) -> bool {
     mime.starts_with("text/") || mime == SVG
+}
+
+/// The byte limit a read of `mimes` runs under: text's when every type is text, else the image limit.
+fn read_limit(limits: &ClipboardLimits, mimes: &[&str]) -> u64 {
+    if mimes.iter().all(|mime| is_text(mime)) { limits.text_bytes } else { limits.image_bytes }
 }
 
 pub(super) fn hash_bytes(bytes: &[u8]) -> u64 {

@@ -93,6 +93,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
     leaves! { out;
         "base.size.control.sm" Num 16.0..=48.0 => s.control.sm;
         "base.size.control.md" Num 16.0..=48.0 => s.control.md;
+        "base.size.button" Num 16.0..=48.0 => s.button;
         "base.size.icon.sm" Num 10.0..=32.0 => s.icon.sm;
         "base.size.icon.md" Num 10.0..=32.0 => s.icon.md;
         "base.size.icon.lg" Num 10.0..=32.0 => s.icon.lg;
@@ -102,12 +103,13 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.rail.button" Num 16.0..=64.0 => s.rail.button;
         "base.size.bar.title" Num 16.0..=80.0 => s.bar.title;
         "base.size.bar.tab" Num 16.0..=64.0 => s.bar.tab;
+        "base.size.bar.tab_large" Num 16.0..=80.0 => s.bar.tab_large;
         "base.size.bar.status" Num 16.0..=64.0 => s.bar.status;
         "base.size.bar.options" Num 16.0..=80.0 => s.bar.options;
         "base.size.bar.options_narrow" Num 16.0..=80.0 => s.bar.options_narrow;
+        "base.size.bar.column" Num 8.0..=48.0 => s.bar.column;
         "base.size.panel_header" Num 16.0..=64.0 => s.panel_header;
         "base.size.popup_min" Num 64.0..=640.0 => s.popup_min;
-        "base.size.scroll_fade" Num 4.0..=64.0 => s.scroll_fade;
         "base.size.thumb.sm" Num 12.0..=96.0 => s.thumb.sm;
         "base.size.thumb.md" Num 12.0..=96.0 => s.thumb.md;
         "base.size.thumb.lg" Num 12.0..=96.0 => s.thumb.lg;
@@ -140,17 +142,14 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.float.height" Num 48.0..=1024.0 => s.float.height;
         "base.size.window.cascade" Num 8.0..=96.0 => s.window.cascade;
         "base.size.pane.least" Num 16.0..=128.0 => s.pane.least;
-        "base.size.ruler.tick.mid" Num 1.0..=32.0 => s.ruler.tick.mid;
-        "base.size.ruler.tick.minor" Num 1.0..=32.0 => s.ruler.tick.minor;
-        "base.size.story.height" Num 120.0..=1024.0 => s.story.height;
-        "base.size.story.width_min" Num 120.0..=1024.0 => s.story.width_min;
-        "base.size.story.width_max" Num 120.0..=2048.0 => s.story.width_max;
         "base.size.dock.column" Num 120.0..=640.0 => s.dock.column;
-        "base.size.notice.width" Num 120.0..=1024.0 => s.notice.width;
         "base.size.dialog.least" Num 120.0..=1024.0 => s.dialog.least;
         "base.size.dialog.wrap" Num 120.0..=1024.0 => s.dialog.wrap;
         "base.size.dialog.button" Num 24.0..=240.0 => s.dialog.button;
         "base.size.dialog.side_button" Num 24.0..=240.0 => s.dialog.side_button;
+        "base.size.page.column" Num 240.0..=2048.0 => s.page.column;
+        "base.size.page.margin" Num 0.0..=240.0 => s.page.margin;
+        "base.size.page.action" Num 16.0..=96.0 => s.page.action;
     }
     let sp = &mut b.space;
     leaves! { out;
@@ -168,6 +167,9 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.space.pad.chip" Num 0.0..=32.0 => sp.pad.chip;
         "base.space.pad.segment" Num 0.0..=32.0 => sp.pad.segment;
         "base.space.inset.screen" Num 0.0..=64.0 => sp.inset.screen;
+        "base.space.inset.page_side" Num 0.0..=160.0 => sp.inset.page_side;
+        "base.space.inset.page_margin" Num 0.0..=160.0 => sp.inset.page_margin;
+        "base.space.inset.page_gap" Num 0.0..=64.0 => sp.inset.page_gap;
     }
     let r = &mut b.radius;
     leaves! { out;
@@ -187,6 +189,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.stroke.medium" Num 0.25..=8.0 => st.medium;
         "base.stroke.thick" Num 0.25..=8.0 => st.thick;
         "base.stroke.heavy" Num 0.25..=8.0 => st.heavy;
+        "base.stroke.focus" Num 0.25..=8.0 => st.focus;
         "base.stroke.dash" Num 1.0..=32.0 => st.dash;
         "base.stroke.dash_gap" Num 1.0..=32.0 => st.dash_gap;
         "base.stroke.icon" Num 0.02..=0.2 => st.icon;

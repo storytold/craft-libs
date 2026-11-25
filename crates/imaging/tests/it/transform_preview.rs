@@ -14,7 +14,8 @@ use craft_imaging::ui::transform_preview::{
 };
 use craft_imaging::ui::warp::WarpMesh;
 use craft_ui::canvas::{Canvas, PixelRect};
-use craft_ui::contract::{Lazy, Show as _, ShowContainer as _};
+use craft_ui::contract::{MemoProps, MemoView, PlainData, Show as _, ShowContainer as _, Tracked};
+use craft_ui::primitives::Serials;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Color32, ColorImage, Shape};
 
@@ -31,7 +32,7 @@ fn shown(map: fn() -> PreviewMap<'static>, opacity: f32, clip: Option<[u32; 2]>,
     let meshes = Rc::new(RefCell::new(Vec::new()));
     let seen_view = Rc::new(Cell::new(None));
     let (sink, view_sink) = (Rc::clone(&meshes), Rc::clone(&seen_view));
-    let textures = PreviewTextures::new("t", PreviewPixels::new(solid([2, 2], Color32::from_gray(u8::MAX)), [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut Serials::default(), "t", PreviewPixels::new(solid([2, 2], Color32::from_gray(u8::MAX)), [1.0, 1.0]));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let view = CanvasView::new(room, pt(100.0, 100.0), 1.0).rotation(rotation);
@@ -64,6 +65,32 @@ fn shown(map: fn() -> PreviewMap<'static>, opacity: f32, clip: Option<[u32; 2]>,
 
 fn unit_quad() -> [Point; 4] {
     [pt(0.0, 0.0), pt(100.0, 0.0), pt(100.0, 100.0), pt(0.0, 100.0)]
+}
+
+#[trial]
+fn source_clip_moves_with_the_preview_and_preserves_texture_coordinates() {
+    let clip = [pt(0.0, 0.0), pt(1.0, 0.0), pt(1.0, 0.5), pt(0.0, 0.5)];
+    let moved = [pt(20.0, 40.0), pt(120.0, 40.0), pt(120.0, 140.0), pt(20.0, 140.0)];
+    let mesh = PreviewMap::quad(moved).build(1.0, [0.8, 0.6]).clipped_to_source(clip, [0.8, 0.6]);
+    assert!(!mesh.indices.is_empty());
+    for &index in &mesh.indices {
+        let p = mesh.points[index as usize];
+        let uv = mesh.uv[index as usize];
+        assert!(p.y <= 90.001, "{p:?}");
+        assert!((f64::from(uv[1]) / 0.6 - (p.y - 40.0) / 100.0).abs() < 1e-5);
+    }
+}
+
+/// A clipped preview retains texture coordinates where its frame cuts the image.
+#[trial]
+fn a_preview_clipped_to_a_frame_keeps_its_texture_coordinates() {
+    let quad = [pt(25.0, 20.0), pt(75.0, 20.0), pt(75.0, 80.0), pt(25.0, 80.0)];
+    let mesh = PreviewMap::quad(unit_quad()).build(1.0, [1.0, 1.0]).clipped_to_quad(quad);
+    assert!(!mesh.indices.is_empty());
+    for (p, uv) in mesh.points.iter().zip(&mesh.uv) {
+        assert!(p.x >= 24.999 && p.x <= 75.001 && p.y >= 19.999 && p.y <= 80.001, "{p:?}");
+        assert!((f64::from(uv[0]) - p.x / 100.0).abs() < 1e-5 && (f64::from(uv[1]) - p.y / 100.0).abs() < 1e-5);
+    }
 }
 
 // A Distort dragged past the horizon leaves the cells with a corner on the far side out of the mesh; the cells in
@@ -224,7 +251,7 @@ fn a_style_plan_stays_within_its_budget_at_screen_size_and_refuses_hostile_boxes
 fn a_monitor_conversion_changes_only_the_shown_upload() {
     let ctx = egui::Context::default();
     let raw = solid([2, 2], Color32::from_rgb(140, 89, 51));
-    let textures = PreviewTextures::new("monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut Serials::default(), "monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
     // The trial stands in for the renderer: it takes the texture deltas it reads and applies none.
     let uploaded = |id: egui::TextureId| {
         let mut delta = ctx.tex_manager().write().take_delta();
@@ -316,7 +343,7 @@ fn frame(textures: &PreviewTextures, quad: [Point; 4], zoom: f32) -> StyledFrame
 }
 
 fn styled_textures() -> PreviewTextures {
-    PreviewTextures::new("styled", PreviewPixels::new(solid([4, 4], Color32::from_rgb(200, 100, 50)), [1.0, 1.0]))
+    PreviewTextures::new(&mut Serials::default(), "styled", PreviewPixels::new(solid([4, 4], Color32::from_rgb(200, 100, 50)), [1.0, 1.0]))
 }
 
 fn context() -> (Fixture, egui::Context) {
@@ -385,15 +412,38 @@ type PaintedPreview = (Rc<PreviewTextures>, f32);
 /// The texture and size a painted preview showed.
 type ShownPreview = (egui::TextureId, [f32; 2]);
 
+/// What the next frames paint: the previews, each at its scale, and the display every one is converted for.
+#[derive(Default, PlainData)]
+struct Painting {
+    #[plain_data(assume = "the previews' textures are a cache: what they show follows their pixels, which do not change")]
+    previews: Vec<PaintedPreview>,
+    #[plain_data(assume = "a display is replaced, never changed: its key follows its conversion")]
+    display: Option<PreviewDisplay>,
+}
+
+/// What each painted preview shows: the texture and uv extent `PreviewTextures::pick` gives.
+fn picks(ui: &egui::Ui, painting: &Painting) -> Vec<Option<ShownPreview>> {
+    let display = painting.display.as_ref();
+    painting.previews.iter().map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display)).collect()
+}
+
+/// A memoized view of the painting.
+#[derive(MemoProps)]
+struct Previews<'a> {
+    painting: &'a Tracked<Painting>,
+}
+
+fn previews(props: &mut Previews<'_>, ui: &mut egui::Ui) -> Vec<Option<ShownPreview>> {
+    picks(ui, props.painting)
+}
+
 /// Previews painted every frame of a fixture whose host runs jobs only when a trial says (upstream's 5 × 3 white
 /// image).
 struct Mips {
     fixture: Fixture,
     jobs: Arc<ManualJobs>,
-    /// The previews the next frames paint, each at its scale.
-    painted: Rc<RefCell<Vec<PaintedPreview>>>,
-    /// The display every painted preview is converted for.
-    display: Rc<RefCell<Option<PreviewDisplay>>>,
+    /// What the next frames paint.
+    painting: Rc<RefCell<Tracked<Painting>>>,
     /// What each painted preview showed in the last frame.
     shown: Rc<RefCell<Vec<Option<ShownPreview>>>>,
     /// The previews' uploads in the last frame, read in the frame.
@@ -401,7 +451,7 @@ struct Mips {
 }
 
 fn white(name: &str) -> Rc<PreviewTextures> {
-    Rc::new(PreviewTextures::new(name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
+    Rc::new(PreviewTextures::new(&mut Serials::default(), name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
 }
 
 impl Mips {
@@ -409,51 +459,50 @@ impl Mips {
         Self::with(false)
     }
 
-    /// The previews painted inside a settling region (`Lazy::settles`), which replays its last run while nothing the
-    /// framework tracks changed for it.
-    fn settling() -> Self {
+    /// The previews painted inside a memoized view, which replays its last run while its painting is unchanged and no
+    /// texture it shows is loading.
+    fn memoized() -> Self {
         Self::with(true)
     }
 
-    fn with(settles: bool) -> Self {
+    fn with(memoized: bool) -> Self {
         let jobs = Arc::new(ManualJobs::new());
-        let painted = Rc::new(RefCell::new(Vec::<(Rc<PreviewTextures>, f32)>::new()));
-        let display = Rc::new(RefCell::new(None::<PreviewDisplay>));
+        let painting = Rc::new(RefCell::new(Tracked::new(Painting::default())));
         let shown = Rc::new(RefCell::new(Vec::new()));
         let uploads = Rc::new(Cell::new(0));
-        let (paint, converted, seen, counted) = (Rc::clone(&painted), Rc::clone(&display), Rc::clone(&shown), Rc::clone(&uploads));
+        let (paint, seen, counted) = (Rc::clone(&painting), Rc::clone(&shown), Rc::clone(&uploads));
         let mut fixture = Fixture::new(move |ui| {
-            let run = |ui: &mut egui::Ui| {
-                let display = converted.borrow();
-                let picks = paint
-                    .borrow()
-                    .iter()
-                    .map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display.as_ref()))
-                    .collect();
-                *seen.borrow_mut() = picks;
-            };
-            if settles {
-                Lazy::new("previews", 0.0).settles(true).show(ui, run);
+            let painting = paint.borrow();
+            let shows = if memoized {
+                MemoView::new("previews", Previews { painting: &painting }, previews).show(ui).unwrap_or_default()
             } else {
-                run(ui);
-            }
+                picks(ui, &painting)
+            };
+            *seen.borrow_mut() = shows;
             counted.set(PreviewTextures::statistics(ui.ctx()).uploads);
         });
         fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build()));
         fixture.settle();
-        Mips { fixture, jobs, painted, display, shown, uploads }
+        Mips { fixture, jobs, painting, shown, uploads }
     }
 
-    /// One frame painting `previews`.
-    /// A change of the previews or their scales arrives with input, as a drag's does.
+    /// One frame painting `previews`; a change of the previews or their scales is an edit of the painting.
     fn paint(&mut self, previews: &[(&Rc<PreviewTextures>, f32)]) {
         let next: Vec<_> = previews.iter().map(|(textures, scale)| (Rc::clone(textures), *scale)).collect();
         let changed = {
-            let painted = self.painted.borrow();
+            let painting = self.painting.borrow();
+            let painted = &painting.previews;
             painted.len() != next.len() || painted.iter().zip(&next).any(|(a, b)| !Rc::ptr_eq(&a.0, &b.0) || a.1 != b.1)
         };
-        *self.painted.borrow_mut() = next;
-        self.fixture.frame(if changed { vec![egui::Event::WindowFocused(true)] } else { Vec::new() });
+        if changed {
+            self.painting.borrow_mut().edit(|painting| painting.previews = next);
+        }
+        self.fixture.frame(Vec::new());
+    }
+
+    /// Converts every painted preview for `display` from the next frame on.
+    fn display(&mut self, display: PreviewDisplay) {
+        self.painting.borrow_mut().edit(|painting| painting.display = Some(display));
     }
 
     /// The texture and uv extent the `at`th preview showed.
@@ -471,12 +520,12 @@ fn near_uv(uv: [f32; 2], want: [f32; 2]) -> bool {
 }
 
 /// P91 (#13382): the frame that first needs a mip level builds none on the UI thread; level 0 stands in, the frames
-/// while its job waits do no work for it, and the landing frame uploads it once. In a settling region the frame
-/// after the job lands runs the region again with no other input and shows the level.
+/// while its job waits do no work for it, and the landing frame uploads it once. In a memoized view the frame after
+/// the job lands runs the view again with no other input and shows the level.
 #[trial]
 fn a_mip_level_first_needed_mid_drag_is_built_off_the_ui_thread() {
-    for settles in [false, true] {
-        mips_first_needed_mid_drag(if settles { Mips::settling() } else { Mips::new() });
+    for memoized in [false, true] {
+        mips_first_needed_mid_drag(if memoized { Mips::memoized() } else { Mips::new() });
     }
 }
 
@@ -531,7 +580,7 @@ fn a_level_with_nothing_finer_uploaded_for_the_display_is_built_at_once() {
     assert_eq!(mips.jobs.waiting(), 0, "a first frame at level 1 builds it in the frame");
     assert!(near_uv(mips.shown(0).1, [5.0 / 6.0, 3.0 / 4.0]), "level 1 shows at once");
     mips.paint(&[(&t, 1.0)]);
-    *mips.display.borrow_mut() = Some(PreviewDisplay::new(7, ColorImage::clone));
+    mips.display(PreviewDisplay::new(7, ColorImage::clone));
     mips.paint(&[(&t, 0.3)]);
     assert_eq!(mips.jobs.waiting(), 0, "nothing is uploaded for the new display, so level 1 is built in the frame");
     assert!(near_uv(mips.shown(0).1, [5.0 / 6.0, 3.0 / 4.0]));
@@ -575,11 +624,12 @@ fn a_new_preview_under_the_same_name_shows_its_own_pixels() {
         delta.clear();
         texel
     };
-    let first = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
+    let mut serials = Serials::default();
+    let first = PreviewTextures::new(&mut serials, "same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
     let (id, _) = first.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::WHITE));
     drop(first);
-    let second = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
+    let second = PreviewTextures::new(&mut serials, "same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
     let (id, _) = second.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::BLACK), "the new pixels go up");
 }

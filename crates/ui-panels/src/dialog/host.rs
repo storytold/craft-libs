@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::held::HeldOk;
 use super::stack::{DialogId, DialogStack};
 use crate::contract::{Pattern, PatternKind, PatternProbe};
+use crate::runtime::requests::ColorRequest;
 
 /// How a dialog on the [`DialogHost`] finished. `T` is the dialog's own answer type: a struct of
 /// values for a form, an enum for a prompt with three buttons.
@@ -50,6 +51,11 @@ pub trait StackDialog: Any + Send {
     /// ([`dialog_id`](super::dialog_id) of the dialog's key).
     fn id(&self) -> DialogId;
 
+    /// Whether the dialog is modeless now: current state, so a dialog may change it while open.
+    fn modeless(&self) -> bool {
+        false
+    }
+
     /// Shows one pass; `Some` when the dialog finished this pass.
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<Self::Result>>;
 
@@ -64,6 +70,13 @@ pub trait StackDialog: Any + Send {
     /// (`ParamDialog::instance`). The host replaces an open dialog
     /// only by one of the same type and instance; `None` (the default) is one dialog per type.
     fn instance(&self) -> Option<DialogId> {
+        None
+    }
+
+    /// A child the dialog asks the host to open over it, taken once after [`show`](StackDialog::show): the host opens
+    /// it with [`DialogHost::open_child`] under this dialog (a Replace prompt from a file chooser). `None` (the default)
+    /// asks for nothing.
+    fn take_child(&mut self) -> Option<ChildDialog> {
         None
     }
 
@@ -120,6 +133,46 @@ pub trait StackDialog: Any + Send {
     /// Hosted dialogs with colour rows override it; does nothing by default.
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>) {
         let _ = (key, color);
+    }
+
+    /// A colour row's button press, once; the picked colour is written into row `key` next pass
+    /// ([`answer_color`](StackDialog::answer_color)). `None` (the default) for a dialog without colour rows.
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        None
+    }
+
+    /// Writes the picked `color` into the colour row `key` a [`ColorRequest`] named. Does nothing by default.
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba) {
+        let _ = (key, color);
+    }
+
+    /// Sets every field of `fields` or none, as [`set_json_field`](StackDialog::set_json_field) sets one: the
+    /// default snapshots [`json_fields`](StackDialog::json_fields), sets each field in turn and, on the first
+    /// refusal, restores the snapshot and returns the refusal.
+    fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String> {
+        let snapshot = self.json_fields();
+        for (field, value) in fields {
+            if let Err(refusal) = self.set_json_field(ctx, field, value.clone()) {
+                if let Some(Value::Object(before)) = &snapshot {
+                    for (name, old) in before {
+                        let _ = self.set_json_field(ctx, name, old.clone());
+                    }
+                }
+                return Err(refusal);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the dialog has a Reset now. `false` by default.
+    fn can_reset(&self) -> bool {
+        false
+    }
+
+    /// Puts the values back as the dialog's Reset does; the dialog stays open. `false` when it has no Reset (the
+    /// default).
+    fn reset(&mut self, _ctx: &Context) -> bool {
+        false
     }
 }
 
@@ -181,9 +234,26 @@ pub enum StartupStage {
     Update,
 }
 
+/// A dialog one open dialog asks the host to open as its child ([`StackDialog::take_child`]).
+pub struct ChildDialog(Box<dyn AnyStackDialog>);
+
+impl ChildDialog {
+    /// Wraps `dialog` for [`StackDialog::take_child`].
+    pub fn new<D: StackDialog>(dialog: D) -> Self {
+        Self(Box::new(dialog))
+    }
+}
+
+impl std::fmt::Debug for ChildDialog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildDialog").finish_non_exhaustive()
+    }
+}
+
 /// Type-erased [`StackDialog`] the host stores.
 trait AnyStackDialog: Send {
     fn id(&self) -> DialogId;
+    fn modeless(&self) -> bool;
     fn result_type(&self) -> TypeId;
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
@@ -193,16 +263,27 @@ trait AnyStackDialog: Send {
     fn json_fields(&self) -> Option<Value>;
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
+    /// [`StackDialog::take_child`], unwrapped.
+    fn take_child_erased(&mut self) -> Option<Box<dyn AnyStackDialog>>;
     /// `DialogResult::<D::Result>::Cancel`, boxed, for a dialog closed from outside.
     fn cancelled(&self) -> Box<dyn Any + Send>;
     /// [`StackDialog::cancelled`].
     fn release(&mut self, ctx: &Context);
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>);
+    fn take_color_request(&mut self) -> Option<ColorRequest>;
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba);
+    fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String>;
+    fn can_reset(&self) -> bool;
+    fn reset(&mut self, ctx: &Context) -> bool;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<D: StackDialog> AnyStackDialog for D {
+    fn modeless(&self) -> bool {
+        StackDialog::modeless(self)
+    }
+
     fn id(&self) -> DialogId {
         StackDialog::id(self)
     }
@@ -243,6 +324,10 @@ impl<D: StackDialog> AnyStackDialog for D {
         self.show(ui, stack).map(|result| Box::new(result) as Box<dyn Any + Send>)
     }
 
+    fn take_child_erased(&mut self) -> Option<Box<dyn AnyStackDialog>> {
+        self.take_child().map(|ChildDialog(child)| child)
+    }
+
     fn release(&mut self, ctx: &Context) {
         StackDialog::cancelled(self, ctx);
     }
@@ -253,6 +338,26 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>) {
         StackDialog::preview_color(self, key, color);
+    }
+
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        StackDialog::take_color_request(self)
+    }
+
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba) {
+        StackDialog::answer_color(self, key, color);
+    }
+
+    fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String> {
+        StackDialog::set_json_fields(self, ctx, fields)
+    }
+
+    fn can_reset(&self) -> bool {
+        StackDialog::can_reset(self)
+    }
+
+    fn reset(&mut self, ctx: &Context) -> bool {
+        StackDialog::reset(self, ctx)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -314,6 +419,9 @@ pub struct DialogHost {
     opens: u64,
     /// The number of each dialog's last open, by id; read only while the dialog is open.
     serials: Vec<(DialogId, u64)>,
+    /// Dialogs [`close_by_id`](DialogHost::close_by_id) asked to close, closed by the next `run`
+    /// (which has the `Context` a close needs).
+    closing: Vec<DialogId>,
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -346,6 +454,12 @@ impl fmt::Debug for DialogHost {
 }
 
 impl DialogHost {
+    /// Whether its open stack holds a dialog that is not modeless; current state, so a dialog opened this pass counts.
+    /// A queued startup dialog is not shown yet, so it does not count.
+    pub fn shows_modal(&self) -> bool {
+        self.open.iter().any(|dialog| !dialog.modeless())
+    }
+
     /// An empty host with no open or queued dialogs.
     pub fn new() -> Self {
         Self::default()
@@ -402,6 +516,9 @@ impl DialogHost {
     pub fn run(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.release_replaced(&ctx);
+        for id in std::mem::take(&mut self.closing) {
+            self.cancel_by_id(&ctx, id);
+        }
         self.open_next_queued();
         let ids: Vec<DialogId> = self.stack.ids().collect();
         for (place, id) in ids.into_iter().enumerate() {
@@ -412,7 +529,17 @@ impl DialogHost {
             let Some(at) = self.position_by_id(id) else { continue };
             let stack = &self.stack;
             let dialog = &mut self.open[at];
-            let Some(result) = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack)) else { continue };
+            let shown = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack));
+            // The child is taken after every show, so a request is never left for a later pass; a dialog that just
+            // finished would close its child with it, so its request is dropped.
+            let child = dialog.take_child_erased();
+            let Some(result) = shown else {
+                if let Some(child) = child {
+                    // The child is not on this run's `ids`, so it shows from the next pass, as any open during the run.
+                    self.open_with_parent(child, Some(id));
+                }
+                continue;
+            };
             self.remove_tree(id);
             let dialog = self.open.remove(at);
             crate::runtime::overlay::end_stack_dialog(&ctx, id);
@@ -537,6 +664,16 @@ impl DialogHost {
         }
     }
 
+    /// Asks for the open dialog `id` names to close as a cancel, for a caller with no `Context`
+    /// (a service that drops the request the dialog answers). The close lands at the next
+    /// [`run`](DialogHost::run); asking again before then, or for a dialog that is not open, does
+    /// nothing more.
+    pub fn close_by_id(&mut self, id: DialogId) {
+        if self.position_by_id(id).is_some() && !self.closing.contains(&id) {
+            self.closing.push(id);
+        }
+    }
+
     fn cancel_at(&mut self, ctx: &Context, at: usize) -> bool {
         let id = self.open[at].id();
         self.remove_tree(id);
@@ -568,6 +705,51 @@ impl DialogHost {
             }
             None => Err("no such dialog".to_owned()),
         }
+    }
+
+    /// The top-most open dialog's pending [`ColorRequest`] with its id; the app opens a colour picker over it and
+    /// answers through [`answer_color`](DialogHost::answer_color).
+    pub fn take_color_request(&mut self) -> Option<(DialogId, ColorRequest)> {
+        self.open.iter_mut().rev().find_map(|dialog| {
+            let id = dialog.id();
+            dialog.take_color_request().map(|request| (id, request))
+        })
+    }
+
+    /// Writes the picked `color` into colour row `key` of the open dialog `id`.
+    pub fn answer_color(&mut self, id: DialogId, key: &str, color: craft_theme::Srgba) {
+        if let Some(dialog) = self.open.iter_mut().find(|dialog| dialog.id() == id) {
+            dialog.answer_color(key, color);
+        }
+    }
+
+    /// Sets every field of `fields` on the open dialog `id` or none ([`StackDialog::set_json_fields`]).
+    pub fn set_json_fields(&mut self, ctx: &Context, id: DialogId, fields: &[(String, Value)]) -> Result<(), String> {
+        match self.open.iter_mut().find(|dialog| dialog.id() == id) {
+            Some(dialog) => {
+                let answer = dialog.set_json_fields(ctx, fields);
+                if answer.is_ok() {
+                    ctx.request_repaint();
+                }
+                answer
+            }
+            None => Err("no such dialog".to_owned()),
+        }
+    }
+
+    /// Runs the reset of the open dialog `id`; `false` for an unknown id or a dialog without a Reset.
+    pub fn reset_by_id(&mut self, ctx: &Context, id: DialogId) -> bool {
+        let Some(dialog) = self.open.iter_mut().find(|dialog| dialog.id() == id) else { return false };
+        let done = dialog.reset(ctx);
+        if done {
+            ctx.request_repaint();
+        }
+        done
+    }
+
+    /// Whether the open dialog `id` has a Reset now; `false` for an unknown id.
+    pub fn can_reset_by_id(&self, id: DialogId) -> bool {
+        self.open.iter().find(|dialog| dialog.id() == id).is_some_and(|dialog| dialog.can_reset())
     }
 
     /// The open dialog `id` ([`dialog_id`](super::dialog_id) of its key) as `Any`, for an app with

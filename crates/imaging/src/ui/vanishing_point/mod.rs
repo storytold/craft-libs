@@ -20,14 +20,14 @@
 //! [`FullWindowDialog`]: craft_ui::dialog::FullWindowDialog
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod bar;
+pub(crate) mod bar;
 mod command;
 mod commands;
 mod draw;
-mod editor;
+pub(crate) mod editor;
 mod new_plane;
 mod planes;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;
 mod words;
@@ -52,7 +52,7 @@ use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
 use craft_ui::bars::StatusMessage;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
-use craft_ui::contract::{Bind, Job, Pending, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Job, Pending, Remember as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
     RasterOverlay, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
@@ -187,12 +187,19 @@ pub enum VanishingPointEvent {
 }
 
 /// What the dialog's body keeps between passes: the view, the strip's memory and the canvas the tools run under.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct VanishingView {
     view: FullWindowView,
-    last_used: LastUsed<Pick>,
+    last_used: Tracked<LastUsed<Pick>>,
+    slots: Tracked<Vec<ToolSlot<Pick>>>,
     /// The canvas the tools run under, to cancel their gestures outside a pass.
     canvas: Option<Id>,
+}
+
+impl Default for VanishingView {
+    fn default() -> Self {
+        VanishingView { view: FullWindowView::default(), last_used: Tracked::default(), slots: Tracked::new(slots()), canvas: None }
+    }
 }
 
 /// The New Plane form's state.
@@ -368,7 +375,6 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         let words = env.words::<VanishingPointWords>();
         let common = env.words::<CommonWords>();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
-        let slots = slots();
         let status: RefCell<Option<Pending<PreviewDone, String>>> = RefCell::new(None);
         let events = RefCell::new(Vec::<VanishingPointEvent>::new());
         let shown_canvas = std::cell::Cell::new(None);
@@ -416,7 +422,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                     }
                     // A tool key's release picks nothing.
                     let Some(pick) = command.pick().filter(|_| fired.phase != FirePhase::Release) else { continue };
-                    let slot = slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == pick));
+                    let slot = state.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == pick));
                     let tools: Vec<_> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                     let current = Pick::of(work.strip, work.editor.tool());
                     let picked = slot.and_then(|slot| {
@@ -464,9 +470,9 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                 let shown = Row::new()
                     .fill()
                     .show(ui, |ui, _| {
-                        let rail = ToolRail::new(words.tools.clone(), &slots, &current, &state.last_used).show_column(ui, |_, _| {});
+                        let rail = ToolRail::new(words.tools.clone(), &state.slots, &current, &state.last_used).show_column(ui, |_, _| {});
                         if let Some(next) = rail.last_used {
-                            state.last_used = next;
+                            *state.last_used = next;
                         }
                         chosen = rail.select.filter(|pick| *pick != current);
                         let mut canvas = FullWindowCanvas::new(Bind::bound(&mut state.view), image)

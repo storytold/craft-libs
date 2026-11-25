@@ -1,9 +1,9 @@
 //! The tabs and search, the filters, the sample toolbar and the list of family cards.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
-mod cards;
+pub(crate) mod cards;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -159,7 +159,7 @@ impl Texts<'_> {
 const TABS_SHARE: f32 = 2.0;
 /// The search field's share of the top bar beside the tabs.
 const SEARCH_SHARE: f32 = 1.0;
-static TOP_BAR: [ColumnWidth; 2] = [ColumnWidth::fill(TABS_SHARE), ColumnWidth::fill(SEARCH_SHARE)];
+const TOP_BAR: [ColumnWidth; 2] = [ColumnWidth::fill(TABS_SHARE), ColumnWidth::fill(SEARCH_SHARE)];
 
 impl FontsPanel {
     pub(crate) fn top_bar(&mut self, ui: &mut Ui, browse: &FontsBrowseWords, format: &Format, search: Id) {
@@ -173,7 +173,7 @@ impl FontsPanel {
                 TabItem::new(label.clone()).detail(Label::from(format.integer(count as u64)))
             });
             for event in out.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(tab) = keys.into_iter().last()
                 {
                     self.set_tab(tab);
@@ -254,7 +254,7 @@ impl FontsPanel {
                     ListRow::new(if *key == 0 { any.clone() } else { Label::from(label(*key - 1)) })
                 });
             for event in listed.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     self.query.language = key.checked_sub(1);

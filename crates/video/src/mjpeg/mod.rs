@@ -97,6 +97,10 @@ impl Decoder {
         self
     }
 
+    pub(crate) fn limit_allocation(&mut self, max_bytes: u64) {
+        self.limits.max_alloc = self.limits.max_alloc.min(max_bytes);
+    }
+
     /// Decode one packet.
     pub fn decode(&self, packet: &[u8]) -> Result<Frame> {
         if !is_packet(packet) {
