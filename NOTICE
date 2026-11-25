@@ -437,3 +437,10 @@ The Y4M range-backed source in crates/media-source/src/y4m.rs adapts FilmCraft's
 original implementation (3f137a7ed420cac79b32145f5243b7f98b31f71c), licensed
 MIT OR Apache-2.0. Source notice retained:
 Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+
+`craft-spp-reader` is adapted from TextureCraft's project reader and compiled graph
+decompiler by xilefenko and the TextureCraft contributors, MIT OR Apache-2.0.
+Its embedded PNG encoder is adapted from MaterialCraft by PiJellyPin and contributors,
+MIT OR Apache-2.0. See `crates/spp-reader/NOTICE` and ATTRIBUTION.md.
+The reader uses sevenz-rust2 and lzma-rust2 (Apache-2.0), and hayro-jpeg2000 and
+fearless_simd (MIT OR Apache-2.0) as unmodified registry dependencies.

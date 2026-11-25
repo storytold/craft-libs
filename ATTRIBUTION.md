@@ -188,6 +188,16 @@ Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnu
 
 `crates/media-source/tests/it/y4m.rs` contains original repository-authored synthetic test data under MIT OR Apache-2.0: literal YUV samples and a sparse reader that reports only the length of an oversized frame. It does not use external media or decoder output.
 
+## SPP project reader
+
+`crates/spp-reader` ports the [TextureCraft SPP reader and compiled graph decompiler](https://github.com/storytold/texturecraft/tree/22a37c29e98d8e6fc8c5e611e22f0ab95b83243d/crates/import-reader), MIT OR Apache-2.0. [xilefenko](https://github.com/xilefenko) wrote the original implementation in [TextureCraft #521](https://github.com/storytold/texturecraft/pull/521). Individual reader commits preserve their original authors and immutable source revisions. Workspace wiring adapts the crate name and crate-level documentation.
+
+`crates/spp-reader/tests/fixtures/small.h5` is an original synthetic fixture by xilefenko under MIT OR Apache-2.0. `crates/spp-reader/tests/fixtures/make_fixture.c` generates it with libhdf5 from a deterministic byte pattern and contains the regeneration command. The source is the TextureCraft reader extraction above.
+
+`crates/spp-reader/src/png_out/` retains the PNG encoder copied and adapted by TextureCraft from [PiJellyPin/MaterialCraft](https://github.com/PiJellyPin/MaterialCraft), MIT OR Apache-2.0. It entered the reader in [TextureCraft 3c9e01a7](https://github.com/storytold/texturecraft/commit/3c9e01a7), with further changes preserved in the source history. See `crates/spp-reader/NOTICE`.
+
+The reader introduces [sevenz-rust2 0.24.2](https://crates.io/crates/sevenz-rust2/0.24.2) and its [lzma-rust2 0.23.0](https://crates.io/crates/lzma-rust2/0.23.0) dependency by Hasenbanck and the contributors (Apache-2.0), and [hayro-jpeg2000 0.5.0](https://crates.io/crates/hayro-jpeg2000/0.5.0) by the Hayro contributors with [fearless_simd 1.2.0](https://crates.io/crates/fearless_simd/1.2.0) by the Linebender contributors (MIT OR Apache-2.0). All are used as registry dependencies.
+
 ## Material graph runtime
 
 `crates/material-graph` moves the graph text format, parser, evaluator, pixel-program compiler, and tests from
