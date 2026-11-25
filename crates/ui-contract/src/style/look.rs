@@ -296,6 +296,19 @@ impl IconLook {
     }
 }
 
+/// How a value track (`StyleCx::track`) colours its groove and the part a value fills: a slider's and a range
+/// slider's. An app sets it once at its root (`RootEnv::values`); the default is the muted fill.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum TrackFill {
+    /// `text.muted` on a `line.control_edge` groove.
+    #[default]
+    Muted,
+    /// `accent.solid` on a `line.outline` groove: VectorCraft's.
+    Accent,
+}
+
 /// A value track: a groove with the part a value fills over it, and the marks and ticks along it. A slider, a
 /// range slider, a thumb row and a progress bar paint the same track.
 #[derive(Clone, Debug, PartialEq)]

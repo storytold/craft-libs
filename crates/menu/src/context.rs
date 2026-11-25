@@ -27,7 +27,8 @@ use crate::model::{Builtin, Item, ItemKind, Node};
 /// AppKit's own items ([`Node::Standard`]) are left out. The chord of a row without a binding is the item's own
 /// shortcut, written for the shell's operating system.
 pub fn rows(ui: &mut Ui, nodes: &[Node]) {
-    let rows = Rows::new(Target::of_shell(Env::of(ui).view().shell()));
+    let env = Env::of(ui);
+    let rows = Rows::new(Target::of_shell(env.view().shell())).cjk(cjk(&env));
     let labels = rows.level_labels(nodes, rows.platform(ui));
     rows.show(ui, nodes, &labels);
 }
@@ -39,11 +40,12 @@ pub(crate) struct LevelLabels {
     rows: Vec<RowLabels>,
 }
 
-/// One node's text: its label as the menu shows it (markers escaped, mnemonic marked), the item's shortcut text, and the
-/// text of a submenu's own level. Separators and AppKit's items hold empty text.
+/// One node's text: its label as the menu shows it (markers escaped, mnemonic marked), the letter it takes without
+/// showing it, the item's shortcut text, and the text of a submenu's own level. Separators and AppKit's items hold
+/// empty text.
 #[derive(Debug, Default, PartialEq)]
 struct RowLabels {
-    label: String,
+    label: Shown,
     shortcut: Option<String>,
     children: LevelLabels,
 }
@@ -51,14 +53,30 @@ struct RowLabels {
 /// The text of a bar: its titles as the bar shows them and the text of each menu's rows.
 #[derive(Debug, PartialEq)]
 pub(crate) struct BarLabels {
-    pub(crate) titles: Vec<String>,
+    pub(crate) titles: Vec<Shown>,
     pub(crate) menus: Vec<LevelLabels>,
 }
 
-/// How the rows of a menu are written: the target that names the shortcuts and the app's preferred mnemonic
-/// letters.
+/// A label as its menu shows it, and the English letter it takes without showing it: a translated label with no
+/// letter of its own in a script that writes none after it (Cyrillic, Greek, Arabic…).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Shown {
+    pub(crate) label: String,
+    pub(crate) hidden: Option<char>,
+}
+
+/// Whether the interface language of `env`'s scope is written in a CJK script.
+pub(crate) fn cjk(env: &Env) -> bool {
+    let code = env.view().host().map_or("en", |host| host.language_code());
+    craft_i18n::scripts(code).first().is_some_and(|script| script.cjk())
+}
+
+/// How the rows of a menu are written: the target that names the shortcuts, the app's preferred mnemonic letters and
+/// whether the interface language is CJK.
 pub(crate) struct Rows<'a> {
     target: Target,
+    /// Whether a label with no letter of its own shows its English label's letter after it.
+    cjk: bool,
     preferred: &'a [(&'a str, char)],
     /// Whether rows show their command's icon.
     icons: bool,
@@ -68,7 +86,12 @@ pub(crate) struct Rows<'a> {
 
 impl<'a> Rows<'a> {
     pub(crate) fn new(target: Target) -> Self {
-        Rows { target, preferred: &[], icons: true, compact: false }
+        Rows { target, cjk: false, preferred: &[], icons: true, compact: false }
+    }
+
+    pub(crate) fn cjk(mut self, on: bool) -> Self {
+        self.cjk = on;
+        self
     }
 
     pub(crate) fn icons(mut self, on: bool) -> Self {
@@ -86,16 +109,17 @@ impl<'a> Rows<'a> {
         self
     }
 
-    /// The labels of `siblings` as their menu shows them: markers escaped, the app's preferred letter marked, and
-    /// a label with no letter or digit of its own followed by its English label's letter, "文件(&F)". `key` names
-    /// each sibling for the preferred letters, `english` asks for its English label.
+    /// The labels of `siblings` as their menu shows them: markers escaped and the app's preferred letter marked. A
+    /// label with no letter or digit of its own takes its English label's letter: in a CJK language shown after it,
+    /// "文件(&F)", the convention there; in any other script hidden, so Alt+F still opens "Файл". `key` names each
+    /// sibling for the preferred letters, `english` asks for its English label.
     pub(crate) fn labels<T>(
         &self,
         siblings: &[T],
         label: impl Fn(&T) -> &str,
         key: impl Fn(&T) -> &str,
         english: impl Fn(&T) -> Option<String>,
-    ) -> Vec<String> {
+    ) -> Vec<Shown> {
         let english: Vec<String> = siblings.iter().map(|sibling| english(sibling).unwrap_or_default()).collect();
         let english_refs: Vec<&str> = english.iter().map(String::as_str).collect();
         let letters = mnemonic::assign(&english_refs, &craft_i18n::Folder::new("en"));
@@ -106,12 +130,16 @@ impl<'a> Rows<'a> {
                 let text = label(sibling);
                 let escaped = text.replace('&', "&&");
                 let typed = text.chars().any(|c| c.is_ascii_alphanumeric());
-                if let Some((letter, _)) = letter.filter(|_| !typed) {
-                    return with_key(&escaped, letter);
-                }
-                match self.preferred_letter(key(sibling)) {
-                    Some(letter) => marked(&escaped, letter),
-                    None => escaped,
+                match letter.filter(|_| !typed) {
+                    Some((letter, _)) if self.cjk => Shown { label: with_key(&escaped, letter), hidden: None },
+                    Some((letter, _)) => Shown { label: escaped, hidden: Some(letter) },
+                    None => {
+                        let label = match self.preferred_letter(key(sibling)) {
+                            Some(letter) => marked(&escaped, letter),
+                            None => escaped,
+                        };
+                        Shown { label, hidden: None }
+                    }
                 }
             })
             .collect()
@@ -122,7 +150,7 @@ impl<'a> Rows<'a> {
     }
 
     /// The label a node shows as the menu's sibling, for the preferred letters and the English labels.
-    pub(crate) fn node_labels(&self, nodes: &[Node]) -> Vec<String> {
+    pub(crate) fn node_labels(&self, nodes: &[Node]) -> Vec<Shown> {
         let shown: Vec<&Node> = nodes.iter().filter(|node| !takes_no_letter(node)).collect();
         let mut labels = self
             .labels(
@@ -144,7 +172,7 @@ impl<'a> Rows<'a> {
                 },
             )
             .into_iter();
-        nodes.iter().map(|node| if takes_no_letter(node) { String::new() } else { labels.next().unwrap_or_default() }).collect()
+        nodes.iter().map(|node| if takes_no_letter(node) { Shown::default() } else { labels.next().unwrap_or_default() }).collect()
     }
 
     /// The text of `nodes` and of every submenu below them, with shortcuts written for `platform`.
@@ -181,9 +209,13 @@ impl<'a> Rows<'a> {
                 }
                 Node::Submenu { children, enabled, .. } => {
                     if !enabled || is_dead(children) {
-                        MenuItem::submenu(label).enabled(false).show(ui);
+                        let mut row = MenuItem::submenu(label.label).enabled(false);
+                        if let Some(letter) = label.hidden {
+                            row = row.mnemonic(letter);
+                        }
+                        row.show(ui);
                     } else {
-                        Menu::submenu_row(ui, label, |ui, _| self.show(ui, children, &text.children));
+                        Menu::submenu_row_lettered(ui, label.label, true, label.hidden, |ui, _| self.show(ui, children, &text.children));
                     }
                 }
                 Node::Heading(text) => {
@@ -194,7 +226,7 @@ impl<'a> Rows<'a> {
         }
     }
 
-    fn item(&self, ui: &mut Ui, item: &Item, label: String, shortcut: Option<String>) {
+    fn item(&self, ui: &mut Ui, item: &Item, label: Shown, shortcut: Option<String>) {
         match Builtin::of(&item.command) {
             Some(Builtin::Quit) => {
                 if local(ui, item, label, shortcut).ran {
@@ -219,8 +251,11 @@ impl<'a> Rows<'a> {
 }
 
 /// A local row for a built-in command: the bar runs it itself.
-fn local(ui: &mut Ui, item: &Item, label: String, shortcut: Option<String>) -> craft_ui::menu::MenuItemOutput {
-    let mut row = MenuItem::new(label).enabled(item.enabled);
+fn local(ui: &mut Ui, item: &Item, label: Shown, shortcut: Option<String>) -> craft_ui::menu::MenuItemOutput {
+    let mut row = MenuItem::new(label.label).enabled(item.enabled);
+    if let Some(letter) = label.hidden {
+        row = row.mnemonic(letter);
+    }
     if let Some(shortcut) = shortcut {
         row = row.shortcut(shortcut);
     }
@@ -228,7 +263,7 @@ fn local(ui: &mut Ui, item: &Item, label: String, shortcut: Option<String>) -> c
 }
 
 /// The command row of `item`: the label and mnemonic come from the model, the state from the command.
-fn command_row<'a>(ui: &Ui, item: &Item, label: String, shortcut: Option<String>) -> MenuItem<'a> {
+fn command_row<'a>(ui: &Ui, item: &Item, label: Shown, shortcut: Option<String>) -> MenuItem<'a> {
     // The alternate swaps the command only; the label, kind, shortcut, tint and tooltip stay the
     // item's. The salt is the item's own command, so hover and focus stay on the row through the swap.
     let held = pointer::frame(ui.ctx()).mods;
@@ -236,7 +271,10 @@ fn command_row<'a>(ui: &Ui, item: &Item, label: String, shortcut: Option<String>
         Some(alternate) if alternate.selected_by(held) => alternate.command.clone(),
         _ => item.command.clone(),
     };
-    let mut row = MenuItem::command(command).label(label).enabled(item.enabled).id_salt(item.command.key());
+    let mut row = MenuItem::command(command).label(label.label).enabled(item.enabled).id_salt(item.command.key());
+    if let Some(letter) = label.hidden {
+        row = row.mnemonic(letter);
+    }
     row = match item.kind {
         ItemKind::Plain => row,
         ItemKind::Check(on) => row.check(checked(ui, &item.command).unwrap_or(on)),

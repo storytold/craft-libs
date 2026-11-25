@@ -56,7 +56,7 @@ impl ItemSource<usize> for Documents<'_> {}
 /// A strip of `count` tabs; a closed tab leaves the story's list.
 fn strip(ui: &mut Ui, data: &mut StoryData, strip: TabStrip<'_, usize>, titles: &'static [&'static str], count: usize, kind: TabKind) -> StoryOutput {
     let open = data.value("open", (0..count).collect::<Vec<usize>>());
-    let out = strip.kind(kind).show_items(ui, &Documents { open, titles }, &mut |key, _| Tab::new(titles[*key]).closable(true));
+    let out = strip.kind(kind).show_items(ui, &Documents { open, titles }, &mut |key, _| Tab::new(titles[*key]));
     open.retain(|key| !out.closed.contains(key));
     out.into()
 }
@@ -99,6 +99,13 @@ fn tab_strip_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
 fn tab_strip_panel_pill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::Pill), &TITLES, 4, TabKind::Panel)
+}
+
+/// Panel tabs in the block look (`PanelTabLook::Block`, a dock's `DockConfig::tab_look`): the shown tab a square
+/// `surface.control` block as tall as the strip, the others bare until the pointer rests on one.
+#[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
+fn tab_strip_panel_block(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::Block), &TITLES, 4, TabKind::Panel)
 }
 
 /// The width the narrow panel story's room is held to: the shown tab whole, the others at their first letters.

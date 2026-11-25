@@ -53,6 +53,12 @@ pub(crate) fn layer_position(ctx: &Context, layer: LayerId) -> usize {
     ctx.memory(|memory| memory.layer_ids().position(|listed| listed == layer).map_or(0, |at| at + 1))
 }
 
+/// Whether the screen position `pos` lies in `rect`, given in the space of `layer`, with `layer` the topmost layer there.
+pub(crate) fn lies_in(ctx: &Context, layer: LayerId, rect: Rect, pos: Pos2) -> bool {
+    let at = layer_map(ctx, layer).map_or(pos, |map| map.to_layer(pos));
+    layer_at(ctx, pos) == Some(layer) && rect.contains(at)
+}
+
 /// The topmost layer under a screen position. Inside the canvas a modal layer leaves open (`runtime::sampler`) and
 /// where nothing but the canvas lies over it, it answers the canvas's own layer as if the modal's gate and its scrim
 /// were not there.
@@ -374,7 +380,9 @@ pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
             sizing = ui.is_sizing_pass();
             for rect in covered {
                 ui.painter().rect_filled(rect, 0.0, scrim);
-                let absorber = ui.allocate_rect(rect, Sense::click_and_drag());
+                // It absorbs presses and never takes key focus: a focusable egui widget no component made is a Tab stop
+                // of the app's own (`focus::take_app_widgets`).
+                let absorber = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
                 crate::runtime::egui::widgets::note_widget(ui.ctx(), absorber.id);
                 crate::runtime::egui::access::hide(ui.ctx(), absorber.id);
             }
@@ -417,6 +425,16 @@ pub(crate) fn safe_rect_raw(ctx: &Context) -> Rect {
 /// Hands egui the whole layer order of the running pass, bottom first. egui consumes it by the end of the pass.
 pub(crate) fn set_layer_order(ctx: &Context, order: &[LayerId]) {
     ctx.set_layer_order(order);
+}
+
+/// Brings `layer` to the top of egui's own area order at the end of the running pass, as a press on it does.
+pub(crate) fn move_to_top(ctx: &Context, layer: LayerId) {
+    ctx.move_to_top(layer);
+}
+
+/// Whether egui showed `layer` in the last pass.
+pub(crate) fn visible_last_frame(ctx: &Context, layer: LayerId) -> bool {
+    ctx.memory(|memory| memory.areas().visible_last_frame(&layer))
 }
 
 /// Makes `layer` the modal layer of the running pass: layers below it take no input.
@@ -531,6 +549,30 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
 #[cfg(feature = "suite")]
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
+}
+
+/// The size of one entry of [`host_popup_list`], as an app's popup list entry.
+#[cfg(feature = "suite")]
+const HOST_LIST_ENTRY: Vec2 = Vec2::new(104.0, 22.0);
+
+/// A host's own popup list `id` at `at`, as an app draws one: an egui foreground area with one clickable entry per id
+/// in `entries`, stacked from the top. It leaves arrow keys to egui's directional focus. Returns the entries' rects.
+#[cfg(feature = "suite")]
+pub(crate) fn host_popup_list(ctx: &Context, id: Id, at: Pos2, entries: &[Id]) -> Vec<Rect> {
+    egui::Area::new(id)
+        .order(Order::Foreground)
+        .fixed_pos(at)
+        .show(ctx, |ui| {
+            let mut rects = Vec::new();
+            for (row, &entry) in entries.iter().enumerate() {
+                let rect = Rect::from_min_size(at + Vec2::Y * (HOST_LIST_ENTRY.y * row as f32), HOST_LIST_ENTRY);
+                ui.allocate_rect(rect, Sense::hover());
+                let _ = ui.interact(rect, entry, Sense::click());
+                rects.push(rect);
+            }
+            rects
+        })
+        .inner
 }
 
 /// Opens the host's egui popup `id`.

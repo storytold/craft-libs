@@ -378,3 +378,37 @@ fn card_tile_in_narrow_room_caps_icon_at_picture_rect() {
     let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
     assert!(paper_rect.expand(0.5).contains_rect(icon_bounds), "icon {icon_bounds:?} is inside narrow paper {paper_rect:?}");
 }
+
+/// A page card's name wraps onto a second line, centred, where one line would cut it, and the detail follows the name
+/// inside the card, whether the name took one line or two.
+#[trial]
+fn a_page_card_wraps_its_name_and_sets_the_detail_under_it() {
+    let shown = |name: &'static str| {
+        let mut frames = Frames::new();
+        let mut tile = Rect::NOTHING;
+        for _ in 0..3 {
+            frames.frame(Vec::new(), |ui| {
+                let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+                tile = in_region(ui, region, |ui| {
+                    Tile::new(name).card().card_text(CardText::Page).detail("1080 × 1080 px").page(1080.0, 1080.0).show(ui).response.rect
+                });
+            });
+        }
+        let texts = frames.texts();
+        let name = texts.iter().find(|line| line.text == name).expect("the name is painted").rect;
+        let detail = texts.iter().find(|line| line.text == "1080 × 1080 px").expect("the detail is painted").rect;
+        (tile, name, detail)
+    };
+    let (_, short, short_detail) = shown("Letter");
+    let long_name = "Social Square Post 1080×1080 for every network";
+    let (tile, long, detail) = shown(long_name);
+    assert!(long.height() > short.height() * 1.5, "the long name takes a second line: {long:?} against {short:?}");
+    assert!((long.center().x - tile.center().x).abs() <= 1.0, "the name is centred: {long:?} in {tile:?}");
+    for (name, detail) in [(short, short_detail), (long, detail)] {
+        assert!(
+            detail.top() >= name.bottom() - 1.0 && detail.top() - name.bottom() < short.height(),
+            "the detail follows the name: {detail:?} under {name:?}"
+        );
+        assert!(tile.contains_rect(detail), "the detail is inside the card: {detail:?} in {tile:?}");
+    }
+}

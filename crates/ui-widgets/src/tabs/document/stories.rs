@@ -77,3 +77,38 @@ fn document_tabs_with_name_part(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let shown = *data.value("shown", 0_usize);
     DocumentTabs::new("Documents", &tabs).selected(shown).show(ui).response.into()
 }
+
+/// VectorCraft's tabs (`DocumentTabLook::Semibold`): whole titles in the label's semibold face, the `*` of a modified
+/// tab after its name as well. The shown tab carries its view after the name.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never, title = "Semibold")]
+fn semibold_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const NAME: &str = "Untitled-1";
+    let tabs = [
+        DocumentTab::new(0, format!("{NAME} @ 93.5 % (RGB/Preview)")).modified(true).name_len(NAME.len()),
+        DocumentTab::new(1, "Poster.vectorcraft"),
+    ];
+    let shown = *data.value("shown", 0_usize);
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(crate::tabs::DocumentTabLook::Semibold);
+        },
+        |ui| DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).show(ui).response.into(),
+    )
+}
+
+/// VectorCraft's close buttons (`TabCloseLook::Glyph`): the × alone, a small muted glyph that turns to the text colour
+/// under the pointer, with no fill.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never, title = "Close glyph")]
+fn close_glyph_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tabs = [DocumentTab::new(0, "Untitled-1 @ 93.5 % (RGB/Preview)").modified(true).name_len(10), DocumentTab::new(1, "Poster.vectorcraft")];
+    let shown = *data.value("shown", 0_usize);
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(crate::tabs::DocumentTabLook::Semibold);
+            overrides.values.set(crate::tabs::TabCloseLook::Glyph);
+        },
+        |ui| DocumentTabs::new("Documents", &tabs).selected(shown).show(ui).response.into(),
+    )
+}

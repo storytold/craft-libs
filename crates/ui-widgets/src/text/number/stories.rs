@@ -73,6 +73,9 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .size(size)
                 .show(ui);
         });
+        row("Derived").show(ui, |ui, _| {
+            NumberField::new("Leading", data.bind("derived", Some(SIZE))).unit_kind(UnitKind::Points).derived(true).size(size).show(ui);
+        });
         row("Invalid").show(ui, |ui, _| {
             NumberField::new("Columns", data.bind("invalid", Some(7.0)).check(refuse_all)).range(COLUMNS).size(size).show(ui);
         });
@@ -108,6 +111,12 @@ fn number_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(NumberField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn number_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", data.bind_mixed("mixed", Mixed::<Option<f64>>::Mixed)).show(ui).edit.into()
+}
+
+/// A value that follows from other settings (an automatic leading) reads in parentheses, with its unit, until it is edited.
+#[story(NumberField<'static>, covers = [], drive = Drive::Never)]
+fn number_field_derived(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    NumberField::new("Leading", data.bind("derived", Some(SIZE))).unit_kind(UnitKind::Points).derived(true).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [Invalid], drive = Drive::Never)]
