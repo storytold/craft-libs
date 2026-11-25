@@ -203,7 +203,8 @@ The user's `remove_family` and `remove_files` withdraw the copies first, so the 
 | macOS | `~/Library/Fonts` | `Craft-<file>`, side by side. macOS activates them for every app of the user. |
 | Linux and the BSDs | `$XDG_DATA_HOME/fonts/Craft` (`~/.local/share/fonts/Craft`) | `<store family folder>/<file>`. fontconfig reads the folder with its subfolders; `fc-cache` refreshes the cache afterwards when it is on `PATH`, off the calling thread. |
 | Flatpak | the host's `$HOST_XDG_DATA_HOME/fonts/Craft`, else `~/.local/share/fonts/Craft` | Only when `/.flatpak-info` grants write access to that folder (`--filesystem=xdg-data/fonts:create`; its entries apply in order, `!name` revokes and `:ro` grants no write). No `fc-cache`: it would refresh the sandbox's cache. |
-| Snap, a sandboxed macOS build (Mac App Store), Windows, Haiku, the web | none | `Error::Unsupported`. |
+| Windows 10 1809 and later | `%LOCALAPPDATA%\Microsoft\Windows\Fonts\Craft` | `<store family folder>/<file>`, each listed as `<full name> (TrueType)` (or `(OpenType)` for CFF outlines) under `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts`, loaded into the running session with `AddFontResourceW`, then `WM_FONTCHANGE` is broadcast off the calling thread. A registry value that already names another file is a conflict. Withdrawing unloads the font, deletes the value, then deletes the file; a file another program still holds can't be deleted, so the withdrawal fails and the ledger keeps the copy for the next try. The Win32 calls are in `craft-font-os-windows`. |
+| Snap, a sandboxed macOS build (Mac App Store), a packaged (MSIX) Windows build, older Windows, Haiku, the web | none | `Error::Unsupported`. |
 
 `FontStore::new` has no folder; `with_os_fonts(OsFontFolder::at(dir, layout))` sets one, for tests and setups the rules above don't cover.
 

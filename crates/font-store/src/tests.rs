@@ -1677,7 +1677,9 @@ mod store {
         let mac = FontEnv { os: Os::MacOs, ..unix.clone() };
         assert_eq!(with(&[], &mac), Ok(home.join("Library/Fonts")));
         assert!(with(&[("APP_SANDBOX_CONTAINER_ID", "x")], &mac).is_err());
-        assert!(with(&[], &FontEnv { os: Os::Windows, ..unix.clone() }).is_err());
+        let windows = FontEnv { os: Os::Windows, local_app_data: Some(root.join("Local")), ..unix.clone() };
+        assert_eq!(with(&[], &windows), Ok(root.join("Local/Microsoft/Windows/Fonts/Craft")));
+        assert_eq!(with(&[], &FontEnv { local_app_data: None, ..windows.clone() }), Ok(home.join("AppData/Local/Microsoft/Windows/Fonts/Craft")));
 
         info("xdg-data/fonts:create;");
         assert_eq!(with(&[], &flatpak), Ok(home.join(".local/share/fonts/Craft")));

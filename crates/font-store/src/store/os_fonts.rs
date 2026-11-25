@@ -11,6 +11,13 @@
 //! the next change. A withdrawal deletes files first and rewrites the ledger after, so a crash in
 //! between leaves entries whose files are gone, which the next withdrawal drops.
 //!
+//! On Windows each copy is also a per-user font value in the registry, which the ledger names
+//! (listed before the copy is made, like the copy), loaded into the running session with
+//! `AddFontResourceW`. Windows keeps a loaded font's file from being replaced or deleted, so a
+//! copy is unloaded before either, and its value deleted before it is deleted. A copy that is
+//! still in use elsewhere can't be deleted: the withdrawal fails with that error and the ledger
+//! keeps the copy, so the next withdrawal tries again.
+//!
 //! Everything here blocks (hashing, copying, a catalog rescan): call it off the UI thread.
 
 use std::collections::{HashMap, HashSet};
@@ -20,7 +27,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
-use craft_font_catalog::{Catalog, FontEnv, Os, Source, read_faces};
+use craft_font_catalog::{Catalog, FaceInfo, FontEnv, Os, Source, read_faces};
 use serde::{Deserialize, Serialize};
 
 use super::{Caller, Error, FontStore, InstalledFamily, io};
@@ -47,6 +54,8 @@ pub struct OsFontFolder {
     dir: PathBuf,
     layout: OsFontLayout,
     fc_cache: bool,
+    /// Windows: each copy is a per-user font value in the registry and loaded into the session.
+    registry: bool,
 }
 
 impl OsFontFolder {
@@ -60,9 +69,16 @@ impl OsFontFolder {
     ///   Flatpak, the host's folder (`$HOST_XDG_DATA_HOME`, else `~/.local/share`), only when
     ///   `/.flatpak-info` grants write access to it (`--filesystem=xdg-data/fonts:create`), and
     ///   without `fc-cache`. Not in a Snap (`SNAP` is set).
-    /// - Windows, Haiku and the web: not offered.
+    /// - Windows 10 1809 and later: `%LOCALAPPDATA%\Microsoft\Windows\Fonts\Craft`, each copy
+    ///   listed under `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts` and loaded into
+    ///   the running session. Not in a packaged (MSIX) build.
+    /// - Haiku and the web: not offered.
     pub fn for_env(env: &FontEnv) -> Result<Self, String> {
-        Self::for_env_with(env, &|k| std::env::var_os(k).filter(|v| !v.is_empty()))
+        let folder = Self::for_env_with(env, &|k| std::env::var_os(k).filter(|v| !v.is_empty()))?;
+        if folder.registry {
+            craft_font_os_windows::check_supported()?;
+        }
+        Ok(folder)
     }
 
     /// [`OsFontFolder::for_env`], reading the variables `FontEnv` doesn't hold through `var`.
@@ -74,7 +90,7 @@ impl OsFontFolder {
                     return Err("a sandboxed app (such as the Mac App Store build) can't add fonts to ~/Library/Fonts".into());
                 }
                 let home = env.home.as_ref().ok_or(NO_HOME)?;
-                Ok(Self { dir: home.join("Library/Fonts"), layout: OsFontLayout::Flat, fc_cache: false })
+                Ok(Self { dir: home.join("Library/Fonts"), layout: OsFontLayout::Flat, fc_cache: false, registry: false })
             }
             Os::Unix => {
                 if var("SNAP").is_some() {
@@ -91,9 +107,18 @@ impl OsFontFolder {
                 } else {
                     (env.xdg_data_home.clone().filter(absolute).or(local_share).ok_or(NO_HOME)?, true)
                 };
-                Ok(Self { dir: data.join("fonts/Craft"), layout: OsFontLayout::Folders, fc_cache })
+                Ok(Self { dir: data.join("fonts/Craft"), layout: OsFontLayout::Folders, fc_cache, registry: false })
             }
-            Os::Windows => Err("copying fonts into the Windows Fonts folder isn't supported".into()),
+            Os::Windows => {
+                let local = env
+                    .local_app_data
+                    .clone()
+                    .or_else(|| env.home.as_ref().map(|h| h.join("AppData").join("Local")))
+                    .filter(|p| p.is_absolute())
+                    .ok_or("there is no local app data folder")?;
+                let dir = local.join("Microsoft").join("Windows").join("Fonts").join("Craft");
+                Ok(Self { dir, layout: OsFontLayout::Folders, fc_cache: false, registry: true })
+            }
             Os::Haiku | Os::None => Err("this system has no user font folder the store can add to".into()),
         }
     }
@@ -101,7 +126,7 @@ impl OsFontFolder {
     /// A folder of `layout` at `dir`, with no font cache refresh: tests, and setups the platform
     /// rules don't cover.
     pub fn at(dir: impl Into<PathBuf>, layout: OsFontLayout) -> Self {
-        Self { dir: dir.into(), layout, fc_cache: false }
+        Self { dir: dir.into(), layout, fc_cache: false, registry: false }
     }
 
     /// The folder.
@@ -147,9 +172,62 @@ impl OsFontFolder {
             && self.no_links(&file.path)
     }
 
-    /// Tells fontconfig, off the calling thread. It isn't needed for correctness: fontconfig
-    /// notices changed folders by their mtime.
+    /// The registry value name of the store file `file` with these faces, on Windows:
+    /// `<full names joined by " & "> (TrueType)`, or `(OpenType)` for CFF outlines.
+    fn registry_name(&self, path: &Path, file: &str, faces: &[FaceInfo]) -> Option<String> {
+        if !self.registry {
+            return None;
+        }
+        let mut names: Vec<&str> = faces.iter().filter_map(|f| f.full_name.as_deref()).collect();
+        names.dedup();
+        let stem = Path::new(file).file_stem().map_or(file.into(), |s| s.to_string_lossy());
+        let name = if names.is_empty() { stem.into_owned() } else { names.join(" & ") };
+        let mut magic = [0u8; 4];
+        let cff = File::open(path).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic)).is_ok() && &magic == b"OTTO";
+        Some(format!("{name} ({})", if cff { "OpenType" } else { "TrueType" }))
+    }
+
+    /// Registry values of `planned` that already hold another font: conflicts.
+    fn registry_conflicts(&self, planned: &[Planned]) -> Vec<Conflict> {
+        planned
+            .iter()
+            .filter_map(|p| {
+                let held = craft_font_os_windows::registered(p.registry.as_deref()?)?;
+                let same = held.to_string_lossy().to_lowercase() == p.path.to_string_lossy().to_lowercase();
+                (!same).then_some(Conflict { postscript: None, path: held })
+            })
+            .collect()
+    }
+
+    /// Lists a copy in the registry and loads it into the session, where the OS needs that.
+    fn register(&self, f: &LedgerFile) -> Result<(), Error> {
+        match &f.registry {
+            Some(name) => craft_font_os_windows::register(name, &f.path).map_err(io(format!("registering {} with Windows", f.path.display()))),
+            None => Ok(()),
+        }
+    }
+
+    /// Undoes [`OsFontFolder::register`] for a copy about to be deleted.
+    fn unregister(&self, f: &LedgerFile) -> Result<(), Error> {
+        match &f.registry {
+            Some(name) => craft_font_os_windows::unregister(name, &f.path).map_err(io(format!("unregistering {} from Windows", f.path.display()))),
+            None => Ok(()),
+        }
+    }
+
+    /// Unloads the file at `path` from the session before it is replaced, where the OS locks it.
+    fn unload(&self, path: &Path) {
+        if self.registry && path.exists() {
+            craft_font_os_windows::unload(path);
+        }
+    }
+
+    /// Tells fontconfig, or the windows of a Windows session, off the calling thread. It isn't
+    /// needed for correctness: fontconfig notices changed folders by their mtime.
     fn refresh(&self) {
+        if self.registry {
+            let _ = std::thread::Builder::new().name("font-change".into()).spawn(craft_font_os_windows::broadcast_font_change);
+        }
         if !self.fc_cache {
             return;
         }
@@ -243,6 +321,9 @@ struct LedgerFile {
     /// While `adding` over an earlier copy: that copy's sha256.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     replacing: Option<String>,
+    /// Windows: the per-user font value in the registry that names the copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    registry: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -361,6 +442,8 @@ struct Planned {
     path: PathBuf,
     sha256: String,
     postscript: Vec<String>,
+    /// Windows: the registry value name for the copy.
+    registry: Option<String>,
 }
 
 impl FontStore {
@@ -509,7 +592,7 @@ impl FontStore {
 
     fn share(&self, source: &str, name: &str) -> Result<Vec<PathBuf>, Error> {
         let folder = self.os_fonts.as_ref().map_err(|reason| Error::Unsupported(reason.clone()))?;
-        let copies = {
+        let (copies, registered) = {
             let _lock = self.lock()?;
             let mut ledger = self.read_ledger()?;
             ledger.settle(folder);
@@ -529,6 +612,7 @@ impl FontStore {
                 .filter_map(|p| file_id(p))
                 .collect();
             let (mut conflicts, present) = self.system_conflicts(&planned, &ours);
+            conflicts.extend(folder.registry_conflicts(&planned));
             for p in &planned {
                 for other in &others {
                     for ps in p.postscript.iter().filter(|ps| other.postscript.iter().any(|o| o.eq_ignore_ascii_case(ps))) {
@@ -553,6 +637,7 @@ impl FontStore {
                         mechanism: Mechanism::Present,
                         state: State::Active,
                         replacing: None,
+                        registry: None,
                     });
                     continue;
                 }
@@ -582,6 +667,7 @@ impl FontStore {
                     mechanism: Mechanism::Copy,
                     state,
                     replacing: earlier_copy.filter(|_| state == State::Adding).map(|e| e.sha256.clone()),
+                    registry: p.registry.clone(),
                 });
             }
             if !conflicts.is_empty() {
@@ -604,6 +690,7 @@ impl FontStore {
                 let _ = self.write_ledger(&ledger);
                 return Err(e);
             }
+            let registered = register_all(folder, &ledger, source, name, &stale);
             if let Some(entry) = ledger.families.iter_mut().find(|f| f.is(source, name)) {
                 for f in &mut entry.files {
                     f.state = State::Active;
@@ -616,11 +703,12 @@ impl FontStore {
             ledger.families.retain(|f| !f.files.is_empty());
             self.write_ledger(&ledger)?;
             prune_dirs(folder, stale.iter().map(|s| s.path.as_path()));
-            ledger.family(source, name).map(|f| f.copies().map(|x| x.path.clone()).collect()).unwrap_or_default()
+            let copies = ledger.family(source, name).map(|f| f.copies().map(|x| x.path.clone()).collect()).unwrap_or_default();
+            (copies, registered)
         };
         folder.refresh();
         self.rescan();
-        Ok(copies)
+        registered.map(|()| copies)
     }
 
     /// The family's files, checked against the manifest, with their PostScript names: the
@@ -633,7 +721,9 @@ impl FontStore {
             if file_sha256(&from).as_ref() != Some(&f.sha256) {
                 return Err(Error::Verify { file: f.name.clone(), error: VerifyError::Sha256 });
             }
-            let mut postscript: Vec<String> = read_faces(&from, Source::Store).into_iter().filter_map(|x| x.postscript_name).collect();
+            let faces = read_faces(&from, Source::Store);
+            let registry = folder.registry_name(&from, &f.name, &faces);
+            let mut postscript: Vec<String> = faces.into_iter().filter_map(|x| x.postscript_name).collect();
             postscript.extend(f.postscript.iter().cloned());
             postscript.sort();
             postscript.dedup();
@@ -643,6 +733,7 @@ impl FontStore {
                 path: folder.path_for(&family.dir, &f.name),
                 sha256: f.sha256.clone(),
                 postscript,
+                registry,
             });
         }
         Ok(planned)
@@ -777,6 +868,7 @@ fn copy_in(folder: &OsFontFolder, p: &Planned) -> Result<(), Error> {
     let part = aside(&p.path, "part");
     let _ = std::fs::remove_file(&part);
     std::fs::copy(&p.source, &part).map_err(io(what()))?;
+    folder.unload(&p.path);
     let checked = File::open(&part).and_then(|f| f.sync_all()).map_err(io(what())).and_then(|()| {
         if file_sha256(&part).as_ref() == Some(&p.sha256) {
             Ok(())
@@ -798,6 +890,7 @@ fn remove_if_unchanged(folder: &OsFontFolder, dir: &str, f: &LedgerFile) -> Resu
     if !folder.owns(dir, f) {
         return Ok(false);
     }
+    folder.unregister(f)?;
     restore_removing(&f.path);
     let _ = std::fs::remove_file(aside(&f.path, "part"));
     if std::fs::symlink_metadata(&f.path).is_err() {
@@ -813,6 +906,13 @@ fn remove_if_unchanged(folder: &OsFontFolder, dir: &str, f: &LedgerFile) -> Resu
         std::fs::rename(&removing, &f.path).map_err(io(what()))?;
         Ok(false)
     }
+}
+
+/// Registers the family's copies, except the `stale` ones about to go, where the OS needs that.
+/// Registering again is harmless: it updates the value, and withdrawal unloads every load.
+fn register_all(folder: &OsFontFolder, ledger: &Ledger, source: &str, name: &str, stale: &[LedgerFile]) -> Result<(), Error> {
+    let Some(family) = ledger.family(source, name) else { return Ok(()) };
+    family.copies().filter(|f| !stale.iter().any(|s| s.path == f.path)).try_for_each(|f| folder.register(f))
 }
 
 /// Removes the folders `removed` files leave empty, up to the OS folder itself.

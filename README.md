@@ -166,6 +166,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   and filters over the Google Fonts index, installed fonts by family, the font store interface,
   and (`egui` feature) `FontsPanel`, the whole interface as one panel for the launcher's Fonts tab
   and the standalone app.
+- [`craft-font-os-windows`](crates/font-os-windows/src/lib.rs): the Win32 calls `craft-font-store`
+  needs on Windows to make a font available to every app of the user (the per-user font
+  registry, `AddFontResourceW`, `WM_FONTCHANGE`); the one crate here allowed `unsafe`.
 - [`craft-font-store`](crates/font-store/README.md): the suite's font store: the pinned Google
   Fonts and Noto indexes plus indexes the user adds (never curated), exact lookup by family and
   style or PostScript name, and installs from each source's URLs (jsDelivr, then raw GitHub)
