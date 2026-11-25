@@ -3,8 +3,9 @@
 use craft_i18n::Embedded;
 
 /// The interface languages offered, in menu order.
-pub const LANGUAGES: &[&str] = &["en", "ja", "ar"];
+pub const LANGUAGES: &[&str] = &["en", "ja", "ar", "he"];
 
-/// The panel's words in Japanese and Arabic: the shared catalogs an app gives the `I18n` of its Host, alone or after its
-/// own shared rows. A word without a row shows in English.
-pub const CATALOGS: &Embedded = &[("ja", include_str!("catalogs/ja.tsv"), ""), ("ar", include_str!("catalogs/ar.tsv"), "")];
+/// The panel's words in Japanese, Arabic and Hebrew: the shared catalogs an app gives the `I18n` of its Host, alone or
+/// after its own shared rows. A word without a row shows in English.
+pub const CATALOGS: &Embedded =
+    &[("ja", include_str!("catalogs/ja.tsv"), ""), ("ar", include_str!("catalogs/ar.tsv"), ""), ("he", include_str!("catalogs/he.tsv"), "")];
