@@ -100,8 +100,8 @@ impl Glyph<'_> {
     ///    the ordinary character)
     /// 3. PdfCraft patch: a printable ASCII code (32–126) as itself
     /// 4. PdfCraft patch (100): above 126, a name that only numbers its glyph (`C174`) as the
-    ///    code's Latin-1 character, when the number is that code and every numbered name in the
-    ///    font names its own code
+    ///    code's character in the base encoding the font names, else its Latin-1 character, when
+    ///    the number is that code and every numbered name in the font names its own code
     ///
     /// Returns `None` if the Unicode value could not be determined.
     ///
@@ -503,6 +503,19 @@ impl Encoding {
             _ => None,
         }
     }
+
+    /// Craft patch (numbered names in a base encoding): the character `code` has in a base
+    /// encoding a font names, by its glyph name there. `None` for a font that names none
+    /// (`BuiltIn`), for MacExpert, whose codes are small capitals and figures rather than the
+    /// letters their glyph names' values give, and for a code the table leaves empty.
+    fn named_text(&self, code: u8) -> Option<char> {
+        match self {
+            Self::Standard | Self::MacRoman | Self::WinAnsi => {
+                self.map_code(code).and_then(glyph_name_to_unicode)
+            }
+            Self::MacExpert | Self::BuiltIn => None,
+        }
+    }
 }
 
 /// The font stretch.
@@ -809,20 +822,25 @@ pub(crate) fn numbered_names_name_their_codes<'a>(
 }
 
 /// PdfCraft patch: the text of a glyph name outside the glyph list that only numbers its glyph
-/// (see `glyph_name_numbers`) when that number is the very code the glyph is shown with: the
-/// code's Latin-1 character, for codes above 127 too (`C174` reads `®`), as pdftotext, PDFium
-/// and MuPDF read it. The name and the code then agree, so nothing is guessed from an
-/// encoding table. A number naming another code (`/C1` at 233, review on #3239) and a control
-/// character read as nothing. Callers apply it only in a font where
-/// `numbered_names_name_their_codes` holds.
-pub(crate) fn numbered_glyph_name_at_its_code(name: &str, code: u8) -> Option<BfString> {
-    let c = char::from(code);
-    if c.is_control() {
+/// (see `glyph_name_numbers`) when that number is the very code the glyph is shown with. A
+/// number naming another code (`/C1` at 233, review on #3239) reads as nothing. Callers apply it
+/// only in a font where `numbered_names_name_their_codes` holds.
+///
+/// Craft patch (numbered names in a base encoding): the code reads as its character in `base`,
+/// the base encoding the font names as `read_encoding` gives it. The Windows PostScript driver
+/// names the glyphs of the fonts it converts `/G41` … `/GFF` over WinAnsiEncoding, where 0x92
+/// is `’` and 0x96 is `–`. A font that names no base encoding (`BuiltIn`) or names MacExpert
+/// reads as the code's Latin-1 character (`C174` reads `®`), as pdftotext, PDFium and MuPDF
+/// read it, and a control character there reads as nothing. Private because `Encoding` is.
+fn numbered_glyph_name_at_its_code(name: &str, code: u8, base: &Encoding) -> Option<BfString> {
+    if !glyph_name_numbers(name).any(|n| n == u32::from(code)) {
         return None;
     }
-    glyph_name_numbers(name)
-        .any(|n| n == u32::from(code))
-        .then_some(BfString::Char(c))
+    if let Some(c) = base.named_text(code) {
+        return Some(BfString::Char(c));
+    }
+    let c = char::from(code);
+    (!c.is_control()).then_some(BfString::Char(c))
 }
 
 /// PdfCraft patch (92): the character a `uniXXXX` or `uXXXX` to `uXXXXXX` glyph name stands

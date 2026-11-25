@@ -163,9 +163,17 @@ impl Type1Font {
                 )
             });
             own_codes
-                .then(|| numbered_glyph_name_at_its_code(name, code))
+                .then(|| numbered_glyph_name_at_its_code(name, code, self.base_encoding()))
                 .flatten()
         })
+    }
+
+    fn base_encoding(&self) -> &Encoding {
+        match &self.1 {
+            Kind::Standard(s) => s.base_encoding(),
+            Kind::Cff(c) => &c.encoding,
+            Kind::Type1(t) => &t.encoding,
+        }
     }
 
     fn code_to_ps_name(&self, code: u8) -> Option<&str> {

@@ -348,6 +348,17 @@ palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
 `hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
 `images` feature, matching `filter::ccitt`.
 
+A craft-libs patch, labeled `Craft patch (numbered names in a base encoding)` in code comments,
+extends hayro-interpret (100): a glyph name that only numbers its glyph, at its own code, reads as
+the character that code has in the base encoding the font names (`/BaseEncoding`, or an
+`/Encoding` name), and as the code's Latin-1 character only when the font names none or names
+MacExpert. The Windows PostScript driver names the glyphs of the fonts it converts `/G41` …
+`/GFF` over WinAnsiEncoding without a `/ToUnicode`; read as Latin-1, its codes 0x80-0x9F (quotes,
+dashes, bullets, the euro) were C1 controls and read as nothing. Symbol and ZapfDingbats stand-ins
+keep their built-in encoding and are unchanged. Test:
+`numbered_glyph_names_read_through_the_base_encoding_the_font_names` in
+`crates/pdf/tests/upstream_text.rs`.
+
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
 equivalence. The independent color oracles, backend tests and facade contracts cover
