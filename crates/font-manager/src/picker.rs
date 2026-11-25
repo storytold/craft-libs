@@ -621,6 +621,7 @@ struct Typing {
     hide_classes: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
+    focused: bool,
 }
 
 /// The interface language code of the host, English without one.
@@ -666,7 +667,10 @@ enum Stop {
 }
 
 /// The font family field. Typing filters the list to the families whose name (in any language) matches, the best
-/// match first, and opens it; a click on the name while the list is closed, the chevron and Alt+Down open it on every family (the click selects the name), Alt+Up closes it. Rows: a star, the
+/// match first, and opens it; in the library picker a click on the name while the list is closed opens it on every
+/// family and selects the name, whereas in `Plain` only a click that focuses the field selects the name without opening
+/// the list (subsequent clicks place the caret). The chevron and Alt+Down open the list on every family, and Alt+Up
+/// closes it. Rows: a star, the
 /// family name in the interface face, the sample text (the preview text, else "Sample") in the family's own face at the
 /// preview size and the class mark.
 /// Recent families form a group at the top. Up, Down and Page keys move the keyboard row, which previews, Enter or a
@@ -977,6 +981,8 @@ impl Component for FontPicker<'_> {
         if !self.catalog.is_ready() {
             return;
         }
+        let focused = cx.is_focused();
+        let was_focused = std::mem::replace(&mut cx.memory::<Typing>().focused, focused);
         let list = cx.popup(POPUP);
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
         let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
@@ -992,10 +998,18 @@ impl Component for FontPicker<'_> {
             }
         }
         // A click on the name while the list is closed opens it on every family and selects the name, so typing
-        // replaces it (Photoshop's font field).
+        // replaces it (Photoshop's font field). In Word's plain font picker, clicking selects the name without
+        // auto-opening the popup list so the user can immediately type a replacement family. Subsequent clicks on
+        // an already-focused plain field place the caret rather than re-selecting all text.
         if !list.is_open(cx) && cx.text(&text_key()).is_some_and(|outcome| outcome.clicked) {
-            cx.select_all_text();
-            list.open(cx);
+            if self.kind == FontPickerKind::Plain {
+                if !was_focused {
+                    cx.select_all_text();
+                }
+            } else {
+                cx.select_all_text();
+                list.open(cx);
+            }
         }
         if list.is_open(cx) {
             return;
