@@ -54,6 +54,54 @@ fn text(bytes: &[u8], name: &str) -> String {
 }
 
 #[test]
+fn rejects_xml_forbidden_characters_in_written_metadata_and_navigation() {
+    let mut cases: Vec<(&str, Book<'static>)> = Vec::new();
+    let mut b = book();
+    b.metadata.identifier.push('\0');
+    cases.push(("identifier", b));
+    let mut b = book();
+    b.metadata.title.push('\u{1}');
+    cases.push(("title", b));
+    let mut b = book();
+    b.metadata.language.push('\0');
+    cases.push(("language", b));
+    let mut b = book();
+    b.metadata.creators.push("a\u{ffff}b".into());
+    cases.push(("creator", b));
+    let mut b = book();
+    b.metadata.subjects.push("a\u{b}b".into());
+    cases.push(("subject", b));
+    let mut b = book();
+    b.metadata.description = Some("a\u{c}b".into());
+    cases.push(("description", b));
+    let mut b = book();
+    b.metadata.generator = Some("a\0b".into());
+    cases.push(("generator", b));
+    let mut b = book();
+    b.nav.heading.push('\0');
+    cases.push(("heading", b));
+    let mut b = book();
+    b.nav.items.push(NavItem { href: "content.xhtml#bad\0fragment".into(), label: "Link".into(), level: 1 });
+    cases.push(("href", b));
+    let mut b = book();
+    b.nav.items.push(NavItem { href: "content.xhtml".into(), label: "a\0b".into(), level: 1 });
+    cases.push(("label", b));
+    let mut b = book();
+    b.resources[0].properties.push('\0');
+    cases.push(("properties", b));
+    let mut b = book();
+    b.resources[0].media_type.push('\0');
+    cases.push(("media type", b));
+    for (field, b) in cases {
+        assert!(matches!(write(&b), Err(Error::Invalid(_))), "{field} was silently altered");
+    }
+    let mut valid = book();
+    valid.metadata.title = "A\tB\rC\n&D 👩".into();
+    let output = write(&valid).unwrap();
+    assert_eq!(Epub::open(&output).unwrap().package.title, valid.metadata.title);
+}
+
+#[test]
 fn the_package_starts_with_a_stored_mimetype_and_keeps_the_resource_order() {
     let bytes = write(&book()).unwrap();
     assert!(is_epub(&bytes));
