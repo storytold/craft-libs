@@ -359,6 +359,28 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
                 replace_selection(ctx, widget, text, at, &typed);
                 changed = true;
             }
+            // The input method deletes around the caret, or around the marked text while it composes: the characters the
+            // reported range covers whole, before the selection's start and after its end. The selection and the
+            // marked text keep their place in what is left.
+            EditorInput::DeleteSurrounding { before, after, unit, .. } => {
+                let (caret, anchor) = selection(text);
+                let (lo, hi) = state.preedit.as_ref().map_or((caret.min(anchor), caret.max(anchor)), |p| (p.at, p.at));
+                let (lo_byte, hi_byte) = (byte_of(text, lo), byte_of(text, hi));
+                let gone_before = unit.chars_before(before, &text[..lo_byte]);
+                let gone_after = unit.chars_after(after, &text[hi_byte..]);
+                if gone_before + gone_after == 0 {
+                    continue;
+                }
+                let end = byte_of(text, hi + gone_after);
+                text.replace_range(hi_byte..end, "");
+                let start = byte_of(text, lo - gone_before);
+                text.replace_range(start..lo_byte, "");
+                match &mut state.preedit {
+                    Some(preedit) => preedit.at -= gone_before,
+                    None => text_edit::select(ctx, widget, anchor - gone_before, caret - gone_before),
+                }
+                changed = true;
+            }
             _ => {}
         }
     }
