@@ -179,12 +179,15 @@ impl Component for TitleFace {
     }
 }
 
-/// The style of a menu bar: the titles wear row faces, which underline their mnemonics.
+/// The style of a menu bar: the titles wear row faces, which underline their mnemonics, and the title the keyboard is
+/// on is ringed with the focus look.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct MenuBarStyle {
     #[style(metrics)]
     metrics: Metrics,
+    #[style(focus)]
+    focus: FocusLook,
 }
 
 /// A title's text without its marker, and its mnemonic: the letter and its character index in the text, none for a
@@ -475,8 +478,8 @@ impl Component for MenuBar<'_> {
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 
-    fn style(_: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
-        MenuBarStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: MenuBarStyleKey) -> MenuBarStyle {
+        MenuBarStyle { metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
