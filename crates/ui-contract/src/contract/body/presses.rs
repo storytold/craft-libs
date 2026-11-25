@@ -40,9 +40,9 @@ impl BodyCx<'_> {
     }
 
     /// Whether the primary press of this pass went down on the container's own surface, for a root that senses
-    /// `Sense::SURFACE`: inside its rect, on its layer, where none of its children or parts takes the press. The
-    /// container decides what it means (a dock group focuses its panel, as Photoshop does); it is no click and moves
-    /// no focus by itself.
+    /// `Sense::SURFACE`: inside its rect, on its layer, where none of its children or parts and no app's own egui widget
+    /// in its body takes the press. The container decides what it means (a dock group focuses its panel, as Photoshop
+    /// does); it is no click and moves no focus by itself.
     pub fn surface_pressed(&self) -> bool {
         self.memory.recall::<SurfacePress>(sub(self.id, "surface_press")).pressed
     }
@@ -76,8 +76,8 @@ impl BodyCx<'_> {
 impl BodyHooks<'_> {
     /// Records for the container's hooks whether this pass's primary press went down on its own surface
     /// (`BodyCx::surface_pressed`): no shape of last pass under the press takes it, nor a component's text widget
-    /// egui gives it to (a focused field's), and the press lies in the
-    /// container's rect on its layer; and whether that press is the second of a double click
+    /// egui gives it to (a focused field's), nor an app's own egui widget (a raw text field or canvas in the body), and
+    /// the press lies in the container's rect on its layer; and whether that press is the second of a double click
     /// (`BodyCx::surface_double_pressed`), read from the same press's click count; and whether this pass's primary
     /// release ends a press that went down there (`BodyCx::surface_clicked`). The press origin waits in the press slot
     /// until the release; Escape and a blur clear it, and so does any pass with no button held.
@@ -95,6 +95,7 @@ impl BodyHooks<'_> {
                 inside(press.origin)
                     && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
                     && !pointer::text_takes_press(&ctx, pass.press_targets)
+                    && !pass.press_targets.click.is_some_and(|widget| pointer::foreign_target(&ctx, widget))
             })
         } else {
             None

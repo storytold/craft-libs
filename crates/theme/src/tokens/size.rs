@@ -80,19 +80,33 @@ pub enum GripMark {
     Ticks,
     /// Square dots, [`GripShape::width`] on a side.
     Dots,
+    /// One level bar, [`GripShape::length`] long and [`GripShape::width`] thick: a tick turned on its side. The count
+    /// and the gap do not apply.
+    Bar,
+}
+
+impl GripMark {
+    /// The mark's name in a theme file and a token dump.
+    pub fn name(self) -> &'static str {
+        match self {
+            GripMark::Ticks => "ticks",
+            GripMark::Dots => "dots",
+            GripMark::Bar => "bar",
+        }
+    }
 }
 
 /// The row of marks a dock grip shows (the grip above an icon group, under a tool rail's column bar, at a floating
 /// panel's edge): what the marks are, how many, how large and how far apart, in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GripShape {
-    /// Ticks or dots.
+    /// Ticks, dots or a bar.
     pub mark: GripMark,
     /// How many marks the row has, at every display scale.
     pub count: u16,
-    /// How tall a tick is; dots ignore it.
+    /// How tall a tick is, or how long the bar is; dots ignore it.
     pub length: f32,
-    /// How wide a tick is, or a dot's side.
+    /// How wide a tick is, a dot's side, or how thick the bar is.
     pub width: f32,
     /// The space between two marks.
     pub gap: f32,
@@ -109,7 +123,17 @@ impl Default for GripShape {
     }
 }
 
-/// Corner radii, edge style, knob shape, well shape and grip marks.
+/// The squares of a reference point picker's square look: the step from one square's centre to the next and a
+/// square's side, in points. The picker is two steps and a square wide.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorShape {
+    /// The step from one square's centre to the next.
+    pub cell: f32,
+    /// A square's side.
+    pub square: f32,
+}
+
+/// Corner radii, edge style, knob shape, well shape, grip marks and the reference point's squares.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -122,6 +146,8 @@ pub struct ShapeTokens {
     pub wells: WellShape,
     /// The marks of the dock grips.
     pub grip: GripShape,
+    /// The squares of a reference point picker's square look.
+    pub locator: LocatorShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.
@@ -225,6 +251,8 @@ pub struct BarSizes {
     pub title: f32,
     /// Tab strip.
     pub tab: f32,
+    /// Tab strip in its large form: large document tabs.
+    pub tab_large: f32,
     /// Status bar.
     pub status: f32,
     /// Tool options bar.

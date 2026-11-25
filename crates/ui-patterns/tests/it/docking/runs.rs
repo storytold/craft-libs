@@ -527,6 +527,14 @@ fn a_tab_picked_in_the_focused_group_is_the_focused_panel() {
         seen.borrow_mut().push((output.focused, output.picked));
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
+    // A click on a tab leaves key focus where it is: Tab moves it into the first group, whose shown panel is panel 0.
+    for _ in 0..4 {
+        if reported.borrow().last() == Some(&(Some(0), None)) {
+            break;
+        }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(1);
+    }
+    assert_eq!(reported.borrow().last(), Some(&(Some(0), None)), "Tab reaches the first group");
     let tab = |fixture: &Fixture, name: &str| fixture.by_label(name).expect("the first group's tab");
     let second = tab(&fixture, "Panel 1");
     fixture.click(&second).idle(3);

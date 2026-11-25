@@ -141,6 +141,11 @@ pub(crate) struct Cursors(IdMap<Cursor>);
 #[derive(Default)]
 pub(crate) struct FillCounts(IdMap<u32>);
 
+/// The memoized views running this pass whose content holds a direct child that fills the axis the body around the
+/// view shares (`Scoped::fill_view`), by view id, with that axis.
+#[derive(Default)]
+pub(crate) struct ViewFills(IdMap<Axis>);
+
 /// What makes a child of a content-sized `Stack` column a held child: it measures at its own width while the column
 /// settles its width from the others, and the column's second sweep gives it the settled width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -423,6 +428,9 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
     if !given {
         return measured;
     }
+    if let Some((view, along)) = env.fill_view.filter(|(_, along)| *along == axis) {
+        pass_state::with::<ViewFills, _>(ui.ctx(), |fills| fills.0.insert(view, along));
+    }
     // In a body that shares the axis and scrolls along it, a share never cuts the child's content: what is past the
     // view scrolls.
     if env.fill_body.is_some_and(|(_, along)| along == axis) && view_room(ui, axis).is_some() {
@@ -452,10 +460,34 @@ fn main_fill(ui: &Ui, id: Id, axis: Axis) -> MainFill {
         return MainFill::Share(share, layout_memory::fill_least(ui.ctx(), id, axis));
     }
     if measure::active(ui.ctx()) {
-        pass_state::with::<FillCounts, _>(ui.ctx(), |counts| *counts.0.entry(body).or_insert(0) += 1);
+        count_fill(ui.ctx(), body);
         return MainFill::Measuring;
     }
     MainFill::Room(layout_memory::fill_least(ui.ctx(), id, axis))
+}
+
+/// Counts one child that fills the main axis of the sharing body `body`, in the first sweep of its measuring run.
+fn count_fill(ctx: &egui::Context, body: Id) {
+    pass_state::with::<FillCounts, _>(ctx, |counts| *counts.0.entry(body).or_insert(0) += 1);
+}
+
+/// Counts the memoized view whose content fills the main axis of `ui`'s sharing body as one child that fills it, in the
+/// first sweep of the body's measuring run (`counting_fills`), as a child shown there directly is counted.
+pub(crate) fn count_fill_view(ui: &Ui) {
+    if let Some((body, _)) = Env::of(ui).fill_body {
+        count_fill(ui.ctx(), body);
+    }
+}
+
+/// Opens the record of whether the content of the memoized view `view` fills the axis its body shares, before its run.
+pub(crate) fn open_view_fill(ctx: &egui::Context, view: Id) {
+    pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view));
+}
+
+/// The axis the content of the memoized view `view` filled in the run that just ended, as `fill_size` noted it; closes
+/// the record.
+pub(crate) fn take_view_fill(ctx: &egui::Context, view: Id) -> Option<Axis> {
+    pass_state::with::<ViewFills, _>(ctx, |fills| fills.0.remove(&view))
 }
 
 /// The share a child of `ui`'s body that fills along `axis` takes there, once its body knows it: the room the child
@@ -513,6 +545,22 @@ pub(crate) struct ShrinkReports(IdMap<Vec<Reported>>);
 /// The least widths the body units of each `Row` body asking for them this pass reported, by row id.
 #[derive(Default)]
 pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
+
+/// How far the units of each `Row` body asked for one this pass reach past the row's room at their ideal widths, by
+/// row id: `None` for a row whose units fit.
+#[derive(Default)]
+pub(crate) struct RowShortfalls(IdMap<Option<f32>>);
+
+/// Asks the `Row` body `row` for its shortfall in this pass's measuring run (`take_shortfall`).
+pub(crate) fn ask_shortfall(ctx: &egui::Context, row: Id) {
+    pass_state::with::<RowShortfalls, _>(ctx, |asked| asked.0.insert(row, None));
+}
+
+/// How far the units of the `Row` body `row` reached past its room at their ideal widths in the measuring run since
+/// `ask_shortfall`: `None` when they fit or the row did not run.
+pub(crate) fn take_shortfall(ctx: &egui::Context, row: Id) -> Option<f32> {
+    pass_state::with::<RowShortfalls, _>(ctx, |asked| asked.0.remove(&row).flatten())
+}
 
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's whole and least widths, or `None`
 /// for a body, and how it leaves a row too narrow for it: whether its content is made to be cut, and its rank.
@@ -788,24 +836,25 @@ fn shrink_in_turns(units: &[ShrinkUnit], whole: &[f32], first: &[bool], fixed: f
 /// scrolls keeps every unit and scrolls instead.
 ///
 /// Before those drops, the units that carry a rank (`ranks`) leave whole, scrolling row or not: the lowest rank first,
-/// the last of a rank first, until the kept units fit at their ideal widths. A unit with no rank never leaves by rank.
+/// the last of a rank first, until the kept units fit at their ideal widths in `rank_room` (at most `room`). A unit
+/// with no rank never leaves by rank.
 fn shrink_or_drop(
     units: &[ShrinkUnit],
     whole: &[f32],
     (first, ranks): (&[bool], &[Option<u8>]),
     (fixed, gap): (f32, f32),
-    room: f32,
+    (room, rank_room): (f32, f32),
     order: ShrinkOrder,
     drops: bool,
 ) -> Vec<ShrinkCap> {
     let mut kept = vec![true; units.len()];
     let mut fixed = fixed;
     // Half a point: less than a pixel shows at any scale the box runs.
-    let fits_at = |kept: &[bool], fixed: f32, width: fn(&ShrinkUnit) -> f32| {
+    let fits_at = |kept: &[bool], fixed: f32, width: fn(&ShrinkUnit) -> f32, room: f32| {
         fixed + units.iter().zip(kept).filter(|(_, kept)| **kept).map(|(unit, _)| width(unit)).sum::<f32>() - room < 0.5
     };
-    let fits = |kept: &[bool], fixed: f32| fits_at(kept, fixed, |unit| unit.least);
-    while !fits_at(&kept, fixed, |unit| unit.ideal) {
+    let fits = |kept: &[bool], fixed: f32| fits_at(kept, fixed, |unit| unit.least, room);
+    while !fits_at(&kept, fixed, |unit| unit.ideal, rank_room.min(room)) {
         let Some(rank) = (0..units.len()).filter(|at| kept[*at]).filter_map(|at| ranks[at]).min() else { break };
         let Some(at) = (0..units.len()).rev().find(|at| kept[*at] && ranks[*at] == Some(rank)) else { break };
         kept[at] = false;
@@ -872,8 +921,10 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     let layout = *ui.layout();
     let mut env = Env::of(ui);
     let inherited = (env.unbounded.0, env.least);
+    let rank_short = env.rank_short;
     let mut sweep = |ui: &mut Ui, shrink: Shrink, body: &mut dyn FnMut(&mut Ui) -> R| {
         let scoped = env.local_mut();
+        scoped.rank_short = None;
         scoped.shrink = Some(shrink);
         let least = matches!(shrink, Shrink::Least(_));
         scoped.unbounded.0 = inherited.0 || least;
@@ -906,8 +957,12 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         };
         let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
         let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(leaf, *level)).sum();
-        let widths = if room.is_finite() {
-            shrink_or_drop(&units, &whole, (&first, &ranks), (fixed + held, gap), room, order, drops)
+        // The ranked units give up `rank_short` of the row's ideal width; a row offered no bound (a content-sized row's
+        // measuring run) still drops them for it.
+        let ideal = fixed + held + units.iter().map(|unit| unit.ideal).sum::<f32>();
+        let rank_room = rank_short.map_or(f32::INFINITY, |short| ideal - short);
+        let widths = if room.is_finite() || rank_room.is_finite() {
+            shrink_or_drop(&units, &whole, (&first, &ranks), (fixed + held, gap), (room, rank_room), order, drops)
         } else {
             units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false, narrowed: false }).collect()
         };
@@ -936,7 +991,11 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
         let rect = first.min_rect();
         let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
-        let short = fixed + leaves.iter().map(|leaf| leaf.widths.ideal).sum::<f32>() - room >= 0.5;
+        let shortfall = fixed + leaves.iter().map(|leaf| leaf.widths.ideal).sum::<f32>() - room;
+        let short = shortfall >= 0.5;
+        if short {
+            pass_state::with::<RowShortfalls, _>(&ctx, |asked| asked.0.get_mut(&id).map(|slot| *slot = Some(shortfall)));
+        }
         let probe = room.is_finite() && short && leaves.iter().any(|leaf| leaf.body);
         let again = !probe && settle(&leaves, fixed);
         ((inner, rect, leaves, fixed, probe, again), probe || again)
@@ -1938,6 +1997,7 @@ fn run_stack<R>(ui: &mut Ui, env: &Env, at: &RowIn, body: impl FnMut(&mut Ui) ->
     let env = env.derive_local(|scoped| {
         scoped.shrink = Some(Shrink::Fit);
         scoped.flow_body = Some(at.id);
+        scoped.stack_gap = Some((at.id, at.gap.y));
     });
     let installed = Env::install_for(ui, env.clone());
     // A held child of a column whose own room is unbounded keeps the width it measured at.

@@ -3,6 +3,7 @@
 
 use super::IconicMode;
 use super::targets::ZoneRule;
+use crate::tabs::PanelTabLook;
 use craft_behavior::{DockSide, IconId};
 
 /// A set of the sides of the layout's outer edge or of a group.
@@ -80,6 +81,13 @@ pub struct DockConfig {
     /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
     /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
     pub floating_rounded_body: bool,
+    /// Every docked column, expanded or collapsed to icons, shows as a card on the dock's `surface.background`:
+    /// painted `surface.panel` with `shape.radius.surface` corners and no frame, inset by `space.gap.stack` on its top
+    /// and bottom and, for the column at the window edge, on its outer side; each further column stands
+    /// `space.gap.tight` from its outer neighbour's card. A column is wider by its inset, so it keeps its content's
+    /// width (a tool rail its steps); its dividers, drop bands and edge handle stay on its outer rect. Off: a column
+    /// fills its cell.
+    pub column_cards: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -90,6 +98,9 @@ pub struct DockConfig {
     pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
+    /// The look of the groups' panel tabs: the shown tab on the panel surface ([`PanelTabLook::Plain`]), or on a
+    /// filled rounded pill ([`PanelTabLook::Pill`]).
+    pub tab_look: PanelTabLook,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
     /// with this off, it shows in the app window.
@@ -120,9 +131,11 @@ impl Default for DockConfig {
             close_button: true,
             floating_grip: false,
             floating_rounded_body: false,
+            column_cards: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
+            tab_look: PanelTabLook::Plain,
             native_windows: true,
             group_order_items: false,
             panel_menu_always: false,
@@ -235,6 +248,20 @@ impl DockConfig {
     #[must_use]
     pub fn floating_rounded_body(mut self, on: bool) -> Self {
         self.floating_rounded_body = on;
+        self
+    }
+
+    /// Docked columns as cards on or off ([`column_cards`](Self::column_cards)).
+    #[must_use]
+    pub fn column_cards(mut self, on: bool) -> Self {
+        self.column_cards = on;
+        self
+    }
+
+    /// The look of the groups' panel tabs ([`tab_look`](Self::tab_look)).
+    #[must_use]
+    pub fn tab_look(mut self, look: PanelTabLook) -> Self {
+        self.tab_look = look;
         self
     }
 

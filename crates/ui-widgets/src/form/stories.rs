@@ -2,9 +2,13 @@
 
 use super::Help;
 use super::{Field, FieldGroup};
+use crate::buttons::Link;
 use crate::choice::Swatch;
-use crate::contract::{FieldLayout, GlyphColon, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
-use crate::layout_components::Row;
+use crate::contract::{
+    CaptionInk, FieldLayout, GlyphColon, GlyphLabel, LabelKind, LabelScheme, LinkLabelInk, Props as _, Show as _, ShowContainer as _, SideLabel,
+    Validity,
+};
+use crate::layout_components::{Row, Stack};
 use crate::runtime::env::{Message, with_env};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use crate::text::{HexField, NumberField};
@@ -47,6 +51,65 @@ fn field_link_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let link = shown.inner.as_ref().is_some_and(|field| field.link);
     let facts = StoryOutput::from(shown);
     StoryOutput { clicked: facts.clicked || link, ..facts }
+}
+
+/// A field's link label under each `LinkLabelInk`, each with a free link to options under it: the accent (the default)
+/// with a plain `Link`, then the body ink VectorCraft sets at its root with a `Link` in `Tone::Neutral`, the same ink.
+/// Both stay underlined.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_link_label_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut rows = |ui: &mut Ui, key: &'static str, tone: Option<Tone>| {
+        Stack::new()
+            .id_salt(key)
+            .show(ui, |ui, _| {
+                let side = SideLabel::new().link();
+                let field = Field::new("Opacity").side(side).show(ui, |ui, _| NumberField::new("Opacity", data.bind(key, Some(100.0))).show(ui));
+                let link = Link::new("Stroke");
+                let link = match tone {
+                    Some(tone) => link.tone(tone),
+                    None => link,
+                }
+                .show(ui);
+                // The field the label names reports the link click; the story is its host.
+                field.inner.as_ref().is_some_and(|field| field.link) || StoryOutput::from(link).clicked
+            })
+            .inner
+            == Some(true)
+    };
+    let accent = rows(ui, "accent", None);
+    let neutral = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(LinkLabelInk::Neutral);
+        },
+        |ui| rows(ui, "neutral", Some(Tone::Neutral)),
+    );
+    StoryOutput { clicked: accent || neutral, ..StoryOutput::default() }
+}
+
+/// A field's label under each `CaptionInk`, enabled and disabled: the muted ink (the default), then the normal ink
+/// VectorCraft sets at its root. A disabled label reads in the disabled ink under both.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_caption_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut rows = |ui: &mut Ui, key: &'static str| {
+        Stack::new().id_salt(key).show(ui, |ui, _| {
+            for (salt, enabled) in [("enabled", true), ("disabled", false)] {
+                Field::new("Angle")
+                    .id_salt(salt)
+                    .enabled(enabled)
+                    .show(ui, |ui, _| NumberField::new("Angle", data.bind(key, Some(SIZE))).unit("°").show(ui));
+            }
+        });
+    };
+    rows(ui, "muted");
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(CaptionInk::Normal);
+        },
+        |ui| rows(ui, "normal"),
+    );
+    StoryOutput::default()
 }
 
 /// A glyph label: the icon shows, the text only names the control.

@@ -6,11 +6,11 @@ use craft_i18n::Direction;
 use craft_ui::buttons::Button;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{CommandSet, Props as _, Show as _, ShowContainer as _, Trigger};
-use craft_ui::list::ThumbAspect;
+use craft_ui::list::{CommandHighlight, ThumbAspect};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::commands::CommandState;
-use craft_ui::runtime::env::Scale;
+use craft_ui::runtime::env::{Scale, with_env};
 use craft_ui::testing::{Fixture, Room, pointer, trial};
 use egui::Rect;
 use std::cell::Cell;
@@ -257,6 +257,42 @@ fn the_menu_highlight_moves_to_the_next_row_in_the_frame_the_pointer_reaches_it(
     let shapes = fixture.frame_shapes_with(vec![pointer::moved(redo.center())]);
     assert_eq!(fills_in(&shapes, redo), [lit], "the row the pointer reached paints the full highlight at once");
     assert!(fills_in(&shapes, undo).is_empty(), "the row the pointer left paints no highlight at once: {:?}", fills_in(&shapes, undo));
+}
+
+/// The fill of an open menu's row under the pointer, with `highlight` set at the root or the default.
+fn lit_fill(highlight: Option<CommandHighlight>) -> egui::Color32 {
+    let mut fixture = Fixture::new(move |ui| {
+        with_env(
+            ui,
+            |overrides| {
+                if let Some(highlight) = highlight {
+                    overrides.values.set(highlight);
+                }
+            },
+            |ui| {
+                let opener = Button::new("Open").show(ui);
+                Menu::new("Edit").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+                    MenuItem::new("Undo").show(ui);
+                    MenuItem::new("Redo").show(ui);
+                });
+            },
+        );
+    });
+    fixture.settle();
+    let opener = fixture.by_label("Open").expect("the opener");
+    fixture.click(&opener).settle();
+    let undo = fixture.by_label("Undo").expect("the menu is open").rect;
+    let shapes = fixture.frame_shapes_with(vec![pointer::moved(undo.center())]);
+    let [lit] = fills_in(&shapes, undo)[..] else { panic!("the row under the pointer paints one highlight: {:?}", fills_in(&shapes, undo)) };
+    lit
+}
+
+/// An app that sets `CommandHighlight::Hover` at its root gets a highlight other than the default accent on the row
+/// under the pointer, and the menu still shows which row is active.
+#[trial]
+fn a_root_command_highlight_changes_the_active_rows_fill() {
+    assert_eq!(lit_fill(Some(CommandHighlight::Accent)), lit_fill(None), "the accent is the default");
+    assert_ne!(lit_fill(Some(CommandHighlight::Hover)), lit_fill(None), "the hover highlight is not the accent");
 }
 
 /// A label long enough that a menu of it is wider than a popup's least width, so a sample column shows in the width.
