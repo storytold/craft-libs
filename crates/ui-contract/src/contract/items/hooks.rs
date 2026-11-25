@@ -379,6 +379,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::runtime::egui::repaint::request(&ctx);
         }
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
+        if let Some(at) = self.reveal_around.take().filter(|&at| layout.shown(at)) {
+            cx.core.reveal = Some(self.screen(&layout, rect, at, offset, rtl).intersect(rect));
+        }
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
             note_scroll_regions(ui, rect, self.content, offset, rtl, self.header.view());
