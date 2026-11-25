@@ -192,8 +192,9 @@ fn a_framed_gallery_paints_sunken_well_and_stepper_track() {
     assert!(stepper_track.is_some(), "a panel fill covers the stepper track column {column:?}: {seen:?}");
 }
 
-/// The current tile paints an `accent.soft` fill inside a 1 pt `accent.solid` edge, and a non-current tile paints
-/// neither; the fill stays under the focus ring, so a focused current tile still reads as current.
+/// The current tile paints an `accent.soft` fill and a 1 pt `accent.solid` edge stroked inside it, and a non-current
+/// tile paints neither; nothing filled `accent.solid` lies under the tile's content (a translucent `accent.soft`
+/// would show it through); the fill stays under the focus ring, so a focused current tile still reads as current.
 /// This holds in light and dark, at standard and high contrast.
 #[trial]
 fn the_current_tile_paints_an_accent_fill_and_edge_even_when_focused() {
@@ -201,11 +202,17 @@ fn the_current_tile_paints_an_accent_fill_and_edge_even_when_focused() {
     use craft_ui::runtime::env::Env;
     use egui::Color32;
 
-    fn rects(shapes: &[egui::Shape], out: &mut Vec<(Rect, Color32)>) {
+    /// A painted rect: its bounds, fill, and the colour of its stroke when it has one.
+    struct Painted {
+        rect: Rect,
+        fill: Color32,
+        stroke: Option<Color32>,
+    }
+    fn rects(shapes: &[egui::Shape], out: &mut Vec<Painted>) {
         for shape in shapes {
             match shape {
                 egui::Shape::Vec(inner) => rects(inner, out),
-                egui::Shape::Rect(rect) => out.push((rect.rect, rect.fill)),
+                egui::Shape::Rect(r) => out.push(Painted { rect: r.rect, fill: r.fill, stroke: (r.stroke.width > 0.0).then_some(r.stroke.color) }),
                 _ => {}
             }
         }
@@ -231,19 +238,28 @@ fn the_current_tile_paints_an_accent_fill_and_edge_even_when_focused() {
             Color32::from_rgba_unmultiplied(r, g, b, a)
         });
         assert_ne!(fill, edge, "{mode:?} {contrast:?}: the fill and the edge are different colours");
-        let [current, other] = ["Tile 0", "Tile 1"].map(|name| fixture.by_label(name).map_or(Rect::NOTHING, |tile| tile.rect));
-        let painted = |fixture: &mut Fixture, color: Color32, tile: Rect| {
+        let [current, other] = ["Tile 0", "Tile 1"].map(|name| fixture.by_label(name).expect("the tile shows"));
+        let (current, other) = (current.rect, other.rect);
+        let near = |p: &Painted, tile: Rect| p.rect.intersects(tile) && tile.expand(8.0).contains_rect(p.rect);
+        let seen = |fixture: &mut Fixture| {
             let mut seen = Vec::new();
             rects(&fixture.frame_shapes(), &mut seen);
-            seen.iter().any(|(rect, c)| *c == color && rect.intersects(tile) && tile.expand(8.0).contains_rect(*rect))
+            seen
         };
-        for color in [fill, edge] {
-            assert!(painted(&mut fixture, color, current), "{mode:?} {contrast:?}: the current tile paints {color:?}");
-            assert!(!painted(&mut fixture, color, other), "{mode:?} {contrast:?}: another tile does not paint {color:?}");
-        }
+        let shapes = seen(&mut fixture);
+        let who = format!("{mode:?} {contrast:?}");
+        assert!(shapes.iter().any(|p| p.fill == fill && near(p, current)), "{who}: the current tile fills accent.soft");
+        assert!(shapes.iter().any(|p| p.stroke == Some(edge) && near(p, current)), "{who}: the current tile's edge is an accent.solid stroke");
+        assert!(
+            !shapes.iter().any(|p| p.fill == edge && p.rect.contains_rect(current.shrink(2.0))),
+            "{who}: no accent.solid fill lies under the tile"
+        );
+        assert!(!shapes.iter().any(|p| (p.fill == fill || p.stroke == Some(edge)) && near(p, other)), "{who}: another tile paints neither");
 
         fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
-        assert!(fixture.focused().is_some(), "{mode:?} {contrast:?}: Tab focused the gallery");
-        assert!(painted(&mut fixture, fill, current), "{mode:?} {contrast:?}: the focused current tile keeps its fill");
+        let tile0 = fixture.by_label("Tile 0").expect("the tile shows").node;
+        assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), tile0, "{who}: Tab focused the current tile");
+        let shapes = seen(&mut fixture);
+        assert!(shapes.iter().any(|p| p.fill == fill && near(p, current)), "{who}: the focused current tile keeps its fill");
     }
 }
