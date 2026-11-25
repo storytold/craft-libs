@@ -999,34 +999,57 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
     );
 }
 
-/// Guards the finding that tells an app its canvas stop takes Tab and loses the focus: `host_canvas` named an id that no
-/// egui widget of the pass has. A canvas declared before it is drawn, and one neither declared nor drawn, give none.
-#[trial]
-fn a_host_canvas_no_widget_draws_is_a_finding() {
+/// How an app's window shows the canvas of `host_canvas_findings`.
+#[derive(Clone, Copy, Debug)]
+enum Shown {
+    /// Neither declared nor drawn.
+    Hidden,
+    /// Declared, and drawn with a focusable widget that senses clicks or drags.
+    Click,
+    Drag,
+    /// Declared, and drawn with a widget that senses drags and is not focusable.
+    Unfocusable,
+    /// Declared and not drawn.
+    Undrawn,
+}
+
+/// Whether the canvas holds egui focus after a Tab from nothing in a window that shows it as `shown`, declared before it
+/// is drawn, and the subjects of the findings on it.
+fn host_canvas_findings(shown: Shown) -> (bool, Vec<String>) {
     let canvas = named_id("host canvas");
-    let (declared, drawn) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(true)));
-    let (declares, draws) = (Rc::clone(&declared), Rc::clone(&drawn));
     let mut show = move |ui: &mut Ui| {
-        if declares.get() {
+        if !matches!(shown, Shown::Hidden) {
             host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
         }
-        if draws.get() {
-            widget(ui, canvas);
+        let rect = Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0));
+        match shown {
+            Shown::Hidden | Shown::Undrawn => {}
+            Shown::Click => _ = fixture::host_button(ui, canvas, rect),
+            Shown::Drag => _ = fixture::host_drag_area(ui, canvas, rect),
+            Shown::Unfocusable => fixture::host_unfocusable_area(ui, canvas, rect),
         }
     };
     let mut frames = Frames::new();
-    frames.idle(3, &mut show);
-    declared.set(false);
-    drawn.set(false);
-    frames.idle(1, &mut show);
-    assert!(findings(&frames.ctx).is_empty(), "a drawn canvas and a hidden one: {:?}", findings(&frames.ctx));
-    declared.set(true);
-    frames.idle(1, &mut show);
-    let found = findings(&frames.ctx);
-    assert!(
-        matches!(found.as_slice(), [only] if only.rule == "canvas-without-widget" && only.subject == format!("{canvas:?}")),
-        "the declared canvas no widget draws: {found:?}"
-    );
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Tab);
+    frames.idle(2, &mut show);
+    let found = findings(&frames.ctx).into_iter().filter(|finding| finding.rule == "canvas-without-widget");
+    (egui_focused(&frames.ctx) == Some(canvas), found.map(|finding| finding.subject).collect())
+}
+
+/// Guards the finding that tells an app its canvas stop takes Tab and loses the focus: `host_canvas` named an id that no
+/// focusable egui widget of the pass has.
+#[trial]
+fn a_host_canvas_no_focusable_widget_draws_is_a_finding() {
+    for shown in [Shown::Click, Shown::Drag] {
+        assert_eq!(host_canvas_findings(shown), (true, Vec::new()), "{shown:?}: Tab stays at a canvas with a focusable widget");
+    }
+    assert_eq!(host_canvas_findings(Shown::Hidden).1, Vec::<String>::new(), "a hidden canvas makes no call");
+    for (shown, says) in [(Shown::Undrawn, "no egui widget"), (Shown::Unfocusable, "Sense")] {
+        let (focused, found) = host_canvas_findings(shown);
+        assert!(!focused, "{shown:?}: egui drops the focus Tab gave the canvas");
+        assert!(matches!(found.as_slice(), [only] if only.contains(says)), "{shown:?}: {found:?}");
+    }
 }
 
 /// What `event` did with nothing focused in a window whose host declares its canvas with `keys`: whether the event
