@@ -351,14 +351,12 @@ struct KeyCaps {
     caps: Vec<CapView>,
     key: Option<Key>,
     toggled: Option<Mod>,
-    /// The least height the pane asks for, in points (`Options::keyboard_height`); 0 asks for the keys' own.
-    min_height: f32,
 }
 
 impl KeyCaps {
     /// The keycaps of an empty layout, for the registry's style measurements.
     fn sample() -> Self {
-        KeyCaps { common: craft_ui::contract::Common::new(), caps: Vec::new(), key: None, toggled: None, min_height: 0.0 }
+        KeyCaps { common: craft_ui::contract::Common::new(), caps: Vec::new(), key: None, toggled: None }
     }
 
     fn unit(rect: Rect) -> f32 {
@@ -412,8 +410,14 @@ impl Component for KeyCaps {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        // The caps keep their proportions: 18.5 units go across the pane and 6.25 down it, so the pane is as tall as
+        // the width it is given makes the keys, and a wider pane draws bigger keys rather than the same keys one
+        // control high. A pane narrower than the keys ask for, or one with no bounded room, keeps the least height:
+        // the keys are never smaller than a control.
         let step = cx.style.step;
-        vec2(UNITS_W * step, (UNITS_H * step).max(self.min_height))
+        let least = vec2(UNITS_W * step, UNITS_H * step);
+        let width = cx.room.filter(|room| room.is_finite()).map_or(least.x, |room| room.max(least.x));
+        vec2(least.x, width / UNITS_W * UNITS_H)
     }
 
     fn sense(&self) -> Sense {
@@ -672,7 +676,6 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: 
                     caps: cap_views(env, &state.keyboard, &index.1, mods),
                     key: None,
                     toggled: None,
-                    min_height: env.options.keyboard_height.unwrap_or(0.0),
                 };
                 let pane = caps.id_salt("shortcuts.keyboardCaps").sizing(Sizing::FillWidth).show(ui);
                 picked_key = pane.key;

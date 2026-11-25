@@ -322,9 +322,6 @@ pub struct Options {
     pub visible: Option<fn(&CommandDef) -> bool>,
     /// false: the on-screen keyboard pane.
     pub keyboard: bool,
-    /// The keyboard pane's least height in points, so its keys stay readable in a short dialog. `None`: the height of
-    /// the keys at the framework's control size.
-    pub keyboard_height: Option<f32>,
     /// Read-only rows for keys outside the catalog.
     pub fixed: Vec<FixedRow>,
     /// Formats the app can read, besides the built-in ones.
@@ -358,7 +355,6 @@ impl Default for Options {
             own_areas: false,
             visible: None,
             keyboard: false,
-            keyboard_height: None,
             fixed: Vec::new(),
             import_formats: Vec::new(),
             export_formats: Vec::new(),

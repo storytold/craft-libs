@@ -9,17 +9,25 @@ use egui::Shape;
 
 use super::fixture::Rig;
 
-/// The pane as an app that wants it readable opens it: a size of its own in the rig's 1000 by 700 point window, and a least
-/// height for the keys.
+/// The pane as an app opens it: a size of its own in the rig's 1000 by 700 point window. The pane takes the height its
+/// width gives the keys.
 fn pane_like_an_app(options: &mut craft_menu::shortcuts::Options) {
     options.keyboard = true;
     options.size = Some(egui::vec2(900.0, 620.0));
-    options.keyboard_height = Some(250.0);
 }
 
 /// The key named `name` on the pane (its node is a button of that name).
 fn cap(rig: &Rig, name: &str) -> Target {
     rig.named(name, Role::BUTTON)
+}
+
+/// The pane `width` points wide, with the height of one control and a key's rect: the footer's OK is a control.
+fn pane(width: f32) -> (f32, egui::Rect) {
+    let rig = Rig::tuned(Platform::Windows, |options| {
+        options.keyboard = true;
+        options.size = Some(egui::vec2(width, 620.0));
+    });
+    (rig.named("OK", Role::BUTTON).rect.height(), cap(&rig, "Q").rect)
 }
 
 /// The rects of the painted rectangles that have a fill.
@@ -43,6 +51,16 @@ fn the_keyboard_keeps_readable_keys_beside_the_key_list() {
     let hint = rig.fixture.texts().iter().find(|text| text.text.starts_with("Click a key")).expect("the hint").rect;
     // Q starts 1.5 units in and the block is 18.5 units wide, so the block ends 17 key widths past Q's left edge.
     assert!(hint.left() > q.left() + 17.0 * q.width(), "the hint stands beside the whole block of keys (a key is {q:?}): {hint:?}");
+}
+
+/// The keys keep their proportions in the room the app gives the pane: a wider pane is taller, so its keys stand above one
+/// control's height rather than staying one control high however wide the dialog is.
+#[trial]
+fn a_wider_pane_is_taller_and_its_keys_stand_above_a_control() {
+    let (control, narrow) = pane(700.0);
+    let (_, wide) = pane(950.0);
+    assert!(wide.height() > narrow.height(), "a wider pane draws taller keys: {:?} against {:?}", wide, narrow);
+    assert!(wide.height() > control, "the keys stand above one control's height: {:?} against {control}", wide);
 }
 
 /// Keys are painted with a fill of their own, and the legend words stand on fills too.
