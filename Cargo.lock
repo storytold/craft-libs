@@ -1869,6 +1869,7 @@ dependencies = [
  "blake3",
  "craft-ecproj-format",
  "craft-pcraft-format",
+ "craft-testkit",
  "craft-vectorcraft-format",
  "flate2",
  "proptest",
@@ -2043,6 +2044,7 @@ dependencies = [
 name = "craft-exr"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "exr",
  "flate2",
  "half",
@@ -3187,6 +3189,7 @@ dependencies = [
  "chrono",
  "craft-crw",
  "craft-metadata",
+ "craft-testkit",
  "craft-tiff",
  "jpeg-encoder 0.7.1",
  "jxl-oxide",

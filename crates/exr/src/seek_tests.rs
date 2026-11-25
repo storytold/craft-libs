@@ -352,14 +352,17 @@ fn hostile_files_are_refused_and_never_panic() {
     let try_read = |data: &[u8]| {
         let Ok(index) = Index::build(&mut Cursor::new(data), &Limits::default(), &never) else { return };
         let channels: Vec<(usize, usize)> = (0..index.parts().len()).flat_map(|p| channels_of(&index, p)).collect();
-        let _ = read_planes(&mut Cursor::new(data), &index, &Request::new(&channels, 1 << 24), &never);
+        // 64 KiB is far above what the 9 x 7 file needs.
+        let _ = read_planes(&mut Cursor::new(data), &index, &Request::new(&channels, 1 << 16), &never);
     };
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) cuts and flips at every N-th position, from 0.
+    let step = craft_testkit::hostile::divisor();
     // Every truncation.
-    for n in 0..bytes.len() {
+    for n in (0..bytes.len()).step_by(step) {
         try_read(&bytes[..n]);
     }
     // A flipped byte at every position (headers, tables and chunks).
-    for at in 0..bytes.len() {
+    for at in (0..bytes.len()).step_by(step) {
         let mut broken = bytes.clone();
         broken[at] ^= 0xFF;
         try_read(&broken);

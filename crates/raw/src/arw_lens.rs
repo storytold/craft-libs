@@ -1365,7 +1365,10 @@ mod tests {
 
     #[test]
     fn corrupt_files_never_panic() {
-        for order in [Little, Big] {
+        // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut, from 0, and overwrites every
+        // N-th byte, from a different offset for each byte order.
+        let step = craft_testkit::hostile::divisor();
+        for (k, order) in [Little, Big].into_iter().enumerate() {
             let good = Arw::new("ILCE-7RM4A", order).build();
             let tiff = Tiff::parse(&good).unwrap();
             let strip = tiff.ifds[0].image().unwrap().chunks(good.len() as u64)[0];
@@ -1377,10 +1380,10 @@ mod tests {
                     assert_eq!((h.lens_metadata, h.opcodes), (f.lens_metadata, f.opcodes));
                 }
             };
-            for len in 0..good.len() {
+            for len in (0..good.len()).step_by(step) {
                 check(&good[..len]);
             }
-            for at in (0..good.len()).filter(|at| !image.contains(at)) {
+            for at in (k % step..good.len()).step_by(step).filter(|at| !image.contains(at)) {
                 for v in [0, 0xff, good[at] ^ 0x80, good[at] ^ 0x01] {
                     let mut file = good.clone();
                     file[at] = v;

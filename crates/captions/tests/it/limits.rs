@@ -32,18 +32,25 @@ fn ttml_does_not_expand_entities() {
 /// Every single-byte change to a written file reads or is refused; none panics.
 #[test]
 fn mutated_files_never_panic() {
-    for format in Format::ALL {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) cuts at every N-th byte, from 0, and changes every
+    // N-th byte, from a different offset for each format.
+    let step = craft_media_testkit::hostile::divisor();
+    for (k, format) in Format::ALL.into_iter().enumerate() {
         let bytes = write(&doc(), format, WriteOptions::default());
         // every byte of a text file, and the header and first blocks of the (sparse) binary one
         for i in 0..bytes.len().min(2048) {
-            for v in [0u8, 0x20, 0x3c, 0x7f, 0xff] {
-                let mut m = bytes.clone();
-                if let Some(b) = m.get_mut(i) {
-                    *b = v;
+            if i % step == k % step {
+                for v in [0u8, 0x20, 0x3c, 0x7f, 0xff] {
+                    let mut m = bytes.clone();
+                    if let Some(b) = m.get_mut(i) {
+                        *b = v;
+                    }
+                    let _ = parse(&m, format);
                 }
-                let _ = parse(&m, format);
             }
-            let _ = parse(bytes.get(..i).unwrap_or(&[]), format);
+            if i % step == 0 {
+                let _ = parse(bytes.get(..i).unwrap_or(&[]), format);
+            }
         }
     }
 }
