@@ -10,7 +10,7 @@ mod press;
 #[doc(hidden)]
 pub mod registration;
 
-pub(crate) use nav::{enter_row, leave_row, roving_move, row_has_stops};
+pub(crate) use nav::{StopBounds, enter_row, leave_row, roving_move, row_has_stops};
 pub(crate) use press::{held_draft, note_holds_drafts};
 pub(crate) use registration::{Group, Stop};
 
