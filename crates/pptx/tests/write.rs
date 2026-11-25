@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use craft_pptx::table::{Cell, Table};
 use craft_pptx::{
-    ColorRef, Defaults, Geom, MediaId, Plain, Presentation, Rgba, SchemeSlot, Shape, ShapeId, ShapeKind, Size, Slide, SlideId, TextBody, Xfrm,
+    ColorRef, ConnectionSite, Defaults, Geom, MediaId, PhType, Placeholder, Plain, Presentation, Rgba, SchemeSlot, Shape, ShapeId, ShapeKind, Size,
+    Slide, SlideId, TextBody, Xfrm,
 };
 
 /// A deck with the plain master and one slide on its layout.
@@ -324,4 +325,118 @@ fn templates_and_shows_differ_in_the_main_content_type() {
         assert!(part(&bytes, "[Content_Types].xml").contains(ct), "{ext}");
         assert_eq!(craft_pptx::import(&bytes, &Plain).unwrap().slides.len(), 1);
     }
+}
+
+fn shape<'a>(p: &'a Presentation, name: &str) -> &'a Shape {
+    p.slides[0].shapes.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("no shape {name}"))
+}
+
+/// Within rounding to whole EMU.
+fn same_sites(a: &[ConnectionSite], b: &[ConnectionSite]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4)
+}
+
+/// Every element below `e` with the local name `local`, in document order.
+fn descendants<'a>(e: &'a craft_xml::El, local: &str, out: &mut Vec<&'a craft_xml::El>) {
+    for c in e.elements() {
+        if c.local() == local {
+            out.push(c);
+        }
+        descendants(c, local, out);
+    }
+}
+
+/// Connection sites are fractions of the shape's box in the model and positions in the shape's own
+/// space in the file (not the path's): a site on the right edge is written at the shape's width,
+/// and every site comes back as the fraction it left with, in order.
+#[test]
+fn custom_geometry_connection_sites_survive_writing_and_reading() {
+    let mut p = deck();
+    let sites = vec![ConnectionSite::new(0.0, 0.5), ConnectionSite::new(1.0, 0.5), ConnectionSite::new(0.5, 1.25)];
+    // A path space unlike the shape's, so sites written in the wrong space would not come back.
+    let path = craft_pptx::CustomPath { w: 10.0, h: 10.0, d: "M 0 0 L 10 0 L 10 10 Z".into(), ..Default::default() };
+    add(
+        &mut p,
+        Shape {
+            name: "Pinned".into(),
+            xfrm: Some(Xfrm::new(10.0, 20.0, 200.0, 100.0)),
+            geom: Geom::Custom { paths: vec![path], sites: sites.clone() },
+            ..Default::default()
+        },
+    );
+    let bytes = craft_pptx::export(&p, &Plain).unwrap();
+
+    let slide = craft_xml::Options::default().parse(part(&bytes, "ppt/slides/slide1.xml").as_bytes()).unwrap();
+    let mut sps = vec![];
+    descendants(&slide, "sp", &mut sps);
+    let sp = sps
+        .into_iter()
+        .find(|sp| {
+            let mut names = vec![];
+            descendants(sp, "cNvPr", &mut names);
+            names.first().and_then(|c| c.attr("name")) == Some("Pinned")
+        })
+        .expect("the shape is written");
+    let mut ext = vec![];
+    descendants(sp, "ext", &mut ext);
+    let ext = ext.into_iter().find(|e| e.attr("cx").is_some()).expect("the shape's extent");
+    let mut pos = vec![];
+    descendants(sp, "pos", &mut pos);
+    assert_eq!(pos.len(), sites.len(), "one position per site");
+    assert_eq!(pos[1].attr_f64("x"), ext.attr_f64("cx"), "the right-edge site sits at the shape's width");
+    assert_eq!(pos[0].attr_f64("y").map(|y| y * 2.0), ext.attr_f64("cy"), "the mid-height site sits at half the shape's height");
+
+    let q = craft_pptx::import(&bytes, &Plain).unwrap();
+    let back = shape(&q, "Pinned");
+    assert!(matches!(&back.geom, Geom::Custom { paths, sites: got } if paths.len() == 1 && same_sites(got, &sites)), "{:?}", back.geom);
+}
+
+/// A custom geometry with sites and no path draws nothing and offers places to glue to. It stays
+/// that, not a rectangle, and keeps its sites.
+#[test]
+fn an_empty_custom_geometry_keeps_its_connection_sites() {
+    let mut p = deck();
+    let sites = vec![ConnectionSite::new(0.5, 0.5)];
+    add(
+        &mut p,
+        Shape {
+            name: "Pin".into(),
+            xfrm: Some(Xfrm::new(100.0, 100.0, 1.0, 1.0)),
+            geom: Geom::Custom { paths: vec![], sites: sites.clone() },
+            ..Default::default()
+        },
+    );
+    let q = round_trip(&p);
+    let back = shape(&q, "Pin");
+    assert!(matches!(&back.geom, Geom::Custom { paths, sites: got } if paths.is_empty() && same_sites(got, &sites)), "{:?}", back.geom);
+}
+
+/// A placeholder has no transform of its own, so its sites go out in the extent the reader assumes
+/// for a shape without one, and come back as the fractions they left with. A custom geometry that
+/// holds only sites is the placeholder's own, not "none, take the layout's"; and a slide
+/// placeholder without a geometry takes its layout placeholder's, sites included.
+#[test]
+fn a_placeholder_with_only_connection_sites_keeps_them() {
+    let sites = vec![ConnectionSite::new(0.0, 0.5), ConnectionSite::new(1.0, 0.5)];
+    let pinned = |s: &Shape| matches!(&s.geom, Geom::Custom { paths, sites: got } if paths.is_empty() && same_sites(got, &sites));
+    let title = || Some(Placeholder { kind: PhType::Title, idx: 0, vertical: false, size: None, has_custom_prompt: false });
+    let layout_title = |p: &mut Presentation, geom: Geom| {
+        let id = ShapeId(p.alloc_id().unwrap());
+        let shape = Shape { id, name: "Title".into(), xfrm: Some(Xfrm::new(10.0, 10.0, 300.0, 50.0)), ph: title(), geom, ..Default::default() };
+        Arc::make_mut(&mut p.masters[0]).layouts[0].shapes.push(shape);
+    };
+
+    // The slide placeholder's own sites, with no transform of its own.
+    let mut p = deck();
+    layout_title(&mut p, Geom::default());
+    add(&mut p, Shape { name: "Own".into(), ph: title(), geom: Geom::Custom { paths: vec![], sites: sites.clone() }, ..Default::default() });
+    let q = round_trip(&p);
+    assert!(pinned(shape(&q, "Own")), "{:?}", shape(&q, "Own").geom);
+
+    // The layout placeholder's sites, inherited by a slide placeholder without a geometry.
+    let mut p = deck();
+    layout_title(&mut p, Geom::Custom { paths: vec![], sites: sites.clone() });
+    add(&mut p, Shape { name: "Inherited".into(), ph: title(), ..Default::default() });
+    let q = round_trip(&p);
+    assert!(pinned(shape(&q, "Inherited")), "{:?}", shape(&q, "Inherited").geom);
 }

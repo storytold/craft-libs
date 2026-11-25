@@ -24,7 +24,7 @@ pub use read::MAX_TAG_BYTES;
 use std::sync::Arc;
 
 pub use craft_drawingml::color::{ColorScheme, ColorTransform, Rgba, SchemeSlot};
-pub use craft_drawingml::custgeom::CustomPath;
+pub use craft_drawingml::custgeom::{ConnectionSite, CustomPath};
 pub use craft_drawingml::diagram::{Diagram, DiagramNode};
 pub use craft_drawingml::style::{self, ColorBase, ColorRef, Effects, Fill, Line, ShapeStyle};
 pub use craft_drawingml::table::{self, Cell, Table};
@@ -331,8 +331,14 @@ pub enum Geom {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         adj: Vec<f64>,
     },
-    /// Custom geometry: sub-paths in their own coordinate space (w, h) scaled to the shape.
-    Custom { paths: Vec<CustomPath> },
+    /// Custom geometry: sub-paths in their own coordinate space (w, h) scaled to the shape, and
+    /// the connection sites (`a:cxnLst`) a connector's ends glue to, as fractions of the shape's
+    /// box. A geometry with sites and no path draws nothing and only offers the sites.
+    Custom {
+        paths: Vec<CustomPath>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sites: Vec<ConnectionSite>,
+    },
 }
 
 impl Default for Geom {

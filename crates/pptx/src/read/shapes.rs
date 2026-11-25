@@ -217,8 +217,16 @@ fn preset_geom(pg: &El) -> Geom {
 /// (`inherit_placeholder_geometry`).
 fn mark_inherited_geometry(s: &mut Shape, pr: Option<&El>) {
     if s.ph.is_some() && pr.is_none_or(|pr| pr.child(Local("prstGeom")).is_none() && pr.child(Local("custGeom")).is_none()) {
-        s.geom = Geom::Custom { paths: vec![] };
+        s.geom = Geom::Custom { paths: vec![], sites: vec![] };
     }
+}
+
+/// The shape's extent in EMU: the space a custom geometry's guides and connection sites are in.
+/// A shape without a transform of its own (a placeholder inheriting its box) is read in the extent
+/// the writer uses for it, so its sites keep their fractions through a round trip.
+fn extent_emu(s: &Shape) -> (f64, f64) {
+    let inherited = craft_drawingml::custgeom::INHERITED_EXTENT_EMU;
+    s.xfrm.map(|x| (craft_drawingml::pt_to_emu(x.w) as f64, craft_drawingml::pt_to_emu(x.h) as f64)).unwrap_or((inherited, inherited))
 }
 
 /// `spPr` → transform, geometry, fill, line, effects.
@@ -229,10 +237,13 @@ fn sp_pr(imp: &mut Imp, part: &Part, s: &mut Shape, pr: &El) {
     if let Some(pg) = pr.child(Local("prstGeom")) {
         s.geom = preset_geom(pg);
     } else if let Some(cg) = pr.child(Local("custGeom")) {
-        let (w, h) = s.xfrm.map(|x| (craft_drawingml::pt_to_emu(x.w) as f64, craft_drawingml::pt_to_emu(x.h) as f64)).unwrap_or((21600.0, 21600.0));
+        let (w, h) = extent_emu(s);
         let paths = craft_drawingml::custgeom::read_cust_geom(cg, w, h);
-        if !paths.is_empty() {
-            s.geom = Geom::Custom { paths };
+        let sites = craft_drawingml::custgeom::read_cxn_lst(cg, w, h);
+        // A custom geometry with sites and no path is still the shape's own: nothing drawn, only
+        // places for connectors to glue to.
+        if !paths.is_empty() || !sites.is_empty() {
+            s.geom = Geom::Custom { paths, sites };
         }
     }
     s.fill = dml::fill_of(&mut Src(imp, part), pr);
