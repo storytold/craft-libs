@@ -215,8 +215,10 @@ fn escape(text: &str) -> String {
         } else if let Some(c) = rest.chars().next() {
             match c {
                 '\n' | '\r' => out.push_str("\\N"),
-                // Empty override block separates a literal slash from N/n/h.
-                '\\' => out.push_str("\\{}"),
+                // An empty-style override block separates a literal backslash from N/n/h: ffmpeg strips
+                // `{\i0}` and keeps the backslash, so a reader gets `\N` back as two characters instead of a
+                // line break. `{}` alone is plain text to ffmpeg, which leaves it in the cue.
+                '\\' => out.push_str("\\{\\i0}"),
                 '{' => out.push('\u{ff5b}'),
                 '}' => out.push('\u{ff5d}'),
                 '\u{a0}' => out.push_str("\\h"),
