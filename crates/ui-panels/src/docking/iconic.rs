@@ -46,9 +46,11 @@ pub struct IconicSizes {
     pub column: DockSizes,
     /// The height of an icon cell (the rail button).
     pub cell: f32,
-    /// The height of the grip strip at the top of each icon group, above its first icon.
+    /// The height of the grip strip at the top of each icon group, above its first icon: none with
+    /// [`IconGroupSeparator::Rule`].
     pub grip: f32,
-    /// The room between two icon groups.
+    /// The room between two icon groups: the tight gap, or with [`IconGroupSeparator::Rule`] the stack gap and the
+    /// rule.
     pub separator: f32,
     /// The column width from which each cell shows its panel's name beside its icon.
     pub labels: f32,
@@ -61,13 +63,11 @@ impl IconicSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
         let size = &cx.tokens.size;
-        IconicSizes {
-            column: DockSizes::style(cx),
-            cell: size.rail.button,
-            grip: super::group::grip_strip(cx.tokens),
-            separator: cx.tokens.space.gap.tight,
-            labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
-        }
+        let (grip, separator) = match cx.env::<IconGroupSeparator>() {
+            IconGroupSeparator::Grip => (super::group::grip_strip(cx.tokens), cx.tokens.space.gap.tight),
+            IconGroupSeparator::Rule => (0.0, cx.tokens.space.gap.stack + cx.rule(RuleKind::Edge).width.points(cx.frame_ctx().pixels_per_point())),
+        };
+        IconicSizes { column: DockSizes::style(cx), cell: size.rail.button, grip, separator, labels: size.rail.width * LABELS_IN_RAIL_WIDTHS }
     }
 
     /// The sizes in the root scope's style, for code outside a style pass:
@@ -98,16 +98,17 @@ pub enum IconicMode {
     Rail,
 }
 
-/// What marks the icon groups of a collapsed column apart. An app sets it once at its root (`RootEnv::values`). Either
-/// way each group keeps its grip strip above its first icon, which drags the group.
+/// What marks the icon groups of a collapsed column apart. An app sets it once at its root (`RootEnv::values`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
 #[env(style)]
 #[non_exhaustive]
 pub enum IconGroupSeparator {
-    /// Each group's grip strip shows the dock's grip marks (`shape.grip`, in `line.grip`).
+    /// Each group has a grip strip above its first icon, which shows the dock's grip marks (`shape.grip`, in
+    /// `line.grip`) and drags the group.
     #[default]
     Grip,
-    /// The grip strips are bare, and an edge rule (`line.border`) lies level across the room between two groups,
+    /// No grip strips: a group's first icon drags the group, its first icon stands right under the column's bar, and an
+    /// edge rule (`line.border`) lies level in the middle of the `space.gap.stack` between two groups,
     /// `space.gap.inline` short of the column's sides: VectorCraft's icon groups, as production drew them.
     Rule,
 }
@@ -436,7 +437,9 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
                 }
                 y += sizes.cell;
             }
-            grips.push((at, grip));
+            if grip.height() > 0.0 {
+                grips.push((at, grip));
+            }
             groups.push((at, Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), y))));
         }
         Plan { bar, cells, names, grips, groups, body }
@@ -576,22 +579,30 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let dragging =
             |phase: PressPhase| matches!(phase, PressPhase::DragStart { start, .. } if start.button == craft_behavior::PointerButton::Primary);
         let mut began = false;
-        for (group, extent) in &plan.groups {
-            if dragging(cx.part(GRIP.at(*group as u64)).press.phase)
-                && let Some(lead) = self.column.groups.get(*group)
-                && let Some(anchor) = lead.panels.first()
-            {
-                let shown = lead.active_panel().unwrap_or(anchor);
-                let label = Label::from((self.spec)(shown).label.as_str().to_owned());
-                start_icon_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), extent.size(), label);
-                began = true;
+        // A group drags by its grip strip, or without one by its first icon.
+        let group_drag = |cx: &mut Cx<'_, Self>, group: usize| {
+            let lead = self.column.groups.get(group)?;
+            let anchor = lead.panels.first()?;
+            let extent = plan.groups.iter().find(|(at, _)| *at == group)?.1;
+            let shown = lead.active_panel().unwrap_or(anchor);
+            let label = Label::from((self.spec)(shown).label.as_str().to_owned());
+            start_icon_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), extent.size(), label);
+            Some(())
+        };
+        for (group, _) in &plan.grips {
+            if cx.part_if_declared(GRIP.at(*group as u64)).is_some_and(|grip| dragging(grip.press.phase)) {
+                began |= group_drag(cx, *group).is_some();
             }
         }
+        let gripless = plan.grips.is_empty();
         for (at, (group, panel, cell)) in plan.cells.iter().enumerate() {
             let named = cx.part_if_declared(NAME.at(at as u64)).is_some_and(|name| dragging(name.press.phase));
-            if (dragging(cx.part(CELL.at(at as u64)).press.phase) || named)
-                && let Some(panel) = self.panel(*group, *panel)
-            {
+            if !(dragging(cx.part(CELL.at(at as u64)).press.phase) || named) {
+                continue;
+            }
+            if gripless && *panel == 0 {
+                began |= group_drag(cx, *group).is_some();
+            } else if let Some(panel) = self.panel(*group, *panel) {
                 let label = Label::from((self.spec)(panel).label.as_str().to_owned());
                 start_icon_drag(cx, DragUnit::Panel(panel.clone()), PanelKey::of(panel), cell.size(), label);
                 began = true;
@@ -692,8 +703,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
                 IconGroupSeparator::Rule => {
                     let xs = plan.body.x_range().shrink(style.rule_inset);
                     // In the middle of the room from a group's last icon to the next group's first.
-                    for ((_, above), (_, strip)) in plan.groups.iter().zip(plan.grips.iter().skip(1)) {
-                        let y = (above.bottom() + strip.bottom()) / 2.0;
+                    for pair in plan.groups.windows(2) {
+                        let y = (pair[0].1.bottom() + pair[1].1.top()) / 2.0;
                         ui.draw().rule(RuleKind::Edge, Pos2::new(xs.min, y), Pos2::new(xs.max, y));
                     }
                 }

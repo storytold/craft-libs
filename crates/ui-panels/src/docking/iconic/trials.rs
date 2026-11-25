@@ -24,7 +24,7 @@ use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
 use craft_behavior::overlay::Side;
-use egui::{Key, Modifiers, Pos2, Rect, UiBuilder, Vec2};
+use egui::{Id, Key, Modifiers, Pos2, Rect, UiBuilder, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -662,19 +662,17 @@ fn a_themes_bar_grip_is_one_level_bar() {
     assert!((bar.center().x - strip.center().x).abs() <= 0.5, "centred across the strip: {bar:?} in {strip:?}");
 }
 
-/// An app's `IconGroupSeparator::Rule` (VectorCraft's): the grip strips show no marks, and one level edge rule lies in
-/// the room between the two groups, under the first group's last icon and over the second group's first, short of the
-/// column's sides; none lies over the first group.
-#[trial]
-fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
-    let mut fixture = Fixture::hosted(|ui| {
+/// The icons of the two groups of a collapsed column whose groups stand apart by `separator`: the column's id and the
+/// fixture.
+fn separated(separator: IconGroupSeparator) -> (Fixture, Id) {
+    let mut fixture = Fixture::hosted(move |ui| {
         let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
         column.iconic = true;
         let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
         with_env(
             ui,
             |overrides| {
-                overrides.values.set(IconGroupSeparator::Rule);
+                overrides.values.set(separator);
             },
             |ui| {
                 let output = IconicColumn::new("Panels", global("iconic column", "rule"), &column, Bind::kept(), &named)
@@ -686,6 +684,17 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
     });
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
+    (fixture, id)
+}
+
+/// An app's `IconGroupSeparator::Rule` (VectorCraft's): no grip strips, so the first icon stands higher than under grip
+/// strips; one level edge rule lies in the middle of the room between the two groups, short of the column's sides, and
+/// none over the first group; a drag on a group's first icon moves the group, on its next icon only that panel.
+#[trial]
+fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
+    let (gripped, gripped_id) = separated(IconGroupSeparator::Grip);
+    let gripped_first = gripped.part_rect(gripped_id, CELL.at(0)).expect("the first icon under grips");
+    let (mut fixture, id) = separated(IconGroupSeparator::Rule);
     let border = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.line.border);
     let shapes = fixture.frame_shapes();
     let level: Vec<(Pos2, Pos2, egui::Color32)> = shapes
@@ -696,20 +705,25 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
         })
         .collect();
     for group in [0, 1] {
-        let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group keeps its grip");
-        assert!(grip_ticks(&shapes, strip).is_none(), "group {group}: the strip shows no marks");
+        assert!(fixture.part_rect(id, GRIP.at(group)).is_none(), "group {group} has no grip strip");
     }
-    let first = fixture.part_rect(id, GRIP.at(0)).expect("the first group's grip");
-    assert!(!level.iter().any(|(a, _, _)| first.y_range().contains(a.y)), "no rule over the first group: {level:?}");
-    let (last, next) = (
-        fixture.part_rect(id, CELL.at(1)).expect("the first group's last icon"),
-        fixture.part_rect(id, CELL.at(2)).expect("the second group's icon"),
-    );
+    let cell = |at: u64| fixture.part_rect(id, CELL.at(at)).expect("the icon shows");
+    let (first, last, next) = (cell(0), cell(1), cell(2));
+    assert!(first.top() < gripped_first.top() - 0.5, "the first icon {first:?} stands higher than under a grip strip {gripped_first:?}");
+    assert!(!level.iter().any(|(a, _, _)| a.y < first.bottom()), "no rule over the first group: {level:?}");
     let between: Vec<_> = level.iter().filter(|(a, _, _)| a.y > last.bottom() && a.y < next.top()).collect();
     let [(a, b, ink)] = between.as_slice() else { panic!("one rule between the groups: {level:?}") };
+    let middle = (last.bottom() + next.top()) / 2.0;
+    assert!((a.y - middle).abs() <= 0.5, "the rule {a:?} lies in the middle of the room from {last:?} to {next:?}");
     let (left, right) = (a.x.min(b.x), a.x.max(b.x));
     let span = right - left;
     assert!(left > 0.0 && right < RAIL && span > RAIL - span, "the rule reaches across the column, short of its sides: {a:?} to {b:?}");
     let [r, g, bl, al] = border.0;
     assert_eq!(*ink, egui::Color32::from_rgba_unmultiplied(r, g, bl, al), "the rule is in line.border");
+    for (icon, unit) in [(first, DragUnit::Group(1)), (last, DragUnit::Panel(2)), (next, DragUnit::Group(3))] {
+        fixture.drag_hold_at(icon.center(), Vec2::new(RAIL * 2.0, 0.0));
+        let dragged = drag::active::<GroupDrag<u8>>(fixture.ctx()).map(|drag| drag.unit.clone());
+        assert_eq!(dragged, Some(unit.clone()), "a drag on the icon {icon:?} moves {unit:?}");
+        fixture.release_at(icon.center() + Vec2::new(RAIL * 2.0, 0.0)).settle();
+    }
 }

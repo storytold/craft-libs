@@ -114,7 +114,7 @@ fn icons_as_a_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     .into()
 }
 
-/// The icon groups of an app that sets `IconGroupSeparator::Rule` at its root (VectorCraft's): bare grip strips, and an
+/// The icon groups of an app that sets `IconGroupSeparator::Rule` at its root (VectorCraft's): no grip strips, and an
 /// edge rule across the room between two groups.
 #[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Never, title = "Icon groups apart by a rule")]
 fn icon_groups_apart_by_a_rule(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
