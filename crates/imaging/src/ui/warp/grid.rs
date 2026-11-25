@@ -25,12 +25,13 @@ use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
 
-/// How far from an anchor or a handle end a press takes it, in hit targets (12.25 at an 8 target), measured from
-/// where the pointer acts ([`CanvasView::pointer_offset`](craft_behavior::CanvasView::pointer_offset)), on an unplaced mesh ([`WarpGrid::reach_scale`] scales it under a
-/// placement). The reach probes on the reference application (2026-11-23..25, 2 px steps): straight above a handle end
-/// 10 px reaches it and 12 does not at 100 % and 66.7 % (10.5 and 12.5 from where the pointer acts); 12 reaches and 14
-/// does not at 50 % and 33.3 % (12.25 and 12.17 from there).
-const REACH_IN_TARGETS: f32 = 1.53125;
+/// How far from an anchor or a handle end a press takes it, in hit targets (12 at an 8 target), measured from where
+/// the pointer acts ([`CanvasView::pointer_offset`](craft_behavior::CanvasView::pointer_offset)), in the unplaced mesh
+/// as the view would show it ([`WarpGrid::reach_map`] under a placement). The reach probes on the reference application
+/// (2026-11-23..25): straight above a handle end at rest 10.5 px reaches it and 12.5 does not at 100 %, 11.95 reaches
+/// and 13.95 does not at 33.3 %; under a perspective at 33.3 %, along three directions in 1 px steps, the presses
+/// within 11.02 of the handle in the unplaced contents reached it and those from 12.25 on did not.
+const REACH_IN_TARGETS: f32 = 1.5;
 
 
 /// An anchor or a handle end: `POINT.at(index)` with the index into [`WarpMesh::points`].
@@ -58,6 +59,16 @@ impl<'a> WarpReachScale<'a> {
     /// The scale `scale`.
     pub fn new(scale: impl Fn(Point) -> f64 + 'a) -> Self {
         WarpReachScale(Box::new(scale))
+    }
+}
+
+/// The host's map from the warp's unplaced contents to the document at a document point: [`WarpGrid::reach_map`].
+pub struct WarpReachMap<'a>(Box<dyn Fn(Point) -> [f64; 4] + 'a>);
+
+impl<'a> WarpReachMap<'a> {
+    /// The map `map`.
+    pub fn new(map: impl Fn(Point) -> [f64; 4] + 'a) -> Self {
+        WarpReachMap(Box::new(map))
     }
 }
 
@@ -192,6 +203,13 @@ pub struct WarpGrid<'a> {
     /// reached it; at rest 12 reached and 14 did not).
     #[prop(func = "Fn(Point) -> f64")]
     reach_scale: Option<WarpReachScale<'a>>,
+    /// The linear map from the warp's unplaced contents to the document at a document point, row by row (`[a, b, c,
+    /// d]`: a contents step (x, y) is the document step (a·x + b·y, c·x + d·y)). A point's reach is then a circle in the
+    /// contents as the view would show them unplaced, an ellipse on screen (measured 2026-11-25 under a perspective
+    /// at 33.3 %: the reach runs further along the axis the placement squeezes). Takes the place of
+    /// [`reach_scale`](Self::reach_scale).
+    #[prop(func = "Fn(Point) -> [f64; 4]")]
+    reach_map: Option<WarpReachMap<'a>>,
     /// The mesh an edit makes of the mesh at the press; by default [`WarpMesh::edited`].
     #[prop(func = "Fn(&WarpMesh, &WarpEdit) -> WarpMesh")]
     rule: Option<WarpRule<'a>>,
@@ -211,6 +229,7 @@ impl<'a> WarpGrid<'a> {
             split: None,
             surface: None,
             reach_scale: None,
+            reach_map: None,
             rule: None,
             report: Report::default(),
         }
@@ -459,10 +478,17 @@ impl Component for WarpGrid<'_> {
             // The reach is measured from where the pointer acts (half a pixel up and left of it), so the circle
             // sits half a pixel down and right of the point.
             let at = space.view.to_screen(mesh.points[index] - space.view.pointer_offset());
-            let scale = self.reach_scale.as_ref().map_or(1.0, |scale| (scale.0)(mesh.points[index]));
-            let scale = if scale.is_finite() && scale > 0.0 { scale.clamp(0.05, 4.0) as f32 } else { 1.0 };
+            let reach = cx.style.reach;
+            let shape = match self.reach_map.as_ref().and_then(|map| reach_ellipse(&space.view, at, reach, (map.0)(mesh.points[index]))) {
+                Some(ellipse) => HitShape::Polygon(ellipse),
+                None => {
+                    let scale = self.reach_scale.as_ref().map_or(1.0, |scale| (scale.0)(mesh.points[index]));
+                    let scale = if scale.is_finite() && scale > 0.0 { scale.clamp(0.05, 4.0) as f32 } else { 1.0 };
+                    HitShape::circle(at, reach * scale)
+                }
+            };
             let part = cx
-                .part(POINT.at(index as u64), HitShape::circle(at, cx.style.reach * scale))
+                .part(POINT.at(index as u64), shape)
                 .sense(sense)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .focusable();
@@ -598,4 +624,31 @@ impl Component for WarpGrid<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> WarpGridOutput {
         WarpGridOutput { mesh: cx.edit_response(), edit: self.report.edit, picked: self.report.picked }
     }
+}
+
+/// The screen outline of a point's reach `reach` around `at` under the contents-to-document map `map` (`[a, b, c, d]`,
+/// [`WarpGrid::reach_map`]): the circle of that radius in the contents as `view` would show them unplaced, carried
+/// through the map, each radius kept within 0.05 to 4 times `reach`. `None` for a map that is no number or flat (the
+/// caller falls back to a circle).
+fn reach_ellipse(view: &craft_behavior::CanvasView, at: egui::Pos2, reach: f32, map: [f64; 4]) -> Option<Vec<egui::Pos2>> {
+    let [a, b, c, d] = map;
+    let det = a * d - b * c;
+    if !(map.iter().all(|v| v.is_finite()) && det.abs() > 1e-12) {
+        return None;
+    }
+    const SIDES: usize = 32;
+    let outline: Vec<egui::Pos2> = (0..SIDES)
+        .map(|k| {
+            let turn = std::f32::consts::TAU * k as f32 / SIDES as f32;
+            let unplaced = view.unmap_vec(egui::vec2(turn.cos(), turn.sin()) * reach);
+            let placed = craft_behavior::kurbo::Vec2::new(a * unplaced.x + b * unplaced.y, c * unplaced.x + d * unplaced.y);
+            // Each radius kept within 0.05 to 4 times the reach, as a scaled circle's is: near a placement's horizon
+            // (or under a crossed one) the map runs away and would take presses anywhere on the canvas.
+            let off = view.map_vec(placed);
+            let len = off.length();
+            let held = len.clamp(reach * 0.05, reach * 4.0);
+            at + if len > 0.0 && len.is_finite() { off * (held / len) } else { egui::vec2(turn.cos(), turn.sin()) * reach }
+        })
+        .collect();
+    outline.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(outline)
 }

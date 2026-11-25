@@ -635,3 +635,41 @@ fn the_reach_scale_shrinks_a_points_reach() {
         }
     }
 }
+
+/// Under a host's map from the unplaced contents, a point's reach is a circle in the contents as the view would show
+/// them unplaced: where the map halves x, a press 5.5 px right of an anchor (11 in the contents) takes it and one
+/// 6.5 px right (13) misses, while straight down, where nothing is squeezed, 11.5 px takes it and 12.5 misses.
+#[trial]
+fn a_reach_map_makes_a_points_reach_a_circle_in_the_contents() {
+    for (dir, px, taken) in [((1.0f32, 0.0f32), 5.5f32, true), ((1.0, 0.0), 6.5, false), ((0.0, 1.0), 11.5, true), ((0.0, 1.0), 12.5, false)] {
+        let view = Rc::new(Cell::new(None::<CanvasView>));
+        let edit = Rc::new(Cell::new(None::<WarpEdit>));
+        let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+        let shown = (Rc::clone(&view), Rc::clone(&edit), Rc::clone(&mesh));
+        let mut fixture = Fixture::new(move |ui| {
+            let (view, edit, mesh) = &shown;
+            let room = ui.available_rect_before_wrap();
+            let shown_view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+            view.set(Some(shown_view));
+            let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+                let mut held = mesh.borrow_mut();
+                WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).reach_map(|_| [0.5, 0.0, 0.0, 1.0]).show_at(ui, body.rect)
+            });
+            if let Some(output) = canvas.inner
+                && output.edit.is_some()
+            {
+                edit.set(output.edit);
+            }
+        });
+        fixture.settle();
+        // From the bottom right anchor, measured from where the pointer acts, outward (off the mesh).
+        let v = view.get().expect("drawn");
+        let anchor = v.to_screen(Point::new(RECT.x1 + 0.5, RECT.y1 + 0.5));
+        let at = anchor + egui::vec2(dir.0, dir.1) * px;
+        drag_frames(&mut fixture, at, at + egui::vec2(dir.0, dir.1) * 20.0);
+        match edit.get() {
+            Some(WarpEdit::Point { index, .. }) => assert!(taken && index == 15, "{dir:?} {px}: point {index}"),
+            other => assert!(!taken && !matches!(other, Some(WarpEdit::Point { .. })), "{dir:?} {px}: {other:?}"),
+        }
+    }
+}
