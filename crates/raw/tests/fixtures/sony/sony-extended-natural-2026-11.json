@@ -1,0 +1,527 @@
+{
+  "method": "18 metadata-only controls, identical procedural pixels within each mode; natural 20-70mm and 50mm curves transplanted into controlled containers, plus negative localized bumps. Sony 16-bit TIFF exports with saved IDC2 distortion On. Independent local affine registration at 247 positions. Strongest full-frame barrel first-pass phase aliases were reinitialized from successful image-derived displacements and freely reoptimized without lens-table guidance.",
+  "controls": [
+    {
+      "name": "a1-full-u",
+      "variant": "zoom-negative",
+      "setting": [
+        1,
+        16
+      ],
+      "table": [
+        0,
+        -31,
+        -123,
+        -274,
+        -478,
+        -728,
+        -1015,
+        -1333,
+        -1672,
+        -2025,
+        -2384,
+        -2741,
+        -3088,
+        -3416,
+        -3711,
+        -3954,
+        -4120,
+        -4183,
+        -4118
+      ]
+    },
+    {
+      "name": "a1-full-u",
+      "variant": "zoom-positive",
+      "setting": [
+        1,
+        16
+      ],
+      "table": [
+        0,
+        6,
+        22,
+        50,
+        91,
+        144,
+        210,
+        289,
+        383,
+        494,
+        621,
+        769,
+        939,
+        1134,
+        1359,
+        1617,
+        1912,
+        2249,
+        2631
+      ]
+    },
+    {
+      "name": "a1-full-u",
+      "variant": "prime-negative",
+      "setting": [
+        1,
+        16
+      ],
+      "table": [
+        0,
+        -2,
+        -8,
+        -16,
+        -27,
+        -42,
+        -60,
+        -81,
+        -100,
+        -110,
+        -107,
+        -83,
+        -30,
+        64,
+        216,
+        439,
+        749,
+        1161,
+        1689
+      ]
+    },
+    {
+      "name": "a1-full-u",
+      "variant": "prime-positive",
+      "setting": [
+        1,
+        16
+      ],
+      "table": [
+        0,
+        1,
+        3,
+        9,
+        17,
+        29,
+        42,
+        60,
+        86,
+        127,
+        189,
+        280,
+        408,
+        589,
+        838,
+        1173,
+        1608,
+        2161,
+        2848
+      ]
+    },
+    {
+      "name": "a1-full-u",
+      "variant": "negative-bump6",
+      "setting": [
+        1,
+        16
+      ],
+      "table": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -192,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "a1-full-u",
+      "variant": "negative-bump9",
+      "setting": [
+        1,
+        16
+      ],
+      "table": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -192,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "a1-apsc-c",
+      "variant": "zoom-negative",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        -31,
+        -123,
+        -274,
+        -478,
+        -728,
+        -1015,
+        -1333,
+        -1672,
+        -2025,
+        -2384,
+        -2741,
+        -3088,
+        -3416,
+        -3711,
+        -3954,
+        -4120,
+        -4183,
+        -4118
+      ]
+    },
+    {
+      "name": "a1-apsc-c",
+      "variant": "zoom-positive",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        6,
+        22,
+        50,
+        91,
+        144,
+        210,
+        289,
+        383,
+        494,
+        621,
+        769,
+        939,
+        1134,
+        1359,
+        1617,
+        1912,
+        2249,
+        2631
+      ]
+    },
+    {
+      "name": "a1-apsc-c",
+      "variant": "prime-negative",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        -2,
+        -8,
+        -16,
+        -27,
+        -42,
+        -60,
+        -81,
+        -100,
+        -110,
+        -107,
+        -83,
+        -30,
+        64,
+        216,
+        439,
+        749,
+        1161,
+        1689
+      ]
+    },
+    {
+      "name": "a1-apsc-c",
+      "variant": "prime-positive",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        1,
+        3,
+        9,
+        17,
+        29,
+        42,
+        60,
+        86,
+        127,
+        189,
+        280,
+        408,
+        589,
+        838,
+        1173,
+        1608,
+        2161,
+        2848
+      ]
+    },
+    {
+      "name": "a1-apsc-c",
+      "variant": "negative-bump6",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -192,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "a1-apsc-c",
+      "variant": "negative-bump9",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -192,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "a1-7834",
+      "variant": "zoom-negative",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        -31,
+        -123,
+        -274,
+        -478,
+        -728,
+        -1015,
+        -1333,
+        -1672,
+        -2025,
+        -2384,
+        -2741,
+        -3088,
+        -3416,
+        -3711,
+        -3954,
+        -4120,
+        -4183,
+        -4118
+      ]
+    },
+    {
+      "name": "a1-7834",
+      "variant": "zoom-positive",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        6,
+        22,
+        50,
+        91,
+        144,
+        210,
+        289,
+        383,
+        494,
+        621,
+        769,
+        939,
+        1134,
+        1359,
+        1617,
+        1912,
+        2249,
+        2631
+      ]
+    },
+    {
+      "name": "a1-7834",
+      "variant": "prime-negative",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        -2,
+        -8,
+        -16,
+        -27,
+        -42,
+        -60,
+        -81,
+        -100,
+        -110,
+        -107,
+        -83,
+        -30,
+        64,
+        216,
+        439,
+        749,
+        1161,
+        1689
+      ]
+    },
+    {
+      "name": "a1-7834",
+      "variant": "prime-positive",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        1,
+        3,
+        9,
+        17,
+        29,
+        42,
+        60,
+        86,
+        127,
+        189,
+        280,
+        408,
+        589,
+        838,
+        1173,
+        1608,
+        2161,
+        2848
+      ]
+    },
+    {
+      "name": "a1-7834",
+      "variant": "negative-bump6",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -192,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "a1-7834",
+      "variant": "negative-bump9",
+      "setting": [
+        1,
+        11
+      ],
+      "table": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        -192,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}

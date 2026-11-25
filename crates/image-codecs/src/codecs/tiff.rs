@@ -193,6 +193,11 @@ fn camera_raw_mode(b: &[u8], legacy: bool) -> bool {
             if cfa && compression == Some(7) && photo == Some(6) && samples == Some(3) {
                 return true;
             }
+            // Sony pixel-shift composites (`.ARQ`) store four samples per pixel under Sony's own photometric
+            // interpretation 32892; nothing else of Sony's uses it.
+            if photo == Some(32892) {
+                return true;
+            }
         }
         for i in 0..usize::from(n) {
             let e = ifd.saturating_add(2 + 12 * i);
