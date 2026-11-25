@@ -4137,7 +4137,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
 - `craft_ui::runtime::focus::FocusMove`: `pub enum FocusMove { Keys, Other }`. What moved the key focus.
 - `craft_ui::runtime::focus::FocusShape`: `pub enum FocusShape { Rect, Circle, Polygon(Vec<egui::Pos2>) }`. The shape the focus ring takes around a part.
 - `craft_ui::runtime::focus::has`: `pub fn has(ctx: &Context, id: Id) -> bool`. Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
-- `craft_ui::runtime::focus::host_canvas`: `pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse)`. Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: a focus stop
+- `craft_ui::runtime::focus::host_canvas`: `pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse)`. Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: its focus stop
 - `craft_ui::runtime::focus::is_focused`: `pub fn is_focused(ctx: &Context, id: Id) -> bool`. Whether the focus stop is the component `id`: the focused member or item of its arena, or a root that
 - `craft_ui::runtime::focus::request`: `pub fn request(ctx: &Context, target: FocusTarget) -> bool`. Moves focus to `target`, leaves modality unchanged and asks the enclosing scroll owner to reveal it. Called
 - `craft_ui::runtime::focus::takes_letters`: `pub fn takes_letters(keys: &KeyUse) -> bool`. Whether a stop with these keys takes typed letters: a text field or a shortcut recorder. The letters a keytip or a

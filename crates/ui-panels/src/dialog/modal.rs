@@ -287,7 +287,7 @@ impl<'a> Dialog<'a> {
     /// The larger frame margin.
     #[must_use]
     pub fn roomy(mut self, on: bool) -> Self {
-        self.props = self.props.pad(if on { crate::contract::Pad::Roomy } else { crate::contract::Pad::Regular });
+        self.props = self.props.pad(if on { crate::contract::Pad::Roomy } else { crate::contract::Pad::Dialog });
         self
     }
 

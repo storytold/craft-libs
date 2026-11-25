@@ -99,6 +99,8 @@ pub struct TabStripOutput<K> {
     pub empty_drag: bool,
     /// The second press of a double click went down on the strip's empty room this pass.
     pub empty_double: bool,
+    /// The overflow button, when some tabs do not fit: its rect in screen space and the id of its accessibility node.
+    pub overflow: Option<(Rect, Id)>,
 }
 
 impl<K> Outcome for TabStripOutput<K> {
@@ -1010,6 +1012,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
+        let overflow = self.more.map(|rect| (rect, crate::runtime::access::sub_node_id(cx.core.id, OVERFLOW.into())));
         let TabStrip { picked, torn, wheeled, empty_drag, empty_double, can_close, kind, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
@@ -1032,7 +1035,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             mods: craft_keymap::Mods::NONE,
         }));
         response.events = kept;
-        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
+        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double, overflow }
     }
 }
 
