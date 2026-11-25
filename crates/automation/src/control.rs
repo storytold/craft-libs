@@ -200,8 +200,16 @@ impl ControlChannel {
 
     /// Reply now, or park the reply on input, a job or a screenshot. `settle_ms` is the
     /// screenshot settle delay ([`crate::screenshot::settle_ms`] of the animation time);
-    /// `document` the identity a screenshot is attributed to.
+    /// `document` the identity a screenshot is attributed to. A screenshot is admitted at
+    /// [`motion::now`]; [`Self::settle_at`] takes the time instead.
     pub fn settle(&mut self, req: ControlRequest, outcome: Reply, document: Option<DocumentId>, settle_ms: f64) {
+        self.settle_at(req, outcome, document, settle_ms, motion::now());
+    }
+
+    /// [`Self::settle`] with a screenshot admitted at `now`: its settle delay and its
+    /// [`crate::screenshot::DEADLINE`] count from `now`, on the clock the app passes to
+    /// [`Captures::issue`] and [`Captures::drain`].
+    pub fn settle_at(&mut self, req: ControlRequest, outcome: Reply, document: Option<DocumentId>, settle_ms: f64, now: Instant) {
         let reply = req.reply;
         match outcome {
             Reply::Done(v) => {
@@ -212,7 +220,7 @@ impl ControlChannel {
             Reply::AccessTree => self.tree_waiters.push(reply),
             Reply::Screenshot { token, path, region, viewport } => {
                 let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
-                if let Err((reply, e)) = self.captures.admit(request, motion::now()) {
+                if let Err((reply, e)) = self.captures.admit(request, now) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }
