@@ -17,6 +17,8 @@ pub struct Intents {
     /// one has none.
     sources: Vec<Option<Source>>,
     took_arrows: Vec<NavMove>,
+    scalar_moves: Vec<((NavMove, MoveMods), bool)>,
+    scalar_at: usize,
     nudge: Option<Nudge>,
     chords: Vec<Chord>,
     set_value: Option<(Option<PartRef>, f64)>,
@@ -88,6 +90,15 @@ impl Intents {
             }
             None => false,
         }
+    }
+
+    /// Takes one scalar-row move selected by the canonical router, independently of ordinary focused navigation.
+    #[doc(hidden)]
+    pub fn take_scalar_move(&mut self) -> Option<(NavMove, MoveMods)> {
+        let item = self.scalar_moves.get_mut(self.scalar_at)?;
+        self.scalar_at += 1;
+        item.1 = true;
+        Some(item.0)
     }
 
     /// Takes the next move, whichever it is: for a component that acts on every move. A move taken is the component's,
@@ -287,6 +298,8 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
         items,
         sources,
         took_arrows: Vec::new(),
+        scalar_moves: routed.scalar_moves.into_iter().map(|movement| (movement, false)).collect(),
+        scalar_at: 0,
         nudge: routed.nudge,
         chords: routed.chords,
         set_value: routed.set_value,
@@ -474,6 +487,8 @@ pub fn settle(ctx: &Context, id: Option<Id>, intents: &Intents) {
         let Some(routed) = stage.routed.get_mut(&id) else { return };
         let mut taken = intents.items.iter().map(|(_, taken)| *taken);
         routed.items.retain(|_| !taken.next().unwrap_or(false));
+        let mut scalar_taken = intents.scalar_moves.iter().map(|(_, taken)| *taken);
+        routed.scalar_moves.retain(|_| !scalar_taken.next().unwrap_or(false));
         if intents.nudge.is_none() {
             routed.nudge = None;
         }

@@ -5,6 +5,52 @@ use crate::press::{PressPhase, PressState};
 use emath::{Pos2, Rect, Vec2};
 use std::ops::{Range, RangeInclusive};
 
+/// A modifier that changes continuous pointer-drag sensitivity. It does not remap input or keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DragModifier {
+    /// Alt (Option).
+    Alt,
+    /// Shift.
+    Shift,
+    /// Control.
+    Control,
+    /// The platform's command modifier.
+    Command,
+}
+
+impl DragModifier {
+    fn held(self, press: &PressState) -> bool {
+        match self {
+            Self::Alt => press.mods.alt,
+            Self::Shift => press.mods.shift,
+            Self::Control => press.mods.ctrl,
+            Self::Command => press.mods.cmd,
+        }
+    }
+}
+
+/// The pointer-only fine/coarse bindings of a continuous drag. Fine wins when both bindings match.
+/// Unbound modifiers leave travel normal. Defaults retain Alt fine, Shift coarse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DragModifiers {
+    fine: Option<DragModifier>,
+    coarse: Option<DragModifier>,
+}
+
+impl DragModifiers {
+    /// Selects the fine and coarse bindings; `None` disables that binding.
+    pub const fn new(fine: Option<DragModifier>, coarse: Option<DragModifier>) -> Self {
+        Self { fine, coarse }
+    }
+}
+
+impl Default for DragModifiers {
+    fn default() -> Self {
+        Self::new(Some(DragModifier::Alt), Some(DragModifier::Shift))
+    }
+}
+
 /// How the pointer's position along the axis becomes a value.
 #[derive(Clone, Debug, PartialEq)]
 enum Mapping {
@@ -24,6 +70,7 @@ pub struct ValueDrag {
     hide_cursor: bool,
     fine: f64,
     coarse: Option<f64>,
+    modifiers: DragModifiers,
 }
 
 /// The factor Alt (Option) applies to travel when a drag sets none.
@@ -40,12 +87,30 @@ impl ValueDrag {
     /// A track whose `start` lies after its `end` runs backwards, as a vertical slider's does, and a range whose start
     /// exceeds its end maps the track the other way; the value stays within the range either way.
     pub fn absolute(track: Range<f32>, range: RangeInclusive<f64>) -> Self {
-        ValueDrag { mapping: Mapping::Absolute { track }, axis: Axis::X, range, warp: false, hide_cursor: false, fine: FINE, coarse: None }
+        ValueDrag {
+            mapping: Mapping::Absolute { track },
+            axis: Axis::X,
+            range,
+            warp: false,
+            hide_cursor: false,
+            fine: FINE,
+            coarse: None,
+            modifiers: DragModifiers::default(),
+        }
     }
 
     /// The value changes by `rate` units per point of travel from the press. Vertical travel upwards increases it.
     pub fn relative(rate: f64, range: RangeInclusive<f64>) -> Self {
-        ValueDrag { mapping: Mapping::Relative { rate }, axis: Axis::X, range, warp: false, hide_cursor: false, fine: FINE, coarse: None }
+        ValueDrag {
+            mapping: Mapping::Relative { rate },
+            axis: Axis::X,
+            range,
+            warp: false,
+            hide_cursor: false,
+            fine: FINE,
+            coarse: None,
+            modifiers: DragModifiers::default(),
+        }
     }
 
     /// The axis the pointer travels on; the default is horizontal.
@@ -64,6 +129,12 @@ impl ValueDrag {
     /// larger step has no meaning, so Shift changes nothing.
     pub const fn coarse(mut self, factor: f64) -> Self {
         self.coarse = Some(factor);
+        self
+    }
+
+    /// Selects pointer fine/coarse bindings without changing keyboard or wheel behavior.
+    pub const fn modifiers(mut self, modifiers: DragModifiers) -> Self {
+        self.modifiers = modifiers;
         self
     }
 
@@ -129,9 +200,9 @@ impl ValueDrag {
             _ => return None,
         };
         let pos = pos - shift;
-        let fine = if press.mods.alt {
+        let fine = if self.modifiers.fine.is_some_and(|binding| binding.held(press)) {
             self.fine
-        } else if press.mods.shift {
+        } else if self.modifiers.coarse.is_some_and(|binding| binding.held(press)) {
             self.coarse.unwrap_or(1.0)
         } else {
             1.0
@@ -235,6 +306,38 @@ mod tests {
     use crate::press::{PointerButton, PressStart};
     use craft_keymap::Mods;
     use emath::{Vec2, pos2};
+
+    #[test]
+    fn pointer_modifier_policy_preserves_defaults_and_raw_modifiers() {
+        let base = ValueDrag::relative(1.0, -1000.0..=1000.0).coarse(10.0);
+        let mut both = Mods::ALT;
+        both.shift = true;
+        for (mods, expected) in [(Mods::NONE, 20.0), (Mods::SHIFT, 200.0), (Mods::ALT, 2.0), (both, 2.0)] {
+            let press = drag(pos2(0.0, 0.0), pos2(20.0, 0.0), mods);
+            assert_eq!(base.value(0.0, &press, false), Some(expected));
+            assert_eq!(press.mods, mods);
+        }
+    }
+
+    #[test]
+    fn pointer_modifier_policy_selects_shift_fine_and_alt_normal() {
+        let base = ValueDrag::relative(1.0, -1000.0..=1000.0).coarse(10.0).modifiers(DragModifiers::new(Some(DragModifier::Shift), None));
+        let mut both = Mods::ALT;
+        both.shift = true;
+        for (mods, expected) in [(Mods::NONE, 20.0), (Mods::SHIFT, 2.0), (Mods::ALT, 20.0), (both, 2.0)] {
+            let press = drag(pos2(0.0, 0.0), pos2(20.0, 0.0), mods);
+            assert_eq!(base.value(0.0, &press, false), Some(expected));
+            assert_eq!(press.mods, mods);
+        }
+    }
+
+    #[test]
+    fn pointer_modifier_policy_unbound_and_overlapping_bindings_are_explicit() {
+        let base = ValueDrag::relative(1.0, -1000.0..=1000.0).coarse(10.0);
+        let shift = drag(pos2(0.0, 0.0), pos2(20.0, 0.0), Mods::SHIFT);
+        assert_eq!(base.clone().modifiers(DragModifiers::new(None, None)).value(0.0, &shift, false), Some(20.0));
+        assert_eq!(base.modifiers(DragModifiers::new(Some(DragModifier::Shift), Some(DragModifier::Shift))).value(0.0, &shift, false), Some(2.0));
+    }
 
     fn drag(from: Pos2, to: Pos2, mods: Mods) -> PressState {
         let start = PressStart::new(from, PointerButton::Primary, 0.0, 1);
