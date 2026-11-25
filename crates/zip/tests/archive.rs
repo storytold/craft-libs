@@ -205,3 +205,27 @@ fn owned_archive_applies_directory_guards() {
     assert!(Archive::open_owned(bytes, ROOMY).unwrap().has_duplicate_names());
     assert!(Archive::open_owned(b"invalid".to_vec(), ROOMY).is_err());
 }
+
+#[test]
+fn header_validation_rejects_local_name_disagreement_before_reads() {
+    let original = archive(&[("folder/file", b"payload", Compression::Deflated)]);
+    let mut good = Archive::open(&original, ROOMY).unwrap();
+    good.validate_header_consistency().unwrap();
+    let mut bad = original;
+    // Only the local name changes; the central directory remains valid.
+    bad[30] = b'X';
+    let mut candidate = Archive::open(&bad, ROOMY).unwrap();
+    assert!(candidate.validate_header_consistency().is_err());
+}
+
+#[test]
+fn header_validation_accepts_streamed_data_descriptors() {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new_stream(Vec::new());
+    writer.start_file("stream.txt", zip::write::SimpleFileOptions::default()).unwrap();
+    writer.write_all(b"stream content").unwrap();
+    let bytes = writer.finish().unwrap().into_inner();
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+    archive.validate_header_consistency().unwrap();
+    assert_eq!(archive.read("stream.txt", 100).unwrap().unwrap(), b"stream content");
+}

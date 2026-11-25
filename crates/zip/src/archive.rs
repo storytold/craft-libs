@@ -132,6 +132,14 @@ impl<'a> Archive<'a> {
         self.duplicates
     }
 
+    /// Check each local header against the central-directory entry before reading data.
+    /// This detects mismatched names, sizes, flags and compression methods without
+    /// decompressing the entries. Duplicate names and overlapping entries are also
+    /// rejected. Callers can reject ambiguous archives before parsing.
+    pub fn validate_header_consistency(&mut self) -> Result<(), Error> {
+        self.zip.validate_header_consistency().map_err(|error| Error::NotZip(error.to_string()))
+    }
+
     /// Do two entries' compressed data ranges overlap? A format that stores many files in one
     /// archive can refuse aliases so one payload cannot be expanded and retained repeatedly.
     pub fn has_overlapping_files(&mut self) -> Result<bool, Error> {
