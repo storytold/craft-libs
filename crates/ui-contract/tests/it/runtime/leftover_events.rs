@@ -112,6 +112,11 @@ fn a_fresh_press_ends_a_fired_key_hold_after_the_events_before_it() {
 #[trial]
 fn a_clip_keeps_its_place_beside_equal_events_a_widget_took() {
     let mut frames = Frames::new();
+    // The trial is about where the paste is put back, not who takes it: the library's own Paste, which binds Cmd+V by
+    // default, is unbound so it takes neither the paste nor its place.
+    let mut unbound = Overrides::new();
+    unbound.insert(EditCommands::Paste.id(), Vec::new());
+    frames.commands(CommandInput::new().overrides(Arc::new(unbound)));
     let left = RefCell::new(Vec::new());
     // A widget of the app's own takes the first of the two texts in the one frame below by hand, as one that reads
     // the input in order takes the first match it meets (egui's own consumers take every equal event).
