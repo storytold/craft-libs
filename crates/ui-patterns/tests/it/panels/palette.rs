@@ -47,6 +47,17 @@ struct Rig {
 /// A palette open over `entries`, inside a modal dialog when `in_dialog`, with `beneath` shown before it in the same
 /// window. `recents` binds the palette's recent commands to the rig when given; else the palette keeps them.
 fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: bool, beneath: impl Fn(&mut Ui) + 'static) -> Rig {
+    rig_least(entries, recents, in_dialog, None, beneath)
+}
+
+/// [`rig`], with the palette's least width `least` when given.
+fn rig_least(
+    entries: Vec<HelpEntry>,
+    recents: Option<Vec<CommandRef>>,
+    in_dialog: bool,
+    least: Option<LeastWidth>,
+    beneath: impl Fn(&mut Ui) + 'static,
+) -> Rig {
     let open = Rc::new(Cell::new(true));
     let picked = Rc::new(RefCell::new(None::<CommandRef>));
     let refused = Rc::new(RefCell::new(None::<CommandRef>));
@@ -61,6 +72,10 @@ fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: boo
             let view = env.view();
             let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
             let palette = CommandPalette::new("Commands", &entries, &index, Bind::bound(&mut is_open));
+            let palette = match least {
+                Some(least) => palette.least_width(least),
+                None => palette,
+            };
             let output = if bound {
                 let mut recents = shown_held.borrow().clone();
                 let output = palette.recents(Bind::bound(&mut recents)).show(ui);
@@ -530,14 +545,22 @@ fn enter_on_a_disabled_first_match_runs_nothing() {
 }
 
 /// The dialog face is a steady, readable width: over short labels it opens at least the palette's least width, typing a
-/// query that drops the widest rows leaves its width as it was, and in a narrow window it keeps to its share of it.
-/// Guards against a box as wide as its widest row, which opened narrow and jumped as the results changed.
+/// query that drops the widest rows leaves its width as it was, and in a narrow window it keeps to its share of it,
+/// where a least width wider than that share gives way to it. Guards against a box as wide as its widest row, which
+/// opened narrow and jumped as the results changed.
 #[trial]
 fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
-    let least = Rc::new(Cell::new(0.0_f32));
-    let read = least.clone();
-    let entries = vec![entry("cut", "Cut"), entry("copy", "Copy"), entry("paste", "Paste"), entry("pasteInside", "Paste Inside")];
-    let mut rig = rig(entries, None, false, move |ui| read.set(LeastWidth::Palette.points(craft_ui::runtime::env::Env::of(ui).tokens.tokens())));
+    let entries = || vec![entry("cut", "Cut"), entry("copy", "Copy"), entry("paste", "Paste"), entry("pasteInside", "Paste Inside")];
+    // A rig whose palette has the least width `role` (the default when `None`), and that width in its tokens.
+    let rigged = |role: Option<LeastWidth>| {
+        let least = Rc::new(Cell::new(0.0_f32));
+        let read = least.clone();
+        let points = move |ui: &mut Ui| {
+            read.set(role.unwrap_or(LeastWidth::Palette).points(craft_ui::runtime::env::Env::of(ui).tokens.tokens()));
+        };
+        (rig_least(entries(), None, false, role, points), least)
+    };
+    let (mut rig, least) = rigged(None);
     let width = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the palette's box shows").rect.width();
     rig.fixture.room(Vec2::new(1400.0, 900.0)).settle();
     let opened = width(&rig.fixture);
@@ -548,8 +571,20 @@ fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
     let typed = width(&rig.fixture);
     assert!((typed - opened).abs() <= 0.5, "the box keeps its width as the rows change: {typed} against {opened}");
 
-    let narrow = 400.0;
-    rig.fixture.room(Vec2::new(narrow, 900.0)).settle();
+    // The box's share is of the window, and a fixture's window is never narrower than 800 points, whatever the room
+    // (`Frames::screen`): the share is read from the window the layer shows in, not from the room.
+    let narrow = Vec2::new(400.0, 900.0);
+    rig.fixture.room(narrow).settle();
+    let window = rig.fixture.ctx().content_rect().width();
     let kept = width(&rig.fixture);
-    assert!(kept <= narrow * 0.6 + 0.5, "a narrow window keeps the box to its share: {kept} in {narrow}");
+    assert!(kept <= window * 0.6 + 0.5, "a narrow window keeps the box to its share: {kept} in {window}");
+
+    // That share is wider than the palette's least width, which the box keeps there; a least width wider than the
+    // share gives way to it.
+    let (mut wide, least) = rigged(Some(LeastWidth::WideDialog));
+    wide.fixture.room(narrow).settle();
+    let window = wide.fixture.ctx().content_rect().width();
+    assert!(least.get() > window * 0.6, "the wide least width {} is wider than the share of {window}", least.get());
+    let kept = width(&wide.fixture);
+    assert!(kept <= window * 0.6 + 0.5, "a least width wider than the share gives way to it: {kept} in {window}");
 }
