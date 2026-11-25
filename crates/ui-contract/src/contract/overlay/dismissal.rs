@@ -34,12 +34,11 @@ pub(super) fn dismissal(
     if dismiss.anchor_gone && layer.overlay.opener.as_ref().is_some_and(|first| !first.active(ctx, None).0.enabled) {
         return Some(CloseReason::AnchorGone);
     }
-    // The input hook recorded the press (and removed a primary one) beside the layers open in that pass; presses inside
-    // the family and its anchors never get here.
+    // The input hook recorded the press (and removed a primary one) as the lone point it landed on; the record stands
+    // for the layers the pass already had, and presses inside the family and its anchors never get here.
     if dismiss.outside == Outside::Absorb {
-        // A layer that appears in this pass was not open when the press was made, so the press is not outside it: a
-        // secondary press reaches the part below, which opens its own menu in the same pass when a press and its
-        // release share a frame.
+        // A layer that appears in this pass opened after the press was made, so the press is not outside it: `opening`
+        // is what tells it from the layers the record stands for.
         if overlay::absorbed_press(ctx).is_some() && !overlay::opening(ctx, layer.id) {
             return Some(CloseReason::Outside);
         }

@@ -745,8 +745,9 @@ pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::in
     input.events.len() != before
 }
 
-/// The outside press the input hook recorded for the running pass, beside the layers open when it was made. A tracked
-/// input (`Input::Press`).
+/// The outside press the input hook recorded for the running pass: the lone point it landed on, for the layers the pass
+/// showed before it. `opening` is how a layer that appears in the pass tells it is none of those. A tracked input
+/// (`Input::Press`).
 pub(crate) fn absorbed_press(ctx: &Context) -> Option<Pos2> {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
     absorbed_press_raw(ctx)
