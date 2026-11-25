@@ -221,12 +221,11 @@ impl DropZone {
     }
 }
 
-/// What a drag moves along with the pointer when its source is a container: the container's layer, and its window
-/// where it opens one. Targets never see the pointer through the layer or inside the window, so the targets under
-/// the moving unit take the drop.
+/// The window a drag moves along with the pointer when its source is a container that opens one. Targets never see
+/// the pointer inside the window, so the targets under the moving unit take the drop; the container's layer is looked
+/// through the same way ([`moving_layer`]).
 #[derive(Clone, Copy, Default)]
 struct Moving {
-    layer: Option<Layer>,
     viewport: Option<ViewportId>,
 }
 
@@ -357,7 +356,7 @@ pub fn start(
                 .unwrap_or(PointerButton::Primary);
             board.session = Some(Session {
                 source,
-                moving: Moving { layer: overlay::entry(ctx, source).map(|entry| entry.layer), viewport: Some(viewports::viewport_id(source)) },
+                moving: Moving { viewport: Some(viewports::viewport_id(source)) },
                 viewport,
                 button,
                 payload,
@@ -637,9 +636,13 @@ pub(crate) fn dragging_of(ctx: &Context, payload: TypeId) -> Option<(Arc<dyn Any
     Some((payload, session_pointer(ctx)?))
 }
 
-/// The layer the running session's source moves with the pointer, which hit tests for drop targets look through.
+/// The layer the running session's source moves with the pointer when the source is a container, which hit tests for
+/// drop targets look through. Read from the layers shown last frame at each hit test, not when the session starts: a
+/// container shown first in the pass its drag starts (a window floated to continue a press) has its layer recorded
+/// only after its body ran (`overlay::record`).
 pub(crate) fn moving_layer(ctx: &Context) -> Option<Layer> {
-    board(ctx, |board| board.session.as_ref().and_then(|session| session.moving.layer))
+    let source = board(ctx, |board| board.session.as_ref().map(|session| session.source))?;
+    overlay::entry(ctx, source).map(|entry| entry.layer)
 }
 
 /// Whether the running session's source is the window of the running viewport: its targets take no drop of the
@@ -959,14 +962,26 @@ pub(crate) struct Ghost {
     pub mark: Option<(DropMark, Arc<UiTokens>)>,
 }
 
-/// The running session's ghost data.
+/// The running session's ghost data for the running viewport. The mark paints in the window whose target registered
+/// it, and also in the window the session moves, mapped to the same desktop place: that window lies over the mark,
+/// which would otherwise show only through it.
 pub(crate) fn ghost(ctx: &Context) -> Option<Ghost> {
     let viewport = pass::current_viewport(ctx);
-    board(ctx, |board| {
-        board.session.as_ref().map(|session| Ghost {
-            preview: session.preview.clone(),
-            env: session.env.clone(),
-            mark: session.mark.as_ref().filter(|shown| shown.viewport == viewport).map(|shown| (shown.mark, shown.tokens.clone())),
-        })
-    })
+    let (preview, env, mark, moves_this) = board(ctx, |board| {
+        board
+            .session
+            .as_ref()
+            .map(|session| (session.preview.clone(), session.env.clone(), session.mark.clone(), session.moving.viewport == Some(viewport)))
+    })?;
+    let mark = mark.and_then(|shown| {
+        let offset = if shown.viewport == viewport {
+            Vec2::ZERO
+        } else if moves_this {
+            WindowHost::of(ctx).offset_between(shown.viewport, viewport)?
+        } else {
+            return None;
+        };
+        Some((shown.mark.mapped(|point| point + offset), shown.tokens))
+    });
+    Some(Ghost { preview, env, mark })
 }

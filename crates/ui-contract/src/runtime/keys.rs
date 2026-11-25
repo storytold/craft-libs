@@ -66,9 +66,6 @@ pub enum MenuKey {
 pub(crate) struct NavKeys {
     pub(crate) tabs: Vec<bool>,
     pub(crate) panes: Vec<bool>,
-    /// The input hook left a bare Tab in egui's input: nothing has the focus and the window registered no focus stop,
-    /// so the framework has nothing to move to and egui moves its own focus.
-    pub(crate) tab_to_egui: bool,
 }
 
 struct Press {
@@ -325,6 +322,9 @@ pub(crate) struct Stage {
     pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.
     queued_edits: Vec<EditCommand>,
+    /// A component read its intents in this pass, so the pass's UI is running: an edit fired from now on waits for the
+    /// next pass.
+    intents_read: bool,
     /// The components that asked for a context menu in this pass, with the rect it opens at.
     contexts: Vec<(Id, egui::Rect, Option<PartRef>)>,
     /// Components with an open edit run this pass: Escape cancels the run before it leaves a row's child.

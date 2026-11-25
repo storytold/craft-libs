@@ -270,6 +270,22 @@ fn the_wheel_steps_the_shown_tab_only_where_the_strip_asks_for_it() {
     }
 }
 
+/// A notch of wheel scroll that arrives in four quarter-notch passes shows one tab step, as a whole notch in one pass
+/// does: a trackpad's small deltas add up instead of being dropped.
+#[trial]
+fn small_wheel_deltas_add_up_to_one_tab_step() {
+    use craft_ui::testing::pointer;
+    for parts in [4_u32, 1] {
+        let (mut fixture, shown) = wheel_rig(true);
+        let over = fixture.by_label("Two").expect("the tab's node").center();
+        fixture.frame(vec![pointer::moved(over)]).idle(1);
+        for _ in 0..parts {
+            fixture.frame(vec![pointer::wheel_lines(-1.0 / parts as f32)]).idle(2);
+        }
+        assert_eq!(shown.get(), 1, "a notch in {parts} passes shows exactly the next tab");
+    }
+}
+
 /// A double click on the empty room after the last document tab asks for a new document; a double click on a tab
 /// activates it and asks for none.
 #[trial]

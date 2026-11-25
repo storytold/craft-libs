@@ -1157,3 +1157,36 @@ fn a_new_question_in_place_of_another_waits_again_for_its_armed_answer() {
     click_ok(&mut fixture);
     assert!(host.borrow().is_empty(), "after its delay the OK answers it");
 }
+
+/// A dialog is padded `space.pad.dialog` and its footer buttons stand `size.dialog.button_height` high (VectorCraft's
+/// 22-point margin and 28-point buttons); an app that sets neither keeps a panel's padding and a push button's height.
+#[trial]
+fn a_dialog_takes_its_padding_and_footer_button_height_from_the_dialog_sizes() {
+    let shown = |overrides: &[(&str, f32)]| {
+        let mut sizes = craft_theme::AppSizes::default();
+        for (path, value) in overrides {
+            sizes.all.insert((*path).to_owned(), craft_theme::SizeValue::Number(*value));
+        }
+        let mut root = craft_ui::runtime::env::RootEnv::default();
+        root.sizes = Arc::new(sizes);
+        let mut fixture = Fixture::new(|ui| {
+            let mut open = true;
+            Dialog::new("Options").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+                Text::new("Body text").show(ui);
+            });
+        });
+        fixture.root(root).room(vec2(1200.0, 800.0)).settle();
+        let dialog = fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+        let text = fixture.texts().iter().find(|run| run.text == "Body text").expect("the body is painted").rect;
+        (text.left() - dialog.left(), fixture.by_label("OK").expect("the footer's OK").rect.height())
+    };
+    let standard = shown(&[]);
+    let dialog = shown(&[("space.pad.dialog", 30.0), ("size.dialog.button_height", 40.0)]);
+    assert!(dialog.0 > standard.0 + 10.0, "a larger dialog padding moves the body in from the edge: {standard:?} then {dialog:?}");
+    assert!(dialog.1 > standard.1 + 10.0, "a taller dialog button raises OK: {standard:?} then {dialog:?}");
+    let follows = shown(&[("space.pad.regular", 30.0), ("size.button", 40.0)]);
+    assert!(
+        (follows.0 - dialog.0).abs() < 0.5 && (follows.1 - dialog.1).abs() < 0.5,
+        "both follow the panel padding and the push button: {follows:?} and {dialog:?}"
+    );
+}

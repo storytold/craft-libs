@@ -167,6 +167,9 @@ pub(crate) struct Facts {
     /// The components whose memory owners registered in the run (`memory::register_owner`): a replay needs their
     /// shown-tier state still kept (`memory::ended_since`).
     pub(crate) owners: Vec<egui::Id>,
+    /// The components that take the AccessKit requests on the nodes the run registered (`note_node_owner`): a request
+    /// routed to one of them is routed into the run, though the component is no egui widget (a collection's row).
+    pub(crate) node_owners: Vec<egui::Id>,
     /// The layout memory entries the run kept (`note_layout_keep`): a replay keeps them (`layout_memory::keep`).
     pub(crate) layout_keeps: Vec<egui::Id>,
     /// The derived values the run asked for (`note_derived_keep`): a replay keeps them, since it asks for none.
@@ -293,6 +296,7 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.blocked |= open.facts.blocked;
             outer.facts.discards |= open.facts.discards;
             outer.facts.owners.extend(open.facts.owners.iter().copied());
+            outer.facts.node_owners.extend(open.facts.node_owners.iter().copied());
             outer.facts.layout_keeps.extend(open.facts.layout_keeps.iter().copied());
             outer.facts.derived_keeps.extend(open.facts.derived_keeps.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
@@ -577,6 +581,12 @@ pub(crate) fn note_layout_keep(ctx: &Context, id: egui::Id) {
 /// keeps it too, as the replay asks for nothing and an entry no pass asked for in a frame is dropped.
 pub(crate) fn note_derived_keep(ctx: &Context, slot: egui::Id) {
     with_open(ctx, |facts| facts.derived_keeps.push(slot));
+}
+
+/// Notes that `owner` takes the AccessKit requests on a node the running code registered (`keys::register_node`). A
+/// replay registers the node again from its journal, which notes it in the records open around the replay.
+pub(crate) fn note_node_owner(ctx: &Context, owner: egui::Id) {
+    with_open(ctx, |facts| facts.node_owners.push(owner));
 }
 
 /// Notes that the memory owner `owner` registered in the running code.

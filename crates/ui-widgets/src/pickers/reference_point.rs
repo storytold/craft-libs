@@ -12,6 +12,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, Flags, FocusLook, Stateful, States, StyleColor, StyleCx, SurfaceKind, SurfaceLook, UiTokens};
 use craft_behavior::{Anchor9, Metrics, NavShape, PartKey, PartRef, Roving, Sense};
+use craft_theme::Rgba;
 use egui::{CornerRadius, Pos2, Rect, Vec2, vec2};
 
 #[cfg(feature = "suite")]
@@ -54,7 +55,7 @@ pub struct ReferencePointStyle {
     surface: SurfaceLook,
     #[style(focus)]
     focus: FocusLook,
-    /// The side of one point's cell.
+    /// The side of one point's cell; in the `Squares` look, the step from one square's centre to the next.
     cell: f32,
     /// The side of an unpicked point's dot.
     dot: f32,
@@ -62,13 +63,13 @@ pub struct ReferencePointStyle {
     picked_dot: f32,
     /// The dots' corner radius.
     dot_radius: egui::CornerRadius,
-    /// The picked point's dot.
+    /// The picked point's dot or square: `accent.text`, `text.normal` in the `Squares` look.
     ink: Stateful<StyleColor>,
     /// The side of the square one growth arrow fits in.
     arrow: f32,
     /// The unpicked dots and squares, the line joining the squares and the growth arrows.
     arrow_ink: Stateful<StyleColor>,
-    /// The side of a square of the `Squares` look.
+    /// The side of a square of the `Squares` look, which is two cells and a square wide.
     square: f32,
     /// The width of the `Squares` line and of the unpicked squares' outline.
     line: StrokeWidth,
@@ -104,8 +105,10 @@ pub enum ReferencePointLook {
     /// A dot for each point, the pick's twice as wide.
     #[default]
     Dots,
-    /// Eight outer squares joined by one line round the box and a lone centre square, the pick filled, with growth
-    /// arrows in `Dots` only.
+    /// Eight outer squares joined by one line round the box and a lone centre square in the muted ink, the pick
+    /// filled in the normal text ink, on the surface around the picker with no well of its own. The squares are
+    /// `shape.locator.square` on a side, `shape.locator.cell` apart, the same in the compact picker. Growth arrows are
+    /// in `Dots` only.
     Squares,
 }
 
@@ -213,21 +216,32 @@ impl Component for ReferencePoint<'_> {
         let edge = Stateful::new(cx.color(colors.line.control_edge));
         let disabled = cx.color(colors.text.disabled);
         let look = |rest: StyleColor| Stateful::new(rest).off(States::new(rest, rest, rest, disabled));
-        ReferencePointStyle {
-            metrics: Metrics::new(),
-            surface: SurfaceLook::new(Stateful::new(StyleColor(sunken.fill)))
+        let squares = key.look == ReferencePointLook::Squares;
+        // The squares stand on the surface around them, joined by their own line; the dots sit in a sunken well.
+        let surface = if squares {
+            SurfaceLook::new(Stateful::new(cx.color(Rgba::TRANSPARENT)))
+        } else {
+            SurfaceLook::new(Stateful::new(StyleColor(sunken.fill)))
                 .kind(SurfaceKind::Sunken)
                 .radius(sunken.radius)
-                .border(edge, cx.tokens.stroke.thin),
+                .border(edge, cx.tokens.stroke.thin)
+        };
+        ReferencePointStyle {
+            metrics: Metrics::new(),
+            surface,
             focus: cx.focus_look(),
-            cell: if key.compact { cx.tokens.size.icon.md / GRID as f32 } else { cx.tokens.size.control.md },
+            cell: match (squares, key.compact) {
+                (true, _) => cx.tokens.shape.locator.cell,
+                (false, true) => cx.tokens.size.icon.md / GRID as f32,
+                (false, false) => cx.tokens.size.control.md,
+            },
             dot: DOT,
             picked_dot: if key.compact { DOT } else { DOT * 2.0 },
             dot_radius: UiTokens::corner(cx.tokens.shape.radius.sm),
-            ink: look(cx.color(colors.accent.text)),
+            ink: look(cx.color(if squares { colors.text.normal } else { colors.accent.text })),
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
-            square: cx.tokens.size.handle.sm,
+            square: cx.tokens.shape.locator.square,
             line: StrokeWidth::Thin,
             bar: cx.tokens.size.icon.sm,
             bar_short: cx.tokens.size.icon.sm * BAR_SHORT,
@@ -239,7 +253,11 @@ impl Component for ReferencePoint<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.style.cell * GRID as f32)
+        Vec2::splat(if self.look == ReferencePointLook::Squares {
+            cx.style.cell * (GRID - 1) as f32 + cx.style.square
+        } else {
+            cx.style.cell * GRID as f32
+        })
     }
 
     fn sense(&self) -> Sense {
@@ -324,7 +342,15 @@ impl Component for ReferencePoint<'_> {
             return;
         }
         if squares {
-            let centres: Vec<Pos2> = (0..Anchor9::ALL.len()).map(|at| Self::cell_rect(cx.rect, at).center()).collect();
+            // The outer squares' edges meet the picker's edges, a cell apart.
+            let first = cx.rect.min + Vec2::splat(cx.style.square / 2.0);
+            let centres: Vec<Pos2> = Anchor9::ALL
+                .iter()
+                .map(|point| {
+                    let (column, row) = point.cell();
+                    first + vec2(column as f32, row as f32) * cx.style.cell
+                })
+                .collect();
             let (half, outline) = (cx.style.square / 2.0, cx.resolve(&cx.style.arrow_ink));
             // Each side of the ring runs between the squares it joins, so the line never crosses a square.
             for (from, to) in RING.iter().zip(RING.iter().cycle().skip(1)) {
