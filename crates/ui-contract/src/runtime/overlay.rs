@@ -302,8 +302,8 @@ pub(crate) struct Persist {
     stack: Vec<Id>,
     /// A press the modal drop removed, for the window host to raise the modal's window.
     dropped_press: bool,
-    /// The screen rects a press may land in without closing the top menu family: the family and its anchors, without
-    /// the window or modal card that hosts the menus (`absorb_zone`). `None` when the top layer does not absorb outside
+    /// The screen rects a press may land in without closing the top menu family: its live layers and their anchors,
+    /// without the window or modal card that hosts the menus (`absorb_zone`). `None` when the top layer does not absorb outside
     /// presses.
     absorb_zone: Option<Vec<Rect>>,
     /// An outside press the input hook recorded for the running pass (and removed, for a primary one).
@@ -314,7 +314,8 @@ pub(crate) struct Persist {
     popup_over_modal: bool,
     /// The layers that first showed while the primary button was held, until that press ends.
     held_open: IdSet,
-    /// The root frame and pass each shown layer first ran its body in; gone with the layer's last entry.
+    /// The root frame and pass each shown layer first ran its body in, and for a layer of this window that shows in a
+    /// popup window of its own, the pass it first asked for it in; gone with the layer's last entry.
     appeared: IdMap<(u64, u64)>,
     /// The roots whose asked raise ran in a pass where a floating window (re)appeared: egui raises every layer that
     /// shows again, and its area order keeps the old order among the layers raised in one pass, so the raise is asked
@@ -553,19 +554,29 @@ fn reopened(ctx: &Context, id: Id, exiting: bool) -> bool {
     !exiting && with_pass(ctx, |pass| pass.last.iter().any(|entry| entry.id == id && entry.exiting))
 }
 
-/// Whether the layer `id` appears in this pass, read before its `begin_layer`: it was hidden in the last pass, or it
+/// Whether the layer `id` appears in this pass, read before its `note_appeared`: it was hidden in the last pass, or it
 /// faded out and is open again. What the layer remembers starts fresh then; a discard pass that repeats the frame
 /// keeps what the first pass of the frame recorded.
 pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
-    appears_in(ctx, pass::current_viewport(ctx), id, exiting)
+    reopened(ctx, id, exiting) || with_persist(ctx, pass::current_viewport(ctx), |persist| !persist.appeared.contains_key(&id))
 }
 
-/// Whether the layer `id` appears in [`begin_layer`]'s pass of `viewport`, read before it: a layer shown in a popup
-/// window is stamped there, by the popup's own pass, so its host reads that viewport's record rather than its opener's,
-/// which stamps nothing for it. A layer that faded out is seen in the stack of the running pass, whose host shows the
-/// window that decides it.
-pub(crate) fn appears_in(ctx: &Context, viewport: ViewportId, id: Id, exiting: bool) -> bool {
-    reopened(ctx, id, exiting) || with_persist(ctx, viewport, |persist| !persist.appeared.contains_key(&id))
+/// Records that the layer `id` shows in the running viewport in this pass; returns whether it appears in it
+/// ([`appears`]). A layer shown in a popup window is recorded in its opener's viewport too, where its host runs.
+pub(crate) fn note_appeared(ctx: &Context, id: Id, exiting: bool) -> bool {
+    let appears = appears(ctx, id, exiting);
+    if appears {
+        let viewport = pass::current_viewport(ctx);
+        let first = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
+        with_persist(ctx, viewport, |persist| persist.appeared.insert(id, first));
+    }
+    appears
+}
+
+/// Whether the layer `id` first showed in the running viewport in this root frame, in any of its passes.
+pub(crate) fn appeared_this_frame(ctx: &Context, id: Id) -> bool {
+    let now = pass::root_frame_nr(ctx);
+    with_persist(ctx, pass::current_viewport(ctx), |persist| persist.appeared.get(&id).is_some_and(|(frame, _)| *frame == now))
 }
 
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
@@ -573,7 +584,7 @@ pub(crate) fn appears_in(ctx: &Context, viewport: ViewportId, id: Id, exiting: b
 pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side: Option<Side>) {
     // Which layers a press opened reads the presses and releases.
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
-    let reopened = reopened(ctx, id, exiting);
+    let new = note_appeared(ctx, id, exiting);
     with_pass(ctx, |pass| {
         pass.drawing.push((id, tier));
         pass.exiting.push(exiting);
@@ -581,19 +592,11 @@ pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side
             pass.sides.push((id, side));
         }
     });
-    let viewport = pass::current_viewport(ctx);
-    let first = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
     let (down, released) = pointer::with_pass_raw(ctx, |read| {
         let released = read.frame.as_ref().filter(|frame| frame.release == Some(craft_behavior::PointerButton::Primary)).map(|frame| frame.pos);
         (read.primary_down, released)
     });
-    let release = with_persist(ctx, viewport, |persist| {
-        let new = reopened || !persist.appeared.contains_key(&id);
-        if reopened {
-            persist.appeared.insert(id, first);
-        } else {
-            persist.appeared.entry(id).or_insert(first);
-        }
+    let release = with_persist(ctx, pass::current_viewport(ctx), |persist| {
         if exiting {
             return None;
         }
@@ -622,17 +625,6 @@ pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side
 pub fn opening(ctx: &Context, id: Id) -> bool {
     let viewport = pass::current_viewport(ctx);
     let now = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
-    with_persist(ctx, viewport, |persist| persist.appeared.get(&id) == Some(&now))
-}
-
-/// Whether the layer `id` first ran its body in the pass `pass` of the popup window `viewport`, in the running frame: a
-/// layer shown in a popup window appears in the popup's pass, which runs inside its opener's, so the opener's pass reads
-/// it once that pass ended, where [`opening`] reads the layer's own. `pass_nr` of a passed viewport names the pass after
-/// the one that showed the layer, but the opener's pass reads the popup's number before it runs, which is the number the
-/// popup's begin pass stamps the layer with: the two numbers name one pass, so a layer that appeared in an earlier pass of
-/// the same frame (a discard) is not one that appears in this one.
-pub(crate) fn appeared_in_pass(ctx: &Context, viewport: ViewportId, id: Id, pass: u64) -> bool {
-    let now = (pass::root_frame_nr(ctx), pass);
     with_persist(ctx, viewport, |persist| persist.appeared.get(&id) == Some(&now))
 }
 
@@ -743,11 +735,11 @@ pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
 }
 
 /// The input hook: keeps the first press of any button that lands outside the top menu family, its anchors and its
-/// parents up to the window or modal card that hosts it (`absorb_zone`) for the layers' dismissal, and removes the
-/// primary ones, so nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what
-/// it lands on: a right-click on another part closes the menu and opens that part's menu. The record is for the layers
-/// open when the press was made: a layer that appears in this pass was not, and its dismissal reads none of it
-/// (`opening`). Returns whether it removed one.
+/// parents short of the window or modal card that hosts it (`absorb_zone`) for the layers' dismissal, and removes the primary ones,
+/// so nothing below the menu sees them (`Outside::Absorb`). A secondary or middle press goes on to what it lands on: a
+/// right-click on another part closes the menu and opens that part's menu. The record is for the layers open when the
+/// press was made: a layer that appears in this pass was not, and its dismissal reads none of it (`opening`). Returns
+/// whether it removed one.
 pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::input::RawInput) -> bool {
     let zone = with_persist(ctx, input.viewport_id, |persist| persist.absorb_zone.clone());
     let Some(zone) = zone else { return false };
@@ -910,14 +902,20 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
 }
 
 /// The screen rects a press may land in without closing `top`, the top layer of the family `members` (parent first),
-/// which absorbs outside presses: the rect, anchor and peers of each member opened inside the layer that hosts `top`,
-/// or of every member when no layer hosts it. The menus show over their host and are not part of it, so a press
-/// elsewhere in that host is outside them, as one beside them in the main window is.
+/// which absorbs outside presses: the rect, anchor and peers of each live member of the family, less the layers that
+/// host it. The host is the nearest of `top`'s parents a press outside stops at (`stops_presses`: a window, a floating
+/// window or panel, a modal layer, or the entry of an OS window mount), outside every menu of the family; the layers it
+/// was opened from host the family with it. The menus show over their host and are not part of it, so a press elsewhere
+/// in that host is outside them, as one beside them in the main window is. A window opened from a menu (a menu's
+/// companion bar) is part of the menu, not its host. A member fading out takes no input, so a press on it, or on its
+/// anchor, is outside: the press that reopens a menu still fading out closes its open sibling.
 fn absorb_zone(members: &[OpenEntry], top: &OpenEntry) -> Vec<Rect> {
-    let host = parents(members, top).find(|entry| stops_presses(entry)).map(|entry| entry.id);
+    let in_menu = |entry: &OpenEntry| parents(members, entry).any(|parent| parent.rank == Rank::Popup);
+    let host = parents(members, top).find(|entry| stops_presses(entry) && !in_menu(entry));
+    let hosts: Vec<Id> = host.into_iter().flat_map(|host| std::iter::once(host).chain(parents(members, host))).map(|entry| entry.id).collect();
     members
         .iter()
-        .filter(|member| host.is_none_or(|host| parents(members, member).any(|parent| parent.id == host)))
+        .filter(|member| !member.exiting && !hosts.contains(&member.id))
         .flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied()))
         .collect()
 }

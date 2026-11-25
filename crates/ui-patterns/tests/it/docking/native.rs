@@ -1,6 +1,6 @@
 //! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, the OS close, and
 //! docking the whole window by dragging its title row. A context menu opened in a palette places its popup window as
-//! it places the menu in the main window.
+//! it places the menu in the main window; the palette's own menus keep their place and take the arrow keys in theirs.
 
 use craft_behavior::Intent;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
@@ -17,10 +17,10 @@ use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::{drag, keys};
-use craft_ui::testing::access::AccessTree;
+use craft_ui::testing::access::{AccessTree, focused_key};
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::pointer::{moved, press, release, secondary};
+use craft_ui::testing::pointer::{gone, moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, HeldButtons};
 use craft_ui::text::NumberField;
@@ -1930,4 +1930,78 @@ fn a_context_menu_a_palette_opens_is_not_closed_by_the_press_that_opened_it() {
         trace.join("\n")
     );
     assert!(!palette_menu_shows(&dock, &out, "Second action"), "and the second menu closed:\n{}", trace.join("\n"));
+}
+
+/// Opens the menu a secondary click at `at`, a point of the palette's window, asks for; returns its popup window.
+fn open_menu(dock: &mut NativeDock, rect: &mut Rect, at: Pos2) -> ViewportId {
+    for events in [vec![moved(at)], vec![secondary(at, true)], vec![secondary(at, false)], vec![], vec![]] {
+        collapsed_frame(dock, &mut Palettes, rect, vec![], events);
+    }
+    let out = collapsed_frame(dock, &mut Palettes, rect, vec![], vec![]);
+    let opened = popups(dock, &out).into_iter().find(|viewport| !tree_of_viewport(&out, *viewport).with_role(Role::MENU).is_empty());
+    opened.expect("the menu shows in a popup window")
+}
+
+/// The arrow keys move the focus in a native palette's tab menu, and Enter runs the row they reach: Dock Panel, which
+/// is not the first row, docks the panel. Opened again after Escape, the menu starts as it opened first.
+#[trial]
+fn the_arrow_keys_reach_a_row_of_a_native_palettes_tab_menu() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    let mut at = FLOAT_AT;
+    dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    let out = collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], vec![]);
+    let palette = dock.palette.expect("the palette's window opened");
+    let tab = node_rect(tree_of_viewport(&out, palette), PALETTE_TITLE, Role::TAB).expect("the palette shows the panel's tab").center();
+    // A key in the menu's window, and the row focused in the frame after it.
+    let key = |dock: &mut NativeDock, at: &mut Rect, menu: ViewportId, key: Key| -> Option<String> {
+        dock.windows.send(menu, vec![key_press(key, Modifiers::NONE)]);
+        collapsed_frame(dock, &mut Palettes, at, vec![], vec![]);
+        dock.windows.send(menu, vec![key_release(key, Modifiers::NONE)]);
+        collapsed_frame(dock, &mut Palettes, at, vec![], vec![]);
+        let out = collapsed_frame(dock, &mut Palettes, at, vec![], vec![]);
+        let tree = &out.trees.iter().find(|(shown, _)| *shown == menu)?.1;
+        tree.name_of(focused_key(tree)).map(str::to_owned)
+    };
+    let menu = open_menu(&mut dock, &mut at, tab);
+    let first = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    let second = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    assert_ne!(first, second, "the second arrow moves the focus on");
+    key(&mut dock, &mut at, menu, Key::Escape);
+    for _ in 0..30 {
+        collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], vec![]);
+    }
+    let out = collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], vec![]);
+    assert!(!popups(&dock, &out).contains(&menu), "Escape closed the menu");
+    let menu = open_menu(&mut dock, &mut at, tab);
+    let mut row = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    assert_eq!(row, first, "the menu starts at the same row again");
+    for _ in 0..4 {
+        if row.as_deref() == Some("Dock Panel") {
+            break;
+        }
+        row = key(&mut dock, &mut at, menu, Key::ArrowDown);
+    }
+    key(&mut dock, &mut at, menu, Key::Enter);
+    let layout = dock.workspace.layout();
+    assert!(layout.floating.is_empty(), "Enter ran {row:?}, which docks the panel: {layout:?}");
+}
+
+/// The menu a secondary click on a native palette's title row hangs at the pointer stays there while the pointer
+/// leaves the palette for the menu's window and comes back, and hangs at the new place of a second secondary click.
+#[trial]
+fn a_native_palettes_title_row_menu_stays_where_it_opened() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    let mut at = FLOAT_AT;
+    dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    let menu = open_menu(&mut dock, &mut at, ROW_AT);
+    let opened = window_rect(&dock, menu);
+    for events in [vec![gone()], vec![], vec![moved(ROW_AT + Vec2::new(-60.0, 80.0))], vec![]] {
+        collapsed_frame(&mut dock, &mut Palettes, &mut at, vec![], events);
+        assert_eq!(window_rect(&dock, menu), opened, "the menu stays where it opened");
+    }
+    let menu = open_menu(&mut dock, &mut at, ROW_AT - Vec2::new(40.0, 0.0));
+    let moved = window_rect(&dock, menu);
+    assert!(moved.min.x < opened.min.x - 1.0, "it hangs at the second click: {moved:?}, first {opened:?}");
 }
