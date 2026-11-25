@@ -810,6 +810,9 @@ enum Fields {
     Tuple,
     /// An enum's variants, whose `{ .. }` and `( .. )` hold typed fields.
     Variants,
+    /// An enum's variants, in the discriminant (`V = f(..)`) that runs from a variant's `=` to the
+    /// next `,`: its delimiters are an expression's.
+    Discriminant,
 }
 
 /// A declaration whose fields or parameters have not opened yet.
@@ -1200,10 +1203,16 @@ impl Lexer<'_> {
         }
     }
 
-    /// A `=` that is not part of `==`, `!=`, `<=`, `>=` or `..=` ends a `let` pattern.
+    /// A `=` that is not part of `==`, `!=`, `<=`, `>=` or `..=` ends a `let` pattern, and among an
+    /// enum's variants starts a discriminant.
     fn equals(&mut self) {
         let before = self.at.checked_sub(1).and_then(|i| self.chars.get(i)).copied();
         let compares = matches!(before, Some('=' | '!' | '<' | '>' | '.')) || self.peek(1) == Some('=');
+        if let Some((_, _, fields @ Fields::Variants)) = self.delims.last_mut()
+            && !compares
+        {
+            *fields = Fields::Discriminant;
+        }
         if let Some(TestRegion::Item { level, pattern, .. }) = &mut self.test
             && *level == self.delims.len()
             && !compares
@@ -1675,12 +1684,19 @@ impl Lexer<'_> {
                     _ => Fields::Tuple,
                 }
             }
-            // A variant's `{ .. }` or `( .. )` after its name.
-            _ if self.after_word && self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Variants) => match c {
-                '{' => Fields::Typed,
-                '(' => Fields::Tuple,
-                _ => Fields::Untyped,
-            },
+            // A variant's `{ .. }` or `( .. )` after its name, not in its discriminant, and not after
+            // a path, a method or an operator (`m::f::<u8, u16>::call(..)` after a comma in the
+            // discriminant's generic arguments).
+            _ if self.after_word
+                && !matches!(self.prev_prev, Some(':' | '.' | '=' | '+' | '-' | '/' | '%' | '&' | '|' | '^' | '<' | '>'))
+                && self.delims.last().is_some_and(|&(_, _, fields)| fields == Fields::Variants) =>
+            {
+                match c {
+                    '{' => Fields::Typed,
+                    '(' => Fields::Tuple,
+                    _ => Fields::Untyped,
+                }
+            }
             _ => Fields::Untyped,
         };
         self.delims.push((c, self.line, fields));
@@ -1768,6 +1784,12 @@ impl Lexer<'_> {
         if !comma {
             let level = self.delims.len();
             self.declares.retain(|declares| declares.level < level);
+        }
+        // A `,` among an enum's variants ends a discriminant.
+        if let Some((_, _, fields @ Fields::Discriminant)) = self.delims.last_mut()
+            && comma
+        {
+            *fields = Fields::Variants;
         }
         if let Some(TestRegion::Item { level, opened, item, semi, angle, params, .. }) = self.test
             && level == self.delims.len()
@@ -2540,6 +2562,32 @@ union U where ty! {}: Copy {
 fn f() where ty!{}: Copy { let _ = S { #[cfg(test)] probe: a < b, live: "four" }; }
 "#;
         assert_eq!(literals(source), ["one", "two", "three", "four"]);
+    }
+
+    #[test]
+    fn enum_discriminants_are_expressions() {
+        let source = r#"enum E {
+    V = f(#[cfg(test)] if 1 < 2 { true } else { false }, live("one") > 0),
+    W = m::f(#[cfg(test)] a < b, live("two") > 0),
+    X = g(1)(#[cfg(test)] a < b, live("three") > 0),
+    T = m::f::<u8, u16>::call(#[cfg(test)] a < b, live("ten") > 0),
+    S = <A as B<u8, u16>>::call(#[cfg(test)] a < b, live("eleven") > 0),
+    #[doc = "four"]
+    Y(#[cfg(test)] Pair<u8, Tag<{ "AzureKit".len() }>>, Tag<{ "five".len() }>),
+    Z { #[cfg(test)] field: Pair<u8, Tag<{ "AzureKit".len() }>>, live: Tag<{ "six".len() }> },
+}
+macro_rules! variants {
+    ($a:ident, $b:ident, $c:ident) => {
+        enum M {
+            $a = f(#[cfg(test)] a < b, live("seven") > 0),
+            $b(#[cfg(test)] Pair<u8, Tag<{ "AzureKit".len() }>>, Tag<{ "eight".len() }>),
+            $c { #[cfg(test)] field: Pair<u8, Tag<{ "AzureKit".len() }>>, live: Tag<{ "nine".len() }> },
+            $(#[$meta])* V(#[cfg(test)] Pair<u8, Tag<{ "AzureKit".len() }>>, Tag<{ "twelve".len() }>),
+        }
+    };
+}
+"#;
+        assert_eq!(literals(source), ["one", "two", "three", "ten", "eleven", "four", "five", "six", "seven", "eight", "nine", "twelve"]);
     }
 
     #[test]
