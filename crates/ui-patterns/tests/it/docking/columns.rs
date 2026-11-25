@@ -522,6 +522,46 @@ fn a_flyout_stands_among_the_floating_windows_in_their_order() {
     assert_eq!(clicks.get(), 1, "and a press at the button now reaches it");
 }
 
+/// A flyout closed and opened again while its exit fade runs is raised over the window the fade let in front of it. A
+/// flyout stands in the floating windows' order, where egui raises a layer when it first shows and when it is pressed,
+/// and it does neither for a layer that shows again while its area is still up.
+#[trial]
+fn a_flyout_opened_again_during_its_fade_is_above_the_window_over_it() {
+    let workspace = Rc::new(RefCell::new(flyout_dock(None)));
+    let flyout = Rc::new(Cell::new(None));
+    let mut panels = UnderWindow { flyout: Rc::clone(&flyout), clicks: Rc::new(Cell::new(0)) };
+    let (held, specs, pass_rect) = (Rc::clone(&workspace), Tracked::new(Sides), Rc::clone(&flyout));
+    let mut fixture = Fixture::new(move |ui| {
+        // The cell holds this pass's flyout rect, so a flyout that does not show reads as `None`.
+        pass_rect.set(None);
+        let config = DockConfig::default().native_windows(false);
+        let shown = Bind::given(Arc::clone(&held.borrow()));
+        DockArea::new("Flyout dock", shown, &specs, &mut panels, config).show(ui);
+    });
+    fixture.room(Vec2::new(900.0, 600.0)).settle();
+    let icon = fixture.by_label("Alpha").expect("Alpha's icon").rect.center();
+    fixture.click_at(icon).settle();
+    let open = flyout.get().expect("Alpha's flyout shows its group");
+    // A point of the flyout's own top that the floating window covers too.
+    let tab = Pos2::new(open.left() + 60.0, open.top() + 40.0);
+    let ctx = fixture.ctx().clone();
+    let flyout_layer = ctx.layer_id_at(tab).expect("the flyout shows at its tab");
+
+    // The floating window shows over the flyout, as the newest layer, so it is on top where they overlap.
+    *workspace.borrow_mut() = flyout_dock(Some(window_over(open)));
+    fixture.settle();
+    let window_layer = ctx.layer_id_at(tab).expect("the window over the flyout shows");
+    assert_ne!(window_layer, flyout_layer, "the window over the flyout is the layer on top at its tab");
+
+    // Closed, the flyout fades out over the nine frames of its 150 ms fade at 1/60 s rather than at once.
+    fixture.frame(vec![pointer::moved(icon)]).frame(vec![pointer::press(icon)]).frame(vec![pointer::release(icon)]);
+    assert!(flyout.get().is_some(), "the closed flyout still shows while its exit fade runs");
+    // Opened again in the fade, the flyout is the newer layer and takes the top back.
+    fixture.frame(vec![pointer::moved(icon)]).frame(vec![pointer::press(icon)]).frame(vec![pointer::release(icon)]).frame(Vec::new());
+    assert!(flyout.get().is_some(), "the icon opens the flyout again while it fades");
+    assert_eq!(ctx.layer_id_at(tab), Some(flyout_layer), "the flyout opened again during its fade is above the window over it");
+}
+
 #[derive(PlainData)]
 struct RailWithMenu;
 
