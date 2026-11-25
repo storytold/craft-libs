@@ -578,10 +578,12 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
     });
 }
 
-/// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the running pass that
-/// nothing took, in the order they arrived, for a host that runs shortcuts of its own on the input of a window the
-/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only. Call it once
-/// the viewport's content has run. Other events (pointer, IME, window events) are never in it.
+/// The key, text and clipboard events of the running pass that nothing took, in the order they arrived.
+///
+/// They are the `Key`, `Text`, `Copy`, `Cut`, `Paste` and `PasteImage` events, for a host that runs shortcuts of its own
+/// on the input of a window the framework gives it no commands for: an OS window of a dock, whose keys egui hands to
+/// that window only. Call it once the viewport's content has run. Other events (pointer, IME, window events) are never
+/// in it.
 ///
 /// An event is left over when no component of the viewport has keyboard focus (a framework stop or an app's own
 /// widget), the key stage neither took it for itself (Escape, Tab and focus moves, claimed and edit chords, the menu
@@ -594,9 +596,9 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
 /// so are its repeats that fire nothing.
 ///
 /// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
-/// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events. Empty
-/// while a component has focus, as that component owns the keys then. The same in every call of a pass: it reads the
-/// pass and changes nothing.
+/// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events: each of
+/// them keeps its own place beside the events egui still holds, equal ones apart. Empty while a component has focus, as
+/// that component owns the keys then. The same in every call of a pass: it reads the pass and changes nothing.
 pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let record = focus::record(ctx, viewport);
