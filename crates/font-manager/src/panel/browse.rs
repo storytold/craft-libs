@@ -341,8 +341,10 @@ impl FontsPanel {
         });
     }
 
-    pub(crate) fn main(&mut self, ui: &mut Ui, texts: &Texts<'_>, folder: &Folder, host: Option<&Arc<Host>>) {
-        Stack::new().fill().show(ui, |ui, _| {
+    /// The toolbar, the notices and the cards; the positions of the catalogue cards on screen, or `None` while it shows
+    /// none.
+    pub(crate) fn main(&mut self, ui: &mut Ui, texts: &Texts<'_>, folder: &Folder, host: Option<&Arc<Host>>) -> Option<Range<usize>> {
+        let shown = Stack::new().fill().show(ui, |ui, _| {
             self.toolbar(ui, texts.browse);
             self.subsets.typed(format!("{:?}\n{:?}\n{}", self.settings.preset, self.query.language, self.settings.sample));
             if let Some(problem) = &self.notice {
@@ -355,14 +357,15 @@ impl FontsPanel {
             match self.tab {
                 Tab::Catalogue => {
                     self.download_note(ui, texts.browse);
-                    self.catalogue_list(ui, texts, host);
+                    self.catalogue_list(ui, texts, host)
                 }
                 Tab::Installed => {
-                    self.subsets.cancel_all();
                     self.installed_list(ui, texts, folder, host);
+                    None
                 }
             }
         });
+        shown.inner.flatten()
     }
 
     fn toolbar(&mut self, ui: &mut Ui, browse: &FontsBrowseWords) {
@@ -409,22 +412,20 @@ impl FontsPanel {
         }
     }
 
-    fn catalogue_list(&mut self, ui: &mut Ui, texts: &Texts<'_>, host: Option<&Arc<Host>>) {
+    fn catalogue_list(&mut self, ui: &mut Ui, texts: &Texts<'_>, host: Option<&Arc<Host>>) -> Option<Range<usize>> {
         let browse = texts.browse;
         let index = match &self.catalogue {
             Ok(c) => Arc::clone(&c.index),
             Err(error) => {
-                self.subsets.cancel_all();
                 Notice::new(Tone::Bad, Label::from(browse.indexes_unreadable.fill(&[("error", error.as_str())]))).show(ui);
-                return;
+                return None;
             }
         };
         self.source_problems(ui, texts, &index, host);
         Text::new(Label::from(texts.families(self.results.len()))).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
         if self.results.is_empty() {
-            self.subsets.cancel_all();
             self.empty(ui, browse, &browse.no_match, &browse.no_match_hint, true);
-            return;
+            return None;
         }
         let results = self.results.clone();
         let shown = {
@@ -432,7 +433,6 @@ impl FontsPanel {
             let keys = CardKeys::new(&results, |i| index.families().get(i).map(|f| f.family.as_str()));
             FamilyCards::new(browse.cards.clone()).show_items(ui, &keys, &mut |key, _| FamilyCard::new(me.catalogue_card(&index, *key, texts)))
         };
-        self.request_subsets(&index, &results, shown.visible);
         for event in shown.events {
             match event {
                 CollectionEvent::Activate(i) => self.detail = Some(Detail::Family(i)),
@@ -451,13 +451,19 @@ impl FontsPanel {
                 _ => {}
             }
         }
+        Some(shown.visible)
     }
 
-    /// Asks the preview service for the subsets of the cards on screen and round them.
-    fn request_subsets(&mut self, index: &Index, results: &[usize], visible: Range<usize>) {
-        let window = Subsets::window(&visible, results.len());
-        let rows: Vec<Option<SubsetRow<'_>>> = window.clone().map(|n| self.subset_row(index, *results.get(n)?)).collect();
-        self.subsets.request(index, window.start, &rows, visible);
+    /// Asks the preview service for the subsets of the catalogue cards on screen, at the positions `visible` of the
+    /// results, and round them; cancels what the list asked for when it shows no card.
+    pub(crate) fn request_subsets(&mut self, visible: Option<Range<usize>>) {
+        let Some((visible, index)) = visible.zip(self.index()) else {
+            self.subsets.cancel_all();
+            return;
+        };
+        let window = Subsets::window(&visible, self.results.len());
+        let rows: Vec<Option<SubsetRow<'_>>> = window.clone().map(|n| self.subset_row(&index, *self.results.get(n)?)).collect();
+        self.subsets.request(&index, window.start, &rows, visible);
     }
 
     /// The family at `i` in the index as a row drawn with a subset: `None` when it is installed or previewed whole.

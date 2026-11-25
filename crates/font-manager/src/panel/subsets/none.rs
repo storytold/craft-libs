@@ -22,6 +22,10 @@ impl Subsets {
         false
     }
 
+    pub(crate) fn serves(&self, _: &Family) -> bool {
+        false
+    }
+
     pub(crate) fn loading(&self) -> bool {
         false
     }

@@ -936,24 +936,33 @@ impl<'a> FontsPanelView<'a> {
         let search = ui.scope_id().with("search");
         let folder = env.folder();
         let wake = panel.jobs.waker();
-        let shown = Stack::new().fill().label(words.panel.clone()).command_scope(FontsCommand::SCOPE).show(ui, |ui, root| {
-            panel.subsets.begin(root.now(), &wake);
+        let mut begun = false;
+        let mut shown = Stack::new().fill().label(words.panel.clone()).command_scope(FontsCommand::SCOPE).show(ui, |ui, root| {
+            if !std::mem::replace(&mut begun, true) {
+                panel.subsets.begin(root.now(), &wake);
+            }
             while root.take_command::<FontsCommand>().is_some() {
                 focus::request(ui.ctx(), FocusTarget::Id(search));
             }
             root.publish(FontsCommand::Find, CommandState::new());
             panel.top_bar(ui, &browse, texts.format, search);
-            Grid::new(&PANES).fill().show(ui, |ui, _| {
+            let panes = Grid::new(&PANES).fill().show(ui, |ui, _| {
                 panel.filters(ui, &texts);
-                panel.main(ui, &texts, &folder, host.as_ref());
+                panel.main(ui, &texts, &folder, host.as_ref())
             });
+            panes.inner.flatten()
         });
+        // A measuring run has no rows on screen, and a pass that runs again may have the wrong ones.
+        let rerun = craft_ui::runtime::frame::will_rerun(ui.ctx());
+        let real = shown.settle(|_, visible| (!rerun).then(|| panel.request_subsets(visible.take()))).flatten().is_some();
         if panel.detail.is_some() {
             if DetailsSheet::new(panel).show(ui).closed {
                 panel.detail = None;
             }
         } else {
-            panel.subsets.request_detail(None, &[]);
+            if real {
+                panel.subsets.request_detail(None, &[]);
+            }
             panel.detail_axes.clear();
         }
         if let Some(seconds) = panel.subsets.next_wake() {

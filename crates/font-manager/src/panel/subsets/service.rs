@@ -10,7 +10,10 @@
 //! variable file's at the `var` instance, which keeps every axis.
 //!
 //! Drawing only looks subsets up ([`Subsets::font`], [`Subsets::detail_font`]). What the pass showed is taken in once,
-//! after the list ([`Subsets::request`]) and the sheet ([`Subsets::request_detail`]).
+//! after the real run of the list ([`Subsets::request`]) and of the sheet ([`Subsets::request_detail`]).
+//!
+//! The service holds the built-in sources' files only, and asking it for another file would tell it the file's hash: a
+//! family of a source the user added is never asked for (`key_of`).
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -37,8 +40,10 @@ const DETAIL: u32 = 4;
 const PAUSE_SECS: f64 = 0.25;
 /// A failed subset is asked for again after this long, not every frame.
 const RETRY_SECS: f64 = 30.0;
-/// Decoded subsets kept in memory; the disk cache holds more.
+/// Decoded subsets kept in memory, more while more are in use; the disk cache holds more.
 const MAX_HELD: usize = 256;
+/// A subset wanted within this many passes is in use.
+const IN_USE: u64 = 2;
 
 /// A decoded subset and the pass it was last wanted in.
 struct Held {
@@ -128,6 +133,11 @@ impl Subsets {
         self.available
     }
 
+    /// Whether the details sheet draws the styles of `family` from subsets: a service is set, which holds its files.
+    pub(crate) fn serves(&self, family: &Family) -> bool {
+        self.available && family.is_curated()
+    }
+
     /// Whether rows and the details sheet get their previews from the service: a service is set and previews are on.
     /// Otherwise a session download is the only way to see a font.
     fn previewing(&self) -> bool {
@@ -178,7 +188,6 @@ impl Subsets {
 
     /// Takes in what the pool fetched, at the pass time `now`. `wake` asks the UI for a pass when a fetch ends.
     pub(crate) fn begin(&mut self, now: f64, wake: &Wake) {
-        self.pass += 1;
         self.now = now;
         self.waits = false;
         if !std::mem::replace(&mut self.woken, true) {
@@ -288,9 +297,10 @@ impl Subsets {
     }
 
     /// Asks for the subsets of the files (by position) of `shown`'s family that the sheet draws with its text, before
-    /// the list's rows; called once a pass, also when the sheet is closed. What it no longer wants goes back to the
-    /// list, which cancels what it doesn't want either.
+    /// the list's rows; called at the end of each pass, also when the sheet is closed. What it no longer wants goes back
+    /// to the list, which cancels what it doesn't want either.
     pub(crate) fn request_detail(&mut self, shown: Option<(&Index, &Family, &str)>, files: &[usize]) {
+        self.pass += 1;
         let Some((index, family, text)) = shown.filter(|_| self.available) else {
             self.detail.clear();
             return;
@@ -342,7 +352,7 @@ impl Subsets {
                 settled &= self.fonts.contains_key(&sample) || self.has_failed(&sample);
                 self.want(&mut wanted, sample, VISIBLE);
             }
-            if let Some(ascii) = covers_latin(family).then(|| subset_key(family, Subset::Ascii)).flatten() {
+            if let Some(ascii) = list_file(family).filter(|_| covers_latin(family)).and_then(|f| key_of(family, f, Instance::List, Subset::Ascii)) {
                 latin.push(ascii);
             }
             let Some(key) = self.key(index, row) else { continue };
@@ -437,12 +447,13 @@ impl Subsets {
         self.asked.retain(|k, _| detail.contains(k));
     }
 
-    /// Drops the subsets wanted least recently past [`MAX_HELD`].
+    /// Drops the subsets wanted least recently past [`MAX_HELD`], but none in use.
     fn trim(&mut self) {
         if self.fonts.len() <= MAX_HELD {
             return;
         }
-        let mut by_use: Vec<(u64, PreviewKey)> = self.fonts.iter().map(|(k, held)| (held.used, k.clone())).collect();
+        let mut by_use: Vec<(u64, PreviewKey)> =
+            self.fonts.iter().filter(|(_, held)| held.used + IN_USE < self.pass).map(|(k, held)| (held.used, k.clone())).collect();
         by_use.sort_by_key(|(used, _)| *used);
         for (_, key) in by_use.into_iter().take(self.fonts.len() - MAX_HELD) {
             self.fonts.remove(&key);
@@ -461,8 +472,9 @@ fn detail_instance(file: &FontFile) -> Instance {
     if file.is_variable() { Instance::Var } else { Instance::List }
 }
 
-fn subset_key(family: &Family, subset: Subset) -> Option<PreviewKey> {
-    PreviewKey::new(&list_file(family)?.sha256, Instance::List, subset)
+/// The key of `subset` of `file` at `instance`; `None` for a family of a source the user added.
+fn key_of(family: &Family, file: &FontFile, instance: Instance, subset: Subset) -> Option<PreviewKey> {
+    family.is_curated().then(|| PreviewKey::new(&file.sha256, instance, subset)).flatten()
 }
 
 fn covers_latin(family: &Family) -> bool {
@@ -472,7 +484,7 @@ fn covers_latin(family: &Family) -> bool {
 /// The sample subset of `file` at `instance` for the text `index` gives it.
 fn sample_subset(index: &Index, family: &Family, file: &FontFile, instance: Instance) -> Option<PreviewKey> {
     let text = index.sample_text(family, file)?;
-    PreviewKey::new(&file.sha256, instance, Subset::Sample(SampleHash::of(text)))
+    key_of(family, file, instance, Subset::Sample(SampleHash::of(text)))
 }
 
 /// The subset that draws `text` in `file`: the sample when the sample subset has every character (the sentence and the
@@ -495,12 +507,12 @@ fn text_key(index: &Index, family: &Family, file: &FontFile, instance: Instance,
     } else {
         Subset::Codepoints(Codepoints::from_text(text))
     };
-    PreviewKey::new(&file.sha256, instance, subset)
+    key_of(family, file, instance, subset)
 }
 
 /// The subset of the sample text's characters and the family name, which the sample subset holds too. `None` when that
 /// is more characters than a request may name.
 fn sample_fallback(index: &Index, family: &Family, file: &FontFile, instance: Instance) -> Option<PreviewKey> {
     let text = index.sample_text(family, file)?;
-    PreviewKey::new(&file.sha256, instance, Subset::Codepoints(Codepoints::from_text(&format!("{text}{}", family.family))))
+    key_of(family, file, instance, Subset::Codepoints(Codepoints::from_text(&format!("{text}{}", family.family))))
 }

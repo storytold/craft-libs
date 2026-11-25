@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ use craft_i18n::I18n;
 use craft_ui::contract::Role;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Room, Target, trial};
-use egui::{Event, Key, Modifiers, Pos2};
+use egui::{Event, Key, Modifiers, Pos2, Vec2};
 
 const HACK: &str = "ofl/hack/Hack-Regular.ttf";
 const UBUNTU: &str = "ufl/ubuntu/Ubuntu-Light.ttf";
@@ -348,10 +348,13 @@ fn a_cards_install_menu_chooses_where_the_fonts_go() {
 }
 
 /// A preview service that answers every subset with the same small font, and logs what it answered. While held it
-/// answers nothing, and a request cancelled meanwhile isn't logged.
+/// answers nothing, and a request cancelled meanwhile is logged as cancelled instead.
 #[derive(Default)]
 struct FakeService {
     answered: Mutex<Vec<String>>,
+    cancelled: Mutex<Vec<String>>,
+    /// Requests that reached the service.
+    started: AtomicUsize,
     held: AtomicBool,
     /// Answers sample subsets with HTTP 404, as for a sample text the service doesn't have.
     no_samples: AtomicBool,
@@ -361,13 +364,12 @@ struct FakeService {
 
 impl Fetch for FakeService {
     fn get(&self, url: &str, _: u64, cancel: &Cancel) -> Result<Vec<u8>, FetchError> {
-        while self.held.load(Ordering::SeqCst) {
-            if cancel.is_cancelled() {
-                return Err(FetchError::Cancelled);
-            }
+        self.started.fetch_add(1, Ordering::SeqCst);
+        while self.held.load(Ordering::SeqCst) && !cancel.is_cancelled() {
             std::thread::sleep(Duration::from_millis(2));
         }
         if cancel.is_cancelled() {
+            self.cancelled.lock().unwrap_or_else(PoisonError::into_inner).push(url.to_owned());
             return Err(FetchError::Cancelled);
         }
         self.answered.lock().unwrap_or_else(PoisonError::into_inner).push(url.to_owned());
@@ -406,14 +408,17 @@ const SAMPLE: &str = "Sphinx of black quartz, judge my vow";
 
 /// An index of `families` with `SAMPLE` as the sample text of Latin.
 fn service_index(families: &str) -> Index {
-    let json = format!(
+    Index::from_json(service_json(families).as_bytes()).unwrap()
+}
+
+fn service_json(families: &str) -> String {
+    format!(
         r#"{{"schema":1,"version":"1.2","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
         "languages":[{{"id":"en_Latn","name":"English","script":"Latn","population":1}}],
         "scripts":[{{"id":"Latn","name":"Latin"}}],
         "samples":{{"Latn":{{"text":"{SAMPLE}","method":"udhr","language":"en_Latn"}}}},
         "families":[{families}]}}"#
-    );
-    Index::from_json(json.as_bytes()).unwrap()
+    )
 }
 
 /// Sixty Latin families, `Family 01` to `Family 60`, whose one file's sha256 starts with the family's number in hex.
@@ -478,9 +483,8 @@ impl Rig {
 
     /// Scrolls the cards by `points`.
     fn scroll(&mut self, points: f32) {
-        let first = self.numbers()[0];
-        let card = self.named(Role::LIST_ITEM, &format!("Family {first:02}")).center();
-        self.fx.frame(vec![Event::PointerMoved(card)]).frame(vec![craft_ui::testing::pointer::wheel(-points)]);
+        let cards = self.named(Role::LIST, "Families").center();
+        self.fx.frame(vec![Event::PointerMoved(cards)]).frame(vec![craft_ui::testing::pointer::wheel(-points)]);
         for _ in 0..4 {
             self.fx.advance(0.5);
             self.fx.frame(Vec::new());
@@ -527,13 +531,64 @@ fn previews_follow_the_screen_and_the_typed_text() {
     rig.scroll(6.0 * 400.0);
     assert!(rig.panel.borrow().loading_previews());
     let passed = rig.numbers();
+    // The first wheel goes to the end of the list as its unshown cards are estimated, the second to its end.
+    rig.scroll(100_000.0);
     rig.scroll(100_000.0);
     service.held.store(false, Ordering::SeqCst);
     rig.load();
     let last = rig.numbers();
-    assert!(passed[0] > shown[shown.len() - 1] && last[0] > passed[passed.len() - 1], "{shown:?} {passed:?} {last:?}");
+    assert!(passed[0] > shown[shown.len() - 1] && last[0] > passed[passed.len() - 1] && last.contains(&60), "{shown:?} {passed:?} {last:?}");
     let answered = FakeService::numbers(&service.urls(), "u/");
     assert!(!answered.is_empty() && answered.iter().all(|n| last.contains(n)), "rows that left were asked for: {answered:?} {last:?}");
+}
+
+/// A resize and a search that keep the cards on screen cancel nothing that is being fetched.
+#[trial]
+fn a_resize_and_a_search_cancel_no_preview() {
+    let service = Arc::new(FakeService::default());
+    service.held.store(true, Ordering::SeqCst);
+    let mut rig = service_rig("previews-kept", &service, latin_index());
+    rig.set_previews(true);
+    for _ in 0..500 {
+        if service.started.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(service.started.load(Ordering::SeqCst) > 0, "the service was asked");
+    let shown = rig.numbers();
+    rig.fx.room(Room::Window.size() + Vec2::new(40.0, 120.0)).settle();
+    rig.type_into("Search", "Family");
+    service.held.store(false, Ordering::SeqCst);
+    rig.load();
+    assert!(shown.iter().all(|n| rig.numbers().contains(n)), "the cards stayed on screen: {shown:?} {:?}", rig.numbers());
+    let cancelled = std::mem::take(&mut *service.cancelled.lock().unwrap_or_else(PoisonError::into_inner));
+    assert!(cancelled.is_empty(), "{cancelled:?}");
+    let samples = FakeService::numbers(&service.urls(), "sample-");
+    assert!(shown.iter().all(|n| samples.contains(n)), "{shown:?} {samples:?}");
+}
+
+/// The service is not asked for the files of a source the user added, which offer the whole-family preview.
+#[trial]
+fn a_family_of_an_added_source_is_not_asked_of_the_service() {
+    let service = Arc::new(FakeService::default());
+    let file = format!(
+        r#"{{"path":"ofl/added/Added-Regular.ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}"#,
+        "ef".repeat(32)
+    );
+    let family = format!(
+        r#"{{"family":"Added","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"OFL","sample_script":"Latn","files":[{file}]}}"#
+    );
+    let index = Index::from_user_bytes(service_json(&family).as_bytes(), "https://fonts.example.org/index.json").unwrap();
+    let mut rig = service_rig("previews-added", &service, index);
+    rig.set_previews(true);
+    rig.load();
+    rig.sample("Hello, world");
+    assert!(rig.present("Preview"), "the card offers the whole-family preview");
+    rig.open("Added");
+    rig.load();
+    rig.named(Role::BUTTON, "Preview");
+    assert_eq!(service.started.load(Ordering::SeqCst), 0, "{:?}", service.urls());
 }
 
 /// A sample the service has not (another text) is asked for as the sample's characters, once.
@@ -564,7 +619,8 @@ fn a_failing_preview_service_is_named_and_previews_are_offered() {
     assert!(rig.fx.texts().iter().any(|painted| painted.text.contains(SERVICE)), "the notice names the server");
     assert!(rig.present("Preview"), "the card offers the whole-family preview");
     rig.open("Family 01");
-    assert!(rig.present("Preview"), "and so does its sheet");
+    // The sheet's is a button, a card's a link.
+    rig.named(Role::BUTTON, "Preview");
 }
 
 /// One family: a variable upright file with three named instances, whose sha256 is `ab…`, and a static italic, `cd…`.
@@ -618,6 +674,32 @@ fn the_exported_rows_show_the_panel_in_japanese() {
     let panel = FontsPanel::new(Options::new(catalog(&root), store.clone(), Ok(index())));
     let rig = show(panel, store, Arc::new(Host::builder(APP).i18n(Arc::new(i18n)).lang(lang).jobs(Arc::new(InlineJobs)).build()));
     assert!(rig.present("すべてのカテゴリ") && !rig.present("All categories"));
+}
+
+/// With downloads off, a family's NOTICE is offered in its sheet and not read until the user asks.
+#[trial]
+fn a_notice_is_read_only_when_asked_while_downloads_are_off() {
+    let file = format!(
+        r#"{{"path":"apache/a/A-Regular.ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}"#,
+        "aa".repeat(32)
+    );
+    let notice = format!(r#"{{"path":"apache/a/NOTICE","size":10,"sha256":"{}"}}"#, "bb".repeat(32));
+    let family = format!(
+        r#"{{"family":"Noticed","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"APACHE2","notice_file":{notice},"files":[{file}]}}"#
+    );
+    let root = root("notice");
+    let files = HashMap::from([("apache/a/NOTICE".to_owned(), b"Copyright Noticed".to_vec())]);
+    let store = Arc::new(FakeStore::new(root.join("store"), files));
+    let panel = FontsPanel::new(Options::new(catalog(&root), store.clone(), Ok(service_index(&family))));
+    let mut rig = show(panel, store, host_with(Arc::new(MemorySections::default()), Arc::new(InlineJobs)));
+    rig.open("Noticed");
+    assert!(!rig.panel.borrow().downloads_allowed());
+    rig.named(Role::BUTTON, "Show notice");
+    assert!(!rig.present("Copyright Noticed"), "the text is not read");
+    assert!(!rig.present("Retry"), "nor was a read refused");
+
+    rig.allow();
+    assert!(rig.fx.texts().iter().any(|painted| painted.text.contains("Copyright Noticed")), "read once downloads are allowed");
 }
 
 #[trial]

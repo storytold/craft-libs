@@ -396,7 +396,7 @@ impl<'a> DetailsSheet<'a> {
         let points = panel.settings.size.max(MIN_SAMPLE_POINTS);
         let mut todo: Vec<Do> = Vec::new();
         let mut open = true;
-        let shown = Dialog::prompt(sheet.title.clone())
+        let mut shown = Dialog::prompt(sheet.title.clone())
             .overlay(|overlay| {
                 let dismiss = overlay.dismiss.outside(Outside::Absorb);
                 overlay.dismiss(dismiss)
@@ -410,7 +410,9 @@ impl<'a> DetailsSheet<'a> {
             });
         let index = panel.index();
         let family = sheet.index.zip(index.as_deref()).and_then(|(i, index)| Some((index, index.families().get(i)?, sheet.sample.as_str())));
-        panel.subsets.request_detail(family, &sheet.subset_files);
+        if !craft_ui::runtime::frame::will_rerun(ui.ctx()) {
+            shown.settle(|_, ()| panel.subsets.request_detail(family, &sheet.subset_files));
+        }
         let closed = shown.output.closed.is_some();
         if closed {
             panel.detail = None;
@@ -827,7 +829,7 @@ impl FamilyStyles<'_> {
                 // A variable file's instances install together: the file's action on its first.
                 let actions = std::iter::once(action).chain(std::iter::repeat(Action::None));
                 lines.extend(preview_faces.into_iter().zip(actions).map(|(face, action)| self.line(Owner::Preview, face, action)));
-            } else if self.panel.subsets.available() {
+            } else if self.panel.subsets.serves(self.family) {
                 subset_files.push(n);
                 self.subset_lines(file, action, &mut lines);
             } else {
