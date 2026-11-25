@@ -825,6 +825,33 @@ pub fn prepare_update(
     prepare_update_with_options(app, install, release, platform, http, paths, stop, phase, last, running_version, UpdateOptions::default())
 }
 
+/// The file of `release` that updates `install` on `platform`, the machine it runs on, or why
+/// there is none. A Windows MSI copy takes only an MSI of `build`, the running build's
+/// architecture, with no fallback to another one: its update reinstalls the copy in its own
+/// context and folder, which [`crate::msi_migrate`] works out from this build (`Program Files
+/// (x86)` for a 32-bit one), so an MSI of another architecture would put the product in the wrong
+/// place. Any other copy, such as a portable folder that a 32-bit build runs from on 64-bit
+/// Windows, takes the build that suits the machine best, emulated ones included.
+fn pick_update<'a>(
+    app: &App,
+    install: &Install,
+    release: &'a Release,
+    platform: Platform,
+    build: Option<crate::Arch>,
+) -> Result<&'a crate::release::Asset, String> {
+    let kinds = [install.kind()];
+    let (platform, picked) = match (install, build) {
+        (Install::Msi(_), Some(arch)) if platform.os == crate::Os::Windows => {
+            let platform = Platform { arch, ..platform };
+            (platform, crate::platform::pick_exact_asset(release, &[app.id], platform, &kinds))
+        }
+        _ => (platform, pick_asset(release, &[app.id], platform, &kinds)),
+    };
+    picked
+        .map(|(asset, _)| asset)
+        .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))
+}
+
 /// Like [`prepare_update`], with an explicit choice of Windows Installer progress UI.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_update_with_options(
@@ -851,9 +878,7 @@ pub fn prepare_update_with_options(
         // Without that opt-in, a build from source requires a strictly higher release.
         return Err(format!("{} {} is not newer than currently running version {}", app.name, release.version_label(), cur_v));
     }
-    let (asset, _) = pick_asset(release, &[app.id], platform, &[install.kind()])
-        .ok_or_else(|| format!("{} {} has no {} for {}", app.name, release.version_label(), install.kind().label(), platform.label()))?;
-    let asset = asset.clone();
+    let asset = pick_update(app, install, release, platform, crate::platform::build_arch())?.clone();
     crate::install::bind_artifact_version(app, release, &asset)?;
     crate::install::check_download_link(app, release, &asset)?;
     // Nothing is downloaded for a copy that can't install it.
@@ -4056,6 +4081,59 @@ mod tests {
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::Deb, PathBuf::new()).kind()).as_deref(), Some(names[4]));
         assert_eq!(pick(Os::Linux, Install::Flatpak.kind()).as_deref(), Some(names[5]));
         assert_eq!(pick(Os::Linux, Install::Package(PackageKind::ArchPkg, PathBuf::new()).kind()).as_deref(), Some(names[6]));
+    }
+
+    /// An MSI copy updates within its own build's architecture; any other copy takes the
+    /// machine's. Here a 32-bit PhotoCraft 0.21.0 on 64-bit Windows (photocraft#13565).
+    #[test]
+    fn only_an_msi_copy_keeps_to_its_build_architecture() {
+        use crate::{Arch, Os};
+        let release = release_with(&[
+            "photocraft-0.21.0-windows-x64-portable.zip",
+            "photocraft-0.21.0-windows-x64.msi",
+            "photocraft-0.21.0-windows-x86-portable.zip",
+            "photocraft-0.21.0-windows-x86.msi",
+        ]);
+        let machine = Platform { os: Os::Windows, arch: Arch::X64 };
+        let pick = |install: Install| pick_update(&crate::suite::PHOTOCRAFT, &install, &release, machine, Some(Arch::X86)).map(|a| a.name.clone());
+        assert_eq!(pick(Install::Msi(PathBuf::new())).as_deref(), Ok("photocraft-0.21.0-windows-x86.msi"));
+        assert_eq!(pick(Install::Portable(PathBuf::new())).as_deref(), Ok("photocraft-0.21.0-windows-x64-portable.zip"));
+        #[cfg(windows)]
+        assert_eq!(pick(Install::Standalone(PathBuf::new())).as_deref(), Ok("photocraft-0.21.0-windows-x64-portable.zip"));
+        // A build of no known architecture takes the machine's.
+        let unknown = pick_update(&crate::suite::PHOTOCRAFT, &Install::Msi(PathBuf::new()), &release, machine, None);
+        assert_eq!(unknown.map(|a| a.name.as_str()), Ok("photocraft-0.21.0-windows-x64.msi"));
+    }
+
+    /// An MSI copy never falls back to an MSI of another architecture, in either direction,
+    /// while a portable copy still runs an emulated build when its own is missing.
+    #[test]
+    fn an_msi_copy_takes_no_msi_of_another_architecture() {
+        use crate::{Arch, Os};
+        let app = &crate::suite::PHOTOCRAFT;
+        let pick = |names: &[&str], install: Install, machine: Arch, build: Arch| {
+            let release = Release { tag: "0.24.0".into(), ..release_with(names) };
+            pick_update(app, &install, &release, Platform { os: Os::Windows, arch: machine }, Some(build)).map(|a| a.name.clone())
+        };
+        let msi = || Install::Msi(PathBuf::new());
+        let x86_only = ["photocraft-0.24.0-windows-x86-portable.zip", "photocraft-0.24.0-windows-x86.msi"];
+        // An x64 MSI copy with only an x86 MSI on offer: no update, rather than the x86 package.
+        assert_eq!(pick(&x86_only, msi(), Arch::X64, Arch::X64), Err("PhotoCraft 0.24.0 has no Installer (.msi) for Windows x64".into()));
+        // A native ARM64 MSI copy keeps off the emulated x64 MSI.
+        let x64_only = ["photocraft-0.24.0-windows-x64-portable.zip", "photocraft-0.24.0-windows-x64.msi"];
+        assert_eq!(pick(&x64_only, msi(), Arch::Arm64, Arch::Arm64), Err("PhotoCraft 0.24.0 has no Installer (.msi) for Windows ARM64".into()));
+        // A 32-bit MSI copy on 64-bit Windows keeps off the x64 MSI (photocraft 0.22.0 onwards).
+        assert_eq!(pick(&x64_only, msi(), Arch::X64, Arch::X86), Err("PhotoCraft 0.24.0 has no Installer (.msi) for Windows x86".into()));
+        // Its own architecture's MSI is still taken.
+        assert_eq!(pick(&x64_only, msi(), Arch::X64, Arch::X64).as_deref(), Ok("photocraft-0.24.0-windows-x64.msi"));
+        // Portable copies keep their emulated fallback.
+        let portable = || Install::Portable(PathBuf::new());
+        assert_eq!(pick(&x86_only, portable(), Arch::X64, Arch::X64).as_deref(), Ok("photocraft-0.24.0-windows-x86-portable.zip"));
+        assert_eq!(pick(&x64_only, portable(), Arch::Arm64, Arch::Arm64).as_deref(), Ok("photocraft-0.24.0-windows-x64-portable.zip"));
+        // Only Windows has MSI copies to keep apart: elsewhere the machine's platform decides.
+        let linux_release = release_with(&["photocraft-0.24.0-linux-x86_64.AppImage"]);
+        let linux = pick_update(app, &msi(), &linux_release, Platform { os: Os::Linux, arch: Arch::X64 }, Some(Arch::Arm64));
+        assert!(linux.as_ref().is_err_and(|e| e.ends_with("for Linux x64")), "{linux:?}");
     }
 
     fn release_with(names: &[&str]) -> Release {
