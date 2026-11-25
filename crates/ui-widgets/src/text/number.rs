@@ -868,7 +868,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // float noise and keeps the step's precision even where the field shows fewer decimals: a field of hundredths
         // that shows no decimals still moves by a hundredth, not by nothing. The step is not a grid here: an Alt drag
         // moves by a share of it.
-        let decimals = self.decimals().max(decimals_for_step(step));
+        let decimals = self.decimals().max(decimals_for_step(rule.step));
         let scale = self.scale;
         let mut scrub =
             Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| V::of_number(round_to(number, decimals) / scale))
