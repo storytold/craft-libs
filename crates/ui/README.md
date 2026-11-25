@@ -6,6 +6,9 @@ interaction; `layout` provides toolbar fitting, split geometry and resize handle
 `layout::Section` groups dialog or inspector settings in caller-styled frames with optional headings.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
+`slider` is a slider with a visible filled track and an optional value field, plus the status bar `ZoomBar`;
+`font_box`, `ribbon` and `status_bar` are the font name/size control, the ribbon body and groups, and the status bar, so
+the Office-style and Adobe-style apps share one look for them (see [Shared chrome](#shared-chrome)).
 `fonts` installs the UI font stack, the same fallback order in every app.
 `localized` supplies number fields that write and read the user's region's numbers.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
@@ -598,6 +601,53 @@ represented by `None`, independently of explicit one-sided, long-edge or short-e
 Receipts and backend errors remain unmodified data for the app to display. These controls work
 on WASM too; browser PDF printing remains an app-owned service.
 
+## Shared chrome
+
+These components fix geometry and states, not content: the app supplies commands, icons, labels in the
+interface language, its accent and what each change does. Preview them in every app's accent with
+`cargo run -p craft-ui --example chrome_preview -- OUT_DIR` (set `CRAFT_PREVIEW_FONTS` to a folder
+with `Inter-Regular.ttf` to render in Inter).
+
+```rust
+use craft_ui::font_box::{FontBox, FontBoxLabels, FontBoxStyle};
+use craft_ui::ribbon::{Ribbon, RibbonGroup, RibbonStyle};
+use craft_ui::status_bar::{self, StatusBar, StatusBarStyle};
+
+fn chrome(ui: &mut egui::Ui, family: &mut String, size: &mut Option<f32>, families: &[String], has_text: bool) {
+    let v = ui.visuals().clone();
+    let (rs, fs) = (RibbonStyle::from_visuals(&v), FontBoxStyle::from_visuals(&v));
+    let labels = FontBoxLabels { font: "Font", size: "Font Size", grow: "Increase Font Size", shrink: "Decrease Font Size", clear: "Clear Formatting" };
+    Ribbon::new(&rs).show(ui, |ui| {
+        RibbonGroup::new("Font", &rs).launcher("Font Settings").show(ui, |ui| {
+            // Nothing to format: dimmed, showing the theme font, instead of empty boxes.
+            FontBox::new(family, size, families, &fs, labels).enabled(has_text).hint("Inter", 11.0).clear(true).show(ui);
+        });
+    });
+    let ss = StatusBarStyle::from_visuals(&v);
+    StatusBar::new(&ss).show(ui, |ui| { status_bar::item(ui, &ss, "Page 1 of 2"); }, |_ui| {});
+}
+```
+
+- **Ribbon.** `RibbonFrame::platform_default()` is what Microsoft 365 does: flat on macOS, a card
+  inset 6 pt with radius 8 elsewhere. Group captions default to on except on macOS
+  (`ribbon::captions_default`). Groups are contiguous, at least as wide as their caption, with an
+  optional dialog launcher.
+  `ribbon::fit` holds the card's three bands: the tab strip the app draws itself, the command band
+  and the 18 pt group-label band under it. An app that passes the widths its groups measured last
+  frame (`.groups(&measured)`) gets the groups that no longer fit folded to one row, which opens
+  the whole group in a drop-down; `ribbon::fit::Collapse` chooses between folding from the first
+  group that does not fit (Word, Excel) and folding from the end (PowerPoint). Each
+  `GroupResponse` reports its `level` and `width` for the next frame's plan, and a plan whose
+  folded row is still too wide reports `overflow` so the app scrolls instead of clipping.
+- **Font box.** Two rounded fields with the chevron inside; both accept typing, and the list
+  narrows while typing. Grow/shrink walk the size presets, then whole points (Word's behaviour).
+  An empty family or `None` size is a mixed selection (blank, still editable); `.enabled(false)`
+  with `.hint(..)` is "no text to format".
+- **Status bar.** One height and text size; context items on the left, view switches and the
+  `ZoomBar` on the right. It fills the rect it is given: across the window in the Office-style
+  apps, under the document area (panels full height) in the Adobe-style ones.
+- **Accent.** The app's accent marks state and navigation (selected toggle, focus, slider fill),
+  never icon glyphs: the font box's grow/shrink and clear marks use the text colour.
 ## Localized numbers
 
 `localized::LocaleNumbers` writes numbers in the region's digits, decimal mark and grouping and

@@ -18,6 +18,7 @@ pub mod docking;
 #[cfg(feature = "esign")]
 pub mod esign;
 mod focus;
+pub mod font_box;
 pub mod fonts;
 pub mod icons;
 pub mod ime;
@@ -27,9 +28,12 @@ pub mod menu;
 pub mod panes;
 pub mod presence;
 pub mod printing;
+pub mod ribbon;
 pub mod shapes;
 #[cfg(feature = "share")]
 pub mod share;
+pub mod slider;
+pub mod status_bar;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
 pub mod testing;
