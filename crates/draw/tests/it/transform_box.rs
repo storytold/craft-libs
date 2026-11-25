@@ -435,10 +435,14 @@ fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
 }
 
 /// A side's reach on a box whose inside moves, as measured on the reference application at 100 %: its midpoint handle
-/// reaches 11 points every way, inside the box too; away from it the side's band runs from half a point outside its
-/// line to 13 outside, and a press on the line or inside it moves the box.
+/// reaches 11 points every way, inside the box too; away from it the side's band runs from its line to 12 outside where
+/// the view reads the pointer, half a pixel up and left of it: a press on the right or bottom side's line or inside it
+/// moves the box, and one on the top or left side's line takes the side (2026-11-25, away from the handles: on the
+/// right side's line and 3 and 6 inside it the box moved, 1, 3, 6 and 10 outside took the side, 13 outside took nothing;
+/// on the top and the left side's line the side, a point inside them the box; on the bottom side's line the box, a
+/// point below it the side; 13 above the top side nothing).
 #[trial]
-fn a_sides_midpoint_reaches_into_the_box_and_its_band_starts_outside_the_line() {
+fn a_sides_midpoint_reaches_into_the_box_and_its_band_starts_on_the_line_as_the_view_reads_the_pointer() {
     let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
     // The right edge runs from (300, 80) to (300, 220); its middle is (300, 150).
     let cases = [
@@ -447,17 +451,51 @@ fn a_sides_midpoint_reaches_into_the_box_and_its_band_starts_outside_the_line() 
         (Point::new(300.0, 160.0), Some(BoxPart::Edge(1)), "on the line, 10 along from the middle"),
         (Point::new(288.0, 150.0), Some(BoxPart::Inside), "12 inside at the middle"),
         (Point::new(296.0, 164.0), Some(BoxPart::Inside), "4 inside, 14 along from the middle"),
-        (Point::new(300.0, 110.0), Some(BoxPart::Inside), "on the line, away from the middle"),
+        (Point::new(300.0, 110.0), Some(BoxPart::Inside), "on the right line, away from the middle"),
         (Point::new(298.0, 110.0), Some(BoxPart::Inside), "2 inside, away from the middle"),
         (Point::new(301.0, 110.0), Some(BoxPart::Edge(1)), "a point outside, away from the middle"),
         (Point::new(312.0, 110.0), Some(BoxPart::Edge(1)), "12 outside, away from the middle"),
+        // The top edge runs from (100, 80) to (300, 80), the left from (100, 220) to (100, 80), the bottom along y 220.
+        (Point::new(250.0, 80.0), Some(BoxPart::Edge(0)), "on the top line, away from the middle"),
+        (Point::new(250.0, 81.0), Some(BoxPart::Inside), "a point inside the top line"),
+        (Point::new(250.0, 69.0), Some(BoxPart::Edge(0)), "11 above the top line"),
+        (Point::new(100.0, 110.0), Some(BoxPart::Edge(3)), "on the left line, away from the middle"),
+        (Point::new(101.0, 110.0), Some(BoxPart::Inside), "a point inside the left line"),
+        (Point::new(250.0, 220.0), Some(BoxPart::Inside), "on the bottom line, away from the middle"),
+        (Point::new(250.0, 221.0), Some(BoxPart::Edge(2)), "a point below the bottom line"),
     ];
     for (at, part, what) in cases {
         hover(&mut h, at);
         assert_eq!(h.host.borrow().hovered, part, "{what}");
     }
-    hover(&mut h, Point::new(314.0, 110.0));
-    assert_ne!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "14 outside is past the band");
+    for (at, side, what) in [
+        (Point::new(313.0, 110.0), BoxPart::Edge(1), "13 outside the right side is past the band"),
+        (Point::new(250.0, 67.0), BoxPart::Edge(0), "13 above the top side is past the band"),
+    ] {
+        hover(&mut h, at);
+        assert_ne!(h.host.borrow().hovered, Some(side), "{what}");
+    }
+}
+
+/// On a box crossed over itself (a bow tie: its top and bottom sides cross), each of the two sides that do not cross
+/// takes a press outside its own triangle, not inside it (the reference application, 2026-11-25: on an hourglass made
+/// by a Perspective corner dragged past its partner, a press 8 px outside the right side took the side; the winding of
+/// the whole box, which the two triangles turn opposite ways, put that side's band inside its triangle).
+#[trial]
+fn a_bow_ties_uncrossed_sides_take_a_press_outside_their_own_triangle() {
+    // The left corners have passed each other: the top side runs from (100, 220) to (300, 80), the bottom side from
+    // (300, 220) to (100, 80); they cross at (200, 150).
+    let quad = [Point::new(100.0, 220.0), Point::new(300.0, 80.0), Point::new(300.0, 220.0), Point::new(100.0, 80.0)];
+    let mut h = harness(BoxState::new(quad, Point::new(200.0, 150.0)), |config| config.rules = free_rules());
+    for (at, side, taken, what) in [
+        (Point::new(308.0, 110.0), BoxPart::Edge(1), true, "8 outside the right side"),
+        (Point::new(292.0, 110.0), BoxPart::Edge(1), false, "8 inside the right side"),
+        (Point::new(92.0, 110.0), BoxPart::Edge(3), true, "8 outside the left side"),
+        (Point::new(108.0, 110.0), BoxPart::Edge(3), false, "8 inside the left side"),
+    ] {
+        hover(&mut h, at);
+        assert_eq!(h.host.borrow().hovered == Some(side), taken, "{what}: {:?}", h.host.borrow().hovered);
+    }
 }
 
 /// On a box whose inside is the tool's (a text frame), the side's line itself still takes the side.

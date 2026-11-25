@@ -97,19 +97,24 @@ const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
 /// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a corner handle reaches 11 from
-/// its point and a side's midpoint handle 11, inside the box as outside; each side's band runs from half a point
-/// outside it (inside it, on a box whose inside is the tool's) to 13 outside, and the band's first quarter of the side from each corner, at most 13 along it, is that
+/// its point and a side's midpoint handle 11, inside the box as outside; each side's band runs from its line where the
+/// view reads the pointer (from half a point inside it under the pointer itself, on a box whose inside is the tool's)
+/// to 12 outside, and the band's first quarter of the side from each corner, at most 13 along it, is that
 /// corner's; the reference point and the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate
 /// band runs from 5 to 18 outside it). The midpoint reach and the side band are measured on the reference application
 /// at 100 %: a press 10 points inside at a side's midpoint, or 10 along the side from it, takes the side, one 12 inside
-/// moves the box; away from the midpoint a press on the side's line or inside it moves the box, one a point outside
-/// takes the side, and so does one 12 outside but not one 14 outside. The corner reach is measured too (the reach
+/// moves the box; away from the midpoint a press on the right or bottom side's line or inside it moves the box, one a
+/// point outside takes the side, and so does one 12 outside but not one 13 outside; a press on the top or left side's
+/// line takes the side, one a point inside it moves the box, and one 13 above the top side takes nothing (the sides
+/// are read where the view reads the pointer, half a pixel up and left of it at 100 %). The corner reach is measured
+/// too (the reach
 /// probe of 2026-11-23: a press 10 along an axis from the corner takes it, 12 not; 8.5 on the diagonal does, 11.3
 /// not: a circle of about 11). The corners' share of the bands is PhotoCraft's: inside the box only a handle's own reach is the box's, so a press there off the handles
 /// reaches what lies under the box (a text editor under a paragraph frame).
 const HANDLE_REACH_IN_HANDLES: f32 = 1.375;
 const EDGE_REACH_IN_HANDLES: f32 = 1.375;
-const SIDE_BAND_IN_HANDLES: f32 = 1.625;
+const SIDE_BAND_IN_HANDLES: f32 = 1.5;
+const CORNER_ALONG_IN_HANDLES: f32 = 1.625;
 const HIT_IN_HANDLES: f32 = 1.5;
 const ROTATE_REACH_IN_HANDLES: f32 = 4.5;
 const BAND_INNER_IN_HANDLES: f32 = 0.625;
@@ -329,6 +334,8 @@ pub struct TransformBoxStyle {
     edge_reach: f32,
     /// How far a side's band reaches outside the box.
     side_band: f32,
+    /// How far along a side from a corner the corner's stretch of the side's band reaches at most.
+    corner_along: f32,
     /// The hit radius of the reference point and of the centre.
     hit: f32,
     /// How far from a corner the rotate pointer shows outside the box.
@@ -1267,6 +1274,7 @@ impl Component for TransformBox<'_> {
             handle_reach: handle.md * HANDLE_REACH_IN_HANDLES,
             edge_reach: handle.md * EDGE_REACH_IN_HANDLES,
             side_band: handle.md * SIDE_BAND_IN_HANDLES,
+            corner_along: handle.md * CORNER_ALONG_IN_HANDLES,
             hit: handle.md * HIT_IN_HANDLES,
             rotate_reach: handle.md * ROTATE_REACH_IN_HANDLES,
             band_inner: handle.md * BAND_INNER_IN_HANDLES,
@@ -1365,15 +1373,22 @@ impl Component for TransformBox<'_> {
             }
             return;
         }
-        // Where the bands start: on a box whose inside moves, half a point outside the line, so a press on the line
-        // moves the box; on one whose inside is the tool's, half a point inside it, so the line takes the side.
-        let line = if self.inside_moves { SIDE_LINE_OUTSIDE } else { -SIDE_LINE_INSIDE };
+        // Where the bands start: on a box whose inside moves, on the line as the view reads the pointer (half a pixel up
+        // and left of it at 100 %), so a press on the top or left side's line takes the side and one on the right or
+        // bottom side's line moves the box; on one whose inside is the tool's, half a point inside the line under the
+        // pointer itself, so the line takes the side.
+        let (line, sides) = if self.inside_moves {
+            let read = space.view.map_vec(space.view.pointer_offset());
+            (0.0, quad.map(|corner| corner - read))
+        } else {
+            (-SIDE_LINE_INSIDE, quad)
+        };
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
             let band = if self.rules.edge_band > 0.0 {
                 edge_band(&quad, side, self.rules.edge_band)
             } else {
-                side_band(&quad, side, line, style.side_band)
+                side_band(&sides, side, line, style.side_band)
             };
             cx.part(EDGE.at(u64::from(k)), band)
                 .sense(Sense::DRAG | Sense::CLICK | context)
@@ -1384,7 +1399,7 @@ impl Component for TransformBox<'_> {
             let corner = usize::from(k);
             // The side that starts at the corner, then the one that ends there.
             for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
-                let Some(reach) = corner_reach(&quad, side, corner, line, style.side_band) else { continue };
+                let Some(reach) = corner_reach(&sides, side, corner, line, style.side_band, style.corner_along) else { continue };
                 cx.part(CORNER_REACH.at(2 * u64::from(k) + end), reach)
                     .sense(Sense::DRAG | Sense::CLICK | context)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
@@ -1704,27 +1719,48 @@ fn edge_band(quad: &[Pos2; 4], side: usize, reach: f32) -> HitShape {
     HitShape::Polygon(vec![a - along + inner, b + along + inner, b + along + outer, a - along + outer])
 }
 
-/// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `width` along it, as far
-/// out as the band. `None` for a side with no length.
-fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, line: f32, width: f32) -> Option<HitShape> {
+/// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `most` along it, as far
+/// out as the band (`width`). `None` for a side with no length.
+fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, line: f32, width: f32, most: f32) -> Option<HitShape> {
     let out = outward(quad, side)?;
     let other = if corner == side { quad[(side + 1) % 4] } else { quad[side] };
     let from = quad[corner];
     let along = other - from;
-    let reach = (along.length() * 0.25).min(width);
+    let reach = (along.length() * 0.25).min(most);
     Some(band_along(from, from + along.normalized() * reach, out, line, width))
 }
 
-/// The unit normal pointing out of the box `quad` from side `side`, `None` for a side with no length.
+/// The unit normal pointing out of the box `quad` from side `side`, `None` for a side with no length. On a box crossed
+/// over itself (a bow tie: two opposite sides cross) the two sides that do not cross point away from the crossing, each
+/// out of its own triangle; the winding, which the two triangles turn opposite ways, decides only the crossing sides.
 fn outward(quad: &[Pos2; 4], side: usize) -> Option<Vec2> {
-    let along = quad[(side + 1) % 4] - quad[side];
+    let (a, b) = (quad[side], quad[(side + 1) % 4]);
+    let along = b - a;
     if along.length() < 1e-3 {
         return None;
     }
+    let d = along.normalized();
+    let normal = Vec2::new(d.y, -d.x);
+    // The sides beside this one cross each other: this side closes one of the bow tie's two triangles.
+    if let Some(crossing) = crossing_of(quad[(side + 1) % 4], quad[(side + 2) % 4], quad[(side + 3) % 4], quad[side]) {
+        return Some(if normal.dot(a - crossing) >= 0.0 { normal } else { -normal });
+    }
     // The winding tells outside from inside, as `quad::outset` reads it.
     let area: f32 = (0..4).map(|i| quad[i].x * quad[(i + 1) % 4].y - quad[(i + 1) % 4].x * quad[i].y).sum();
-    let d = along.normalized();
-    Some(Vec2::new(d.y, -d.x) * if area >= 0.0 { 1.0 } else { -1.0 })
+    Some(normal * if area >= 0.0 { 1.0 } else { -1.0 })
+}
+
+/// Where the segment from `a` to `b` crosses the one from `c` to `d` between their ends, `None` when they do not cross
+/// there (or run parallel).
+fn crossing_of(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> Option<Pos2> {
+    let (r, s) = (b - a, d - c);
+    let det = r.x * s.y - r.y * s.x;
+    if det.abs() < 1e-6 {
+        return None;
+    }
+    let ac = c - a;
+    let (t, u) = ((ac.x * s.y - ac.y * s.x) / det, (ac.x * r.y - ac.y * r.x) / det);
+    (t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0).then(|| a + r * t)
 }
 
 /// The band from `a` to `b` from `line` out along `out` (negative: inside) to `width` out.
@@ -1733,8 +1769,10 @@ fn band_along(a: Pos2, b: Pos2, out: Vec2, line: f32, width: f32) -> HitShape {
     HitShape::Polygon(vec![a + inner, b + inner, b + outer, a + outer])
 }
 
-/// How far outside a side's line its band starts on a box whose inside moves, in screen points: a press on the line
-/// moves the box, as in the reference application.
+/// How far outside a side's line the inside of a box that moves still takes the press, in screen points: up to where
+/// the right and bottom sides' bands start under the pointer itself (they start on the line where the view reads the
+/// pointer, half a pixel up and left of it at 100 %), so a press on those lines moves the box, as in the reference
+/// application.
 const SIDE_LINE_OUTSIDE: f32 = 0.5;
 /// How far inside the box a press still lies on a side's line on a box whose inside is the tool's, in screen points.
 const SIDE_LINE_INSIDE: f32 = 0.5;
