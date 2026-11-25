@@ -29,7 +29,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
         doc,
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
-        next_rev_id: 0,
+        ids: super::AnnotationIds::new(doc),
         open_moves: Vec::new(),
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
         docpr: doc.next_shape_id().saturating_sub(1),

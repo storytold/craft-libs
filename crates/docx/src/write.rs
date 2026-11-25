@@ -16,13 +16,13 @@ pub(crate) use story::written_toc_span;
 mod watermark;
 mod wordart;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use craft_wordmodel::ParaProps;
 use craft_wordmodel::numbering::{Level, LevelSuffix};
 use craft_wordmodel::props::VAlign;
 use craft_wordmodel::styles::{Style, StyleKind, TablePart};
-use craft_wordmodel::{Blocks, Document, PartKind};
+use craft_wordmodel::{Blocks, Document, InlineObject, PartKind};
 
 use crate::package::{MAX_VBA_RELATED, VBA_PROJECT_PART, VBA_RELATED, rt, zip_entries};
 use crate::xml::{self, W};
@@ -105,6 +105,47 @@ pub(crate) fn stacking(doc: &Document) -> (u32, BTreeMap<u32, u32>) {
     (zmap.values().last().copied().unwrap_or(FIRST_Z), zmap)
 }
 
+/// The annotations' `w:id`s (ISO/IEC 29500-1 §17.13.4–§17.13.6), one number space for every kind.
+/// Comments and editable ranges keep the model's own ids. Revisions, move ranges and bookmarks get
+/// fresh ids from the numbers those leave free, so no two annotations of different kinds share an
+/// id (#3307).
+pub(crate) struct AnnotationIds {
+    /// The ids the document's comments and editable ranges keep.
+    kept: BTreeSet<u32>,
+    /// The lowest number a fresh id may take; past `u32::MAX` when none is left.
+    next: u64,
+}
+
+impl AnnotationIds {
+    pub(crate) fn new(doc: &Document) -> Self {
+        let mut kept: BTreeSet<u32> = doc.comments.keys().copied().collect();
+        let stories = std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks));
+        for b in stories.flat_map(|blocks| blocks.iter()) {
+            craft_wordmodel::walk::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } = o {
+                        kept.insert(*id);
+                    }
+                }
+            });
+        }
+        // Fresh ids start at 1, where revisions were numbered before #3307.
+        Self { kept, next: 1 }
+    }
+
+    /// A fresh id: the lowest number from 1 that no comment, editable range or earlier fresh id has. In the
+    /// unreachable case of every `u32` being used, `u32::MAX` again rather than a wrapped id.
+    pub(crate) fn fresh(&mut self) -> u32 {
+        while let Ok(id) = u32::try_from(self.next) {
+            self.next += 1;
+            if !self.kept.contains(&id) {
+                return id;
+            }
+        }
+        u32::MAX
+    }
+}
+
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
     /// Numbered display equations written so far (automatic numbers are written as text).
@@ -112,7 +153,8 @@ pub(crate) struct Writer<'d> {
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,
-    next_rev_id: u32,
+    /// The `w:id`s revisions, move ranges and bookmarks are given (see [`AnnotationIds`]).
+    ids: AnnotationIds,
     /// Move ranges open in the output: (revision, range `w:id`, destination?).
     open_moves: Vec<(u32, String, bool)>,
     docpr: u32,
@@ -233,8 +275,12 @@ impl Writer<'_> {
     }
 
     fn bookmark_id(&mut self, name: &str) -> String {
-        let n = self.bookmarks.len() as u32;
-        self.bookmarks.entry(name.to_string()).or_insert(n).to_string()
+        if let Some(id) = self.bookmarks.get(name) {
+            return id.to_string();
+        }
+        let id = self.ids.fresh();
+        self.bookmarks.insert(name.to_string(), id);
+        id.to_string()
     }
 
     fn note_id(&mut self, part: u32, foot: bool) -> String {

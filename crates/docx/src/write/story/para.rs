@@ -301,12 +301,12 @@ impl Writer<'_> {
     }
 
     pub(super) fn rev_attrs(&mut self, idx: u32) -> (String, String, String) {
-        self.next_rev_id += 1;
+        let id = self.ids.fresh();
         let r = self.doc.revisions.get(idx as usize);
         let author = crate::write::annotation_author(self.doc, r.map_or("", |r| r.author.as_str())).to_string();
         // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
         let date = if self.doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
-        (self.next_rev_id.to_string(), author, date)
+        (id.to_string(), author, date)
     }
 
     /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
