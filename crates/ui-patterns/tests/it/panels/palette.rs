@@ -3,7 +3,7 @@
 //! remembers what it ran.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, Overlay, Role, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, CommandSet, LeastWidth, Overlay, Role, Show as _, ShowContainer as _, clicked};
 use craft_ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft_ui::patterns::panels::{CommandPalette, PaletteFace};
 use craft_ui::popover::Popover;
@@ -527,4 +527,29 @@ fn enter_on_a_disabled_first_match_runs_nothing() {
     assert_eq!(*refused.borrow(), Some(CommandRef::from(EditCommands::Undo)), "the output names the refused command");
     assert!(open.get(), "the palette stays open");
     assert!(take_output(fixture.ctx()).fired.is_empty(), "nothing ran");
+}
+
+/// The dialog face is a steady, readable width: over short labels it opens at least the palette's least width, typing a
+/// query that drops the widest rows leaves its width as it was, and in a narrow window it keeps to its share of it.
+/// Guards against a box as wide as its widest row, which opened narrow and jumped as the results changed.
+#[trial]
+fn the_dialog_face_keeps_a_readable_width_while_the_query_changes_its_rows() {
+    let least = Rc::new(Cell::new(0.0_f32));
+    let read = least.clone();
+    let entries = vec![entry("cut", "Cut"), entry("copy", "Copy"), entry("paste", "Paste"), entry("pasteInside", "Paste Inside")];
+    let mut rig = rig(entries, None, false, move |ui| read.set(LeastWidth::Palette.points(craft_ui::runtime::env::Env::of(ui).tokens.tokens())));
+    let width = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the palette's box shows").rect.width();
+    rig.fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    let opened = width(&rig.fixture);
+    assert!(opened >= least.get(), "short labels open the box at its least width: {opened} against {}", least.get());
+
+    rig.fixture.type_text("cut").settle();
+    assert_eq!(names(&rig.fixture).len(), 1, "the query lists one short row: {:?}", names(&rig.fixture));
+    let typed = width(&rig.fixture);
+    assert!((typed - opened).abs() <= 0.5, "the box keeps its width as the rows change: {typed} against {opened}");
+
+    let narrow = 400.0;
+    rig.fixture.room(Vec2::new(narrow, 900.0)).settle();
+    let kept = width(&rig.fixture);
+    assert!(kept <= narrow * 0.6 + 0.5, "a narrow window keeps the box to its share: {kept} in {narrow}");
 }
