@@ -1,6 +1,6 @@
 //! `Flyout`: the panel an icon of an iconic column opens beside the column.
 
-use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, Place, PlacementChange, ResizeEdges};
+use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, Place, PlacementChange, PopupLayer, ResizeEdges};
 use crate::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
 };
@@ -56,6 +56,10 @@ impl Outcome for FlyoutOutput {
 /// The user resizes it by its top and bottom edges, the edge away from the column and the two corners there; the
 /// column side stays. The flyout keeps no rect of its own: each step comes back in [`FlyoutShown::placed`] and the
 /// caller places the next pass from it.
+///
+/// It stands above the floating windows as a popup does, or below them with `popup_layer` set to
+/// `PopupLayer::BelowWindows` when it is opened outside every layer: a window over it is drawn above it and takes the
+/// presses there, and the menus opened from it still stand above everything.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, unregistered)]
 pub struct Flyout {
@@ -72,6 +76,9 @@ pub struct Flyout {
     /// The least size a resize leaves the flyout.
     #[prop(quantity = "least room a resize leaves, from the dock's measured sizes, in points")]
     least: Vec2,
+    /// Where the flyout stands against the floating windows: above them (the default) or below them.
+    #[prop]
+    popup_layer: PopupLayer,
     placed: Option<PlacementChange>,
 }
 
@@ -80,7 +87,17 @@ impl Flyout {
     /// `Side::End`), closing on a press outside it and when the focus leaves it if `auto_collapse`.
     pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
-        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
+        Flyout {
+            common: Common::new(),
+            props,
+            opens,
+            size,
+            auto_collapse,
+            within: Rect::EVERYTHING,
+            least: Vec2::ZERO,
+            popup_layer: PopupLayer::AboveWindows,
+            placed: None,
+        }
     }
 
     /// The layer the flyout shows in, its top left at `top_left`: placed by the caller, resizable on every edge but
@@ -102,7 +119,8 @@ impl Flyout {
                     .focus_left(self.auto_collapse)
                     .commands(false),
             )
-            .body_scroll(false);
+            .body_scroll(false)
+            .popup_layer(self.popup_layer);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }
 

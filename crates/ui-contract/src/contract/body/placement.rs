@@ -163,12 +163,8 @@ pub(super) fn measure_layer(props: &ContainerProps, id: Id, ui: &Ui) -> areas::L
     let area = sub(id, "area");
     match &props.mount {
         Mount::Viewport { .. } if windows::mount_window(ui.ctx(), id) => ui.layer_id(),
-        Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => {
-            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), overlay.rank), area)
-        }
-        Mount::FullWindow => {
-            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), crate::contract::Overlay::full_window(props.focus).rank), area)
-        }
+        Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => areas::layer_of(overlay.tier(ui.ctx()), area),
+        Mount::FullWindow => areas::layer_of(crate::contract::Overlay::full_window(props.focus).tier(ui.ctx()), area),
         _ => ui.layer_id(),
     }
 }

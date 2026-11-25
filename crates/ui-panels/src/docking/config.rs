@@ -3,6 +3,7 @@
 
 use super::IconicMode;
 use super::targets::ZoneRule;
+use crate::contract::overlay::PopupLayer;
 use crate::tabs::{PanelTabLook, PanelTabShrink};
 use craft_behavior::{DockSide, IconId};
 
@@ -119,6 +120,12 @@ pub struct DockConfig {
     /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
     /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
     pub iconic_mode: IconicMode,
+    /// Where the flyouts of docked columns collapsed to icons stand against the floating windows: above them
+    /// ([`PopupLayer::AboveWindows`], the default), or below them ([`PopupLayer::BelowWindows`]), so a floating window
+    /// stays in front of a docked column's open flyout it overlaps, is drawn over it and takes the presses there. A
+    /// flyout below the windows still closes as before, and the menus opened from it stand above everything. A
+    /// floating window's own flyouts stand above it either way.
+    pub flyout_layer: PopupLayer,
 }
 
 impl Default for DockConfig {
@@ -146,6 +153,7 @@ impl Default for DockConfig {
             panel_menu_always: false,
             panel_menu_icon: IconId::new("more"),
             iconic_mode: IconicMode::Flyouts,
+            flyout_layer: PopupLayer::AboveWindows,
         }
     }
 }
@@ -155,6 +163,13 @@ impl DockConfig {
     #[must_use]
     pub fn iconic_mode(mut self, mode: IconicMode) -> Self {
         self.iconic_mode = mode;
+        self
+    }
+
+    /// Where docked columns' flyouts stand against the floating windows ([`flyout_layer`](Self::flyout_layer)).
+    #[must_use]
+    pub fn flyout_layer(mut self, layer: PopupLayer) -> Self {
+        self.flyout_layer = layer;
         self
     }
 

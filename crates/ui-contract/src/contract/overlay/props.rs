@@ -5,12 +5,12 @@ use super::place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, S
 use crate::runtime::access::PopupKind;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::motion::{MotionSpec, spec};
-use crate::runtime::overlay::{Backdrop, LayerRole, Rank};
+use crate::runtime::overlay::{Backdrop, LayerRole, PopupLayer, Rank};
 use crate::runtime::windows::ResizeEdge;
 use craft_behavior::overlay::{Align, MinWidth, Side};
 use craft_behavior::{GesturePhase, OwnerClass};
 use egui::emath::TSTransform;
-use egui::{Align2, Id, Pos2, Rect, Response, Vec2};
+use egui::{Align2, Context, Id, Pos2, Rect, Response, Vec2};
 use std::borrow::Cow;
 
 /// What a press outside the layer and its anchor does.
@@ -159,6 +159,9 @@ pub struct Overlay {
     pub continue_move: Option<Vec2>,
     /// What the layer is for; a progress window is left out of `any_open`.
     pub role: LayerRole,
+    /// Where a popup stands against the floating windows: above them (the default), or below them when it is opened
+    /// outside every layer, as a dock column's flyout ([`PopupLayer::BelowWindows`]). Read only for `Rank::Popup`.
+    pub popup_layer: PopupLayer,
     /// Set only by [`Overlay::full_window`].
     full_window: bool,
 }
@@ -199,6 +202,7 @@ impl Overlay {
             moved_by_app: false,
             continue_move: None,
             role: LayerRole::default(),
+            popup_layer: PopupLayer::default(),
             full_window: false,
         }
     }
@@ -465,6 +469,18 @@ impl Overlay {
     pub fn role(mut self, role: LayerRole) -> Overlay {
         self.role = role;
         self
+    }
+
+    /// Sets where a popup stands against the floating windows ([`Overlay::popup_layer`]).
+    pub fn popup_layer(mut self, layer: PopupLayer) -> Overlay {
+        self.popup_layer = layer;
+        self
+    }
+
+    /// The egui tier the layer opened now shows in: its rank's, raised to that of the layer it is opened inside, and
+    /// the windows' for a popup that stands below them.
+    pub(crate) fn tier(&self, ctx: &Context) -> crate::runtime::egui::areas::Tier {
+        crate::runtime::overlay::layer_tier(ctx, self.rank, self.popup_layer)
     }
 
     /// Sets whether the move band moves the OS window the layer is shown in, in place of the layer.

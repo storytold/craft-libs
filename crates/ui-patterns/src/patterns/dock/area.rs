@@ -3,7 +3,7 @@
 
 use super::hide::{self, PruneKey};
 use crate::contract::Revision;
-use crate::contract::overlay::{PlacementChange, PlacementKind};
+use crate::contract::overlay::{PlacementChange, PlacementKind, PopupLayer};
 use crate::contract::{
     Bind, BindMut, BodyCx, Cx, Entry, Gap, MemoKey, MemoProps, MemoView, NoValue, Outbox, Outcome, Pad, Pointer as _, Props as _, Show as _,
     ShowContainer as _, Sizing, Tracked, WordSetCx as _,
@@ -1460,8 +1460,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             DockTargets::<P>::register_room(ui.ctx(), dock, cell);
         }
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
-        // Only a docked column's icons are a rail; a floating window's open flyouts.
+        // Only a docked column's icons are a rail; a floating window's open flyouts, which stand above its window.
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
+        let flyout_layer = if in_window { PopupLayer::AboveWindows } else { scene.config.flyout_layer };
         // The width the user gives a column by its inner edge leaves out its card's inset.
         let inset = card.map_or(0.0, |place| scene.sizes.inset(place));
         let mut icons = |cell: Rect, open: Option<P>, card: Option<CardInset>| {
@@ -1474,7 +1475,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .bar(bar)
                     .within(within)
                     .auto_collapse(scene.auto_collapse)
-                    .mode(mode);
+                    .mode(mode)
+                    .flyout_layer(flyout_layer);
                 let shown = match card {
                     Some(place) => shown.card(place),
                     None => shown,

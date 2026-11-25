@@ -219,6 +219,10 @@ pub type LayerKey = egui::LayerId;
 /// How an overlay layer ranks among egui's orders, bottom to top: the one place the runtime chooses an `Order`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
+    /// The popups that stand below the windows (`overlay::PopupLayer::BelowWindows`): egui's background order, which
+    /// they are listed in above the window's content. The floating windows are left to egui's area order in the tier
+    /// above, so a listed layer of theirs would lie over every one of them.
+    BelowWindows,
     /// Floating windows and panels.
     Window,
     /// Toasts, popups, modals and their chrome.
@@ -230,6 +234,7 @@ pub(crate) enum Tier {
 impl Tier {
     fn order(self) -> Order {
         match self {
+            Tier::BelowWindows => Order::Background,
             Tier::Window => Order::Middle,
             Tier::Foreground => Order::Foreground,
             Tier::Tooltip => Order::Tooltip,
