@@ -8,8 +8,8 @@ use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Size, TextSize, Them
 use craft_ui::choice::RadioGroup;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::form::{Field, FieldGroup};
-use craft_ui::layout_components::Row;
+use craft_ui::form::Field;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
@@ -73,7 +73,9 @@ impl Outcome for AppearancePageOutput {
 /// Rows, top to bottom, with the labels at the start: Appearance Mode (Sync with system, Dark, Light), Light Theme and
 /// Dark Theme (a row of [`ThemeChip`]s each: the built-in themes, then the library's, each in the rows for the modes it
 /// has; "Active" after the chips of the row for the mode the app shows now), Size (Compact, Comfortable), UI Font Size
-/// (the [`TextSize`] steps), Contrast and Motion (Sync with system, Standard or Full, High or Reduced).
+/// (the [`TextSize`] steps), Contrast and Motion (Sync with system, Standard or Full, High or Reduced). An app that keeps
+/// its own appearance shows only what it keeps: the `size`, `text_size` and `contrast` props leave those rows out, and
+/// `can_favorite` the favourite stars and their menu.
 ///
 /// The page edits the bound draft, a [`SelectionChange`] the Preferences model keeps; the chips and lists show
 /// [`SuiteClient::shown`] (through the [`SuiteView`]) with the draft applied. Nothing reaches the suite until the window applies: the model's
@@ -88,9 +90,19 @@ pub struct AppearancePage<'a> {
     /// The themes marked with a filled star.
     #[prop]
     favorites: &'a [ThemeId],
+    /// Offers favourites (default on): the chips' stars and their Add to Favorites / Remove from Favorites menu. An app
+    /// that keeps no favourites turns it off; the page then reports no `favorite_toggled`.
+    #[prop]
+    can_favorite: bool,
+    /// Shows the Size row (default on); an app that keeps no size of its own turns it off.
+    #[prop]
+    size: bool,
     /// Shows the UI Font Size row (default on); an app with its own text-size control turns it off.
     #[prop]
     text_size: bool,
+    /// Shows the Contrast row (default on); an app that keeps no contrast choice turns it off.
+    #[prop]
+    contrast: bool,
     /// The system shows its dark mode: which row is active when the mode follows the system.
     #[prop]
     system_dark: bool,
@@ -99,18 +111,18 @@ pub struct AppearancePage<'a> {
 impl<'a> AppearancePage<'a> {
     /// The page over the suite `suite` (from [`SuiteClient::view`]), editing `draft`.
     pub fn new(suite: &'a SuiteView, draft: Bind<'a, SelectionChange>) -> Self {
-        AppearancePage { suite, draft, favorites: &[], text_size: true, system_dark: false }
+        AppearancePage { suite, draft, favorites: &[], can_favorite: true, size: true, text_size: true, contrast: true, system_dark: false }
     }
 
     /// Shows the page.
     pub fn show(self, ui: &mut Ui) -> AppearancePageOutput {
-        let AppearancePage { suite, draft, favorites, text_size, system_dark } = self;
+        let AppearancePage { suite, draft, favorites, can_favorite, size, text_size, contrast, system_dark } = self;
         let words = Env::of(ui).words::<AppearanceWords>();
         let themes = themes(suite);
         let mut held = Held::new(draft);
         let mut toggled = None;
         let mut changed = false;
-        let mut shown = FieldGroup::new(words.appearance.clone()).show(ui, |ui, cx| {
+        let mut shown = Stack::new().label(words.appearance.clone()).show(ui, |ui, cx| {
             let before = held.read(cx).unwrap_or_default();
             let mut now = before.clone();
             let shown = now.applied_to(&suite.shown);
@@ -130,6 +142,7 @@ impl<'a> AppearancePage<'a> {
             }
             for dark in [false, true] {
                 let (title, chosen) = if dark { (&words.dark_theme, &shown.theme_dark) } else { (&words.light_theme, &shown.theme_light) };
+                let favorites = can_favorite.then_some(favorites);
                 let row = ChipRow { title, dark, active: dark == dark_active, chosen: chosen.as_ref(), themes: &themes, favorites, words: &words };
                 let (picked, flipped) = row.show(ui);
                 if let Some(id) = picked {
@@ -137,9 +150,11 @@ impl<'a> AppearancePage<'a> {
                 }
                 toggled = toggled.take().or(flipped);
             }
-            let sizes = [Entry::new(Size::Compact, words.compact.clone()), Entry::new(Size::Comfortable, words.comfortable.clone())];
-            if let Some(size) = pick(ui, &words.size, "size", shown.size.unwrap_or_default(), &sizes) {
-                now.size = Some(size);
+            if size {
+                let sizes = [Entry::new(Size::Compact, words.compact.clone()), Entry::new(Size::Comfortable, words.comfortable.clone())];
+                if let Some(size) = pick(ui, &words.size, "size", shown.size.unwrap_or_default(), &sizes) {
+                    now.size = Some(size);
+                }
             }
             if text_size {
                 let steps = [
@@ -152,13 +167,15 @@ impl<'a> AppearancePage<'a> {
                     now.text_size = Some(step);
                 }
             }
-            let contrasts = [
-                Entry::new(ContrastChoice::System, words.contrast_system.clone()),
-                Entry::new(ContrastChoice::Standard, words.contrast_standard.clone()),
-                Entry::new(ContrastChoice::High, words.contrast_high.clone()),
-            ];
-            if let Some(contrast) = pick(ui, &words.contrast, "contrast", shown.contrast.unwrap_or_default(), &contrasts) {
-                now.contrast = Some(contrast);
+            if contrast {
+                let contrasts = [
+                    Entry::new(ContrastChoice::System, words.contrast_system.clone()),
+                    Entry::new(ContrastChoice::Standard, words.contrast_standard.clone()),
+                    Entry::new(ContrastChoice::High, words.contrast_high.clone()),
+                ];
+                if let Some(contrast) = pick(ui, &words.contrast, "contrast", shown.contrast.unwrap_or_default(), &contrasts) {
+                    now.contrast = Some(contrast);
+                }
             }
             let motions = [
                 Entry::new(MotionChoice::System, words.motion_system.clone()),
@@ -204,7 +221,8 @@ struct ChipRow<'a> {
     active: bool,
     chosen: Option<&'a ThemeId>,
     themes: &'a [ThemeDef],
-    favorites: &'a [ThemeId],
+    /// The favourite themes; `None` offers no favourites.
+    favorites: Option<&'a [ThemeId]>,
     words: &'a AppearanceWords,
 }
 
@@ -220,7 +238,11 @@ impl ChipRow<'_> {
             let group = RadioGroup::new(self.title.clone(), Bind::given(self.chosen.cloned())).id_salt("group").show(ui, |ui, _| {
                 Row::new().wrap(true).show(ui, |ui, _| {
                     for theme in self.themes.iter().filter(|theme| fits(theme)) {
-                        let favorite = self.favorites.contains(&theme.id);
+                        let Some(favorites) = self.favorites else {
+                            ThemeChip::new(theme, self.dark).can_favorite(false).id_salt(theme.id.as_str()).show(ui);
+                            continue;
+                        };
+                        let favorite = favorites.contains(&theme.id);
                         let chip = ThemeChip::new(theme, self.dark).favorite(favorite).id_salt(theme.id.as_str()).show(ui);
                         if chip.favorite_clicked {
                             flipped = Some(theme.id.clone());

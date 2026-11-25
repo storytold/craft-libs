@@ -16,7 +16,7 @@ use crate::contract::{
 };
 use crate::display::{Divider, Icon, Text};
 use crate::layout_components::{Row, Stack};
-use crate::list::{List, ListRow, ThumbAspect, TrailingPart};
+use crate::list::{List, ListRow, RowEvent, ThumbAspect, TrailingFace, TrailingPart};
 use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
@@ -27,10 +27,10 @@ use crate::primitives::{
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
-use crate::sections::Section;
+use crate::sections::{HeaderStrength, Section};
 use crate::style::{Corners, DataColor, StyleCx, SurfaceKind, SurroundLook, TypeRole};
-use crate::tile_grid::{CaptionPlace, Tile, TileGrid};
-use craft_behavior::{IconId, Proposal, SelectionChange, keyed};
+use crate::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid};
+use craft_behavior::{DisplayOrder, IconId, ItemSource, Proposal, SelectionChange, keyed};
 use craft_theme::variant::{CustomVariant, Emphasis, RadiusStep, Tone, VariantLook};
 use craft_theme::{Rgba, Tokens, Variant};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
@@ -59,9 +59,19 @@ const HOME_DROP_ICON: f32 = 34.0;
 // design: allow[literal-size/vec2](the desktop Home page's outer margins are larger than any spacing token)
 const HOME_DESKTOP_INSET: Vec2 = vec2(36.0, 54.0);
 const HOME_DROP_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-drop", home_drop_look);
+/// New and Open on the desktop Home page: the control radius, not the pill of dialog buttons.
+const HOME_NEW_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-new", home_new_look);
+const HOME_OPEN_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-open", home_open_look);
+/// A row of the Home rail (Home, Learn, the community links): no edge or fill at rest, muted ink that turns normal
+/// under the pointer. The selected row keeps normal ink and an accent bar at its leading edge.
+const HOME_ROW_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-row", home_row_look);
+const HOME_ROW_SELECTED_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-row-selected", home_row_selected_look);
 
 /// The revealed part of a recent row that takes the file off the list.
 pub(super) const REMOVE: TrailingPart = TrailingPart::new(0);
+
+/// The part of a listed pinned folder's heading that unpins the folder.
+const UNPIN: TrailingPart = TrailingPart::new(0);
 
 /// The commands of a recent file's context menu. They act on the file that has the lead in the recent files, which a
 /// secondary click or the context-menu key gives to the file the menu is for. Delete at the lead of the recent files is
@@ -123,6 +133,12 @@ pub enum StartAction {
     UseTemplate(String),
     /// The "more templates" link: the app shows its template gallery.
     MoreTemplates,
+    /// A file listed under a pinned folder was opened: the app opens that path.
+    OpenPinnedFile(PathBuf),
+    /// A pinned folder was folded: the app keeps it folded.
+    FoldPinned(PathBuf),
+    /// A pinned folder's More row was chosen: the app lists all of its files.
+    ExpandPinned(PathBuf),
 }
 
 /// How the start screen is laid out.
@@ -134,6 +150,106 @@ pub enum StartLayout {
     Gallery,
     /// A greeting page: a title, the templates, then the recent files as rows. It shows neither Pinned nor the drop card.
     Greeting,
+}
+
+/// Where a host section sits on the start screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StartPlace {
+    /// Before the Recent section.
+    BeforeRecent,
+    /// After the last built-in section.
+    AfterSections,
+}
+
+/// The most files a pinned folder lists before its More row.
+pub const PINNED_FILES_SHOWN: usize = 8;
+
+/// A pinned folder as the start screen lists it, with the files the app found in it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PinnedFolder {
+    /// The folder's path; also the identity of the entry.
+    pub path: PathBuf,
+    /// The name shown.
+    pub name: String,
+    /// The folder's files, once the app has listed them.
+    pub listing: Option<FolderListing>,
+    /// The folder shows no files.
+    pub folded: bool,
+    /// The folder lists all of its files, not the first [`PINNED_FILES_SHOWN`].
+    pub expanded: bool,
+}
+
+impl PinnedFolder {
+    /// A pinned folder at `path` shown as `name`, not yet listed, unfolded and not expanded.
+    pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
+        PinnedFolder { path: path.into(), name: name.into(), listing: None, folded: false, expanded: false }
+    }
+
+    /// This folder with its files, `listing`, as the app found them.
+    #[must_use]
+    pub fn listing(mut self, listing: FolderListing) -> Self {
+        self.listing = Some(listing);
+        self
+    }
+
+    /// This folder shown folded (no files) or not.
+    #[must_use]
+    pub fn folded(mut self, folded: bool) -> Self {
+        self.folded = folded;
+        self
+    }
+
+    /// This folder listing all of its files, or only the first [`PINNED_FILES_SHOWN`].
+    #[must_use]
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = expanded;
+        self
+    }
+}
+
+/// What the app knows of a pinned folder's files.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum FolderListing {
+    /// The app is still listing the folder.
+    Pending,
+    /// The folder cannot be listed.
+    Unavailable,
+    /// The folder's files, and how many it holds in all.
+    Listed {
+        /// The files to show.
+        files: Vec<PinnedFile>,
+        /// The number of files in the folder.
+        total: usize,
+    },
+}
+
+/// A file listed under a pinned folder.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PinnedFile {
+    /// The file's full path.
+    pub path: PathBuf,
+    /// The name shown.
+    pub name: String,
+    /// A second line under the name.
+    pub note: Option<String>,
+}
+
+impl PinnedFile {
+    /// A file at `path` shown as `name`, with no second line.
+    pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
+        PinnedFile { path: path.into(), name: name.into(), note: None }
+    }
+
+    /// This file with a second line, `note`, under its name.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
 }
 
 /// What a start screen pass reports.
@@ -155,26 +271,42 @@ impl Outcome for StartOutput {
     }
 }
 
+/// An app's own section of the start screen: its title and its body.
+type AppSection<'a> = (Label, RefCell<&'a mut dyn FnMut(&mut Ui)>);
+
 /// The start screen, shown in a shell's body when no document is open.
 ///
-/// - **Layout.** New and Open (the first Tab stops), then Recent with the view switch and the sort, Pinned Folders
-///   when the app gives the list (even an empty one) and Templates when it gives any. The page scrolls as a whole, and each grid and list takes the height of its rows.
+/// - **Layout.** New and Open (the first Tab stops; with `offers_new(false)` New is left out and Open leads), then the
+///   host's [`StartPlace::BeforeRecent`] sections, Recent with the view switch and the sort (left out with
+///   `max_recent(0)`), Pinned Folders when the app gives the list (even an empty one), the app's own
+///   [`app_section`](StartScreen::app_section) when it gives one, Templates when it gives any, then the host's
+///   [`StartPlace::AfterSections`] sections, in call order. The page scrolls as a whole, and each grid and list takes
+///   the height of its rows.
 /// - **Greeting layout.** With `layout(StartLayout::Greeting)` the page shows the `title`, the templates without a
-///   section heading, the `more_templates` link, then the recent files as rows in the order the app gave them: no view
-///   switch, no sort, no Pinned Folders and no drop card.
+///   section heading, the `more_templates` link, then the recent files as rows in the order the app gave them, then the
+///   app's own section: no view switch, no sort, no Pinned Folders and no drop card.
 /// - **Recent files.** A grid of cards or a list, by the `view` binding, in the order of the `sort` binding. A click or
 ///   Enter opens a file; arrows move; the context menu (secondary click, the menu key or Shift+F10) and the
-///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder.
+///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder. A file's
+///   [`note`](RecentFile::note) shows in place of its age.
+/// - **Pinned folders.** Each folder is a heading row, with a disclosure when the app lists it (still listing, empty
+///   or unavailable too). A listed folder holds its files, the first
+///   [`PINNED_FILES_SHOWN`] until the app expands it, then a More row; the heading's trailing note says when the app is
+///   still listing, cannot list, found no files or kept only the newest. The app owns fold and expansion: the
+///   disclosure and Left/Right report [`StartAction::FoldPinned`], the More row [`StartAction::ExpandPinned`], and the
+///   app passes `folded` and `expanded` back.
 /// - **Thumbnails.** With `thumbnails(store, source)`, each card, row and template asks the store for its
 ///   [`ThumbKey`] at the size it paints: a placeholder until the picture is ready, a failure mark when loading failed,
 ///   the file icon when the source has no picture for the key. Without it cards show the file icon.
-/// - **Links.** `links` adds a rail beside the page (New and Open, then the links) in a room wide enough, else the
-///   links follow the sections. A double click on the page's own room opens a file, as Open does.
+/// - **Links.** `links` adds a rail beside the page (New and Open, then the links) in a room that holds the rail and
+///   the sections' least width, host sections included, else the links follow the sections. A double click on the
+///   page's own room opens a file, as Open does.
 /// - **No recent files.** With a `drop_hint` the Recent section is a card that opens a file on a click, Enter or Space.
 /// - **State.** The app owns the list, the view and the sort. The screen writes a changed view or sort through its
 ///   binding and reports everything else as [`StartAction`]s.
 ///
 /// ```ignore
+/// let folders = vec![PinnedFolder::new("/home/ana/Work", "Work").listing(listing)];
 /// let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &recent).pinned(&folders).show(ui);
 /// for action in out.actions { /* the app opens, removes, pins... */ }
 /// ```
@@ -187,7 +319,7 @@ pub struct StartScreen<'a> {
     /// The pinned folders in the app's order. The section shows once this is given; an app that cannot pin leaves it
     /// out.
     #[prop]
-    pinned: Option<&'a [PathBuf]>,
+    pinned: Option<&'a [PinnedFolder]>,
     /// The template cards; the section is left out when there are none.
     #[prop]
     templates: &'a [Template],
@@ -205,6 +337,8 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
     drop_hint: Option<Label>,
+    /// One app section, drawn after Recent and Pinned Folders and before Templates.
+    section: Option<AppSection<'a>>,
     /// How the page is laid out.
     #[prop]
     layout: StartLayout,
@@ -226,12 +360,38 @@ pub struct StartScreen<'a> {
     page_paper: Option<DataColor>,
     /// The desktop Home layout set by [`Self::home_layout`].
     home: Option<HomeLayout<'a>>,
+    /// The New… button shows (true by default).
+    #[prop]
+    offers_new: bool,
+    /// The Open… button shows (true by default); an app that opens files from its title bar leaves it out. A double
+    /// click on the page's empty room still asks for Open.
+    #[prop]
+    offers_open: bool,
+    /// The heading of the pinned folders section, in place of the built-in word.
+    #[prop(into)]
+    pinned_title: Option<Label>,
+    /// PdfCraft's section look: the Recent, Pinned Folders and Templates headings in the heading strength and quiet,
+    /// a ghost Pin Folder button, and a Clear button among Recent's controls that reports
+    /// [`StartAction::ClearRecent`]. By default the sections keep their plain titles and buttons and Recent has no
+    /// Clear button.
+    #[prop(flag)]
+    heading_sections: bool,
+    /// The pinned folders stand above the recent files, as production's Folders section does. By default they follow
+    /// the recent files.
+    #[prop(flag)]
+    pinned_first: bool,
+    /// The host's sections, each at its place, in call order.
+    sections: Vec<(StartPlace, HostSection<'a>)>,
 }
 
 struct HomeLayout<'a> {
     title: Label,
     footer_links: &'a [StartLink],
 }
+
+/// A host section's body. A cell, because the page's body runs for the measuring pass and the shown pass and calls
+/// every section in both.
+type HostSection<'a> = RefCell<Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>>;
 
 /// A link on the start screen's rail.
 #[derive(Clone, Debug, PartialEq)]
@@ -288,6 +448,7 @@ impl<'a> StartScreen<'a> {
             thumbnails: None,
             links: &[],
             drop_hint: None,
+            section: None,
             home: None,
             layout: StartLayout::default(),
             title: None,
@@ -295,6 +456,12 @@ impl<'a> StartScreen<'a> {
             picture: (PICTURE_WIDE, PICTURE_HIGH),
             card_zoom: None,
             page_paper: None,
+            offers_new: true,
+            offers_open: true,
+            pinned_title: None,
+            heading_sections: false,
+            pinned_first: false,
+            sections: Vec::new(),
         }
     }
 
@@ -313,6 +480,20 @@ impl<'a> StartScreen<'a> {
         self
     }
 
+    /// One app section titled `title`, drawn as a fixed section after Recent and Pinned Folders and before Templates.
+    /// `body` may run more than once in a pass: the rail measures it.
+    pub fn app_section(mut self, title: impl Into<Label>, body: &'a mut dyn FnMut(&mut Ui)) -> Self {
+        self.section = Some((title.into(), RefCell::new(body)));
+        self
+    }
+
+    /// Shows `body` as a host section at `place` on the start screen, after the sections given there before it. Its
+    /// least width counts in whether the rail fits beside the page.
+    pub fn section(mut self, place: StartPlace, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
+        self.sections.push((place, RefCell::new(Box::new(body))));
+        self
+    }
+
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
     pub fn thumbnails(mut self, thumbnails: &'a Thumbnails<ThumbKey>, source: &'a dyn ThumbSource<ThumbKey>) -> Self {
         self.thumbnails = Some((thumbnails, source));
@@ -324,7 +505,7 @@ impl<'a> StartScreen<'a> {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Leads {
     pub(super) recent: Option<PathBuf>,
-    pub(super) pinned: Option<PathBuf>,
+    pub(super) pinned: Option<PinnedKey>,
 }
 
 /// The thumbnails and the source of each key's revision.
@@ -344,11 +525,30 @@ pub(super) struct Page<'p> {
     pub(super) drop_hint: Option<&'p Label>,
     pub(super) now: Option<i64>,
     pub(super) actions: &'p RefCell<Vec<StartAction>>,
+    /// New… shows beside Open.
+    pub(super) offers_new: bool,
+    /// Open… shows.
+    pub(super) offers_open: bool,
+    /// The heading of the pinned folders section, in place of the built-in word.
+    pub(super) pinned_title: Option<&'p Label>,
+    /// PdfCraft's section look (`StartScreen::heading_sections`).
+    pub(super) heading_sections: bool,
 }
 
 impl<'p> Page<'p> {
     pub(super) fn push(&self, action: StartAction) {
         self.actions.borrow_mut().push(action);
+    }
+
+    /// A section of the page titled `title`: in the heading strength and quiet under `heading_sections`.
+    pub(super) fn section(&self, title: Label) -> Section<'static> {
+        let section = Section::fixed(title);
+        if self.heading_sections { section.strength(HeaderStrength::Heading).quiet_header() } else { section }
+    }
+
+    /// The line a recent file shows under its card's name and at its row's end: the app's note, else the age.
+    pub(super) fn recent_detail(&self, file: &RecentFile) -> Option<String> {
+        file.note.clone().or_else(|| self.age(file.opened))
     }
 
     /// How long before `now` `then` was, in words; `None` when either time is unknown.
@@ -386,8 +586,8 @@ impl<'p> Page<'p> {
             .card()
             .aspect(f32::from(self.picture.0) / f32::from(self.picture.1));
         let grid = match self.card_zoom {
-            Some(zoom) => grid.zoom(zoom),
-            None => grid.zoom(CARD_ZOOM).fill_row(),
+            Some(zoom) => grid.zoom(GridZoom::Fixed(f64::from(zoom))),
+            None => grid.zoom(GridZoom::Fixed(f64::from(CARD_ZOOM))).fill_row(),
         };
         grid.sizing(Sizing::FillWidth).natural_height(true)
     }
@@ -436,7 +636,7 @@ pub(super) fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead:
             }
             CollectionEvent::LeadMoved { key, .. } => *lead = Some(key),
             CollectionEvent::Delete(keys) => deleted.extend(keys),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 if let Some(key) = keys.into_iter().last() {
                     *lead = Some(key);
                 }
@@ -461,6 +661,7 @@ impl StartScreen<'_> {
             thumbnails,
             links,
             drop_hint,
+            section,
             layout,
             title,
             more_templates,
@@ -468,6 +669,12 @@ impl StartScreen<'_> {
             card_zoom,
             page_paper,
             home,
+            offers_new,
+            offers_open,
+            pinned_title,
+            heading_sections,
+            pinned_first,
+            sections,
         } = self;
         let env = Env::of(ui);
         let collator = env.collator();
@@ -482,6 +689,10 @@ impl StartScreen<'_> {
             paper: page_paper,
             drop_hint: drop_hint.as_ref(),
             now,
+            offers_new,
+            offers_open,
+            pinned_title: pinned_title.as_ref(),
+            heading_sections,
             actions: &actions,
         };
         let view = RefCell::new(view);
@@ -494,37 +705,70 @@ impl StartScreen<'_> {
         let rail_stack = || Stack::new().gap(Gap::Tight).pad(Pad::Regular).label(words.start_links.clone());
         let rail_body = |ui: &mut Ui| {
             new_and_open(&page, ui, Sizing::Content);
-            let _ = Divider::horizontal().show(ui);
+            if offers_new || offers_open {
+                let _ = Divider::horizontal().show(ui);
+            }
             link_items(ui, links, false);
         };
         let page_stack = || Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width();
+        // The page stack fills its room, so its own measure is the room. The least width is that of the same body in a
+        // content-sized column, where a fill-width child only follows the column.
+        let page_content = || Stack::new().gap(Gap::Section).pad(Pad::Regular);
+        // The host's sections at `place`, each one child of the page, so they stand one section gap apart.
+        let host_sections = |ui: &mut Ui, place: StartPlace| {
+            for (_, body) in sections.iter().filter(|(held, _)| *held == place) {
+                let _ = Stack::new().fill_width().show(ui, |ui, cx| {
+                    let mut held = body.borrow_mut();
+                    let run: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) = &mut **held;
+                    run(ui, cx);
+                });
+            }
+        };
         // `beside` is whether the rail stands beside the page; without it New and Open lead the page and the links follow
         // the sections.
         let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool, drop_area: Option<(f32, bool)>| {
-            if !beside {
+            if !beside && (offers_new || offers_open) {
                 let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui, Sizing::Content));
             }
+            let app_section = |ui: &mut Ui| {
+                if let Some((title, body)) = &section {
+                    let _ = Section::fixed(title.clone()).header_gap(Gap::Section).show(ui, |ui, _| {
+                        let mut body = body.borrow_mut();
+                        (*body)(ui);
+                    });
+                }
+            };
+            host_sections(ui, StartPlace::BeforeRecent);
             if layout == StartLayout::Greeting {
                 greeting_body(&page, ui, title.as_ref(), more_templates.as_ref(), templates, recent, max_recent);
+                app_section(ui);
             } else {
-                let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
-                let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
-                let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
-                sort_recent(&mut files, current_sort, &collator);
-
-                if let (true, Some(hint), Some((center, wide))) = (files.is_empty(), page.drop_hint, drop_area) {
-                    home_drop(&page, ui, hint, center, wide);
-                } else {
-                    let desktop_home = drop_area.is_some_and(|(_, wide)| wide);
-                    recent_section(&page, ui, &view, &sort, current_view, &files, desktop_home);
-                }
-                if let Some(pinned) = pinned {
+                // With `pinned_first` the pinned folders stand above the recent files, as production's Folders section
+                // does; else they follow them.
+                if let Some(pinned) = pinned.filter(|_| pinned_first) {
                     pinned_section(&page, ui, pinned);
                 }
+                if max_recent > 0 {
+                    let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
+                    let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
+                    let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
+                    sort_recent(&mut files, current_sort, &collator);
+                    if let (true, Some(hint), Some((center, wide))) = (files.is_empty(), page.drop_hint, drop_area) {
+                        home_drop(&page, ui, hint, center, wide);
+                    } else {
+                        let desktop_home = drop_area.is_some_and(|(_, wide)| wide);
+                        recent_section(&page, ui, &view, &sort, current_view, &files, desktop_home);
+                    }
+                }
+                if let Some(pinned) = pinned.filter(|_| !pinned_first) {
+                    pinned_section(&page, ui, pinned);
+                }
+                app_section(ui);
                 if !templates.is_empty() {
                     templates_section(&page, ui, templates);
                 }
             }
+            host_sections(ui, StartPlace::AfterSections);
             if !beside && !links.is_empty() {
                 let _ = Stack::new().gap(Gap::Tight).label(words.start_links.clone()).show(ui, |ui, _| link_items(ui, links, false));
             }
@@ -539,7 +783,7 @@ impl StartScreen<'_> {
         // narrower page keeps New and Open in its row and lists the links after the sections.
         let rail = !links.is_empty() && {
             let rail_width = rail_stack().measure_in(ui, Proposal::Ideal, |ui, _| rail_body(ui)).x;
-            let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true, None)).x;
+            let sections_least = page_content().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true, None)).x;
             ui.available_width() >= rail_width + env.tokens.space.gap.section + sections_least
         };
 
@@ -586,9 +830,9 @@ impl HomeLayout<'_> {
                     Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(gap).scroll(Scroll::vertical()).show_at(ui, content, |ui, cx| {
                         let top = ui.available_rect_before_wrap().top();
                         if !wide {
-                            let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::FillWidth));
+                            let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| home_new_and_open(page, ui));
                         }
-                        let _ = Text::new(self.title.clone()).role(TypeRole::Display).show(ui);
+                        let _ = Text::new(self.title.clone()).role(TypeRole::Heading).show(ui);
                         home_divider(ui);
                         sections(ui, cx, top + content.height() / 2.0, wide);
                         if !wide {
@@ -604,7 +848,7 @@ impl HomeLayout<'_> {
         let stack = || Stack::new().id_salt("home-rail").pad(Pad::Regular).gap(Gap::Section);
         let top = |ui: &mut Ui| {
             let _ = Stack::new().id_salt("home-actions").gap(Gap::Stack).fill_width().show(ui, |ui, _| {
-                new_and_open(page, ui, Sizing::FillWidth);
+                home_new_and_open(page, ui);
             });
             home_divider(ui);
             home_links(ui, page, "home-nav", links, Gap::Section);
@@ -654,7 +898,8 @@ fn home_columns(room: Rect, rtl: bool) -> (Rect, Rect) {
 
 fn home_links(ui: &mut Ui, page: &Page<'_>, id: &'static str, links: &[StartLink], gap: Gap) {
     if !links.is_empty() {
-        let _ = Stack::new().id_salt(id).gap(gap).label(page.words.start_links.clone()).fill_width().show(ui, |ui, _| link_items(ui, links, true));
+        let _ =
+            Stack::new().id_salt(id).gap(gap).label(page.words.start_links.clone()).fill_width().show(ui, |ui, cx| home_link_items(ui, cx, links));
     }
 }
 
@@ -673,6 +918,82 @@ fn home_divider(ui: &mut Ui) {
 fn home_edge(tokens: &Tokens) -> Rgba {
     let color = &tokens.color;
     if color.line.divider == color.surface.canvas { color.text.faint } else { color.line.divider }
+}
+
+fn home_new_look(tokens: &Tokens) -> VariantLook {
+    Variant::PRIMARY.resolve(tokens).radius(RadiusStep::Control)
+}
+
+fn home_open_look(tokens: &Tokens) -> VariantLook {
+    home_drop_look(tokens)
+}
+
+fn home_row_look(tokens: &Tokens) -> VariantLook {
+    let mut look = Variant::GHOST.resolve(tokens).radius(RadiusStep::Control);
+    look.text.rest = tokens.color.text.muted;
+    look.muted.rest = tokens.color.text.muted;
+    look
+}
+
+fn home_row_selected_look(tokens: &Tokens) -> VariantLook {
+    Variant::GHOST.resolve(tokens).radius(RadiusStep::Control)
+}
+
+/// New and Open on the desktop Home page, filling the rail (or the narrow page's row).
+fn home_new_and_open(page: &Page<'_>, ui: &mut Ui) {
+    let words = page.words;
+    if page.offers_new {
+        let new = Button::new(words.new.clone()).id_salt("new").variant(Variant::Custom(HOME_NEW_LOOK)).sizing(Sizing::FillWidth);
+        if clicked(&new.show(ui)) {
+            page.push(StartAction::New);
+        }
+    }
+    if page.offers_open {
+        let open = Button::new(words.open.clone()).id_salt("open").variant(Variant::Custom(HOME_OPEN_LOOK)).sizing(Sizing::FillWidth);
+        if clicked(&open.show(ui)) {
+            page.push(StartAction::Open);
+        }
+    }
+}
+
+/// The rows of a Home rail group: each link is a full-width row with its icon, a URL opening in the browser (the URL
+/// is its tooltip) and a command firing as a pointer activation. A selected row has an accent bar at its leading edge.
+fn home_link_items(ui: &mut Ui, cx: &mut BodyCx<'_>, links: &[StartLink]) {
+    for (at, link) in links.iter().enumerate() {
+        let look = if link.selected { HOME_ROW_SELECTED_LOOK } else { HOME_ROW_LOOK };
+        let mut button =
+            Button::new(link.label.clone()).id_salt(("start-link", at)).variant(Variant::Custom(look)).align(HAlign::Start).sizing(Sizing::FillWidth);
+        if let Some(icon) = &link.icon {
+            button = button.icon(icon.clone());
+        }
+        if let StartLinkTarget::Url(url) = &link.target {
+            button = button.tooltip(url.clone());
+        }
+        let shown = button.show(ui);
+        if link.selected {
+            home_selected_bar(ui, shown.response().rect);
+        }
+        if clicked(&shown) {
+            match &link.target {
+                StartLinkTarget::Url(url) => cx.open_url(url, false),
+                StartLinkTarget::Command(command) => {
+                    let _ = commands::fire(ui.ctx(), command.clone(), FireSource::Pointer);
+                }
+            }
+        }
+    }
+}
+
+/// The accent bar at the leading edge of the selected Home row, as tall as its icon.
+fn home_selected_bar(ui: &mut Ui, row: Rect) {
+    let env = Env::of(ui);
+    let style = StyleCx::of_env(ui.ctx(), &env);
+    // The accent mark's look: `accent.solid`, `stroke.thick` wide.
+    let look = style.rule(RuleKind::DropMark);
+    let scale = ui.ctx().pixels_per_point();
+    let bar = Rect::from_center_size(row.center(), vec2(row.width(), env.tokens.size.icon.md.min(row.height())));
+    let side = if env.direction.is_rtl() { RectSide::Right } else { RectSide::Left };
+    ui.painter().extend(Rule::edge(&look, bar, side, scale));
 }
 
 fn home_drop_look(tokens: &Tokens) -> VariantLook {
@@ -738,13 +1059,13 @@ fn greeting_body(
     }
 }
 
-/// New and Open, the first Tab stops of the page.
+/// New and Open, the first Tab stops of the page; Open alone where the app offers no New.
 fn new_and_open(page: &Page<'_>, ui: &mut Ui, sizing: Sizing) {
     let words = page.words;
-    if clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).sizing(sizing).show(ui)) {
+    if page.offers_new && clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).sizing(sizing).show(ui)) {
         page.push(StartAction::New);
     }
-    if clicked(&Button::new(words.open.clone()).id_salt("open").sizing(sizing).show(ui)) {
+    if page.offers_open && clicked(&Button::new(words.open.clone()).id_salt("open").sizing(sizing).show(ui)) {
         page.push(StartAction::Open);
     }
 }
@@ -798,51 +1119,249 @@ fn recent_section(
         Entry::new(RecentSort::Name, words.sort_name.clone()),
         Entry::new(RecentSort::Created, words.sort_created.clone()),
     ];
-    let _ = Section::fixed(words.recent.clone())
+    let _ = page
+        .section(words.recent.clone())
         .header_gap(Gap::Section)
         .command_scope(StartRecentCommands::SCOPE)
         .controls(|ui, _| {
             let _ = Segmented::new(words.view.clone(), view.borrow_mut().reborrowed(), &modes).show(ui);
             let _ = Select::new(words.sort.clone(), sort.borrow_mut().reborrowed(), &orders).show(ui);
+            // Clear empties the list, as the menu's Clear Recent Files does; with no files there is nothing to clear.
+            if page.heading_sections {
+                let clear = Button::new(words.clear_recent.clone()).icon(IconId::new("trash")).enabled(!files.is_empty()).id_salt("clear").show(ui);
+                if clicked(&clear) {
+                    page.push(StartAction::ClearRecent);
+                }
+            }
         })
         .show(ui, |ui, cx| recent_body(page, ui, cx, files, current, &words.no_recent, desktop_home));
 }
 
-fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PathBuf]) {
+/// A row of the pinned folders' list.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum PinnedKey {
+    /// The heading of the folder at this path.
+    Folder(PathBuf),
+    /// A file listed under `folder`; the folder is part of the key because nested pinned folders can list one file twice.
+    File { folder: PathBuf, path: PathBuf },
+    /// The More row of the folder at this path.
+    More(PathBuf),
+}
+
+impl PinnedKey {
+    /// What opening the row asks of the app, by a click, Enter or the menu's Open.
+    fn opened(self) -> StartAction {
+        match self {
+            PinnedKey::Folder(path) => StartAction::OpenPinned(path),
+            PinnedKey::File { path, .. } => StartAction::OpenPinnedFile(path),
+            PinnedKey::More(path) => StartAction::ExpandPinned(path),
+        }
+    }
+}
+
+/// What a row of the pinned folders shows.
+#[derive(Clone, Copy)]
+enum PinnedRow<'f> {
+    Folder(&'f PinnedFolder),
+    File(&'f PinnedFile),
+    More { expanded: bool },
+}
+
+/// The files the app listed in `folder`; none while it is not listed.
+fn listed_files(folder: &PinnedFolder) -> &[PinnedFile] {
+    match &folder.listing {
+        Some(FolderListing::Listed { files, .. }) => files,
+        _ => &[],
+    }
+}
+
+/// The files of `folder` the list shows: none while folded, the first [`PINNED_FILES_SHOWN`] until expanded.
+fn shown_files(folder: &PinnedFolder) -> &[PinnedFile] {
+    let files = listed_files(folder);
+    match (folder.folded, folder.expanded) {
+        (true, _) => &[],
+        (false, true) => files,
+        (false, false) => files.get(..PINNED_FILES_SHOWN).unwrap_or(files),
+    }
+}
+
+/// The note at the end of a listed folder's heading: the state of its listing, or that the app kept only the newest
+/// files; `None` for a folder whose files all show.
+fn folder_note(words: &ShellWords, folder: &PinnedFolder) -> Option<Label> {
+    match &folder.listing {
+        None => None,
+        Some(FolderListing::Pending) => Some(words.looking_for_files.clone()),
+        Some(FolderListing::Unavailable) => Some(words.folder_unavailable.clone()),
+        Some(FolderListing::Listed { files, .. }) if files.is_empty() => Some(words.folder_empty.clone()),
+        Some(FolderListing::Listed { files, total }) if *total > files.len() => {
+            let (shown, total) = (files.len().to_string(), total.to_string());
+            Some(Label::from(words.newest_of.fill(&[("shown", shown.as_str()), ("total", total.as_str())])))
+        }
+        Some(_) => None,
+    }
+}
+
+/// The source of the pinned folders' list: each folder's heading, then the files it shows and its More row when it
+/// holds more than [`PINNED_FILES_SHOWN`]. A heading is a tree group when the app lists the folder.
+struct PinnedRows<'f> {
+    rows: Vec<(PinnedKey, PinnedRow<'f>)>,
+}
+
+impl<'f> PinnedRows<'f> {
+    fn new(folders: &'f [PinnedFolder]) -> Self {
+        let mut rows = Vec::new();
+        for folder in folders {
+            rows.push((PinnedKey::Folder(folder.path.clone()), PinnedRow::Folder(folder)));
+            rows.extend(
+                shown_files(folder)
+                    .iter()
+                    .map(|file| (PinnedKey::File { folder: folder.path.clone(), path: file.path.clone() }, PinnedRow::File(file))),
+            );
+            if !folder.folded && listed_files(folder).len() > PINNED_FILES_SHOWN {
+                rows.push((PinnedKey::More(folder.path.clone()), PinnedRow::More { expanded: folder.expanded }));
+            }
+        }
+        PinnedRows { rows }
+    }
+
+    fn row(&self, key: &PinnedKey) -> Option<PinnedRow<'f>> {
+        self.index_of(key).and_then(|at| self.rows.get(at)).map(|(_, row)| *row)
+    }
+}
+
+impl DisplayOrder<PinnedKey> for PinnedRows<'_> {
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn key(&self, at: usize) -> PinnedKey {
+        self.rows[at].0.clone()
+    }
+
+    fn index_of(&self, key: &PinnedKey) -> Option<usize> {
+        self.rows.iter().position(|(held, _)| held == key)
+    }
+
+    fn depth(&self, at: usize) -> usize {
+        match self.rows[at].1 {
+            PinnedRow::Folder(_) => 0,
+            PinnedRow::File(_) | PinnedRow::More { .. } => 1,
+        }
+    }
+
+    /// Every folder the app lists folds, one with no files to show too, so each heading has its disclosure.
+    fn has_children(&self, at: usize) -> bool {
+        matches!(self.rows[at].1, PinnedRow::Folder(folder) if folder.listing.is_some())
+    }
+
+    fn open(&self, at: usize) -> bool {
+        matches!(self.rows[at].1, PinnedRow::Folder(folder) if !folder.folded)
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        match self.rows[at].1 {
+            PinnedRow::Folder(folder) => Some(Cow::Borrowed(folder.name.as_str())),
+            PinnedRow::File(file) => Some(Cow::Borrowed(file.name.as_str())),
+            PinnedRow::More { .. } => None,
+        }
+    }
+}
+
+impl ItemSource<PinnedKey> for PinnedRows<'_> {}
+
+/// The list row of a pinned folders' row.
+fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
+    match row {
+        PinnedRow::Folder(folder) => {
+            let mut heading = ListRow::new(Label::from(folder.name.clone()))
+                .detail(folder.path.display().to_string())
+                .icon(IconSpec::svg(IconId::new("folder")))
+                .depth(0);
+            // A folder the app does not list keeps the plain row; its menu and Delete still unpin it.
+            if folder.listing.is_none() {
+                return heading;
+            }
+            heading = heading.group(!folder.folded);
+            if let Some(note) = folder_note(words, folder) {
+                heading = heading.trailing(note);
+            }
+            heading.trailing_part(UNPIN, TrailingFace::Strong(words.unpin.clone()), words.unpin_folder.fill(&[("name", folder.name.as_str())]))
+        }
+        PinnedRow::File(file) => {
+            let row = ListRow::new(Label::from(file.name.clone()))
+                .depth(1)
+                .icon(IconSpec::svg(IconId::new("file")))
+                .tooltip(file.path.display().to_string());
+            match &file.note {
+                Some(note) => row.detail(note.clone()),
+                None => row,
+            }
+        }
+        PinnedRow::More { expanded } => ListRow::new(if expanded { words.show_less.clone() } else { words.show_more.clone() }).depth(1),
+    }
+}
+
+fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
     let words = page.words;
-    let _ = Section::fixed(words.pinned.clone())
+    let _ = page
+        .section(page.pinned_title.cloned().unwrap_or_else(|| words.pinned.clone()))
         .header_gap(Gap::Section)
         .command_scope(StartPinnedCommands::SCOPE)
         .controls(|ui, _| {
-            if clicked(&Button::new(words.pin_folder.clone()).id_salt("pin").icon(IconId::new("new_folder")).show(ui)) {
+            let pin = Button::new(words.pin_folder.clone()).id_salt("pin").icon(IconId::new("new_folder"));
+            let pin = if page.heading_sections { pin.variant(Variant::GHOST) } else { pin };
+            if clicked(&pin.show(ui)) {
                 page.push(StartAction::PinFolder);
             }
         })
         .show(ui, |ui, cx| {
-            let mut lead = cx.keep::<Leads>().pinned.clone().filter(|path| folders.contains(path));
+            let rows = PinnedRows::new(folders);
+            let mut lead = cx.keep::<Leads>().pinned.clone().filter(|key| rows.row(key).is_some());
+            // One rule for the menu row, the palette and Delete: only a folder's heading unpins.
+            cx.publish(StartPinnedCommands::Unpin, commands::CommandState::new().enabled(matches!(lead, Some(PinnedKey::Folder(_)))));
             while let Some((command, _)) = cx.take_command::<StartPinnedCommands>() {
-                let Some(path) = lead.clone() else { continue };
-                page.push(match command {
-                    StartPinnedCommands::Open => StartAction::OpenPinned(path),
-                    StartPinnedCommands::Unpin => StartAction::UnpinFolder(path),
-                });
+                let action = match (command, lead.clone()) {
+                    (StartPinnedCommands::Open, Some(key)) => Some(key.opened()),
+                    (StartPinnedCommands::Unpin, Some(PinnedKey::Folder(path))) => Some(StartAction::UnpinFolder(path)),
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    page.push(action);
+                }
             }
             if folders.is_empty() {
                 let _ = Notice::new(Tone::Neutral, words.no_pinned.clone()).layout(NoticeLayout::Centred).show(ui);
                 return;
             }
-            let source = keyed(folders, |folder: &PathBuf| folder.clone());
-            let out = List::<PathBuf>::new(words.pinned.clone())
+            let out = List::<PinnedKey>::new(words.pinned.clone())
                 .select(SelectMode::Single)
                 .activate(ActivateOn::Click)
+                .tree(true)
                 .sizing(Sizing::FillWidth)
                 .natural_height(true)
-                .show_items(ui, &source, &mut |path, _| {
-                    let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
-                    ListRow::new(Label::from(name)).detail(path.display().to_string()).icon(IconSpec::svg(IconId::new("folder")))
+                .show_items(ui, &rows, &mut |key, _| match rows.row(key) {
+                    Some(row) => pinned_row(words, row),
+                    None => ListRow::new(Label::Empty),
                 });
-            for path in read_events(out.events, &mut lead).0 {
-                page.push(StartAction::OpenPinned(path));
+            for event in &out.events {
+                match event {
+                    // The list keeps no open state: the disclosure and Left/Right ask the app to fold or unfold the
+                    // folder, which reports only a change from what the app passed.
+                    CollectionEvent::Open(change) => {
+                        if let PinnedKey::Folder(path) = &change.key
+                            && folders.iter().any(|folder| &folder.path == path && folder.folded == change.open)
+                        {
+                            page.push(StartAction::FoldPinned(path.clone()));
+                        }
+                    }
+                    CollectionEvent::Item(PinnedKey::Folder(path), RowEvent::Trailing { part, .. }) if *part == UNPIN => {
+                        page.push(StartAction::UnpinFolder(path.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            for key in read_events(out.events, &mut lead).0 {
+                page.push(key.opened());
             }
             if lead.is_some() {
                 let _ = Menu::context(words.pinned_menu.clone(), &out.response).show(ui, |ui, _| {
@@ -855,7 +1374,7 @@ fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PathBuf]) {
 }
 
 fn templates_section(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
-    let _ = Section::fixed(page.words.templates.clone()).header_gap(Gap::Section).show(ui, |ui, _| templates_grid(page, ui, templates));
+    let _ = page.section(page.words.templates.clone()).header_gap(Gap::Section).show(ui, |ui, _| templates_grid(page, ui, templates));
 }
 
 /// The template cards, which report the chosen one as [`StartAction::UseTemplate`].

@@ -17,6 +17,7 @@ fn build() -> MenuBar {
                 vec![
                     item("file.new", "New").into(),
                     Node::submenu("Open Recent", vec![item("file.recent.a", "notes.txt").into()]),
+                    Node::submenu("Export", vec![item("file.export.pdf", "PDF").into()]).enabled(false),
                     Node::Separator,
                     item("file.revert", "Revert").enabled(false).into(),
                 ],

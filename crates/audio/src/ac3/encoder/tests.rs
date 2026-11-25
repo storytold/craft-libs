@@ -105,8 +105,14 @@ fn dec3_describes_dependent_rear_pair_and_aggregate_rate() -> Result<(), Box<dyn
 
 #[test]
 fn actual_decoder_positions_satisfy_all_three_ac3_bit_budgets() -> Result<(), Box<dyn std::error::Error>> {
-    for rate in [32000, 44100, 48000] {
-        for bitrate in super::super::BITRATES {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th bit rate, from a different offset for
+    // each sample rate, so the rates together still reach every bit rate.
+    let step = craft_media_testkit::hostile::divisor();
+    for (ri, rate) in [32000, 44100, 48000].into_iter().enumerate() {
+        for (bi, bitrate) in super::super::BITRATES.into_iter().enumerate() {
+            if !(bi + ri).is_multiple_of(step) {
+                continue;
+            }
             for mode in [CodingMode::Mono, CodingMode::ThreeFrontTwoSurround] {
                 let cfg =
                     Config { codec: Codec::Ac3, sample_rate: rate, bitrate_kbps: bitrate, mode, lfe: mode == CodingMode::ThreeFrontTwoSurround };

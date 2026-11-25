@@ -188,6 +188,42 @@ fn opening_a_closed_floating_panel_restores_its_window_place() {
     assert_eq!(group_members(workspace.layout(), 11), [11, 12, 50]);
 }
 
+/// The active tab of the dock or floating group holding `panel`.
+fn front(layout: &Layout<u32>, panel: u32) -> u32 {
+    *layout.group(&layout.place(&panel).unwrap()).unwrap().active_panel().unwrap()
+}
+
+/// Tabs closed in one batch (one at a time, as a preset does, or by Close Tab Group) come back together with whichever
+/// of them reopens, in their order and with that one in front, after a save and a load; a tab closed in a batch of its
+/// own stays closed.
+#[test]
+fn tabs_closed_together_reopen_together_and_a_tab_closed_alone_stays_closed() {
+    let batches = [vec![Action::close(2), Action::close(3)], vec![Action::close(3), Action::close(2)], vec![Action::close_group(2)]];
+    for batch in batches {
+        for open in [2, 3] {
+            let mut workspace = Workspace::new(docked());
+            workspace.apply_all(batch.clone(), false, allow).unwrap();
+            let saved = serde_json::to_string(&workspace).unwrap();
+            let mut workspace: Workspace<u32> = serde_json::from_str(&saved).unwrap();
+            workspace.apply(Action::open(open, None), false, allow).unwrap();
+            let layout = workspace.layout();
+            assert_eq!(group_members(layout, open), [2, 3], "{batch:?}, then {open} opens");
+            assert_eq!(front(layout, open), open, "{batch:?}: the reopened tab is in front");
+            assert_eq!(end_dock(layout)[0].groups[0].panels, [2, 3], "{batch:?}: back above 4 in its column");
+            assert!(workspace.hidden().is_empty());
+        }
+    }
+
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::close(3), false, allow).unwrap();
+    workspace.apply(Action::close(2), false, allow).unwrap();
+    workspace.apply(Action::open(2, None), false, allow).unwrap();
+    assert_eq!(group_members(workspace.layout(), 2), [2]);
+    assert!(workspace.layout().place(&3).is_none(), "3 closed on its own stays closed");
+    workspace.apply(Action::open(3, None), false, allow).unwrap();
+    assert_eq!(group_members(workspace.layout(), 2), [2, 3], "it reopens beside 2");
+}
+
 /// A panel that floats keeps its docked place until it docks or closes; floating again from the float keeps the first.
 #[test]
 fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
@@ -403,6 +439,63 @@ fn a_panel_that_docks_only_in_columns_never_lands_in_a_frame() {
     assert_eq!(sorted(saved.layout()), [1, 2, 3, 4, 6]);
 }
 
+/// A location whose anchor, sibling and tab-before name `anchor`.
+fn recorded(layout: &Layout<u32>, anchor: u32) -> craft_behavior::dock::Location<u32> {
+    let mut location = layout.location(&5).unwrap();
+    location.anchor = Some(anchor);
+    location.sibling = vec![anchor];
+    location.placement = DockPlacement::tab(Some(anchor));
+    location
+}
+
+/// Every place of `workspace` that holds the panel `id`: the layout, the keys of the records and their locations.
+fn mentions(workspace: &Workspace<u32>, id: u32) -> bool {
+    let records = workspace.hidden().iter().chain(workspace.floated());
+    let named = records.clone().any(|(panel, location)| {
+        let before = matches!(&location.placement, DockPlacement::Tab { before: Some(p) } if *p == id);
+        *panel == id || location.anchor == Some(id) || location.sibling.contains(&id) || before
+    });
+    named || workspace.layout().contains(&id)
+}
+
+/// A rename keeps the panel's place wherever the id sits (tab group, dock column, floating window, records and the
+/// anchors of other records), refuses a missing source and a taken name, and leaves the workspace as it was then.
+#[test]
+fn a_renamed_panel_keeps_its_place_and_a_taken_name_changes_nothing() {
+    for from in [11, 3, 7, 50, 51] {
+        let layout = docked();
+        let mut base = Workspace::default();
+        base.replace(Workspace::from_parts(
+            layout.clone(),
+            vec![(50, recorded(&layout, from)), (52, recorded(&layout, 5))],
+            vec![(51, recorded(&layout, from))],
+        ));
+        base.validate().unwrap();
+        let swap = |panel: u32| if panel == from { 99 } else { panel };
+
+        let mut renamed = base.clone();
+        let (revision, generation) = (renamed.revision(), renamed.generation());
+        renamed.rename(&from, 99).unwrap_or_else(|e| panic!("{from}: {e:?}"));
+        let panels = |workspace: &Workspace<u32>| workspace.layout().panels().into_iter().copied().collect::<Vec<_>>();
+        assert_eq!(panels(&renamed), panels(&base).into_iter().map(swap).collect::<Vec<_>>(), "{from}: the panel keeps its position");
+        let keys = |records: &[(u32, _)]| records.iter().map(|(panel, _)| *panel).collect::<Vec<_>>();
+        assert_eq!(keys(renamed.hidden()), keys(base.hidden()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: hidden keys");
+        assert_eq!(keys(renamed.floated()), keys(base.floated()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: floated keys");
+        assert!(!mentions(&renamed, from) && mentions(&renamed, 99), "{from}: no field holds the old id");
+        renamed.validate().unwrap();
+        assert!(renamed.revision() != revision && renamed.generation() == generation, "{from}: a rename is an edit");
+
+        for (source, name, error) in [(40, 99, DockError::MissingPanel), (from, 4, DockError::DuplicatePanel), (from, 52, DockError::DuplicatePanel)]
+        {
+            let mut refused = base.clone();
+            let revision = refused.revision();
+            assert_eq!(refused.rename(&source, name), Err(error), "{from}: {source} to {name}");
+            assert_eq!(refused, base, "{from}: a refused rename changes nothing");
+            assert_eq!(refused.revision(), revision);
+        }
+    }
+}
+
 /// A stepped column (a toolbar's) keeps its step count docked, floating and through JSON, and its width moves only
 /// by steps.
 #[test]
@@ -458,6 +551,7 @@ fn every_workspace_mutator_moves_the_revision() {
     moves("set_visible", &|workspace| workspace.set_visible(5, false, None, false, allow).unwrap());
     moves("reconcile", &|workspace| workspace.reconcile(|panel| *panel != 5, allow, &Workspace::new(docked())));
     moves("raise_window_floor", &|workspace| workspace.raise_window_floor(1000));
+    moves("rename", &|workspace| workspace.rename(&5, 99).unwrap());
     moves("forget_hidden", &|workspace| {
         workspace.apply(Action::close(5), false, allow).unwrap();
         let revision = workspace.revision();

@@ -1,6 +1,8 @@
 //! `Slider` and `RangeSlider`: the value maths that is the family's own: stepping in the reading direction, the scales
 //! that spread a range over a track, and thumbs that never cross.
 
+pub(crate) mod primary_down;
+
 pub(crate) mod dials;
 
 pub(crate) mod thumb_row;
@@ -9,7 +11,7 @@ use craft_behavior::{EditEvent, MotionMode};
 use craft_ui::contract::{Bind, Props as _, Show as _};
 use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, Frames, trial};
-use craft_ui::value_drag::Slider;
+use craft_ui::value_drag::{Slider, SliderScale};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,6 +24,7 @@ const FIELD: Rect = Rect { min: Pos2::new(20.0, 20.0), max: Pos2::new(220.0, 50.
 struct Slide {
     value: RefCell<f64>,
     range: std::ops::RangeInclusive<f64>,
+    scale: SliderScale,
     step: Option<f64>,
     wheel_step: Option<f64>,
     trim: Option<(f64, f64)>,
@@ -30,12 +33,20 @@ struct Slide {
 
 impl Slide {
     fn new(value: f64) -> Self {
-        Slide { value: RefCell::new(value), range: 0.0..=100.0, step: None, wheel_step: None, trim: None, events: RefCell::default() }
+        Slide {
+            value: RefCell::new(value),
+            range: 0.0..=100.0,
+            scale: SliderScale::Linear,
+            step: None,
+            wheel_step: None,
+            trim: None,
+            events: RefCell::default(),
+        }
     }
 
     fn show(&self, ui: &mut Ui) {
         let mut value = self.value.borrow_mut();
-        let mut slider = Slider::new(Bind::bound(&mut *value), self.range.clone()).label("Opacity");
+        let mut slider = Slider::new(Bind::bound(&mut *value), self.range.clone()).scale(self.scale).label("Opacity");
         if let Some(step) = self.step {
             slider = slider.step(step);
         }
@@ -96,6 +107,32 @@ fn a_grabbed_slider_thumb_moves_by_the_pointer_travel_and_a_click_on_it_changes_
     frames.idle(3, &mut show);
     pointer::click(&mut frames, FIELD.center() + Vec2::new(3.0, 0.0), &mut show);
     assert_eq!(slide.value(), START, "a click on the thumb leaves the value");
+}
+
+/// A log slider changes its value by equal ratios for equal travels (a linear one by equal differences), and a travel
+/// far past either end lands on the range's end.
+#[trial]
+fn a_log_slider_spreads_equal_ratios_evenly() {
+    let (min, max) = (0.01, 20.0);
+    let log = |value: f64| Slide { range: min..=max, scale: SliderScale::Log, ..Slide::new(value) };
+    let travel = 20.0;
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-3 * a.abs().max(b.abs());
+
+    let v0 = (min * max).sqrt();
+    let v1 = dragged(&log(v0), 0.0, travel);
+    let v2 = dragged(&log(v1), travel, travel);
+    assert!(v1 > v0 && v2 > v1, "the drags moved the value up: {v0} {v1} {v2}");
+    assert!(close(v1 / v0, v2 / v1), "equal travels give equal ratios: {v0} {v1} {v2}");
+
+    let l1 = dragged_from(0.0, travel);
+    let l2 = dragged(&Slide::new(l1), travel, travel);
+    assert!(close(l1 - START, l2 - l1), "a linear slider gives equal differences: {START} {l1} {l2}");
+
+    let far = 4.0 * FIELD.width();
+    let top = dragged(&log(v0), 0.0, far);
+    let bottom = dragged(&log(v0), 0.0, -far);
+    assert!((top - max).abs() < 1e-2 * max, "a travel past the end lands on the maximum: {top}");
+    assert!((bottom - min).abs() < 1e-2 * min, "a travel past the start lands on the minimum: {bottom}");
 }
 
 /// A trimmed span's ends are drawn across the track, not stops: a drag that ends beside one lands where the drag

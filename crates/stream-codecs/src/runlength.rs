@@ -7,7 +7,34 @@ use crate::{Failure, Step};
 const NAME: &str = "RunLengthDecode";
 
 pub fn decode(data: &[u8], max: usize) -> Step {
-    let mut out = Vec::with_capacity(data.len().saturating_mul(2).min(max));
+    decode_packets(data, max, Mode::Whole).map(|(out, _)| out)
+}
+
+/// Decode one run-length stream and return its bytes and the number of input bytes consumed.
+///
+/// The count includes the end-of-data byte (128); any bytes after it remain unread. EOF between
+/// packets is accepted without an end marker. Each packet must be complete before its output
+/// limit is checked, so a truncated packet is corrupt even if its available bytes exceed `max`.
+/// An earlier complete packet exceeding the limit still fails before any later packet is read.
+/// On corruption, partial output contains only complete preceding packets.
+///
+/// Output grows as packets arrive instead of reserving space for the input, which may include
+/// an arbitrarily long program after the end marker. The existing [`decode`] retains its
+/// allocation and partial-literal limit policy.
+pub fn decode_prefix(data: &[u8], max: usize) -> Result<(Vec<u8>, usize), Failure> {
+    decode_packets(data, max, Mode::Prefix)
+}
+
+enum Mode {
+    Whole,
+    Prefix,
+}
+
+fn decode_packets(data: &[u8], max: usize, mode: Mode) -> Result<(Vec<u8>, usize), Failure> {
+    let mut out = match mode {
+        Mode::Whole => Vec::with_capacity(data.len().saturating_mul(2).min(max)),
+        Mode::Prefix => Vec::new(),
+    };
     let mut i = 0;
     while let Some(&l) = data.get(i) {
         i += 1;
@@ -16,6 +43,9 @@ pub fn decode(data: &[u8], max: usize) -> Step {
             0..=127 => {
                 let n = usize::from(l) + 1;
                 let avail = n.min(data.len() - i);
+                if matches!(mode, Mode::Prefix) && avail < n {
+                    return Err(Failure::corrupt(NAME, "truncated literal run", out));
+                }
                 if out.len() + avail > max {
                     return Err(Failure::limit(max));
                 }
@@ -38,7 +68,7 @@ pub fn decode(data: &[u8], max: usize) -> Step {
             }
         }
     }
-    Ok(out)
+    Ok((out, i))
 }
 
 pub fn encode(data: &[u8]) -> Vec<u8> {
@@ -116,6 +146,68 @@ mod tests {
         assert!(matches!(decode(&[129, 0, 129, 0], 200).map_err(|f| f.error), Err(CodecError::LimitExceeded(200))));
         assert!(matches!(decode(&[3, 1, 2, 3, 4], 3).map_err(|f| f.error), Err(CodecError::LimitExceeded(3))));
         assert_eq!(decode(&[129, 0, 129, 0], 256).ok().unwrap().len(), 256);
+    }
+
+    #[test]
+    fn prefix_stops_after_eod_without_reading_the_program_tail() {
+        let bytes = [2, b'a', b'b', b'c', 254, b'x', 128, 127];
+        let (out, used) = decode_prefix(&bytes, 6).ok().unwrap();
+        assert_eq!(out, b"abcxxx");
+        assert_eq!(&bytes[used..], &[127]); // Truncated data after EOD is not decoded.
+        assert_eq!(used, 7);
+        assert_eq!(decode_prefix(&[128], 0).ok().unwrap(), (vec![], 1));
+    }
+
+    #[test]
+    fn prefix_accepts_empty_input_and_eof_between_packets() {
+        assert_eq!(decode_prefix(&[], 0).ok().unwrap(), (vec![], 0));
+        let bytes = [0, b'a', 255, b'b'];
+        assert_eq!(decode_prefix(&bytes, 3).ok().unwrap(), (b"abb".to_vec(), bytes.len()));
+    }
+
+    #[test]
+    fn prefix_checks_packet_completeness_before_its_output_limit() {
+        for bytes in [&[2, b'a', b'b'][..], &[129][..]] {
+            let failure = decode_prefix(bytes, 0).err().unwrap();
+            assert!(matches!(failure.error, CodecError::Corrupt { .. }));
+            assert!(failure.partial.is_empty());
+        }
+        let failure = decode_prefix(&[0, b'q', 2, b'a', b'b'], 1).err().unwrap();
+        assert!(matches!(failure.error, CodecError::Corrupt { .. }));
+        assert_eq!(failure.partial, b"q");
+    }
+
+    #[test]
+    fn prefix_checks_each_complete_packet_before_later_corruption() {
+        for bytes in [&[0, b'a', 127][..], &[255, b'a', 127][..]] {
+            let failure = decode_prefix(bytes, 0).err().unwrap();
+            assert!(matches!(failure.error, CodecError::LimitExceeded(0)));
+            assert!(failure.partial.is_empty());
+        }
+        assert_eq!(decode_prefix(&[0, b'a', 128], 1).ok().unwrap(), (vec![b'a'], 3));
+        assert_eq!(decode_prefix(&[255, b'a', 128], 2).ok().unwrap(), (vec![b'a'; 2], 3));
+    }
+
+    #[test]
+    fn prefix_does_not_reserve_for_the_undecoded_tail() {
+        let mut bytes = vec![128];
+        bytes.resize(1 << 20, 127);
+        let (out, used) = decode_prefix(&bytes, usize::MAX).ok().unwrap();
+        assert_eq!(used, 1);
+        assert_eq!(out.capacity(), 0);
+        let out = decode(&bytes, 256).ok().unwrap();
+        assert!(out.capacity() >= 256, "whole decoding keeps its input-based reservation");
+    }
+
+    #[test]
+    fn whole_decode_keeps_its_partial_literal_and_limit_precedence() {
+        let bytes = [2, b'a', b'b'];
+        let failure = decode(&bytes, 1).err().unwrap();
+        assert!(matches!(failure.error, CodecError::LimitExceeded(1)));
+        assert!(failure.partial.is_empty());
+        let failure = decode(&bytes, 2).err().unwrap();
+        assert!(matches!(failure.error, CodecError::Corrupt { .. }));
+        assert_eq!(failure.partial, b"ab");
     }
 
     #[test]

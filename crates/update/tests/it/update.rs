@@ -6,27 +6,36 @@ use craft_ui::dialog::{DialogHost, dialog_id};
 use craft_ui::testing::{Fixture, trial};
 use craft_update::pins::{Pins, VersionTrack};
 use craft_update::release::Release;
-use craft_update::stack_dialogs::UpdatePromptDialog;
+use craft_update::stack_dialogs::{UpdateCheckDialog, UpdatePromptDialog, UpdateWords};
 use craft_update::suite::PHOTOCRAFT;
-use craft_update::updater::{CheckSource, Status, Updater};
+use craft_update::updater::{Action, CheckSource, Status, Updater};
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
 type Dialogs = Rc<RefCell<DialogHost>>;
-type Checked = Result<Option<Release>, String>;
+type Checked = Result<Option<Release>, craft_update::CheckError>;
 
 fn newer() -> Release {
     Release { tag: "v9.0.0".into(), version: craft_update::parse_version("9.0.0"), ..Release::default() }
 }
 
+fn photocraft() -> craft_host::HostBuilder {
+    Host::builder(AppInfo { id: "photocraft", name: "PhotoCraft", version: "1.0" })
+}
+
 /// A fixture running `dialogs` every pass for an app named PhotoCraft.
 fn rig(dialogs: DialogHost) -> (Fixture, Dialogs) {
+    rig_for(dialogs, photocraft().build())
+}
+
+/// A fixture running `dialogs` every pass for the app `host` names.
+fn rig_for(dialogs: DialogHost, host: Host) -> (Fixture, Dialogs) {
     let dialogs: Dialogs = Rc::new(RefCell::new(dialogs));
     let shown = dialogs.clone();
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
-    fixture.host(Arc::new(Host::builder(AppInfo { id: "photocraft", name: "PhotoCraft", version: "1.0" }).build()));
+    fixture.host(Arc::new(host));
     fixture.settle();
     (fixture, dialogs)
 }
@@ -59,6 +68,29 @@ fn a_request_during_the_startup_check_is_not_lost() {
     assert_eq!(u.status(), &Status::UpToDate);
 }
 
+/// A ready updater built for a screen test reports Ready to a requested check, asks the app to close only on Restart
+/// to Update while the app may close, and starts its helper once, at the exit.
+#[trial]
+fn a_ready_updater_closes_on_restart_and_starts_its_helper_at_the_exit() {
+    let (_fixture, dialogs) = rig(DialogHost::new());
+    let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let helper = started.clone();
+    let mut u = Updater::ready_for_tests(&PHOTOCRAFT, "0.1.0", newer(), move || {
+        helper.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    })
+    .with_pins_path(no_pins());
+    u.check_now();
+    assert_eq!(u.status(), &Status::Ready, "a requested check finds the update ready");
+    assert_eq!(u.run(&mut dialogs.borrow_mut(), true), Action::None, "nothing closes the app before Restart to Update");
+    u.restart_to_update();
+    assert_eq!(u.run(&mut dialogs.borrow_mut(), false), Action::None, "unsaved work holds the close");
+    assert_eq!(u.run(&mut dialogs.borrow_mut(), true), Action::Close, "Restart to Update asks the app to close");
+    assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 0, "the helper waits for the exit");
+    drop(u);
+    assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 1, "the exit starts the helper once");
+}
+
 #[trial]
 fn a_check_exposes_the_release_it_found_and_an_up_to_date_one_exposes_none() {
     let ctx = ctx();
@@ -71,6 +103,73 @@ fn a_check_exposes_the_release_it_found_and_an_up_to_date_one_exposes_none() {
     current.check_now();
     current.settle_for_tests(&ctx);
     assert!(current.available().is_none());
+}
+
+#[trial]
+fn a_rate_limited_check_is_its_own_status_so_the_app_can_translate_it() {
+    let ctx = ctx();
+    let mut u = updater(Err(craft_update::CheckError::RateLimited));
+    u.check_now();
+    u.settle_for_tests(&ctx);
+    assert_eq!(u.status(), &Status::RateLimited);
+    let mut other = updater(Err("offline".into()));
+    other.check_now();
+    other.settle_for_tests(&ctx);
+    assert_eq!(other.status(), &Status::Failed("offline".into()), "any other reason stays data");
+}
+
+/// The check dialog open in `status`: whether `text` is on screen.
+fn check_dialog_shows(status: Status, text: &str) -> bool {
+    let mut dialog = UpdateCheckDialog::new("0.1.0");
+    dialog.set_status(status);
+    let mut dialogs = DialogHost::new();
+    dialogs.open(dialog);
+    let (fixture, _) = rig(dialogs);
+    fixture.texts().iter().any(|t| t.text.contains(text)) || fixture.by_label(text).is_some()
+}
+
+/// The check dialog's head for the app `host` names: how many textured shapes the dialog paints (the dialog's own
+/// chrome paints some), and whether it shows the app name's initial in the icon's place.
+fn check_dialog_head(host: Host) -> (usize, bool) {
+    let mut dialog = UpdateCheckDialog::new("0.1.0");
+    dialog.set_status(Status::UpToDate);
+    let mut dialogs = DialogHost::new();
+    dialogs.open(dialog);
+    let (mut fixture, _) = rig_for(dialogs, host);
+    let textured = fixture
+        .frame_shapes()
+        .iter()
+        .filter(|shape| match shape {
+            egui::Shape::Mesh(mesh) => mesh.texture_id != egui::TextureId::default(),
+            egui::Shape::Rect(rect) => rect.brush.is_some(),
+            _ => false,
+        })
+        .count();
+    (textured, fixture.texts().iter().any(|t| t.text == "P"))
+}
+
+/// The app gives its icon once, to its host beside its name, and the check dialog shows it in its head, which the
+/// prompt shares; an app without one shows its name's initial.
+#[trial]
+fn the_update_dialogs_show_the_icon_the_app_gives_its_host() {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([240, 122, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap_or_else(|error| panic!("the icon encodes: {error}"));
+    let icon: &'static [u8] = Box::leak(png.into_boxed_slice());
+    let (with_icon, initial_with_icon) = check_dialog_head(photocraft().icon_png(icon).build());
+    let (without, initial_without) = check_dialog_head(photocraft().build());
+    assert!(with_icon > without, "the icon paints a picture: {with_icon} textured shapes against {without}");
+    assert!(!initial_with_icon, "the icon takes the initial's place");
+    assert!(initial_without, "no icon: the initial");
+}
+
+#[trial]
+fn the_check_dialog_words_a_rate_limit_itself_and_passes_other_reasons_through() {
+    let words = UpdateWords::default();
+    assert!(check_dialog_shows(Status::RateLimited, words.rate_limited.as_str()));
+    assert!(!check_dialog_shows(Status::Failed("offline".into()), words.rate_limited.as_str()));
+    assert!(check_dialog_shows(Status::Failed("offline".into()), "offline"));
 }
 
 #[trial]

@@ -138,6 +138,49 @@ fn a_craft_face_with_the_mono_role_leads_the_monospace_family() {
     assert_eq!(without.chain(&FontRef::monospace()).first(), default_head.as_ref(), "without the mono face the default monospace face leads");
 }
 
+/// craft-fonts' signature face leads the signature family and draws in no other; without it the signature family is
+/// the proportional chain, so `FontRef::signature()` always names a family egui knows.
+#[trial]
+fn a_craft_face_with_the_signature_role_leads_only_the_signature_family() {
+    const SIGNATURE: EmbeddedFace = EmbeddedFace {
+        family: "Dancing Script",
+        style: "Regular",
+        scripts: &["Latn"],
+        bytes: &[],
+        index: 0,
+        role: Some(craft_fonts_build::SIGNATURE_ROLE),
+    };
+    const MONO: EmbeddedFace = EmbeddedFace {
+        family: "JetBrains Mono",
+        style: "Regular",
+        scripts: &["Latn"],
+        bytes: &[],
+        index: 0,
+        role: Some(craft_fonts_build::MONO_ROLE),
+    };
+    let build = |faces: &[EmbeddedFace]| {
+        UiFonts::new(&I18nScripts).craft_faces(faces).languages(&["en", "vi"]).ui_language("vi").system_fonts(SystemFonts::Off).stack()
+    };
+    let name = "Dancing Script Regular";
+
+    let with: Vec<EmbeddedFace> = CRAFT.iter().copied().chain([SIGNATURE, MONO]).collect();
+    let stack = build(&with);
+    let signature = stack.chain(&FontRef::signature());
+    assert_eq!(signature.first().map(String::as_str), Some(name), "the signature face leads the signature family");
+    assert!(!signature.iter().any(|face| face == "JetBrains Mono Regular"), "the mono face doesn't lead the signature family");
+    let proportional = stack.chain(&FontRef::proportional());
+    assert!(signature.len() > 1 && signature[1..].iter().all(|face| proportional.contains(face)), "the proportional chain follows");
+    for family in [FontRef::proportional(), FontRef::monospace()] {
+        // A Vietnamese UI asks Latin faces for the letters its base faces lack: the signature face isn't one of them.
+        assert!(!stack.chain(&family).iter().any(|face| face == name), "{family:?} has no signature face");
+    }
+    assert_eq!(stack.chain(&FontRef::monospace()).first().map(String::as_str), Some("JetBrains Mono Regular"), "the mono lead stays");
+
+    let without = build(CRAFT);
+    assert!(!without.chain(&FontRef::signature()).is_empty(), "the signature family is registered without its face");
+    assert_eq!(without.chain(&FontRef::signature()), without.chain(&FontRef::proportional()), "without its face it is the proportional chain");
+}
+
 #[trial]
 fn variable_faces_draw_at_regular_weight() {
     // The Arabic test face's default instance is Thin (100), like many variable system fonts.

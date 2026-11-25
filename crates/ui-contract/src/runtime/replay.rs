@@ -9,8 +9,11 @@
 //!
 //! The record also holds the facts the settled test reads (`runtime::lazy`): the values the run read, whether
 //! something in it still moves (an animation that is not at its end, a repaint request) and the earliest time it asked
-//! to be shown again, and whether it did something a replay cannot repeat (an overlay it shows, paint on another
-//! layer, a label scope open around it). Such a record is never replayed: the view runs.
+//! to be shown again, the overlay layers it shows and where the focus was in it, and whether it did something a replay
+//! cannot repeat (paint on a layer that is neither its own nor an overlay it shows, such as a raw egui popup or a
+//! transformed body; a window of another viewport; a label scope open around it). Such a record is never replayed:
+//! the view runs. An overlay it shows is journaled as every other registration is (its `Area`, its layer stack
+//! entry), so its record replays only where it ran (`Record::pinned`).
 
 use crate::runtime::egui::areas::Layer;
 use crate::runtime::focus::{self, Transcript};
@@ -19,7 +22,7 @@ use crate::runtime::inputs::{Input, Inputs};
 use crate::runtime::pass_state;
 use crate::runtime::reads::BindKey;
 use crate::runtime::shift::Shift;
-use egui::{Context, IdSet, RecordShift};
+use egui::{Context, IdSet, RecordShift, Rect};
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
@@ -90,6 +93,15 @@ impl PartialEq for Entry {
     }
 }
 
+impl Entry {
+    /// The entry at the place `shift` names. A shift that leaves every record as it is (`RecordShift::is_none`, a
+    /// pinned record's) leaves the entry too, as it leaves egui's records: a clip a layer the record shows sets lies
+    /// outside the clip around the record, which `RecordShift::clip` would cut it to.
+    fn at(&self, shift: &RecordShift) -> Entry {
+        if shift.is_none() { self.clone() } else { self.0.shifted(shift) }
+    }
+}
+
 impl fmt::Debug for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.describe(f)
@@ -155,6 +167,9 @@ pub(crate) struct Facts {
     /// The components whose memory owners registered in the run (`memory::register_owner`): a replay needs their
     /// shown-tier state still kept (`memory::ended_since`).
     pub(crate) owners: Vec<egui::Id>,
+    /// The components that take the AccessKit requests on the nodes the run registered (`note_node_owner`): a request
+    /// routed to one of them is routed into the run, though the component is no egui widget (a collection's row).
+    pub(crate) node_owners: Vec<egui::Id>,
     /// The layout memory entries the run kept (`note_layout_keep`): a replay keeps them (`layout_memory::keep`).
     pub(crate) layout_keeps: Vec<egui::Id>,
     /// The derived values the run asked for (`note_derived_keep`): a replay keeps them, since it asks for none.
@@ -164,6 +179,43 @@ pub(crate) struct Facts {
     /// The command scope instances that registered in the run (`commands::register_instance`): a command queued for one
     /// is taken only by a run, so a replay waits until the queue holds none.
     pub(crate) instances: Vec<egui::Id>,
+    /// The overlay layers the run showed (`note_overlay`): their paint and widgets are the record's, and the pointer over
+    /// one of them engages the record.
+    pub(crate) overlays: Vec<ShownLayer>,
+    /// The layer stack entries the run recorded (`note_layer`): a close queued for one is taken only by a run.
+    pub(crate) layers: Vec<egui::Id>,
+}
+
+/// An overlay layer a run showed: its egui layer and its rect in screen space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShownLayer {
+    pub(crate) layer: Layer,
+    pub(crate) rect: Rect,
+}
+
+/// Where the focus was in a run: the component of the focused stop when the run registered it, and the egui widget
+/// that held egui focus when the run made it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Held {
+    pub(crate) stop: Option<egui::Id>,
+    pub(crate) widget: Option<egui::Id>,
+}
+
+impl Held {
+    /// Where the focus is now: the component of the focused stop and the egui widget that holds egui focus.
+    pub(crate) fn focused(ctx: &Context) -> Held {
+        Held { stop: focus::focused_stop(ctx).map(|key| key.0), widget: crate::runtime::egui::focus::focused(ctx) }
+    }
+
+    /// The part of the focus `self` that is among the stops of `focus` and the egui widgets `widgets`.
+    pub(crate) fn within(self, focus: &Transcript, widgets: &IdSet) -> Held {
+        Held { stop: self.stop.filter(|stop| focus.stop_ids().any(|id| id == *stop)), widget: self.widget.filter(|widget| widgets.contains(widget)) }
+    }
+
+    /// Whether the focus is in the run at all.
+    pub(crate) fn any(self) -> bool {
+        self.stop.is_some() || self.widget.is_some()
+    }
 }
 
 /// What one real run of a region added to its pass.
@@ -173,14 +225,22 @@ pub(crate) struct Record {
     egui: egui::PassRecords,
     /// The egui widgets of the run.
     pub(crate) widgets: IdSet,
+    /// Where the focus was in the run when it ended.
+    pub(crate) held: Held,
     pub(crate) facts: Facts,
 }
 
 impl Record {
     /// Whether a replay can add the record at another place: egui's records hold no paint callback
-    /// (`PassRecords::paints_callback`).
+    /// (`PassRecords::paints_callback`) and the record is not pinned.
     pub(crate) fn movable(&self) -> bool {
-        !self.egui.paints_callback()
+        !self.egui.paints_callback() && !self.pinned()
+    }
+
+    /// Whether the record replays only where it ran, at the offset and clip of its run: it shows an overlay, which a
+    /// host places in screen space by its anchor, so a move of the record is no move of the layer.
+    pub(crate) fn pinned(&self) -> bool {
+        !self.facts.overlays.is_empty()
     }
 }
 
@@ -218,7 +278,8 @@ pub(crate) fn in_audit_run(ctx: &Context) -> bool {
     OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.iter().any(|open| open.audit))
 }
 
-/// Ends the innermost record, the one around a run on `layer`: paint or widgets on another layer block it.
+/// Ends the innermost record, the one around a run on `layer`: paint or widgets on a layer that is neither `layer` nor
+/// an overlay the run showed block it.
 pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     OPEN.fetch_sub(1, Ordering::AcqRel);
     let (open, journal) = pass_state::with::<Recorder, _>(ctx, |recorder| {
@@ -235,6 +296,7 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.blocked |= open.facts.blocked;
             outer.facts.discards |= open.facts.discards;
             outer.facts.owners.extend(open.facts.owners.iter().copied());
+            outer.facts.node_owners.extend(open.facts.node_owners.iter().copied());
             outer.facts.layout_keeps.extend(open.facts.layout_keeps.iter().copied());
             outer.facts.derived_keeps.extend(open.facts.derived_keeps.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
@@ -242,6 +304,8 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.reads.extend(open.facts.reads.iter().copied().filter(|key| !kept || !matches!(key, BindKey::Place(..))));
             outer.facts.inputs.extend(open.facts.inputs);
             outer.facts.instances.extend(open.facts.instances.iter().copied());
+            outer.facts.overlays.extend(open.facts.overlays.iter().copied());
+            outer.facts.layers.extend(open.facts.layers.iter().copied());
         } else {
             recorder.journal.clear();
         }
@@ -254,13 +318,23 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     facts.layout_keeps.dedup();
     facts.derived_keeps.sort_unstable_by_key(|id| id.value());
     facts.derived_keeps.dedup();
-    // A paint callback's output depends on what its closure holds, which neither a view's key nor a comparison sees:
-    // its run is never replayed.
-    facts.blocked |= egui.layers().any(|on| on != layer) || egui.paints_callback();
+    // Paint on a layer that is neither the run's own nor an overlay it showed (a raw egui popup, a transformed body)
+    // comes from code that registers nothing to replay it with. A paint callback's output depends on what its closure
+    // holds, which neither a view's key nor a comparison sees. Either run is never replayed.
+    facts.blocked |= egui.layers().any(|on| on != layer && !facts.overlays.iter().any(|shown| shown.layer == on)) || egui.paints_callback();
     // Every discard request reaches egui's output (`sizing::request_discard` and egui's own); layout memory's waits
     // for the end of the pass and notes itself (`note_discard`).
     facts.discards |= discard_requests(ctx) > open.discards;
-    Record { focus: focus::transcript(ctx, open.focus), journal, widgets: egui.widgets().iter().map(|widget| widget.id).collect(), egui, facts }
+    let focus = focus::transcript(ctx, open.focus);
+    let widgets = egui.widgets().iter().map(|widget| widget.id).collect();
+    // A run that ends holding focus reads where the focus is and what is sent to it: a focus move, and the next key,
+    // text, IME, clipboard or AccessKit event wherever the framework routes it, run it.
+    let held = Held::focused(ctx).within(&focus, &widgets);
+    if held.any() {
+        facts.inputs.insert(Input::Focus);
+        facts.inputs.insert(Input::Sent);
+    }
+    Record { focus, journal, widgets, held, egui, facts }
 }
 
 #[cfg(feature = "testing")]
@@ -280,6 +354,10 @@ impl Record {
             // The display names a widget by its rect only; the difference may be in its sense, state or interact rect.
             Some(egui::PassRecordsDiff::Widget { index, left, right }) => found.push(format!("widget rect {index}: left {left:?} / right {right:?}")),
             // The display names a node by its bounds only; the difference may be in any other property.
+            // The display names a shape by its rects only; the difference may be in its colour, stroke, texture or text.
+            Some(egui::PassRecordsDiff::Shape { layer, index, left, right }) => {
+                found.push(format!("paint: shape {index} on {layer:?}: left {left:?} / right {right:?}"))
+            }
             Some(egui::PassRecordsDiff::Node { index, left, right }) => {
                 found.push(format!("AccessKit node {index}: left {left:?} / right {right:?}"))
             }
@@ -289,7 +367,7 @@ impl Record {
         if let Some(diff) = self.focus.first_difference(&run.focus) {
             found.push(format!("focus: {diff}"));
         }
-        let shifted: Vec<Entry> = self.journal.iter().map(|entry| entry.0.shifted(shift)).collect();
+        let shifted: Vec<Entry> = self.journal.iter().map(|entry| entry.at(shift)).collect();
         let (left, right) = (&shifted, &run.journal);
         if let Some(index) = left
             .iter()
@@ -355,7 +433,7 @@ pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
     let noting = recording(ctx);
     if noting {
         pass_state::with::<Recorder, _>(ctx, |recorder| {
-            recorder.journal.extend(record.journal.iter().map(|entry| if shift.is_none() { entry.clone() } else { entry.0.shifted(shift) }));
+            recorder.journal.extend(record.journal.iter().map(|entry| entry.at(shift)));
             recorder.replaying = true;
         });
     }
@@ -471,6 +549,17 @@ pub(crate) fn note_wake(ctx: &Context, at: f64) {
     with_open(ctx, |facts| facts.wake = min_wake(facts.wake, Some(at)));
 }
 
+/// Notes that the running code showed the overlay layer `layer` at the screen rect `rect`. Called by the journaled
+/// registration of the layer's `Area`, so a record that replays it notes it again in the records open around it.
+pub(crate) fn note_overlay(ctx: &Context, layer: Layer, rect: Rect) {
+    with_open(ctx, |facts| facts.overlays.push(ShownLayer { layer, rect }));
+}
+
+/// Notes that the running code recorded the layer stack entry `id`, by a run or a replay.
+pub(crate) fn note_layer(ctx: &Context, id: egui::Id) {
+    with_open(ctx, |facts| facts.layers.push(id));
+}
+
 /// Notes that the running code did something a replay cannot repeat.
 pub(crate) fn block(ctx: &Context) {
     with_open(ctx, |facts| facts.blocked = true);
@@ -492,6 +581,12 @@ pub(crate) fn note_layout_keep(ctx: &Context, id: egui::Id) {
 /// keeps it too, as the replay asks for nothing and an entry no pass asked for in a frame is dropped.
 pub(crate) fn note_derived_keep(ctx: &Context, slot: egui::Id) {
     with_open(ctx, |facts| facts.derived_keeps.push(slot));
+}
+
+/// Notes that `owner` takes the AccessKit requests on a node the running code registered (`keys::register_node`). A
+/// replay registers the node again from its journal, which notes it in the records open around the replay.
+pub(crate) fn note_node_owner(ctx: &Context, owner: egui::Id) {
+    with_open(ctx, |facts| facts.node_owners.push(owner));
 }
 
 /// Notes that the memory owner `owner` registered in the running code.

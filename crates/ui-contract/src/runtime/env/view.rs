@@ -48,6 +48,10 @@ impl<'a> EnvView<'a> {
         self.scoped.scroll_owner.map(|owner| owner.id)
     }
 
+    pub(crate) fn fallback_collection(&self) -> Option<Id> {
+        self.scoped.fallback_collection
+    }
+
     /// The view of the innermost scroll area around the scope.
     pub(crate) fn lazy_view(&self) -> Option<crate::runtime::lazy::View> {
         self.scoped.lazy
@@ -56,6 +60,14 @@ impl<'a> EnvView<'a> {
     /// The line length paragraphs wrap at in this scope, if a container around it sets one.
     pub(crate) fn measure(&self) -> Option<f32> {
         self.scoped.measure
+    }
+
+    /// The content-sized `Stack` column whose first sweep runs now, if the scope is a direct child of it in flow.
+    pub(crate) fn column_first_sweep(&self) -> Option<Id> {
+        match self.scoped.column {
+            Some(super::ColumnSweep::Count(column)) => Some(column),
+            _ => None,
+        }
     }
 
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).

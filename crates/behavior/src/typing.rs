@@ -238,4 +238,22 @@ mod tests {
         typing.edit(&mut run, &Some(5.0), "9");
         assert_eq!(typing.escape(&mut run), Escaped::Restore(Some(5.0)));
     }
+
+    /// A field's value can change under a half-typed draft (a panel's selection changes): the draft and the value the
+    /// run began from must stay, so the commit and Escape work from what the user started typing over.
+    #[test]
+    fn a_draft_survives_an_outside_value_change_until_commit() {
+        let typing = TypingRun::new(NumberCodec::default());
+        let (began, outside) = (Some(12.0), Some(24.0));
+        let mut run = EditRun::new(began);
+        typing.edit(&mut run, &began, "+");
+        typing.edit(&mut run, &outside, "+6");
+        assert_eq!(typing.shown(&run, &outside), "+6", "the open draft is shown, not the value that changed under it");
+        assert_eq!(run.start, began, "the run keeps the value it began from");
+        assert_eq!(typing.commit(&mut run), Ended::Commit(Some(18.0)), "relative input applies to the value the run began from");
+
+        typing.edit(&mut run, &began, "9");
+        typing.edit(&mut run, &outside, "90");
+        assert_eq!(typing.escape(&mut run), Escaped::Restore(began), "Escape restores the value from before the run");
+    }
 }

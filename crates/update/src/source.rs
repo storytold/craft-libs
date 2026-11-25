@@ -171,10 +171,9 @@ impl ReleaseSource for GitHubSource {
                 Err(e) => log::warn!("{repo}: release pages: {e}"),
             }
         }
-        let why = api_error.unwrap_or_else(|| "GitHub's request limit was reached".into());
         match self.cached(repo, prereleases) {
             Some(latest) => Answer { latest, source: Source::Cache },
-            None => Answer { latest: LatestRelease::Failed(why), source: Source::Cache },
+            None => Answer { latest: api_error.map_or(LatestRelease::RateLimited, LatestRelease::Failed), source: Source::Cache },
         }
     }
 
@@ -217,6 +216,16 @@ impl ReleaseSource for GitHubSource {
 pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
+
+    #[trial]
+    fn a_rate_limited_source_with_nothing_saved_answers_rate_limited_not_english_text() {
+        // Nothing is written (a rate-limited answer saves nothing), and a name only this run uses has no cache to read.
+        let dir = std::env::temp_dir().join(format!("craft-update-source-rate-limited-{}-{}", std::process::id(), crate::now()));
+        let http = Http::new("craft-update-test/0.0").expect("an HTTP client");
+        let source = GitHubSource::new(http, dir.join("releases.json"));
+        *source.limited_until.lock().expect("lock") = Some(crate::now() + 600);
+        assert_eq!(source.latest("storytold/none", true).latest, LatestRelease::RateLimited);
+    }
 
     #[trial]
     fn a_reset_past_the_quota_window_cannot_stop_the_api_for_good() {

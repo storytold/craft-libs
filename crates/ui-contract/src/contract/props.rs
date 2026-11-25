@@ -31,6 +31,7 @@ pub struct Common {
     pub(crate) keeps_name: bool,
     pub(crate) access_key: Option<char>,
     pub(crate) default_stop: bool,
+    pub(crate) focus_request: Option<crate::runtime::focus::FocusRequest>,
     pub(crate) doc_key: Option<DocKey>,
     /// The scope a leaf is an instance of while it holds key focus.
     pub(crate) command_scope: Option<CommandScope>,
@@ -58,6 +59,7 @@ impl Common {
             keeps_name: false,
             access_key: None,
             default_stop: false,
+            focus_request: None,
             doc_key: None,
             command_scope: None,
             ltr_axis: false,
@@ -197,6 +199,14 @@ pub trait Props: Meta + Sized {
         self
     }
 
+    /// Asks for focus on the component's stop in this pass, once (`FocusRequest`): an inline editor a click opens
+    /// sends `Take` in the pass it opens, a view's search field sends `WhenNone` in the pass the view opens. Sent
+    /// in later passes too, it takes the focus back each time.
+    fn request_focus(mut self, request: crate::runtime::focus::FocusRequest) -> Self {
+        self.common_mut(Internal::new()).focus_request = Some(request);
+        self
+    }
+
     /// The semantic key of the component.
     fn doc_key(mut self, key: DocKey) -> Self {
         self.common_mut(Internal::new()).doc_key = Some(key);
@@ -232,6 +242,8 @@ pub struct Resolved<'p> {
     pub(crate) access_key: Option<char>,
     /// `Common.default_stop`: the stop is its scope's default (`Initial::Default`).
     pub(crate) default_stop: bool,
+    /// `Common.focus_request`: the stop asks for focus in this pass.
+    pub(crate) focus_request: Option<crate::runtime::focus::FocusRequest>,
     /// `Common.ltr_axis`.
     pub(crate) ltr_axis: bool,
     /// `Common.sizing`: a leaf's own sizing.
@@ -254,6 +266,12 @@ impl Resolved<'_> {
     /// The sizing the host set on this component, if any: a leaf with `Sizing::Content` sizes to its content.
     pub fn sizing(&self) -> Option<Sizing> {
         self.sizing
+    }
+
+    /// The text of the component's own tooltip as the tooltip shows it: its disabled text while the component is
+    /// disabled. `None` when the component has no tooltip.
+    pub fn tooltip_text(&self, env: &crate::runtime::env::EnvView<'_>) -> Option<String> {
+        self.tooltip.map(|tooltip| super::tooltip::resolve_spec(env, tooltip.spec(), self.enabled))
     }
 }
 
