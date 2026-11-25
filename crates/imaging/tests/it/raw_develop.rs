@@ -333,7 +333,7 @@ fn the_footer_runs_across_the_dialog_and_the_settings_column_keeps_its_own_width
         .into_iter()
         .map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("the footer's {name}")).rect)
         .fold(Rect::NOTHING, Rect::union);
-    assert!(footer.min.y >= column.max.y.min(canvas.max.y) - 0.5, "the footer {footer:?} stands under the column {column:?}");
+    assert!(footer.min.y >= column.max.y.max(canvas.max.y) - 0.5, "the footer {footer:?} stands under the column {column:?} and the canvas {canvas:?}");
     assert!(footer.min.x < canvas.max.x, "the footer {footer:?} runs under the canvas {canvas:?}");
     assert!(column.max.x >= footer.max.x - 0.5, "the Settings column {column:?} reaches the end edge as the footer {footer:?} does");
     assert!(column.min.y <= canvas.min.y + 0.5, "the Settings column {column:?} starts at the top as the canvas {canvas:?} does");
