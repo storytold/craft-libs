@@ -24,6 +24,7 @@ pub mod ime;
 pub mod layout;
 pub mod localized;
 pub mod menu;
+pub mod node_editor;
 pub mod panes;
 pub mod presence;
 pub mod printing;
