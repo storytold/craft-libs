@@ -133,6 +133,11 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Opt
             facts.text.clone()
         }
     });
+    if let Some(value) = value.as_deref()
+        && crate::runtime::inspect::recording(ctx)
+    {
+        crate::runtime::inspect::note_text_value(ctx, owner, value);
+    }
     adapter::write_text(ctx, owner, &TextNode { value: value.as_deref(), editable: facts.editable, disabled: facts.disabled, selection });
     Service::<Tables>::run(ctx, |tables| tables.0.insert(owner, entries));
 }

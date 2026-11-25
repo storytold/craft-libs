@@ -516,6 +516,28 @@ where
     }
 }
 
+/// Where the journal of the running pass ends now, when a record is open: the mark [`withdraw`] takes the entries made
+/// since from.
+pub(crate) fn mark(ctx: &Context) -> Option<usize> {
+    recording(ctx).then(|| pass_state::with::<Recorder, _>(ctx, |recorder| recorder.journal.len()))
+}
+
+/// Takes back the entries of the call `again` (as [`journal`] takes it, with arguments of type `A`) that the open
+/// records noted since `from` (a [`mark`]): a region that keeps what it shows to itself (`inspect::record`) owns the
+/// registrations its components made in it, and a replay of the view around the region must not make them again in
+/// whatever record is open there.
+pub(crate) fn withdraw<A, F>(ctx: &Context, from: usize, _again: F)
+where
+    A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
+    F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
+{
+    pass_state::with::<Recorder, _>(ctx, |recorder| {
+        let from = from.min(recorder.journal.len());
+        let tail = recorder.journal.split_off(from);
+        recorder.journal.extend(tail.into_iter().filter(|entry| entry.0.as_any().downcast_ref::<Note<A, F>>().is_none()));
+    });
+}
+
 /// Notes that the running code read the value `key`.
 pub(crate) fn note_read(ctx: &Context, key: BindKey) {
     if OPEN.load(Ordering::Acquire) > 0 && frame::running(ctx).is_some() {
