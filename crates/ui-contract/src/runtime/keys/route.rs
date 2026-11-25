@@ -24,6 +24,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let target = focus::focused_rec(ctx);
     let (batch, nodes, captures, held_claims, alt_claims, fired_claims, hover_deletes) = current(ctx, |stage| {
         stage.routed.clear();
+        stage.intents_read = false;
         stage.contexts.clear();
         stage.claimed.clear();
         stage.activated.clear();
@@ -548,19 +549,27 @@ pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
     shortcuts
 }
 
-/// Asks the focused component of the running viewport to take `command` as `Intent::Edit` in the next pass.
+/// Asks the focused component of the running viewport to take `command` as `Intent::Edit`: in this pass when no
+/// component has read its intents in it yet (a system menu pick the host dispatches before the UI), else in the next
+/// pass (a pick in the window's own menus or bars, which run in the UI).
 /// `false` when it does not list the command, or is the app's own widget (`Stop::host`), whose edits are the app's. A paste asks the platform for the clipboard text, which arrives as
 /// the paste event that becomes the intent. Focus is read as it is now: a menu pick returns focus in its pass
 /// before its command fires, and the command goes where focus returned.
 pub(crate) fn queue_edit(ctx: &Context, command: EditCommand) -> bool {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
-    if !focus::focused_rec(ctx).is_some_and(|rec| !rec.stop.host && rec.stop.keys.edits.contains(command)) {
+    let Some(id) = focus::focused_rec(ctx).filter(|rec| !rec.stop.host && rec.stop.keys.edits.contains(command)).map(|rec| rec.stop.id) else {
         return false;
-    }
+    };
     if command == EditCommand::Paste {
         crate::runtime::egui::clipboard::request_paste(ctx);
-    } else {
-        with(ctx, viewport, |stage| stage.queued_edits.push(command));
+    } else if with(ctx, viewport, |stage| {
+        if !stage.intents_read {
+            push(&mut stage.routed, Some(id), Intent::Edit(command), false);
+        } else {
+            stage.queued_edits.push(command);
+        }
+        stage.intents_read
+    }) {
         crate::runtime::egui::repaint::request_of(ctx, viewport);
     }
     true

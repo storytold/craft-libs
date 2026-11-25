@@ -338,3 +338,23 @@ fn a_filter_the_bar_applies_deselects_what_it_hides() {
     fixture.idle(2);
     assert!(selects(&seen).is_empty(), "a layer selected later, while the filter hides it, stays selected");
 }
+
+/// Where the Objects filter's Filter button ends under `search`.
+fn filter_button_end(search: craft_layers::ui::filter::ObjectsSearch) -> f32 {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut filter = LayerFilter::default();
+        filter.by = FilterBy::Objects;
+        let _ = craft_layers::ui::filter::LayerFilterBar::new(Bind::bound(&mut filter)).filter_types([FilterBy::Objects]).show(ui);
+    });
+    fixture.root_value(search).room(ONE_PANEL).settle();
+    fixture.by_label("Filter").expect("the Objects filter shows its Filter button").rect.right()
+}
+
+/// An app whose Objects search fills the bar (`ObjectsSearch::Fill`, VectorCraft's Layers panel) gets its Filter
+/// button further toward the end edge than the field's own width leaves it.
+#[trial]
+fn a_filling_objects_search_puts_the_filter_button_at_the_end() {
+    use craft_layers::ui::filter::ObjectsSearch;
+    let (natural, fill) = (filter_button_end(ObjectsSearch::Natural), filter_button_end(ObjectsSearch::Fill));
+    assert!(fill > natural, "the Filter button ends at {fill} under Fill, {natural} under Natural");
+}

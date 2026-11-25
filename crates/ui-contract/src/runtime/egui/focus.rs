@@ -27,6 +27,17 @@ pub(crate) fn focused(ctx: &Context) -> Option<Id> {
     ctx.memory(|memory| memory.focused())
 }
 
+/// egui's focus candidates of the running pass from the `seen`th on (`Memory::focus_candidates`): the widgets
+/// interested in key focus, in the order they registered.
+pub(crate) fn candidates_since(ctx: &Context, seen: usize) -> Vec<egui::FocusCandidate> {
+    ctx.memory(|memory| memory.focus_candidates().get(seen..).map(<[_]>::to_vec).unwrap_or_default())
+}
+
+/// Whether the widget egui holds key focus on keeps Tab by its event filter (`Memory::focus_lock_filter`).
+pub(crate) fn focused_keeps_tab(ctx: &Context) -> bool {
+    ctx.memory(|memory| memory.focus_lock_filter()).is_some_and(|filter| filter.tab)
+}
+
 /// Whether egui holds a label text selection, which egui copies on a copy or cut event.
 pub(crate) fn label_selection(ctx: &Context) -> bool {
     ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|state| state.has_selection()).unwrap_or(false)
@@ -57,9 +68,9 @@ pub(crate) fn surrender(ctx: &Context, id: Id) {
 }
 
 /// H7: egui's begin pass set a focus direction from an unmodified arrow or the Tab it kept. The focus service clears
-/// it before any component runs unless egui focus is on an app's own widget (`FocusedRecord::host_focus`), or the
-/// key stage left a Tab to egui in a window with no focus stop, and the service moves no focus in the pass: egui would
-/// otherwise move focus off a framework stop that the same arrow reaches as an intent.
+/// it before any component runs unless egui focus is on an app's own widget (`FocusedRecord::host_focus`) and the
+/// service moves no focus in the pass: egui would otherwise move focus off a framework stop that the same arrow
+/// reaches as an intent.
 pub(crate) fn clear_directional_focus(ctx: &Context) {
     ctx.memory_mut(|memory| memory.move_focus(FocusDirection::None));
 }
