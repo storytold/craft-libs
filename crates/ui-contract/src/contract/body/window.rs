@@ -215,7 +215,7 @@ fn resized_edge(before: Rect, after: Rect) -> Option<ResizeEdge> {
 /// `rect` moved, at its size, the least distance that puts it inside `bounds`: the one keep rule for a layer's
 /// bounds, whether the user moves the layer or the host places it. On an axis where it is longer than the bounds, its
 /// low edge sits on theirs.
-pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
+pub fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
     let keep = |low: f32, high: f32, bounds_low: f32, bounds_high: f32| low.min(bounds_high - (high - low)).max(bounds_low) - low;
     rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
 }
