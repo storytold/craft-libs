@@ -49,6 +49,9 @@ pub struct IconicSizes {
     /// The height of the grip strip at the top of each icon group, above its first icon: none with
     /// [`IconGroupSeparator::Rule`].
     pub grip: f32,
+    /// How far a group's grip band reaches into its first icon: none with [`IconGroupSeparator::Grip`], whose strip is
+    /// the band, `space.gap.inline` with [`IconGroupSeparator::Rule`].
+    pub band: f32,
     /// The room between two icon groups: the tight gap, or with [`IconGroupSeparator::Rule`] the stack gap and the
     /// rule.
     pub separator: f32,
@@ -63,11 +66,12 @@ impl IconicSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
         let size = &cx.tokens.size;
-        let (grip, separator) = match cx.env::<IconGroupSeparator>() {
-            IconGroupSeparator::Grip => (super::group::grip_strip(cx.tokens), cx.tokens.space.gap.tight),
-            IconGroupSeparator::Rule => (0.0, cx.tokens.space.gap.stack + cx.rule(RuleKind::Edge).width.points(cx.frame_ctx().pixels_per_point())),
+        let gap = &cx.tokens.space.gap;
+        let (grip, band, separator) = match cx.env::<IconGroupSeparator>() {
+            IconGroupSeparator::Grip => (super::group::grip_strip(cx.tokens), 0.0, gap.tight),
+            IconGroupSeparator::Rule => (0.0, gap.inline, gap.stack + cx.rule(RuleKind::Edge).width.points(cx.frame_ctx().pixels_per_point())),
         };
-        IconicSizes { column: DockSizes::style(cx), cell: size.rail.button, grip, separator, labels: size.rail.width * LABELS_IN_RAIL_WIDTHS }
+        IconicSizes { column: DockSizes::style(cx), cell: size.rail.button, grip, band, separator, labels: size.rail.width * LABELS_IN_RAIL_WIDTHS }
     }
 
     /// The sizes in the root scope's style, for code outside a style pass:
@@ -107,9 +111,11 @@ pub enum IconGroupSeparator {
     /// `line.grip`) and drags the group.
     #[default]
     Grip,
-    /// No grip strips: a group's first icon drags the group, its first icon stands right under the column's bar, and an
-    /// edge rule (`line.border`) lies level in the middle of the `space.gap.stack` between two groups,
-    /// `space.gap.inline` short of the column's sides: VectorCraft's icon groups, as production drew them.
+    /// No grip strips: a group's first icon stands right under the column's bar, and an edge rule (`line.border`) lies
+    /// level in the middle of the `space.gap.stack` between two groups, `space.gap.inline` short of the column's sides.
+    /// A bare band drags the group: the first group's top `space.gap.inline` of its first icon, a later group's room
+    /// above it and that much of its first icon. The band takes a press there, so a click in it opens no flyout;
+    /// below it the icon drags its own panel. VectorCraft's icon groups, as production drew them.
     Rule,
 }
 
@@ -295,7 +301,7 @@ struct Plan {
     cells: Vec<(usize, usize, Rect)>,
     /// The rest of each row in a wide column, where the panel's name shows; empty in a narrow column.
     names: Vec<Rect>,
-    /// `(group, rect)` of each group's grip strip, above its first icon.
+    /// `(group, rect)` of each group's grip: its strip above its first icon, or its band (`IconicSizes::band`).
     grips: Vec<(usize, Rect)>,
     /// `(group, rect)` of the whole of each group: its grip strip and its cells.
     groups: Vec<(usize, Rect)>,
@@ -455,12 +461,14 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
         let wide = body.width() >= sizes.labels;
         let (mut y, mut cells, mut names, mut grips, mut groups) = (body.top(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for (at, group) in self.column.groups.iter().enumerate() {
+            let above = y;
             if at > 0 {
                 y += sizes.separator;
             }
             let top = y;
-            let grip = Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), top + sizes.grip));
-            y = grip.bottom();
+            y = top + sizes.grip;
+            // The grip strip, or a band that reaches into the first icon and covers the room above the group.
+            let band = if sizes.band > 0.0 { above..=y + sizes.band } else { top..=y };
             for panel in 0..group.panels.len() {
                 let row = Rect::from_min_size(Pos2::new(body.left(), y), Vec2::new(body.width(), sizes.cell));
                 if wide {
@@ -472,9 +480,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
                 }
                 y += sizes.cell;
             }
-            if grip.height() > 0.0 {
-                grips.push((at, grip));
-            }
+            grips.push((at, Rect::from_x_y_ranges(body.x_range(), *band.start()..=band.end().min(y))));
             groups.push((at, Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), y))));
         }
         Plan { bar, cells, names, grips, groups, body }
@@ -594,6 +600,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             cx.part(GRIP.at(*group as u64), *grip)
                 .sense(Sense::DRAG)
                 .exact_hit()
+                // A band over the first icon's top takes the press there, as production's, drawn after the icons, did.
+                .stacking(u32::from(sizes.band > 0.0))
                 .cursor(CursorIcon::Grab)
                 .drag_cursor(CursorIcon::Grabbing)
                 .pointer_only("Move Panel To in the panel menu moves the group's panels");
@@ -614,30 +622,22 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let dragging =
             |phase: PressPhase| matches!(phase, PressPhase::DragStart { start, .. } if start.button == craft_behavior::PointerButton::Primary);
         let mut began = false;
-        // A group drags by its grip strip, or without one by its first icon.
-        let group_drag = |cx: &mut Cx<'_, Self>, group: usize| {
-            let lead = self.column.groups.get(group)?;
-            let anchor = lead.panels.first()?;
-            let extent = plan.groups.iter().find(|(at, _)| *at == group)?.1;
-            let shown = lead.active_panel().unwrap_or(anchor);
-            let label = Label::from((self.spec)(shown).label.as_str().to_owned());
-            start_icon_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), extent.size(), label);
-            Some(())
-        };
-        for (group, _) in &plan.grips {
-            if cx.part_if_declared(GRIP.at(*group as u64)).is_some_and(|grip| dragging(grip.press.phase)) {
-                began |= group_drag(cx, *group).is_some();
+        for (group, extent) in &plan.groups {
+            if dragging(cx.part(GRIP.at(*group as u64)).press.phase)
+                && let Some(lead) = self.column.groups.get(*group)
+                && let Some(anchor) = lead.panels.first()
+            {
+                let shown = lead.active_panel().unwrap_or(anchor);
+                let label = Label::from((self.spec)(shown).label.as_str().to_owned());
+                start_icon_drag(cx, DragUnit::Group(anchor.clone()), PanelKey::of(shown), extent.size(), label);
+                began = true;
             }
         }
-        let gripless = plan.grips.is_empty();
         for (at, (group, panel, cell)) in plan.cells.iter().enumerate() {
             let named = cx.part_if_declared(NAME.at(at as u64)).is_some_and(|name| dragging(name.press.phase));
-            if !(dragging(cx.part(CELL.at(at as u64)).press.phase) || named) {
-                continue;
-            }
-            if gripless && *panel == 0 {
-                began |= group_drag(cx, *group).is_some();
-            } else if let Some(panel) = self.panel(*group, *panel) {
+            if (dragging(cx.part(CELL.at(at as u64)).press.phase) || named)
+                && let Some(panel) = self.panel(*group, *panel)
+            {
                 let label = Label::from((self.spec)(panel).label.as_str().to_owned());
                 start_icon_drag(cx, DragUnit::Panel(panel.clone()), PanelKey::of(panel), cell.size(), label);
                 began = true;

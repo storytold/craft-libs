@@ -663,39 +663,47 @@ fn a_themes_bar_grip_is_one_level_bar() {
     assert!((bar.center().x - strip.center().x).abs() <= 0.5, "centred across the strip: {bar:?} in {strip:?}");
 }
 
-/// The icons of the two groups of a collapsed column whose groups stand apart by `separator`: the column's id and the
-/// fixture.
-fn separated(separator: IconGroupSeparator) -> (Fixture, Id) {
+/// The icons of the two groups of a collapsed column `width` wide whose groups stand apart by `separator`: the fixture,
+/// the column's id and the panel whose flyout is open.
+fn separated(separator: IconGroupSeparator, width: f32) -> (Fixture, Id, Rc<Cell<Option<u8>>>) {
+    let open = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&open);
     let mut fixture = Fixture::hosted(move |ui| {
         let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
         column.iconic = true;
-        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
-        with_env(
-            ui,
-            |overrides| {
-                overrides.values.set(separator);
-            },
-            |ui| {
-                let output = IconicColumn::new("Panels", global("iconic column", "rule"), &column, Bind::kept(), &named)
-                    .within(screen())
-                    .show_flyouts_at(ui, place, |_, _, _, _| None);
-                Some(output.into())
-            },
-        )
+        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, SCREEN.y));
+        let mut now = seen.get();
+        let output =
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(separator);
+                },
+                |ui| {
+                    IconicColumn::new("Panels", global("iconic column", "rule"), &column, Bind::bound(&mut now), &named)
+                        .within(screen())
+                        .show_flyouts_at(ui, place, |_, _, _, _| None)
+                },
+            );
+        seen.set(now);
+        Some(output.into())
     });
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
-    (fixture, id)
+    (fixture, id, open)
 }
 
 /// An app's `IconGroupSeparator::Rule` (VectorCraft's): no grip strips, so the first icon stands higher than under grip
 /// strips; one level edge rule lies in the middle of the room between the two groups, short of the column's sides, and
-/// none over the first group; a drag on a group's first icon moves the group, on its next icon only that panel.
+/// none over the first group. Each group keeps a bare grip band, as production's: the first group's over its first
+/// icon's top edge, a later group's over the room above it and its first icon's top edge. A drag from a band moves the
+/// group, from an icon below the band, the first included, only that icon's panel; a click in the band opens no flyout
+/// (the band takes the press there, as production's did), a click below it does, in a narrow and in a wide column.
 #[trial]
 fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
-    let (gripped, gripped_id) = separated(IconGroupSeparator::Grip);
+    let (gripped, gripped_id, _) = separated(IconGroupSeparator::Grip, RAIL);
     let gripped_first = gripped.part_rect(gripped_id, CELL.at(0)).expect("the first icon under grips");
-    let (mut fixture, id) = separated(IconGroupSeparator::Rule);
+    let (mut fixture, id, _) = separated(IconGroupSeparator::Rule, RAIL);
     let border = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.line.border);
     let shapes = fixture.frame_shapes();
     let level: Vec<(Pos2, Pos2, egui::Color32)> = shapes
@@ -705,12 +713,22 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
             _ => None,
         })
         .collect();
-    for group in [0, 1] {
-        assert!(fixture.part_rect(id, GRIP.at(group)).is_none(), "group {group} has no grip strip");
-    }
     let cell = |at: u64| fixture.part_rect(id, CELL.at(at)).expect("the icon shows");
+    let band = |group: u64| fixture.part_rect(id, GRIP.at(group)).expect("each group keeps a grip band");
     let (first, last, next) = (cell(0), cell(1), cell(2));
+    let (top, lower) = (band(0), band(1));
     assert!(first.top() < gripped_first.top() - 0.5, "the first icon {first:?} stands higher than under a grip strip {gripped_first:?}");
+    for (group, band) in [top, lower].into_iter().enumerate() {
+        assert!(grip_ticks(&shapes, band).is_none(), "group {group}: the band shows no marks");
+    }
+    assert!(
+        near(top.top(), first.top()) && top.bottom() > first.top() && top.bottom() < first.center().y,
+        "the first band {top:?} is the top edge of {first:?}"
+    );
+    assert!(
+        near(lower.top(), last.bottom()) && lower.bottom() > next.top() && lower.bottom() < next.center().y,
+        "the later band {lower:?} covers the room from {last:?} and the top edge of {next:?}"
+    );
     assert!(!level.iter().any(|(a, _, _)| a.y < first.bottom()), "no rule over the first group: {level:?}");
     let between: Vec<_> = level.iter().filter(|(a, _, _)| a.y > last.bottom() && a.y < next.top()).collect();
     let [(a, b, ink)] = between.as_slice() else { panic!("one rule between the groups: {level:?}") };
@@ -721,11 +739,30 @@ fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
     assert!(left > 0.0 && right < RAIL && span > RAIL - span, "the rule reaches across the column, short of its sides: {a:?} to {b:?}");
     let [r, g, bl, al] = border.0;
     assert_eq!(*ink, egui::Color32::from_rgba_unmultiplied(r, g, bl, al), "the rule is in line.border");
-    for (icon, unit) in [(first, DragUnit::Group(1)), (last, DragUnit::Panel(2)), (next, DragUnit::Group(3))] {
-        fixture.drag_hold_at(icon.center(), Vec2::new(RAIL * 2.0, 0.0));
-        let dragged = drag::active::<GroupDrag<u8>>(fixture.ctx()).map(|drag| drag.unit.clone());
-        assert_eq!(dragged, Some(unit.clone()), "a drag on the icon {icon:?} moves {unit:?}");
-        fixture.release_at(icon.center() + Vec2::new(RAIL * 2.0, 0.0)).settle();
+    for width in [RAIL, WIDE_COLUMN] {
+        let (mut fixture, id, open) = separated(IconGroupSeparator::Rule, width);
+        let cell = |at: u64| fixture.part_rect(id, CELL.at(at)).expect("the icon shows");
+        let band = |group: u64| fixture.part_rect(id, GRIP.at(group)).expect("each group keeps a grip band");
+        let (first, last, next, top, lower) = (cell(0), cell(1), cell(2), band(0), band(1));
+        let in_top = Pos2::new(first.center().x, top.center().y);
+        let drags = [
+            (in_top, DragUnit::Group(1)),
+            (Pos2::new(next.center().x, (last.bottom() + next.top()) / 2.0), DragUnit::Group(3)),
+            (Pos2::new(next.center().x, (next.top() + lower.bottom()) / 2.0), DragUnit::Group(3)),
+            (first.center(), DragUnit::Panel(1)),
+            (last.center(), DragUnit::Panel(2)),
+            (next.center(), DragUnit::Panel(3)),
+        ];
+        for (from, unit) in drags {
+            fixture.drag_hold_at(from, Vec2::new(SCREEN.x / 2.0, 0.0));
+            let dragged = drag::active::<GroupDrag<u8>>(fixture.ctx()).map(|drag| drag.unit.clone());
+            assert_eq!(dragged, Some(unit.clone()), "{width} wide: a drag from {from:?} moves {unit:?}");
+            fixture.release_at(from + Vec2::new(SCREEN.x / 2.0, 0.0)).settle();
+        }
+        fixture.click_at(in_top).idle(3);
+        assert_eq!(open.get(), None, "{width} wide: a click in the band opens no flyout");
+        fixture.click_at(first.center()).idle(3);
+        assert_eq!(open.get(), Some(1), "{width} wide: a click on the first icon below the band opens its flyout");
     }
 }
 
