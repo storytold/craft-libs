@@ -454,8 +454,12 @@ impl Converter<'_> {
     /// is anchored doesn't reach into it, and comes back after it.
     pub(crate) fn apart<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> T {
         let link = self.link.take();
+        // a tracked deletion doesn't run into or out of a story of its own (a note whose
+        // deletion never ends would otherwise leave the body's text after it unread)
+        let in_delete = std::mem::replace(&mut self.in_delete, false);
         let out = read(self);
         self.link = link;
+        self.in_delete = in_delete;
         out
     }
 
@@ -481,7 +485,7 @@ impl Converter<'_> {
         let mut blocks = std::mem::take(&mut acc.blocks);
         if !acc.items.is_empty() || blocks.is_empty() {
             let page_break = ctx.page_break && acc.first;
-            blocks.push(Blk::P(Box::new(self.para_with(&ctx, page_break, std::mem::take(&mut acc.items)))));
+            blocks.push(Blk::P(Box::new(self.para_with(&ctx, page_break, acc.first, std::mem::take(&mut acc.items)))));
         }
         if cell_last
             && ctx.text_only
@@ -515,11 +519,19 @@ impl Converter<'_> {
         out
     }
 
-    /// A paragraph of `ctx`'s shape holding `items`.
-    fn para_with(&mut self, ctx: &ParaCtx, page_break: bool, items: Vec<Item>) -> P {
+    /// A paragraph of `ctx`'s shape holding `items`: the source paragraph's `first` piece, or one
+    /// after a table it holds.
+    fn para_with(&mut self, ctx: &ParaCtx, page_break: bool, first: bool, items: Vec<Item>) -> P {
         let (mut props, spacing) = self.para_props(&ctx.pp, ctx.font_h, page_break, true, ctx.trim, ctx.text_only);
+        let style = ctx.style_id.as_deref().and_then(|sid| self.h.style(num(Some(sid))));
+        if !first {
+            // the shape's page break went before the first piece: a later one, after a table in
+            // the same source paragraph, doesn't break again (nor take its style's break)
+            let style_breaks = style.is_some_and(|st| self.h.para_pr(Some(&st.para_pr.to_string())).page_break_before);
+            props.page_break_before = (ctx.pp.page_break_before || style_breaks).then_some(false);
+        }
         if let Some(sid) = ctx.style_id.as_deref()
-            && self.h.style(num(Some(sid))).is_some()
+            && style.is_some()
         {
             props.style = Some(props::style_id(num(Some(sid))));
         }
@@ -688,7 +700,7 @@ impl Converter<'_> {
             let p = if floating_only && !page_break && !ctx.pp.page_break_before {
                 P { items, ..P::tiny() }
             } else {
-                self.para_with(ctx, page_break, items)
+                self.para_with(ctx, page_break, acc.first, items)
             };
             acc.blocks.push(Blk::P(Box::new(p)));
             acc.first = false;

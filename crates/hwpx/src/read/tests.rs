@@ -156,6 +156,34 @@ fn switches_in_branches_and_the_text_after_them_are_read() {
     assert!(text.contains('뒤'), "the text after the switch: {text:?}");
 }
 
+/// A note whose tracked deletion never ends (a damaged file) doesn't take the body's text after
+/// it into the deletion. Before, the deletion state came back with the body.
+#[test]
+fn a_deletion_left_open_in_a_note_stays_in_the_note() {
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:t>앞</hp:t><hp:ctrl><hp:footNote><hp:subList><hp:p><hp:run><hp:t><hp:deleteBegin/>지운 글</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl><hp:t>뒤</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let text = body_text(&read_bytes(&hwpx(&sec)).unwrap());
+    assert!(text.contains('뒤'), "the body's text after the note: {text:?}");
+}
+
+/// A paragraph whose shape breaks the page before it, holding a table and then text, breaks
+/// the page once, before the table. Before, the text after the table broke the page again.
+#[test]
+fn a_page_break_before_a_paragraph_holding_a_table_comes_once() {
+    let head = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:refList><hh:paraProperties itemCnt="2"><hh:paraPr id="0"/><hh:paraPr id="1"><hh:breakSetting pageBreakBefore="1"/></hh:paraPr></hh:paraProperties></hh:refList></hh:head>"#;
+    let tbl = r#"<hp:tbl rowCnt="1" colCnt="1"><hp:sz width="10000" height="2000"/><hp:pos treatAsChar="0"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="10000" height="2000"/></hp:tc></hp:tr></hp:tbl>"#;
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p paraPrIDRef="0"><hp:run><hp:t>첫 문단</hp:t></hp:run></hp:p><hp:p paraPrIDRef="1"><hp:run>{tbl}<hp:t>표 뒤 글</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx_with(head, &sec)).unwrap();
+    let breaks = doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.page_break_before == Some(true)).count();
+    assert!(doc.body.iter().any(|b| b.as_table().is_some()), "the table is a block");
+    assert_eq!(breaks, 1, "one page break");
+    let after = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.contains("표 뒤 글")).expect("the text after the table");
+    assert_ne!(after.props.page_break_before, Some(true), "not before the text after the table");
+}
+
 #[test]
 fn package_finds_sections() {
     let bytes = hwpx(&format!(r#"<hs:sec {NS}><hp:p/></hs:sec>"#));
