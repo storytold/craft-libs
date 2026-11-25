@@ -2,7 +2,9 @@
 
 use crate::Kind;
 
-/// How many leading bytes [`identify`] reads at most. Every signature it knows lies within them.
+/// How many leading bytes [`identify`] reads at most. Every signature it knows lies within them,
+/// except for container formats like OpenRaster whose distinguishing payload may be pushed past
+/// this window by variable-length ZIP extra fields (which fall back to [`Kind::Zip`]).
 pub const HEAD: usize = 4096;
 
 /// The largest universal Mach-O architecture count taken as Mach-O rather than a Java class.
@@ -24,6 +26,11 @@ const TS_SYNC: u8 = 0x47;
 /// before the weaker ones further in or built from few bits (TAR at byte 257, MP3 and AAC frame
 /// headers, MPEG transport stream packets), so a file is never named by a weak signature when a
 /// strong one matches.
+///
+/// OpenRaster (`.ora`) archives require an uncompressed `mimetype` entry as their first file,
+/// but permit variable-length ZIP extra fields. If ZIP metadata pushes the `image/openraster`
+/// payload beyond [`HEAD`] bytes, `identify` falls back to [`Kind::Zip`] as an intentionally
+/// bounded format hint rather than reading an unbounded stream.
 ///
 /// `CAFEBABE` starts both a universal Mach-O and a Java class file. The next big-endian 32-bit
 /// value is a Mach-O architecture count or a class file's version: up to 44 is taken as
@@ -102,7 +109,7 @@ fn checked(b: &[u8]) -> Option<Kind> {
 }
 
 /// `PK\x03\x04`: an OpenRaster archive when the first entry is a stored `mimetype` holding
-/// `image/openraster`, otherwise [`Kind::Zip`].
+/// `image/openraster` within [`HEAD`], otherwise [`Kind::Zip`].
 fn zip(b: &[u8]) -> Kind {
     if is_ora(b) { Kind::Ora } else { Kind::Zip }
 }
