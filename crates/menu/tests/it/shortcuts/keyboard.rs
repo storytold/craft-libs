@@ -9,6 +9,14 @@ use egui::Shape;
 
 use super::fixture::Rig;
 
+/// The pane as an app that wants it readable opens it: a size of its own in the rig's 1000 by 700 point window, and a least
+/// height for the keys.
+fn pane_like_an_app(options: &mut craft_menu::shortcuts::Options) {
+    options.keyboard = true;
+    options.size = Some(egui::vec2(900.0, 620.0));
+    options.keyboard_height = Some(250.0);
+}
+
 /// The key named `name` on the pane (its node is a button of that name).
 fn cap(rig: &Rig, name: &str) -> Target {
     rig.named(name, Role::BUTTON)
@@ -29,17 +37,18 @@ fn filled(shapes: &[Shape]) -> Vec<(egui::Rect, egui::Color32)> {
 /// beside the whole block of keys, not between them.
 #[trial]
 fn the_keyboard_keeps_readable_keys_beside_the_key_list() {
-    let rig = Rig::tuned(Platform::Windows, |options| options.keyboard = true);
+    let rig = Rig::tuned(Platform::Windows, pane_like_an_app);
     let q = cap(&rig, "Q").rect;
     assert!(q.width() >= 24.0 && q.height() >= 24.0, "a key stays readable: {q:?}");
     let hint = rig.fixture.texts().iter().find(|text| text.text.starts_with("Click a key")).expect("the hint").rect;
-    assert!(hint.left() > q.left() + 18.0 * q.width(), "the hint stands beside the whole block of keys (a key is {q:?}): {hint:?}");
+    // Q starts 1.5 units in and the block is 18.5 units wide, so the block ends 17 key widths past Q's left edge.
+    assert!(hint.left() > q.left() + 17.0 * q.width(), "the hint stands beside the whole block of keys (a key is {q:?}): {hint:?}");
 }
 
 /// Keys are painted with a fill of their own, and the legend words stand on fills too.
 #[trial]
 fn keys_and_the_legend_are_filled() {
-    let mut rig = Rig::tuned(Platform::Windows, |options| options.keyboard = true);
+    let mut rig = Rig::tuned(Platform::Windows, pane_like_an_app);
     let q = cap(&rig, "Q").rect;
     let legend = rig.fixture.texts().iter().find(|text| text.text == "Application").expect("the legend word Application").rect;
     let fills = filled(&rig.fixture.frame_shapes());
