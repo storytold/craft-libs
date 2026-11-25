@@ -9,8 +9,8 @@ use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules,
 use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine, SnapSuspend};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
-    Axis, CancelReason, CanvasView, Cursor, CursorBadge, CursorIcon, CursorPriority, GesturePhase, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape,
-    PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
+    Axis, CancelReason, CanvasView, Cursor, CursorBadge, CursorIcon, CursorPriority, GesturePhase, HitLevel, HitPriority, HitShape, Intent, Metrics,
+    NavShape, PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasSpace, GestureSnap, Snap, canvas_snap, canvas_space, readout};
@@ -715,7 +715,9 @@ impl<'a> TransformBox<'a> {
             && self.move_only().is_none()
             && match part {
                 BoxPart::Inside => true,
-                BoxPart::Outside => !matches!(self.rotate_zone, RotateZone::Knob | RotateZone::Handle) && self.rotate_zone.rotates_at(&screen.quad, at),
+                BoxPart::Outside => {
+                    !matches!(self.rotate_zone, RotateZone::Knob | RotateZone::Handle) && self.rotate_zone.rotates_at(&screen.quad, at)
+                }
                 _ => false,
             }
     }
