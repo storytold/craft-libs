@@ -8,7 +8,7 @@ use craft_ui::contract::{Bind, BodyCx, PlainData, Role, ShowContainer as _, Trac
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, PanelSpecs, WindowMenuRows};
 use craft_ui::menu::{Menu, PanelRow};
 use craft_ui::patterns::dock::DockArea;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,6 +35,38 @@ impl DockPanels<usize> for Panels {
     }
 }
 
+/// A host with no rows of its own.
+struct Bare;
+
+impl DockPanels<usize> for Bare {
+    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
+}
+
+/// The panel menu buttons a dock of two groups shows with `config`, for a host that gives no rows.
+fn menu_buttons(config: DockConfig) -> (Fixture, Vec<Target>) {
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![2, 3], 0));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let specs = Tracked::new(Specs);
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Bare, config.clone()).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle();
+    let buttons = fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
+    (fixture, buttons)
+}
+
+/// A panel with no rows of its own shows no menu button, unless the dock shows the button on every group; that
+/// button's menu holds the dock's own rows.
+#[trial]
+fn a_dock_that_shows_the_panel_menu_always_gives_every_group_the_button() {
+    let (_, hidden) = menu_buttons(DockConfig::default());
+    assert!(hidden.is_empty(), "no button for panels without rows");
+    let (mut fixture, shown) = menu_buttons(DockConfig::default().panel_menu_always(true));
+    assert_eq!(shown.len(), 2, "each group shows its panel menu button");
+    fixture.click(&shown[0]).idle(2);
+    assert!(fixture.by_label("Float").is_some(), "the menu holds the dock's own rows");
+}
+
 /// With the first group's tabs focused, Float in the second group's panel menu floats the second group's panel.
 #[trial]
 fn a_panel_menu_command_reaches_the_group_whose_button_opened_it() {
@@ -47,8 +79,9 @@ fn a_panel_menu_command_reaches_the_group_whose_button_opened_it() {
         *held.borrow_mut() = shown;
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle();
-    let first = fixture.by_label("Panel 0").expect("the first group's tab");
-    fixture.click(&first).idle(1);
+    // Tab from nothing focuses the first group's tabs; a click on a tab leaves focus where it is.
+    fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+    assert!(fixture.focused_stop().is_some(), "Tab focused the first group's tabs");
     let buttons: Vec<_> =
         fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
     assert_eq!(buttons.len(), 2, "each group shows its panel menu button");
@@ -71,8 +104,9 @@ fn tab_reaches_the_tabs_then_the_drag_band_then_the_panel_menu_button() {
         DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(800.0, 600.0)).settle();
-    let tab = fixture.by_label("Panel 0").expect("the group's tab");
-    fixture.click(&tab).idle(1);
+    // Tab from nothing reaches the tabs first.
+    fixture.key(Key::Tab, Modifiers::NONE).idle(1);
+    assert!(fixture.focused_stop().is_some(), "Tab focused the tabs");
     let mut parts = Vec::new();
     for _ in 0..2 {
         fixture.key(Key::Tab, Modifiers::NONE).idle(1);

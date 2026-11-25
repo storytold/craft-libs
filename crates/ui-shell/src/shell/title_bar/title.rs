@@ -110,7 +110,9 @@ impl Arrangement for Gap {
         let room_start = self.body_width - room.width();
         let (from, width) = Title::span(self.centre - room_start - self.margin, free, size.x);
         out.push(Rect::from_min_size(room.min + vec2(self.margin + from, (room.height() - size.y) / 2.0), vec2(width, size.y)));
-        vec2(room.width(), size.y)
+        // The title takes no width of its own: it lies in what the leading content leaves, so a member that fills the
+        // row (a document tab strip) takes the free width and the title the rest, if any.
+        vec2(0.0, size.y)
     }
 }
 

@@ -14,13 +14,13 @@
 //! two happened, once, between the UI thread and the transport.
 
 use std::sync::mpsc::{Receiver, Sender};
-use web_time::Instant;
 
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
+use web_time::Instant;
 
-use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotRequest, screenshot_reply};
+use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotParams, ScreenshotRequest, screenshot_reply};
 use crate::synthetic::TARGET_CHANGED;
 
 /// A reply: the JSON object the transport writes as one line.
@@ -112,13 +112,16 @@ pub enum Reply {
     /// Reply with this JSON now.
     Done(Value),
     /// A `ui.screenshot`: admit `token` to the queue; `path` is where the app's write authority
-    /// puts the PNG, `None` inlines it as base64 in the reply.
+    /// puts the PNG, `None` inlines it as base64 in the reply; `region` is refused at admission
+    /// when it lies outside the window.
     #[non_exhaustive]
     Screenshot {
         /// Identifies the capture; must differ from every pending token.
         token: u64,
         /// File to write the PNG to, or `None` to inline it.
         path: Option<String>,
+        /// The part of the window to capture, in points; `None` captures the whole window.
+        region: Option<egui::Rect>,
         /// The viewport to capture.
         viewport: egui::ViewportId,
     },
@@ -138,10 +141,10 @@ impl Reply {
         Reply::AccessTree
     }
 
-    /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
-    /// when `None`.
-    pub fn screenshot(token: u64, path: Option<String>, viewport: egui::ViewportId) -> Self {
-        Self::Screenshot { token, path, viewport }
+    /// A `ui.screenshot` reply for `token` of `viewport` with what [`ScreenshotParams::from_params`] read: the PNG
+    /// goes to `params.path` or is inlined when `None`, and shows `params.region` or the whole window.
+    pub fn screenshot(token: u64, params: ScreenshotParams, viewport: egui::ViewportId) -> Self {
+        Self::Screenshot { token, path: params.path, region: params.region, viewport }
     }
 
     /// `Done` with the [`result_reply`] of a method's result.
@@ -207,8 +210,9 @@ impl ControlChannel {
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::AccessTree => self.tree_waiters.push(reply),
-            Reply::Screenshot { token, path, viewport } => {
-                if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
+            Reply::Screenshot { token, path, region, viewport } => {
+                let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
+                if let Err((reply, e)) = self.captures.admit(request, motion::now()) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }
@@ -238,8 +242,10 @@ impl ControlChannel {
     /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]), with success
     /// once nothing is queued or in flight. Call it once per pass, at the end of the pass (after its
     /// UI ran): the step that pass consumed counts as run, so the reply goes out with that pass
-    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass.
+    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass. It also has the host
+    /// keep its access trees, which `control` targets and `ui.find` read.
     pub fn poll_input(&mut self, host: &WindowHost) {
+        host.keep_access_trees();
         if host.take_injected_withdrawn() {
             self.input_cancelled(TARGET_CHANGED);
         } else if host.injected_idle_at_pass_end() {
@@ -255,7 +261,8 @@ impl ControlChannel {
             return;
         }
         // `ui.accessTree` takes no window: it reads the main window's tree.
-        let Some(update) = WindowHost::of(ctx).access_tree(egui::ViewportId::ROOT) else { return };
+        let Some(tree) = WindowHost::of(ctx).access_tree(egui::ViewportId::ROOT) else { return };
+        let update = tree.update();
         let nodes: Vec<Value> = update
             .nodes
             .iter()
@@ -313,7 +320,7 @@ impl ControlChannel {
     pub fn finish_captures(&mut self, finished: Vec<Finished>, write: &mut crate::screenshot::PngWriter<'_>) {
         for f in finished {
             let reply = match f.result {
-                Ok(image) => screenshot_reply(f.token, image, f.path.as_deref(), write),
+                Ok(image) => screenshot_reply(f.token, image, f.region, f.geometry, f.path.as_deref(), write),
                 Err(e) => json!({"ok": false, "error": e}),
             };
             if let Some(tx) = f.reply {

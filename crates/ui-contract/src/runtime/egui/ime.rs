@@ -27,14 +27,14 @@ pub(crate) enum Raw {
     ResetRetired(egui::ImeResetId),
 }
 
-/// Removes the IME events from `events`, and the other events `drop` names, and returns the IME events in order, each
-/// with its place: how many of the events left in `events` arrived before it. The key stage numbers the events it
-/// reads by the same places (`keys::input_hook`), so an editor gets the two in the order they arrived.
-pub(crate) fn take_events(events: &mut Vec<Arrived>, take: bool, drop: impl Fn(&Event) -> bool) -> Vec<(Raw, usize)> {
+/// Removes the IME events `take` names from `events`, and the other events `drop` names, and returns the IME events
+/// in order, each with its place: how many of the events left in `events` arrived before it. The key stage numbers the
+/// events it reads by the same places (`keys::input_hook`), so an editor gets the two in the order they arrived.
+pub(crate) fn take_events(events: &mut Vec<Arrived>, take: impl Fn(&Event) -> bool, drop: impl Fn(&Event) -> bool) -> Vec<(Raw, usize)> {
     let mut taken = Vec::new();
     let mut kept = 0;
     events.retain(|Arrived { event, .. }| {
-        if let Some(raw) = take.then(|| raw_of(event)).flatten() {
+        if let Some(raw) = take(event).then(|| raw_of(event)).flatten() {
             taken.extend(raw.map(|raw| (raw, kept)));
             return false;
         }
@@ -43,6 +43,12 @@ pub(crate) fn take_events(events: &mut Vec<Arrived>, take: bool, drop: impl Fn(&
         keep
     });
     taken
+}
+
+/// The IME event `event` is, as the engine reads it, for the engine to follow an app's own editor through the events
+/// it leaves to egui.
+pub(crate) fn read(event: &Event) -> Option<Raw> {
+    raw_of(event).flatten()
 }
 
 /// What the IME engine reads from `event`: `None` for an event that is not the engine's, `Some(None)` for one it takes
@@ -99,6 +105,21 @@ pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) -> Option<
         ime.surrounding_text = out.surrounding;
         ime.change_cause = out.cause;
         output.ime = Some(ime);
+    });
+    reset
+}
+
+/// Interrupts the composition of the IME output the app's own editor wrote this pass, in its context, and asks for a
+/// reset. An editor that asked for its own reset in that output keeps its request, so the platform answers the app's
+/// id and the app gets its completion. Returns the reset request the output carries, as `write` does.
+pub(crate) fn interrupt_written(ctx: &Context, viewport: ViewportId) -> Option<egui::ImeResetId> {
+    let written = ctx.output(|output| output.ime.as_ref().and_then(|ime| ime.reset_request));
+    let reset = written.or_else(|| ctx.request_ime_reset(viewport));
+    ctx.output_mut(|output| {
+        if let Some(ime) = &mut output.ime {
+            ime.should_interrupt_composition = true;
+            ime.reset_request = reset;
+        }
     });
     reset
 }

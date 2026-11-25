@@ -267,6 +267,12 @@ pub fn icon_names() -> &'static [&'static str] {
     svg_set::names()
 }
 
+/// Paints `spec` centred in `rect` as components do, so a [`Glyph`] (which gets a raw `Painter`) can draw a set icon
+/// inside its own drawing: in its enabled inks, on the surface its own `ink` names. `Draw::icon` adds the badge.
+pub fn paint_icon(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>) {
+    paint(painter, tokens, direction, rect, spec, false, false);
+}
+
 /// Paints `spec`'s glyph centred in the square of `rect`'s shorter side; `Draw::icon` adds the badge. `single_ink` paints
 /// every layer of an app icon in the one colour: the icon of a component in its disabled state. `on_dark` is whether
 /// the icon stands on a strong fill or scrim (the surface's ink is `Ink::OnDark`): its accent parts then paint in the
@@ -351,6 +357,8 @@ impl SvgIcon {
 
     /// Paints the icon centred in `square`, on whole pixels, each layer in its ink of `inks`. A catalog icon has only
     /// the ink layer; an app icon also paints its accent and fixed parts over it. A layer with no part is not painted.
+    /// An app icon with a fill (`AppIcons::with_fills`) paints it under every layer, in the fill's own colour whatever
+    /// the inks.
     pub(crate) fn paint_layers(&self, painter: &Painter, square: Rect, inks: LayerInks) {
         let ctx = painter.ctx();
         let ppp = ctx.pixels_per_point();
@@ -359,6 +367,13 @@ impl SvgIcon {
         let min = (square.center() - vec2(side, side) / 2.0).round_to_pixels(ppp);
         let rect = Rect::from_min_size(min, vec2(side, side));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        if let Some((svg, [r, g, b, a])) = svg_set::fill_of(self.entry) {
+            // The fill's key type keeps its texture apart from the layers'.
+            let key = (self.entry, self.set, px, stroke_px, self.mirrored, true);
+            let texture = TextureCache::texture(ctx, key, || svg_set::rasterise_fill(svg, px));
+            let tint = Color32::from_rgba_unmultiplied(r, g, b, a);
+            crate::runtime::egui::textures::paint(painter, texture, rect, uv, tint, egui::CornerRadius::ZERO);
+        }
         let fixed = match inks.fixed {
             Some(color) => (svg_set::Layer::FixedMask, color),
             // design: allow[raw-colour/const](a fixed layer keeps the colours it is drawn in: a white tint leaves them unchanged)

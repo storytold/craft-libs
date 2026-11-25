@@ -72,16 +72,14 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
     assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "the focus is back on Edit Toolbar");
 }
 
-/// A tool already on the toolbar is dimmed and does not drag; a tool that is not on it drags to the rail.
-#[trial]
-fn only_a_tool_off_the_toolbar_drags() {
+/// Whether `label`'s row of the drawer `story` (opened from the rail's Edit Toolbar button) starts a drag, for each label.
+fn drawer_drags(story: &str, labels: &[&str]) -> Vec<bool> {
     let registry = Registry::of(&[craft_ui::testing::register]);
-    let entry = registry.stories().iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
+    let entry = registry.stories().iter().find(|entry| entry.story.name == story).expect("the drawer story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
     let opener = fixture.by_label("Edit Toolbar").expect("the rail's Edit Toolbar button");
     fixture.click(&opener).settle();
-    // Pencil is on the toolbar behind Brush, so its only button is the drawer's row.
     let drags = |fixture: &mut Fixture, label: &str| {
         let row = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
         let before = drag::started(fixture.ctx());
@@ -90,8 +88,40 @@ fn only_a_tool_off_the_toolbar_drags() {
         fixture.release_at(row.center() + Vec2::new(0.0, 30.0)).settle();
         started
     };
-    assert!(!drags(&mut fixture, "Pencil"), "Pencil is on the toolbar");
-    assert!(drags(&mut fixture, "Eraser"), "Eraser is not");
+    labels.iter().map(|label| drags(&mut fixture, label)).collect()
+}
+
+/// By default a tool already on the toolbar, grouped behind another tool too, is dimmed and does not drag; a tool that
+/// is not on it drags to the rail.
+#[trial]
+fn only_a_tool_off_the_toolbar_drags() {
+    // Pencil is on the toolbar behind Brush.
+    assert_eq!(drawer_drags("toolbar_drawer", &["Pencil", "Eraser"]), [false, true], "Pencil is on the toolbar, Eraser is not");
+}
+
+/// With `grouped_tools_drag` (PdfCraft's drawer) a grouped tool can also be dragged from the drawer into its own slot.
+#[trial]
+fn a_grouped_tool_also_drags_from_the_drawer() {
+    // Pencil is on the toolbar behind Brush, so its only button is the drawer's row.
+    assert_eq!(
+        drawer_drags("toolbar_drawer_with_grouped_tools_dragging", &["Pencil", "Eraser"]),
+        [true, true],
+        "Pencil can also have its own slot; Eraser is off the toolbar"
+    );
+}
+
+#[trial]
+fn adding_a_grouped_tool_keeps_the_group_entry() {
+    let slots = [slot(0, &[UNDO, REDO])];
+    let edit = ToolbarEdit::add(tool(REDO), DropAt::new_slot(1));
+    let result = apply_toolbar_edit(&slots, &edit, &[]);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].tools.len(), 2);
+    assert_eq!(result[1].tools[0].id, REDO);
+    let removed = apply_toolbar_edit(&result, &ToolbarEdit::remove_from(result[1].id, 0), &[]);
+    assert_eq!(layout(&removed), layout(&slots), "removing the separate occurrence preserves the group");
+    let moved = apply_toolbar_edit(&result, &ToolbarEdit::move_from(result[1].id, 0, DropAt::new_slot(0)), &[]);
+    assert_eq!(moved[1].tools.len(), 2, "moving the separate occurrence preserves the group");
 }
 
 /// A click on a tool reports it as the one to select and leaves no row selected: the drawer's rows pick, they do not
@@ -155,4 +185,64 @@ fn the_drawer_opens_on_the_side_it_is_given() {
         let away = if opens == Side::Start { row.right() <= rail.left() } else { row.left() >= rail.right() };
         assert!(away, "{opens:?}: the drawer row {row:?} lies on that side of the rail {rail:?}");
     }
+}
+
+/// With two groups of tools the list holds heading rows between the tools, so a tool's key is not its flat index: a
+/// revealed tool far down the list scrolls into the drawer's room, and only a marked tool wears the mark.
+#[trial]
+fn a_revealed_tool_scrolls_into_view_and_wears_the_mark() {
+    use craft_ui::contract::Role;
+    use craft_ui::display::TargetMark;
+    use craft_ui::rails::{DrawerGroup, ToolbarDrawer};
+    use egui::{Pos2, Rect};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    const ROOM: Vec2 = Vec2::new(480.0, 240.0);
+    let shown = |marked: bool| {
+        let pending = Rc::new(Cell::new(true));
+        let mut fixture = Fixture::new(move |ui| {
+            let ids = |from: u8, to: u8| (from..to).map(tool).collect::<Vec<_>>();
+            let mut second = ids(30, 49);
+            second.push(tool(CUT));
+            let groups = [DrawerGroup::new("First", ids(10, 30)), DrawerGroup::new("Second", second)];
+            let toolbar = [slot(0, &[UNDO])];
+            let rail = Rect::from_min_size(Pos2::ZERO, Vec2::new(48.0, ROOM.y));
+            let target = CUT;
+            let mut drawer = ToolbarDrawer::new(rail, &groups, &toolbar, None);
+            if pending.replace(false) {
+                drawer = drawer.reveal(&target);
+            }
+            if marked {
+                drawer = drawer.mark(&target);
+            }
+            drawer.show(ui);
+        });
+        fixture.room(ROOM).idle(60);
+        // The drawer is a popover over the window, which is larger than the room: its list scrolls inside it.
+        let drawer = fixture.by_role(Role::DIALOG).first().expect("the drawer is open").rect;
+        let row = fixture.by_label("Cut").expect("the revealed tool's row is shown").rect;
+        (drawer, row, !fixture.styles_of(std::any::type_name::<TargetMark>()).is_empty())
+    };
+    let (drawer, row, marked) = shown(true);
+    assert!(drawer.contains_rect(row), "the revealed row {row:?} lies inside the drawer {drawer:?}");
+    assert!(marked, "the marked tool wears the mark");
+    let (_, _, unmarked) = shown(false);
+    assert!(!unmarked, "without a mark no ring is drawn");
+}
+
+// The Edit Toolbar button takes the app's icon (production shows a settings gear, not an ellipsis) and stays one named,
+// working button.
+#[trial]
+fn the_edit_toolbar_button_takes_the_apps_icon() {
+    use craft_ui::rails::{LastUsed, ToolRail};
+    let slots = Tracked::new(vec![slot(0, &[UNDO])]);
+    let last = Tracked::new(LastUsed::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ToolRail::new("Tools", &slots, &UNDO, &last)
+            .edit_toolbar("Customize")
+            .edit_icon(craft_behavior::IconId::new("settings"))
+            .show_rail(ui, |_, _| {});
+    });
+    fixture.idle(12);
+    assert!(fixture.by_label("Customize").is_some(), "the button keeps its name with another icon");
 }

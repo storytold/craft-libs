@@ -36,6 +36,7 @@ mod app_values;
 mod host_words;
 mod overrides;
 mod root;
+mod scrub;
 pub(crate) mod system;
 pub(crate) mod tokens;
 mod values;
@@ -44,9 +45,10 @@ mod view;
 pub use app_values::{AppValues, EnvValue, StyleValue};
 pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, in_room, with_env};
 pub use root::{ResolvedRoot, RootEnv};
-pub use system::{SystemState, system_appearance};
+pub use scrub::ScrubDrags;
+pub use system::{SystemState, system_appearance, system_text_scale};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
@@ -76,7 +78,8 @@ pub(crate) struct FooterSlotOf {
 }
 
 /// The flow facts of the body around a memoized view that its content is laid out by: whether that body is a
-/// content-sized or a given column, the axes it sizes from its content, whether the view runs in a least measure, the
+/// content-sized or a given column, the axes it sizes from its content, the axis it shares among the children that fill
+/// it, whether the view runs in a least measure, the
 /// axes a scrolling body leaves unbounded, whether it fills a beside label's cell and whether its leaves fit the view's
 /// room (`Scoped::view_fits`). A measuring run of a container or a row lays the view out under other facts than its
 /// real run, so they are a fact of the view's place, which each kind of run compares on its own (`lazy::Place`,
@@ -86,6 +89,7 @@ pub(crate) struct Flow {
     content_column: bool,
     given_column: bool,
     content: (bool, bool),
+    shares: Option<craft_behavior::Axis>,
     least: bool,
     unbounded: (bool, bool),
     cell_fills: bool,
@@ -151,6 +155,10 @@ pub struct Scoped {
     /// The width a `Row` body was offered this pass, before its `End` or `Center` lead narrowed the block: the room
     /// its direct children share. Only the row's own children read it.
     pub(crate) row_room: Option<f32>,
+    /// How far the ranked units of the first `Row` body below give way before its other drops: the row drops them
+    /// until the kept units fit in its ideal width less this, an end region that joins its body's fit
+    /// (`EndRegion::fit`) giving up the body's shortfall. That row's children do not read it.
+    pub(crate) rank_short: Option<f32>,
     /// The line of the unwrapped `Row` body whose direct children the scope places in flow (`RowLine`).
     pub(crate) row_line: Option<RowLine>,
     /// Where the first child the scope places in flow reports its first line: a container's header or body
@@ -159,6 +167,9 @@ pub struct Scoped {
     /// The body whose flow places the scope's direct children: the flow start a child reads (`layout::flow_start`)
     /// and the one a child placed in flow closes.
     pub(crate) flow_body: Option<Id>,
+    /// The `Stack` body that places the scope's direct children in flow and the gap it leaves between them; it holds
+    /// only while that body is `flow_body`.
+    pub(crate) stack_gap: Option<(Id, f32)>,
     /// A rule precedes the start of the body this scope opens: its container draws one under its header, or draws
     /// nothing of its own and itself follows one. The body's layout opens its flow start with it.
     pub(crate) after_rule: bool,
@@ -178,6 +189,10 @@ pub struct Scoped {
     /// extents of the other children and the gaps, over the number of children that fill. `None` while the body is
     /// measured, and without a measuring run of this pass.
     pub(crate) fill_share: Option<f32>,
+    /// The memoized view whose content the scope's direct children run in, with the axis the body around that view
+    /// shares (its `fill_body`'s): a child given that axis to fill tells the view (`layout::fill_size`), which then is
+    /// a child that fills that body (`contract::lazy`).
+    pub(crate) fill_view: Option<(Id, craft_behavior::Axis)>,
     /// The shrink step of the unwrapped `Row` or `Stack` body that encloses the scope, as its direct children in flow
     /// take part in it.
     pub(crate) shrink: Option<Shrink>,
@@ -198,6 +213,8 @@ pub struct Scoped {
     /// The innermost scrolling body that encloses the scope: a collection under it owns no scroll of its own, and
     /// page and end moves a component leaves untaken go to it.
     pub(crate) scroll_owner: Option<ScrollOwner>,
+    /// The enclosing region's fallback collection for unused moves.
+    pub(crate) fallback_collection: Option<Id>,
     /// The axes (horizontal, vertical) the innermost scrolling body scrolls on: the room along them is unbounded, so
     /// a child that fills there takes its content size, except the children that fill the main axis of a body that
     /// shares it: they share what the view shows, at least their content size (`layout::view_room`).
@@ -257,6 +274,14 @@ pub struct Inherited {
     pub(crate) today: Option<CalendarDate>,
     /// `RootEnv::tab_toggles_chrome`.
     pub(crate) tab_toggles_chrome: bool,
+    /// `RootEnv::escape_leaves_fields`.
+    pub(crate) escape_leaves_fields: bool,
+    /// `RootEnv::shortcuts_repeat`: the key stage reads only it, so no view's key covers it.
+    pub(crate) shortcuts_repeat: bool,
+    /// `RootEnv::cursor_follows_zoom`: painted cursor images follow the interface zoom.
+    pub(crate) cursor_follows_zoom: bool,
+    /// `RootEnv::tooltips`: tooltips show.
+    pub(crate) tooltips: bool,
     /// `RootEnv::canvas_pattern`: the canvas surround shows the theme's pattern.
     #[doc(hidden)]
     pub canvas_pattern: bool,
@@ -298,7 +323,7 @@ pub(crate) enum Shrink {
     /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
     /// at the level the row gave it.
     Apply(Id),
-    /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
+    /// A `Stack` body or a wrapping `Row`: each leaf shows at most the room (a whole line), never below its least.
     Fit,
 }
 
@@ -400,14 +425,22 @@ impl Scoped {
 
     /// Starts a layer from its opener's scope: the inherited group stays, the layer-local fields start fresh, and the
     /// layer is no line of a bar it was opened from. A layer's content measures and runs in this.
+    ///
+    /// The layer is outside its opener's flow: an inside label and a filling cell belong to the beside label's own
+    /// control, and the opener's least measure is not the layer's. A tooltip of a control in an inspector cell keeps
+    /// its text width, not the layer's cap.
     pub(crate) fn start_layer(&mut self) {
         self.start_room();
+        self.inside_label = None;
+        self.cell_fills = false;
+        self.least = false;
         self.bracket = None;
         self.measure = None;
         self.arena = None;
         self.roving = None;
         self.transform = None;
         self.scroll_owner = None;
+        self.fallback_collection = None;
         self.wheel = WheelScope::Plain;
         self.unbounded = (false, false);
         self.lazy = None;
@@ -437,6 +470,7 @@ impl Scoped {
         self.column_row = false;
         self.fill_body = None;
         self.fill_share = None;
+        self.fill_view = None;
         self.shrink = None;
         self.column = None;
         self.offered = None;
@@ -456,6 +490,7 @@ impl Scoped {
             || self.column_row
             || self.fill_body.is_some()
             || self.fill_share.is_some()
+            || self.fill_view.is_some()
             || self.shrink.is_some()
             || self.column.is_some()
             || self.offered.is_some()
@@ -466,12 +501,17 @@ impl Scoped {
     /// content axes. The view's content then measures and
     /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
     /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
-    /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
-    /// content along x, as the row counted it: a child that fills there takes its measured width, not the row's flow
-    /// region a view the row does not narrow is shown in.
-    pub(crate) fn start_view_room(&mut self) {
+    /// content fit the room the view is given (`Shrink::Fit`).
+    ///
+    /// In a body that shares an axis among the children that fill it (`fill_body`), a direct child of the content
+    /// given that axis to fill tells the view `view` (`fill_view`): the view is then one of the children that fill the
+    /// body, given its share as its room, as the child shown without the view would be. A view that is a unit of a
+    /// shrinking `Row` that does not share its width sizes from its content along x, as the row counted it: a child
+    /// that fills there takes its measured width, not the row's flow region a view the row does not narrow is shown in.
+    pub(crate) fn start_view_room(&mut self, view: Id) {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
+        let shares = self.shares();
         let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
         // The view stands on the line of the row around it only to fill it, as a levelled unit does: a fill-width row in
         // it (a bar in a shell slot) takes the line's height and centres on it, as shown without the view; its children
@@ -480,17 +520,27 @@ impl Scoped {
         self.start_room();
         (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
         self.row_line = line;
+        self.fill_view = shares.map(|axis| (view, axis));
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
-        if row_unit {
+        if row_unit && shares != Some(craft_behavior::Axis::X) {
             self.content.0 = true;
         }
     }
 
-    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body,
-    /// whose leaves show at most its room, and as one of the units a shrinking `Row` narrows. In a `Grid` cell, a
-    /// wrapping `Row` or a `Ui` with no body around it a leaf keeps its measured width, and so does the view's content.
+    /// The axis the enclosing body shares among its direct children that fill it (`fill_body`).
+    pub(crate) const fn shares(&self) -> Option<craft_behavior::Axis> {
+        match self.fill_body {
+            Some((_, axis)) => Some(axis),
+            None => None,
+        }
+    }
+
+    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body
+    /// and a wrapping `Row`, whose leaves show at most its room (a whole line), and as one of the units a shrinking
+    /// `Row` narrows. In a `Grid` cell or a `Ui` with no body around it a leaf keeps its measured width, and so does the
+    /// view's content.
     pub(crate) const fn view_fits(&self) -> bool {
         matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_) | Shrink::Fit))
     }
@@ -517,7 +567,13 @@ impl Scoped {
             for id in self.commands.ids() {
                 id.key(&mut key);
             }
-            key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
+            key.feed_hash(&(
+                std::mem::discriminant(&self.motion.mode),
+                self.canvas_pattern,
+                self.tab_toggles_chrome,
+                self.escape_leaves_fields,
+                self.today,
+            ));
             (&self.format, &self.dates, &self.host).key(&mut key);
             let value_bytes = self.values.key(&mut key);
             #[cfg(feature = "testing")]
@@ -534,6 +590,7 @@ impl Scoped {
             content_column: self.content_column,
             given_column: self.given_column,
             content: self.content,
+            shares: self.shares(),
             least: self.least,
             unbounded: self.unbounded,
             cell_fills: self.cell_fills,
@@ -642,6 +699,10 @@ impl Env {
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
                     tab_toggles_chrome: root.tab_toggles_chrome,
+                    escape_leaves_fields: root.escape_leaves_fields,
+                    shortcuts_repeat: root.shortcuts_repeat,
+                    cursor_follows_zoom: root.cursor_follows_zoom,
+                    tooltips: root.tooltips,
                     canvas_pattern: root.canvas_pattern,
                     host,
                     values: root.values.clone(),
@@ -668,21 +729,25 @@ impl Env {
                 given_column: false,
                 content: (false, false),
                 row_room: None,
+                rank_short: None,
                 row_line: None,
                 first_line: None,
                 flow_body: None,
+                stack_gap: None,
                 after_rule: false,
                 column_row: false,
                 bracket: None,
                 footer_slot: None,
                 fill_body: None,
                 fill_share: None,
+                fill_view: None,
                 shrink: None,
                 column: None,
                 least: false,
                 offered: None,
                 measure: None,
                 scroll_owner: None,
+                fallback_collection: None,
                 unbounded: (false, false),
                 lazy: None,
                 item: None,

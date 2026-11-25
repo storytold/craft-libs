@@ -160,14 +160,16 @@ struct Entry {
 }
 
 /// What a run that showed a child measured: the extent it took, the key of the content it showed, the room it was
-/// offered (`Rect::NOTHING` for a collection row, whose extent its collection reports) and the flow of the body around
-/// it (the default for a collection row).
+/// offered (`Rect::NOTHING` for a collection row, whose extent its collection reports), the flow of the body around
+/// it (the default for a collection row) and the axis that body shares which a memoized view's content filled, which
+/// makes the view one of the children that fill the body (`layout::fill_size`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Measured {
     pub(crate) size: Vec2,
     pub(crate) key: Key,
     pub(crate) room: Rect,
     pub(crate) flow: Flow,
+    pub(crate) fills: Option<craft_behavior::Axis>,
 }
 
 /// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity, flow and environment,
@@ -457,6 +459,13 @@ pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, meas
     });
 }
 
+/// The axis the content of the memoized view `id` filled in its last run of this kind (`sizing`), else of the other
+/// kind: the run of this pass once one ran, else the kept one. `None` before any run showed it.
+pub(crate) fn fills(ctx: &Context, id: Id, sizing: bool) -> Option<craft_behavior::Axis> {
+    let (own, other) = (usize::from(!sizing), usize::from(sizing));
+    with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[own].or(entry.sizes[other])).and_then(|measured| measured.fills))
+}
+
 /// The extent the child `id` took in the last measuring or real run that showed it (this pass's measuring run once it
 /// ran), at whatever room it had; `None` before any run showed it.
 pub(crate) fn last_extent(ctx: &Context, id: Id) -> Option<Vec2> {
@@ -490,7 +499,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - the focus is where its run left it (`replay::Held`: the same stop and egui widget of it, or none), and while the
 ///   focus is in it no key, text, IME, clipboard or AccessKit event came (`Input::Sent`, which such a run reads);
 /// - none of its stops is the target of a focus request, now or in its last run;
-/// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes);
+/// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes), and no scroll
+///   move waits for a component in it (`moving`, the targets the contract's scroll owners queued);
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`), or,
 ///   replaying a run of this frame, after that run started;
 /// - the call's key is the one of its last run (its props key after that run), and its environment (theme, density,
@@ -502,14 +512,23 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no framework input its run read outside its props has moved (`runtime::inputs`), the scroll view a nested `Lazy`
 ///   child of it decided by is the same (moved with it, `moved`), no command waits for a command scope instance of
 ///   it, and no close waits for a layer it shows.
-pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, call: Call, view: Option<View>, key: Key) -> Option<(Vec2, Rect, RecordShift)> {
+pub(crate) fn settled(
+    ctx: &Context,
+    owner: Option<Id>,
+    id: Id,
+    call: Call,
+    view: Option<View>,
+    key: Key,
+    moving: &[Id],
+) -> Option<(Vec2, Rect, RecordShift)> {
     let (place, sizing, flow) = match call {
         Call::Real(place) => (Some(place), None, place.flow),
         Call::Measuring { room, flow } => (None, room, flow),
     };
     let real = place.is_some();
     let revealed = focus::targets(ctx)[1];
-    let routed = crate::runtime::keys::routed_to(ctx);
+    let mut routed = crate::runtime::keys::routed_to(ctx);
+    routed.extend_from_slice(moving);
     let now = frame::clock(ctx);
     let dragged = input_state::dragged(ctx);
     let focused = replay::Held::focused(ctx);
@@ -533,7 +552,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, call: Call, view
                         && !facts.discards
                         && facts.quiet(now, edited.as_ref())
                         && !settled.record.focus.stop_ids().any(|stop| revealed == Some(stop) || routed.contains(&stop))
-                        && !routed.iter().any(|id| settled.record.widgets.contains(id))
+                        && !routed.iter().any(|id| settled.record.widgets.contains(id) || settled.record.facts.node_owners.contains(id))
                         && !dragged.is_some_and(|widget| settled.record.widgets.contains(&widget))
                         && focused.within(&settled.record.focus, &settled.record.widgets) == settled.record.held
                 });
@@ -730,7 +749,7 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
 pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
     write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(Some(owner), id, frame);
-        entry.sizes[1] = Some(Measured { size, key: Key::None, room: Rect::NOTHING, flow: Flow::default() });
+        entry.sizes[1] = Some(Measured { size, key: Key::None, room: Rect::NOTHING, flow: Flow::default(), fills: None });
         entry.measured_in = Some(pass_nr);
     });
 }
