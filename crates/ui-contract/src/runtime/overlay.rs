@@ -566,15 +566,7 @@ fn reopened(ctx: &Context, id: Id, exiting: bool) -> bool {
 /// faded out and is open again. What the layer remembers starts fresh then; a discard pass that repeats the frame
 /// keeps what the first pass of the frame recorded.
 pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
-    appears_in(ctx, pass::current_viewport(ctx), id, exiting)
-}
-
-/// Whether the layer `id` appears in [`begin_layer`]'s pass of `viewport`, read before it: a layer shown in a popup
-/// window is stamped there, by the popup's own pass, so its host reads that viewport's record rather than its opener's,
-/// which stamps nothing for it. A layer that faded out is seen in the stack of the running pass, whose host shows the
-/// window that decides it.
-pub(crate) fn appears_in(ctx: &Context, viewport: ViewportId, id: Id, exiting: bool) -> bool {
-    reopened(ctx, id, exiting) || with_persist(ctx, viewport, |persist| !persist.appeared.contains_key(&id))
+    reopened(ctx, id, exiting) || with_persist(ctx, pass::current_viewport(ctx), |persist| !persist.appeared.contains_key(&id))
 }
 
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
@@ -631,17 +623,6 @@ pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side
 pub fn opening(ctx: &Context, id: Id) -> bool {
     let viewport = pass::current_viewport(ctx);
     let now = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
-    with_persist(ctx, viewport, |persist| persist.appeared.get(&id) == Some(&now))
-}
-
-/// Whether the layer `id` first ran its body in the pass `pass` of the popup window `viewport`, in the running frame: a
-/// layer shown in a popup window appears in the popup's pass, which runs inside its opener's, so the opener's pass reads
-/// it once that pass ended, where [`opening`] reads the layer's own. `pass_nr` of a passed viewport names the pass after
-/// the one that showed the layer, but the opener's pass reads the popup's number before it runs, which is the number the
-/// popup's begin pass stamps the layer with: the two numbers name one pass, so a layer that appeared in an earlier pass of
-/// the same frame (a discard) is not one that appears in this one.
-pub(crate) fn appeared_in_pass(ctx: &Context, viewport: ViewportId, id: Id, pass: u64) -> bool {
-    let now = (pass::root_frame_nr(ctx), pass);
     with_persist(ctx, viewport, |persist| persist.appeared.get(&id) == Some(&now))
 }
 
