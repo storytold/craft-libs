@@ -109,23 +109,12 @@ pub fn overflow(ui: &mut Ui, items: &[MenuItem], labels: &MenuLabels) -> Option<
     items_of(&hit, items)
 }
 
-/// Width of a split button's chevron half, as a share of the control height, so it follows
-/// density.
-const CHEVRON_WIDTH_PER_HEIGHT: f32 = 0.8;
-
 /// A primary action with a chevron beside it.
 ///
 /// The two halves are two controls. Pressing the label does the thing. Pressing
 /// the chevron offers the variations. One control that did both would leave a
 /// person guessing which half they had hit.
 pub fn split(ui: &mut Ui, primary: &str, items: &[MenuItem], labels: &MenuLabels) -> Option<SplitHit> {
-    split_named(ui, primary, primary, items, labels)
-}
-
-/// [`split`] for a primary action whose label leaves out what it acts on, as on each card of a
-/// list. `name` is the button's accessible name ("Install Hack" for "Install"), and starts with
-/// the label.
-pub fn split_named(ui: &mut Ui, primary: &str, name: &str, items: &[MenuItem], labels: &MenuLabels) -> Option<SplitHit> {
     let mut hit = None;
     ui.horizontal(|ui| {
         // The halves touch, so they read as one control with two parts. Square
@@ -144,28 +133,14 @@ pub fn split_named(ui: &mut Ui, primary: &str, name: &str, items: &[MenuItem], l
             (egui::CornerRadius { ne: 0, se: 0, ..radius }, egui::CornerRadius { nw: 0, sw: 0, ..radius })
         };
         let label = |ui: &mut Ui, hit: &mut Option<SplitHit>| {
-            let button = ui.add(egui::Button::new(primary).corner_radius(if backwards { inner } else { outer }));
-            if name != primary {
-                button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, button.enabled(), name));
-            }
-            if button.clicked() {
+            if ui.add(egui::Button::new(primary).corner_radius(if backwards { inner } else { outer })).clicked() {
                 *hit = Some(SplitHit::Primary);
             }
         };
         let chevron = |ui: &mut Ui, hit: &mut Option<SplitHit>| {
-            // Just room for the painted triangle, whatever padding and font the
-            // caller's style gives the label half.
-            let more = ui
-                .scope(|ui| {
-                    ui.spacing_mut().button_padding.x = 0.0;
-                    let corner = if backwards { outer } else { inner };
-                    let width = ui.spacing().interact_size.y * CHEVRON_WIDTH_PER_HEIGHT;
-                    ui.add(egui::Button::new("").min_size(egui::vec2(width, 0.0)).corner_radius(corner))
-                })
-                .inner;
-            // `chevron` paints 9 points in from the rect's right edge; centre it.
-            let at = more.rect.translate(egui::vec2(9.0 - more.rect.width() / 2.0, 0.0));
-            crate::buttons::chevron(ui, at, ui.visuals().text_color());
+            // Room for the triangle, which is painted rather than typed.
+            let more = ui.add(egui::Button::new("    ").corner_radius(if backwards { outer } else { inner }));
+            crate::buttons::chevron(ui, more.rect, ui.visuals().text_color());
             let name = labels.more_for.replace("{action}", &primary.to_lowercase());
             more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
             let more = more.on_hover_text(name.as_str());
