@@ -62,8 +62,9 @@ pub fn git_source(url: &str, rev: &str) -> String {
 }
 
 /// `url` as Cargo writes it in a `source`: the scheme in lowercase, the `.` and `..` segments of the
-/// path resolved, and, for `http` and `https`, the host in lowercase, an empty port or the scheme's
-/// default port (80 or 443) left out, and `/` for an empty path. Other URLs keep their authority as
+/// path resolved, and, for `http` and `https`, the host in lowercase, a port of digits written as its
+/// number, an empty port or the scheme's default port (80 or 443) left out, and `/` for an empty
+/// path. Other URLs keep their authority as
 /// written.
 fn cargo_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else { return url.to_owned() };
@@ -71,9 +72,9 @@ fn cargo_url(url: &str) -> String {
     let (authority, tail) = rest.split_at_checked(rest.find(['/', '?', '#']).unwrap_or(rest.len())).unwrap_or((rest, ""));
     let (path, query) = tail.split_at_checked(tail.find(['?', '#']).unwrap_or(tail.len())).unwrap_or((tail, ""));
     let path = if path.is_empty() { String::new() } else { resolve_dot_segments(path) };
-    let default_port = match scheme.as_str() {
-        "http" => "80",
-        "https" => "443",
+    let default_port: u16 = match scheme.as_str() {
+        "http" => 80,
+        "https" => 443,
         _ => return format!("{scheme}://{authority}{path}{query}"),
     };
     let (user, host_port) = match authority.rsplit_once('@') {
@@ -91,9 +92,14 @@ fn cargo_url(url: &str) -> String {
         out.push('@');
     }
     out.push_str(&host.to_ascii_lowercase());
-    if let Some(port) = port.filter(|port| !port.is_empty() && *port != default_port) {
+    // A port of digits is written as its number, so `0443` is the default port 443.
+    let port = port.filter(|port| !port.is_empty()).map(|port| match port.parse::<u16>() {
+        Ok(number) if port.bytes().all(|b| b.is_ascii_digit()) => (number != default_port).then(|| number.to_string()),
+        _ => Some(port.to_owned()),
+    });
+    if let Some(port) = port.flatten() {
         out.push(':');
-        out.push_str(port);
+        out.push_str(&port);
     }
     if path.is_empty() {
         out.push('/');
@@ -953,6 +959,13 @@ mod tests {
         // Other ports, and schemes without a default port, are kept.
         assert_eq!(git_source("https://host:8443/r", "abc"), "git+https://host:8443/r?rev=abc#abc");
         assert_eq!(git_source("ssh://git@Host:22/r", "abc"), "git+ssh://git@Host:22/r?rev=abc#abc");
+    }
+
+    #[test]
+    fn git_sources_write_a_port_as_its_number() {
+        assert_eq!(git_source("https://host:0443/r", "abc"), "git+https://host/r?rev=abc#abc");
+        assert_eq!(git_source("http://host:080/r", "abc"), "git+http://host/r?rev=abc#abc");
+        assert_eq!(git_source("https://host:08443/r", "abc"), "git+https://host:8443/r?rev=abc#abc");
     }
 
     #[test]

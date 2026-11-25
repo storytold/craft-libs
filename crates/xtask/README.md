@@ -201,8 +201,8 @@ Some("pdf-deps") => {
   gives the source Cargo writes for a git dependency pinned to a full commit hash, and `CRATES_IO` the
   source for crates.io. `git_source` and `check_commits` write a git URL as Cargo does: the `.` and
   `..` segments of the path resolved (`https://github.com/o/./r` becomes `https://github.com/o/r`),
-  and for `http` and `https` the scheme and host in lowercase, without the default port
-  (`https://github.com:443/o/r` becomes `https://github.com/o/r`).
+  and for `http` and `https` the scheme and host in lowercase, a port written as its number, and
+  without the default port (`https://github.com:0443/o/r` becomes `https://github.com/o/r`).
 - `FeatureRule::Contains` requires the listed features and allows others. `FeatureRule::Exactly`
   allows the listed features only. Both read the package's node in `resolve.nodes`.
 - `Scope::Active` rejects a forbidden package that has a resolved node, development dependencies
