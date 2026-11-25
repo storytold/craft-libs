@@ -1,28 +1,23 @@
-//! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
-//! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
-//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
-//! palette's level under a modal and its visibility while the main window is minimized, a layer shown in a popup
-//! window and what it remembers while it shows (a scrolled body's offset, a context opener clicked again), injected
-//! keys across a focus loss, non-finite injected points, a
-//! repeated injected press, the window that has the keys, a wheel with no known pointer, the placement of a minimized
-//! window, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
-//! policy.
+//! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS resize
+//! (H4), the raise of a modal's window and the keyboard it takes from a window it blocks, the mount of a full-window
+//! container (in a window of its own, or in a full-screen or Wayland-maximized main window), the size of a
+//! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
+//! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
+//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the
+//! placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted window's
+//! Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Dismiss, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
-    Trigger,
-};
+use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::layout::Block;
-use craft_ui::testing::pointer::{moved, press, release, secondary, wheel};
+use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
@@ -332,6 +327,216 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
         let other = if backend == Backend::Wayland { ViewportCommand::Focus } else { attention.clone() };
         assert_eq!(at(&other), None, "{backend:?}: one way of raising: {sent:?}");
     }
+}
+
+/// Window facts with the focus as given, at a place the window system tells.
+fn focus(on: bool) -> ViewportInfo {
+    ViewportInfo { focused: Some(on), inner_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(300.0))), ..ViewportInfo::default() }
+}
+
+fn on_x11() -> Windows {
+    Windows::with(InstallSpec::new(ShellInfo::default().backend(Backend::X11), Arc::new(FakeSystem::new())))
+}
+
+/// How many focus requests `out` sent to `viewport`.
+fn focus_requests(out: &Out, viewport: ViewportId) -> usize {
+    out.commands.iter().filter(|(id, command)| *id == viewport && *command == ViewportCommand::Focus).count()
+}
+
+/// Frames that last longer than a modal's window waits before it takes the keyboard.
+const PAST_THE_WAIT: usize = 40;
+
+/// The app's own modal that opens while a window it blocks has the keyboard (a command typed in a floated panel opens
+/// the save prompt in the main window) gets the keys it needs: its window takes the OS focus from the blocked one,
+/// once, and the wait before it wakes an idle app. Nothing is sent when no blocked window has the focus by then (an OS
+/// dialog that opened with the modal took it, or the modal's window has it) or the modal closed meanwhile.
+#[trial]
+fn an_app_modal_takes_the_keyboard_from_a_window_it_blocks() {
+    // The frames after the modal opens in which the main window, which shows it, got a focus request, with the main
+    // window and a child window focused as given and `before` run before each frame.
+    let requests = |root: bool, float: bool, before: &dyn Fn(&Windows, usize)| -> Vec<usize> {
+        let windows = on_x11();
+        windows.root_info(focus(root));
+        windows.child_info(focus(float));
+        let frame = || windows.frame(vec![], vec![], |ui| ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |_, _| {}));
+        for _ in 0..4 {
+            frame();
+        }
+        windows.app_modal(Some(ViewportId::ROOT));
+        (0..PAST_THE_WAIT)
+            .flat_map(|at| {
+                before(&windows, at);
+                vec![at; focus_requests(&frame(), ViewportId::ROOT)]
+            })
+            .collect()
+    };
+    let none: [usize; 0] = [];
+    let sent = requests(false, true, &|_, _| {});
+    let &[handed] = sent.as_slice() else { panic!("the main window takes the keyboard from the float once: {sent:?}") };
+    assert!(handed > 1, "not before an OS dialog that opens with the modal could take it: frame {handed}");
+    let closes = |windows: &Windows, at| {
+        if at == handed {
+            windows.app_modal(None);
+        }
+    };
+    assert_eq!(requests(false, true, &closes), none, "the modal closed meanwhile");
+    let os_dialog = |windows: &Windows, at| {
+        if at == 1 {
+            windows.child_info(focus(false));
+        }
+    };
+    assert_eq!(requests(false, true, &os_dialog), none, "an OS dialog took the focus");
+    assert_eq!(requests(false, false, &|_, _| {}), none, "no window of the app has the focus");
+    assert_eq!(requests(true, false, &|_, _| {}), none, "the modal's window has the focus");
+
+    let woken = Arc::new(Mutex::new(false));
+    let settled = |windows: &Windows, at| {
+        if at == 2 {
+            let woken = woken.clone();
+            windows.ctx.set_request_repaint_callback(move |info| *woken.lock().unwrap() |= !info.delay.is_zero());
+        }
+    };
+    requests(false, true, &settled);
+    assert!(*woken.lock().unwrap(), "an idle app wakes for the hand-over");
+}
+
+/// A framework modal in a window of its own takes the keyboard from the main window it blocks.
+#[trial]
+fn a_framework_modal_takes_the_keyboard_from_the_window_it_blocks() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(false));
+    let sent: usize = (0..PAST_THE_WAIT).map(|_| focus_requests(&modal_frame(&windows), child())).sum();
+    assert_eq!(sent, 1, "once");
+}
+
+/// A menu's layer hung from a place near its window's corner: opened in a palette it shows in a popup window.
+fn menu_layer() -> ContainerProps {
+    use craft_behavior::overlay::{Align, Side};
+    use craft_ui::contract::overlay::{Anchor, Place};
+    let anchor = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(10.0));
+    ContainerProps::new().mount(Mount::Layer(Overlay::menu().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start))))
+}
+
+/// The popup window `out` shows beside the main window and `palette`.
+fn popup_window(out: &Out, palette: ViewportId) -> Option<ViewportId> {
+    out.builders.iter().map(|(id, _)| *id).find(|id| ![ViewportId::ROOT, palette].contains(id))
+}
+
+/// A popup window opened from the window that shows the app's modal keeps the keyboard.
+#[trial]
+fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
+    let windows = on_x11();
+    windows.root_info(focus(false));
+    windows.child_info(focus(true));
+    let open = Cell::new(false);
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    Modal { common: Common::new(), props: menu_layer() }.id_salt("popup").show(ui, |_, _| {});
+                }
+            });
+        })
+    };
+    let palette = builder_titled(&frame(), "tool").0;
+    windows.app_modal(Some(palette));
+    open.set(true);
+    frame();
+    windows.child_info(focus(false));
+    let outs: Vec<Out> = (0..PAST_THE_WAIT).map(|_| frame()).collect();
+    let popup = outs.last().and_then(|out| popup_window(out, palette)).expect("the layer opened in the palette shows in a popup window");
+    assert_eq!(windows.facts(popup).focused, Some(true), "the popup window has the keyboard");
+    assert_eq!(outs.iter().map(|out| focus_requests(out, palette)).sum::<usize>(), 0, "the modal's window leaves it there");
+}
+
+/// A layer in a popup window keeps the scroll that a focus move below its view gave it while it is open, and starts at
+/// the top when it opens again.
+#[trial]
+fn a_layer_in_a_popup_window_keeps_its_scroll_until_it_closes() {
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    let (open, reveal, top) = (Cell::new(false), Cell::new(false), Cell::new(0.0));
+    let (tall, last) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    let props = menu_layer().scroll(Scroll::vertical());
+                    Modal { common: Common::new(), props }.id_salt("popup").show(ui, |ui, _| {
+                        if !craft_ui::testing::is_measuring(ui.ctx()) {
+                            top.set(ui.next_widget_position().y);
+                        }
+                        Probe::new(&tall).id_salt("tall").size(Vec2::new(100.0, 2000.0)).show(ui);
+                        Probe::new(&last).id_salt("last").show(ui);
+                        if let Some(id) = last.borrow().id.filter(|_| reveal.take()) {
+                            request(ui.ctx(), FocusTarget::Id(id));
+                        }
+                    });
+                }
+            });
+        })
+    };
+    let settled = || {
+        let mut out = frame();
+        for _ in 1..PAST_THE_WAIT {
+            out = frame();
+        }
+        out
+    };
+    let palette = builder_titled(&frame(), "tool").0;
+    open.set(true);
+    assert!(popup_window(&settled(), palette).is_some(), "the layer opened in the palette shows in a popup window");
+    let start = top.get();
+    reveal.set(true);
+    settled();
+    let scrolled = top.get();
+    assert!(scrolled < start - 1.0, "the layer stays scrolled: its content starts at {scrolled}, {start} unscrolled");
+    open.set(false);
+    assert_eq!(popup_window(&settled(), palette), None, "the layer closed");
+    open.set(true);
+    settled();
+    assert!((top.get() - start).abs() < 0.5, "opened again, it starts at the top: {} after {scrolled}, {start} unscrolled", top.get());
+}
+
+/// A popup that a press in another window of the app opened stays open, also when its opener runs a second pass of the
+/// frame it opens in, and a later press there closes it.
+#[trial]
+fn a_popup_window_stays_after_the_press_in_another_window_that_opened_it() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    let (open, again, closed) = (Cell::new(false), Cell::new(false), RefCell::new(Vec::new()));
+    let frame = |root: Vec<Event>| {
+        windows.frame(root, vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    Capture { common: Common::new(), props: menu_layer(), closed: &closed }.id_salt("popup").show(ui, |_, _| {});
+                    if again.take() {
+                        craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
+                    }
+                }
+            });
+        })
+    };
+    let at = Pos2::new(250.0, 250.0);
+    frame(vec![]);
+    let out = frame(vec![moved(at)]);
+    let palette = builder_titled(&out, "tool").0;
+    frame(vec![press(at), release(at)]);
+    open.set(true);
+    again.set(true);
+    let mut out = frame(vec![]);
+    for _ in 0..4 {
+        out = frame(vec![]);
+    }
+    assert!(!again.get() && popup_window(&out, palette).is_some(), "the popup opened, its opener's pass repeated");
+    assert_eq!(*closed.borrow(), [], "the press that opened it leaves it open");
+    frame(vec![press(at), release(at)]);
+    frame(vec![]);
+    assert_eq!(closed.borrow().first(), Some(&CloseReason::Outside), "a later press in the main window closes it");
 }
 
 /// A window that a modal in another window blocks takes no wheel, as it takes no press or key: what is under the
@@ -1306,260 +1511,38 @@ fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_clo
     assert_eq!(back, Some(true), "the palette returns once the modal closed");
 }
 
-/// A layer mounted with `props`, its open state in the caller's binding, recording the closes it is given.
-#[derive(craft_ui::contract::Component)]
-#[component(container)]
-struct Sheet<'a> {
-    #[common]
-    common: Common,
-    #[container]
-    props: ContainerProps,
-    open: Bind<'a, bool>,
-    closed: &'a RefCell<Vec<CloseReason>>,
-}
-
-impl Component for Sheet<'_> {
-    const ROLE: Role = Role::GROUP;
-    type Style = PlainStyle;
-    type Output = Response;
-
-    fn style(_: &StyleCx<'_>, _: SheetStyleKey) -> PlainStyle {
-        PlainStyle::min(Vec2::new(120.0, 60.0))
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
-    }
-}
-
-impl Container for Sheet<'_> {
-    fn open(&mut self) -> Option<BindMut<'_, bool>> {
-        Some(self.open.reborrow())
-    }
-
-    fn closed(&mut self, why: CloseReason) {
-        self.closed.borrow_mut().push(why);
-    }
-}
-
-/// The palette window's rect, in desktop points: the room its layers may take.
-const PALETTE_AT: Rect = Rect { min: Pos2::new(200.0, 150.0), max: Pos2::new(500.0, 350.0) };
-
-/// One frame of the main window showing a palette-level window whose body shows `overlay`'s layer, the layer's open
-/// state carried back out to `open`.
-fn palette_layer_frame(windows: &Windows, overlay: &Overlay, open: &Cell<bool>, closed: &RefCell<Vec<CloseReason>>) -> Out {
-    let mut is_open = open.get();
-    let out = windows.frame(vec![], vec![], |ui| {
-        Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
-            let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
-            Sheet { common: Common::new(), props, open: Bind::bound(&mut is_open), closed }.id_salt("sheet").show(ui, |_, _| {});
-        });
-    });
-    open.set(is_open);
-    out
-}
-
-/// A layer shown in a popup window of a palette window keeps what it remembered while it shows: its timed dismissal
-/// counts from the pass it appeared, not from the last pass, so it closes after its timeout with no input at all. The
-/// layer's body runs in the popup's pass, which stamps its appearance in that window's record; its host decides the
-/// window in the palette's pass, where the opener's record never holds the layer.
+/// A palette that opens while the palettes still yield to a modal or popup of the root window that has just closed
+/// opens hidden and appears in the frames after.
 #[trial]
-fn a_layer_in_a_popup_window_closes_after_its_timeout() {
+fn a_palette_opened_as_the_roots_modal_or_popup_closes_appears() {
     let windows = Windows::new();
-    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
-    // The palette's window: a tool window, whose layers show in popup windows of their own.
-    let palette = ViewportInfo {
-        focused: Some(true),
-        inner_rect: Some(PALETTE_AT),
-        outer_rect: Some(PALETTE_AT),
-        native_pixels_per_point: Some(1.0),
-        ..ViewportInfo::default()
-    };
-    windows.child_info(palette);
-    // A menu that closes by itself a quarter second after it appears: fifteen frames at the kit's sixty a second.
-    const TIMEOUT: f32 = 0.25;
-    let overlay = Overlay::menu().dismiss(Dismiss::new().timeout(Some(TIMEOUT)));
-    let open = Cell::new(true);
-    let closed = RefCell::new(Vec::new());
-    let mut out = palette_layer_frame(&windows, &overlay, &open, &closed);
-    for _ in 0..2 {
-        out = palette_layer_frame(&windows, &overlay, &open, &closed);
-    }
-    let shown: Vec<ViewportId> = out.builders.iter().map(|(viewport, _)| *viewport).filter(|viewport| *viewport != ViewportId::ROOT).collect();
-    assert_eq!(shown.len(), 2, "the palette's window and the layer's own popup window: {shown:?}");
-    assert!(open.get(), "the layer is open early in its timeout: {:?}", closed.borrow());
-    // Well past a quarter second of frames, with no input at all.
-    for _ in 0..30 {
-        palette_layer_frame(&windows, &overlay, &open, &closed);
-    }
-    assert!(!open.get(), "the layer closes after its timeout");
-    assert_eq!(*closed.borrow(), [CloseReason::Timeout], "the timeout closed it, and no other rule did");
-}
-
-/// A scrolled body of a layer shown in a popup window keeps its offset while the layer shows. The read step that starts
-/// a layer's body at the top when it opens runs in the opener's pass, before the popup window's pass, which is where the
-/// layer is stamped: it reads the layer's appearance in that window's record, not in the opener's, which never holds it.
-#[trial]
-fn a_scrolled_body_of_a_layer_in_a_popup_window_keeps_its_offset() {
-    let windows = Windows::new();
-    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
-    // The palette's window: a tool window, whose layers show in popup windows of their own.
-    let palette = ViewportInfo {
-        focused: Some(true),
-        inner_rect: Some(PALETTE_AT),
-        outer_rect: Some(PALETTE_AT),
-        native_pixels_per_point: Some(1.0),
-        ..ViewportInfo::default()
-    };
-    windows.child_info(palette);
-    // A dropdown list, whose body is capped by the room its popup window leaves, holding more than it shows: it scrolls.
-    let overlay = Overlay::dropdown();
-    let owner = egui::Id::unique("a tall body in a popup window");
-    let seen = RefCell::new(Seen::default());
-    let open = Cell::new(true);
-    let closed = RefCell::new(Vec::new());
-    let frame = || {
-        let mut is_open = open.get();
-        let out = windows.frame(vec![], vec![], |ui| {
-            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
-                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
-                Sheet { common: Common::new(), props, open: Bind::bound(&mut is_open), closed: &closed }.id(owner).show(ui, |ui, _| {
-                    for _ in 0..8 {
-                        Block::new(Vec2::new(60.0, 40.0)).show(ui);
-                    }
-                    Probe::new(&seen).id_salt("lowest row").show(ui);
-                });
-            });
-        });
-        open.set(is_open);
-        out
-    };
-    for _ in 0..4 {
-        frame();
-    }
-    let at_top = seen.borrow().rect;
-    assert!(at_top.height() > 0.0, "the layer's body laid its content out: {at_top:?}");
-    // Show the lowest row, which lies below the room the popup window leaves.
-    craft_ui::testing::contract::queue_reveal(&windows.ctx, owner, at_top);
-    frame();
-    frame();
-    let scrolled = seen.borrow().rect;
-    assert!(scrolled.min.y < at_top.min.y - 1.0, "the reveal scrolled the body: {at_top:?} then {scrolled:?}");
-    for _ in 0..4 {
-        frame();
-    }
-    assert_eq!(seen.borrow().rect, scrolled, "the offset stays while the layer shows, with no input at all");
-    assert!(closed.borrow().is_empty(), "scrolling the body closed nothing: {:?}", closed.borrow());
-}
-
-/// A layer mounted as `props`' layer whose open state is its opener's: a menu a context opener opens, with the body the
-/// trial gives it and the closes it is given.
-#[derive(craft_ui::contract::Component)]
-#[component(container)]
-struct OpenedMenu<'a> {
-    #[common]
-    common: Common,
-    #[container]
-    props: ContainerProps,
-    closed: &'a RefCell<Vec<CloseReason>>,
-}
-
-impl Component for OpenedMenu<'_> {
-    const ROLE: Role = Role::GROUP;
-    type Style = PlainStyle;
-    type Output = Response;
-
-    fn style(_: &StyleCx<'_>, _: OpenedMenuStyleKey) -> PlainStyle {
-        PlainStyle::min(Vec2::new(80.0, 24.0))
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
-    }
-}
-
-impl Container for OpenedMenu<'_> {
-    fn closed(&mut self, why: CloseReason) {
-        self.closed.borrow_mut().push(why);
-    }
-}
-
-/// A second right-click on a context opener hangs its menu at the new pointer while the menu stays open, also when the
-/// menu shows in a popup window of a palette window: the pointer the layer opened at goes when its opener fires again.
-#[trial]
-fn a_second_right_click_hangs_a_menu_in_a_popup_window_at_the_new_pointer() {
-    let windows = Windows::new();
-    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
-    let palette = ViewportInfo {
-        focused: Some(true),
-        inner_rect: Some(PALETTE_AT),
-        outer_rect: Some(PALETTE_AT),
-        native_pixels_per_point: Some(1.0),
-        ..ViewportInfo::default()
-    };
-    windows.child_info(palette);
-    let overlay = Overlay::menu();
-    let opener_at = RefCell::new(Seen::default());
-    let closed = RefCell::new(Vec::new());
-    let frame = |events: Vec<Event>| {
-        windows.frame(vec![], events, |ui| {
-            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
-                let opener = Probe::new(&opener_at).size(Vec2::new(240.0, 140.0)).sense(Sense::CLICK).id_salt("opener").show(ui);
-                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone().opened_by(&opener, Trigger::Context)));
-                OpenedMenu { common: Common::new(), props, closed: &closed }.id_salt("rows").show(ui, |ui, _| {
-                    for _ in 0..3 {
-                        Block::new(Vec2::new(80.0, 24.0)).show(ui);
-                    }
-                });
-            });
+    let frame = |modal: bool, palette: bool| {
+        windows.frame(vec![], vec![], |ui| {
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("modal").show(ui, |_, _| {});
+            }
+            if palette {
+                Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            }
         })
     };
-    // Where the menu shows: the window of its own that the frame opened besides the palette's.
-    let menu_window = |out: &Out| -> Rect {
-        let (palette, _) = builder_titled(out, "tool");
-        let (viewport, _) = out
-            .builders
-            .iter()
-            .find(|(viewport, _)| *viewport != ViewportId::ROOT && *viewport != palette)
-            .expect("the menu shows in a popup window of the palette's");
-        let facts = windows.facts(*viewport);
-        facts.outer_rect.or(facts.inner_rect).expect("the menu's window is placed")
-    };
-    for _ in 0..2 {
-        frame(vec![]);
+    for _ in 0..3 {
+        frame(true, false);
     }
-    let at = opener_at.borrow().rect;
-    assert!(at.height() > 0.0, "the opener showed: {at:?}");
-    // Two points well inside the opener, the second above the first where the menu hanging below it does not reach:
-    // the palette's body lies within its window's points, and either way both right-clicks land on the opener.
-    let (first, second) = (at.center() + Vec2::new(0.0, 20.0), at.center() - Vec2::new(30.0, 20.0));
-    // A right-click on the opener opens the menu at that point.
-    frame(vec![moved(first)]);
-    frame(vec![secondary(first, true)]);
-    let mut out = frame(vec![secondary(first, false)]);
-    for _ in 0..2 {
-        out = frame(vec![]);
+    frame(false, false);
+    let out = frame(false, true);
+    let (tool, builder) = builder_titled(&out, "tool");
+    let mut shown = builder.visible != Some(false);
+    assert!(!shown, "it opens hidden while the palettes yield");
+    for out in [out].into_iter().chain((0..3).map(|_| frame(false, true))) {
+        for (id, command) in out.commands {
+            if let (true, ViewportCommand::Visible(visible)) = (id == tool, command) {
+                shown = visible;
+            }
+        }
     }
-    assert!(closed.borrow().is_empty(), "the right-click opened the menu and closed nothing: {:?}", closed.borrow());
-    let opened = menu_window(&out);
-    // A second right-click on the same opener, while the menu is open, hangs the menu at the new pointer.
-    frame(vec![moved(second)]);
-    frame(vec![secondary(second, true)]);
-    let mut out = frame(vec![secondary(second, false)]);
-    for _ in 0..2 {
-        out = frame(vec![]);
-    }
-    // The press lands outside the menu's own rect, so it closes the menu and the release opens it again. The layer shows
-    // in the pass between them (the close is decided after its body ran), so it never shows nothing and keeps what it
-    // remembered: where its opener first hung it. No other rule closed it.
-    assert!(closed.borrow().iter().all(|why| *why == CloseReason::Outside), "only an outside press closed the menu: {:?}", closed.borrow());
-    let after = menu_window(&out);
-    let moved = after.min - opened.min;
-    let pointer = second - first;
-    assert!(
-        (moved - pointer).length() < 1.0,
-        "the menu hangs where the pointer is now: it stood at {opened:?}, stands at {after:?}, and the pointer moved {pointer:?}"
-    );
+    assert!(shown, "it appears once the modal is gone");
 }
 
 /// A key automation holds is in `keys::held` while it is held and not after its release.

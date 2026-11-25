@@ -15,7 +15,7 @@ use crate::runtime::motion::{self, Driver};
 use crate::runtime::overlay::{self, Backdrop, CloseReason, OpenEntry, Rank};
 use crate::runtime::windows::{self, PopupOpen, PopupRoom, WindowSpec};
 use craft_behavior::{MotionKind, Playback};
-use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
+use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
 /// What the host reads for one layer.
 pub(crate) struct Layer<'a> {
@@ -80,6 +80,27 @@ fn recall(layer: &Layer<'_>, ctx: &Context) -> LayerMemory {
     MemoryStage::peek::<LayerMemory>(ctx, memory_slot(layer.id))
 }
 
+/// What the layer remembers as its host's pass starts. A layer that `appears` starts with nothing it remembered while
+/// shown before, also when it opens again during its exit fade or its host never saw it hide: the focus that was inside
+/// it does not close it as `focus_left`. A right-click on a context opener while its layer is open hangs the layer at
+/// the new pointer.
+fn recall_shown(layer: &Layer<'_>, ctx: &Context, appears: bool) -> LayerMemory {
+    if appears {
+        return LayerMemory::default();
+    }
+    let mut memory = recall(layer, ctx);
+    let pointed = layer
+        .overlay
+        .opener
+        .as_ref()
+        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
+    if pointed {
+        memory.opening = None;
+        memory.pointer_at = None;
+    }
+    memory
+}
+
 fn remember(layer: &Layer<'_>, ctx: &Context, memory: LayerMemory) {
     let mut stage = MemoryStage::open_owned(ctx, memory_slot(layer.id), layer.owner);
     *stage.shown::<LayerMemory>(memory_slot(layer.id)) = memory;
@@ -115,32 +136,6 @@ fn area_id(id: Id) -> Id {
     sub(id, "area")
 }
 
-/// The viewport whose pass shows the layer `id` of `overlay`, opened in the running viewport: the popup window's when
-/// it shows there ([`host_in_popup`]), else the running one. That pass is where the layer is stamped
-/// (`overlay::begin_layer`), and where a body's read step and the host read what it appeared and remembers.
-pub(crate) fn layer_viewport(ctx: &Context, overlay: &Overlay, id: Id) -> ViewportId {
-    if !overlay.is_full_window() && windows::popup_room(ctx).is_some() {
-        crate::runtime::egui::viewports::viewport_id(id)
-    } else {
-        crate::runtime::egui::pass::current_viewport(ctx)
-    }
-}
-
-/// A right-click on a context opener while its layer is open hangs the layer at the new pointer: what the layer
-/// remembered of the pass it appeared in (how its opener opened it, and the pointer it hung from) is dropped, so both
-/// are taken again in this pass.
-fn reanchor(layer: &Layer<'_>, memory: &mut LayerMemory) {
-    let pointed = layer
-        .overlay
-        .opener
-        .as_ref()
-        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
-    if pointed {
-        memory.opening = None;
-        memory.pointer_at = None;
-    }
-}
-
 /// The overlay host: shows `body` on an egui layer for `layer` and decides its dismissal. A layer opened in a palette
 /// window shows in a popup window of its own ([`host_in_popup`]); a full-window layer covers its own window.
 pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
@@ -149,11 +144,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     {
         return host_in_popup(ctx, layer, popup, body);
     }
-    // A layer that appears starts with nothing it remembered while shown before, also when it opens again during its
-    // exit fade or its host never saw it hide: the focus that was inside it does not close it as `focus_left`.
     let appears = overlay::appears(ctx, layer.id, layer.exiting);
-    let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
-    reanchor(layer, &mut memory);
+    let mut memory = recall_shown(layer, ctx, appears);
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
@@ -308,13 +300,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
 /// laid out in the popup's pass first, in the room its unplaced form has, and placed by the size it took there.
 /// A popup that takes keys (a menu, a flyout) takes the OS focus; a tooltip takes none and lets the pointer through.
 fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
-    // The layer's body runs in the popup window's pass, which stamps the layer's appearance in that window's record:
-    // this pass, which decides the window, reads it there. The opener's own record never holds the layer, so a layer
-    // that appeared once would read as appearing in every pass.
-    let viewport = layer_viewport(ctx, layer.overlay, layer.id);
-    let appears = overlay::appears_in(ctx, viewport, layer.id, layer.exiting);
-    let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
-    reanchor(layer, &mut memory);
+    let appears = overlay::note_appeared(ctx, layer.id, layer.exiting);
+    let mut memory = recall_shown(layer, ctx, appears);
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
@@ -340,10 +327,6 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     let spec = WindowSpec::popup().takes_focus(!tooltip && (scope.is_some() || overlay.rank.takes_keys())).passes_pointer(tooltip);
     let known = measured.map(|size| Rect::from_min_size(unplaced.at, size));
     let open = PopupOpen { id: layer.id, spec: &spec, rect: known.map(|rect| rect.translate(popup.origin.to_vec2())) };
-    // The popup's pass runs nested in this one and its begin pass stamps a layer's first appearance with its own
-    // number: read that number before the pass runs, so this pass tells a layer appearing in it from one that appeared
-    // in an earlier pass of the frame.
-    let popup_pass = crate::runtime::egui::pass::pass_nr(ctx, viewport);
     let mut shown = None;
     windows::show_popup(ctx, &open, |ui| {
         let at = unplaced.at.to_vec2();
@@ -368,7 +351,8 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.window = true;
     entry.popup = true;
     overlay::record(ctx, entry);
-    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport, popup_pass, appears)) };
+    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
+    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport)) };
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);
     LayerOut { dismissed }
