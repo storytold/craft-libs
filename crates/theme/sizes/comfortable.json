@@ -31,6 +31,7 @@
       },
       "dialog": {
         "button": 84.0,
+        "button_height": 30.0,
         "least": 380.0,
         "side_button": 96.0,
         "wrap": 440.0
@@ -110,6 +111,7 @@
         "groove": 5.0
       },
       "row": {
+        "menu": 30.0,
         "text": 21.0
       },
       "thumb": {
@@ -147,6 +149,7 @@
       "pad": {
         "chip": 6.0,
         "control": 8.0,
+        "dialog": 12.0,
         "regular": 12.0,
         "roomy": 20.0,
         "segment": 14.0

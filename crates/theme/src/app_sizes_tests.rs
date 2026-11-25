@@ -3,6 +3,8 @@
 use serde_json::{Value, json};
 
 use super::*;
+use crate::app_sizes::FOLLOWS;
+use crate::sizes::{Preset, Slot, leaves};
 
 fn sizes(v: &Value) -> AppSizes {
     AppSizes::parse(v.to_string().as_bytes()).unwrap()
@@ -54,4 +56,30 @@ fn a_page_follows_the_values_it_stands_in_for_unless_the_app_sets_its_own() {
     assert_eq!(follows.size.page.button, follows.size.control.md, "New and Open follow the push button to the control height");
     let own = applied(&json!({ "all": { "space.gap.section": 30, "size.page.gap.section": 40 } }));
     assert!(own.size.page.gap.section > own.space.gap.section, "the app's own page gap wins");
+}
+
+/// Each built-in size set gives a following value (`FOLLOWS`) the value it follows, so a new follower changes no app
+/// that leaves it unset; an app's override reaches a follower through every step (a dialog's footer button follows the
+/// push button, which follows the control height).
+#[test]
+fn a_follower_starts_at_the_value_it_follows_and_takes_its_override() {
+    let value = |preset: &mut Preset, path: &str| {
+        let want = format!("base.{path}");
+        leaves(preset).into_iter().find_map(|l| match l.slot {
+            Slot::Num(x) | Slot::Length(x) if l.path == want => Some(*x),
+            _ => None,
+        })
+    };
+    for size in [Size::Compact, Size::Comfortable] {
+        let base = crate::sizes::builtin(size).base;
+        for (own, of) in FOLLOWS {
+            let mut preset = base;
+            assert_eq!(value(&mut preset, own), value(&mut preset, of), "{size:?}: {own} starts at {of}");
+        }
+        let mut preset = base;
+        sizes(&json!({ "all": { "size.control.md": 40, "space.pad.regular": 20 } })).apply_base(size, &mut preset);
+        assert_eq!(value(&mut preset, "size.dialog.button_height"), Some(40.0), "{size:?}: through size.button");
+        assert_eq!(value(&mut preset, "size.row.menu"), Some(40.0), "{size:?}");
+        assert_eq!(value(&mut preset, "space.pad.dialog"), Some(20.0), "{size:?}");
+    }
 }

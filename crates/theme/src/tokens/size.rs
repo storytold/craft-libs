@@ -176,8 +176,11 @@ pub struct Gaps {
 pub struct Pads {
     /// Inside controls.
     pub control: f32,
-    /// Inside panels and default dialog frames.
+    /// Inside panels.
     pub regular: f32,
+    /// Inside default dialog frames. An app that sets `space.pad.regular` and not this keeps its dialogs padded as its
+    /// panels are.
+    pub dialog: f32,
     /// Inside roomy dialogs.
     pub roomy: f32,
     /// Inside badges, key caps and chips: tighter than a control.
@@ -379,6 +382,9 @@ pub struct DialogSizes {
     pub wrap: f32,
     /// The least width of a footer button.
     pub button: f32,
+    /// The height of a footer button. An app that sets `size.button` and not this keeps its footer buttons a push
+    /// button high.
+    pub button_height: f32,
     /// The least width of a button in a column beside the body.
     pub side_button: f32,
 }
@@ -438,6 +444,8 @@ pub struct RowSizes {
     /// The height of a row that shows text only: one body line and `space.gap.tight`. Read-only display tables (a
     /// metadata table) take it; rows the user picks from stay a control high.
     pub text: f32,
+    /// The height of a menu's row. An app that sets `size.control.md` and not this keeps its menu rows a control high.
+    pub menu: f32,
 }
 
 /// Thicknesses of gradient ramps, in logical pixels.
