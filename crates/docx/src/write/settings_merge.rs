@@ -240,15 +240,23 @@ fn mode_span(s: &str) -> Option<(usize, usize)> {
         return Some((start, open_end));
     }
     // CT_CompatSetting has no content, so the next end tag is this element's — unless a
-    // comment comes first: comment text can spell the end tag without being one, and
-    // ending the span there would leave the comment's tail behind as an unmatched tag.
+    // comment or processing instruction comes first: their text can spell the end tag
+    // without being one, and ending the span there would leave a tail behind as an
+    // unmatched tag. The scan walks `<` tokens in one forward pass, skipping each
+    // comment through `-->` and each instruction through `?>`.
     let mut i = open_end;
     let close = loop {
         let tail = s.get(i..)?;
-        let end = tail.find("</w:compatSetting")?;
-        match tail.find("<!--") {
-            Some(c) if c < end => i += c + tail.get(c..)?.find("-->")? + 3,
-            _ => break i + end,
+        let lt = tail.find('<')?;
+        let rest = tail.get(lt..)?;
+        if rest.starts_with("</w:compatSetting") {
+            break i + lt;
+        } else if rest.starts_with("<!--") {
+            i += lt + rest.find("-->")? + 3;
+        } else if rest.starts_with("<?") {
+            i += lt + rest.find("?>")? + 2;
+        } else {
+            i += lt + 1;
         }
     };
     Some((start, close + tag_end(s.get(close..)?)? + 1))
@@ -441,6 +449,22 @@ mod tests {
         );
         assert!(!out.contains("-->"), "{out}");
         assert_eq!(out.matches("</w:compatSetting").count(), 0, "{out}");
+    }
+
+    #[test]
+    fn a_processing_instruction_inside_an_expanded_compat_mode_does_not_truncate_it() {
+        // A processing instruction can spell the end tag, or hold a comment opener with no
+        // comment end: neither ends the element, and neither makes the merge fall back.
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"><?p </w:compatSetting> ?></w:compatSetting><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).expect("merge fell back")).unwrap();
+        assert!(
+            out.contains(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="15"/><w:compatSetting w:name="x" w:uri="u" w:val="1"/></w:compat>"#),
+            "{out}"
+        );
+        assert_eq!(out.matches("</w:compatSetting").count(), 0, "{out}");
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="u" w:val="14"><?p <!-- ?></w:compatSetting></w:compat><w:rsids/></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).expect("merge fell back")).unwrap();
+        assert!(out.contains(r#"w:val="15""#) && out.contains("<w:rsids/>"), "{out}");
     }
 
     #[test]
