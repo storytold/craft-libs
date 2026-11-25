@@ -372,8 +372,7 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
-    /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)).
-    #[prop]
+    /// The look of the tabs: [`tab_look`](DockGroup::tab_look).
     tab_look: PanelTabLook,
     /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
     /// single titled panel does: the panels are shown from a rail, not by tabs.
@@ -422,8 +421,10 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
     pub fn new(anchor: P, panels: Titles, active: PanelKey) -> Self {
-        let props =
-            ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new().fill(SurfaceKind::Background)).command_scope(DockCommands::SCOPE);
+        let props = ContainerProps::new()
+            .sizing(Sizing::Fill)
+            .header(HeaderRegion::new().fill(strip_surface(PanelTabLook::Plain)))
+            .command_scope(DockCommands::SCOPE);
         let title = panels.as_slice().iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
         DockGroup {
             common: Common::new(),
@@ -472,6 +473,15 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         DockGroup { take_focus: true, ..self }
     }
 
+    /// The look of the tabs ([`DockConfig::tab_look`](super::DockConfig::tab_look)). [`PanelTabLook::Block`] tabs
+    /// lie on a strip of `surface.canvas`, the others on the window's background.
+    #[must_use]
+    pub fn tab_look(mut self, look: PanelTabLook) -> Self {
+        self.props = self.props.header(HeaderRegion::new().fill(strip_surface(look)));
+        self.tab_look = look;
+        self
+    }
+
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
     fn shows_menu_button(&self) -> bool {
         self.panel_menu_shown && self.menu.is_some()
@@ -505,7 +515,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     /// The band the group is dragged by and the panel menu button, at the end of the header: the band first. The
     /// button sits at the strip's top, level with the tab labels' caps, as the "…" of the old tab strips did; beside
-    /// [`PanelTabLook::Pill`] tabs, in the strip's middle with their pills.
+    /// [`PanelTabLook::Pill`] and [`PanelTabLook::Block`] tabs, in the strip's middle.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
@@ -518,7 +528,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             let side = (slot.width() - grip_width(cx.tokens) - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
             let height = side.min(slot.height());
-            let top = if self.tab_look == PanelTabLook::Pill { slot.center().y - height / 2.0 } else { slot.top() };
+            let top = if self.tab_look == PanelTabLook::Plain { slot.top() } else { slot.center().y - height / 2.0 };
             let button = Rect::from_min_size(egui::Pos2::new(end.left(), top), Vec2::new(end.width(), height));
             let _ = cx
                 .header_part(HeaderEdge::End, MENU, button)
@@ -823,6 +833,11 @@ enum TabEvent {
     EmptyDouble,
     /// A tab's drag started.
     DragStarted,
+}
+
+/// The surface a dock's strips lie on with tabs in `look`: its groups' tab strips and its columns' bars.
+pub(crate) fn strip_surface(look: PanelTabLook) -> SurfaceKind {
+    if look == PanelTabLook::Block { SurfaceKind::Canvas } else { SurfaceKind::Background }
 }
 
 /// The props of a group's tab row: the tabs and how they show, the group's size where a tab's drag starts, and the

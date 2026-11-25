@@ -421,6 +421,9 @@ impl Component for Tab<'_> {
             Stateful::new(c(clear)).off(States::new(c(clear), hover, c(clear), c(clear))).on(States::new(c(clear), c(clear), c(clear), c(clear)))
         } else if text_only {
             Stateful::new(c(clear))
+        } else if key.kind == TabKind::Panel && key.panel_look == PanelTabLook::Block {
+            let control = c(colors.surface.control);
+            Stateful::new(c(clear)).off(States::new(c(clear), hover, hover, c(clear))).on(States::new(control, control, control, control))
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };

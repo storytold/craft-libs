@@ -101,6 +101,13 @@ fn tab_strip_panel_pill(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::Pill), &TITLES, 4, TabKind::Panel)
 }
 
+/// Panel tabs in the block look (`PanelTabLook::Block`, a dock's `DockConfig::tab_look`): the shown tab a square
+/// `surface.control` block as tall as the strip, the others bare until the pointer rests on one.
+#[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
+fn tab_strip_panel_block(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    strip(ui, data, TabStrip::new("Panels").shown(1).panel_look(PanelTabLook::Block), &TITLES, 4, TabKind::Panel)
+}
+
 /// The width the narrow panel story's room is held to: the shown tab whole, the others at their first letters.
 const NARROW_ROOM: f32 = 260.0;
 
