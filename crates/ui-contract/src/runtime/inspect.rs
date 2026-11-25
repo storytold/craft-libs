@@ -193,7 +193,7 @@ impl crate::runtime::Shift for Arc<Recorded> {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         let elements =
             self.elements.iter().map(|element| Element { rect: by.rect(element.rect), content: by.rect(element.content), ..element.clone() });
-        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), ..hit.clone() });
+        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), bounds: by.rect(hit.bounds), ..hit.clone() });
         Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
     }
 
@@ -206,7 +206,11 @@ impl crate::runtime::Shift for Arc<Recorded> {
             content: element.content.snapped(&to.content, within),
             ..element.clone()
         });
-        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea { rect: hit.rect.snapped(&to.rect, within), ..hit.clone() });
+        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea {
+            rect: hit.rect.snapped(&to.rect, within),
+            bounds: hit.bounds.snapped(&to.bounds, within),
+            ..hit.clone()
+        });
         Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
     }
 }
