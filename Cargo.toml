@@ -60,6 +60,11 @@ hayro-interpret = { version = "=0.7.0", default-features = false, features = ["e
 hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
 bytemuck = "1"
 kurbo = "0.13"
+# Robust sweep line and boolean ops on Bezier paths (MIT OR Apache-2.0), from vendor/linesweeper, which carries a bound on the
+# sweep's event loop that the registry copy lacks (the README of craft-pathops, "The crossings"). craft-pathops names the vendored copy
+# by path, with the version, so that an app that depends on it by git gets the bounded copy without a [patch.crates-io] entry of its own
+# (a [patch] applies only to the workspace it is in). The [patch.crates-io] entry below is for the crates that name it by version.
+linesweeper = { path = "vendor/linesweeper", version = "0.5" }
 thiserror = "2"
 craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
@@ -163,6 +168,7 @@ craft-ods = { path = "crates/ods" }
 craft-prc = { path = "crates/prc" }
 craft-lottie = { path = "crates/lottie" }
 craft-menu = { path = "crates/menu" }
+craft-pathops = { path = "crates/pathops" }
 craft-metafile = { path = "crates/metafile" }
 craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
@@ -297,6 +303,17 @@ winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457
 # craft-audio's `decode` need the same override in their own workspace.
 [profile.dev.package.symphonia-bundle-flac]
 overflow-checks = false
+
+# linesweeper is the sweep behind craft-pathops (and craft-prepress' `flatten` feature) and does
+# most of the work in their tests. Built at opt-level 3 the slowest craft-pathops test goes from
+# about 39 s to 25 s, and its unit tests from 36 s to 24 s.
+[profile.dev.package.linesweeper]
+opt-level = 3
+
+# polycool finds the roots that linesweeper's comparison of two cubics needs, and in a debug build (unoptimised, as a dependency is by default) was
+# most of the time of a sweep of curves: a stroke of round joins that goes back and forth over one line (the fixture of craft-pathops' README, "The crossings") took 88 s unoptimised and 12 s at opt-level 3.
+[profile.dev.package.polycool]
+opt-level = 3
 
 # Codec hot loops: the oracle and conformance tests of a debug build take minutes below opt-level 3.
 [profile.dev.package.craft-video]

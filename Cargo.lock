@@ -2842,6 +2842,16 @@ name = "craft-palette"
 version = "0.1.0"
 
 [[package]]
+name = "craft-pathops"
+version = "0.1.0"
+dependencies = [
+ "kurbo 0.13.1",
+ "linesweeper",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pcap"
 version = "0.1.0"
 dependencies = [
