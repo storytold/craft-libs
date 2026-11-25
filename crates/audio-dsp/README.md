@@ -23,7 +23,8 @@ and contains no `unsafe` code.
   neither does a bitcrusher that takes one sample in every 1 to 50 and rounds it to 1 to 16 bits,
   or a tremolo that lowers the gain once per cycle of a sine, triangle or square LFO. A vibrato
   that swings the pitch by up to 100 cents through a delay moved by a sine or triangle LFO adds
-  no latency either: the delay is 0 at the start of each cycle.
+  no latency either: the delay is 0 at the start of each cycle, except while it glides to new
+  settings.
 - `loudness`: an ITU-R BS.1770-4 / EBU R128 meter with momentary, short-term and integrated
   loudness, loudness range (EBU Tech 3342), sample peak and true peak.
 - `pan`: stereo pan laws, a surround panner over any layout of up to 16 speakers, and first-order

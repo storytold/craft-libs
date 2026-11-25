@@ -14,20 +14,20 @@ fn voice_pitch_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("semitones", (block / 500 % 7) as f32 * 4.0 - 12.0);
+                    assert!(fx.set_param("semitones", (block / 500 % 7) as f32 * 4.0 - 12.0));
                 }
                 100 => {
-                    fx.set_param("formant_follow", 1.0);
+                    assert!(fx.set_param("formant_follow", 1.0));
                 }
                 250 => {
-                    fx.set_param("cents", -35.0);
+                    assert!(fx.set_param("cents", -35.0));
                 }
                 400 => {
-                    fx.set_param("formant_follow", 0.0);
+                    assert!(fx.set_param("formant_follow", 0.0));
                 }
                 499 => {
-                    fx.set_param("semitones", 0.0);
-                    fx.set_param("cents", 0.0);
+                    assert!(fx.set_param("semitones", 0.0));
+                    assert!(fx.set_param("cents", 0.0));
                 }
                 _ => {}
             }
@@ -60,10 +60,10 @@ fn voice_formant_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("semitones", (block / 500 % 7) as f32 * 4.0 - 12.0);
+                    assert!(fx.set_param("semitones", (block / 500 % 7) as f32 * 4.0 - 12.0));
                 }
                 499 => {
-                    fx.set_param("semitones", 0.0);
+                    assert!(fx.set_param("semitones", 0.0));
                 }
                 _ => {}
             }
@@ -105,10 +105,10 @@ fn noise_suppression_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("reduction", (block / 500 % 5) as f32 * 10.0);
+                    assert!(fx.set_param("reduction", (block / 500 % 5) as f32 * 10.0));
                 }
                 499 => {
-                    fx.set_param("reduction", 0.0);
+                    assert!(fx.set_param("reduction", 0.0));
                 }
                 _ => {}
             }
@@ -148,16 +148,16 @@ fn bitcrusher_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("bits", 1.0 + (block / 500 % 16) as f32);
+                    assert!(fx.set_param("bits", 1.0 + (block / 500 % 16) as f32));
                 }
                 100 => {
-                    fx.set_param("rate_divide", 1.0 + (block / 500 % 7) as f32 * 7.5);
+                    assert!(fx.set_param("rate_divide", 1.0 + (block / 500 % 7) as f32 * 7.5));
                 }
                 250 => {
-                    fx.set_param("mix", 40.0);
+                    assert!(fx.set_param("mix", 40.0));
                 }
                 499 => {
-                    fx.set_param("mix", 100.0);
+                    assert!(fx.set_param("mix", 100.0));
                 }
                 _ => {}
             }
@@ -192,16 +192,16 @@ fn vibrato_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("rate", 1.0 + (block / 500 % 10) as f32 * 1.4);
+                    assert!(fx.set_param("rate", 1.0 + (block / 500 % 10) as f32 * 1.4));
                 }
                 100 => {
-                    fx.set_param("shape", (block / 500 % 2) as f32);
+                    assert!(fx.set_param("shape", (block / 500 % 2) as f32));
                 }
                 250 => {
-                    fx.set_param("depth", 100.0);
+                    assert!(fx.set_param("depth", 100.0));
                 }
                 499 => {
-                    fx.set_param("depth", 30.0);
+                    assert!(fx.set_param("depth", 30.0));
                 }
                 _ => {}
             }
@@ -236,16 +236,16 @@ fn tremolo_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("rate", 0.1 + (block / 500 % 10) as f32 * 2.0);
+                    assert!(fx.set_param("rate", 0.1 + (block / 500 % 10) as f32 * 2.0));
                 }
                 100 => {
-                    fx.set_param("shape", (block / 500 % 3) as f32);
+                    assert!(fx.set_param("shape", (block / 500 % 3) as f32));
                 }
                 250 => {
-                    fx.set_param("depth", 100.0);
+                    assert!(fx.set_param("depth", 100.0));
                 }
                 499 => {
-                    fx.set_param("depth", 30.0);
+                    assert!(fx.set_param("depth", 30.0));
                 }
                 _ => {}
             }
@@ -280,17 +280,17 @@ fn ring_mod_does_not_allocate_while_processing() {
         for block in 0..10_000u32 {
             match block % 500 {
                 0 => {
-                    fx.set_param("effect", (block / 500 % 4) as f32);
+                    assert!(fx.set_param("effect", (block / 500 % 4) as f32));
                 }
                 100 => {
-                    fx.set_param("mod_source", (block / 500 % 3) as f32);
+                    assert!(fx.set_param("mod_source", (block / 500 % 3) as f32));
                 }
                 250 => {
-                    fx.set_param("frequency", 30.0 + (block / 500 % 5) as f32 * 400.0);
-                    fx.set_param("mod_depth", 60.0);
+                    assert!(fx.set_param("frequency", 30.0 + (block / 500 % 5) as f32 * 400.0));
+                    assert!(fx.set_param("mod_depth", 60.0));
                 }
                 499 => {
-                    fx.set_param("mod_depth", 0.0);
+                    assert!(fx.set_param("mod_depth", 0.0));
                 }
                 _ => {}
             }

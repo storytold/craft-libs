@@ -22,8 +22,8 @@
 //! sine, triangle or square LFO at `rate`.
 //!
 //! The vibrato (`vibrato`) reads the input through a delay that grows from 0 and shrinks back once
-//! per cycle of a sine or triangle LFO at `rate`, so the pitch swings by up to `depth` cents. The
-//! delay is 0 at the start of each cycle.
+//! per cycle of a sine or triangle LFO at `rate`, so the pitch swings by up to `depth` cents. While
+//! no glide to new settings is in progress, the delay is 0 at the start of each cycle.
 
 use super::util::{DelayLine, Envelope, Lfo, Prng, coef, delay_line_len, echo_tail, uni_sine, uni_tri};
 use crate::{AudioEffect, ParamSpec, ParamValues, Smoothed, Unit, block_len, flush32, param_plumbing};
@@ -169,6 +169,10 @@ impl AudioEffect for RingMod {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        if n == 0 {
+            // No sample uses the new settings, so the lines keep their state.
+            return;
+        }
         let nch = channels.len().min(self.lines.len());
         let effect = self.pv.idx("effect");
         if effect != self.effect {
@@ -217,7 +221,12 @@ impl AudioEffect for RingMod {
                 let wet = match effect {
                     1 => {
                         line.push(dry);
-                        line.read(FM_BASE + swing * (1.0 + carrier))
+                        // The read interpolates in f64, as Vibrato's does, so neighboring samples
+                        // near the f32 limit with opposite signs do not overflow.
+                        let d = (FM_BASE + swing * (1.0 + carrier)).clamp(0.0, line.max_delay());
+                        let (di, frac) = (d.floor() as usize, f64::from(d - d.floor()));
+                        let (a, b) = (f64::from(line.tap(di)), f64::from(line.tap(di + 1)));
+                        (a + (b - a) * frac) as f32
                     }
                     2 | 3 => {
                         let y = flush32(dry + sign * fb * line.read(back));
@@ -227,7 +236,9 @@ impl AudioEffect for RingMod {
                     _ => dry * carrier,
                 };
                 if ch < nch {
-                    channels[ch][i] = dry + mix * (wet - dry);
+                    // The mix runs in f64, so finite samples near the f32 limit stay finite.
+                    let (dry, wet) = (f64::from(dry), f64::from(wet));
+                    channels[ch][i] = (dry + f64::from(mix) * (wet - dry)) as f32;
                 }
             }
         }
@@ -420,6 +431,10 @@ impl AudioEffect for Tremolo {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        if n == 0 {
+            // No sample uses the new settings, so no glide starts.
+            return;
+        }
         let nch = channels.len().min(self.channels);
         let rate = self.pv.v("rate");
         let edge = self.edge_len();
@@ -452,10 +467,11 @@ impl AudioEffect for Tremolo {
 /// The swing is set so that the pitch falls by `depth` cents while the delay grows, and rises by a
 /// little less while it shrinks: the read moves at `1 -/+ d` samples per sample, with
 /// `d = 1 - 2^(-depth / 1200)`. A sine reaches `d` at its steepest point, and a triangle holds it
-/// for each half of the cycle. At the start of each cycle the delay is 0. Rate takes effect from
-/// the next sample with the phase kept. A change of Rate, Depth or Shape glides the delay from its
-/// last value to the new curve, moving it by at most 1/32 sample per sample on top of the curve, so
-/// the output neither clicks nor jumps in pitch.
+/// for each half of the cycle. While no glide is in progress, the delay is 0 at the start of each
+/// cycle. Rate takes effect from the next sample with the phase kept. A change of Rate, Depth or
+/// Shape glides the delay from its last value to the new curve, moving it by at most 1/32 sample
+/// per sample on top of the curve, so the output neither clicks nor jumps in pitch. A glide can run
+/// past the start of a cycle, and the delay there stays above 0 until the glide ends.
 pub struct Vibrato {
     pv: ParamValues,
     sr: f32,
@@ -549,6 +565,10 @@ impl AudioEffect for Vibrato {
     }
     fn process(&mut self, channels: &mut [&mut [f32]]) {
         let n = block_len(channels);
+        if n == 0 {
+            // No sample uses the new settings, so no glide starts.
+            return;
+        }
         let nch = channels.len().min(self.lines.len());
         let rate = self.pv.v("rate");
         let shape = self.pv.idx("shape");
@@ -764,6 +784,54 @@ mod tests {
         }
     }
 
+    /// An empty block does not take up a change of effect, so a resonator switched away from and
+    /// back before the next sample keeps its ring.
+    #[test]
+    fn an_empty_block_keeps_the_resonator_ring() {
+        let p = [("effect", 2.0), ("frequency", 500.0), ("resonance", 80.0)];
+        let (mut r, mut still) = (ring(&p, 1), ring(&p, 1));
+        for f in [&mut r, &mut still] {
+            let mut x = vec![0.0f32; 50];
+            x[10] = 1.0;
+            f.process(&mut [&mut x]);
+        }
+        assert!(r.set_param("effect", 0.0));
+        let mut empty: [f32; 0] = [];
+        r.process(&mut [&mut empty[..]]);
+        r.process(&mut []);
+        assert!(r.set_param("effect", 2.0));
+        let (mut a, mut b) = (vec![0.0f32; 500], vec![0.0f32; 500]);
+        r.process(&mut [&mut a]);
+        still.process(&mut [&mut b]);
+        assert!(rms(&b) > 1e-3, "the ring has already died out");
+        assert_eq!(a, b);
+    }
+
+    /// Neighboring samples at the f32 limit with opposite signs come out finite from every effect
+    /// at every mix, through Frequency Mod's fractional and whole-sample reads, and a mix of 0
+    /// passes them through unchanged.
+    #[test]
+    fn samples_at_the_f32_limit_stay_finite() {
+        let edge: Vec<f32> = (0..4800).map(|i| if i % 2 == 0 { f32::MAX } else { -f32::MAX }).collect();
+        for effect in 0..4 {
+            for mix in [0.0, 50.0, 100.0] {
+                let mut r = ring(&[("effect", effect as f32), ("frequency", 5000.0), ("mix", mix)], 1);
+                let mut y = edge.clone();
+                r.process(&mut [&mut y]);
+                assert!(y.iter().all(|v| v.is_finite()), "effect {effect}, mix {mix}");
+                if mix == 0.0 {
+                    assert_eq!(y, edge, "effect {effect}");
+                }
+            }
+        }
+        // At 48 kHz Frequency Mod's first read is 50 samples back, a whole number, and the next
+        // ones fall between samples.
+        let mut r = ring(&[("effect", 1.0)], 1);
+        let mut y = edge.clone();
+        r.process(&mut [&mut y]);
+        assert!(y[60..].iter().any(|v| v.abs() > 1e30 && v.abs() < f32::MAX), "no fractional read near the limit");
+    }
+
     fn crush(params: &[(&str, f32)], channels: usize) -> Bitcrusher {
         let mut c = Bitcrusher::new(SR, channels);
         for (id, v) in params {
@@ -807,11 +875,16 @@ mod tests {
             let mut c = crush(&[("bits", 16.0), ("rate_divide", divide)], 1);
             let mut y = x.clone();
             c.process(&mut [&mut y]);
-            let at = changes(&y);
-            for (k, w) in at.windows(2).enumerate() {
-                assert_eq!(w[1] - w[0], want[k % want.len()], "divide {divide}: hold {k}");
+            let mut expected = vec![0usize];
+            while let Some(&last) = expected.last() {
+                let next = last + want[(expected.len() - 1) % want.len()];
+                if next >= x.len() {
+                    break;
+                }
+                expected.push(next);
             }
-            assert!(at.iter().all(|&i| y[i] == x[i]), "divide {divide}: a hold does not start with the input");
+            assert_eq!(changes(&y), expected, "divide {divide}");
+            assert!(expected.iter().all(|&i| y[i] == x[i]), "divide {divide}: a hold does not start with the input");
         }
     }
 
@@ -823,11 +896,13 @@ mod tests {
         let mut a: Vec<f32> = (0..10).map(|i| (i + 1) as f32 / 1024.0).collect();
         c.process(&mut [&mut a]);
         assert!(c.set_param("rate_divide", 2.0));
-        let mut b: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
+        let input: Vec<f32> = (10..40).map(|i| (i + 1) as f32 / 1024.0).collect();
+        let mut b = input.clone();
         c.process(&mut [&mut b]);
-        let at = changes(&b);
-        assert_eq!(at[0], 0);
-        assert!(at.windows(2).all(|w| w[1] - w[0] == 2), "holds after the change: {at:?}");
+        // `changes` counts the first sample whatever it holds, so the capture is checked apart.
+        assert_eq!(b[0], input[0], "the hold in progress was not cut short");
+        assert_eq!(changes(&b), (0..30).step_by(2).collect::<Vec<_>>());
+        assert!((0..30).step_by(2).all(|i| b[i] == input[i]));
     }
 
     /// A held sample sounds for no longer than the tail reports after the input ends.
@@ -1045,6 +1120,22 @@ mod tests {
         }
     }
 
+    /// An empty block does not take up a change of shape, so a shape changed and restored before
+    /// the next sample starts no glide.
+    #[test]
+    fn tremolo_empty_block_starts_no_glide() {
+        let p = [("rate", 5.0), ("depth", 100.0), ("shape", 0.0)];
+        let (mut t, mut still) = (tremolo(&p, 1), tremolo(&p, 1));
+        gains(&mut t, 1000);
+        gains(&mut still, 1000);
+        assert!(t.set_param("shape", 1.0));
+        let mut empty: [f32; 0] = [];
+        t.process(&mut [&mut empty[..]]);
+        t.process(&mut []);
+        assert!(t.set_param("shape", 0.0));
+        assert_eq!(gains(&mut t, 2000), gains(&mut still, 2000));
+    }
+
     fn vibrato(params: &[(&str, f32)], channels: usize) -> Vibrato {
         let mut v = Vibrato::new(SR, channels);
         for (id, x) in params {
@@ -1156,6 +1247,22 @@ mod tests {
                 assert!(b.iter().all(|d| *d > -0.05), "{from} to {to} at {start}: the delay went below 0");
             }
         }
+    }
+
+    /// An empty block does not take up a change of depth, so a depth changed and restored before
+    /// the next sample starts no glide.
+    #[test]
+    fn vibrato_empty_block_starts_no_glide() {
+        let p = [("rate", 6.0), ("depth", 100.0)];
+        let (mut v, mut still) = (vibrato(&p, 1), vibrato(&p, 1));
+        delays(&mut v, 0, 1000);
+        delays(&mut still, 0, 1000);
+        assert!(v.set_param("depth", 10.0));
+        let mut empty: [f32; 0] = [];
+        v.process(&mut [&mut empty[..]]);
+        v.process(&mut []);
+        assert!(v.set_param("depth", 100.0));
+        assert_eq!(delays(&mut v, 1000, 4000), delays(&mut still, 1000, 4000));
     }
 
     /// After the input ends, the output falls silent within the reported tail, for every shape and
