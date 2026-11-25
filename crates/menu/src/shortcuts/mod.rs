@@ -316,7 +316,7 @@ pub struct Options {
     pub keyboard: bool,
     /// false: a Match Case checkbox beside Search, off when the dialog opens. Ticked, a row matches only when
     /// its command's name, as written or translated, contains the query with the exact case; ids, aliases,
-    /// menu paths and shortcuts no longer match.
+    /// menu paths and typed shortcuts no longer match; a chord recorded by Search by key still finds its bindings.
     pub match_case: bool,
     /// Read-only rows for keys outside the catalog.
     pub fixed: Vec<FixedRow>,

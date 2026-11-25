@@ -7,6 +7,7 @@ use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Platform, Policy, Sc
 use craft_menu::shortcuts::{HoldSetting, Outcome};
 use craft_ui::contract::Role;
 use craft_ui::testing::trial;
+use egui::{Key, Modifiers};
 
 use super::fixture::{self, Rig};
 
@@ -117,6 +118,49 @@ fn match_case_matches_command_names_only() {
         assert!(rows_for(&mut rig, query, "Export").is_empty(), "{query:?} is not in Export…'s name");
     }
     assert_eq!(rows_for(&mut rig, "Export", "Export").len(), 1);
+}
+
+/// The name of the control that holds the keyboard focus.
+fn focused(rig: &Rig) -> Option<String> {
+    let tree = rig.fixture.tree();
+    tree.name_of(craft_ui::testing::access::focused_key(tree)).map(str::to_owned)
+}
+
+/// Presses Tab until the control named `name` holds the focus.
+fn tab_to(rig: &mut Rig, name: &str) {
+    for _ in 0..40 {
+        if focused(rig).as_deref() == Some(name) {
+            return;
+        }
+        rig.press(Modifiers::NONE, Key::Tab);
+    }
+    panic!("Tab never reached {name:?}; the focus is on {:?}", focused(rig));
+}
+
+/// By keyboard alone, with Match Case ticked: a chord recorded by Search by key finds the command bound to it, and a
+/// shortcut typed into Search still does not.
+#[trial]
+fn with_match_case_ticked_search_by_key_still_finds_the_binding() {
+    let mut rig = Rig::tuned(Platform::Mac, |o| o.match_case = true);
+    tab_to(&mut rig, "Match Case");
+    rig.press(Modifiers::NONE, Key::Space);
+    let check = match_case_box(&rig).expect("the dialog offers Match Case");
+    assert_eq!(rig.fixture.tree().toggled_of(check.node), Some(craft_behavior::Mixed::Same(true)), "Space ticks Match Case");
+
+    tab_to(&mut rig, "Search by key");
+    rig.press(Modifiers::NONE, Key::Space);
+    rig.press(Modifiers::COMMAND, Key::E);
+    let rows = rig.names_with(Role::ROW, "Export");
+    assert_eq!(rows.len(), 1, "the recorded chord finds Export…: {rows:?}");
+    let check = match_case_box(&rig).expect("the dialog offers Match Case");
+    assert_eq!(rig.fixture.tree().toggled_of(check.node), Some(craft_behavior::Mixed::Same(true)), "Match Case stays ticked");
+
+    tab_to(&mut rig, "Search:");
+    rig.press(Modifiers::COMMAND, Key::A);
+    rig.fixture.type_text("Cmd+E");
+    rig.fixture.idle(2);
+    let rows = rig.names_with(Role::ROW, "Export");
+    assert!(rows.is_empty(), "a typed shortcut is not in Export…'s name: {rows:?}");
 }
 
 /// With holds on, Summarize… writes a hold binding in its command's line as its trigger text; with holds off the
