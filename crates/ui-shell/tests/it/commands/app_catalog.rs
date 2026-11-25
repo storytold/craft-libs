@@ -369,7 +369,7 @@ fn own_set(registry: &mut Registry) {
                 .with_dispatch(Dispatch::App),
         ])
     }
-    registry.add_story_set(SetEntry::new(|| "TrialOwnSet", defs, || Vec::new(), || Vec::new(), || Vec::new(), None, || Ok(Vec::new())));
+    registry.add_story_set(SetEntry::new(|| "TrialOwnSet", defs, Vec::new, Vec::new, Vec::new, None, || Ok(Vec::new())));
 }
 
 /// An app's def for a linked set's command adds its keys without taking the set's dispatch away: a set that runs its
