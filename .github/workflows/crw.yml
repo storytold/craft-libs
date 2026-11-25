@@ -1,0 +1,74 @@
+name: Shared CRW
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
+  pull_request:
+    paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-crw-${{ github.ref }}
+  cancel-in-progress: true
+
+# fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
+jobs:
+  wasm:
+    timeout-minutes: 10
+    name: CRW WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p craft-crw --locked --target wasm32-unknown-unknown
+
+  samples:
+    timeout-minutes: 20
+    name: CRW sample files decode exactly
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+      # Pull requests restore the entry main saved and never write their own: the same
+      # files saved once per pull request took a share of the 10 GB cache budget.
+      - name: Restore the CC0 sample files
+        id: samples
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ runner.temp }}/crw-samples
+          key: crw-samples-${{ hashFiles('crates/crw/tests/samples.json') }}
+      - name: Fetch the pinned CC0 sample files (raw.pixls.us)
+        run: python scripts/fetch-crw-samples.py "$RUNNER_TEMP/crw-samples"
+      - name: Save the CC0 sample files
+        if: github.event_name != 'pull_request' && steps.samples.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ runner.temp }}/crw-samples
+          key: ${{ steps.samples.outputs.cache-primary-key }}
+      - run: cargo test -p craft-crw --release --locked --test samples -- --nocapture
+        env:
+          CRAFT_CRW_SAMPLES: ${{ runner.temp }}/crw-samples
+          CRAFT_CRW_REQUIRE_SAMPLES: "1"

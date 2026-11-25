@@ -12,7 +12,7 @@ use crate::layout::Layout;
 pub mod foreign;
 
 /// The longest chord or trigger text [`Chord::parse`] and [`Trigger::parse`] accept, in bytes.
-pub const MAX_CHORD_TEXT: usize = 64;
+pub const MAX_CHORD_TEXT: usize = 72;
 
 /// The platform a keymap is used on. It decides display text and whether `ctrl` folds into `cmd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -92,7 +92,7 @@ keys! {
     Up => "Up", Down => "Down", Left => "Left", Right => "Right",
     Minus => "-", Equals => "=", Plus => "+", OpenBracket => "[", CloseBracket => "]",
     Backslash => "\\", Semicolon => ";", Quote => "'", Backtick => "`",
-    Comma => ",", Period => ".", Slash => "/",
+    Comma => ",", Period => ".", Slash => "/", IntlBackslash => "IntlBackslash",
     Colon => ":", Pipe => "|", Questionmark => "?", Exclamationmark => "!",
     OpenCurlyBracket => "{", CloseCurlyBracket => "}",
 }
@@ -181,7 +181,8 @@ impl Key {
     }
 
     /// Punctuation and symbol keys: `-`, `=`, `+`, brackets, `\`, `;`, `'`, `` ` ``, `,`, `.`,
-    /// `/` and the shifted symbols `:`, `|`, `?`, `!`, `{`, `}`.
+    /// `/`, the ISO key next to left Shift (`IntlBackslash`) and the shifted symbols `:`, `|`,
+    /// `?`, `!`, `{`, `}`.
     pub const fn is_symbol(self) -> bool {
         matches!(
             self,
@@ -197,6 +198,7 @@ impl Key {
                 | Key::Comma
                 | Key::Period
                 | Key::Slash
+                | Key::IntlBackslash
                 | Key::Colon
                 | Key::Pipe
                 | Key::Questionmark

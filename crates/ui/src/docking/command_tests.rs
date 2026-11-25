@@ -69,13 +69,18 @@ fn tab(before: Option<&str>) -> Placement<P> {
     Placement::Tab { before: before.map(s) }
 }
 
-#[test]
-fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
-    let mut seen = BTreeSet::new();
-    let mut id = |params: Value| {
-        seen.insert(params["command"].as_str().unwrap().to_owned());
-        params
-    };
+fn record_id(seen: &mut BTreeSet<String>, params: Value) -> Value {
+    seen.insert(params["command"].as_str().unwrap().to_owned());
+    params
+}
+
+fn ui_dock_operation(mut params: Value) -> Value {
+    params["command"] = json!("ui.dock");
+    params
+}
+
+fn exercise_move_commands(seen: &mut BTreeSet<String>) {
+    let mut id = |params: Value| record_id(seen, params);
 
     // The raw action form, in both protocols.
     let raw = json!({"MoveFloating": {"panel": "color", "rect": [44, 66, 360, 450]}});
@@ -105,6 +110,10 @@ fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
             to: Target::At { anchor: s("layers"), placement: Placement::Group { below: false, height: None } }
         }]
     );
+}
+
+fn exercise_float_and_dock_commands(seen: &mut BTreeSet<String>) {
+    let mut id = |params: Value| record_id(seen, params);
 
     // float: a docked panel, a lone floating panel, a group and a column.
     assert_eq!(
@@ -149,6 +158,10 @@ fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
     assert_eq!(actions(json!({"command": "window.panel.dock", "panel": "layers"})), vec![]);
     let (shown, _) = applied(json!({"command": "window.panel.dock", "panel": "swatches"}));
     assert!(shown.layout.contains(&s("swatches")) && shown.hidden.is_empty());
+}
+
+fn exercise_visibility_and_state_commands(seen: &mut BTreeSet<String>) {
+    let mut id = |params: Value| record_id(seen, params);
 
     // activate shows a hidden panel; close actions report what they closed.
     let (shown, _) = applied(id(json!({"command": "window.panel.activate", "panel": "swatches"})));
@@ -171,6 +184,10 @@ fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
         actions(id(json!({"command": "window.panel.iconic", "panel": "history"}))),
         vec![Action::SetIconic { panel: s("history"), iconic: true }]
     );
+}
+
+fn exercise_window_and_workspace_commands(seen: &mut BTreeSet<String>) {
+    let mut id = |params: Value| record_id(seen, params);
 
     // window: a floating window goes native at its rect; a docked group floats first.
     assert_eq!(
@@ -204,13 +221,12 @@ fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
     // Lock toggles or sets.
     assert!(applied(id(json!({"command": "window.workspace.lock"}))).0.locked);
     assert!(!applied(json!({"command": "window.workspace.lock", "locked": false})).0.locked);
+}
+
+fn exercise_ui_dock_commands() {
+    let op = ui_dock_operation;
 
     // The small apps' ui.dock operations.
-    let op = |params: Value| {
-        let mut params = params;
-        params["command"] = json!("ui.dock");
-        params
-    };
     let (shown, _) = applied(op(json!({"operation": "open", "panel": "swatches"})));
     assert!(shown.layout.contains(&s("swatches")));
     assert_eq!(actions(op(json!({"operation": "close", "panel": "layers"}))), vec![Action::Close { panel: s("layers") }]);
@@ -250,9 +266,10 @@ fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
         actions(op(json!({"operation": "resizeSplit", "path": [], "size": {"Ratio": 0.35}}))),
         vec![Action::ResizeSplit { path: vec![], size: SplitSize::Ratio(0.35) }]
     );
+}
 
-    let ids: BTreeSet<String> = DockCommand::<P>::IDS.iter().map(|id| (*id).to_owned()).collect();
-    assert_eq!(seen, ids, "one case per id");
+fn reject_invalid_commands() {
+    let op = ui_dock_operation;
 
     // Bad params: parse errors, or a DockError with nothing changed.
     for params in [
@@ -282,12 +299,29 @@ fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
         DockError::InvalidPlacement,
     );
     rejected(op(json!({"operation": "resizeSplit", "path": [true, true, true], "size": {"Ratio": 0.5}})), DockError::MissingTarget);
+}
+
+fn reject_locked_native_window() {
     // A docked group cannot float into a native window when locked.
     let mut locked = workspace();
     locked.locked = true;
     let before = locked.clone();
     assert!(parse(json!({"command": "window.panel.window", "panel": "layers"})).unwrap().apply(&mut locked, false, &space(), permissions).is_err());
     assert_eq!(locked, before);
+}
+
+#[test]
+fn dock_commands_parse_every_documented_shape_and_map_to_atomic_actions() {
+    let mut seen = BTreeSet::new();
+    exercise_move_commands(&mut seen);
+    exercise_float_and_dock_commands(&mut seen);
+    exercise_visibility_and_state_commands(&mut seen);
+    exercise_window_and_workspace_commands(&mut seen);
+    exercise_ui_dock_commands();
+    let ids: BTreeSet<String> = DockCommand::<P>::IDS.iter().map(|id| (*id).to_owned()).collect();
+    assert_eq!(seen, ids, "one case per id");
+    reject_invalid_commands();
+    reject_locked_native_window();
 }
 
 #[test]

@@ -271,7 +271,11 @@ fn lookups_match_exactly_and_refuse_near_matches() {
     assert_eq!(name("Test Var", "Light").unwrap(), "TestVar[wght].ttf");
     assert!(matches!(name("Test Var", "Thin"), Err(Unavailable::NoStyle { .. })));
     assert!(matches!(name("Test Var", "Bold Italic"), Err(Unavailable::NoStyle { .. })));
+}
 
+#[test]
+fn postscript_lookups_match_exactly() {
+    let index = index_of(&fixture().index).unwrap();
     assert_eq!(index.find_postscript("TestSans-Bold").unwrap().family.family, "Test Sans");
     assert_eq!(index.find_postscript("TestVar-SemiBold").unwrap().file.file_name(), "TestVar[wght].ttf");
     assert!(matches!(index.find_postscript("testsans-bold"), Err(Unavailable::NoPostScript(_))));
@@ -279,7 +283,30 @@ fn lookups_match_exactly_and_refuse_near_matches() {
     let Err(Unavailable::Ambiguous { families, .. }) = index.find_postscript("Shared-Regular") else { panic!("not ambiguous") };
     assert_eq!(families, ["Shared One", "Shared Two"]);
     assert!(index.family("Shared Two").unwrap().face_by_postscript("Shared-Regular").is_some());
+}
 
+#[test]
+fn many_files_sharing_a_postscript_name_index_in_linear_time() {
+    let mut v = fixture().index;
+    let bytes = font("Many", "Regular", 400);
+    for f in 0..40 {
+        let files: Vec<serde_json::Value> = (0..2500)
+            .map(|i| file_entry(&format!("ofl/many{f}/Many-{i}.ttf"), &bytes, "normal", 400, json!([]), &["Many-Regular", "Many-Regular"]))
+            .collect();
+        let family = json!({"family": format!("Many {f}"), "license": "OFL", "license_path": null, "files": files});
+        v["families"].as_array_mut().unwrap().push(family);
+    }
+    let index = index_of(&v).unwrap();
+    let Err(Unavailable::Ambiguous { families, .. }) = index.find_postscript("Many-Regular") else { panic!("not ambiguous") };
+    assert_eq!(families.len(), 40);
+    assert_eq!(families[0], "Many 0");
+    let first = index.family("Many 7").unwrap();
+    assert_eq!(first.face_by_postscript("Many-Regular").unwrap().file_name(), "Many-0.ttf");
+}
+
+#[test]
+fn styles_parse_and_urls_pin_the_commit() {
+    let index = index_of(&fixture().index).unwrap();
     assert_eq!(parse_style("Extra Bold Italic"), Some((800, true)));
     assert_eq!(parse_style("semi-bold"), Some((600, false)));
     assert_eq!(parse_style("Condensed Bold"), None);
@@ -461,6 +488,16 @@ fn sources_merge_with_the_first_preferred() {
     // A second source with the same ID is left out and reported.
     let twice = Index::merge([index_of(&noto_fixture().index).unwrap(), index_of(&noto_fixture().index).unwrap()]);
     assert_eq!((twice.sources().len(), twice.families().len(), twice.problems().len()), (1, 3, 1));
+    // A source left out brings no samples, also from inside an index merged before.
+    let sample = |text: &str| json!({"text": text, "method": "udhr", "language": "xx"});
+    let a0 = index_of(&noto_fixture().index).unwrap();
+    let mut a1 = noto_fixture().index;
+    a1["samples"] = json!({"Latn": sample("A")});
+    let mut b = fixture().index;
+    b["version"] = json!("1.2");
+    b["samples"] = json!({"Latn": sample("B")});
+    let nested = Index::merge([a0, Index::merge([index_of(&a1).unwrap(), index_of(&b).unwrap()])]);
+    assert_eq!((nested.sources().len(), nested.sample("Latn").map(|s| s.text.as_str())), (2, Some("B")));
 }
 
 #[test]
@@ -737,6 +774,14 @@ mod store {
         server.serve("mirror", &format!("v1/files/{sha}"), Reply::Ok(b"not the font".to_vec()));
         user.install_face(&index, face, &Cancel::new(), &mut none).unwrap();
         assert!(user.is_installed(face.family, face.file));
+
+        // A family from a source the user added never goes to the service.
+        let added = Index::from_user_bytes(f.index.to_string().as_bytes(), "https://fonts.example.org/index.json").unwrap();
+        let face = added.find_face("Test Sans", "Bold").unwrap();
+        let before = server.requests().len();
+        user.legal_text(&added, face.family, crate::LegalText::License, &Cancel::new()).unwrap();
+        user.install_face(&added, face, &Cancel::new(), &mut none).unwrap();
+        assert!(server.requests()[before..].iter().all(|r| !r.starts_with("/mirror/")), "{:?}", &server.requests()[before..]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -785,7 +830,8 @@ mod store {
         user.install_family(&index, family, &Cancel::new(), &mut none).unwrap();
         // Three files and a licence, one attempt at the mirror.
         assert_eq!(accepted.load(Ordering::Relaxed), 1);
-        assert!(client.service_is_down());
+        assert!(client.service_is_down(&format!("http://127.0.0.1:{port}")));
+        assert!(!client.service_is_down("https://fonts.example.com"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -806,6 +852,28 @@ mod store {
             other => panic!("{other:?}"),
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_client_with_other_timeouts_shares_the_down_state() {
+        let client = Client::default();
+        let short =
+            client.with_timeouts(Timeouts { connect: Duration::from_secs(1), response: Duration::from_secs(1), overall: Duration::from_secs(2) });
+        client.mark_service_down("https://fonts.example.com");
+        assert!(short.service_is_down("https://fonts.example.com/v1/x"));
+    }
+
+    #[test]
+    fn a_service_marked_down_does_not_block_another() {
+        let server = Server::start();
+        server.serve("b", "x", Reply::Ok(b"ok".to_vec()));
+        let client = server.client();
+        client.mark_service_down("https://fonts.example.com/a");
+        assert!(client.service_is_down("https://Fonts.example.com/b"));
+        let url = format!("{}b/x", server.base);
+        assert_eq!(client.get_from_service(&url, 100, &Cancel::new(), &mut |_| {}).unwrap(), b"ok");
+        client.mark_service_down("https://other.example.com");
+        assert!(client.service_is_down("https://fonts.example.com/a"));
     }
 
     #[test]
@@ -844,7 +912,7 @@ mod store {
         assert_eq!(crate::store::resolve_preview_service(env, setting).as_deref(), Some("https://a.example.com"));
         assert_eq!(crate::store::resolve_preview_service(Some(""), setting).as_deref(), Some("https://b.example.com"));
         assert_eq!(crate::store::resolve_preview_service(None, None), None);
-        let source = |env, setting| crate::store::resolve_preview_source(env, setting).1;
+        let source = |env, setting| crate::store::resolve_preview_source(env, setting, None).1;
         assert_eq!(
             (source(env, setting), source(Some(" "), setting), source(None, None)),
             (PreviewServiceSource::Env, PreviewServiceSource::Saved, PreviewServiceSource::None)
@@ -853,6 +921,60 @@ mod store {
         assert_eq!(crate::store::resolve_preview_service(Some("http://fonts.example.com"), setting), None);
         assert_eq!(crate::store::resolve_preview_service(Some("http://127.0.0.1:9"), None).as_deref(), Some("http://127.0.0.1:9"));
         assert_eq!(crate::store::resolve_preview_service(Some("http://[::1]:9/x/"), None).as_deref(), Some("http://[::1]:9/x"));
+    }
+
+    #[test]
+    fn host_default_preview_service_comes_after_env_and_setting_and_is_never_saved() {
+        let dir = temp("preview-default");
+        let store =
+            |env| FontStore::new(dir.clone(), Caller::User).with_default_preview_service("https://default.example.com/").with_preview_env(env);
+        let user = store(None);
+        let in_effect = |s: &FontStore| (s.preview_service(), s.preview_service_source());
+        assert_eq!(in_effect(&user), (Some("https://default.example.com".into()), PreviewServiceSource::Default));
+        user.set_preview_service(Some("https://saved.example.com")).unwrap();
+        assert_eq!(in_effect(&user), (Some("https://saved.example.com".into()), PreviewServiceSource::Saved));
+        assert_eq!(in_effect(&store(Some("https://env.example.com"))), (Some("https://env.example.com".into()), PreviewServiceSource::Env));
+        user.set_preview_service(None).unwrap();
+        assert_eq!(in_effect(&user), (Some("https://default.example.com".into()), PreviewServiceSource::Default));
+        assert!(!std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("default.example.com"));
+        // Another app sharing the store without a default has no service.
+        assert_eq!(FontStore::new(dir.clone(), Caller::User).with_preview_env(None).preview_service(), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saved_network_choice_beats_the_host_default_which_beats_off() {
+        let dir = temp("network-default");
+        let host = |network| FontStore::new(dir.clone(), Caller::User).with_default_network(network);
+        assert_eq!(FontStore::new(dir.clone(), Caller::User).network(), Network::Off);
+        assert_eq!(host(Network::On).network(), Network::On);
+        assert_eq!(FontStore::new(dir.clone(), Caller::Agent).with_default_network(Network::On).network(), Network::Off);
+        // Another setting saved meanwhile is not a network choice.
+        host(Network::On).set_previews_enabled(false).unwrap();
+        assert_eq!(host(Network::On).network(), Network::On);
+        assert!(!std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("network"));
+        host(Network::On).disable_network().unwrap();
+        assert_eq!(host(Network::On).network(), Network::Off);
+        host(Network::Off).enable_network().unwrap();
+        assert_eq!(host(Network::Off).network(), Network::On);
+        // A file from before the choice could be absent: its "off" is the user's.
+        std::fs::write(dir.join("settings.json"), br#"{"network":"off","user_sources":[]}"#).unwrap();
+        assert_eq!(host(Network::On).network(), Network::Off);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_settings_file_that_does_not_parse_fails_closed() {
+        let dir = temp("settings-broken");
+        let host = |network| FontStore::new(dir.clone(), Caller::User).with_default_network(network);
+        std::fs::write(dir.join("settings.json"), b"{not json").unwrap();
+        // No network and no preview service, not even the host's; a setting saved over the file
+        // keeps the network off.
+        let broken = host(Network::On).with_default_preview_service("https://default.example.com").with_preview_env(None);
+        assert_eq!((broken.network(), broken.preview_service(), broken.previews_enabled()), (Network::Off, None, true));
+        broken.set_previews_enabled(true).unwrap();
+        assert_eq!(host(Network::On).network(), Network::Off);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::cmap::Cmap;
 use crate::manifest::{ManifestEntry, ParseError, parse_manifest, script_matches};
@@ -14,6 +14,46 @@ use crate::manifest::{ManifestEntry, ParseError, parse_manifest, script_matches}
 const DIR_VAR: &str = "CRAFT_FONTS_DIR";
 const REQUIRED_VAR: &str = "CRAFT_FONTS_REQUIRED";
 const EMPTY_TABLE: &str = "&[]\n";
+/// The most a manifest may hold; the real one is a few KiB.
+const MAX_MANIFEST_BYTES: u64 = 1 << 20;
+/// The most a font or licence file may hold (bytes): the largest CJK collections are a few tens of MiB.
+const MAX_FILE_BYTES: u64 = 64 << 20;
+
+/// Read the regular file `path`, at most `limit` bytes: a device, a FIFO or a file that grows while
+/// it is read can't fill memory or block the build.
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    // Opening a FIFO with no writer blocks, so refuse anything that isn't a file before opening.
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(io::Error::other(format!("larger than {limit} bytes")));
+    }
+    Ok(bytes)
+}
+
+/// [`read_bounded`] as UTF-8 text.
+fn read_text_bounded(path: &Path, limit: u64) -> io::Result<String> {
+    String::from_utf8(read_bounded(path, limit)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Print `cargo::rerun-if-changed` for `path`. Cargo reads one instruction a line, so a path with a
+/// line break (a supplier's file name, or a checkout directory) would print a second one.
+fn rerun_if_changed(cargo: &mut Vec<String>, path: &Path) -> Result<(), Error> {
+    let shown = path.display().to_string();
+    if shown.contains(['\n', '\r']) {
+        return Err(Error::LineBreakInPath { path: path.to_path_buf() });
+    }
+    cargo.push(format!("cargo::rerun-if-changed={shown}"));
+    Ok(())
+}
 
 /// Whether the build script is building for wasm32 (web builds usually embed fewer faces).
 pub fn target_is_wasm() -> bool {
@@ -149,8 +189,10 @@ impl Embed {
     /// Copy the selected faces into `dir` instead of embedding them, for a web build that serves
     /// them beside its wasm, and write a table of [`ServedFace`](crate::ServedFace)s.
     ///
-    /// Each font file and its licence file keep their path under the checkout's `fonts/`
-    /// directory (`noto-sans-arabic/NotoSansArabic.ttf`), and a face's `url` is `url_prefix`
+    /// Each font file keeps its path under the checkout's `fonts/` directory
+    /// (`noto-sans-arabic/NotoSansArabic.ttf`), and its licence file keeps its path and stem but is
+    /// always published as `.txt` (`noto-sans-arabic/OFL.txt`; `LICENSE.html` becomes `LICENSE.txt`), so a
+    /// supplier's name can't make the site serve a page. A face's `url` is `url_prefix`
     /// followed by that path, so `serve("web/fonts", "fonts/")` suits a page that serves
     /// `web/fonts` as `fonts/`. An interface face cut by `Embed::subset_to` is served from its cut,
     /// with the start of the cut's SHA-256 in the file name (`ui/NotoSansTCUI-Regular.<hash>.ttf`)
@@ -181,14 +223,17 @@ impl Embed {
     pub(crate) fn run(&self, env: &Env, out_file: &Path, cargo: &mut Vec<String>) -> Result<Vec<ManifestEntry>, Error> {
         cargo.push(format!("cargo::rerun-if-env-changed={DIR_VAR}"));
         cargo.push(format!("cargo::rerun-if-env-changed={REQUIRED_VAR}"));
-        for text in self.checked_files() {
-            cargo.push(format!("cargo::rerun-if-changed={}", text.display()));
-        }
         let out = match (out_file.is_absolute(), &env.out_dir) {
             (true, _) => out_file.to_path_buf(),
             (false, Some(out_dir)) => Path::new(out_dir).join(out_file),
             (false, None) => return Err(Error::NoOutDir),
         };
+        for text in self.checked_files() {
+            if let Err(e) = rerun_if_changed(cargo, text) {
+                write(&out, EMPTY_TABLE)?;
+                return Err(e);
+            }
+        }
         let required = self.required.unwrap_or_else(|| env.required.as_ref().is_some_and(|v| v == "1"));
         let dir = self.dir.clone().or_else(|| env.dir.clone().filter(|d| !d.is_empty()).map(PathBuf::from));
 
@@ -236,10 +281,12 @@ impl Embed {
     /// The wanted manifest entries with their canonical file paths.
     fn select(&self, dir: &Path, cargo: &mut Vec<String>) -> Result<Vec<Face>, Error> {
         let manifest = dir.join("fonts/manifest.txt");
-        let text = std::fs::read_to_string(&manifest).map_err(|source| Error::Read { path: manifest.clone(), source })?;
+        let text = read_text_bounded(&manifest, MAX_MANIFEST_BYTES).map_err(|source| Error::Read { path: manifest.clone(), source })?;
         // Cargo treats a missing watched file as changed, which would rerun the build every time.
-        cargo.push(format!("cargo::rerun-if-changed={}", manifest.display()));
+        rerun_if_changed(cargo, &manifest)?;
         let entries = parse_manifest(&text).map_err(|error| Error::Parse { manifest: manifest.clone(), error })?;
+        // The manifest read, so the checkout exists. Faces and licences must resolve under it.
+        let root = dir.canonicalize().map_err(|source| Error::Read { path: dir.to_path_buf(), source })?;
         if let Some(families) = &self.families {
             let unknown: Vec<String> = families.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)).cloned().collect();
             if !unknown.is_empty() {
@@ -278,10 +325,27 @@ impl Embed {
                 uncut.push(format!("{} {}", entry.family, entry.style));
                 continue;
             }
+            // A manifest path names a file in the checkout, and is served under the same name.
+            for file in [&entry.file, &entry.licence_file] {
+                if !file.is_empty() && !is_checkout_relative(file) {
+                    return Err(Error::OutsideCheckout { manifest, file: file.clone() });
+                }
+            }
             let file = dir.join(&entry.file);
             // `include_bytes!` resolves relative paths from the including source file.
             let path = file.canonicalize().map_err(|source| Error::Read { path: file, source })?;
-            cargo.push(format!("cargo::rerun-if-changed={}", path.display()));
+            // A symlink in the checkout must not pull a file from elsewhere on the build host. A
+            // missing licence is only warned about when serving; one that exists must be inside.
+            if !path.starts_with(&root) {
+                return Err(Error::OutsideCheckout { manifest, file: entry.file });
+            }
+            if !entry.licence_file.is_empty() && dir.join(&entry.licence_file).canonicalize().is_ok_and(|licence| !licence.starts_with(&root)) {
+                return Err(Error::OutsideCheckout { manifest, file: entry.licence_file });
+            }
+            if !path.is_file() {
+                return Err(Error::OutsideCheckout { manifest, file: entry.file });
+            }
+            rerun_if_changed(cargo, &path)?;
             let (index, sha256) = (entry.index, entry.sha256.clone());
             faces.push(Face { entry, path, index, cut, sha256 });
         }
@@ -322,7 +386,7 @@ impl Embed {
         let dir = out_dir.join("craft-fonts-ui");
         std::fs::create_dir_all(&dir).map_err(|source| Error::Write { path: dir.clone(), source })?;
         for face in faces.iter_mut().filter(|face| face.cut) {
-            let source = std::fs::read(&face.path).map_err(|source| Error::Read { path: face.path.clone(), source })?;
+            let source = read_bounded(&face.path, MAX_FILE_BYTES).map_err(|source| Error::Read { path: face.path.clone(), source })?;
             let bytes = crate::subset::subset(&source, face.index, &chars).map_err(|failure| match failure {
                 crate::subset::Failure::NotTrueType => Error::NotTrueType { path: face.path.clone() },
                 crate::subset::Failure::Other(reason) => Error::Subset { path: face.path.clone(), reason },
@@ -366,11 +430,24 @@ impl Embed {
         }
         let manifest = dir.join("fonts/manifest.txt");
         // `select` read and parsed this manifest already.
-        let entries = std::fs::read_to_string(&manifest).ok().and_then(|text| parse_manifest(&text).ok()).unwrap_or_default();
+        let entries = read_text_bounded(&manifest, MAX_MANIFEST_BYTES).ok().and_then(|text| parse_manifest(&text).ok()).unwrap_or_default();
         for family in self.elsewhere.iter().filter(|f| !entries.iter().any(|e| &e.family == *f)) {
             cargo.push(format!("cargo::warning=craft-fonts: embedded_elsewhere names {family}, which {} lacks", manifest.display()));
         }
-        entries.into_iter().filter(|e| self.elsewhere.contains(&e.family)).collect()
+        let root = dir.canonicalize().ok();
+        let inside = |file: &str| {
+            is_checkout_relative(file) && root.as_ref().is_some_and(|root| dir.join(file).canonicalize().is_ok_and(|path| path.starts_with(root)))
+        };
+        let mut kept = Vec::new();
+        for entry in entries.into_iter().filter(|e| self.elsewhere.contains(&e.family)) {
+            // A face outside the checkout is not read, so it covers no characters.
+            if !dir.join(&entry.file).exists() || inside(&entry.file) {
+                kept.push(entry);
+            } else {
+                cargo.push(format!("cargo::warning=craft-fonts: {}: {:?} is not a file inside the checkout", manifest.display(), entry.file));
+            }
+        }
+        kept
     }
 
     /// Warn about each catalog's and [`Embed::check_text`] file's characters that neither an
@@ -383,8 +460,8 @@ impl Embed {
         let elsewhere = self.elsewhere(dir, cargo);
         let fonts: Vec<(&ManifestEntry, u32, Option<Vec<u8>>)> = faces
             .iter()
-            .map(|face| (&face.entry, face.index, std::fs::read(&face.path).ok()))
-            .chain(elsewhere.iter().map(|entry| (entry, entry.index, std::fs::read(dir.join(&entry.file)).ok())))
+            .map(|face| (&face.entry, face.index, read_bounded(&face.path, MAX_FILE_BYTES).ok()))
+            .chain(elsewhere.iter().map(|entry| (entry, entry.index, read_bounded(&dir.join(&entry.file), MAX_FILE_BYTES).ok())))
             .collect();
         let mut cmaps = Vec::new();
         for (entry, index, bytes) in &fonts {
@@ -476,21 +553,40 @@ fn table(faces: &[Face]) -> Result<String, Error> {
 impl Serve {
     /// Copy the faces' files and licences into the served directory; returns the table.
     fn copy(&self, checkout: &Path, faces: &[Face], cargo: &mut Vec<String>) -> Result<String, Error> {
+        let root = checkout.canonicalize().map_err(|source| Error::Read { path: checkout.to_path_buf(), source })?;
+        let manifest = checkout.join("fonts/manifest.txt");
         let mut copied: Vec<String> = Vec::new();
         let mut src = String::from("// Generated by craft-fonts-build. Do not edit.\n&[\n");
         for face in faces {
             let (entry, path) = (&face.entry, &face.path);
             let served = served_file(face);
-            let font = std::fs::read(path).map_err(|source| Error::Read { path: path.clone(), source })?;
+            let licence_name = served_licence(&entry.licence_file);
+            let font = read_bounded(path, MAX_FILE_BYTES).map_err(|source| Error::Read { path: path.clone(), source })?;
             let size = font.len();
             if !copied.contains(&served) {
                 copied.push(served.clone());
+                // `select` checked the manifest paths; the served names must stay under `dir` too.
+                for name in [served.as_str(), licence_name.as_str()] {
+                    if !name.is_empty() && !is_checkout_relative(name) {
+                        return Err(Error::OutsideCheckout { manifest, file: name.to_owned() });
+                    }
+                    // Writing follows a symlink, so one in the served directory could redirect it.
+                    let to = self.dir.join(name);
+                    if !name.is_empty() && has_symlink(&self.dir, &to) {
+                        return Err(Error::Write { path: to, source: io::Error::other("a symlink is in the way") });
+                    }
+                }
                 copy_file(path, &self.dir.join(&served), cargo)?;
-                let licence = checkout.join(&entry.licence_file);
-                if entry.licence_file.is_empty() || !licence.is_file() {
-                    cargo.push(format!("cargo::warning=craft-fonts: no licence file beside {}", entry.file));
-                } else {
-                    copy_file(&licence, &self.dir.join(served_path(&entry.licence_file)), cargo)?;
+                let licence = (!entry.licence_file.is_empty())
+                    .then(|| checkout.join(&entry.licence_file).canonicalize().ok())
+                    .flatten()
+                    .filter(|licence| licence.is_file());
+                match licence {
+                    None => cargo.push(format!("cargo::warning=craft-fonts: no licence file beside {}", entry.file)),
+                    Some(licence) if !licence.starts_with(&root) => {
+                        return Err(Error::OutsideCheckout { manifest, file: entry.licence_file.clone() });
+                    }
+                    Some(licence) => copy_file(&licence, &self.dir.join(&licence_name), cargo)?,
                 }
             }
             let coverage = crate::coverage::of_face(&font, face.index).unwrap_or_else(|| {
@@ -550,6 +646,32 @@ fn served_file(face: &Face) -> String {
     }
 }
 
+/// Where a face's licence is served: beside its font, always as `.txt`, whatever the supplier named
+/// it. A `LICENSE.html` published as it is would be a page on the site's own origin.
+fn served_licence(file: &str) -> String {
+    if file.is_empty() {
+        return String::new();
+    }
+    Path::new(served_path(file)).with_extension("txt").to_string_lossy().into_owned()
+}
+
+/// Whether a manifest path stays under the directory it is joined to: relative, without `..`, a
+/// root or a drive prefix.
+fn is_checkout_relative(file: &str) -> bool {
+    !file.is_empty() && Path::new(file).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
+/// Whether `to`, or a directory between `dir` and `to`, is a symlink. `symlink_metadata` doesn't
+/// follow one.
+fn has_symlink(dir: &Path, to: &Path) -> bool {
+    let Ok(rest) = to.strip_prefix(dir) else { return true };
+    let mut current = dir.to_path_buf();
+    rest.components().any(|component| {
+        current.push(component);
+        std::fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink())
+    })
+}
+
 /// A checkout path relative to the served directory: `fonts/a/A.ttf` → `a/A.ttf`.
 fn served_path(file: &str) -> &str {
     file.strip_prefix("fonts/").unwrap_or(file)
@@ -558,11 +680,11 @@ fn served_path(file: &str) -> &str {
 /// Copy `from` unless `to` already holds the same bytes. The copy keeps `from`'s modification time
 /// and is watched, so the build copies it again once it is deleted, without running every build.
 fn copy_file(from: &Path, to: &Path, cargo: &mut Vec<String>) -> Result<(), Error> {
-    cargo.push(format!("cargo::rerun-if-changed={}", to.display()));
+    rerun_if_changed(cargo, to)?;
     let write_error = |source| Error::Write { path: to.to_path_buf(), source };
     let read_error = |source| Error::Read { path: from.to_path_buf(), source };
-    let bytes = std::fs::read(from).map_err(read_error)?;
-    if std::fs::read(to).is_ok_and(|old| old == bytes) {
+    let bytes = read_bounded(from, MAX_FILE_BYTES).map_err(read_error)?;
+    if read_bounded(to, MAX_FILE_BYTES).is_ok_and(|old| old == bytes) {
         return Ok(());
     }
     if let Some(parent) = to.parent() {
@@ -622,6 +744,12 @@ pub enum Error {
     UnknownFamilies { manifest: PathBuf, families: Vec<String>, known: Vec<String> },
     /// A face to embed has a path that isn't UTF-8, which `include_bytes!` can't name.
     NonUtf8Path { path: PathBuf },
+    /// A manifest font or licence path is absolute, climbs out with `..`, or resolves (through a
+    /// symlink) to a file outside the checkout.
+    OutsideCheckout { manifest: PathBuf, file: String },
+    /// A path that goes into a `cargo::rerun-if-changed` line has a line break, which would start
+    /// another cargo instruction.
+    LineBreakInPath { path: PathBuf },
 }
 
 impl fmt::Display for Error {
@@ -654,6 +782,10 @@ impl fmt::Display for Error {
                 known.join(", ")
             ),
             Self::NonUtf8Path { path } => write!(f, "cannot embed {}: include_bytes! needs a UTF-8 path", path.display()),
+            Self::OutsideCheckout { manifest, file } => {
+                write!(f, "{}: {file:?} is not a file inside the checkout", manifest.display())
+            }
+            Self::LineBreakInPath { path } => write!(f, "{path:?} has a line break: cargo could not be told to watch it"),
         }
     }
 }

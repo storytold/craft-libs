@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use craft_font_manager::craft_font_catalog::Os;
-use craft_font_manager::remote::{Codepoints, DiskCache, Instance, MAX_CODEPOINTS, Preview, PreviewError, PreviewKey, Previews, Subset};
+use craft_font_manager::remote::{Codepoints, DiskCache, Instance, MAX_CODEPOINTS, Preview, PreviewError, PreviewKey, Previews, SampleHash, Subset};
 use craft_font_manager::store::{FakeStore, Installer, SuiteStore};
 use craft_font_manager::{Catalog, FontEnv};
 use craft_font_store::{Client, is_font};
@@ -53,15 +53,15 @@ fn canonical_codepoints_match_the_shared_vectors() {
 fn subset_urls() {
     let key = |inst, subset| PreviewKey::new(&sha(0x0a), inst, subset).map(|k| k.url("https://fonts.example.com/"));
     let base = format!("https://fonts.example.com/v1/faces/{}", sha(0x0a));
-    assert_eq!(key(Instance::List, Subset::Sample), Some(format!("{base}/list/sample.woff2")));
+    assert_eq!(key(Instance::List, Subset::Sample(SampleHash::of("Hello"))), Some(format!("{base}/list/sample-185f8db32271.woff2")));
     assert_eq!(key(Instance::List, Subset::Ascii), Some(format!("{base}/list/ascii.woff2")));
-    assert_eq!(key(Instance::Var, Subset::Sample), Some(format!("{base}/var/sample.woff2")));
+    assert_eq!(key(Instance::Var, Subset::Sample(SampleHash::of("Hello"))), Some(format!("{base}/var/sample-185f8db32271.woff2")));
     assert_eq!(key(Instance::Var, Subset::Codepoints(Codepoints::from_text("ab"))), Some(format!("{base}/var/u/61-62.woff2")));
 
-    let upper = PreviewKey::new(&"AB".repeat(32), Instance::List, Subset::Sample).unwrap();
+    let upper = PreviewKey::new(&"AB".repeat(32), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
     assert_eq!(upper.sha256(), "ab".repeat(32));
-    assert!(PreviewKey::new("../../etc", Instance::List, Subset::Sample).is_none());
-    assert!(PreviewKey::new(&"g".repeat(64), Instance::List, Subset::Sample).is_none());
+    assert!(PreviewKey::new("../../etc", Instance::List, Subset::Sample(SampleHash::of("Hello"))).is_none());
+    assert!(PreviewKey::new(&"g".repeat(64), Instance::List, Subset::Sample(SampleHash::of("Hello"))).is_none());
     let many: Codepoints = ('\u{4e00}'..).take(MAX_CODEPOINTS + 1).collect();
     assert!(PreviewKey::new(&sha(1), Instance::List, Subset::Codepoints(many.clone())).is_none());
     let mut fits = many;
@@ -98,6 +98,9 @@ fn disk_cache_drops_the_least_recently_used() {
     let smaller = DiskCache::new(&dir, 200);
     assert_eq!(smaller.size(), 200);
     assert_eq!(files(), 2);
+    // A file another session cached after this one read the folder.
+    smaller.put("f", &bytes(6));
+    assert!(again.contains("f"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -200,8 +203,8 @@ fn previews_come_from_the_service_then_the_cache_and_only_with_consent() {
     let service = Service::start();
     let dir = temp("service");
     let store = Arc::new(FakeStore::new(&dir, HashMap::new()));
-    let sample = PreviewKey::new(&sha(1), Instance::List, Subset::Sample).unwrap();
-    let broken = PreviewKey::new(&sha(2), Instance::List, Subset::Sample).unwrap();
+    let sample = PreviewKey::new(&sha(1), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
+    let broken = PreviewKey::new(&sha(2), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
     service.serve(&sample, Reply::Ok(WOFF2.to_vec()));
     service.serve(&broken, Reply::Ok(b"wOF2 but not really".to_vec()));
     let previews = Previews::new(store.clone());
@@ -249,9 +252,13 @@ fn the_suite_store_and_its_previews_share_the_service_down_state() {
     let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(root.join("store")), ..FontEnv::default() };
     let store = SuiteStore::for_user(Arc::new(Catalog::new(env).with_font_service(false))).unwrap();
     let client = store.http_client().unwrap();
-    assert!(!client.service_is_down() && !store.client().service_is_down());
-    client.mark_service_down();
-    assert!(store.client().service_is_down());
+    let svc = "https://fonts.example.com";
+    assert!(!client.service_is_down(svc) && !store.client().service_is_down(svc));
+    client.mark_service_down(svc);
+    assert!(store.client().service_is_down(svc));
+    // The pool's client has its own timeouts and the same down state.
+    let pool_client = client.with_timeouts(craft_font_store::Timeouts::default());
+    assert!(pool_client.service_is_down(svc));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -262,11 +269,11 @@ fn a_service_marked_down_gets_no_requests() {
     let store = Arc::new(FakeStore::new(&dir, HashMap::new()));
     store.set_preview_service(Some(&service.base)).unwrap();
     store.allow_downloads(true).unwrap();
-    let key = PreviewKey::new(&sha(1), Instance::List, Subset::Sample).unwrap();
+    let key = PreviewKey::new(&sha(1), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
     service.serve(&key, Reply::Ok(WOFF2.to_vec()));
     // The client is shared with, say, the store's installs, which found the service unreachable.
     let client = Client::default();
-    client.mark_service_down();
+    client.mark_service_down(&service.base);
     let previews = Previews::new(store.clone()).with_fetcher(Arc::new(client));
     previews.request(key, 1);
     let got = wait_for(&previews, 1);
@@ -282,7 +289,7 @@ fn highest_priority_first_and_cancelled_requests_deliver_nothing() {
     let store = Arc::new(FakeStore::new(&dir, HashMap::new()));
     store.allow_downloads(true).unwrap();
     store.set_preview_service(Some(&service.base)).unwrap();
-    let keys: Vec<PreviewKey> = (1..=4).map(|n| PreviewKey::new(&sha(n), Instance::List, Subset::Sample).unwrap()).collect();
+    let keys: Vec<PreviewKey> = (1..=4).map(|n| PreviewKey::new(&sha(n), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap()).collect();
     let [held, low, high, dropped] = [&keys[0], &keys[1], &keys[2], &keys[3]];
     service.serve(held, Reply::Held);
     for key in [low, high, dropped] {
@@ -309,5 +316,34 @@ fn highest_priority_first_and_cancelled_requests_deliver_nothing() {
     assert!(previews.poll().is_empty());
     assert_eq!(previews.pending(), 0);
     service.release();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sample_hash_is_the_sha256_prefix_of_the_exact_text() {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!("data/preview-vectors.json")).unwrap();
+    let vectors = vectors["sample_hash"]["vectors"].as_array().unwrap();
+    assert!(vectors.len() >= 4);
+    for v in vectors {
+        let text = v["text"].as_str().unwrap();
+        assert_eq!(SampleHash::of(text).as_str(), v["h"].as_str().unwrap(), "{text:?}");
+    }
+    assert_ne!(SampleHash::of("Hello\n"), SampleHash::of("Hello"));
+    let a = PreviewKey::new(&sha(1), Instance::List, Subset::Sample(SampleHash::of("a"))).unwrap();
+    let b = PreviewKey::new(&sha(1), Instance::List, Subset::Sample(SampleHash::of("b"))).unwrap();
+    assert_ne!(a.path(), b.path(), "the disk cache key names the text");
+}
+
+#[test]
+fn a_404_comes_back_as_not_found() {
+    let service = Service::start();
+    let dir = temp("notfound");
+    let store = Arc::new(FakeStore::new(&dir, HashMap::new()));
+    store.set_preview_service(Some(&service.base)).unwrap();
+    let key = PreviewKey::new(&sha(1), Instance::List, Subset::Sample(SampleHash::of("Hello"))).unwrap();
+    let previews = Previews::new(store.clone());
+    previews.request(key, 1);
+    let got = wait_for(&previews, 1);
+    assert_eq!(got.first().map(|p| p.font.clone().unwrap_err()), Some(PreviewError::NotFound));
     let _ = std::fs::remove_dir_all(dir);
 }

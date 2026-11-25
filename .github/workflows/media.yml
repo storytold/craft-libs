@@ -3,53 +3,65 @@ name: Shared media
 on:
   push:
     branches: [main]
-    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+    paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   pull_request:
-    paths: ["crates/media/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
+    paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A fraction of the fuzz-style cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  CRAFT_HOSTILE_DIVISOR: "8"
+  PROPTEST_CASES: "64"
+
 concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
   group: shared-media-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   lint:
     timeout-minutes: 10
-    name: Media lint, feature sets, WASM
+    # fmt, and clippy with default and with all features, run in the Workspace gate on every OS.
+    name: Media feature sets, WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
-          components: rustfmt, clippy
+          toolchain: stable
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: craft-media-lint
-      - run: cargo fmt -p craft-media --check
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features bitstream -- -D warnings
-      - run: cargo clippy -p craft-media --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features matroska -- -D warnings
-      - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features ogg -- -D warnings
+      - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features serde -- -D warnings
       - run: cargo check -p craft-media --all-features --locked --target wasm32-unknown-unknown
   test:
     timeout-minutes: 15
     name: Media tests with ffmpeg oracles
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
-          key: craft-media-test
+          toolchain: stable
       - name: Build tests while installing ffmpeg
         run: |
           # The man-db index rebuild after dpkg is slow on hosted runners.

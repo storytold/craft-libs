@@ -10,7 +10,7 @@ repository.workspace = true
 [features]
 default = []
 # `FontsPanel`: the whole interface as one egui panel.
-egui = ["dep:egui", "dep:craft-ui", "dep:serde", "dep:log"]
+egui = ["dep:egui", "dep:craft-ui", "dep:serde", "dep:log", "dep:skrifa"]
 
 [dependencies]
 craft-font-catalog = { workspace = true }
@@ -24,6 +24,8 @@ egui = { workspace = true, features = ["default_fonts"], optional = true }
 craft-ui = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
+# A variable subset's axes and their names, for the detail view's sliders.
+skrifa = { version = "0.47", default-features = false, features = ["std"], optional = true }
 # Decodes the preview service's WOFF2 subsets; pure Rust. Brotli only: WOFF 1 isn't served.
 wuff = { version = "0.2.9", default-features = false, features = ["brotli"] }
 

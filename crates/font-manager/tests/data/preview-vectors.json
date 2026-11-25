@@ -80,5 +80,26 @@
    "codepoints": "",
    "closure": "20,200c-200d,25cc"
   }
- ]
+ ],
+ "sample_hash": {
+  "rule": "The {h} of /v1/faces/{sha256}/{inst}/sample-{h}.woff2: the first 12 lowercase hex characters of the sha256 of the face's sample text exactly as the index gives it (the file's sample_text, else samples[file.sample_script ?? family.sample_script].text), as UTF-8 bytes, with no normalisation and newlines kept. The subset itself also covers the family name; h covers only the sample text. A request whose h is not the face's current one gets 404; the client then falls back to u/{codepoints}.",
+  "vectors": [
+   {
+    "text": "Whereas recognition of the inherent dignity",
+    "h": "a79fe905fc38"
+   },
+   {
+    "text": "โดยที่การไม่นำพาและการหมิ่นในคุณค่าของสิทธิมนุษยชน",
+    "h": "ea9257b96f35"
+   },
+   {
+    "text": "𐊪𐊾𐊠𐊽𐊾𐊲𐊸𐊫𐊷𐋉𐋃𐊷𐊲𐊷𐊲𐊰𐊫𐋇𐊫𐊰𐊪𐊫𐊣\n𐊪𐊾𐊠𐊽𐊾𐊲𐊸𐊫𐊷𐋉𐋃𐊷𐊲𐊷𐊲𐊰𐊫𐋇𐊫𐊰𐊪𐊫𐊣",
+    "h": "259046b056a5"
+   },
+   {
+    "text": "Hello",
+    "h": "185f8db32271"
+   }
+  ]
+ }
 }

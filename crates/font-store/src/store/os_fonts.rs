@@ -60,7 +60,7 @@ impl OsFontFolder {
     ///   Flatpak, the host's folder (`$HOST_XDG_DATA_HOME`, else `~/.local/share`), only when
     ///   `/.flatpak-info` grants write access to it (`--filesystem=xdg-data/fonts:create`), and
     ///   without `fc-cache`. Not in a Snap (`SNAP` is set).
-    /// - Windows (for now), Haiku and the web: not offered.
+    /// - Windows, Haiku and the web: not offered.
     pub fn for_env(env: &FontEnv) -> Result<Self, String> {
         Self::for_env_with(env, &|k| std::env::var_os(k).filter(|v| !v.is_empty()))
     }
@@ -93,7 +93,7 @@ impl OsFontFolder {
                 };
                 Ok(Self { dir: data.join("fonts/Craft"), layout: OsFontLayout::Folders, fc_cache })
             }
-            Os::Windows => Err("copying fonts into the Windows Fonts folder isn't supported yet".into()),
+            Os::Windows => Err("copying fonts into the Windows Fonts folder isn't supported".into()),
             Os::Haiku | Os::None => Err("this system has no user font folder the store can add to".into()),
         }
     }

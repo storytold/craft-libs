@@ -25,10 +25,10 @@ A source the user adds is an index file at an https URL (`.json` or `.json.gz`).
 
 | Rule | How |
 |---|---|
-| Off until the user turns it on | `FontStore::network()` is `Network::Off` until `enable_network()`. The setting is `settings.json` in the store folder, so it holds for every app. |
+| Off until the user turns it on | `FontStore::network()` is `Network::Off` until `enable_network()`. The setting is `settings.json` in the store folder, so it holds for every app. A host may give its own default for a user who hasn't chosen (`FontStore::with_default_network`); it is never saved, and the user's `enable_network()` or `disable_network()` beats it. A `settings.json` that exists but can't be read, is too large or doesn't parse reads as `Network::Off`, whatever the host's default, and the next saved setting starts from that. |
 | Only the user turns it on | `FontStore::for_user` is for the app's own interface; call `enable_network()` from a setting or from the user's Install click. `FontStore::for_agent` (MCP, CLI, scripting) gets `Error::NotAllowed`. An agent can install while the user has the network on. |
 | No requests at startup | Nothing in the crate makes a request on its own. Only `fetch_indexes` and the installs do, and they return `Error::NetworkOff` without one while the network is off. |
-| Optional preview service | Off unless set: no default address. `CRAFT_FONT_PREVIEW_URL`, else the `preview_service` field of `settings.json` (`FontStore::set_preview_service`, user only, `Error::NotAllowed` for an agent). `FontStore::preview_service()` returns the one in effect and `preview_service_source()` says whether it is `Env`, `Saved` or `None`; the variable's name is `PREVIEW_SERVICE_ENV`. https only; http is accepted only for the addresses `127.0.0.1` and `::1`, never for a host name, which a resolver can point off the machine. A trailing slash is dropped. Example: `CRAFT_FONT_PREVIEW_URL=https://fonts.example.com`. |
+| Optional preview service | Off unless set: craft-libs has no default address. `CRAFT_FONT_PREVIEW_URL`, else the `preview_service` field of `settings.json` (`FontStore::set_preview_service`, user only, `Error::NotAllowed` for an agent), else the host's default (`FontStore::with_default_preview_service`), which is never saved, so clearing the setting brings it back and other apps sharing the store don't see it. `FontStore::preview_service()` returns the one in effect and `preview_service_source()` says whether it is `Env`, `Saved`, `Default` or `None`; the variable's name is `PREVIEW_SERVICE_ENV`. A `settings.json` that exists but can't be read or parsed means no saved service and no host default. Installs and `legal_text` try the service's mirror only for curated families (the built-in sources, `Family::is_curated`), so the hashes of files from sources the user added are never sent to it. https only; http is accepted only for the addresses `127.0.0.1` and `::1`, never for a host name, which a resolver can point off the machine. A trailing slash is dropped. Example: `CRAFT_FONT_PREVIEW_URL=https://fonts.example.com`. |
 | Previews setting | `previews` in `settings.json`, on by default: `FontStore::previews_enabled()`, `set_previews_enabled(bool)` (user only, `Error::NotAllowed` for an agent). The app fetches previews from a set service only while it is on; installs ignore it. |
 | Mirror first | With a service set, an install requests `<service>/v1/files/<sha256>` for each font file and `<service>/v1/licences/<sha256>` for a licence (when the index gives its sha256) before the index's URLs. The size and sha256 checks are the same, and a response that fails them moves on to the next URL. |
 | One HTTP client | `Client`: ureq with rustls and the webpki roots, HTTPS only (plain http only to `127.0.0.1` or `::1`, following no redirects, for a preview service run locally), no cookies, `User-Agent: craft-font-store/<version>`. Timeouts: 15 s to connect, 30 s to the response headers, 10 minutes per file. |
@@ -103,6 +103,8 @@ os-fonts.json        the ledger of copies in the OS user font folder
 indexes/             the last indexes fetched: sources.json, <source>.json.gz, user-<hash>
 previews/            preview subsets (WOFF2) craft-font-manager caches, at most 50 MB
 <family folder>/     the font files and the licence
+language-packs/      installed Language packs, one folder per locale
+language-packs.json  which Language packs are installed
 .staging/            downloads being installed
 .lock                held while the store changes
 ```
@@ -122,9 +124,55 @@ A Google Fonts family's folder is google/fonts' own folder name (`lato/`); anoth
 
 The catalog scans the store folder. With `with_catalog(catalog)`, every install and removal ends with `catalog.rescan()`, which reads only new and changed files, so the app sees the fonts at once. Other running apps notice through `Catalog::rescan_if_changed` (when their window is activated) or `Catalog::watch`.
 
+## Language packs
+
+The store's second item kind, `language-pack`: a language's spelling dictionary, hyphenation patterns and licence texts, published by [storytold/craft-i18n](https://github.com/storytold/craft-i18n) as `<locale>.tar.zst` release assets listed in an `index.json`, and read at runtime by `craft-proof` (`craft_proof::packs`). It reuses the store's folder, consent, HTTP client, staging and sha256 checks; there is no second downloader.
+
+```rust
+const PACKS: PackIndexPin = PackIndexPin { url: "https://github.com/storytold/craft-i18n/releases/download/language-packs-1/index.json", sha256: "<hex>" };
+let index = store.fetch_language_pack_index(&PACKS, &Cancel::new())?;   // or cached_language_pack_index(&PACKS)
+let nl = index.pack("nl").unwrap();
+store.install_language_pack(&index, nl, &Cancel::new(), &mut |p| ())?;  // network on, like fonts
+craft_proof::packs::set_packs_dir(Some(store.language_packs_dir()));      // then packs::reload() after each change
+store.remove_language_pack("nl")?;
+let installed = store.installed_language_packs();
+```
+
+| Call | What it does |
+|---|---|
+| `fetch_language_pack_index(pin, cancel)` | Downloads the index, checks it against the pin's sha256, saves it as `indexes/language-packs.json`. Needs the network on. |
+| `cached_language_pack_index(pin)` | The saved index, when it is the pinned one. |
+| `install_language_pack(index, pack, cancel, progress)` | Downloads the archive (at most 128 MiB), checks size and sha256, unpacks it into `.staging/` and moves it into `language-packs/<locale>/` with one rename (an older pack is replaced the same way). Records it in `language-packs.json`. |
+| `remove_language_pack(locale)` | Moves the folder out at once, updates the record, deletes the files. No network needed. |
+| `installed_language_packs()` | The recorded packs whose folder is there. |
+| `language_packs_dir()` | `<store>/language-packs`, for `craft_proof::packs::set_packs_dir`. |
+
+Removal restores the original folder if the installed-record update fails. If restoration also
+fails, the error names a preserved backup under `language-packs/.removing/`. That recovery
+folder is outside the ordinary download staging sweep; cleanup does not delete the backup.
+Committed removals record their backup IDs in the same atomic record update. On lock acquisition,
+the cleanup sweep attempts at most four previously recorded backups, completing finite rounds through
+the receipts within a live store so failed entries are revisited even as new receipts arrive.
+This bounds the number of
+deletion attempts, not the work to delete one backup. Recreating the store resets the cursor;
+backups and receipts remain available for later retries, and the next lock need not finish all
+pending cleanup. Failed rollback backups have no receipt and remain available for recovery.
+Receipts stay until cleanup succeeds and a later record write prunes them; their IDs cannot be
+reused for a new removal while they remain recorded.
+An installed record rebuilt after corruption has no cleanup receipts; unreceipted backups are
+retained for manual recovery.
+Invalid receipt names are discarded without losing readable pack metadata or other valid receipts.
+Cleanup retains open store, Language pack, and recovery-directory handles; it rejects symlinked
+recovery ancestors. Unix cleanup resolves receipt names relative to the open recovery directory;
+Windows retains ancestor handles that prevent their replacement during cleanup.
+
+**Unpacking is hostile-input safe:** pure-Rust zstd (`ruzstd`, MIT; every frame is read, and nothing but tar padding may follow the archive) and `tar` (MIT OR Apache-2.0); regular files and the `LICENCES` folder only (no links or devices). Only the contract's names are allowed: `pack.toml`, `spelling.aff`, `spelling.dic`, `hyphenation.pat` at the root and `LICENCES/<name>` (`[A-Za-z0-9._-]`, no leading or trailing dot, no Windows device names such as `CON` or `nul.txt`). Each file at most 64 MiB, 256 MiB and 256 entries per pack. `pack.toml` is required and must name the entry's locale; the files the index promises (`spelling`, `hyphenation`) must be there. Index entries need a lowercase BCP 47 locale (listed once, not a Windows device name), a sha256 and an `https://` URL; names, licences, versions, classes and the release lose control and bidi/format characters before they are stored or listed; an optional `source` must be an `https://` URL. At most 4096 zstd frames per archive. An unreadable `language-packs.json` is copied to `language-packs.json.bad` and rebuilt from the pack folders (each `pack.toml`) atomically in place, as is a missing one when pack folders are there, so no installed pack drops out of the list. Only an install or removal (under the store lock) rewrites it; listing reads the folders meanwhile and writes nothing.
+
+**Developer override (testing only — bypasses the pin):** `CRAFT_LANGUAGE_PACK_INDEX=<url or path>` replaces the pinned index URL with an `http://` URL on a loopback host (`127.0.0.1`, `localhost`, `[::1]`), an `https://` URL or a local file path (`file://` URLs are not taken), and **skips the index's sha256 pin**. Archives are still checked against the sha256 and size in that index, and may then also be loopback `http://` URLs or local paths. Off unless the variable is set; it works in release builds too (for end-to-end tests of a real build), a warning is logged whenever it is used, and `language_pack_index_overridden() -> Option<String>` returns the value so apps can show that the pin is bypassed. Never set it for users.
+
 ## Copies in the OS font folder
 
-Fonts in the store are for the Craft apps only. A family can also be copied into the OS user font folder, for every other program of the current user (the API calls this making it available to all apps): opt-in per family, off by default, and only from the user's own action.
+Fonts in the store are for the Craft apps only. A family can also be copied into the OS user font folder, for every other program of the current user (the API calls this making it available to all apps). The calls below work per family; whether an app copies every family the user installs or lets the user choose per family is the app's decision. Only the user's store (`for_user`) changes the OS folder.
 
 | Call | What it does |
 |---|---|
@@ -154,7 +202,7 @@ The user's `remove_family` and `remove_files` withdraw the copies first, so the 
 | macOS | `~/Library/Fonts` | `Craft-<file>`, side by side. macOS activates them for every app of the user. |
 | Linux and the BSDs | `$XDG_DATA_HOME/fonts/Craft` (`~/.local/share/fonts/Craft`) | `<store family folder>/<file>`. fontconfig reads the folder with its subfolders; `fc-cache` refreshes the cache afterwards when it is on `PATH`, off the calling thread. |
 | Flatpak | the host's `$HOST_XDG_DATA_HOME/fonts/Craft`, else `~/.local/share/fonts/Craft` | Only when `/.flatpak-info` grants write access to that folder (`--filesystem=xdg-data/fonts:create`; its entries apply in order, `!name` revokes and `:ro` grants no write). No `fc-cache`: it would refresh the sandbox's cache. |
-| Snap, a sandboxed macOS build (Mac App Store), Windows, Haiku, the web | none | `Error::Unsupported`. Windows (10 1809 and later, HKCU registration) comes later. |
+| Snap, a sandboxed macOS build (Mac App Store), Windows, Haiku, the web | none | `Error::Unsupported`. |
 
 `FontStore::new` has no folder; `with_os_fonts(OsFontFolder::at(dir, layout))` sets one, for tests and setups the rules above don't cover.
 

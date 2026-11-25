@@ -1,0 +1,41 @@
+[package]
+name = "craft-control"
+description = "The control channel any app may share: token files, the loopback server, and its requests; no UI toolkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# AI agents in the open window (desktop): the ArtCraft Launcher's switch, the connection file and
+# the `<id>-cli mcp` side that finds the open window. The agent settings build without it.
+agents = ["dep:craft-ai-agents", "dep:craft-atomic", "dep:craft-flags", "dep:dirs", "dep:log"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# The loopback server is for desktop apps; the web app is driven through the page instead.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The per-launch control token: 32 random bytes from the operating system (MIT OR Apache-2.0).
+getrandom = "0.3"
+# The launcher's app list, read in one place for the launcher, the gateway and every app (MIT OR Apache-2.0, ours).
+craft-ai-agents = { workspace = true, optional = true }
+craft-atomic = { workspace = true, optional = true }
+craft-flags = { workspace = true, optional = true }
+# The system's Documents folder for the default agent folder, on every desktop system (MIT OR Apache-2.0).
+dirs = { version = "7", optional = true }
+log = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"
+
+[[test]]
+name = "agents"
+required-features = ["agents"]

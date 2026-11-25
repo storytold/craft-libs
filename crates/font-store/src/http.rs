@@ -2,10 +2,11 @@
 //! progress and cancellation. Plain http only to a loopback host, and only when the caller opts
 //! in for a preview service run locally.
 
+use std::collections::HashMap;
 use std::io::Read;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Cancels a download from another thread. Clones share the flag.
@@ -76,6 +77,13 @@ pub enum FetchError {
 /// How long a preview service that failed on the network is skipped.
 pub const SERVICE_BACKOFF: Duration = Duration::from_secs(60);
 
+/// `scheme://host:port` of `url`, lowercased.
+fn service_origin(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    format!("{}://{}", scheme.to_ascii_lowercase(), authority.to_ascii_lowercase())
+}
+
 fn now_millis() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -90,8 +98,10 @@ pub struct Client {
     agent: ureq::Agent,
     /// For `http://` to a loopback host. It follows no redirects, so it never leaves the machine.
     loopback: ureq::Agent,
-    /// When the preview service may be tried again after a network failure. Clones share it.
-    service_down_until: Arc<AtomicU64>,
+    /// The origins of preview services that failed on the network, each with when it may be
+    /// tried again. Clones share it.
+    service_down: Arc<Mutex<HashMap<String, u64>>>,
+    https_only: bool,
     /// URL prefixes the tests serve from a local server.
     #[cfg(test)]
     pub(crate) rewrite: Vec<(String, String)>,
@@ -134,9 +144,28 @@ impl Client {
         Self {
             agent: agent(https_only, 3),
             loopback: agent(false, 0),
-            service_down_until: Arc::new(AtomicU64::new(0)),
+            service_down: Arc::new(Mutex::new(HashMap::new())),
+            https_only,
             #[cfg(test)]
             rewrite: Vec::new(),
+        }
+    }
+
+    /// A client that also allows plain `http://`, used only for the developer override of the
+    /// Language pack index (`CRAFT_LANGUAGE_PACK_INDEX`), which accepts only loopback hosts.
+    pub(crate) fn allowing_http(t: Timeouts) -> Self {
+        Self::build(t, false)
+    }
+
+    /// A client with other timeouts that shares this one's preview-service down state, so a
+    /// pool with short timeouts (previews) and the installs agree on which service is down.
+    pub fn with_timeouts(&self, timeouts: Timeouts) -> Client {
+        let fresh = Self::build(timeouts, self.https_only);
+        Client {
+            service_down: Arc::clone(&self.service_down),
+            #[cfg(test)]
+            rewrite: self.rewrite.clone(),
+            ..fresh
         }
     }
 
@@ -166,28 +195,34 @@ impl Client {
     /// to a loopback host is allowed, without following redirects. Never call it with a URL from
     /// an index or a user source.
     ///
-    /// After a network failure (no connection, a timeout; not an HTTP status) the service counts as
-    /// down for [`SERVICE_BACKOFF`]: calls in that time fail at once, so a service that is off
+    /// After a network failure (no connection, a timeout; not an HTTP status) that service (its
+    /// scheme, host and port) counts as down for [`SERVICE_BACKOFF`]: calls in that time fail at once, so a service that is off
     /// doesn't make every request wait out the timeouts. Clones of the client share this.
     pub fn get_from_service(&self, url: &str, max: u64, cancel: &Cancel, on_bytes: &mut dyn FnMut(u64)) -> Result<Vec<u8>, FetchError> {
-        if self.service_is_down() {
+        if self.service_is_down(url) {
             return Err(FetchError::Failed("the preview service is down".into()));
         }
         let got = self.request(url, max, cancel, on_bytes, true);
         if got.as_ref().is_err_and(FetchError::is_network) {
-            self.mark_service_down();
+            self.mark_service_down(url);
         }
         got
     }
 
-    /// Whether a network failure of the preview service is recent enough to skip it.
-    pub fn service_is_down(&self) -> bool {
-        now_millis() < self.service_down_until.load(Ordering::Relaxed)
+    /// Whether a network failure of the preview service at `service` (its URL or any URL on it)
+    /// is recent enough to skip it. Another service is not down.
+    pub fn service_is_down(&self, service: &str) -> bool {
+        let down = self.service_down.lock().unwrap_or_else(|e| e.into_inner());
+        down.get(&service_origin(service)).is_some_and(|until| now_millis() < *until)
     }
 
-    /// Marks the preview service as down for [`SERVICE_BACKOFF`].
-    pub fn mark_service_down(&self) {
-        self.service_down_until.store(now_millis() + SERVICE_BACKOFF.as_millis() as u64, Ordering::Relaxed);
+    /// Marks the preview service at `service` as down for [`SERVICE_BACKOFF`].
+    pub fn mark_service_down(&self, service: &str) {
+        let until = now_millis() + SERVICE_BACKOFF.as_millis() as u64;
+        let mut down = self.service_down.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_millis();
+        down.retain(|_, until| now < *until);
+        down.insert(service_origin(service), until);
     }
 
     fn request(&self, url: &str, max: u64, cancel: &Cancel, on_bytes: &mut dyn FnMut(u64), allow_loopback_http: bool) -> Result<Vec<u8>, FetchError> {

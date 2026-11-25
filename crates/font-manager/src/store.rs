@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use craft_font_catalog::Catalog;
-pub use craft_font_store::UserSource;
-use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, PreviewServiceSource, verify_font};
+use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
+pub use craft_font_store::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};
 
 use crate::index::{Family, Index};
 
@@ -105,13 +105,15 @@ pub trait Installer: Send + Sync {
     }
 
     /// The preview service's base URL, if one is set: [`craft_font_store::PREVIEW_SERVICE_ENV`], else the font
-    /// store's `preview_service` setting. Installs try it as a mirror first.
+    /// store's `preview_service` setting, else the host's default
+    /// ([`SuiteStore::with_default_preview_service`]). Installs try it as a mirror first.
     fn preview_service(&self) -> Option<String> {
         None
     }
 
     /// Where [`Installer::preview_service`] comes from: the environment variable (the setting
-    /// can't change it), the saved setting, or nowhere.
+    /// can't change it), the saved setting, the host's default
+    /// ([`PreviewServiceSource::Default`]), or nowhere.
     fn preview_service_source(&self) -> PreviewServiceSource {
         PreviewServiceSource::None
     }
@@ -144,6 +146,12 @@ pub trait Installer: Send + Sync {
     /// for as long as the caller holds them.
     fn preview_cache(&self) -> Option<PathBuf> {
         None
+    }
+
+    /// The text of `family`'s licence or NOTICE file: the installed copy, else downloaded when
+    /// downloads are allowed. `None` when the family has no such file.
+    fn legal_text(&self, _index: &Index, _family: &Family, _which: LegalText) -> Result<Option<String>, StoreError> {
+        Err(StoreError(NO_FOLDER.into()))
     }
 
     /// Whether store families can be made available to all apps (copied into the OS user font
@@ -195,6 +203,18 @@ impl SuiteStore {
         Some(SuiteStore { store })
     }
 
+    /// Uses `url` as the preview service while neither [`PREVIEW_SERVICE_ENV`] nor the user's
+    /// setting names one; see [`FontStore::with_default_preview_service`]. Never saved.
+    pub fn with_default_preview_service(self, url: &str) -> SuiteStore {
+        SuiteStore { store: self.store.with_default_preview_service(url) }
+    }
+
+    /// Uses `network` for "Allow font downloads" while the user hasn't chosen; see
+    /// [`FontStore::with_default_network`]. Never saved.
+    pub fn with_default_network(self, network: Network) -> SuiteStore {
+        SuiteStore { store: self.store.with_default_network(network) }
+    }
+
     /// The store's HTTP client. Clones share the preview service's down state with installs;
     /// [`Previews::new`](crate::remote::Previews::new) takes it through [`Installer::http_client`].
     pub fn client(&self) -> Client {
@@ -213,9 +233,7 @@ impl SuiteStore {
             .or_else(|| installed.iter().find(|f| f.family.to_lowercase() == lower))
             .map(|f| (f.source.clone(), f.family.clone()))
     }
-}
 
-impl SuiteStore {
     fn found(&self, family: &str, files: &[PathBuf]) -> Result<(String, String), StoreError> {
         self.installed_name(family, files).ok_or_else(|| err(craft_font_store::Error::NotInstalled(family.to_owned())))
     }
@@ -328,6 +346,10 @@ impl Installer for SuiteStore {
 
     fn set_previews_enabled(&self, enabled: bool) -> Result<(), StoreError> {
         self.store.set_previews_enabled(enabled).map_err(err)
+    }
+
+    fn legal_text(&self, index: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
+        self.store.legal_text(index, family, which, &Cancel::new()).map_err(err)
     }
 
     fn available_to_all_supported(&self) -> bool {
@@ -674,6 +696,20 @@ impl Installer for FakeStore {
 
     fn preview_cache(&self) -> Option<PathBuf> {
         Some(self.dir.join("previews"))
+    }
+
+    /// Served from the file table by the index path, like a font.
+    fn legal_text(&self, _: &Index, family: &Family, which: LegalText) -> Result<Option<String>, StoreError> {
+        let path = match which {
+            LegalText::License => family.license_file.as_ref().map(|f| f.path.as_str()).or(family.license_path.as_deref()),
+            LegalText::Notice => family.notice_file.as_ref().map(|f| f.path.as_str()),
+        };
+        let Some(path) = path else { return Ok(None) };
+        if !self.downloads_allowed() {
+            return Err(StoreError("downloading fonts is turned off".into()));
+        }
+        let bytes = self.files.get(path).ok_or_else(|| StoreError(format!("{path} isn't available")))?;
+        Ok(Some(String::from_utf8_lossy(bytes).into_owned()))
     }
 
     fn available_to_all_supported(&self) -> bool {

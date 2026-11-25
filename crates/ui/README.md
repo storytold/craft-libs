@@ -3,6 +3,7 @@
 `craft-ui` provides small egui components with application-supplied styles. `icons` prepares
 embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles tab fitting and
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
+`layout::Section` groups dialog or inspector settings in caller-styled frames with optional headings.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
@@ -11,7 +12,92 @@ The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoC
 records their scope and acceptance limits. Assets (font files included), complete themes, localization
 and command handling remain in each application. No icons, fonts or application engines are bundled.
 
+## Host-owned docking chrome
+
+Iconic flyouts resize from their canvas-side edge, top, bottom and the two
+canvas-side corners, keeping the edge against the icon column anchored. Resizing
+saves the group's `height` and `flyout_width`, and a top-edge resize saves
+`flyout_offset`, the top's distance from the group's icons, so workspaces retain
+independent sizes and placement for each group. Without an offset a flyout aligns
+with its icons, and a saved one stays inside the float bounds. The top handle is a
+4 pt band over the top of the tab strip (`FloatingFrame::top_handle_height`), so it is
+easy to grab while the rest of the strip keeps its clicks and drags.
+An explicit height overrides content fitting; untouched heights continue to fit
+content, including after a width-only drag. Layout locks and float bounds apply.
+
+`DockContent` can replace an iconic column or a complete tab group without a
+second layout tree. `column_rect` reports the fitted column before painting;
+`owns_iconic_column`/`iconic_column` and `custom_group` suppress the corresponding
+stock chrome, body and input when the host takes ownership. Docked custom groups
+also skip stock body top/bottom drop bands; column-edge targets remain available.
+These hooks are also
+forwarded by `show_customized`'s label/permissions/limits adapter.
+
+`resize_handle_style` and `split_separator` let the host paint one seam while
+retaining stock resize input. `owns_floating_width` delegates horizontal floating
+frame-edge handles to the host; internal dividers and vertical handles remain available.
+`owns_floating_split_width` separately delegates internal horizontal dividers when
+the host supplies their replacement input. Presentation-only
+`group_collapsed` does not change the selected tab in the shared model.
+
+All ownership hooks default to false/no-op. `DockStyle::dock_gap` defaults to
+`None`, preserving the ordinary split gap; setting it affects side-dock seams
+only. `FloatingFrame::resize_axes` defaults to both axes and preserves an enabled
+axis at corners when the other is disabled. A host with its own title bar can
+disable the separate top gutter through `reserve_top_resize_band(false)`.
+
+Compatibility and target-size audit: before these hooks, resizable frames already
+reserved a 4 pt top band. That remains the default; `false` is the new host opt-out.
+The unchanged stock edge hit bands are 4 pt thick; corners are at most 12 pt.
+They do **not** meet a 24-by-24 logical-pixel target at 1x. This PR preserves
+those hit rectangles and does not claim accessibility compliance. Focused
+resize handles also support arrow keys (8 pt steps). Enlarging pointer targets
+needs separate overlap, title-bar and viewport-edge acceptance checks.
+
+`chrome::compatibility_tests::defaults_preserve_pre_host_hook_frame_geometry`
+locks down the pre-hook hit rectangles/defaults. `host_hooks_tests` exercises all
+four axis settings with actual corner and side pointer drags, minimum/maximum
+sizes, the viewport edge, and top-gutter opt-out geometry.
+
+Exhaustive `DockStyle` struct literals need `dock_gap: None`; constructors such
+as `from_ui` and `from_visuals` supply the compatible default.
+
+## Dialog and inspector sections
+
+`layout::Section` groups related settings without owning a window, theme or commands. Pass a
+localized heading and a frame built from the application's tokens. Typography stays in the supplied
+`WidgetText`; contents keep normal egui focus, clipping and parent disabled state.
+
+```rust
+use craft_ui::layout::Section;
+use egui::{CornerRadius, Frame, Margin, RichText};
+
+fn display_settings(ui: &mut egui::Ui, show_grid: &mut bool) {
+    let frame = Frame::new()
+        .fill(ui.visuals().window_fill.lerp_to_gamma(ui.visuals().text_color(), 0.04))
+        .stroke(ui.visuals().window_stroke)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(10, 8));
+    Section::new(frame).heading(RichText::new("Display").strong()).show(ui, |ui| {
+        ui.checkbox(show_grid, "Show grid");
+    });
+}
+```
+
+The default fills available width; `.fill_width(false)` wraps the contents. An empty heading adds
+no row or heading gap. The heading remains above the contents even in a horizontal parent.
+The helper neither indents controls nor adds exterior spacing: compose those
+in the caller's layout. Reusing the same frame for nested sections preserves its fill. A translucent fill
+blends again in each nested section; the component does not change global visuals. Invalid floating-point decoration becomes zero and
+large heading gaps/strokes are capped at 64 logical points; forced widths are capped at one million.
+
+This small framing boundary comes from [WordCraft #4038](https://github.com/storytold/wordcraft/pull/4038)
+and is also suitable for GridCraft/DeckCraft dialogs and creative-app inspectors. Consumer adoption
+is separate; application-specific dialog behavior remains in each app.
+
 ## SVG catalogs
+
+For common Insert Shapes choices and previews, see [the shared shape gallery](docs/shape-gallery.md).
 
 ```rust
 use std::sync::OnceLock;
@@ -460,6 +546,38 @@ documentation has the recipe for a shortcut smoke test on a non-Latin layout thr
 letters such as ổ, so an app relying on it fails the `vi` screens until its own face covers them. The per-release manual checks are in
 [language-testing.md](../../docs/language-testing.md).
 
+### Input steps and review screenshots
+
+`testing::input` drives any egui_kittest `Harness<State>` with a fixed number of frames per step:
+`move_to` (1), `press` and `release` (2 each), `click` (3), `drag` (`steps` + 3, primary button,
+1 to `MAX_DRAG_STEPS` moves), `key` (2), `type_text` (2) and `wheel` (2, in points). The modifiers
+given to a step are held from its first frame and released in its last; `press` keeps them held
+until the matching `release`. A drag with another button is `press`, `move_to` and `release`. The
+module documentation lists the events of each frame. The counts hold when no events queued with
+`Harness::event` are waiting, so run the harness after queuing events. `docking::testing::DockDriver` runs its own
+egui context and keeps its own `window_click` and `window_hold`.
+
+`testing::snapshot` writes screenshots for review and compares nothing. `snapshot_dir(var)` reads
+the folder from the environment variable `var`: `DEFAULT_DIR_VAR` (`CRAFT_UI_SNAPSHOT_DIR`), or an
+app's own variable name. With no folder, `with_snapshot_renderer` leaves the builder unchanged and
+no GPU is set up; with one, it sets up wgpu and returns `SnapshotError::Render` on a machine that
+can't render. `save(harness, dir, name)` renders the last frame to `{dir}/{name}.png`, creating the
+folder, and runs no frames, so settle the screen and set the theme first. Names are plain file
+names (ASCII letters, digits, `-`, `_`, `.`, `@`).
+
+```rust,ignore
+use craft_ui::testing::{input, snapshot};
+use egui::{Modifiers, PointerButton, pos2};
+
+let dir = snapshot::snapshot_dir("CRAFT_EXPORT_SNAPSHOTS");
+let mut harness = snapshot::with_snapshot_renderer(Harness::builder(), dir.as_deref())?.build_ui_state(export_ui, state);
+input::click(&mut harness, pos2(40.0, 20.0), PointerButton::Primary, Modifiers::NONE);
+harness.run();
+if let Some(dir) = &dir {
+    snapshot::save(&mut harness, dir, "export-dialog")?;
+}
+```
+
 ## Print settings and feedback
 
 `printing::State` holds the transient printer selection, copies, duplex and grayscale settings,
@@ -587,12 +705,73 @@ verify the actual pixels as well as callback routing.
 
 `text::align_galley_rows` positions already shaped rows inside a fixed-width reading area without changing glyphs or logical text. Supply a per-row alignment, for example the paragraph direction from the application shaper. The helper uses stock egui APIs and keeps cached glyph meshes shared. Its logical rectangle is the requested width; ink may overflow, so clip the painter when drawing cards. Use it for read-only painting, keeping the original galley for editable hit testing.
 
+## Sharing
+
+`share::ShareDialog` is a whole dialog. It holds a recipient picker with autocomplete and
+removable chips. It offers a view-or-edit choice, a note and a notify-by-email box. Under those it
+lists who already has access, with a withdrawal beside each entry. Every Craft app gets the same
+dialog. An application's own part comes to three lines.
+
+```rust
+// Once, at startup. The host supplies the half that reaches the service.
+app.share.connect(my_backend);
+
+// Every frame, open or shut. This is also where answers are collected.
+app.share.show(ctx);
+
+// From the app's Share control, drawn only while `available()` is true.
+if app.share.available() && share_button.clicked() {
+    app.share.open(entry.id.clone(), entry.name.clone());
+}
+```
+
+The dialog opens no socket, names no provider and holds no credential. It states each piece of
+work as a `share::Request` and hands it to a `share::ShareBackend`. That backend answers through a
+`share::Replier` whenever it is ready. Nothing in this crate implements that trait. A host writes
+the half that opens a socket, and this crate never learns what it reaches. The interface half
+therefore builds for the web, and every flow is testable with no server running.
+
+Autocomplete waits `share::DEBOUNCE` after the last keystroke before it asks anything. An answer
+to a query the user has already typed past is dropped before it reaches the list. A list that
+flickers back to stale matches is worse than one that arrives late.
+
+Partial success is rendered as partial success. A share aimed at five people with one wrong
+address reaches four. The dialog names the fifth with the reason the service gave. It keeps that
+one recipient in the picker. A correction then takes one edit. `outcome()` hands back both halves.
+
+Capability is reported and never assumed. `available()` stays false until the service says the
+provider supports sharing and an account is linked. `open` does nothing while it is false. An
+application draws no Share control in that state. A hidden feature beats a button that fails on
+use. Contacts and mail are reported separately. A server with no address book accepts typed
+addresses only. A server that cannot send mail disables the notify box and says why.
+`ShareLabels` holds every string the dialog shows. The defaults are English. A localized
+application replaces them without touching this crate.
+
+A contact's `avatar` is a URL. The dialog asks for the bytes through the same backend, as the row
+that needs the picture is painted and only while that row is on screen. A search answering with
+ten people costs no pictures until somebody looks at them. Each URL is asked about once. A refusal
+is remembered, with initials painted in its place. The host decides whether a picture may be
+fetched at all. A backend that refuses `share::Request::Avatar` gets initials painted instead, and
+a host that would rather not have an application reach a provider's avatar URL directly can say
+so by refusing it. A host that relays pictures answers it. Nothing else changes.
+
+### The account
+
+`account::AccountMenu` is the badge every suite puts in the top right. It shows who is signed in,
+where they are signed in, and whether storage is linked. It holds no credential. It asks the
+service who the caller is, through the application. It reports what the user asked for through
+`take_action`. The application owns what signing in means.
+
+Without linked storage, Open and Save have nowhere to go. The menu says so at rest. A failure at
+the moment of saving arrives too late to be useful.
+
 ## Compatibility and checks
 
 The crate uses egui 0.37 and Rust 1.95 or later. Its production dependency disables egui's default
 features, so egui's bundled fonts and rendering features remain the application's choice. It has
 no default features; see [UI fonts](#ui-fonts) for `color_fonts` and `system_fonts`, and
-[Testing screens in each language](#testing-screens-in-each-language) for `screen-testing`;
+[Testing screens in each language](#testing-screens-in-each-language) for `screen-testing`, which
+also adds `testing::input` and `testing::snapshot`;
 `testing` adds the headless docking driver `docking::testing`. See the
 [suite audit](../../docs/ui-components-audit.md) for candidates, policies and adoption order.
 

@@ -13,7 +13,7 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use egui::{
     Color32, Context, CursorIcon, Event, Id, Key, LayerId, Modifiers, Order, Pos2, RawInput, Rect, ResizeDirection, Sense, Ui, UiBuilder, Vec2,
-    ViewportBuilder, ViewportClass, ViewportCommand, ViewportId, ViewportInfo, WindowLevel, pos2, vec2,
+    ViewportBuilder, ViewportClass, ViewportCommand, ViewportId, ViewportInfo, WindowLevel, X11WindowType, pos2, vec2,
 };
 
 use super::Renderer;
@@ -277,6 +277,8 @@ struct Place {
     /// The height of its bar while minimized, as it was last told. `known` keeps the expanded
     /// size meanwhile.
     collapsed: Option<f32>,
+    /// The X11 window type it opened with.
+    window_type: X11WindowType,
 }
 
 /// Whether two rects differ by more than rounding.
@@ -557,6 +559,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         // A minimized window shows its bar and what `floating_body` draws below it.
         let collapsed = window.minimized.then(|| BAR_HEIGHT + self.minimized_body(window));
         let shown = |[x, y, w, h]: [f32; 4]| [x, y, w, collapsed.unwrap_or(h)];
+        // Under X11 on Linux a palette is a utility window, which GNOME and KDE Plasma leave off
+        // the taskbar. egui ignores the type elsewhere, Wayland included, so there it stays the
+        // same and egui does not recreate the window when its panels change.
+        let x11 = cfg!(target_os = "linux") && !wayland(ctx, env_session());
+        let window_type = if normal || !x11 { X11WindowType::Normal } else { X11WindowType::Utility };
         let mut place = match ctx.data(|d| d.get_temp::<Place>(key)) {
             Some(mut place) => {
                 // The application changed the window's place (undo, reset, a reloaded layout):
@@ -583,9 +590,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 };
                 seen.insert(window.id);
                 ctx.data_mut(|d| d.insert_temp(seen_key, seen));
-                Place { spawn, known: spawn, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None }
+                Place { spawn, known: spawn, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type }
             }
         };
+        // egui recreates a window whose type changes. The new window opens where the old one was:
+        // where the window system last put it, unless a move the application commanded has not
+        // landed yet. The collapsed height a minimized window reports is not the size to keep.
+        if place.window_type != window_type {
+            let waiting = place.pending.is_some_and(|until| now < until);
+            let latest = info.as_ref().and_then(placed).filter(|_| !waiting && !moving(ctx));
+            let at = latest.map_or(place.known, |[x, y, w, h]| [x, y, w, if place.collapsed.is_some() { place.known[3] } else { h }]);
+            place = Place { spawn: at, known: at, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type };
+        }
         // Minimized or expanded: the window keeps its top-left corner and width, and its
         // height is fixed while it shows only its bar.
         // The limits go first: the OS clamps the new size to the limits it has.
@@ -615,7 +631,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 (false, true) => WindowLevel::AlwaysOnTop,
                 (false, false) => INACTIVE_PALETTE,
             })
-            .with_taskbar(false);
+            // No taskbar entry. egui applies `taskbar` only on Windows, and the window type only
+            // under X11 on Linux.
+            .with_taskbar(false)
+            .with_window_type(place.window_type);
         // The bar replaces the OS title bar. macOS keeps the frame, with its title bar and
         // buttons hidden: AppKit resizes a movable window from its edges and corners with its
         // own cursors, and draws its rounded corners and standard shadow.
@@ -780,7 +799,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         Some(key)
     }
 
-    /// The bar at the top of a native window: its title and ×. Dragging it moves the window.
+    /// The bar at the top of a native window: its ×, but no title, as the tab names the panel.
+    /// Dragging it moves the window.
     /// Returns the rects of its buttons.
     fn native_bar(&mut self, ui: &mut Ui, window: &Floating<P>) -> Vec<Rect> {
         let Some(first) = window.panels().next().cloned() else { return Vec::new() };
@@ -792,10 +812,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let movable = window.panels().all(|p| self.permissions(p).movable);
         let closable = self.style.close_button && window.panels().all(|p| self.permissions(p).closable);
         let (move_label, close_label) = (self.style.move_window_label.clone(), self.style.close_window_label.clone());
-        let title = crate::docking::dock_model::first_active(&window.root).map(|p| self.label_of(p)).unwrap_or_default();
         // On macOS the bar keeps the arrow, as native title bars do: AppKit's resize areas
         // cover its ends and top edge, and a cursor set over them flickers with AppKit's.
-        let mut bar = TitleBar::new(self.id.with(("native-bar", window.id)), &move_label).title(title).movable(movable && !OS_RESIZES);
+        let mut bar = TitleBar::new(self.id.with(("native-bar", window.id)), &move_label).movable(movable && !OS_RESIZES);
         if closable {
             bar = bar.close(&close_label).close_at(close_hit, close_glyph);
         }

@@ -1,0 +1,14 @@
+# The Workspace gate's additions to .config/cargo-dev.toml (scripts/ci-workspace-tests.sh passes both). The gate runs
+# every test of these crates, and their tests spend nearly all their time in sample and pixel loops, which run several
+# times faster at opt-level 1; locally they stay at 0, so an edit to them rebuilds fast.
+[profile.dev.package.craft-audio-dsp]
+opt-level = 1
+
+[profile.dev.package.craft-audio]
+opt-level = 1
+
+[profile.dev.package.craft-media]
+opt-level = 1
+
+[profile.dev.package.craft-image-codecs]
+opt-level = 1

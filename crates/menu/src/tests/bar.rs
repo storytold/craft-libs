@@ -10,6 +10,23 @@ use crate::bar::nav::{ARROW, Nav, heading, is_open};
 #[path = "bar_keys.rs"]
 mod keys;
 
+#[test]
+fn rows_from_an_earlier_frame_are_never_activated() {
+    let ctx = egui::Context::default();
+    let id = Id::unique("nav");
+    let row = crate::bar::nav::Row {
+        widget: Id::unique("row"),
+        enabled: true,
+        command: Some(Builtin::Quit.command()),
+        rect: Rect::NOTHING,
+        mnemonic: None,
+    };
+    let mut stale = Nav::default();
+    stale.rows = vec![vec![row]];
+    ctx.data_mut(|d| d.insert_temp(id, stale));
+    assert!(Nav::load(&ctx, id).rows.is_empty(), "rows are this frame's only");
+}
+
 fn item(id: &str, label: &str) -> Item {
     Item::new(id, label)
 }
