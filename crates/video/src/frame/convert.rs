@@ -12,7 +12,7 @@ fn depth(bits: u32) -> Result<u8, FrameError> {
 }
 
 /// A sample aspect ratio with 0 meaning not signalled.
-#[cfg(any(feature = "h264-decode", feature = "hevc-decode", feature = "mpeg2-decode", feature = "dnx"))]
+#[cfg(any(feature = "h264-decode", feature = "hevc-decode", feature = "mpeg2-decode", feature = "mpeg4-decode", feature = "dnx"))]
 fn sar(num: u32, den: u32) -> Option<(u32, u32)> {
     (num != 0 && den != 0).then_some((num, den))
 }
@@ -250,6 +250,37 @@ impl TryFrom<crate::mpeg2::Picture> for VideoFrame {
         }
         f.pts = Some(p.pts);
         f.sar = sar(p.info.sar.0, p.info.sar.1);
+        f.field_order = field_order;
+        Ok(f)
+    }
+}
+
+#[cfg(feature = "mpeg4-decode")]
+impl TryFrom<crate::mpeg4::Picture> for VideoFrame {
+    type Error = FrameError;
+
+    /// An 8-bit 4:2:0 YCbCr frame. Colour description, sample aspect ratio, field order and
+    /// presentation timestamp are carried over from the decoded VOP and `VideoObjectLayer`.
+    fn try_from(p: crate::mpeg4::Picture) -> Result<Self, FrameError> {
+        let (cw, ch) = (p.chroma_width(), p.chroma_height());
+        let field_order = if !p.interlaced {
+            FieldOrder::Progressive
+        } else if p.top_field_first {
+            FieldOrder::TopFieldFirst
+        } else {
+            FieldOrder::BottomFieldFirst
+        };
+        let planes = vec![
+            Plane::packed(p.width, p.height, 8, Samples::U8(p.y))?,
+            Plane::packed(cw, ch, 8, Samples::U8(p.u))?,
+            Plane::packed(cw, ch, 8, Samples::U8(p.v))?,
+        ];
+        let mut f = VideoFrame::new(p.width, p.height, ColorFamily::YCbCr, Subsampling::S420, planes, None)?;
+        if let Some(c) = p.info.color {
+            f.color = ColorTags { primaries: c.primaries, transfer: c.transfer, matrix: c.matrix, full_range: c.full_range };
+        }
+        f.pts = Some(p.pts);
+        f.sar = sar(u32::from(p.info.sar.0), u32::from(p.info.sar.1));
         f.field_order = field_order;
         Ok(f)
     }
