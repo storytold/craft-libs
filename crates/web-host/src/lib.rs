@@ -22,10 +22,11 @@
 //! this crate already speak version 1. Those bridges put the app's own release in `ready`'s
 //! `version` (`"0.14.0"`): a host treats any `version` it doesn't know as `"1"`.
 //!
-//! The app is hosted when its URL has `?host=parent` (framed by a same-origin page: messages go
-//! through `postMessage`) or its canvas has `data-host="page"` (the page runs it directly:
-//! messages are `CustomEvent`s on the canvas, the fields in `detail`). This module is the contract
-//! itself and builds everywhere; [`web`] (wasm32 only) is the bridge an app's web shell calls.
+//! The app is hosted when its URL has `?host=parent` (framed by a same-origin page, or by a page on
+//! an origin listed in the canvas's `data-host-origins`: messages go through `postMessage`) or its
+//! canvas has `data-host="page"` (the page runs it directly: messages are `CustomEvent`s on the
+//! canvas, the fields in `detail`). This module is the contract itself and builds everywhere;
+//! [`web`] (wasm32 only) is the bridge an app's web shell calls.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -45,7 +46,8 @@ pub const MAX_NAME_CHARS: usize = 255;
 /// How a page hosts the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// `?host=parent`: a same-origin page frames the app; messages go through `postMessage`.
+    /// `?host=parent`: a same-origin page, or one on an origin the canvas's `data-host-origins`
+    /// lists, frames the app; messages go through `postMessage`.
     Parent,
     /// `data-host="page"` on the app's canvas: the page runs the app itself; messages are
     /// `CustomEvent`s on the canvas.
@@ -138,6 +140,54 @@ pub fn file_name(raw: Option<&str>, fallback: &str) -> String {
     trimmed.chars().take(MAX_NAME_CHARS).collect()
 }
 
+/// The canvas attribute that names the other origins allowed to frame the app with `?host=parent`.
+pub const HOST_ORIGINS_ATTRIBUTE: &str = "data-host-origins";
+
+/// Whether a framing page on `origin` may host the app, by the list in the app's own page: the
+/// canvas's `data-host-origins`, origins separated by spaces or commas
+/// (`https://*.code.example.com vscode-webview://*`). A `*` may only start the host, and stands
+/// for one or more whole host labels: never part of a label, a `:`, a `/` or an empty name. An
+/// `http` or `https` pattern needs a fixed domain after its `*`. The list is in the page the
+/// app's server sends, not in the URL, so a framing page can't add itself. An opaque origin
+/// (`null`) is never allowed.
+pub fn origin_allowed(origin: &str, allowed: &str) -> bool {
+    if origin.is_empty() || origin == "null" {
+        return false;
+    }
+    let origin = origin.to_ascii_lowercase();
+    allowed
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|pattern| !pattern.is_empty())
+        .any(|pattern| origin_matches(&origin, &pattern.to_ascii_lowercase()))
+}
+
+fn origin_matches(origin: &str, pattern: &str) -> bool {
+    let Some((head, tail)) = pattern.split_once('*') else { return origin == pattern };
+    let web = head == "http://" || head == "https://";
+    if !head.ends_with("://") || head.len() == 3 || tail.contains('*') || (!tail.is_empty() && !tail.starts_with('.')) || (web && tail.is_empty()) {
+        return false;
+    }
+    let Some(labels) = origin.strip_prefix(head).and_then(|rest| rest.strip_suffix(tail)) else { return false };
+    !labels.is_empty()
+        && !labels.starts_with('.')
+        && !labels.ends_with('.')
+        && !labels.contains("..")
+        && labels.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+}
+
+/// The origin (`scheme://host:port`, lowercase) of an absolute URL such as `document.referrer`,
+/// or `None` for an empty, relative or opaque one. Credentials before an `@` are not part of it.
+/// Only for URLs the browser has already serialized: raw input (`\` for `/`, odd escapes) is not
+/// cleaned up.
+pub fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let valid_scheme = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    (valid_scheme && !host.is_empty()).then(|| format!("{scheme}://{host}").to_ascii_lowercase())
+}
+
 /// Remember `next` before the send. A page host can, while that send is still
 /// running, report a different state; that later report must win. A failed send
 /// restores the previous state only when nothing else recorded one.
@@ -192,6 +242,61 @@ mod tests {
         assert_eq!(Mode::detect("?host=parents", None), None);
         assert_eq!(Mode::detect("?xhost=parent", None), None);
         assert_eq!(Mode::detect("", Some("frame")), None);
+    }
+
+    #[test]
+    fn only_listed_other_origins_may_frame_the_app() {
+        let list = "https://*.code.example.com, vscode-webview://*  https://editor.example.org:8443";
+        for origin in [
+            "https://8080--main--ws--ana.code.example.com",
+            "https://a.b.code.example.com",
+            "HTTPS://Ws.Code.Example.com",
+            "vscode-webview://1a2b3c4d",
+            "https://editor.example.org:8443",
+        ] {
+            assert!(origin_allowed(origin, list), "{origin} is listed");
+        }
+        for origin in [
+            "https://code.example.com",            // a * needs at least one label
+            "https://evil.com/.code.example.com",  // not an origin a browser reports
+            "https://evil.com:1.code.example.com", // no ports or paths inside a *
+            "https://x..code.example.com",
+            "https://.code.example.com",
+            "https://ws.code.example.com.evil.com",
+            "http://ws.code.example.com", // another scheme
+            "https://editor.example.org", // another port
+            "https://editor.example.org:84430",
+            "null",
+            "",
+        ] {
+            assert!(!origin_allowed(origin, list), "{origin:?} is not listed");
+        }
+        assert!(!origin_allowed("https://a.example.com", ""), "no list allows nothing");
+        assert!(!origin_allowed("https://a.example.com", "*"), "a bare * is no origin");
+        assert!(!origin_allowed("https://a.b.example.com", "https://*.*.example.com"), "one * per origin");
+        // A * covers whole labels at the start of the host, nothing else.
+        assert!(!origin_allowed("https://evilexample.com", "https://*example.com"));
+        assert!(!origin_allowed("https://editor.attacker.com", "https://editor.*"));
+        assert!(!origin_allowed("https://anything.com", "https://*"), "any https site is no list");
+        assert!(!origin_allowed("https://a.example.com", "*://a.example.com"));
+        assert!(origin_allowed("vscode-webview://1a2b", "vscode-webview://*"));
+        // Patterns: any case, commas alone, a port after the domain.
+        assert!(origin_allowed("https://ws.example.com", "HTTPS://*.EXAMPLE.COM"));
+        assert!(origin_allowed("https://b.example.com", "https://a.example.com,https://b.example.com"));
+        assert!(origin_allowed("https://ws.x.com:8443", "https://*.x.com:8443"));
+        assert!(!origin_allowed("https://ws.x.com", "https://*.x.com:8443"));
+    }
+
+    #[test]
+    fn a_referrer_gives_its_origin() {
+        assert_eq!(origin_of("https://Ws.Example.com:8443/a/b?c#d").as_deref(), Some("https://ws.example.com:8443"));
+        assert_eq!(origin_of("https://ws.example.com").as_deref(), Some("https://ws.example.com"));
+        assert_eq!(origin_of("https://user:pw@ws.example.com/x").as_deref(), Some("https://ws.example.com"));
+        assert_eq!(origin_of("vscode-webview://1a2b/index.html").as_deref(), Some("vscode-webview://1a2b"));
+        assert_eq!(origin_of("https://[::1]:8080/a").as_deref(), Some("https://[::1]:8080"));
+        for url in ["", "/relative/page", "about:blank", "https:///path", "://host", "1https://host"] {
+            assert_eq!(origin_of(url), None, "{url:?}");
+        }
     }
 
     #[test]
