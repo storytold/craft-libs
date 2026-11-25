@@ -1,8 +1,9 @@
 # craft-media
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
-clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers, and
-Ogg, MPEG-2 Systems (transport and program stream) and Sierra VMD demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers,
+an MPEG-2 Systems (transport and program stream) demuxer and transport stream muxer, and Ogg and
+Sierra VMD demuxers, written from the public specifications. No `unsafe`, no panics on malformed
 input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
 (for `mxf`), `serde` (optional).
 
@@ -549,7 +550,8 @@ FourCC, size, frame rate, packet count, audio format and duration.
 A clean-room MPEG-2 Systems demuxer from FilmCraft's `filmcraft-mpegts`
 (storytold/filmcraft@4bec22b): transport streams (188-byte, 192-byte BDAV / M2TS, 204-byte) and
 program streams (MPEG-1/2 PS, VOB, MOD). No GPL/LGPL code (FFmpeg, libavformat) was consulted;
-FFmpeg is a fixture generator and test oracle only. No muxer, no decoding.
+FFmpeg is a fixture generator and test oracle only. No decoding. The transport stream writer is
+`mpegts::mux` ([below](#transport-stream-writer)).
 
 ```rust
 use craft_media::mpegts::{Kind, open};
@@ -636,6 +638,116 @@ with random start codes and sync words, damaged PSI sections with valid CRCs, an
 helpers on arbitrary bytes. `tests/oracle_mpegts.rs` compares ten ffmpeg-made files (MPEG-2, H.264
 and HEVC video; MP2, ADTS and LATM AAC, AC-3, E-AC-3, Blu-ray and DVD LPCM; TS, M2TS, VOB and
 MPEG-1 system streams) with ffprobe's packets: unit counts, sizes, timestamps and key flags.
+
+### Transport stream writer
+
+`mpegts::mux::Muxer` writes one program to any `std::io::Write` as frames arrive, so the same code
+writes `.ts` files, HLS segments and SRT payloads. Its `Codec`, `Stream` and `Error` types are its
+own, separate from the demuxer's.
+
+```rust
+use craft_media::mpegts::mux::{Codec, Config, Frame, Muxer, Stream};
+
+let streams = [Stream::new(0x100, Codec::H264), Stream::new(0x101, Codec::AacAdts)];
+let mut ts = Muxer::new(Vec::new(), Config::default(), &streams)?;
+let idr = [0, 0, 0, 1, 0x65, 0x88, 0x84];
+ts.write_frame(0, &Frame { data: &idr, pts: 90_000, dts: None, key: true })?;
+let bytes = ts.finish()?;
+assert_eq!(bytes.len() % 188, 0);
+```
+
+- A program association section and a program map section, each ending with its CRC-32. They are
+  written at the start, every `Config::psi_interval`, before every video keyframe when
+  `Config::psi_before_keyframes` is set, and before the first frame after `Muxer::replace_writer`
+  or `Muxer::discontinuity`.
+- One PES packet per frame, with PTS and, when it differs from the PTS, DTS:
+
+  | `Codec` | stream_type | stream_id | Frames passed in |
+  |---|---|---|---|
+  | `H264` | 0x1B | 0xE0 | Annex B access units; an access unit delimiter is added when missing |
+  | `Hevc` | 0x24 | 0xE0 | Annex B access units; an access unit delimiter is added when missing |
+  | `Mpeg2Video` | 0x02 | 0xE0 | MPEG-2 pictures from their first start code |
+  | `Mpeg1Video` | 0x01 | 0xE0 | MPEG-1 pictures from their first start code |
+  | `Mpeg4Part2` | 0x10 | 0xE0 | MPEG-4 Part 2 visual frames from their first start code |
+  | `Av1(Av1Config)` | 0x06 | 0xBD | temporal units in the low overhead format (every OBU has `obu_size`) |
+  | `AacAdts` | 0x0F | 0xC0 | ADTS frames; their `frame_length` fields must tile the frame |
+  | `Aac { .. }` | 0x0F | 0xC0 | raw AAC frames; the writer adds the ADTS header |
+  | `Opus { channels }` | 0x06 | 0xBD | Opus access units, 1 to 8 channels; the writer adds the Opus control header |
+  | `OpusMapped(OpusMapping)` | 0x06 | 0xBD | Opus multistream access units with an explicit channel mapping |
+  | `Ac3` | 0x81 | 0xBD | AC-3 sync frames |
+  | `Eac3` | 0x87 | 0xBD | E-AC-3 sync frames (bsid 11 to 16) |
+  | `MpegAudio { low_sample_rate }` | 0x03 or 0x04 | 0xC0 | MPEG audio frames, layers I to III, whose version matches the stream type |
+
+  `Codec::aac_from_asc` turns an AudioSpecificConfig into the `Aac` fields, and refuses one that
+  an ADTS header cannot carry (frameLengthFlag 1, for one). An `Opus { channels }` access unit is
+  one Opus packet for 1 or 2 channels. For 3 to 8 channels it holds the streams of mapping family 1
+  in the order that table 4-3 of the Opus transport draft gives, and every stream but the last uses
+  the self-delimited framing of RFC 6716 Appendix B. `OpusMapped` takes any other layout.
+- Descriptors in the program map section: a registration descriptor `AC-3` or `EAC3` on AC-3 and
+  E-AC-3 streams; a registration descriptor `Opus` and an extension descriptor (tag 0x7F,
+  extension tag 0x80) on Opus streams, whose channel_config_code is the channel count for
+  `Opus { channels }` and 0x81 with the mapping family, stream counts and channel mapping for
+  `OpusMapped`; a registration descriptor `AV01` and the AV1 video descriptor (tag 0x80) built
+  from `Av1Config` (`Av1Config::from_av1c` reads an AV1CodecConfigurationRecord); and an
+  ISO 639 language descriptor on any stream that has a language.
+- For AV1, each OBU follows the start code 0x000001 with emulation prevention bytes, temporal
+  delimiters and padding OBUs that end with a zero byte are left out, and each PES packet holds
+  one temporal unit. A keyframe must carry a
+  sequence header, and tile list OBUs are refused.
+- For Opus, `Muxer::write_frame_with_trim` writes the control header's start and end trims (each
+  at most 8 191 samples, `MAX_OPUS_TRIM`). A start trim is allowed only while every earlier frame
+  of the stream was trimmed whole, 65 535 samples in all.
+- The PCR on `Config::pcr_pid`: one of the streams' PIDs, or a PID that carries only PCRs. PCRs
+  are never more than `Config::pcr_interval` apart (at most 100 ms, H.222.0 §2.7.2). The PCR is
+  the largest DTS so far minus `Config::pcr_delay`, 1 to 90 000 ticks (`MAX_PCR_DELAY`, the
+  one-second limit of §2.4.2.6). A live output calls `Muxer::advance` while no frames arrive; its
+  time is on the DTS scale, so the PCR it writes is that time minus `pcr_delay`.
+- A continuity counter per PID, the random access indicator on keyframes, adaptation field
+  stuffing, and timestamps written modulo 2^33. `Muxer::discontinuity` starts a new time base:
+  the next packet of every stream PID and of the PCR PID sets the discontinuity_indicator
+  (§2.4.3.5), and timestamps may then go back.
+
+Packets go to the output in batches of `Config::batch_packets` (7 by default, 1 316 bytes, one UDP
+datagram), each in one `write` call, and the rest of a batch at the end of every `write_frame` and
+`advance` unless `Config::hold_packets` is set. The batch is allocated once, in `Muxer::new`. After
+an `Error::Io` the output may hold part of a packet; `Stats::packets` counts only whole packets.
+`Muxer::replace_writer` returns the old output in a `Segment` (packet and frame counts, first and
+last PTS, whether it starts with a keyframe, any error from its last packets), and the new output
+starts with the PAT, the PMT and a PCR. `Muxer::replace_writer_continuing` swaps the output
+without adding them.
+
+Frames are checked before anything is written. A stream's DTS must not go back, a video stream's
+DTS must increase, a DTS may not be after its PTS, and a frame may be at most `pcr_delay` behind
+the largest DTS written so far (`Error::Timestamp`). Audio frames must fit in one PES packet, and
+video frames are at most `MAX_VIDEO_FRAME` (`MAX_UNIT_BYTES`, counting the start codes and escape
+bytes the writer adds; `Error::FrameTooLarge`). A program has 1 to 32 streams on PIDs 0x0010 to
+0x1FFE (`Error::BadPid`, `Error::DuplicatePid`), and its program map section is at most 1 021 bytes
+(`Error::PsiTooLarge`). A gap in the timeline longer than `MAX_PCR_FILL` PCR intervals gets one PCR
+at its end and is counted in `Stats::pcr_gaps`.
+
+`Config::default()`: program 1 with its PMT on PID 0x1000, the PCR on the first video stream (or
+the first stream) every 40 ms and 700 ms behind the DTS, the PAT and PMT every 100 ms and before
+keyframes, and writes of 7 packets.
+
+Gaps: one program per stream; no null packets (no constant bit rate); not written: LPCM (H.222.0
+defines no LPCM stream type for transport streams), AAC in LATM, DTS, subtitles and teletext. The
+demuxer reads Opus and AV1 streams as `Unknown(6)` and MPEG-4 Part 2 as `Unknown(0x10)`, one unit
+per PES packet.
+
+Specifications: the ones above, and Opus Interactive Audio Codec Transport Multiplexing Standard,
+draft TS V0.1.3 (2015-10), for the Opus control header and descriptors; RFC 6716 for Opus packet
+durations and self-delimited framing; Carriage of AV1 in MPEG-2 TS (Alliance for Open Media
+working draft) and the AV1 Bitstream & Decoding Process Specification for AV1; ISO/IEC 14496-3
+for the AudioSpecificConfig; ATSC A/52 for the AC-3 and E-AC-3 stream types and registration
+descriptors.
+
+Tests: `tests/mpegts_mux_readback.rs` reads the output back with the demuxer: streams, codecs,
+languages, every frame's bytes, PTS and DTS, keyframes and the PCR range, with no continuity or
+CRC warnings, including AV1 units, Opus with an explicit mapping and a start trim, both sides of a
+discontinuity, and the output that follows an I/O error. `tests/mpegts_mux_fuzz.rs` muxes random
+programs and timelines with idle gaps and output swaps and reads them back, and feeds random bytes
+to every codec. Unit tests check every PES header's fixed bits, the sections' CRC, and that every
+refused frame writes nothing.
 
 ## `mxf`
 

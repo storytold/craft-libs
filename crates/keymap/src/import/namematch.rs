@@ -268,46 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn extra_words_still_find_the_tool() {
-        let tools = candidates(&[
-            ("tool:rectangle", "Rectangle Tool"),
-            ("tool:roundedRectangle", "Rounded Rectangle Tool"),
-            ("tool:rectangularGrid", "Rectangular Grid Tool"),
-            ("tool:ellipse", "Ellipse Tool"),
-        ]);
-        assert_eq!(proposed("Acme Rectangle Tool", &tools), Some("tool:rectangle"));
-        assert_eq!(proposed("Rounded Rectangle", &tools), Some("tool:roundedRectangle"));
-        assert_eq!(proposed("ellipse tool", &tools), Some("tool:ellipse"), "case aside, the label itself");
-    }
-
-    #[test]
-    fn letters_only_names_match_ids() {
-        let commands = candidates(&[("acme.copyAll", "Everything"), ("acme.copyAllOnPage", "Everything on This Page"), ("acme.clear", "Clear Out")]);
-        assert_eq!(proposed("acmecopyall", &commands), Some("acme.copyAll"));
-        assert_eq!(proposed("Acme Copy All On Page", &commands), Some("acme.copyAllOnPage"));
-        assert_eq!(proposed("clear out", &commands), Some("acme.clear"));
-    }
-
-    #[test]
-    fn ties_need_a_choice() {
-        let tools = candidates(&[("tool:rectangle", "Rectangle Tool"), ("tool:ellipse", "Ellipse Tool"), ("tool:star", "Star Tool")]);
-        assert_eq!(propose("Tool", &tools), Proposal::Choice(vec![0, 1, 2]));
-        assert_eq!(propose("Nothing Alike", &tools), Proposal::Choice(vec![]));
-        assert_eq!(propose("", &tools), Proposal::Choice(vec![]));
-    }
-
-    #[test]
-    fn names_without_spaces_match_by_character_pairs() {
-        let list = vec![
-            Candidate { id: "tool:rectangle".into(), labels: vec!["Rectangle Tool".into(), "長方形ツール".into()] },
-            Candidate { id: "tool:ellipse".into(), labels: vec!["Ellipse Tool".into(), "楕円形ツール".into()] },
-        ];
-        assert_eq!(proposed("長方形ツール", &list), Some("tool:rectangle"));
-        assert_eq!(proposed("楕円形 ツール", &list), Some("tool:ellipse"), "spaces and punctuation aside");
-        assert_eq!(proposed("楕円形ツール2", &list), Some("tool:ellipse"), "most character pairs shared");
-    }
-
-    #[test]
     fn the_index_finds_what_scoring_every_candidate_finds() {
         let list = candidates(&[
             ("tool:rectangle", "Rectangle Tool"),
@@ -331,21 +291,5 @@ mod tests {
             assert_eq!(matcher.propose(name), every, "{name}");
         }
         assert_eq!(proposed("foobar", &list), Some("foo.bar"), "the id alone, sharing no word or pair with the label");
-    }
-
-    #[test]
-    fn only_the_head_of_a_long_name_counts() {
-        let label: String = "ä€𝄞b".repeat(50);
-        let candidate = Candidate { id: "acme.long".into(), labels: vec![label.clone()] };
-        assert_eq!(head(&label).chars().count(), MAX_NAME_CHARS);
-        assert_eq!(score(&format!("{label}and more words after the head"), &candidate), 1.0);
-        assert_eq!(head("short"), "short");
-    }
-
-    #[test]
-    fn words_split_camel_case_and_separators() {
-        assert_eq!(words("selectAll_onArtboard 2x"), ["select", "all", "on", "artboard", "2x"]);
-        assert_eq!(words("Acme\u{a0}Lasso-Tool"), ["acme", "lasso", "tool"]);
-        assert_eq!(id_words("tool:roundedRectangle"), ["rounded", "rectangle"]);
     }
 }

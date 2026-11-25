@@ -229,12 +229,22 @@ pub fn path_data(path: &BezPath) -> String {
 /// Path data with `decimals` decimals per coordinate, written compactly: `M1.00 2.00L3.50 2.00Z`.
 /// Coordinates that are not finite are written as zero.
 pub fn path_data_fixed(path: &BezPath, decimals: usize) -> String {
+    path_data_with_format(path, |value| num(value, decimals))
+}
+
+/// Compact absolute path commands with caller-owned coordinate formatting.
+///
+/// The formatter is called once per coordinate, in path order. It must produce a valid SVG
+/// number (including handling nonfinite inputs); it controls rounding and negative zero.
+/// Command letters and separators are shared, while the application's precision policy stays
+/// with the caller. No intermediate geometry or coordinate collection is allocated.
+pub fn path_data_with_format<T: Display>(path: &BezPath, mut format: impl FnMut(f64) -> T) -> String {
     let mut d = String::new();
     let mut command = |letter: char, points: &[Point]| {
         d.push(letter);
         for (i, p) in points.iter().enumerate() {
             let sep = if i == 0 { "" } else { " " };
-            let _ = write!(d, "{sep}{} {}", num(p.x, decimals), num(p.y, decimals));
+            let _ = write!(d, "{sep}{} {}", format(p.x), format(p.y));
         }
     };
     for el in path.elements() {
@@ -398,6 +408,25 @@ mod tests {
         p.curve_to((1.0, 1.0), (2.0, 2.0), (3.0, 1.0 / 3.0));
         p.close_path();
         p
+    }
+
+    #[test]
+    fn custom_path_format_keeps_commands_and_coordinate_order() {
+        let mut path = BezPath::new();
+        path.move_to((1.0, 2.0));
+        path.line_to((3.0, 4.0));
+        path.quad_to((5.0, 6.0), (7.0, 8.0));
+        path.curve_to((9.0, 10.0), (11.0, 12.0), (13.0, 14.0));
+        path.close_path();
+        let mut seen = Vec::new();
+        let output = path_data_with_format(&path, |v| {
+            seen.push(v);
+            v
+        });
+        assert_eq!(output, "M1 2L3 4Q5 6 7 8C9 10 11 12 13 14Z");
+        assert_eq!(seen, (1..=14).map(f64::from).collect::<Vec<_>>());
+        assert_eq!(BezPath::from_svg(&output).unwrap(), path);
+        assert_eq!(path_data_with_format(&BezPath::new(), |_: f64| -> String { panic!("empty path") }), "");
     }
 
     #[test]
