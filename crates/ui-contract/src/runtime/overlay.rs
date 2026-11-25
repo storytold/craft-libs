@@ -626,6 +626,17 @@ pub fn opening(ctx: &Context, id: Id) -> bool {
     with_persist(ctx, viewport, |persist| persist.appeared.get(&id) == Some(&now))
 }
 
+/// Whether the layer `id` first ran its body in the pass `pass` of the popup window `viewport`, in the running frame: a
+/// layer shown in a popup window appears in the popup's pass, which runs inside its opener's, so the opener's pass reads
+/// it once that pass ended, where [`opening`] reads the layer's own. `pass_nr` of a passed viewport names the pass after
+/// the one that showed the layer, but the opener's pass reads the popup's number before it runs, which is the number the
+/// popup's begin pass stamps the layer with: the two numbers name one pass, so a layer that appeared in an earlier pass of
+/// the same frame (a discard) is not one that appears in this one.
+pub(crate) fn appeared_in_pass(ctx: &Context, viewport: ViewportId, id: Id, pass: u64) -> bool {
+    let now = (pass::root_frame_nr(ctx), pass);
+    with_persist(ctx, viewport, |persist| persist.appeared.get(&id) == Some(&now))
+}
+
 /// Queues a close of every layer opened from inside the layer `id`, so the open state of a popup in its body does
 /// not outlive it. The closes are carried: with no motion the layer's body hides in the same frame, so the owner of
 /// a popup in it runs again only when the layer reopens, and takes the close then.
