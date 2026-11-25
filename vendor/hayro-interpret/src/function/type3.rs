@@ -215,7 +215,8 @@ mod tests {
         // Each enclosing function contributes a dictionary and /Functions array;
         // the leaf contributes a dictionary and its /Domain (or /C0, /C1) array.
         // Thus 32 function levels reach exactly 64 direct containers, while 33
-        // reach 66 and are rejected by syntax before function construction.
+        // reach 66. Syntax omits the outer dictionary's whole /Functions value
+        // past its cap (#5320); function construction must still refuse it.
         let data = function_limits_stitching(32);
         let object = Object::from_bytes(data.as_bytes()).unwrap();
         assert_eq!(
@@ -223,7 +224,12 @@ mod tests {
             Some(smallvec![0.5])
         );
         let data = function_limits_stitching(33);
-        assert!(Object::from_bytes(data.as_bytes()).is_none());
+        let object = Object::from_bytes(data.as_bytes()).expect("the outer dictionary survives");
+        let Object::Dict(dict) = &object else {
+            panic!("a function dictionary");
+        };
+        assert!(!dict.contains_key(FUNCTIONS), "no partially parsed child functions");
+        assert!(Function::new(&object).is_none(), "an omitted /Functions must not become a usable function");
     }
 
     fn function_limits_indirect_stitching(levels: usize) -> hayro_syntax::Pdf {

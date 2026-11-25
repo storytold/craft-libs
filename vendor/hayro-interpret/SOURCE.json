@@ -344,7 +344,7 @@
       "path": "src/function/type3.rs",
       "source_sha256": "2153a517d8365fabf8b43d867572d7463cabcdbcdee28eea7f23e122af1bd0cc",
       "source_git_blob": "37950f89c912865e05d849526dbf0c04d4439099",
-      "sha256": "53a0000544aa56cc753d02ccdead174f61cfae2ff92ac60d87b5144ff4232115"
+      "sha256": "5d0caf2ff69546d5893485eae6505aa4284f6020a434b39af40ebec6f6e28df7"
     },
     {
       "path": "src/function/type4.rs",

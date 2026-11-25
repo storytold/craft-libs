@@ -1,10 +1,11 @@
 //! A byte reader.
 
+use alloc::vec::Vec;
 use core::cell::Cell;
 use core::ops::Range;
 
 /// Direct arrays and dictionaries may nest at most 64 levels, including in decoded streams.
-const MAX_CONTAINER_DEPTH: usize = 64;
+pub(crate) const MAX_CONTAINER_DEPTH: usize = 64;
 
 /// A reader for reading bytes and PDF objects.
 #[derive(Clone, Debug)]
@@ -19,6 +20,8 @@ pub struct Reader<'a> {
     // PdfCraft patch: bound direct-object nesting while skipping arrays and dictionaries
     // and while parsing dictionaries (`Dict::skip`, `Array::skip`, `parse_dict_with`).
     skip_depth: usize,
+    // PdfCraft #5320: distinguish depth refusal from malformed input.
+    depth_refused: bool,
     control: Option<crate::cancel::Control>,
     next_check: Cell<usize>,
 }
@@ -33,7 +36,7 @@ impl<'a> Reader<'a> {
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset, past_end: Cell::new(false), skip_depth: 0, control: None, next_check: Cell::new(0) }
+        Self { data, offset, past_end: Cell::new(false), skip_depth: 0, depth_refused: false, control: None, next_check: Cell::new(0) }
     }
 
     pub(crate) fn set_control(&mut self, control: Option<crate::cancel::Control>) {
@@ -70,6 +73,7 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn enter_container(&mut self) -> Option<()> {
         if self.skip_depth >= MAX_CONTAINER_DEPTH {
+            self.depth_refused = true;
             return None;
         }
         self.skip_depth += 1;
@@ -77,7 +81,113 @@ impl<'a> Reader<'a> {
     }
 
     pub(crate) fn leave_container(&mut self) {
-        self.skip_depth -= 1;
+        self.skip_depth = self.skip_depth.saturating_sub(1);
+    }
+
+    /// PdfCraft patch (29): whether `enter_container` refused a level since the last call, and
+    /// clears it.
+    pub(crate) fn take_depth_refused(&mut self) -> bool {
+        core::mem::take(&mut self.depth_refused)
+    }
+
+    /// PdfCraft patch (29): marks a refused level again (see `take_depth_refused`).
+    pub(crate) fn set_depth_refused(&mut self, refused: bool) {
+        self.depth_refused = refused;
+    }
+
+    /// PdfCraft patch (29): whether the reader is inside exactly one array or dictionary, the
+    /// outermost one of the object it reads.
+    pub(crate) fn in_outermost_container(&self) -> bool {
+        self.skip_depth == 1
+    }
+
+    /// PdfCraft patch (29): steps over the direct array or dictionary at the offset without
+    /// parsing it, in one pass and without recursion, however deeply it nests: each `]` must
+    /// close an array and each `>>` a dictionary, and strings and comments are stepped over so
+    /// the delimiters in them don't count. Nothing in it is read, so nothing can be reached
+    /// through it. Returns `None`, with the offset where it was, when no array or dictionary
+    /// starts here, a closing delimiter doesn't match its opener, a hexadecimal string holds
+    /// something other than hexadecimal digits and whitespace, or the data ends before it
+    /// closes.
+    pub(crate) fn skip_unparsed_container(&mut self) -> Option<()> {
+        let start = self.offset;
+        let skipped = self.skip_unparsed_container_inner();
+        if skipped.is_none() {
+            self.offset = start;
+        }
+        skipped
+    }
+
+    fn skip_unparsed_container_inner(&mut self) -> Option<()> {
+        if self.peek_tag(b"<<").is_none() && self.peek_tag(b"[").is_none() {
+            return None;
+        }
+        // What each open level is, one bit per level (set for a dictionary): at most one word
+        // for every 64 bytes of the data, since every level takes at least one byte.
+        let mut kinds: Vec<u64> = Vec::new();
+        let mut depth = 0usize;
+        loop {
+            let closes_dict = match self.read_byte()? {
+                b'[' => {
+                    open_level(&mut kinds, &mut depth, false)?;
+                    continue;
+                }
+                b'<' if self.peek_byte() == Some(b'<') => {
+                    self.forward();
+                    open_level(&mut kinds, &mut depth, true)?;
+                    continue;
+                }
+                // A hexadecimal string: it ends at the first `>` and holds only what
+                // `String::skip` accepts, hexadecimal digits and whitespace.
+                b'<' => {
+                    loop {
+                        let byte = self.read_byte()?;
+                        if byte == b'>' {
+                            break;
+                        }
+                        if !byte.is_ascii_hexdigit() && !crate::trivia::is_white_space_character(byte) {
+                            return None;
+                        }
+                    }
+                    continue;
+                }
+                b']' => false,
+                b'>' if self.peek_byte() == Some(b'>') => {
+                    self.forward();
+                    true
+                }
+                b')' | b'>' => return None,
+                // A literal string, with its balanced parentheses and escapes.
+                b'(' => {
+                    let mut open = 1usize;
+                    while open > 0 {
+                        match self.read_byte()? {
+                            b'\\' => {
+                                self.read_byte()?;
+                            }
+                            b'(' => open = open.checked_add(1)?,
+                            b')' => open -= 1,
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+                // A comment runs to the end of its line.
+                b'%' => {
+                    while !matches!(self.read_byte()?, b'\n' | b'\r') {}
+                    continue;
+                }
+                _ => continue,
+            };
+            depth = depth.checked_sub(1)?;
+            let is_dict = kinds.get(depth / 64).is_some_and(|w| (w >> (depth % 64)) & 1 == 1);
+            if is_dict != closes_dict {
+                return None;
+            }
+            if depth == 0 {
+                return Some(());
+            }
+        }
     }
 
     /// Returns `true` if the reader has reached the end of the data.
@@ -299,10 +409,28 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// PdfCraft patch (29): opens one more level in `Reader::skip_unparsed_container`, a dictionary
+/// when `dict`, recording its kind in `kinds` (one bit per level).
+fn open_level(kinds: &mut Vec<u64>, depth: &mut usize, dict: bool) -> Option<()> {
+    let word = *depth / 64;
+    if word == kinds.len() {
+        kinds.push(0);
+    }
+    let bits = kinds.get_mut(word)?;
+    let bit = 1u64 << (*depth % 64);
+    if dict {
+        *bits |= bit;
+    } else {
+        *bits &= !bit;
+    }
+    *depth = depth.checked_add(1)?;
+    Some(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::Reader;
-    use crate::object::{Array, Dict};
+    use crate::object::{Array, Dict, FromBytes};
     use crate::reader::ReaderExt;
     use alloc::format;
     use alloc::string::String;
@@ -340,8 +468,12 @@ mod tests {
                 assert_eq!(reader.skip_depth, 0, "a rejected array must unwind its depth");
 
                 let mut reader = Reader::new(dictionary.as_bytes());
-                assert_eq!(reader.skip::<Dict<'_>>(in_content).is_some(), depth <= 64, "dictionary {depth}");
-                assert_eq!(reader.skip_depth, 0, "a rejected dictionary must unwind its depth");
+                assert!(reader.skip::<Dict<'_>>(in_content).is_some(), "outer dictionary {depth} survives");
+                assert_eq!(reader.skip_depth, 0, "a recovered dictionary must unwind its depth");
+                // #5320 changes refusal of the whole dictionary into omission of its whole entry.
+                // The cap still prevents traversing any part of that overdeep value.
+                let parsed = Dict::from_bytes(dictionary.as_bytes()).expect("the outer dictionary survives");
+                assert_eq!(parsed.contains_key("A"), depth <= 64, "dictionary {depth}: whole or absent");
             }
         }
     }
@@ -354,7 +486,13 @@ mod tests {
                 data = if level % 2 == 0 { format!("<< /A {data} >>") } else { format!("[{data}]") };
             }
             let mut reader = Reader::new(data.as_bytes());
-            assert_eq!(reader.skip::<crate::object::Object<'_>>(true).is_some(), depth <= 64);
+            // At 65 the outside container is a dictionary, so its entire /A is omitted.
+            // At 64 the outside container is an array and the whole value fits.
+            assert!(reader.skip::<crate::object::Object<'_>>(true).is_some());
+            if depth > 64 {
+                let parsed = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+                assert!(!parsed.contains_key("A"), "the mixed value is absent, not truncated at the cap");
+            }
             assert_eq!(reader.skip_depth, 0);
         }
     }
