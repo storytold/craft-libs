@@ -163,8 +163,13 @@ fn rebuilt_ramp_is_continuous_from_the_first_clip_to_the_last() {
 /// background surrounds it.
 #[test]
 fn thin_line_without_reliable_colour_is_continuous_where_it_clips() {
-    for height in [32usize, 512, 1024] {
-        for width in [1usize, 4, 16] {
+    // The gate runs a one-row line in 32 rows and a four-row line in 512; nightly every pair, up to 1024 rows.
+    let full = craft_testkit::hostile::divisor() == 1;
+    for (h, height) in [32usize, 512, 1024].into_iter().enumerate() {
+        for (w, width) in [1usize, 4, 16].into_iter().enumerate() {
+            if !full && (w != h || h > 1) {
+                continue;
+            }
             let top = (height - width) / 2;
             let (row, first) = rebuilt_ramp(top..top + width, height);
             assert_continuous(&row, first, 0.002, &format!("{width} rows of {height}"));

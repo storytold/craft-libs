@@ -1,0 +1,704 @@
+//! The motion service (13): tweens over one clock, the motion table, and one repaint request per viewport.
+
+use crate::runtime::egui::{memory as store, pass, repaint};
+use crate::runtime::env::MotionPolicy;
+use crate::runtime::frame::{self, PerViewport};
+use crate::runtime::memory::{self, MemoryStage};
+use craft_behavior::{MotionKind, Playback};
+use craft_theme::Motion;
+use egui::{Context, Id, Pos2, Rect, Vec2};
+use std::hash::Hash;
+
+/// Which token of `MotionTokens` gives a spec its duration and curve.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Token {
+    Hover,
+    Open,
+    Move,
+    Caret,
+    Outline,
+}
+
+/// How a value approaches its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Curve {
+    /// From where it was to the new target over the token's duration.
+    Tween,
+    /// Toward a target that moves every frame, by exponential smoothing with the token's duration as its settle time.
+    Follow,
+}
+
+/// A motion constant: a component picks one from `spec`, never writes seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MotionSpec {
+    token: Token,
+    kind: MotionKind,
+    curve: Curve,
+}
+
+impl MotionSpec {
+    const fn new(token: Token, kind: MotionKind, curve: Curve) -> Self {
+        MotionSpec { token, kind, curve }
+    }
+
+    /// The kind that picks this spec's row of the motion table.
+    pub const fn kind(self) -> MotionKind {
+        self.kind
+    }
+
+    fn motion(self, policy: &MotionPolicy) -> Motion {
+        let tokens = &policy.tokens;
+        match self.token {
+            Token::Hover => tokens.hover,
+            Token::Open => tokens.open,
+            Token::Move => tokens.r#move,
+            Token::Caret => tokens.caret,
+            Token::Outline => tokens.outline,
+        }
+    }
+}
+
+/// The motion constants.
+pub mod spec {
+    use super::{Curve, MotionKind, MotionSpec, Token};
+
+    /// Hover and press feedback.
+    pub const HOVER: MotionSpec = MotionSpec::new(Token::Hover, MotionKind::Fade, Curve::Tween);
+    /// A check, a toggle or a selection turning on or off.
+    pub const CHECK: MotionSpec = MotionSpec::new(Token::Hover, MotionKind::Fade, Curve::Tween);
+    /// A popup's opacity.
+    pub const OPEN_FADE: MotionSpec = MotionSpec::new(Token::Open, MotionKind::Fade, Curve::Tween);
+    /// A popup's travel while it opens.
+    pub const OPEN_RISE: MotionSpec = MotionSpec::new(Token::Open, MotionKind::Travel, Curve::Tween);
+    /// An element moving within the screen.
+    pub const MOVE: MotionSpec = MotionSpec::new(Token::Move, MotionKind::Travel, Curve::Tween);
+    /// A text caret gliding to its new place.
+    pub const CARET: MotionSpec = MotionSpec::new(Token::Caret, MotionKind::Travel, Curve::Tween);
+    /// A selection outline gliding to its new cells.
+    pub const OUTLINE: MotionSpec = MotionSpec::new(Token::Outline, MotionKind::Travel, Curve::Tween);
+    /// A target that moves every frame: zoom ease, remote cursors, autoscroll.
+    pub const FOLLOW: MotionSpec = MotionSpec::new(Token::Move, MotionKind::Travel, Curve::Follow);
+    /// A spinner, marching ants or a pulse.
+    pub const LOOP: MotionSpec = MotionSpec::new(Token::Move, MotionKind::Loop, Curve::Tween);
+    /// A text caret's blink.
+    pub const BLINK: MotionSpec = MotionSpec::new(Token::Caret, MotionKind::Blink, Curve::Tween);
+}
+
+/// How long a blinking caret shows or hides its stroke, in seconds: the platform's usual caret rate.
+const BLINK_HALF_PERIOD: f64 = 0.53;
+
+/// A value a tween can run over.
+pub trait Interpolate: Copy + PartialEq + Send + Sync + 'static {
+    /// The value `t` of the way from `a` to `b`; `t` is 0 to 1.
+    fn lerp(a: Self, b: Self, t: f32) -> Self;
+    /// How far apart two values are, in the value's own unit.
+    fn distance(a: Self, b: Self) -> f32;
+}
+
+impl Interpolate for f32 {
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        a + (b - a) * t
+    }
+
+    fn distance(a: Self, b: Self) -> f32 {
+        (a - b).abs()
+    }
+}
+
+impl Interpolate for Vec2 {
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        a + (b - a) * t
+    }
+
+    fn distance(a: Self, b: Self) -> f32 {
+        (a - b).length()
+    }
+}
+
+impl Interpolate for Pos2 {
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        a + (b - a) * t
+    }
+
+    fn distance(a: Self, b: Self) -> f32 {
+        (a - b).length()
+    }
+}
+
+impl Interpolate for Rect {
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        Rect::from_min_max(<Pos2 as Interpolate>::lerp(a.min, b.min, t), <Pos2 as Interpolate>::lerp(a.max, b.max, t))
+    }
+
+    fn distance(a: Self, b: Self) -> f32 {
+        <Pos2 as Interpolate>::distance(a.min, b.min).max(<Pos2 as Interpolate>::distance(a.max, b.max))
+    }
+}
+
+/// A distance under this ends a follow; a thousandth of a point or of a unit fraction is below anything painted.
+const FOLLOW_EPSILON: f32 = 0.001;
+
+/// Time constants a follow's settle time spans: 95% of the way after the token's duration.
+const FOLLOW_TIME_CONSTANTS: f32 = 3.0;
+
+/// A running animation of one value. Evaluating it at the same time twice gives the same value, so a
+/// discarded pass repeats a frame exactly.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tween<T: Interpolate> {
+    from: T,
+    to: T,
+    /// The start of a tween; the last evaluation of a follow.
+    started: f64,
+    shown: T,
+}
+
+impl<T: Interpolate> Tween<T> {
+    /// A tween at rest at `value`.
+    pub fn at(value: T) -> Self {
+        Tween { from: value, to: value, started: 0.0, shown: value }
+    }
+
+    /// The value to paint.
+    pub fn shown(&self) -> T {
+        self.shown
+    }
+
+    /// The value it runs toward.
+    pub fn target(&self) -> T {
+        self.to
+    }
+
+    /// True once the shown value is the target.
+    pub fn is_settled(&self) -> bool {
+        self.shown == self.to
+    }
+
+    /// Runs toward `to` from the value shown now.
+    pub fn retarget(&mut self, to: T, now: f64) {
+        self.from = self.shown;
+        self.to = to;
+        self.started = now;
+    }
+
+    /// Evaluates at `now` with `motion`'s duration and curve.
+    pub(crate) fn step(&mut self, now: f64, motion: Motion, curve: Curve) {
+        let seconds = f64::from(motion.millis) / 1000.0;
+        match curve {
+            Curve::Tween => {
+                let progress = if seconds > 0.0 { ((now - self.started) / seconds) as f32 } else { 1.0 };
+                self.shown = if progress >= 1.0 { self.to } else { T::lerp(self.from, self.to, motion.easing.at(progress)) };
+            }
+            Curve::Follow => {
+                let dt = (now - self.started).max(0.0);
+                self.started = now;
+                let rate = if seconds > 0.0 { 1.0 - (-(dt as f32) * FOLLOW_TIME_CONSTANTS / seconds as f32).exp() } else { 1.0 };
+                let next = T::lerp(self.shown, self.to, rate);
+                self.shown = if T::distance(next, self.to) < FOLLOW_EPSILON { self.to } else { next };
+            }
+        }
+    }
+}
+
+/// An open-close presence: `t` is 0 closed and 1 open, and a closing one stays visible until `t` reaches 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Presence {
+    /// The animated openness, 0 to 1.
+    pub t: f32,
+    /// Whether anything of it should be shown.
+    pub visible: bool,
+    /// Closing but still fading out.
+    pub exiting: bool,
+}
+
+impl Presence {
+    /// The presence of an openness `t` whose target is open or closed.
+    fn at(t: f32, open: bool) -> Self {
+        Presence { t, visible: open || t > 0.0, exiting: !open && t > 0.0 }
+    }
+}
+
+/// One key of a keyed presence: the hash of its key, its openness, the frame that last drove it open, and what the
+/// caller keeps with it while it shows.
+#[derive(Clone)]
+struct KeyedEntry<P> {
+    key: Id,
+    tween: Tween<f32>,
+    /// A key that no pass of the running frame drove open is closing.
+    open_in: Option<u64>,
+    payload: P,
+}
+
+/// The keys of one keyed presence name, in the order they first opened, and the frame the name was first driven.
+#[derive(Clone)]
+struct Keyed<P> {
+    born: u64,
+    entries: Vec<KeyedEntry<P>>,
+}
+
+/// What a viewport's animations asked for in the running pass.
+#[derive(Default)]
+pub(crate) struct Wanted {
+    unsettled: bool,
+    wake: Option<f64>,
+}
+
+/// The wall clock's reading, for a host that drives a store on real time (`ShellApp::tick`). It is the one place
+/// outside a pass that reads the clock.
+pub fn now() -> web_time::Instant {
+    web_time::Instant::now()
+}
+
+/// Marks the running viewport as having an animation that is not at its end value.
+pub(crate) fn note_unsettled(ctx: &Context) {
+    crate::runtime::replay::note_unsettled(ctx);
+    PerViewport::<Wanted>::with(ctx, pass::current_viewport(ctx), |wanted| wanted.unsettled = true);
+}
+
+/// The end hook: one repaint request for the running viewport, now when an animation is unsettled, else at the
+/// earliest wake.
+pub(crate) fn end_pass(ctx: &Context) {
+    let viewport = pass::current_viewport(ctx);
+    let wanted = PerViewport::<Wanted>::with(ctx, viewport, std::mem::take);
+    if wanted.unsettled {
+        repaint::request_of(ctx, viewport);
+    } else if let Some(at) = wanted.wake {
+        repaint::request_after(ctx, viewport, at - frame::clock(ctx));
+    }
+}
+
+/// Whether the open tween of the layer `base` still shows it: it opens, shows, or fades out. Reads without driving.
+pub(crate) fn layer_fading(ctx: &Context, base: Id) -> bool {
+    store::peek_clone::<Tween<f32>>(ctx, memory::sub(base, ("anim", "open")))
+        .is_some_and(|tween| !tween.is_settled() || tween.target() > 0.0 || tween.shown() > 0.0)
+}
+
+/// The open-close presence of an overlay layer `base` that no component context drives: the overlay host reads it.
+/// A layer that is closed and fully faded out answers without opening a stage.
+pub(crate) fn layer_presence(ctx: &Context, base: Id, owner: Id, policy: MotionPolicy, open: bool, spec: MotionSpec) -> Presence {
+    let hidden = Presence { t: 0.0, visible: false, exiting: false };
+    if !open && !layer_fading(ctx, base) {
+        return hidden;
+    }
+    let stage = MemoryStage::open_owned(ctx, memory::sub(base, "presence"), owner);
+    let presence = Driver { stage: &stage, base, policy }.presence("open", open, spec);
+    stage.write_back();
+    // The exit that ends here is the last pass in which the layer's hosts run it: from the next pass `layer_fading`
+    // answers false and they skip it. What ran around it this pass does not hold for the next one.
+    if !open && !layer_fading(ctx, base) {
+        note_unsettled(ctx);
+    }
+    presence
+}
+
+/// Moves `tween` toward `target` at `now` by `spec` under `policy`, or sets it there where the mode does not run
+/// `spec`'s kind. Every named tween, keyed or not, and the read of a keyed exit step through here.
+fn advance_tween<T: Interpolate>(policy: &MotionPolicy, tween: &mut Tween<T>, target: T, spec: MotionSpec, now: f64) {
+    if policy.mode.playback(spec.kind) != Playback::Run {
+        *tween = Tween::at(target);
+        return;
+    }
+    if tween.target() != target {
+        // A follow steps from its last evaluation toward wherever its target is now; restarting its clock
+        // would hold it still for a frame each time the target moves.
+        match spec.curve {
+            Curve::Tween => tween.retarget(target, now),
+            Curve::Follow => tween.to = target,
+        }
+    }
+    tween.step(now, spec.motion(policy), spec.curve);
+}
+
+/// The slot of the keyed presence `name` of the component `base`.
+fn keyed_slot_of(base: Id, name: &'static str) -> Id {
+    memory::sub(base, ("presence_keyed", name))
+}
+
+/// The keys of the keyed presence `name` of the component `base` that are not among `listed`, closing from where
+/// they are at this pass's clock, each with its last payload. It reads a copy and stores nothing: the same keys,
+/// values and order `Driver::exiting` gives in the same pass, for code that runs before the component's own pass
+/// drives this frame's open keys (a collection's layout).
+pub(crate) fn peek_exiting<P: Clone + Send + Sync + 'static>(
+    ctx: &Context,
+    base: Id,
+    policy: MotionPolicy,
+    name: &'static str,
+    spec: MotionSpec,
+    listed: &[Id],
+) -> Vec<(Presence, P)> {
+    let Some(keyed) = store::peek_clone::<Keyed<P>>(ctx, keyed_slot_of(base, name)) else { return Vec::new() };
+    let now = frame::clock(ctx);
+    keyed
+        .entries
+        .into_iter()
+        .filter(|entry| !listed.contains(&entry.key))
+        .filter_map(|mut entry| {
+            advance_tween(&policy, &mut entry.tween, 0.0, spec, now);
+            let presence = Presence::at(entry.tween.shown(), false);
+            presence.visible.then_some((presence, entry.payload))
+        })
+        .collect()
+}
+
+/// The hover, press and on tweens of one component.
+#[derive(Clone)]
+pub(crate) struct StateTweens([Tween<f32>; 3]);
+
+/// Everything an `Animate` call needs from the context type that makes it.
+pub(crate) struct Driver<'a> {
+    pub(crate) stage: &'a MemoryStage,
+    pub(crate) base: Id,
+    pub(crate) policy: MotionPolicy,
+}
+
+impl Driver<'_> {
+    /// The slot of a component's own `anim` name.
+    fn slot(&self, name: &'static str) -> Id {
+        memory::sub(self.base, ("anim", name))
+    }
+
+    pub(crate) fn anim<T: Interpolate>(&self, name: &'static str, target: T, spec: MotionSpec) -> T {
+        self.run(name, target, spec)
+    }
+
+    /// The pipeline's state values (`hover`, `press`, `on`), stepped in `tweens`, which the component's `Shown`
+    /// record keeps; `None` the first pass, which starts at the targets. A sizing pass's stage keeps nothing, so it
+    /// steps a copy.
+    pub(crate) fn state_anims(&self, tweens: &mut Option<StateTweens>, targets: [bool; 3], specs: [MotionSpec; 3]) -> [f32; 3] {
+        let ctx = self.stage.ctx();
+        let now = frame::clock(ctx);
+        let tweens = tweens.get_or_insert_with(|| StateTweens(targets.map(|on| Tween::at(f32::from(u8::from(on))))));
+        let mut shown = [0.0; 3];
+        for (at, tween) in tweens.0.iter_mut().enumerate() {
+            let target = f32::from(u8::from(targets[at]));
+            if self.policy.mode.playback(specs[at].kind) == Playback::Run {
+                if tween.target() != target {
+                    tween.retarget(target, now);
+                }
+                tween.step(now, specs[at].motion(&self.policy), specs[at].curve);
+            } else {
+                *tween = Tween::at(target);
+            }
+            shown[at] = tween.shown();
+        }
+        if !self.stage.is_peek() && tweens.0.iter().any(|tween| !tween.is_settled()) {
+            note_unsettled(ctx);
+        }
+        shown
+    }
+
+    /// A sizing pass evaluates a copy and stores nothing: it must not retarget a running tween or adopt a slot
+    /// for an owner that registers no pass.
+    fn run<T: Interpolate>(&self, name: &'static str, target: T, spec: MotionSpec) -> T {
+        let ctx = self.stage.ctx();
+        let id = self.slot(name);
+        let sizing = self.stage.is_peek();
+        let now = frame::clock(ctx);
+        let existing = if sizing { store::peek_clone::<Tween<T>>(ctx, id) } else { store::take::<Tween<T>>(ctx, id) };
+        // A tween that moves in this pass (a new target, also one it jumps to, or a step, also its last one) leaves the
+        // slot in another state than the run found it in, which the next run reads (`layer_fading` among others): a
+        // record of the run is not replayed. Only a tween still running asks for another frame.
+        let moved = existing.as_ref().is_some_and(|tween| tween.target() != target || !tween.is_settled());
+        let mut tween = match existing {
+            Some(tween) => tween,
+            None => {
+                if !sizing {
+                    memory::adopt::<Tween<T>>(ctx, self.stage.owner(), id);
+                }
+                Tween::at(target)
+            }
+        };
+        self.advance(&mut tween, target, spec, now);
+        let shown = tween.shown();
+        if !sizing {
+            if !tween.is_settled() {
+                note_unsettled(ctx);
+            } else if moved {
+                crate::runtime::replay::note_unsettled(ctx);
+            }
+            store::put(ctx, id, tween);
+        }
+        shown
+    }
+
+    pub(crate) fn anim_bool(&self, name: &'static str, on: bool, spec: MotionSpec) -> f32 {
+        self.anim(name, f32::from(u8::from(on)), spec)
+    }
+
+    /// Moves `tween` toward `target` at `now` by `spec`, or sets it there where the mode does not run `spec`'s kind.
+    /// Named tweens, keyed or not, step through here.
+    fn advance<T: Interpolate>(&self, tween: &mut Tween<T>, target: T, spec: MotionSpec, now: f64) {
+        advance_tween(&self.policy, tween, target, spec, now);
+    }
+
+    /// The presence of the unkeyed `name`: the one-key case of `presence_keyed`, kept in a plain tween slot because
+    /// the overlay host reads a layer's openness there (`layer_fading`).
+    pub(crate) fn presence(&self, name: &'static str, open: bool, spec: MotionSpec) -> Presence {
+        Presence::at(self.anim_bool(name, open, spec), open)
+    }
+
+    /// The slot of a component's keyed presence `name`.
+    fn keyed_slot(&self, name: &'static str) -> Id {
+        keyed_slot_of(self.base, name)
+    }
+
+    /// The frame the running pass belongs to; both passes of one frame share it.
+    fn frame(&self) -> u64 {
+        let ctx = self.stage.ctx();
+        pass::frame_nr(ctx, pass::current_viewport(ctx))
+    }
+
+    /// The keys of `name` as stored; a sizing pass reads a copy and the real pass takes them out to put them back.
+    /// `None` when the name has never been driven.
+    fn load_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str) -> Option<Keyed<P>> {
+        let ctx = self.stage.ctx();
+        let id = self.keyed_slot(name);
+        if self.stage.is_peek() { store::peek_clone::<Keyed<P>>(ctx, id) } else { store::take::<Keyed<P>>(ctx, id) }
+    }
+
+    /// Puts the keys of `name` back after a real pass and asks for the next frame while one of them moves. A sizing
+    /// pass stores nothing.
+    fn store_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str, keyed: Keyed<P>) {
+        if self.stage.is_peek() {
+            return;
+        }
+        let ctx = self.stage.ctx();
+        if keyed.entries.iter().any(|entry| !entry.tween.is_settled()) {
+            note_unsettled(ctx);
+        }
+        store::put(ctx, self.keyed_slot(name), keyed);
+    }
+
+    /// The presence of `key` among the keys of `name`, which keeps `payload` with it while it is visible. In the
+    /// frame the name is first driven every key starts at its target, as `anim` does; a key that appears later
+    /// enters from closed. Two passes of one frame step to the same value, because a tween's value depends only on
+    /// the pass clock.
+    pub(crate) fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: Id,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence {
+        let ctx = self.stage.ctx();
+        let (now, frame) = (frame::clock(ctx), self.frame());
+        let mut keyed = self.load_keyed::<P>(name).unwrap_or_else(|| {
+            if !self.stage.is_peek() {
+                memory::adopt::<Keyed<P>>(ctx, self.stage.owner(), self.keyed_slot(name));
+            }
+            Keyed { born: frame, entries: Vec::new() }
+        });
+        let target = f32::from(u8::from(open));
+        let at = match keyed.entries.iter().position(|entry| entry.key == key) {
+            Some(at) => at,
+            None => {
+                let start = if keyed.born == frame { target } else { 0.0 };
+                keyed.entries.push(KeyedEntry { key, tween: Tween::at(start), open_in: None, payload: payload.clone() });
+                keyed.entries.len() - 1
+            }
+        };
+        let mut presence = Presence::at(target, open);
+        if let Some(entry) = keyed.entries.get_mut(at) {
+            self.advance(&mut entry.tween, target, spec, now);
+            entry.open_in = open.then_some(frame);
+            entry.payload = payload;
+            presence = Presence::at(entry.tween.shown(), open);
+        }
+        if !presence.visible {
+            keyed.entries.retain(|entry| entry.key != key);
+        }
+        self.store_keyed(name, keyed);
+        presence
+    }
+
+    /// The keys of `name` that no pass of the running frame drove open, closing from where they are, each with the
+    /// payload it was last given; a key is dropped, payload and all, once it has faded out. Read it after driving
+    /// this frame's open keys.
+    pub(crate) fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec) -> Vec<(Presence, P)> {
+        let Some(mut keyed) = self.load_keyed::<P>(name) else { return Vec::new() };
+        let (now, frame) = (frame::clock(self.stage.ctx()), self.frame());
+        let mut out = Vec::new();
+        keyed.entries.retain_mut(|entry| {
+            if entry.open_in == Some(frame) {
+                return true;
+            }
+            entry.open_in = None;
+            self.advance(&mut entry.tween, 0.0, spec, now);
+            let presence = Presence::at(entry.tween.shown(), false);
+            if presence.visible {
+                out.push((presence, entry.payload.clone()));
+            }
+            presence.visible
+        });
+        self.store_keyed(name, keyed);
+        out
+    }
+
+    pub(crate) fn jump<T: Interpolate>(&self, name: &'static str, value: T) {
+        if self.stage.is_peek() {
+            return;
+        }
+        let ctx = self.stage.ctx();
+        let id = self.slot(name);
+        if store::peek_clone::<Tween<T>>(ctx, id).is_none() {
+            memory::adopt::<Tween<T>>(ctx, self.stage.owner(), id);
+        }
+        store::put(ctx, id, Tween::at(value));
+    }
+
+    pub(crate) fn phase(&self, period: f64, tick: Option<f64>) -> Option<f32> {
+        loop_phase(self.stage.ctx(), self.policy, period, tick)
+    }
+
+    /// Whether a caret that last moved or was typed at `restart` shows its stroke now. It shows solid for a
+    /// half period after `restart`, then alternates; a mode whose Blink row is solid never hides it.
+    pub(crate) fn blink(&self, restart: f64) -> bool {
+        if self.policy.mode.playback(spec::BLINK.kind()) != Playback::Run {
+            return true;
+        }
+        let now = frame::clock(self.stage.ctx());
+        let since = (now - restart).max(0.0);
+        let step = (since / BLINK_HALF_PERIOD).floor();
+        self.wake_at(restart + (step + 1.0) * BLINK_HALF_PERIOD);
+        step % 2.0 == 0.0
+    }
+
+    pub(crate) fn now(&self) -> f64 {
+        frame::clock(self.stage.ctx())
+    }
+
+    pub(crate) fn wake_at(&self, at: f64) {
+        wake_at(self.stage.ctx(), at);
+    }
+}
+
+/// Asks for a pass of the running viewport at `at`; the earliest request wins.
+pub(crate) fn wake_at(ctx: &Context, at: f64) {
+    crate::runtime::replay::note_wake(ctx, at);
+    PerViewport::<Wanted>::with(ctx, pass::current_viewport(ctx), |wanted| wanted.wake = Some(wanted.wake.map_or(at, |old| old.min(at))));
+}
+
+/// The 0 to 1 position of a loop of `period` seconds on the pass clock, stepped every `tick` seconds when given
+/// (and then waking the viewport at the next step; an unstepped loop keeps it repainting); `None` when `policy`'s
+/// mode asks for the still frame. It is the one reading of a loop, for components (`Animate::phase`) and for a canvas
+/// tool's paint, which has no component context.
+#[doc(hidden)]
+pub fn loop_phase(ctx: &Context, policy: MotionPolicy, period: f64, tick: Option<f64>) -> Option<f32> {
+    if policy.mode.playback(MotionKind::Loop) != Playback::Run || period <= 0.0 {
+        return None;
+    }
+    let now = frame::clock(ctx);
+    match tick.filter(|tick| *tick > 0.0) {
+        Some(tick) => {
+            let step = (now / tick).floor();
+            wake_at(ctx, (step + 1.0) * tick);
+            Some((((step * tick) % period) / period) as f32)
+        }
+        None => {
+            note_unsettled(ctx);
+            Some(((now % period) / period) as f32)
+        }
+    }
+}
+
+/// Motion on `Cx`, `BodyCx` and `ItemCx`. Every method takes `&self`: slots live in context data under the
+/// component's id and go with its shown entries.
+pub trait Animate: crate::runtime::memory::sealed::Sealed {
+    /// `target` approached over `spec`'s duration; the first call returns `target` without animating.
+    fn anim<T: Interpolate>(&self, name: &'static str, target: T, spec: MotionSpec) -> T;
+    /// A 0 to 1 value approaching 1 when `on`, else 0.
+    fn anim_bool(&self, name: &'static str, on: bool, spec: MotionSpec) -> f32;
+    /// Open-close presence for something shown while it opens and fades out.
+    fn presence(&self, name: &'static str, open: bool, spec: MotionSpec) -> Presence;
+    /// Open-close presence of one of a set of things under `name`, told apart by `key`, such as the items of a list
+    /// that enter and leave. `payload` is kept with the key while it is visible, so a thing its owner no longer has
+    /// can still be drawn while it fades out (`exiting`). The first frame of `name` starts every key at its target;
+    /// a key that appears later enters from closed.
+    fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: impl Hash,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence;
+    /// The keys of `name` that no pass of this frame drove open through `presence_keyed`, fading out, each with the
+    /// payload it was last given; a key is forgotten once it has faded out. Call it after driving the frame's open
+    /// keys.
+    fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec) -> Vec<(Presence, P)>;
+    /// Sets `name` to `value` with no animation.
+    fn jump<T: Interpolate>(&self, name: &'static str, value: T);
+    /// The 0 to 1 position of a loop of `period` seconds, stepped every `tick` seconds when given; `None` when
+    /// the mode asks for the still frame.
+    fn phase(&self, period: f64, tick: Option<f64>) -> Option<f32>;
+    /// Whether a caret last moved at `restart` (a pass time) shows now: solid right after `restart`, then
+    /// blinking; always solid where the motion table's Blink row is solid.
+    fn blink(&self, restart: f64) -> bool;
+    /// The pass's time in seconds, read once per frame.
+    fn now(&self) -> f64;
+    /// Asks for a pass at `at` (timers, holds, polls), whatever the motion mode.
+    fn wake_at(&self, at: f64);
+}
+
+/// The id of a presence key: its hash, so a key needs no `Debug` to tell its presence apart.
+pub(crate) fn key_id(key: &impl Hash) -> Id {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    store::unique(hasher.finish())
+}
+
+/// The types that reach the motion service.
+pub(crate) trait Drives {
+    fn driver(&self) -> Driver<'_>;
+}
+
+impl<X: Drives + crate::runtime::memory::sealed::Sealed> Animate for X {
+    fn anim<T: Interpolate>(&self, name: &'static str, target: T, spec: MotionSpec) -> T {
+        self.driver().anim(name, target, spec)
+    }
+
+    fn anim_bool(&self, name: &'static str, on: bool, spec: MotionSpec) -> f32 {
+        self.driver().anim_bool(name, on, spec)
+    }
+
+    fn presence(&self, name: &'static str, open: bool, spec: MotionSpec) -> Presence {
+        self.driver().presence(name, open, spec)
+    }
+
+    fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: impl Hash,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence {
+        self.driver().presence_keyed(name, key_id(&key), open, payload, spec)
+    }
+
+    fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec) -> Vec<(Presence, P)> {
+        self.driver().exiting(name, spec)
+    }
+
+    fn jump<T: Interpolate>(&self, name: &'static str, value: T) {
+        self.driver().jump(name, value);
+    }
+
+    fn phase(&self, period: f64, tick: Option<f64>) -> Option<f32> {
+        self.driver().phase(period, tick)
+    }
+
+    fn blink(&self, restart: f64) -> bool {
+        self.driver().blink(restart)
+    }
+
+    fn now(&self) -> f64 {
+        self.driver().now()
+    }
+
+    fn wake_at(&self, at: f64) {
+        self.driver().wake_at(at);
+    }
+}
