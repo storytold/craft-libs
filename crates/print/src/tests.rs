@@ -26,7 +26,7 @@ fn spooler_arguments_and_printer_list() {
     };
     assert_eq!(
         spool::lp_args_for(&job, false).join(" "),
-        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
+        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false -o print-scaling=none"
     );
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
@@ -151,7 +151,7 @@ fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
     let auto = if cfg!(target_os = "macos") { " -o AP_D_InputSlot=" } else { "" };
     assert_eq!(
         args.unwrap(),
-        format!("-n 1 -t memo.pdf -o collate=true -o fit-to-page=false{auto}"),
+        format!("-n 1 -t memo.pdf -o collate=true -o fit-to-page=false -o print-scaling=none{auto}"),
         "no file argument: lp reads the job from stdin"
     );
     assert!(stdin.unwrap() == pdf, "lp receives the whole job on stdin");
@@ -336,7 +336,7 @@ fn printer_option_defaults_and_job_arguments() {
         ..Job::default()
     };
     let args = lp_args(&job).join(" ");
-    assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
+    assert!(args.ends_with("-o fit-to-page=false -o print-scaling=none -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }
 
@@ -351,10 +351,10 @@ fn a_job_naming_no_tray_asks_macos_for_auto_select() {
         let job = Job { options: options.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(), ..Job::default() };
         spool::lp_args_for(&job, apple).join(" ")
     };
-    assert_eq!(args(&[], true), format!("-n 1 -t Craft -o collate=true -o fit-to-page=false {auto}"));
+    assert_eq!(args(&[], true), format!("-n 1 -t Craft -o collate=true -o fit-to-page=false -o print-scaling=none {auto}"));
     assert!(args(&[("EFMediaType", "Heavy1")], true).ends_with(&format!("-o EFMediaType=Heavy1 {auto}")), "other options are not a tray");
     // A tray the job names is the tray: CUPS would prefer it to Auto Select anyway.
-    assert!(args(&[("InputSlot", "Tray3")], true).ends_with("-o fit-to-page=false -o InputSlot=Tray3"));
+    assert!(args(&[("InputSlot", "Tray3")], true).ends_with("-o print-scaling=none -o InputSlot=Tray3"));
     assert!(!args(&[("inputslot", "Tray3")], true).contains("AP_D_InputSlot"), "CUPS option names ignore case");
     assert_eq!(args(&[("AP_D_InputSlot", "Tray3")], true).matches("AP_D_InputSlot").count(), 1, "the caller's own is not doubled");
     // Auto Select is no tray at all, and neither is a value lp can't be given.
@@ -432,6 +432,23 @@ fn queue_duplex_defaults_and_explicit_scaling_reach_the_spooler() {
     let shrink = lp_args(&Job { scaling: Scaling::ShrinkToFit, ..Job::default() });
     assert!(shrink.iter().any(|a| a == "print-scaling=auto-fit"));
     assert!(!shrink.iter().any(|a| a.starts_with("fit-to-page=")));
+}
+
+/// storytold/pdfcraft#7207: the exact `lp` arguments of each scaling, on Apple's CUPS and on
+/// another. An exact-size job asks IPP for `print-scaling=none` as well as the older
+/// `fit-to-page=false`, which does not override the IPP attribute: a queue defaulting to `auto`
+/// (IPP Everywhere's default) shrank an A4 sheet into its 3 mm margins, to 97 %.
+#[test]
+fn each_scaling_reaches_cups_as_exactly_these_options() {
+    let args = |scaling: Scaling, apple: bool| spool::lp_args_for(&Job { scaling, ..Job::default() }, apple).join(" ");
+    for (apple, auto) in [(false, ""), (true, " -o AP_D_InputSlot=")] {
+        assert_eq!(args(Scaling::Exact, apple), format!("-n 1 -t Craft -o collate=true -o fit-to-page=false -o print-scaling=none{auto}"));
+        assert_eq!(args(Scaling::ShrinkToFit, apple), format!("-n 1 -t Craft -o collate=true -o print-scaling=auto-fit{auto}"));
+    }
+    // A job asks for one scaling only: CUPS keeps the last of a repeated option.
+    for scaling in [Scaling::Exact, Scaling::ShrinkToFit] {
+        assert_eq!(lp_args(&Job { scaling, ..Job::default() }).iter().filter(|a| a.starts_with("print-scaling=")).count(), 1);
+    }
 }
 
 /// Driver settings `len` bytes long whose header says `size` + `extra`, filled with `fill`.

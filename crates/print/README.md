@@ -15,7 +15,10 @@ submits jobs with copies, collation, duplex and color.
 `command_preview` returns diagnostics without creating files or starting a process.
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
-  sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
+  sheets use IPP `print-scaling=none` and the older `fit-to-page=false`; `fit-to-page` alone
+  does not override a queue's `print-scaling-default`, and IPP Everywhere's `auto` shrinks a
+  paper-sized sheet into the printable area (A4 with 3 mm margins at 97 %,
+  storytold/pdfcraft#7207). Shrink-to-fit uses IPP `print-scaling=auto-fit`.
 - **macOS paper tray:** a job whose options name no `InputSlot` also sends `AP_D_InputSlot=`,
   the system Print dialog's Paper Feed: Auto Select. Without it CUPS uses the PPD's default
   tray, and a printer whose default tray is empty holds the job while CUPS reports it completed
