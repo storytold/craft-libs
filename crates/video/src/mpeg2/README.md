@@ -169,7 +169,7 @@ are compared within a tolerance: **per frame max |Δ| ≤ 4 and PSNR ≥ 58 dB, 
 samples differing**. Frame count, display order, picture types, interlacing and field order are
 exact (ffprobe).
 
-`tests/mpeg2/oracle.rs` (FFmpeg-encoded elementary streams):
+`tests/it/mpeg2/oracle.rs` (FFmpeg-encoded elementary streams):
 
 | Fixture | Content | Max Δ | Differing | PSNR |
 |---|---|---|---|---|
@@ -218,7 +218,7 @@ fell to 77–150 fps). These are lower bounds.
   rounding, field addressing, edge clamping.
 - `tests.rs`: a hand-built intra picture decodes to its DC; truncation at every byte and
   3000 random mutations never panic.
-- `synth_tests.rs`, `tests/mpeg2/oracle.rs`: see above (single-threaded decode identical to the
+- `synth_tests.rs`, `tests/it/mpeg2/oracle.rs`: see above (single-threaded decode identical to the
   threaded one).
 - `encode/`: every encoder code decodes to its value with the decoder's tables; motion vector
   deltas survive the decoder's wrap for f_code 1-4; forward/inverse DCT and quantiser round trips;
@@ -245,7 +245,7 @@ fell to 77–150 fps). These are lower bounds.
   bitrate, for two picture intervals) are refused, and the lowest bitrate accepted for CIF
   meets the buffer with noise. The `vbv.rs` model itself: both bounds of a constant bitrate
   buffer, a full variable bitrate buffer stops filling, 29.97 fps does not drift.
-- `tests/mpeg2/encode.rs`: FFmpeg decodes our streams of `testsrc2` (CIF and 576-line 4:2:2;
+- `tests/it/mpeg2/encode.rs`: FFmpeg decodes our streams of `testsrc2` (CIF and 576-line 4:2:2;
   without B pictures, with 2 and 4, closed and open GOPs) without errors and within the decoder
   suite's tolerance of our reconstruction, ffprobe reports the profile, level, pixel format and
   picture types in display order, and average bitrate lands within 10 % of 800 and 2500 kbit/s

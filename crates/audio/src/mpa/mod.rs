@@ -474,6 +474,3 @@ pub(crate) fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 3
     }
     *out = o;
 }
-
-#[cfg(test)]
-mod tests;

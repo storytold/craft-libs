@@ -2,7 +2,7 @@ name: Workspace
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -16,19 +16,20 @@ permissions:
   contents: read
 
 concurrency:
-  # A pull request, and main, each have one group, so a newer push cancels the run it supersedes;
-  # the newest push's run still tests everything before it. Every other run (a release tag, a
-  # manual run, the scheduled run) gets a group of its own and is neither cancelled nor replaced
-  # while queued: a release run always finishes, and the scheduled run saves the caches.
-  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main') && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # A pull request, main and next each have one group, so a newer push cancels the run it
+  # supersedes; the newest push's run still tests everything before it. Every other run (a release
+  # tag, a manual run, the scheduled run, nightly.yml's run on next) gets a group of its own and is
+  # neither cancelled nor replaced while queued: a release run always finishes, the scheduled run
+  # saves the caches, and next gets one complete macOS and Windows run a day.
+  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'push' && github.ref == 'refs/heads/next') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'push' && github.ref == 'refs/heads/next' }}
 
 jobs:
   # Whether this run needs the macOS and Windows legs, and which tests every leg runs
-  # (craft-common-actions' select-platforms). On a pull request the macOS and Windows legs run only
-  # when it can change platform behaviour: a crate with platform cfg code or one that depends on
-  # it, the build setup, or a file outside the crates. The tests are those of the crates a change
-  # reaches: the crates that own a changed file, the crates whose Cargo.toml declares a read of it
+  # (craft-common-actions' select-platforms). A pull request runs the Linux legs only, unless it
+  # has the full-ci label (see native-platforms); every other event runs the macOS and Windows legs
+  # too. The tests are those of the crates a change reaches: the crates that own a changed file,
+  # the crates whose Cargo.toml declares a read of it
   # (`[package.metadata.craft] reads`, which this job checks is complete), and every crate that
   # depends on those. The build setup, a crate's own Cargo.toml or a file outside the crates other
   # than documentation runs every test; documentation alone runs none. The full-ci label runs
@@ -41,6 +42,9 @@ jobs:
       platform: ${{ steps.select.outputs.platform }}
       tests: ${{ steps.select.outputs.tests }}
       filter: ${{ steps.select.outputs.filter }}
+      audit: ${{ steps.audit.outputs.audit }}
+      profile: ${{ steps.audit.outputs.profile }}
+      deps-profile: ${{ steps.audit.outputs.deps-profile }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -59,14 +63,54 @@ jobs:
           select-os: '["windows-latest","macos-latest"]'
           select-tests: true
           label: full-ci
+      # Whether the selection reaches a replay-audit crate, which runs the Linux leg as a build job
+      # and three test shards (see `native`), and the hash of the profile overrides every test build
+      # passes (scripts/ci-workspace-tests.sh), which names the Workspace legs' cache entries:
+      # rust-cache's key does not hash these files, and an entry built with other overrides would be
+      # rebuilt in full on every run. Other events than a pull request check out only these files.
+      # The macOS and Windows legs cache dependencies only, so `deps-profile` hashes only the
+      # settings that reach a dependency: `[profile.dev]` and `[profile.dev.package."*"]`. Every
+      # other override names a workspace crate (scripts/test-workspace-tests.py), so changing one
+      # keeps those entries, and next's runs restore main's.
+      - uses: actions/checkout@v7.0.1
+        if: github.event_name != 'pull_request'
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/ci-workspace-tests.sh
+            .config/cargo-*.toml
+          sparse-checkout-cone-mode: false
+      - id: audit
+        env:
+          CRAFT_TESTS: ${{ steps.select.outputs.tests }}
+          CRAFT_TEST_FILTER: ${{ steps.select.outputs.filter }}
+          CRAFT_TEST_SKIP: ${{ steps.select.outputs.skip }}
+        run: |
+          echo "audit=$(bash scripts/ci-workspace-tests.sh audit)" >> "$GITHUB_OUTPUT"
+          echo "profile=$(cat .config/cargo-dev.toml .config/cargo-ci.toml | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          # An assignment, so a failure stops the step (`bash -e`) instead of naming every entry `v2-`.
+          deps=$(python3 -I - <<'PY'
+          import hashlib, json, tomllib
+          kept = []
+          for path in (".config/cargo-dev.toml", ".config/cargo-ci.toml"):
+              with open(path, "rb") as file:
+                  dev = tomllib.load(file)["profile"]["dev"]
+              kept.append([dev, dev.pop("package", {}).get("*", {})])
+          print(hashlib.sha256(json.dumps(kept, sort_keys=True).encode()).hexdigest()[:12])
+          PY
+          )
+          echo "deps-profile=$deps" >> "$GITHUB_OUTPUT"
 
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
   # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
   # rebuilds only the crates a change reaches. `cache-prune` keeps the newest entry. The midnight
-  # scheduled run builds from source (`cold-build`) and starts the entry afresh. The macOS and
-  # Windows legs keep a dependency-only entry: their workspace crates would not fit the 10 GB cache
-  # budget beside Linux's. The lint legs keep no cache (`lint-cache: false`) for the same reason; a
-  # cold lint leg is still shorter than its gate leg.
+  # scheduled run builds from source (`cold-build`) and starts the entry afresh. next has an entry
+  # of its own, since main's is built from different code and lockfile and a pull request into next
+  # rebuilt nearly everything from it (15.5 minutes): nightly.yml's daily manual run on next builds
+  # from source and saves it (`cache-save-on-dispatch`), and pull requests into next restore it
+  # before main's. The macOS and Windows legs keep a dependency-only entry: their workspace crates
+  # would not fit the 10 GB cache budget beside Linux's. The lint legs keep no cache
+  # (`lint-cache: false`) for the same reason; a cold lint leg is still shorter than its gate leg.
   native:
     name: Workspace
     needs: platforms
@@ -74,17 +118,16 @@ jobs:
     with:
       os: '["ubuntu-latest"]'
       cache-workspace-crates: true
-      cold-build: ${{ github.event.schedule == '17 0 * * *' }}
+      cache-save-on-dispatch: true
+      cache-version: &cache-version v2-${{ needs.platforms.outputs.profile }}
+      cold-build: ${{ github.event.schedule == '17 0 * * *' || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/next' }}
       lint-cache: false
-      # Vendored PDF/graphics backends are excluded from the workspace (Cargo.toml) and
-      # compile in scripts/test-pdf-backends.sh. The unreached-rs diff check would
-      # otherwise fail any edit under vendor/ as a file no workspace module reaches.
+      # The vendored crates are on the workspace `exclude` list and craft-pdf's read-only contract is a
+      # workspace of its own (pdf.yml tests it), so unreached-rs has no module tree for them.
       unreached-rs-allow: |
         **/fixtures/**
-        vendor/hayro*/**
-        vendor/krilla/**
-        vendor/linesweeper/**
-        vendor/vello_*/**
+        vendor/**
+        crates/pdf/read-only-contract/**
       timeout-minutes: &timeout 120
       # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: &tools cargo-nextest@0.9.150
@@ -124,34 +167,33 @@ jobs:
         fi
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      command: &command |
-        # The tests run once, with every feature, in parallel across test binaries; nextest skips
-        # doctests, so `cargo test --doc` runs them. Examples are not built, except the two whose
-        # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
-        # first clippy run; the last command runs the crates whose tests check behaviour with a
-        # feature off, which an all-features build cannot reach.
-        # Every build is the whole workspace's, as on main; the filter narrows only the run. The
-        # doctests run for the whole workspace: `cargo test -p <selected>` would resolve features
-        # over the selected crates only and rebuild the dependencies whose features differ.
-        if [ "$CRAFT_TESTS" = none ]; then
-          echo "No crate changed: no tests to run."
-          exit 0
-        fi
-        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
-        cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+      # A selection that reaches a replay-audit crate builds once in a `build` job, which writes
+      # three nextest archives and then runs the doctests; three shard legs run them in parallel:
+      # every selected test outside the replay audit's crates and craft-draw, those crates (run plainly,
+      # then the audit crates with the audit), and craft-image-codecs with default features. Any other selection
+      # (and every macOS and Windows leg) builds and runs in one leg. scripts/ci-workspace-tests.sh
+      # holds every step.
+      test-shards: ${{ needs.platforms.outputs.audit == 'true' && 3 || 0 }}
+      shard-archives: ${{ needs.platforms.outputs.audit == 'true' }}
+      archive-command: ${{ needs.platforms.outputs.audit == 'true' && 'bash scripts/ci-workspace-tests.sh archive' || '' }}
+      after-archive-command: bash scripts/ci-workspace-tests.sh doctest
+      shard-command: bash scripts/ci-workspace-tests.sh shard
+      command: &command bash scripts/ci-workspace-tests.sh run
 
-  # The macOS and Windows legs, when `platforms` says this run needs them, with the Linux leg's
-  # inputs.
+  # The macOS and Windows legs, with the Linux leg's inputs. They take 1.5-2 hours against the Linux
+  # leg's 15-40 minutes, so a pull request does not wait for them: they run after the merge, on
+  # every push to main and next, on main's scheduled runs and on nightly.yml's daily run on next.
+  # A pull request that needs them before it merges gets the full-ci label.
   native-platforms:
     name: Workspace
     needs: platforms
-    if: needs.platforms.outputs.platform == 'true'
+    if: needs.platforms.outputs.platform == 'true' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["windows-latest","macos-latest"]'
       lint-cache: false
+      # Named by the dependency settings alone (`deps-profile`), so next restores main's entries.
+      cache-version: v2-${{ needs.platforms.outputs.deps-profile }}
       timeout-minutes: *timeout
       tools: *tools
       craft-fonts-ref: *craft-fonts
@@ -169,25 +211,16 @@ jobs:
       cache-key-files: *cache-key-files
       lint-command: *lint
       command: *command
-      windows-command: |
-        if [ "$CRAFT_TESTS" = none ]; then
-          echo "No crate changed: no tests to run."
-          exit 0
-        fi
-        powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
-        cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
-  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
-  # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
-  # done, instead of leaving them to the 10 GB budget's eviction, which would evict other entries
-  # too. The only job with `actions: write`; it checks out and runs nothing from the repository.
+  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), as
+  # does the daily manual run on next, and every run restores only the newest. This deletes the
+  # older ones of the run's branch as soon as the Linux leg is done, instead of leaving them to the
+  # 10 GB budget's eviction, which would evict other entries too. The only job with
+  # `actions: write`; it checks out and runs nothing from the repository.
   cache-prune:
     name: cache prune
     needs: native
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -201,10 +234,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
-          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
+          gh cache list --repo "$REPO" --ref "$REF" --limit 100 --sort created_at --order desc --json id,key \
             --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
           declare -A kept
           while read -r id key; do
