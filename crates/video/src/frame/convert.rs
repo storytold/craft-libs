@@ -54,14 +54,24 @@ fn h273(code: u8) -> u8 {
 impl TryFrom<crate::h264::decode::Picture> for VideoFrame {
     type Error = FrameError;
 
-    /// An 8-bit 4:2:0 frame.
+    /// A 4:2:0 or 4:2:2 frame: 8-bit storage when both depths are 8, else 16-bit storage for all
+    /// three planes ([`Picture::is_deep`](crate::h264::decode::Picture::is_deep)). The chroma
+    /// planes carry the stream's chroma bit depth, which may differ from the luma depth.
     fn try_from(p: crate::h264::decode::Picture) -> Result<Self, FrameError> {
+        let (bits, chroma_bits) = (p.bit_depth, p.bit_depth_chroma);
+        let deep = p.is_deep();
+        let [y, u, v] = if deep {
+            [Samples::U16(p.y16), Samples::U16(p.u16), Samples::U16(p.v16)]
+        } else {
+            [Samples::U8(p.y), Samples::U8(p.u), Samples::U8(p.v)]
+        };
         let planes = vec![
-            Plane::new(p.width, p.height, p.y_stride, 8, Samples::U8(p.y))?,
-            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, 8, Samples::U8(p.u))?,
-            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, 8, Samples::U8(p.v))?,
+            Plane::new(p.width, p.height, p.y_stride, bits, y)?,
+            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, chroma_bits, u)?,
+            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, chroma_bits, v)?,
         ];
-        let mut f = VideoFrame::new(p.width, p.height, ColorFamily::YCbCr, Subsampling::S420, planes, None)?;
+        let sub = if p.chroma422 { Subsampling::S422 } else { Subsampling::S420 };
+        let mut f = VideoFrame::new(p.width, p.height, ColorFamily::YCbCr, sub, planes, None)?;
         f.color = ColorTags { primaries: p.color.primaries, transfer: p.color.transfer, matrix: p.color.matrix, full_range: p.color.full_range };
         f.pts = Some(p.pts);
         f.sar = sar(p.sar.0.into(), p.sar.1.into());
