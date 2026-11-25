@@ -82,100 +82,125 @@ impl Default for OperationSettings {
     }
 }
 
-/// A production pass a layer runs over all of its member shapes: a cooked preset
-/// (D-07) tagged with its kind, carrying the full settings snapshot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum Operation {
+/// The kind of a production pass: what the machine does with the member shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationKind {
     /// Cut the outline.
-    Cut(OperationSettings),
+    Cut,
     /// Sticker kiss cut: through the face material only, the backing stays whole.
-    KissCut(OperationSettings),
+    KissCut,
     /// Sticker die cut: through the face material and the backing.
-    DieCut(OperationSettings),
+    DieCut,
     /// Draw the outline with a pen.
-    Draw(OperationSettings),
+    Draw,
     /// Crease a fold line.
-    Score(OperationSettings),
+    Score,
     /// Engrave the surface.
-    Engrave(OperationSettings),
+    Engrave,
     /// A dashed tear line.
-    Perforate(OperationSettings),
+    Perforate,
     /// Print on a home printer, then cut around the print using registration marks.
-    PrintThenCut(OperationSettings),
+    PrintThenCut,
     /// One punch per contour.
-    Punch(OperationSettings),
+    Punch,
     /// Shown on the canvas only, never sent to the machine or printer.
     Guide,
 }
 
-impl Operation {
-    /// The settings snapshot; `None` for `Guide`.
-    pub fn settings(&self) -> Option<&OperationSettings> {
-        match self {
-            Operation::Guide => None,
-            Operation::Cut(s)
-            | Operation::KissCut(s)
-            | Operation::DieCut(s)
-            | Operation::Draw(s)
-            | Operation::Score(s)
-            | Operation::Engrave(s)
-            | Operation::Perforate(s)
-            | Operation::PrintThenCut(s)
-            | Operation::Punch(s) => Some(s),
-        }
-    }
-
+impl OperationKind {
     /// The physical process this pass runs on; `None` for `Guide`.
     pub fn process(&self) -> Option<Process> {
         Some(match self {
-            Operation::Cut(_) | Operation::KissCut(_) | Operation::DieCut(_) | Operation::Engrave(_) | Operation::Perforate(_) => Process::Laser,
-            Operation::Draw(_) => Process::Pen,
-            Operation::Score(_) => Process::Creaser,
-            Operation::Punch(_) => Process::Punch,
-            Operation::PrintThenCut(_) => Process::Print,
-            Operation::Guide => return None,
+            OperationKind::Cut | OperationKind::KissCut | OperationKind::DieCut | OperationKind::Engrave | OperationKind::Perforate => Process::Laser,
+            OperationKind::Draw => Process::Pen,
+            OperationKind::Score => Process::Creaser,
+            OperationKind::Punch => Process::Punch,
+            OperationKind::PrintThenCut => Process::Print,
+            OperationKind::Guide => return None,
         })
     }
 
     /// The cutting strategy within the process.
     pub fn strategy(&self) -> Strategy {
         match self {
-            Operation::Cut(_) | Operation::Draw(_) | Operation::PrintThenCut(_) => Strategy::Line,
-            Operation::KissCut(_) => Strategy::KissCut,
-            Operation::DieCut(_) => Strategy::DieCut,
-            Operation::Score(_) => Strategy::Score,
-            Operation::Engrave(_) => Strategy::Fill,
-            Operation::Perforate(_) => Strategy::Perforate,
-            Operation::Punch(_) => Strategy::Drill,
-            Operation::Guide => Strategy::Guide,
+            OperationKind::Cut | OperationKind::Draw | OperationKind::PrintThenCut => Strategy::Line,
+            OperationKind::KissCut => Strategy::KissCut,
+            OperationKind::DieCut => Strategy::DieCut,
+            OperationKind::Score => Strategy::Score,
+            OperationKind::Engrave => Strategy::Fill,
+            OperationKind::Perforate => Strategy::Perforate,
+            OperationKind::Punch => Strategy::Drill,
+            OperationKind::Guide => Strategy::Guide,
         }
     }
 
     /// Whether this pass is canvas-only guidance and excluded from production output.
     pub fn is_guide(&self) -> bool {
-        matches!(self, Operation::Guide)
+        matches!(self, OperationKind::Guide)
     }
 
     /// Kebab-case wire name of the pass.
     pub fn kind_name(&self) -> &'static str {
         match self {
-            Operation::Cut(_) => "cut",
-            Operation::KissCut(_) => "kiss-cut",
-            Operation::DieCut(_) => "die-cut",
-            Operation::Draw(_) => "draw",
-            Operation::Score(_) => "score",
-            Operation::Engrave(_) => "engrave",
-            Operation::Perforate(_) => "perforate",
-            Operation::PrintThenCut(_) => "print-then-cut",
-            Operation::Punch(_) => "punch",
-            Operation::Guide => "guide",
+            OperationKind::Cut => "cut",
+            OperationKind::KissCut => "kiss-cut",
+            OperationKind::DieCut => "die-cut",
+            OperationKind::Draw => "draw",
+            OperationKind::Score => "score",
+            OperationKind::Engrave => "engrave",
+            OperationKind::Perforate => "perforate",
+            OperationKind::PrintThenCut => "print-then-cut",
+            OperationKind::Punch => "punch",
+            OperationKind::Guide => "guide",
         }
+    }
+}
+
+/// A first-class production entity (GEO-05): one pass over its `members`, in
+/// `Document::operations` order. Geometry is never duplicated here — `members`
+/// holds shape ids only, and a shape may belong to many operations (N:M).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Operation {
+    /// Stable identity; unique within the document.
+    pub id: u64,
+    pub name: String,
+    pub kind: OperationKind,
+    /// The full settings snapshot for the pass (D-09). Emission is a later phase.
+    #[serde(default)]
+    pub settings: OperationSettings,
+    /// Material colour label, `#rrggbb`; display/filter only, never identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Whether exports and cuts include this operation.
+    #[serde(default = "crate::yes")]
+    pub visible: bool,
+    /// A locked operation's shapes cannot be selected or edited.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    /// Member shape ids, in pass order (D-20). Geometry lives once in
+    /// `Document::shapes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<u64>,
+    /// Optional icon name for the operations panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+impl Operation {
+    /// Whether exports and cuts include this operation: visible, not Guide.
+    pub fn is_output(&self) -> bool {
+        self.visible && !self.kind.is_guide()
+    }
+
+    /// Kebab-case wire name of the pass kind.
+    pub fn kind_name(&self) -> &'static str {
+        self.kind.kind_name()
     }
 
     /// Rejects non-finite or nonsensical settings before they reach a file or machine.
     pub fn validate(&self) -> Result<(), DocError> {
-        let Some(s) = self.settings() else { return Ok(()) };
+        let s = &self.settings;
         let name = self.kind_name();
         let finite = |value: f64, field: &'static str| check_finite_mm(value, field).map_err(|e| DocError::Model(format!("operation {name}: {e}")));
         finite(s.power, "power")?;

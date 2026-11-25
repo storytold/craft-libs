@@ -321,7 +321,10 @@ impl Document {
         }
         for layer in &self.layers {
             check_name(&layer.name, "layer name")?;
-            check_color(layer.color.as_deref(), "layer colour")?;
+        }
+        for op in &self.operations {
+            check_name(&op.name, "operation name")?;
+            check_color(op.color.as_deref(), "operation colour")?;
         }
         check_name(&self.meta.title, "title")?;
         if self.meta.notes.len() > MAX_NOTES_BYTES {
@@ -371,11 +374,13 @@ impl Document {
         Ok(())
     }
 
-    /// Whether shape `id` may not be edited: the shape is locked, or any layer whose
-    /// `members` contain it is locked.
+    /// Whether shape `id` may not be edited: the shape is locked, or any layer or
+    /// operation whose `members` contain it is locked.
     pub fn shape_locked(&self, id: u64) -> bool {
         let shape_locked = self.get_shape(id).is_some_and(|s| s.locked);
-        shape_locked || self.layers.iter().any(|layer| layer.locked && layer.members.contains(&id))
+        shape_locked
+            || self.layers.iter().any(|layer| layer.locked && layer.members.contains(&id))
+            || self.operations.iter().any(|op| op.locked && op.members.contains(&id))
     }
 
     /// Index of the first layer whose `members` contain shape `id`.
@@ -485,6 +490,9 @@ impl Document {
         for layer in &mut out.layers {
             layer.members.retain(|id| live.contains(id));
         }
+        for op in &mut out.operations {
+            op.members.retain(|id| live.contains(id));
+        }
         out.groups = out.pruned_groups();
         Some(out)
     }
@@ -506,8 +514,8 @@ impl Document {
             return String::new();
         }
         let mut remaining = max_bytes - empty_len;
-        'layers: for layer in self.layers.iter().filter(|l| l.is_output()) {
-            for id in &layer.members {
+        'layers: for op in self.operations.iter().filter(|o| o.is_output()) {
+            for id in &op.members {
                 let Some(shape) = self.get_shape(*id).filter(|s| !s.hidden) else {
                     continue;
                 };

@@ -43,13 +43,14 @@ pub const HEADER_KEY: &str = "stencilcraft";
 /// version-1 defaults, and omission of default canvas values remain owned by this crate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "Board: Serialize, Kerf: Serialize, Layers: Serialize, Image: Serialize, BoardSetup: Serialize + Default + PartialEq, Pages: Serialize + Default + PartialEq, Guides: Serialize + Default + PartialEq, Grid: Serialize + Default + PartialEq, Snap: Serialize + Default + PartialEq, Groups: Serialize + Default + PartialEq, Meta: Serialize + Default + PartialEq, Shapes: Serialize + Default + PartialEq",
-    deserialize = "Board: Deserialize<'de>, Kerf: Deserialize<'de>, Layers: Deserialize<'de>, Image: Deserialize<'de>, BoardSetup: Deserialize<'de> + Default, Pages: Deserialize<'de> + Default, Guides: Deserialize<'de> + Default, Grid: Deserialize<'de> + Default, Snap: Deserialize<'de> + Default, Groups: Deserialize<'de> + Default, Meta: Deserialize<'de> + Default, Shapes: Deserialize<'de> + Default"
+    serialize = "Board: Serialize, Kerf: Serialize, Layers: Serialize, Operations: Serialize + Default + PartialEq, Image: Serialize, BoardSetup: Serialize + Default + PartialEq, Pages: Serialize + Default + PartialEq, Guides: Serialize + Default + PartialEq, Grid: Serialize + Default + PartialEq, Snap: Serialize + Default + PartialEq, Groups: Serialize + Default + PartialEq, Meta: Serialize + Default + PartialEq, Shapes: Serialize + Default + PartialEq",
+    deserialize = "Board: Deserialize<'de>, Kerf: Deserialize<'de>, Layers: Deserialize<'de>, Operations: Deserialize<'de> + Default, Image: Deserialize<'de>, BoardSetup: Deserialize<'de> + Default, Pages: Deserialize<'de> + Default, Guides: Deserialize<'de> + Default, Grid: Deserialize<'de> + Default, Snap: Deserialize<'de> + Default, Groups: Deserialize<'de> + Default, Meta: Deserialize<'de> + Default, Shapes: Deserialize<'de> + Default"
 ))]
 pub struct DocumentFields<
     Board = Value,
     Kerf = Value,
     Layers = Value,
+    Operations = Option<Value>,
     Image = Value,
     BoardSetup = Option<Value>,
     Pages = Option<Value>,
@@ -64,8 +65,11 @@ pub struct DocumentFields<
     pub board: Board,
     /// Required kerf settings.
     pub kerf: Kerf,
-    /// Required drawing layers.
+    /// Required drawing layers (geometry-only containers in version 2).
     pub layers: Layers,
+    /// Optional production operations, omitted when absent (version 2; absent in version 1).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub operations: Operations,
     /// Next document object id; absent in early version 1 files, where it defaults to 1.
     #[serde(rename = "next-shape-id", default = "default_next_shape_id")]
     pub next_shape_id: u64,
@@ -364,6 +368,7 @@ fn is_wire_field(name: &str) -> bool {
             | "board"
             | "kerf"
             | "layers"
+            | "operations"
             | "next-shape-id"
             | "images"
             | "board-setup"
@@ -423,6 +428,7 @@ mod tests {
             board: json!({"width_mm": 100.0, "height_mm": 150.0}),
             kerf: json!({"width_mm": 0.0, "apply_to_exports": false}),
             layers: json!([]),
+            operations: None,
             next_shape_id: 1,
             images: Vec::new(),
             board_setup: None,

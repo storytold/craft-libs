@@ -1,7 +1,7 @@
 //! Hostile input: malformed, wrong-format, future-version, duplicate-id and
 //! dangling-membership files all fail or recover with a `DocError`, never a panic.
 
-use craft_stencilcraft_document::{DocError, Document, Operation, OperationSettings};
+use craft_stencilcraft_document::{DocError, Document, Operation, OperationKind, OperationSettings};
 use kurbo::BezPath;
 
 fn rect_path() -> BezPath {
@@ -18,8 +18,18 @@ fn rect_path() -> BezPath {
 /// mutate it field by field before loading.
 fn valid_v2_value() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let mut doc = Document::default();
-    doc.layers[0].operation = Some(Operation::Cut(OperationSettings::default()));
     doc.push_shape(0, rect_path())?;
+    doc.operations.push(Operation {
+        id: 1,
+        name: "cut".to_string(),
+        kind: OperationKind::Cut,
+        settings: OperationSettings::default(),
+        color: None,
+        visible: true,
+        locked: false,
+        members: vec![1],
+        icon: None,
+    });
     let json = doc.save_json()?;
     Ok(serde_json::from_str(&json)?)
 }
@@ -81,28 +91,23 @@ fn duplicate_shape_ids_are_a_model_error() -> Result<(), Box<dyn std::error::Err
 #[test]
 fn dangling_member_id_is_pruned_and_load_succeeds() -> Result<(), Box<dyn std::error::Error>> {
     let mut v = valid_v2_value()?;
-    v["layers"][0]["members"] = serde_json::json!([1, 999]);
+    v["operations"][0]["members"] = serde_json::json!([1, 999]);
     let doc = load_value(&v)?;
-    assert_eq!(doc.layers[0].members, vec![1], "the dangling member id is pruned, not fatal");
+    assert_eq!(doc.operations[0].members, vec![1], "the dangling member id is pruned, not fatal");
     Ok(())
 }
 
 #[test]
 fn non_finite_power_or_zero_passes_fail_save_with_model_error() -> Result<(), Box<dyn std::error::Error>> {
-    let mut doc = Document::default();
-    doc.layers[0].operation = Some(Operation::Cut(OperationSettings::default()));
-    doc.push_shape(0, rect_path())?;
+    let doc = valid_v2_value()?;
+    let doc = load_value(&doc)?;
 
     let mut bad_power = doc.clone();
-    if let Some(Operation::Cut(s)) = bad_power.layers[0].operation.as_mut() {
-        s.power = f64::INFINITY;
-    }
+    bad_power.operations[0].settings.power = f64::INFINITY;
     assert!(matches!(bad_power.save_json(), Err(DocError::Model(_))), "non-finite power fails save_json");
 
     let mut zero_passes = doc.clone();
-    if let Some(Operation::Cut(s)) = zero_passes.layers[0].operation.as_mut() {
-        s.passes = 0;
-    }
+    zero_passes.operations[0].settings.passes = 0;
     assert!(matches!(zero_passes.save_json(), Err(DocError::Model(_))), "zero passes fails save_json");
 
     // The untouched document still saves fine.

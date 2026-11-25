@@ -1,8 +1,8 @@
-//! Operations: all ten variants round-trip with non-default settings, the process/strategy
-//! axes match D-06, there is no per-shape operation field (D-05), and invalid settings are
-//! rejected with `DocError::Model`.
+//! Operations: all ten kinds round-trip as first-class entities with non-default
+//! settings, the process/strategy axes match D-06, there is no per-shape operation
+//! field (D-05), and invalid settings are rejected with `DocError::Model`.
 
-use craft_stencilcraft_document::{DocError, Document, Layer, Operation, OperationSettings, Process, Strategy, Tab, Tip};
+use craft_stencilcraft_document::{DocError, Document, Operation, OperationKind, OperationSettings, Process, Strategy, Tab, Tip};
 use kurbo::BezPath;
 
 fn rect_path(x: f64, y: f64, w: f64, h: f64) -> BezPath {
@@ -29,44 +29,58 @@ fn settings() -> OperationSettings {
     }
 }
 
-fn all_variants() -> Vec<Operation> {
-    let s = settings();
+fn all_kinds() -> Vec<OperationKind> {
     vec![
-        Operation::Cut(s.clone()),
-        Operation::KissCut(s.clone()),
-        Operation::DieCut(s.clone()),
-        Operation::Draw(s.clone()),
-        Operation::Score(s.clone()),
-        Operation::Engrave(s.clone()),
-        Operation::Perforate(s.clone()),
-        Operation::PrintThenCut(s.clone()),
-        Operation::Punch(s),
-        Operation::Guide,
+        OperationKind::Cut,
+        OperationKind::KissCut,
+        OperationKind::DieCut,
+        OperationKind::Draw,
+        OperationKind::Score,
+        OperationKind::Engrave,
+        OperationKind::Perforate,
+        OperationKind::PrintThenCut,
+        OperationKind::Punch,
+        OperationKind::Guide,
     ]
 }
 
+fn operation(id: u64, kind: OperationKind, settings: OperationSettings) -> Operation {
+    Operation {
+        id,
+        name: kind.kind_name().to_string(),
+        kind,
+        settings,
+        color: Some("#102030".to_string()),
+        visible: true,
+        locked: false,
+        members: vec![1],
+        icon: Some("star".to_string()),
+    }
+}
+
 #[test]
-fn every_operation_variant_round_trips_with_non_default_params() -> Result<(), Box<dyn std::error::Error>> {
-    for op in all_variants() {
-        let mut doc = Document { layers: vec![Layer::new("pass", Some(op.clone()))], ..Document::default() };
+fn every_operation_kind_round_trips_with_non_default_params() -> Result<(), Box<dyn std::error::Error>> {
+    for kind in all_kinds() {
+        let mut doc = Document::default();
         doc.push_shape(0, rect_path(0.0, 0.0, 8.0, 8.0))?;
+        let op = operation(doc.next_operation_id(), kind, settings());
+        doc.operations.push(op.clone());
         let back = Document::load_json(&doc.save_json()?)?;
-        assert_eq!(back.layers[0].operation.as_ref(), Some(&op), "{} round-trips through save/load", op.kind_name());
+        assert_eq!(back.operations.as_slice(), &[op], "{} round-trips through save/load", kind.kind_name());
     }
     Ok(())
 }
 
 #[test]
-fn process_and_strategy_axes_match_the_operation() {
-    let s = OperationSettings::default();
-    assert_eq!(Operation::Cut(s.clone()).process(), Some(Process::Laser));
-    assert_eq!(Operation::Engrave(s.clone()).process(), Some(Process::Laser));
-    assert_eq!(Operation::Score(s.clone()).process(), Some(Process::Creaser));
-    assert_eq!(Operation::Guide.process(), None);
-    assert_eq!(Operation::Guide.strategy(), Strategy::Guide);
-    assert_eq!(Operation::Cut(s.clone()).strategy(), Strategy::Line);
-    assert_eq!(Operation::Engrave(s.clone()).strategy(), Strategy::Fill);
-    assert_eq!(Operation::Score(s).strategy(), Strategy::Score);
+fn process_and_strategy_axes_match_the_kind() {
+    assert_eq!(OperationKind::Cut.process(), Some(Process::Laser));
+    assert_eq!(OperationKind::Engrave.process(), Some(Process::Laser));
+    assert_eq!(OperationKind::Score.process(), Some(Process::Creaser));
+    assert_eq!(OperationKind::Guide.process(), None);
+    assert_eq!(OperationKind::Guide.strategy(), Strategy::Guide);
+    assert_eq!(OperationKind::Cut.strategy(), Strategy::Line);
+    assert_eq!(OperationKind::Engrave.strategy(), Strategy::Fill);
+    assert_eq!(OperationKind::Score.strategy(), Strategy::Score);
 }
 
 #[test]
@@ -74,12 +88,11 @@ fn a_shape_has_no_per_shape_operation_field() -> Result<(), Box<dyn std::error::
     let mut doc = Document::default();
     let shape = doc.push_shape(0, rect_path(0.0, 0.0, 4.0, 4.0))?;
     let v = serde_json::to_value(&shape)?;
-    assert!(v.get("operation").is_none(), "operation authority lives on layers only (D-05)");
-    // An operation reaches a shape only through a one-shape operation layer.
-    doc.layers[0].operation = Some(Operation::Cut(OperationSettings::default()));
-    doc.layers[0].members = vec![shape.id];
+    assert!(v.get("operation").is_none(), "operation authority lives on Document.operations only (D-05)");
+    // An operation reaches a shape only through its members (ids only, N:M).
+    doc.operations.push(operation(doc.next_operation_id(), OperationKind::Cut, OperationSettings::default()));
     let passes: Vec<u64> = doc.production_sequence().flat_map(|(_, ss)| ss.iter().map(|s| s.id).collect::<Vec<_>>()).collect();
-    assert_eq!(passes, vec![shape.id], "the shape is produced by its layer's pass");
+    assert_eq!(passes, vec![shape.id], "the shape is produced by the operation holding its id");
     Ok(())
 }
 
@@ -91,8 +104,10 @@ fn invalid_settings_are_rejected_with_model_errors() -> Result<(), Box<dyn std::
     zero_passes.passes = 0;
     let mut negative_tab = settings();
     negative_tab.tabs[0].width_mm = -1.0;
-    for op in [Operation::Cut(non_finite), Operation::Engrave(zero_passes), Operation::Perforate(negative_tab)] {
-        let doc = Document { layers: vec![Layer::new("pass", Some(op))], ..Document::default() };
+    for (kind, s) in [(OperationKind::Cut, non_finite), (OperationKind::Engrave, zero_passes), (OperationKind::Perforate, negative_tab)] {
+        let mut doc = Document::default();
+        doc.push_shape(0, rect_path(0.0, 0.0, 4.0, 4.0))?;
+        doc.operations.push(operation(doc.next_operation_id(), kind, s));
         assert!(matches!(doc.save_json(), Err(DocError::Model(_))), "save_json rejects invalid settings with DocError::Model");
     }
     Ok(())

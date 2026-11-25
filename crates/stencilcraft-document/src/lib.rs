@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 pub mod production;
 pub use metadata::{LibraryIndex, LibraryTrashEntry, MAX_RECENT_FILES, RecentFiles};
 pub use migrate::OperationDefaults;
-pub use production::{CombineOp, GroupKind, Operation, OperationSettings, Process, SendAssign, ShapeProduction, SourceGroup, Strategy, Tab};
+pub use production::{
+    CombineOp, GroupKind, Operation, OperationKind, OperationSettings, Process, SendAssign, ShapeProduction, SourceGroup, Strategy, Tab,
+};
 
 /// Native format identity and supported version, defined by the shared wire-format crate.
 pub use craft_stencilcraft_format::{FORMAT_NAME, FORMAT_VERSION};
@@ -87,26 +89,15 @@ impl Default for Board {
     }
 }
 
-/// One layer of the document: a named container of shapes. `operation: Some(..)`
-/// makes it a production pass over all of its `members` (D-01/D-03); `None` is a
-/// workspace container that produces nothing. Every layer embeds its operation
-/// settings snapshot; `preset_id` is optional provenance, not a dependency (D-10).
+/// One geometry layer of the document: a named container of shapes (GEO-05).
+/// Production lives in `Document::operations`; a layer only groups geometry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation: Option<Operation>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preset_id: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub preset_linked: bool,
     pub visible: bool,
     /// A locked layer's shapes cannot be selected or edited.
     #[serde(default, skip_serializing_if = "is_false")]
     pub locked: bool,
-    /// Material colour label, `#rrggbb`; Color Sync merges similar ones.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
     /// Member shape ids, in intra-layer order (D-20). Geometry lives once in
     /// `Document::shapes`; a shape may be a member of many layers (D-02).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -114,24 +105,13 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn new(name: impl Into<String>, operation: Option<Operation>) -> Self {
-        Self { name: name.into(), operation, preset_id: None, preset_linked: false, visible: true, locked: false, color: None, members: Vec::new() }
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), visible: true, locked: false, members: Vec::new() }
     }
 
-    /// Whether exports and cuts include this layer: visible, with a non-guide operation.
-    pub fn is_output(&self) -> bool {
-        self.visible && self.produces()
-    }
-
-    /// Whether newly created shapes may land here: not locked. An operation-less
-    /// container still accepts new shapes (D-18).
+    /// Whether newly created shapes may land here: not locked (D-18).
     pub fn takes_new_shapes(&self) -> bool {
         !self.locked
-    }
-
-    /// Whether this layer is a production pass: it has an operation and it is not Guide.
-    pub fn produces(&self) -> bool {
-        self.operation.as_ref().is_some_and(|op| !op.is_guide())
     }
 }
 
@@ -375,14 +355,18 @@ impl RasterImage {
     }
 }
 
-/// A StencilCraft document: artboard, kerf configuration, operation layers, and the
-/// shape store. Geometry is stored once in `shapes`; layers reference shapes by id
-/// through `members` (D-02).
+/// A StencilCraft document: artboard, kerf configuration, geometry layers, production
+/// operations, and the shape store. Geometry is stored once in `shapes`; layers and
+/// operations reference shapes by id through `members` (D-02, GEO-05).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub board: Board,
     pub kerf: KerfSettings,
+    /// Geometry-only layers (containers of shapes).
     pub layers: Vec<Layer>,
+    /// Production operations, in pass order: the pass order is the operations order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<Operation>,
     /// All shapes, stored once; layers reference them by id.
     #[serde(default)]
     pub shapes: Vec<Shape>,
@@ -417,6 +401,7 @@ type NativeFileFields = craft_stencilcraft_format::DocumentFields<
     Board,
     KerfSettings,
     Vec<Layer>,
+    Vec<Operation>,
     RasterImage,
     PageSetup,
     Vec<Page>,
@@ -433,6 +418,7 @@ type V1FileFields = craft_stencilcraft_format::DocumentFields<
     Board,
     KerfSettings,
     Vec<wire_v1::V1Layer>,
+    Vec<Operation>,
     RasterImage,
     PageSetup,
     Vec<Page>,
@@ -448,9 +434,10 @@ impl Default for Document {
         Self {
             board: Board::default(),
             kerf: KerfSettings::default(),
-            // One operation-less base layer: a workspace container that accepts new
-            // shapes, not an implicit Cut layer (D-18).
-            layers: vec![Layer::new("base", None)],
+            // One base geometry layer: a workspace container that accepts new
+            // shapes (D-18). Production starts empty in `operations`.
+            layers: vec![Layer::new("base")],
+            operations: Vec::new(),
             shapes: Vec::new(),
             next_shape_id: 1,
             images: Vec::new(),
@@ -483,24 +470,32 @@ impl Document {
         self.shapes.iter_mut().find(|s| s.id == id)
     }
 
-    /// Shapes that belong to no operation layer (D-04). A shape that is a member of any
-    /// layer with an operation — a Guide layer included — counts as assigned; a shape in
-    /// an operation-less container only is unassigned.
+    /// Shapes that belong to no operation (D-04). A shape that is a member of any
+    /// operation — a Guide operation included — counts as assigned; a shape in a
+    /// geometry layer only is unassigned.
     pub fn unassigned_shapes(&self) -> impl Iterator<Item = &Shape> {
-        let assigned: std::collections::BTreeSet<u64> =
-            self.layers.iter().filter(|l| l.operation.is_some()).flat_map(|l| l.members.iter().copied()).collect();
+        let assigned: std::collections::BTreeSet<u64> = self.operations.iter().flat_map(|o| o.members.iter().copied()).collect();
         self.shapes.iter().filter(move |s| !assigned.contains(&s.id))
     }
 
-    /// The production passes in document order (D-19): every layer that produces output,
-    /// paired with its member shapes in membership order. A layer with `Some(operation)`
-    /// includes all of its members in that pass (D-03); operation-less and Guide layers
-    /// are skipped (D-17).
-    pub fn production_sequence(&self) -> impl Iterator<Item = (&Layer, Vec<&Shape>)> {
-        self.layers.iter().filter(|l| l.produces()).map(|layer| {
-            let members = layer.members.iter().filter_map(|id| self.get_shape(*id)).collect();
-            (layer, members)
+    /// The production passes in document order (D-19): every visible, non-Guide
+    /// operation, paired with its member shapes in membership order. Pass order is
+    /// the `operations` order.
+    pub fn production_sequence(&self) -> impl Iterator<Item = (&Operation, Vec<&Shape>)> {
+        self.operations.iter().filter(|o| o.is_output()).map(|op| {
+            let members = op.members.iter().filter_map(|id| self.get_shape(*id)).collect();
+            (op, members)
         })
+    }
+
+    /// A free operation id.
+    pub fn next_operation_id(&self) -> u64 {
+        self.operations.iter().map(|o| o.id).max().map_or(1, |m| m.saturating_add(1))
+    }
+
+    /// The operation whose members contain shape `id`, first in pass order.
+    pub fn operation_of_shape(&self, id: u64) -> Option<&Operation> {
+        self.operations.iter().find(|o| o.members.contains(&id))
     }
 
     /// Union of the member shapes' bounds; `None` for an unknown or empty layer.
@@ -529,12 +524,16 @@ impl Document {
     }
 
     /// Drops member ids that reference no shape and deduplicates repeats, keeping
-    /// first-seen order within each layer.
+    /// first-seen order within each layer and operation.
     pub fn prune_members(&mut self) {
         let live: std::collections::BTreeSet<u64> = self.shapes.iter().map(|s| s.id).collect();
         for layer in &mut self.layers {
             let mut seen = std::collections::BTreeSet::new();
             layer.members.retain(|id| live.contains(id) && seen.insert(*id));
+        }
+        for op in &mut self.operations {
+            let mut seen = std::collections::BTreeSet::new();
+            op.members.retain(|id| live.contains(id) && seen.insert(*id));
         }
     }
 
@@ -613,12 +612,21 @@ impl Document {
                     return Err(DocError::Model(format!("layer {i} ({}): member {id} is not a shape", layer.name)));
                 }
             }
-            if let Some(operation) = &layer.operation {
-                operation.validate().map_err(|e| match e {
-                    DocError::Model(m) => DocError::Model(format!("layer {i} ({}): {m}", layer.name)),
-                    other => other,
-                })?;
+        }
+        let mut op_ids = std::collections::BTreeSet::new();
+        for (i, op) in self.operations.iter().enumerate() {
+            if !op_ids.insert(op.id) {
+                return Err(DocError::Model(format!("operation {}: duplicate id {}", i, op.id)));
             }
+            for id in &op.members {
+                if !ids.contains(id) {
+                    return Err(DocError::Model(format!("operation {i} ({}): member {id} is not a shape", op.name)));
+                }
+            }
+            op.validate().map_err(|e| match e {
+                DocError::Model(m) => DocError::Model(format!("operation {i} ({}): {m}", op.name)),
+                other => other,
+            })?;
         }
         Ok(())
     }
@@ -636,6 +644,7 @@ impl Document {
             board: clean.board.clone(),
             kerf: clean.kerf.clone(),
             layers: clean.layers.clone(),
+            operations: clean.operations.clone(),
             shapes: clean.shapes.clone(),
             next_shape_id: clean.next_shape_id,
             images: clean.images.clone(),
@@ -687,13 +696,14 @@ fn load_json_named(json: &str, path: &str, seed: &OperationDefaults) -> Result<D
     let mut doc = match version {
         1 => {
             let fields: V1FileFields = serde_json::from_value(raw_value).map_err(|e| structure_err(path, &e))?;
-            let (shapes, layers, next_shape_id) = migrate::migrate_v1_layers(fields.layers, fields.next_shape_id, seed)?;
+            let migrated = migrate::migrate_v1_layers(fields.layers, fields.next_shape_id, seed)?;
             Document {
                 board: fields.board,
                 kerf: fields.kerf,
-                layers,
-                shapes,
-                next_shape_id,
+                layers: migrated.layers,
+                operations: migrated.operations,
+                shapes: migrated.shapes,
+                next_shape_id: migrated.next_shape_id,
                 images: fields.images,
                 board_setup: fields.board_setup,
                 pages: fields.pages,
@@ -710,6 +720,7 @@ fn load_json_named(json: &str, path: &str, seed: &OperationDefaults) -> Result<D
                 board: fields.board,
                 kerf: fields.kerf,
                 layers: fields.layers,
+                operations: fields.operations,
                 shapes: fields.shapes,
                 next_shape_id: fields.next_shape_id,
                 images: fields.images,
@@ -763,8 +774,20 @@ mod tests {
     fn sample() -> Document {
         let mut doc = Document::default();
         doc.kerf.width_mm = 0.2;
-        doc.layers[0].operation = Some(Operation::Cut(OperationSettings::default()));
+        let op_id = doc.next_operation_id();
+        doc.operations.push(Operation {
+            id: op_id,
+            name: "cut".to_string(),
+            kind: OperationKind::Cut,
+            settings: OperationSettings::default(),
+            color: None,
+            visible: true,
+            locked: false,
+            members: Vec::new(),
+            icon: None,
+        });
         doc.push_shape(0, rect_path(10.0, 20.0, 30.0, 40.0)).unwrap();
+        doc.operations[0].members.push(1);
         doc
     }
 
@@ -877,8 +900,8 @@ mod tests {
     #[test]
     fn push_shape_assigns_ids_and_records_membership() {
         let mut doc = Document::default();
-        // The operation-less base layer accepts new shapes (D-18).
-        assert!(doc.layers[0].operation.is_none() && doc.layers[0].takes_new_shapes());
+        // The base geometry layer accepts new shapes (D-18).
+        assert!(doc.layers[0].takes_new_shapes());
         let s = doc.push_shape(0, rect_path(0.0, 0.0, 5.0, 5.0)).unwrap();
         assert_eq!(s.id, 1);
         let s2 = doc.push_shape(0, rect_path(5.0, 5.0, 5.0, 5.0)).unwrap();
@@ -886,17 +909,69 @@ mod tests {
         assert_eq!(doc.layers[0].members, vec![1, 2]);
         assert_eq!(doc.shape_count(), 2);
         assert!(matches!(doc.push_shape(9, rect_path(0.0, 0.0, 1.0, 1.0)), Err(DocError::Model(_))));
-        // One shape id can be a member of more than one layer (N:M).
-        doc.layers.push(Layer::new("second", Some(Operation::Score(OperationSettings::default()))));
+        // One shape id can be a member of more than one layer and of many
+        // operations (N:M); geometry is stored once.
+        doc.layers.push(Layer::new("second"));
         doc.layers[1].members.push(1);
+        doc.operations.push(Operation {
+            id: doc.next_operation_id(),
+            name: "score".to_string(),
+            kind: OperationKind::Score,
+            settings: OperationSettings::default(),
+            color: None,
+            visible: true,
+            locked: false,
+            members: vec![1],
+            icon: None,
+        });
         let back = Document::load_json(&doc.save_json().unwrap()).unwrap();
         assert_eq!(back.layers[1].members, vec![1]);
+        assert_eq!(back.operations.len(), 1);
+        assert_eq!(back.operations[0].members, vec![1]);
         assert_eq!(back.shapes.len(), 2);
+    }
+
+    #[test]
+    fn operations_round_trip_with_multi_pass_order_and_n_m_membership() {
+        let mut doc = sample();
+        doc.push_shape(0, rect_path(0.0, 0.0, 5.0, 5.0)).unwrap();
+        doc.operations.push(Operation {
+            id: doc.next_operation_id(),
+            name: "engrave".to_string(),
+            kind: OperationKind::Engrave,
+            settings: OperationSettings { power: 40.0, ..OperationSettings::default() },
+            color: Some("#c02020".to_string()),
+            visible: true,
+            locked: false,
+            members: vec![2, 1], // shape 1 is in both passes (N:M)
+            icon: Some("pen".to_string()),
+        });
+        doc.operations.push(Operation {
+            id: doc.next_operation_id(),
+            name: "guide".to_string(),
+            kind: OperationKind::Guide,
+            settings: OperationSettings::default(),
+            color: None,
+            visible: true,
+            locked: true,
+            members: vec![2],
+            icon: None,
+        });
+        let json = doc.save_json().unwrap();
+        let back = Document::load_json(&json).unwrap();
+        assert_eq!(doc, back);
+        // Pass order is the operations order; Guide is not an output pass.
+        let passes: Vec<&str> = back.production_sequence().map(|(op, _)| op.kind_name()).collect();
+        assert_eq!(passes, vec!["cut", "engrave"]);
+        // Geometry is unchanged and stored once.
+        assert_eq!(back.shapes.len(), 2);
+        assert!(back.unassigned_shapes().next().is_none());
     }
 
     fn canvas_sample() -> Document {
         let mut doc = sample();
         doc.push_shape(0, rect_path(50.0, 50.0, 5.0, 5.0)).unwrap();
+        doc.operations[0].members.push(2);
         doc.board_setup.mat = Some("12x12".to_string());
         doc.pages.push(Page {
             x_mm: 120.0,
@@ -909,8 +984,19 @@ mod tests {
         doc.grid.spacing_mm = 5.0;
         doc.grid.subdivisions = 4;
         doc.snap.grid = true;
-        doc.layers[0].color = Some("#112233".to_string());
-        doc.layers.push(Layer { locked: true, ..Layer::new("guide", Some(Operation::Guide)) });
+        doc.operations[0].color = Some("#112233".to_string());
+        doc.layers.push(Layer { locked: true, ..Layer::new("guide") });
+        doc.operations.push(Operation {
+            id: doc.next_operation_id(),
+            name: "guide".to_string(),
+            kind: OperationKind::Guide,
+            settings: OperationSettings::default(),
+            color: None,
+            visible: true,
+            locked: true,
+            members: vec![1],
+            icon: None,
+        });
         doc.groups = vec![
             Group { id: 1, name: "inner".to_string(), children: vec![GroupChild::Shape(1)] },
             Group { id: 2, name: String::new(), children: vec![GroupChild::Group(1), GroupChild::Shape(2)] },
@@ -949,11 +1035,14 @@ mod tests {
             assert!(doc.pages.is_empty() && doc.groups.is_empty() && doc.guides.is_empty());
             assert_eq!(doc.grid, Grid::default());
             assert!(doc.layers.iter().all(|l| !l.locked));
-            // Migration hoists geometry once and gives every layer an operation pass.
+            // Migration hoists geometry once and gives every v1 shape an operation
+            // membership, preserving colour/visibility/lock/order.
             assert!(doc.shape_count() > 0);
-            assert!(doc.layers.iter().all(|l| l.operation.is_some()));
-            let membered: usize = doc.layers.iter().map(|l| l.members.len()).sum();
-            assert_eq!(membered, doc.shape_count());
+            assert!(!doc.operations.is_empty());
+            assert!(doc.operations.iter().all(|o| o.visible && !o.locked));
+            let membered: usize = doc.operations.iter().map(|o| o.members.len()).sum();
+            assert!(membered >= doc.shape_count());
+            assert_eq!(doc.unassigned_shapes().count(), 0);
             // The in-memory migration is not written back until save, which writes v2.
             let saved = doc.save_json().unwrap();
             let v: serde_json::Value = serde_json::from_str(&saved).unwrap();
@@ -983,7 +1072,7 @@ mod tests {
             Box::new(|d| d.pages[0].width_mm = f64::NAN),
             Box::new(|d| d.guides[0].position_mm = f64::INFINITY),
             Box::new(|d| d.grid.subdivisions = 0),
-            Box::new(|d| d.layers[0].color = Some("red".to_string())),
+            Box::new(|d| d.operations[0].color = Some("red".to_string())),
             Box::new(|d| d.meta.notes = "x".repeat(canvas::MAX_NOTES_BYTES + 1)),
             Box::new(|d| d.snap.tolerance_mm = f64::NAN),
         ];
