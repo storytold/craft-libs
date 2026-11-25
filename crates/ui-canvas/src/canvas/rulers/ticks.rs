@@ -16,8 +16,6 @@ pub const LABEL_STEP_MIN: f32 = 60.0;
 /// The least distance between labelled ticks of a centimetre document ruler, in points: a whole centimetre at 100%
 /// (about 28 points) is labelled, as Word's ruler does.
 pub const CENTIMETRE_LABEL_STEP_MIN: f32 = 24.0;
-/// The least distance between ticks of a centimetre document ruler, in points.
-const CENTIMETRE_TICK_STEP_MIN: f64 = 4.0;
 /// Labelled centimetre steps: 1, 2, 5, 10 times the base.
 const CENTIMETRE_STEPS: [f64; 9] = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0];
 
@@ -79,8 +77,8 @@ impl StepLadder {
 pub enum TickRule<'a> {
     /// The units' own table ([`RulerUnits::step`]): decimal steps and ten subdivisions, or the host's custom table.
     Metric,
-    /// Centimetres of a document ruler: a label every centimetre (every 2, 5, 10 and so on when smaller), with quarter
-    /// centimetre ticks while they stay [`CENTIMETRE_TICK_STEP_MIN`] apart, then halves.
+    /// Centimetres of a document ruler: a label every centimetre with quarter centimetre ticks, or every 2, 5, 10 and so
+    /// on centimetres with halves when a centimetre is narrower than [`CENTIMETRE_LABEL_STEP_MIN`].
     Centimetres,
     /// Inches: a label every inch (every 2, 5, 10 and so on when smaller), subdivided by the first of these counts,
     /// finest first, that keeps the ticks a tenth of the least label step apart ([`INCH_SIXTEENTHS`],
@@ -132,9 +130,8 @@ fn inch_step(points_per_inch: f64, finest: &[u32]) -> (f64, u32) {
 fn centimetre_step(points_per_cm: f64) -> (f64, u32) {
     let step_min = f64::from(CENTIMETRE_LABEL_STEP_MIN);
     let step = CENTIMETRE_STEPS.into_iter().find(|step| step * points_per_cm >= step_min).unwrap_or(1000.0);
-    let subdivisions =
-        if step > 1.0 { 2 } else { [4_u32, 2].into_iter().find(|n| points_per_cm / f64::from(*n) >= CENTIMETRE_TICK_STEP_MIN).unwrap_or(1) };
-    (step, subdivisions)
+    // A whole labelled centimetre is at least 24 points wide, so its quarters are 6 points apart.
+    (step, if step > 1.0 { 2 } else { 4 })
 }
 
 /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a
