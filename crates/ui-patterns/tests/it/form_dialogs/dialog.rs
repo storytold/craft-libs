@@ -933,8 +933,13 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     let mut fixture = host_fixture(&host, &twice);
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "light", DialogFields::new(), light));
     fixture.idle(6);
+    // The number field named `label`: a range row's slider, before it on the line, carries the same name.
     let enter = |fixture: &mut Fixture, label: &str, text: &str| {
-        let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+        let field = fixture
+            .by_role(Role::SPIN_BUTTON)
+            .into_iter()
+            .find(|target| fixture.tree().name_of(target.node) == Some(label))
+            .unwrap_or_else(|| panic!("the {label} field"));
         fixture.click(&field).settle();
         fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
         fixture.key(Key::Tab, Modifiers::NONE).settle();
