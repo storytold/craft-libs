@@ -842,3 +842,156 @@ fn frame_tabs_follow_the_wheel_and_close_on_a_middle_click() {
     assert_eq!(out.actions, vec![Action::Close { panel: 2 }]);
     assert_eq!(second(&d), tabs(&[3], 0));
 }
+
+/// The meshes painted in `fill` and the corner radii of the rects stroked with `border`, through
+/// nested shapes.
+fn corners(d: &Driver, fill: Color32, border: egui::Stroke) -> (Vec<egui::Mesh>, Vec<egui::CornerRadius>) {
+    fn walk(shape: &egui::Shape, fill: Color32, border: egui::Stroke, out: &mut (Vec<egui::Mesh>, Vec<egui::CornerRadius>)) {
+        match shape {
+            egui::Shape::Mesh(mesh) if mesh.vertices.iter().all(|v| v.color == fill) => out.0.push((**mesh).clone()),
+            egui::Shape::Rect(rect) if rect.stroke == border && rect.fill == Color32::TRANSPARENT => out.1.push(rect.corner_radius),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, fill, border, out)),
+            _ => {}
+        }
+    }
+    let mut out = (Vec::new(), Vec::new());
+    d.shapes.iter().for_each(|clipped| walk(&clipped.shape, fill, border, &mut out));
+    out
+}
+
+const CORNER_FILL: Color32 = Color32::from_rgb(1, 2, 3);
+
+#[test]
+fn groups_have_square_corners_by_default() {
+    let d = Driver::new(frames());
+    let style = DockStyle::from_visuals(&d.ctx.global_style().visuals);
+    assert_eq!(style.corner_radius, 0.0);
+    let (meshes, radii) = corners(&d, style.corner_fill, style.border);
+    assert!(meshes.is_empty(), "{meshes:?}");
+    assert_eq!(radii.len(), 2);
+    assert!(radii.iter().all(|r| *r == egui::CornerRadius::ZERO), "{radii:?}");
+}
+
+#[test]
+fn a_corner_radius_rounds_each_group_and_its_border() {
+    let mut d = Driver::new(frames());
+    d.tweak = |style| {
+        style.corner_radius = 6.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (meshes, radii) = corners(&d, CORNER_FILL, border);
+    assert_eq!(radii, vec![egui::CornerRadius::same(6); 2]);
+    assert_eq!(meshes.len(), 2, "one mesh per group");
+    for mesh in &meshes {
+        // Four fans: the corner, then 9 points of its quarter circle, 8 triangles.
+        assert_eq!(mesh.vertices.len(), 4 * 10);
+        assert_eq!(mesh.indices.len(), 4 * 8 * 3);
+        let at = |i: usize| mesh.vertices[i].pos;
+        // The fans start at the group's corners: top left, top right, bottom right, bottom left.
+        let group = Rect::from_min_max(at(0), at(20));
+        assert!(group.width() > 12.0 && group.height() > 12.0, "{group:?}");
+        assert_eq!([at(10), at(30)], [group.right_top(), group.left_bottom()]);
+        for fan in 0..4 {
+            let (corner, first, last) = (at(fan * 10), at(fan * 10 + 1), at(fan * 10 + 9));
+            // The arc starts and ends 6 pt from the corner, on its two edges.
+            assert!((corner.distance(first) - 6.0).abs() < 1e-3, "{corner:?} {first:?}");
+            assert!((corner.distance(last) - 6.0).abs() < 1e-3, "{corner:?} {last:?}");
+            assert!(first.x == corner.x || first.y == corner.y);
+            assert!(last.x == corner.x || last.y == corner.y);
+            // Every point of the arc is in the group, within 6 pt of its corner on each axis.
+            for i in 1..10 {
+                let p = at(fan * 10 + i);
+                assert!(group.expand(1e-3).contains(p), "{p:?} outside {group:?}");
+                assert!((p.x - corner.x).abs() <= 6.0 + 1e-3 && (p.y - corner.y).abs() <= 6.0 + 1e-3, "{p:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_corner_radius_is_at_most_half_the_strip_and_a_nan_is_square() {
+    let mut d = Driver::new(frames());
+    d.tweak = |style| {
+        style.corner_radius = 10_000.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (_, radii) = corners(&d, CORNER_FILL, border);
+    // Two groups 600 pt high with a 26 pt strip each: half of the strip.
+    assert_eq!(radii, vec![egui::CornerRadius::same(13); 2]);
+    d.tweak = |style| {
+        style.corner_radius = f32::NAN;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let (meshes, radii) = corners(&d, CORNER_FILL, border);
+    assert!(meshes.is_empty());
+    assert!(radii.iter().all(|r| *r == egui::CornerRadius::ZERO), "{radii:?}");
+}
+
+#[test]
+fn a_floating_group_keeps_square_corners() {
+    let layout = Layout { root: None, floating: vec![Floating::single(vec![5, 6], 1, [80.0, 70.0, 300.0, 220.0])] };
+    let mut d = Driver::new(layout);
+    d.tweak = |style| {
+        style.corner_radius = 6.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (meshes, radii) = corners(&d, CORNER_FILL, border);
+    assert!(meshes.is_empty(), "{meshes:?}");
+    assert!(radii.iter().all(|r| *r == egui::CornerRadius::ZERO), "{radii:?}");
+}
+
+#[test]
+fn the_groups_of_a_dock_column_keep_square_corners() {
+    let mut d = Driver::new(docked());
+    d.tweak = |style| {
+        style.corner_radius = 6.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (meshes, radii) = corners(&d, CORNER_FILL, border);
+    // Only canvas 0, a group of the split tree; [2, 3] and [4] are stacked in the column.
+    assert_eq!(meshes.len(), 1, "{meshes:?}");
+    assert_eq!(radii.iter().filter(|r| **r == egui::CornerRadius::same(6)).count(), 1, "{radii:?}");
+    assert!(radii.iter().all(|r| *r == egui::CornerRadius::same(6) || *r == egui::CornerRadius::ZERO), "{radii:?}");
+}
+
+#[test]
+fn a_stripless_group_is_rounded_without_a_border() {
+    let content = TestContent { protected: vec![1], ..Default::default() };
+    let mut d = Driver::with(frames(), content, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 600.0)));
+    d.tweak = |style| {
+        style.corner_radius = 6.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (meshes, radii) = corners(&d, CORNER_FILL, border);
+    // Lone protected panel 1 draws no strip and no border, but its corners are cut as [2, 3]'s.
+    assert_eq!(meshes.len(), 2, "{meshes:?}");
+    assert_eq!(radii, vec![egui::CornerRadius::same(6)]);
+}
+
+#[test]
+fn a_stripless_group_is_at_most_half_its_narrower_side() {
+    let content = TestContent { protected: vec![1], ..Default::default() };
+    let mut d = Driver::with(frames(), content, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 600.0)));
+    d.tweak = |style| {
+        style.corner_radius = 10_000.0;
+        style.corner_fill = CORNER_FILL;
+    };
+    d.step(vec![]);
+    let border = DockStyle::from_visuals(&d.ctx.global_style().visuals).border;
+    let (meshes, _) = corners(&d, CORNER_FILL, border);
+    // No strip to protect: the lone protected panel 1 (about 300 pt wide) takes half its width.
+    let group = |m: &egui::Mesh| Rect::from_min_max(m.vertices[0].pos, m.vertices[20].pos);
+    let widest = meshes.iter().map(|m| group(m).width()).fold(0.0, f32::max);
+    assert!(meshes.iter().any(|m| (m.vertices[1].pos.distance(m.vertices[0].pos) - widest.min(600.0) / 2.0).abs() < 1.0), "{meshes:?}");
+}

@@ -1,6 +1,11 @@
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{
+    f32::consts::{FRAC_PI_2, PI},
+    fmt::Debug,
+    hash::Hash,
+    sync::Arc,
+};
 
-use egui::{Color32, Galley, Id, Key, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::{Color32, CornerRadius, Galley, Id, Key, Mesh, Rect, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
 use super::{Renderer, clamp_float, stripless};
 use crate::docking::{Action, DockContent, DropTarget, GroupDrag, GroupGesture, Placement, Target, begin_drag, surface::TAB_PADDING};
@@ -62,6 +67,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             if !minimized {
                 self.contents(ui, selected, rect);
             }
+            round_corners(ui.painter(), rect, self.corner_radius(rect, kind, None), self.style.corner_fill);
             self.targets.push(DropTarget {
                 anchor: selected.clone(),
                 rect,
@@ -174,8 +180,25 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if !minimized {
             self.contents(ui, selected, Rect::from_min_max(pos2(rect.left(), strip.bottom()), rect.max));
         }
-        ui.painter().rect_stroke(rect, 0.0, self.style.border, StrokeKind::Inside);
+        let radius = self.corner_radius(rect, kind, Some(strip.height()));
+        round_corners(ui.painter(), rect, radius, self.style.corner_fill);
+        ui.painter().rect_stroke(rect, CornerRadius::same(radius), self.style.border, StrokeKind::Inside);
         false
+    }
+
+    /// [`crate::docking::DockStyle::corner_radius`] for a group of `kind` at `rect`, in whole
+    /// points as egui rounds it: 0 but for a group of the split tree (`Frame`), at most half the
+    /// narrower side and, when the group has a tab strip of `strip` height, half of it, so that the
+    /// corner mask never reaches the tabs or the header.
+    fn corner_radius(&self, rect: Rect, kind: GroupKind, strip: Option<f32>) -> u8 {
+        let wanted = self.style.corner_radius;
+        // Also 0 for a NaN radius and for a rect that is not finite.
+        if kind != GroupKind::Frame || wanted.is_nan() || wanted <= 0.0 || !rect.is_finite() {
+            return 0;
+        }
+        let most = (rect.width().min(rect.height()).min(strip.unwrap_or(f32::INFINITY)) / 2.0).clamp(0.0, f32::from(u8::MAX));
+        // In 0..=255 and whole: the cast loses nothing.
+        wanted.min(most).floor() as u8
     }
 
     /// A part of the strip the host draws (`header` or `extra-tabs`) at `rect`. A press in it
@@ -545,4 +568,38 @@ fn fit_with_extra(widths: &[f32], active: usize, available: f32, extra: f32, min
     let fit = tabs::fit(widths, active, (available - extra.min(minimum)).max(0.0), minimum, OVERFLOW_WIDTH);
     let used = fit.shown.iter().map(|(_, width)| width).sum::<f32>() + fit.overflow_width;
     (fit, extra.min(available - used).max(0.0))
+}
+
+/// Steps of the quarter circle of each corner [`round_corners`] paints.
+const CORNER_STEPS: u32 = 8;
+
+/// Paints `fill` over the four corners of `rect` outside a quarter circle of `radius`, so that
+/// whatever was drawn in `rect` shows rounded corners. Nothing for a radius of 0 or a
+/// transparent `fill`. The edge of the arc is not smoothed: the border drawn over it is.
+pub(super) fn round_corners(painter: &egui::Painter, rect: Rect, radius: u8, fill: Color32) {
+    if radius == 0 || fill == Color32::TRANSPARENT {
+        return;
+    }
+    let r = f32::from(radius);
+    let corners = [
+        (rect.left_top(), pos2(rect.left() + r, rect.top() + r), PI),
+        (rect.right_top(), pos2(rect.right() - r, rect.top() + r), 1.5 * PI),
+        (rect.right_bottom(), pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (rect.left_bottom(), pos2(rect.left() + r, rect.bottom() - r), FRAC_PI_2),
+    ];
+    let mut mesh = Mesh::default();
+    let mut base = 0;
+    for (corner, centre, start) in corners {
+        // A fan from the corner itself to the arc: the corner sees every point of it.
+        mesh.colored_vertex(corner, fill);
+        for step in 0..=CORNER_STEPS {
+            let angle = start + FRAC_PI_2 * step as f32 / CORNER_STEPS as f32;
+            mesh.colored_vertex(centre + r * vec2(angle.cos(), angle.sin()), fill);
+        }
+        for step in 0..CORNER_STEPS {
+            mesh.add_triangle(base, base + 1 + step, base + 2 + step);
+        }
+        base += CORNER_STEPS + 2;
+    }
+    painter.add(Shape::mesh(mesh));
 }
