@@ -1,6 +1,7 @@
 //! `Segmented`: one of a few options as a strip of segments. A leaf with a part per segment; each segment wears a
 //! face that is flat and muted, with a hover fill, and takes the selection fill and edge while it is picked. The row is one Tab stop over its segments: arrows, Home and End move focus between them, Space,
-//! Enter or a click picks the focused one.
+//! Enter or a click picks the focused one. In a room narrower than the strip, the segments that do not fit move to
+//! the next line.
 
 use crate::buttons::ActiveLook;
 use crate::buttons::face::{self, FaceLook, FaceSpec};
@@ -10,9 +11,9 @@ use crate::contract::{
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Flags, FocusLook, IconLook, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
-use craft_behavior::{Flow, Metrics, NavShape, PartKey, PartRef, Roving, Sense, Value};
+use craft_behavior::{Flow, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense, Value};
 use craft_theme::{Rgba, Stateful, States};
-use egui::{Rect, Vec2};
+use egui::{Rect, Vec2, pos2, vec2};
 
 const SEGMENT: PartKey = PartKey::new("segment");
 
@@ -65,6 +66,67 @@ impl<'a, T: Value + 'static> Segmented<'a, T> {
     fn widths(&self, cx: &MeasureCx<'_, Self>) -> Vec<f32> {
         self.entries.iter().map(|entry| cx.face(Self::face(entry)).x).collect()
     }
+
+    /// The segments measured and flowed into lines `room` wide. At the least proposal the room is the widest segment,
+    /// so each segment keeps its whole face.
+    fn arrange(&self, cx: &MeasureCx<'_, Self>, room: f32) -> Placement {
+        let wants = self.widths(cx);
+        let room = if cx.proposal == Proposal::Min { wants.iter().copied().fold(0.0, f32::max).min(room) } else { room };
+        place(&wants, room, cx.style.gap)
+    }
+}
+
+/// Where the segments sit: each segment's line and its start offset in the line, in reading order.
+struct Placement {
+    /// The width each segment wants: its face's measure.
+    wants: Vec<f32>,
+    /// Each segment's width, cut to the line.
+    widths: Vec<f32>,
+    cells: Vec<(usize, f32)>,
+    lines: usize,
+    /// The extent of the longest line.
+    extent: f32,
+}
+
+/// Flows segments `wants` wide into lines `room` wide, `gap` apart: a segment that does not fit what is left of a
+/// line starts the next, and a segment wider than a line is cut to the line. With widths 36, 36 and 36 in a room of
+/// 90 and a gap of 8 the first two share line 0 (at 0 and 44, ending at 80) and the third starts line 1 at 0.
+fn place(wants: &[f32], room: f32, gap: f32) -> Placement {
+    let mut cells = Vec::with_capacity(wants.len());
+    let mut widths = Vec::with_capacity(wants.len());
+    let (mut line, mut at, mut extent) = (0, 0.0_f32, 0.0_f32);
+    for &want in wants {
+        let width = want.min(room);
+        if at > 0.0 && at + width > room {
+            line += 1;
+            at = 0.0;
+        }
+        cells.push((line, at));
+        widths.push(width);
+        extent = extent.max(at + width);
+        at += width + gap;
+    }
+    let lines = if wants.is_empty() { 0 } else { line + 1 };
+    Placement { wants: wants.to_vec(), widths, cells, lines, extent }
+}
+
+impl Placement {
+    /// The strip's size: its longest line, and its lines `height` tall and `gap` apart.
+    fn size(&self, height: f32, gap: f32) -> Vec2 {
+        let lines = self.lines.max(1) as f32;
+        Vec2::new(self.extent, lines * height + (lines - 1.0) * gap)
+    }
+
+    /// The rect of segment `at` in `rect`, its lines sharing the height `rect` leaves after the gaps between them, and
+    /// each line's start edge the reading start.
+    fn rect(&self, at: usize, rect: Rect, gap: f32, rtl: bool) -> Rect {
+        let (line, start) = self.cells[at];
+        let lines = self.lines.max(1) as f32;
+        let height = ((rect.height() - (lines - 1.0) * gap) / lines).max(0.0);
+        let top = rect.min.y + line as f32 * (height + gap);
+        let line = Rect::from_min_size(pos2(rect.min.x, top), vec2(rect.width(), height));
+        Flow::new(line, rtl).span(start, self.widths[at])
+    }
 }
 
 impl<T: Value + 'static> Component for Segmented<'_, T> {
@@ -83,26 +145,24 @@ impl<T: Value + 'static> Component for Segmented<'_, T> {
         }
     }
 
+    /// The lines the segments take in the column's room: one line when the strip fits it.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let widths = self.widths(cx);
-        let gaps = widths.len().saturating_sub(1) as f32;
-        Vec2::new(widths.iter().sum::<f32>() + cx.style.gap * gaps, cx.style.height)
+        self.arrange(cx, cx.column_room().unwrap_or(f32::INFINITY)).size(cx.style.height, cx.style.gap)
     }
 
     fn sense(&self) -> Sense {
         Sense::HOVER
     }
 
+    /// A part per segment, flowed into the lines of `rect`. A segment with an icon, or one cut to its line, shows its
+    /// label as its tooltip.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let widths = self.widths(cx);
-        let gap = cx.style.gap;
+        let placement = self.arrange(cx, rect.width());
+        let (gap, rtl) = (cx.style.gap, cx.flow.is_rtl());
         let current = self.position_of(cx.value());
-        let mut flow = Flow::new(rect, cx.flow.is_rtl());
-        for (at, (entry, width)) in self.entries.iter().zip(widths).enumerate() {
-            let (cell, rest) = flow.take_start(width);
-            flow = rest.take_start(gap).1;
-            let mut part = cx.part(Self::part(at), cell);
-            if entry.icon_spec().is_some() {
+        for (at, entry) in self.entries.iter().enumerate() {
+            let mut part = cx.part(Self::part(at), placement.rect(at, rect, gap, rtl));
+            if entry.icon_spec().is_some() || placement.widths[at] < placement.wants[at] {
                 part = part.tooltip(entry.label().clone());
             }
             if !entry.is_enabled() {
