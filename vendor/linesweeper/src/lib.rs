@@ -74,6 +74,10 @@ pub enum Error {
     NaN,
     /// One of the inputs had a non-closed path.
     NonClosedPath(NonClosedPath),
+    /// The sweep did more work (segment comparisons, position checks, linear searches of the
+    /// sweep line and visits of horizontal segments) than its work limit allows, or the
+    /// topology's output would pass its output limit.
+    WorkLimitExceeded,
 }
 
 impl From<NonClosedPath> for Error {
@@ -88,6 +92,9 @@ impl std::fmt::Display for Error {
             Error::Infinity => write!(f, "one of the inputs was infinite"),
             Error::NaN => write!(f, "one of the inputs had a NaN"),
             Error::NonClosedPath(_) => write!(f, "one of the inputs had a non-closed path"),
+            Error::WorkLimitExceeded => {
+                write!(f, "the sweep did more work or made more output than its limits allow")
+            }
         }
     }
 }

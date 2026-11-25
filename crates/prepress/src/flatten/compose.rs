@@ -39,12 +39,26 @@ pub struct FlattenOptions {
     pub max_regions: usize,
     /// The resolution complex regions are rasterized at ([`raster`](super::raster)).
     pub raster_dpi: f32,
+    /// The most work the region sweep of one group may do before the group goes to
+    /// [`Flattened::complex`] whole as [`ComplexReason::Degenerate`]
+    /// ([`geom::DEFAULT_MAX_SWEEP_WORK`]).
+    pub max_sweep_work: u64,
+    /// The most output the region sweep of one group may hold before the group goes to
+    /// [`Flattened::complex`] whole as [`ComplexReason::Degenerate`]
+    /// ([`geom::DEFAULT_MAX_TOPOLOGY_UNITS`]).
+    pub max_sweep_units: usize,
 }
 
 impl Default for FlattenOptions {
     fn default() -> Self {
         // VectorCraft's medium preset (balance 75) allows 10^(75/20), about 5600 regions.
-        Self { sliver: geom::DEFAULT_SLIVER, max_regions: 5000, raster_dpi: 300.0 }
+        Self {
+            sliver: geom::DEFAULT_SLIVER,
+            max_regions: 5000,
+            raster_dpi: 300.0,
+            max_sweep_work: geom::DEFAULT_MAX_SWEEP_WORK,
+            max_sweep_units: geom::DEFAULT_MAX_TOPOLOGY_UNITS,
+        }
     }
 }
 
@@ -200,7 +214,7 @@ fn flatten_group(
         out.report.flattened += members.len();
         return Ok(());
     }
-    let regions = match geom::regions_with(&b.shapes, &b.clips, opts.sliver) {
+    let regions = match geom::regions_with_limits(&b.shapes, &b.clips, opts.sliver, opts.max_sweep_work, opts.max_sweep_units) {
         Ok(r) => r,
         Err(GeomError::Degenerate) => {
             // Each member's box is clear of every other group's items.
@@ -1216,6 +1230,13 @@ mod tests {
         let f = flatten(&l, &FlattenOptions { max_regions: 2, ..FlattenOptions::default() }).unwrap();
         assert_eq!(f.report.complex_groups, [ComplexGroup { items: vec![0, 1], reason: ComplexReason::TooManyRegions(3) }]);
         assert_eq!((f.complex.len(), f.items.len()), (1, 1));
+
+        for opts in
+            [FlattenOptions { max_sweep_work: 1, ..FlattenOptions::default() }, FlattenOptions { max_sweep_units: 1, ..FlattenOptions::default() }]
+        {
+            let f = flatten(&l, &opts).unwrap();
+            assert_eq!(f.report.complex_groups, [ComplexGroup { items: vec![0, 1], reason: ComplexReason::Degenerate }], "{opts:?}");
+        }
     }
 
     #[test]
