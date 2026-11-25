@@ -3,13 +3,13 @@
 //! container (in a window of its own, or in a full-screen or Wayland-maximized main window), the size of a
 //! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
-//! window that has the keys, a wheel with no known pointer, the placement of a minimized window, the root frame decided
+//! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, the placement of a minimized window, the root frame decided
 //! again, a held close, `act`, and a hosted window's Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::overlay::CloseReason;
@@ -409,11 +409,22 @@ fn a_framework_modal_takes_the_keyboard_from_the_window_it_blocks() {
     assert_eq!(sent, 1, "once");
 }
 
+/// A menu's layer hung from a place near its window's corner: opened in a palette it shows in a popup window.
+fn menu_layer() -> ContainerProps {
+    use craft_behavior::overlay::{Align, Side};
+    use craft_ui::contract::overlay::{Anchor, Place};
+    let anchor = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(10.0));
+    ContainerProps::new().mount(Mount::Layer(Overlay::menu().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start))))
+}
+
+/// The popup window `out` shows beside the main window and `palette`.
+fn popup_window(out: &Out, palette: ViewportId) -> Option<ViewportId> {
+    out.builders.iter().map(|(id, _)| *id).find(|id| ![ViewportId::ROOT, palette].contains(id))
+}
+
 /// A popup window opened from the window that shows the app's modal keeps the keyboard.
 #[trial]
 fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
-    use craft_behavior::overlay::{Align, Side};
-    use craft_ui::contract::overlay::{Anchor, Place};
     let windows = on_x11();
     windows.root_info(focus(false));
     windows.child_info(focus(true));
@@ -422,10 +433,7 @@ fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
         windows.frame(vec![], vec![], |ui| {
             Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
                 if open.get() {
-                    let anchor = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(10.0));
-                    let place = Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start);
-                    let props = ContainerProps::new().mount(Mount::Layer(Overlay::menu().place(place)));
-                    Modal { common: Common::new(), props }.id_salt("popup").show(ui, |_, _| {});
+                    Modal { common: Common::new(), props: menu_layer() }.id_salt("popup").show(ui, |_, _| {});
                 }
             });
         })
@@ -436,10 +444,92 @@ fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
     frame();
     windows.child_info(focus(false));
     let outs: Vec<Out> = (0..PAST_THE_WAIT).map(|_| frame()).collect();
-    let popup = outs.last().and_then(|out| out.builders.iter().map(|(id, _)| *id).find(|id| ![ViewportId::ROOT, palette].contains(id)));
-    let popup = popup.expect("the layer opened in the palette shows in a popup window");
+    let popup = outs.last().and_then(|out| popup_window(out, palette)).expect("the layer opened in the palette shows in a popup window");
     assert_eq!(windows.facts(popup).focused, Some(true), "the popup window has the keyboard");
     assert_eq!(outs.iter().map(|out| focus_requests(out, palette)).sum::<usize>(), 0, "the modal's window leaves it there");
+}
+
+/// A layer in a popup window keeps the scroll that a focus move below its view gave it while it is open, and starts at
+/// the top when it opens again.
+#[trial]
+fn a_layer_in_a_popup_window_keeps_its_scroll_until_it_closes() {
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    let (open, reveal, top) = (Cell::new(false), Cell::new(false), Cell::new(0.0));
+    let (tall, last) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    let props = menu_layer().scroll(Scroll::vertical());
+                    Modal { common: Common::new(), props }.id_salt("popup").show(ui, |ui, _| {
+                        if !craft_ui::testing::is_measuring(ui.ctx()) {
+                            top.set(ui.next_widget_position().y);
+                        }
+                        Probe::new(&tall).id_salt("tall").size(Vec2::new(100.0, 2000.0)).show(ui);
+                        Probe::new(&last).id_salt("last").show(ui);
+                        if let Some(id) = last.borrow().id.filter(|_| reveal.take()) {
+                            request(ui.ctx(), FocusTarget::Id(id));
+                        }
+                    });
+                }
+            });
+        })
+    };
+    let settled = || (0..PAST_THE_WAIT).map(|_| frame()).last().expect("frames ran");
+    let palette = builder_titled(&frame(), "tool").0;
+    open.set(true);
+    assert!(popup_window(&settled(), palette).is_some(), "the layer opened in the palette shows in a popup window");
+    let start = top.get();
+    reveal.set(true);
+    settled();
+    let scrolled = top.get();
+    assert!(scrolled < start - 1.0, "the layer stays scrolled: its content starts at {scrolled}, {start} unscrolled");
+    open.set(false);
+    assert_eq!(popup_window(&settled(), palette), None, "the layer closed");
+    open.set(true);
+    settled();
+    assert!((top.get() - start).abs() < 0.5, "opened again, it starts at the top: {} after {scrolled}, {start} unscrolled", top.get());
+}
+
+/// A popup that a press in another window of the app opened stays open, also when its opener runs a second pass of the
+/// frame it opens in, and a later press there closes it.
+#[trial]
+fn a_popup_window_stays_after_the_press_in_another_window_that_opened_it() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(true));
+    let (open, again, closed) = (Cell::new(false), Cell::new(false), RefCell::new(Vec::new()));
+    let frame = |root: Vec<Event>| {
+        windows.frame(root, vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    Capture { common: Common::new(), props: menu_layer(), closed: &closed }.id_salt("popup").show(ui, |_, _| {});
+                    if again.take() {
+                        craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
+                    }
+                }
+            });
+        })
+    };
+    let at = Pos2::new(250.0, 250.0);
+    frame(vec![]);
+    let out = frame(vec![moved(at)]);
+    let palette = builder_titled(&out, "tool").0;
+    frame(vec![press(at), release(at)]);
+    open.set(true);
+    again.set(true);
+    let mut out = frame(vec![]);
+    for _ in 0..4 {
+        out = frame(vec![]);
+    }
+    assert!(!again.get() && popup_window(&out, palette).is_some(), "the popup opened, its opener's pass repeated");
+    assert_eq!(*closed.borrow(), [], "the press that opened it leaves it open");
+    frame(vec![press(at), release(at)]);
+    frame(vec![]);
+    assert_eq!(closed.borrow().first(), Some(&CloseReason::Outside), "a later press in the main window closes it");
 }
 
 /// A window that a modal in another window blocks takes no wheel, as it takes no press or key: what is under the

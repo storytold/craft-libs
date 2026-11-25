@@ -529,8 +529,8 @@ pub(crate) fn popup_room(ctx: &Context) -> Option<PopupRoom> {
     Some(PopupRoom { origin, room })
 }
 
-/// Whether a primary press landed, in this root frame (or in the last one, unless the popup window `popup` just
-/// `appeared`), in a window of the app other than the running viewport (the popup's opener, whose own presses its
+/// Whether a primary press landed, in this root frame (or in the last one, unless the popup window `popup` `appeared`
+/// in this one), in a window of the app other than the running viewport (the popup's opener, whose own presses its
 /// layer stack judges) and the popup window and the popup windows opened from it.
 pub(crate) fn pressed_elsewhere(ctx: &Context, popup: ViewportId, appeared: bool) -> bool {
     let opener = pass::current_viewport(ctx);
