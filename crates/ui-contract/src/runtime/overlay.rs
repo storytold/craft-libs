@@ -566,7 +566,15 @@ fn reopened(ctx: &Context, id: Id, exiting: bool) -> bool {
 /// faded out and is open again. What the layer remembers starts fresh then; a discard pass that repeats the frame
 /// keeps what the first pass of the frame recorded.
 pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
-    reopened(ctx, id, exiting) || with_persist(ctx, pass::current_viewport(ctx), |persist| !persist.appeared.contains_key(&id))
+    appears_in(ctx, pass::current_viewport(ctx), id, exiting)
+}
+
+/// Whether the layer `id` appears in [`begin_layer`]'s pass of `viewport`, read before it: a layer shown in a popup
+/// window is stamped there, by the popup's own pass, so its host reads that viewport's record rather than its opener's,
+/// which stamps nothing for it. A layer that faded out is seen in the stack of the running pass, whose host shows the
+/// window that decides it.
+pub(crate) fn appears_in(ctx: &Context, viewport: ViewportId, id: Id, exiting: bool) -> bool {
+    reopened(ctx, id, exiting) || with_persist(ctx, viewport, |persist| !persist.appeared.contains_key(&id))
 }
 
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
