@@ -1,5 +1,5 @@
 //! The AppKit calls that need `unsafe`, behind a safe API: observing when a menu starts and stops tracking, and the
-//! Save panel's ([`save_panel`]). macOS only; the crate is empty elsewhere.
+//! Save panel calls in `save_panel`. macOS only; the crate is empty elsewhere.
 //!
 //! This is one of the crates that may allow `unsafe`; the design-lint rule `contract/unsafe-allow` names it. Every
 //! block says why it is sound.
