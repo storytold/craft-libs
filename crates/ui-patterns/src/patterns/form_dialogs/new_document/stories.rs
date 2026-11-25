@@ -38,6 +38,20 @@ fn new_document_dialog_page_cards(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     )
 }
 
+/// The preset cards in `PresetCardLook::OutlineStrong`: the outline look's page and card, the preset's name in the strong
+/// body type.
+#[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never, title = "Strong names")]
+fn new_document_dialog_strong_names(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let opened = data.bind("open", true);
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(PresetCardLook::OutlineStrong);
+        },
+        |ui| NewDocumentDialog::new(Bind::kept()).clipboard(PixelSize::new(1920, 1080)).opened(opened).show(ui).into(),
+    )
+}
+
 #[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never)]
 fn new_document_dialog_with_app_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let presets = (
