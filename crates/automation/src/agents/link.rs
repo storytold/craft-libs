@@ -171,11 +171,12 @@ impl AgentLink {
 
     /// Brings the server in line with `want` (`None`: agents may not connect): start it, restart it
     /// on another port, stop it, or keep it while other settings change. Does nothing while `want`
-    /// equals the last call's and no retry of a failed start is due. A token file that can't be
-    /// read or is open to others schedules no retry: that lasts until someone changes the file,
-    /// and on Windows each check blocks the UI thread for about 300 ms (`owner_only` starts
-    /// `whoami` and PowerShell), which a retry every [`RETRY`] turned into a stall every few
-    /// seconds (photocraft#17006). Changing the settings tries again.
+    /// equals the last call's and no retry of a failed start is due. A token file refused as it is
+    /// (open to others, a damaged token) is replaced by a new one ([`Self::start`]). One that still
+    /// can't be used (a folder in its place, a folder that can't be written) schedules no retry:
+    /// that lasts until someone changes it, and on Windows each check blocks the UI thread for
+    /// about 300 ms (`owner_only` starts `whoami` and PowerShell), which a retry every [`RETRY`]
+    /// turned into a stall every few seconds (photocraft#17006). Changing the settings tries again.
     pub fn sync(&mut self, want: Option<&AgentSettings>, host: &WindowHost) -> LinkUpdate {
         let mut update = LinkUpdate::default();
         if self.launch.is_some() {
@@ -243,11 +244,13 @@ impl AgentLink {
     /// The token from the settings folder (created `0600` when missing), the server, then the
     /// connection file. Any failure leaves nothing running.
     /// A retry of a failed start reuses the token that start checked ([`Self::checked_token`]).
+    /// The token file is the link's own, so one refused as it is gets a new token (see
+    /// [`fresh_token`]).
     fn start(&mut self, dir: &Path, port: u16, port_pref: u32, host: &WindowHost) -> Result<(Running, Receiver<ControlRequest>), LinkProblem> {
         let token_file = dir.join(TOKEN_FILE);
         let token = match self.checked_token.clone() {
             Some(token) => token,
-            None => security::server_token(None, Some(&token_file)).map_err(|e| LinkProblem::TokenFile(e.to_string()))?,
+            None => fresh_token(&token_file)?,
         };
         self.checked_token = Some(token.clone());
         let (requests, server) = server::listen(port, token, host.clone()).map_err(|e| LinkProblem::Listen { port, error: e.to_string() })?;
@@ -268,4 +271,23 @@ impl AgentLink {
     pub fn note(&mut self, problem: LinkProblem) {
         self.status.problem = Some(problem);
     }
+}
+
+/// The token in `token_file`, created when missing. A regular file the check refuses (one an
+/// older app wrote with its folder's access list on Windows, open to Administrators, or a damaged
+/// token) is replaced with a new token, once: the token is only this link's secret, and a client
+/// reads the new one from the file. Kept, its refusal would keep agents out until someone deleted
+/// the file. Anything else in the way (a folder, a link) is reported, not removed.
+fn fresh_token(token_file: &Path) -> Result<String, LinkProblem> {
+    let read = || security::server_token(None, Some(token_file)).map_err(|e| LinkProblem::TokenFile(e.to_string()));
+    let problem = match read() {
+        Ok(token) => return Ok(token),
+        Err(problem) => problem,
+    };
+    if !std::fs::symlink_metadata(token_file).is_ok_and(|meta| meta.is_file()) {
+        return Err(problem);
+    }
+    log::warn!("{problem}; writing a new token file");
+    std::fs::remove_file(token_file).map_err(|e| LinkProblem::TokenFile(format!("{}: {e}", token_file.display())))?;
+    read()
 }

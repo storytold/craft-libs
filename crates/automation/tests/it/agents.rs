@@ -332,6 +332,24 @@ fn a_refused_token_file_is_not_retried_until_the_settings_change() {
     assert_eq!(link.status().problem, None);
 }
 
+/// A token file the check refuses as it is (here a damaged token; on Windows also one an older app wrote with its
+/// folder's access list, open to Administrators) is the link's own: it is replaced with a new token, so agents can
+/// connect instead of staying out until someone deletes the file (photocraft#17006).
+#[trial]
+fn a_refused_token_file_is_replaced_with_a_new_token() {
+    let dir = temp_dir("link-token-refresh");
+    let file = dir.path().join(TOKEN_FILE);
+    std::fs::write(&file, "not a token\n").unwrap();
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x");
+    assert!(link.sync(Some(&on(0)), &host).requests.is_some(), "{:?}", link.status());
+    assert_eq!(link.status().problem, None);
+    let token = std::fs::read_to_string(&file).unwrap();
+    assert_ne!(token.trim(), "not a token");
+    assert_eq!(token.trim().len(), 64, "a new token: {token:?}");
+    assert_eq!(read_connection(dir.path()).unwrap().expect("published").port, link.status().port.expect("listening"));
+}
+
 /// A retry of a taken port reuses the token its first try checked instead of reading the token file again (on Windows
 /// that check is about 300 ms on the UI thread, photocraft#17006); a start that succeeded reads it afresh next time.
 #[trial]
