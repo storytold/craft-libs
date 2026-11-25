@@ -287,7 +287,7 @@ fn channel_curves_need_the_master_and_all_channel_curves() {
     let straight = to_partial(&props(&legacy), Target::RawAbsolute);
     assert_eq!(straight.pointer("/curve/master"), Some(&serde_json::json!([])), "{straight}");
     let mut curved = crate::DevelopSettings::default();
-    curved.curve.master = vec![craft_geom::Point::new(0.0, 0.0), craft_geom::Point::new(0.3, 0.5), craft_geom::Point::new(1.0, 1.0)];
+    curved.curve.master = vec![craft_crop_geom::Point::new(0.0, 0.0), craft_crop_geom::Point::new(0.3, 0.5), craft_crop_geom::Point::new(1.0, 1.0)];
     assert!(curved.merged(&straight).unwrap().curve.master.is_empty());
     let bent = "<rdf:li>0, 0</rdf:li><rdf:li>64, 40</rdf:li><rdf:li>255, 255</rdf:li>";
     let packet = |curves: &[String]| {

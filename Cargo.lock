@@ -1750,6 +1750,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crop-geom"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "craft-crs"
 version = "0.1.0"
 dependencies = [
@@ -1833,7 +1841,7 @@ dependencies = [
 name = "craft-develop-model"
 version = "0.1.0"
 dependencies = [
- "craft-geom",
+ "craft-crop-geom",
  "craft-metadata",
  "miniz_oxide 0.9.1",
  "proptest",
@@ -2265,8 +2273,12 @@ dependencies = [
 name = "craft-geom"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
+ "kurbo 0.13.1",
  "proptest",
  "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2840,6 +2852,18 @@ dependencies = [
 [[package]]
 name = "craft-palette"
 version = "0.1.0"
+
+[[package]]
+name = "craft-pathops"
+version = "0.1.0"
+dependencies = [
+ "craft-geom",
+ "craft-testkit",
+ "kurbo 0.13.1",
+ "linesweeper",
+ "proptest",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "craft-pcap"
@@ -3453,6 +3477,11 @@ dependencies = [
 [[package]]
 name = "craft-testkit"
 version = "0.1.0"
+dependencies = [
+ "craft-geom",
+ "kurbo 0.13.1",
+ "proptest",
+]
 
 [[package]]
 name = "craft-text"
@@ -3518,6 +3547,19 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-trace"
+version = "0.1.0"
+dependencies = [
+ "craft-geom",
+ "craft-image-codecs",
+ "image",
+ "kurbo 0.13.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

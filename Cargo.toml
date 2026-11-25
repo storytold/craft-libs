@@ -187,7 +187,7 @@ craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
-craft-geom = { path = "crates/geom" }
+craft-crop-geom = { path = "crates/crop-geom" }
 craft-develop = { path = "crates/develop" }
 craft-develop-model = { path = "crates/develop-model" }
 craft-sheet = { path = "crates/sheet" }
@@ -203,6 +203,9 @@ craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-testkit = { path = "crates/testkit" }
+craft-geom = { path = "crates/geom" }
+craft-pathops = { path = "crates/pathops" }
+craft-trace = { path = "crates/trace" }
 craft-text = { path = "crates/text" }
 craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }

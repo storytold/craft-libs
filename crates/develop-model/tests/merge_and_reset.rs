@@ -2,8 +2,8 @@
 //! JSON leaves out at their defaults, and the sliders of list entries, behave like every other setting.
 #![allow(clippy::unwrap_used)]
 
+use craft_crop_geom::Point;
 use craft_develop_model::{DevelopSettings, Mask, PointColor, Preset, Section, SegMask, SettingsGroup, Upright, WbMode, extract_groups};
-use craft_geom::Point;
 use serde_json::json;
 
 fn preset(settings: serde_json::Value) -> Preset {

@@ -1,469 +1,325 @@
-//! Geometry for photo editing: points, rectangles, affine and projective transforms, and the crop model.
+//! The Craft suite's 2D vector drawing kernel (RFC-0030), carved from VectorCraft.
 //!
-//! Conventions: image coordinates are y-down. *Normalized* coordinates map the full (uncropped,
-//! oriented) image to `0..1` on both axes, so tools and settings are resolution independent.
+//! The editable path model is anchor based (like every Illustrator tool thinks about paths):
+//! a [`PathData`] is a list of [`SubPath`]s, each a list of [`Anchor`]s with absolute in/out
+//! handle positions. Rendering and algorithms convert to [`kurbo::BezPath`].
+//!
+//! Coordinates are document points (1/72 in), y pointing down.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod crop;
-mod crop_drag;
-mod homography;
-mod real;
+pub mod anchors;
+pub mod arc;
+pub mod bez;
+pub mod corners;
+pub mod hit;
+pub mod path;
+pub mod projective;
+pub mod recognize;
+pub mod shapes;
+pub mod snap;
 
-pub use crop::{CropGeometry, crop_fit_angle, max_inscribed_scale};
-pub use crop_drag::{CropHandle, MAX_RATIO, MIN_CROP_FRACTION, drag_crop};
-pub use homography::Homography;
-pub use real::{Interval, Real};
+pub use anchors::Anchors;
+pub use arc::ArcPath;
+pub use kurbo;
+pub use kurbo::{Affine, BezPath, CubicBez, Line, ParamCurve, PathEl, PathSeg, Point, Rect, Shape, Size, Vec2};
+pub use path::{Anchor, AnchorKind, FillRule, PathData, SubPath};
+pub use projective::Homography;
 
-use serde::{Deserialize, Serialize};
+/// Tolerance used when comparing handle positions to anchor positions.
+pub const EPS: f64 = 1e-9;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Point {
-    pub x: f64,
-    pub y: f64,
-}
+/// Most line segments [`flatten`] makes of one curve, whatever its size and the tolerance.
+pub const MAX_FLATTEN_PER_CURVE: f64 = 4096.0;
 
-impl Point {
-    pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
-    pub fn dist(self, o: Point) -> f64 {
-        (self - o).len()
-    }
-    pub fn lerp(self, o: Point, t: f64) -> Point {
-        Point::new(self.x + (o.x - self.x) * t, self.y + (o.y - self.y) * t)
-    }
-    pub fn to_vec(self) -> Vec2 {
-        Vec2::new(self.x, self.y)
-    }
-}
+/// A curve whose control polygon is longer than this is drawn as a line by [`flatten`]: kurbo
+/// squares and cubes coordinates when it sizes its work, and with coordinates this large that
+/// overflows to infinity and it reserves a buffer no machine has. (Far beyond any drawing.)
+pub const MAX_FLATTEN_LENGTH: f64 = 1e60;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Vec2 {
-    pub x: f64,
-    pub y: f64,
-}
+/// The least tolerance [`flatten`] asks kurbo for. kurbo squares its scaled tolerance when it
+/// sizes a cubic's subdivision; below this the square underflows to zero, the subdivision count
+/// saturates to `usize::MAX` and the buffer reservation panics. (Far below any drawing.)
+pub const MIN_FLATTEN_TOLERANCE: f64 = 1e-100;
 
-impl Vec2 {
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
-    pub fn len(self) -> f64 {
-        self.x.hypot(self.y)
-    }
-    pub fn dot(self, o: Vec2) -> f64 {
-        self.x * o.x + self.y * o.y
-    }
-    pub fn cross(self, o: Vec2) -> f64 {
-        self.x * o.y - self.y * o.x
-    }
-    pub fn normalized(self) -> Vec2 {
-        let l = self.len();
-        if l > 0.0 { Vec2::new(self.x / l, self.y / l) } else { self }
-    }
-    pub fn angle(self) -> f64 {
-        self.y.atan2(self.x)
-    }
-    pub fn rotate(self, a: f64) -> Vec2 {
-        let (s, c) = a.sin_cos();
-        Vec2::new(self.x * c - self.y * s, self.x * s + self.y * c)
-    }
-}
-
-impl std::ops::Sub for Point {
-    type Output = Vec2;
-    fn sub(self, o: Point) -> Vec2 {
-        Vec2::new(self.x - o.x, self.y - o.y)
-    }
-}
-impl std::ops::Add<Vec2> for Point {
-    type Output = Point;
-    fn add(self, v: Vec2) -> Point {
-        Point::new(self.x + v.x, self.y + v.y)
-    }
-}
-impl std::ops::Sub<Vec2> for Point {
-    type Output = Point;
-    fn sub(self, v: Vec2) -> Point {
-        Point::new(self.x - v.x, self.y - v.y)
-    }
-}
-impl std::ops::Add for Vec2 {
-    type Output = Vec2;
-    fn add(self, o: Vec2) -> Vec2 {
-        Vec2::new(self.x + o.x, self.y + o.y)
-    }
-}
-impl std::ops::Sub for Vec2 {
-    type Output = Vec2;
-    fn sub(self, o: Vec2) -> Vec2 {
-        Vec2::new(self.x - o.x, self.y - o.y)
-    }
-}
-impl std::ops::Mul<f64> for Vec2 {
-    type Output = Vec2;
-    fn mul(self, s: f64) -> Vec2 {
-        Vec2::new(self.x * s, self.y * s)
-    }
-}
-impl std::ops::Neg for Vec2 {
-    type Output = Vec2;
-    fn neg(self) -> Vec2 {
-        Vec2::new(-self.x, -self.y)
-    }
-}
-
-/// Axis-aligned rectangle `[x0, x1) × [y0, y1)`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Rect {
-    pub x0: f64,
-    pub y0: f64,
-    pub x1: f64,
-    pub y1: f64,
-}
-
-impl Rect {
-    pub const UNIT: Rect = Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 };
-    pub const fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
-        Self { x0, y0, x1, y1 }
-    }
-    pub fn from_xywh(x: f64, y: f64, w: f64, h: f64) -> Self {
-        Self::new(x, y, x + w, y + h)
-    }
-    pub fn from_center(c: Point, w: f64, h: f64) -> Self {
-        Self::new(c.x - w / 2.0, c.y - h / 2.0, c.x + w / 2.0, c.y + h / 2.0)
-    }
-    pub fn from_points(a: Point, b: Point) -> Self {
-        Self::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
-    }
-    pub fn width(&self) -> f64 {
-        self.x1 - self.x0
-    }
-    pub fn height(&self) -> f64 {
-        self.y1 - self.y0
-    }
-    pub fn area(&self) -> f64 {
-        self.width().max(0.0) * self.height().max(0.0)
-    }
-    pub fn center(&self) -> Point {
-        Point::new((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
-    }
-    pub fn aspect(&self) -> f64 {
-        if self.height() != 0.0 { self.width() / self.height() } else { 0.0 }
-    }
-    pub fn contains(&self, p: Point) -> bool {
-        p.x >= self.x0 && p.x < self.x1 && p.y >= self.y0 && p.y < self.y1
-    }
-    pub fn is_empty(&self) -> bool {
-        self.x1 <= self.x0 || self.y1 <= self.y0
-    }
-    pub fn intersect(&self, o: &Rect) -> Rect {
-        Rect::new(self.x0.max(o.x0), self.y0.max(o.y0), self.x1.min(o.x1), self.y1.min(o.y1))
-    }
-    pub fn union(&self, o: &Rect) -> Rect {
-        Rect::new(self.x0.min(o.x0), self.y0.min(o.y0), self.x1.max(o.x1), self.y1.max(o.y1))
-    }
-    pub fn inflate(&self, dx: f64, dy: f64) -> Rect {
-        Rect::new(self.x0 - dx, self.y0 - dy, self.x1 + dx, self.y1 + dy)
-    }
-    pub fn scale(&self, sx: f64, sy: f64) -> Rect {
-        Rect::new(self.x0 * sx, self.y0 * sy, self.x1 * sx, self.y1 * sy)
-    }
-    pub fn translate(&self, v: Vec2) -> Rect {
-        Rect::new(self.x0 + v.x, self.y0 + v.y, self.x1 + v.x, self.y1 + v.y)
-    }
-    pub fn corners(&self) -> [Point; 4] {
-        [Point::new(self.x0, self.y0), Point::new(self.x1, self.y0), Point::new(self.x1, self.y1), Point::new(self.x0, self.y1)]
-    }
-    /// Largest rectangle of aspect `a` (w/h) centred in `self`.
-    pub fn fit_aspect(&self, a: f64) -> Rect {
-        if !(a.is_finite() && a > 0.0) || self.is_empty() {
-            return *self;
+/// [`kurbo::flatten`], each curve's tolerance raised so that it makes at most about
+/// [`MAX_FLATTEN_PER_CURVE`] segments. kurbo sizes its work and a buffer from the curve's
+/// coordinates before producing anything, so a small curve with far-out handles (from a file, or
+/// scaled up by a view or a projection) asked for gigabytes. The segments a curve needs grow with
+/// the square root of its control polygon's length over the tolerance; that ratio is held under
+/// the square of the cap. A curve whose points aren't finite is drawn as a line to its end.
+pub fn flatten(path: impl IntoIterator<Item = PathEl>, tolerance: f64, mut callback: impl FnMut(PathEl)) {
+    let mut last = None;
+    let mut start = None;
+    for el in path {
+        let (from, to, length) = match el {
+            PathEl::MoveTo(p) => {
+                (last, start) = (Some(p), Some(p));
+                callback(el);
+                continue;
+            }
+            PathEl::LineTo(p) => {
+                last = Some(p);
+                callback(el);
+                continue;
+            }
+            PathEl::ClosePath => {
+                last = start;
+                callback(el);
+                continue;
+            }
+            PathEl::QuadTo(a, b) => (last, b, last.map(|p| p.distance(a) + a.distance(b))),
+            PathEl::CurveTo(a, b, c) => (last, c, last.map(|p| p.distance(a) + a.distance(b) + b.distance(c))),
+        };
+        last = Some(to);
+        let (Some(from), Some(length)) = (from, length) else { continue };
+        // A short polygon far from the origin still overflows kurbo's `p * (mt * 2.0)` products.
+        let far = |p: Point| !(p.x.abs() <= MAX_FLATTEN_LENGTH && p.y.abs() <= MAX_FLATTEN_LENGTH);
+        let controls_far = match el {
+            PathEl::QuadTo(a, _) => far(a),
+            PathEl::CurveTo(a, b, _) => far(a) || far(b),
+            _ => false,
+        };
+        if length.is_nan() || length > MAX_FLATTEN_LENGTH || far(from) || far(to) || controls_far {
+            callback(PathEl::LineTo(to));
+            continue;
         }
-        let (w, h) = (self.width(), self.height());
-        let (nw, nh) = if w / h > a { (h * a, h) } else { (w, w / a) };
-        Rect::from_center(self.center(), nw, nh)
-    }
-    /// Round outward to integer pixel bounds.
-    pub fn round_out(&self) -> Rect {
-        Rect::new(self.x0.floor(), self.y0.floor(), self.x1.ceil(), self.y1.ceil())
-    }
-}
-
-/// 2-D affine transform `[a b c d e f]`: x' = a·x + c·y + e, y' = b·x + d·y + f.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Affine(pub [f64; 6]);
-
-impl Default for Affine {
-    fn default() -> Self {
-        Affine::IDENTITY
+        let tol = tolerance.max(length / (MAX_FLATTEN_PER_CURVE * MAX_FLATTEN_PER_CURVE)).max(MIN_FLATTEN_TOLERANCE);
+        kurbo::flatten([PathEl::MoveTo(from), el], tol, |e| {
+            if !matches!(e, PathEl::MoveTo(_)) {
+                callback(e);
+            }
+        });
     }
 }
 
-impl Affine {
-    pub const IDENTITY: Affine = Affine([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-    pub fn translate(v: Vec2) -> Affine {
-        Affine([1.0, 0.0, 0.0, 1.0, v.x, v.y])
+/// Union of two optional rects.
+pub fn union_opt(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.union(b)),
+        (a, None) => a,
+        (None, b) => b,
     }
-    pub fn scale(sx: f64, sy: f64) -> Affine {
-        Affine([sx, 0.0, 0.0, sy, 0.0, 0.0])
+}
+
+/// Normalize an angle in degrees to (-180, 180].
+pub fn normalize_deg(mut a: f64) -> f64 {
+    a %= 360.0;
+    if a <= -180.0 {
+        a += 360.0;
+    } else if a > 180.0 {
+        a -= 360.0;
     }
-    pub fn rotate(a: f64) -> Affine {
-        let (s, c) = a.sin_cos();
-        Affine([c, s, -s, c, 0.0, 0.0])
+    a
+}
+
+/// Snap a vector to the nearest multiple of `step_deg` (used for Shift-constrained drags).
+pub fn constrain_angle(v: Vec2, step_deg: f64) -> Vec2 {
+    constrain_angle_from(v, step_deg, 0.0)
+}
+
+/// [`constrain_angle`] in steps counted from `base_deg` (the Constrain Angle preference,
+/// counter-clockwise as seen on the y-down page).
+pub fn constrain_angle_from(v: Vec2, step_deg: f64, base_deg: f64) -> Vec2 {
+    let len = v.hypot();
+    if len < EPS {
+        return v;
     }
-    pub fn rotate_about(a: f64, p: Point) -> Affine {
-        Affine::translate(p.to_vec()) * Affine::rotate(a) * Affine::translate(-p.to_vec())
+    // A whole turn (360°, −720°…) is no turn at all.
+    let base_deg = if base_deg.is_finite() { normalize_deg(base_deg) } else { 0.0 };
+    let (step, base) = (step_deg.to_radians(), -base_deg.to_radians());
+    let a = base + ((v.y.atan2(v.x) - base) / step).round() * step;
+    Vec2::new(a.cos() * len, a.sin() * len)
+}
+
+/// The page axes turned by `deg` (the Constrain Angle preference, counter-clockwise as seen on
+/// the y-down page): maps a vector along the turned axes onto the page. `None` when they are the
+/// page's own axes (any multiple of 360°, or a non-finite angle), so callers keep exact page
+/// coordinates; multiples of 90° are exact quarter turns, without floating-point noise.
+pub fn constrain_axes(deg: f64) -> Option<Affine> {
+    if !deg.is_finite() {
+        return None;
     }
-    pub fn apply(&self, p: Point) -> Point {
-        let (x, y) = self.apply_real(p.x, p.y);
-        Point::new(x, y)
-    }
-    /// [`Affine::apply`] for any [`Real`] (e.g. [`Interval`] bounds over many points).
-    pub fn apply_real<T: Real>(&self, x: T, y: T) -> (T, T) {
-        let [a, b, c, d, e, f] = self.0;
-        (x * a + y * c + e, x * b + y * d + f)
-    }
-    pub fn apply_vec(&self, v: Vec2) -> Vec2 {
-        let [a, b, c, d, ..] = self.0;
-        Vec2::new(a * v.x + c * v.y, b * v.x + d * v.y)
-    }
-    pub fn determinant(&self) -> f64 {
-        self.0[0] * self.0[3] - self.0[1] * self.0[2]
-    }
-    pub fn inverse(&self) -> Option<Affine> {
-        let det = self.determinant();
-        if !det.is_finite() || det.abs() < 1e-300 {
-            return None;
+    let d = normalize_deg(deg);
+    let (cos, sin) = if d == 0.0 {
+        return None;
+    } else if d == 90.0 {
+        (0.0, 1.0)
+    } else if d == 180.0 {
+        (-1.0, 0.0)
+    } else if d == -90.0 {
+        (0.0, -1.0)
+    } else {
+        let r = d.to_radians();
+        (r.cos(), r.sin())
+    };
+    // Counter-clockwise on a y-down page is a negative rotation of the coordinates.
+    Some(Affine::new([cos, -sin, sin, cos, 0.0, 0.0]))
+}
+
+/// A rotation by `deg` (clockwise as seen on the y-down page, as [`Affine::rotate`] takes it in
+/// radians), exact at quarter turns and the identity at whole turns; 0 is `Affine::rotate(0.0)`
+/// as before, and any other angle is `Affine::rotate` itself.
+pub fn rotate_deg(deg: f64) -> Affine {
+    if deg.is_finite() && deg != 0.0 {
+        let d = normalize_deg(deg);
+        if d == 0.0 {
+            return Affine::IDENTITY;
         }
-        let [a, b, c, d, e, f] = self.0;
-        let inv = 1.0 / det;
-        let coefficients = [d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv];
-        coefficients.iter().all(|v| v.is_finite()).then_some(Affine(coefficients))
-    }
-    /// Bounding box of a transformed rectangle.
-    pub fn transform_rect_bbox(&self, r: &Rect) -> Rect {
-        let pts = r.corners().map(|p| self.apply(p));
-        let mut out = Rect::new(pts[0].x, pts[0].y, pts[0].x, pts[0].y);
-        for p in &pts[1..] {
-            out = out.union(&Rect::new(p.x, p.y, p.x, p.y));
-        }
-        out
-    }
-}
-
-impl std::ops::Mul for Affine {
-    type Output = Affine;
-    /// `self * o` applies `o` first, then `self`.
-    fn mul(self, o: Affine) -> Affine {
-        let [a, b, c, d, e, f] = self.0;
-        let [a2, b2, c2, d2, e2, f2] = o.0;
-        Affine([a * a2 + c * b2, b * a2 + d * b2, a * c2 + c * d2, b * c2 + d * d2, a * e2 + c * f2 + e, b * e2 + d * f2 + f])
-    }
-}
-
-/// EXIF orientation (1..=8) as a transform of the stored pixel grid.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Orientation {
-    #[default]
-    Normal,
-    FlipH,
-    Rotate180,
-    FlipV,
-    Transpose,
-    Rotate90,
-    Transverse,
-    Rotate270,
-}
-
-impl Orientation {
-    pub fn from_exif(v: u16) -> Orientation {
-        match v {
-            2 => Orientation::FlipH,
-            3 => Orientation::Rotate180,
-            4 => Orientation::FlipV,
-            5 => Orientation::Transpose,
-            6 => Orientation::Rotate90,
-            7 => Orientation::Transverse,
-            8 => Orientation::Rotate270,
-            _ => Orientation::Normal,
+        if d % 90.0 == 0.0
+            && let Some(a) = constrain_axes(-d)
+        {
+            return a;
         }
     }
-    pub fn to_exif(self) -> u16 {
-        match self {
-            Orientation::Normal => 1,
-            Orientation::FlipH => 2,
-            Orientation::Rotate180 => 3,
-            Orientation::FlipV => 4,
-            Orientation::Transpose => 5,
-            Orientation::Rotate90 => 6,
-            Orientation::Transverse => 7,
-            Orientation::Rotate270 => 8,
-        }
-    }
-    /// Whether width and height swap.
-    pub fn swaps_axes(self) -> bool {
-        matches!(self, Orientation::Transpose | Orientation::Rotate90 | Orientation::Transverse | Orientation::Rotate270)
-    }
-    /// Decompose into (clockwise quarter turns applied after an optional horizontal flip).
-    pub fn to_parts(self) -> (bool, u8) {
-        match self {
-            Orientation::Normal => (false, 0),
-            Orientation::Rotate90 => (false, 1),
-            Orientation::Rotate180 => (false, 2),
-            Orientation::Rotate270 => (false, 3),
-            Orientation::FlipH => (true, 0),
-            Orientation::Transverse => (true, 1),
-            Orientation::FlipV => (true, 2),
-            Orientation::Transpose => (true, 3),
-        }
-    }
-    pub fn from_parts(flip: bool, quarter_turns_cw: u8) -> Orientation {
-        match (flip, quarter_turns_cw % 4) {
-            (false, 0) => Orientation::Normal,
-            (false, 1) => Orientation::Rotate90,
-            (false, 2) => Orientation::Rotate180,
-            (false, _) => Orientation::Rotate270,
-            (true, 0) => Orientation::FlipH,
-            (true, 1) => Orientation::Transverse,
-            (true, 2) => Orientation::FlipV,
-            (true, _) => Orientation::Transpose,
-        }
-    }
-    /// Rotate the (already oriented) image a further quarter turn clockwise (`cw`) or counter-clockwise.
-    pub fn rotated(self, cw: bool) -> Orientation {
-        let (f, t) = self.to_parts();
-        Orientation::from_parts(f, if cw { t + 1 } else { t + 3 })
-    }
-    /// Flip the displayed image horizontally.
-    pub fn flipped_h(self) -> Orientation {
-        let (f, t) = self.to_parts();
-        // flipH ∘ rot(t) = rot(-t) ∘ flipH
-        Orientation::from_parts(!f, (4 - t) % 4)
-    }
-    /// The orientation that undoes this one (`o.inverse().map(o.map(p)) == p`). Flips and half turns
-    /// are their own inverses; quarter turns swap.
-    pub fn inverse(self) -> Orientation {
-        match self {
-            Orientation::Rotate90 => Orientation::Rotate270,
-            Orientation::Rotate270 => Orientation::Rotate90,
-            o => o,
-        }
-    }
-    /// Map a rectangle in normalized (0..1) coordinates of the stored image to normalized coordinates
-    /// of the oriented one (e.g. a face region given on the upright photo → the frame after the user's
-    /// Rotate Left/Right).
-    pub fn map_norm_rect(self, r: Rect) -> Rect {
-        let (ax, ay) = self.map(r.x0, r.y0, 1.0, 1.0);
-        let (bx, by) = self.map(r.x1, r.y1, 1.0, 1.0);
-        Rect::from_points(Point::new(ax, ay), Point::new(bx, by))
-    }
-    /// Map a point in stored pixel space (w×h stored dims) to oriented space.
-    pub fn map(self, x: f64, y: f64, w: f64, h: f64) -> (f64, f64) {
-        let (flip, t) = self.to_parts();
-        let (mut x, y2, mut w2, mut h2) = (x, y, w, h);
-        if flip {
-            x = w2 - x;
-        }
-        let mut y = y2;
-        for _ in 0..t {
-            // rotate 90° cw: (x, y) -> (h - y, x)
-            let nx = h2 - y;
-            let ny = x;
-            x = nx;
-            y = ny;
-            std::mem::swap(&mut w2, &mut h2);
-        }
-        (x, y)
-    }
+    Affine::rotate(deg.to_radians())
 }
 
-pub fn clamp01(v: f64) -> f64 {
-    v.clamp(0.0, 1.0)
+/// The `rotation` (degrees, as the shape and type commands take it) that turns a new object from
+/// the page axes onto the axes of Constrain Angle `base`; `None` for the page's own axes (0°, a
+/// whole turn, a non-finite angle), where new objects are drawn exactly as without it.
+pub fn constrain_rotation(base: f64) -> Option<f64> {
+    constrain_axes(base).map(|_| -normalize_deg(base))
 }
 
-pub fn deg(r: f64) -> f64 {
-    r.to_degrees()
+/// Rect from two corner points in any order.
+pub fn rect_from_points(a: Point, b: Point) -> Rect {
+    Rect::from_points(a, b)
 }
 
-pub fn rad(d: f64) -> f64 {
-    d.to_radians()
+/// The 9 reference points of a rect (Illustrator's reference-point locator), row-major from top-left.
+pub fn reference_point(r: Rect, index: usize) -> Point {
+    let xs = [r.x0, r.center().x, r.x1];
+    let ys = [r.y0, r.center().y, r.y1];
+    Point::new(xs[index % 3], ys[(index / 3).min(2)])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn close(a: Point, b: Point) -> bool {
-        a.dist(b) < 1e-9
+    /// A tiny curve with far-out handles flattens into a bounded number of segments; an ordinary
+    /// one exactly as kurbo flattens it.
+    #[test]
+    fn flatten_bounds_the_segments_of_one_curve() {
+        let count = |path: &[PathEl], tol: f64| {
+            let mut n = 0usize;
+            flatten(path.iter().copied(), tol, |_| n += 1);
+            n
+        };
+        let wild = [PathEl::MoveTo(Point::ZERO), PathEl::CurveTo(Point::new(1e15, -1e15), Point::new(-1e15, 1e15), Point::new(1.0, 0.0))];
+        assert!(count(&wild, 0.25) < 3 * MAX_FLATTEN_PER_CURVE as usize);
+        let plain =
+            [PathEl::MoveTo(Point::ZERO), PathEl::CurveTo(Point::new(0.0, 50.0), Point::new(100.0, 50.0), Point::new(100.0, 0.0)), PathEl::ClosePath];
+        let mut ours = vec![];
+        flatten(plain.iter().copied(), 0.25, |e| ours.push(e));
+        let mut theirs = vec![];
+        kurbo::flatten(plain.iter().copied(), 0.25, |e| theirs.push(e));
+        assert_eq!(ours, theirs);
+        let nan = [PathEl::MoveTo(Point::ZERO), PathEl::QuadTo(Point::new(f64::NAN, 0.0), Point::new(1.0, 1.0))];
+        assert_eq!(count(&nan, 0.25), 2);
+        // Finite coordinates whose squares overflow are a line to the end too.
+        let huge = [PathEl::MoveTo(Point::ZERO), PathEl::CurveTo(Point::new(1e200, 0.0), Point::new(-1e200, 1e200), Point::new(1.0, 0.0))];
+        assert_eq!(count(&huge, 0.25), 2);
+        // A short polygon out near f64::MAX: a line, and every point it emits is finite.
+        let m = f64::MAX / 2.0;
+        let far = [PathEl::MoveTo(Point::new(m, m)), PathEl::CurveTo(Point::new(m, m), Point::new(m, m), Point::new(m, m))];
+        let mut points = vec![];
+        flatten(far.iter().copied(), 0.25, |e| points.push(e));
+        assert_eq!(points.len(), 2);
+        assert!(points.iter().all(|e| matches!(e, PathEl::MoveTo(p) | PathEl::LineTo(p) if p.is_finite())), "{points:?}");
     }
 
     #[test]
-    fn affine_compose_and_inverse() {
-        let t = Affine::translate(Vec2::new(3.0, -2.0)) * Affine::rotate(0.7) * Affine::scale(2.0, 0.5);
-        let inv = t.inverse().unwrap();
-        let p = Point::new(1.5, 4.0);
-        assert!(close(inv.apply(t.apply(p)), p));
-        assert!(close((t * inv).apply(p), p));
-    }
-
-    #[test]
-    fn rotate_about_fixes_centre() {
-        let c = Point::new(10.0, 5.0);
-        assert!(close(Affine::rotate_about(1.1, c).apply(c), c));
-    }
-
-    #[test]
-    fn rect_ops() {
-        let r = Rect::new(0.0, 0.0, 4.0, 2.0);
-        assert_eq!(r.aspect(), 2.0);
-        let f = r.fit_aspect(1.0);
-        assert_eq!((f.width(), f.height()), (2.0, 2.0));
-        assert_eq!(f.center(), r.center());
-        assert!(r.contains(Point::new(3.9, 1.9)));
-        assert!(!r.contains(Point::new(4.0, 1.0)));
-        assert!(r.intersect(&Rect::new(5.0, 5.0, 6.0, 6.0)).is_empty());
-    }
-
-    #[test]
-    fn orientation_roundtrip_and_dims() {
-        for v in 1..=8 {
-            let o = Orientation::from_exif(v);
-            assert_eq!(o.to_exif(), v);
-            let (f, t) = o.to_parts();
-            assert_eq!(Orientation::from_parts(f, t), o);
+    fn constrain_axes_are_exact_and_whole_turns_are_none() {
+        for d in [0.0, 360.0, -360.0, 720.0, f64::NAN, f64::INFINITY] {
+            assert!(constrain_axes(d).is_none(), "{d}");
         }
-        assert!(Orientation::Rotate90.swaps_axes());
-        // Rotate90: top-left of stored goes to top-right of display.
-        let (x, y) = Orientation::Rotate90.map(0.0, 0.0, 4.0, 2.0);
-        assert_eq!((x, y), (2.0, 0.0));
-        assert_eq!(Orientation::Normal.rotated(true).rotated(true), Orientation::Rotate180);
-        assert_eq!(Orientation::Normal.rotated(false), Orientation::Rotate270);
-        assert_eq!(Orientation::Normal.flipped_h(), Orientation::FlipH);
-        assert_eq!(Orientation::Rotate90.flipped_h().flipped_h(), Orientation::Rotate90);
+        let v = Point::new(3.0, 4.0);
+        // 90° counter-clockwise on the page: x points up (−y).
+        assert_eq!(constrain_axes(90.0).unwrap() * Point::new(1.0, 0.0), Point::new(0.0, -1.0));
+        assert_eq!(constrain_axes(450.0).unwrap() * v, constrain_axes(90.0).unwrap() * v);
+        assert_eq!(constrain_axes(-90.0).unwrap() * v, Point::new(-4.0, 3.0));
+        assert_eq!(constrain_axes(180.0).unwrap() * v, Point::new(-3.0, -4.0));
+        assert_eq!(constrain_axes(-180.0).unwrap() * v, Point::new(-3.0, -4.0));
+        let a = constrain_axes(30.0).unwrap() * Point::new(1.0, 0.0);
+        assert!((a.x - 30f64.to_radians().cos()).abs() < 1e-12 && (a.y + 0.5).abs() < 1e-12, "{a:?}");
+        assert_eq!(constrain_angle_from(Vec2::new(5.0, 1.0), 45.0, 360.0), constrain_angle_from(Vec2::new(5.0, 1.0), 45.0, 0.0));
     }
 
     #[test]
-    fn orientation_inverse_and_norm_rect() {
-        let r = Rect::new(0.1, 0.2, 0.3, 0.6);
-        for v in 1..=8 {
-            let o = Orientation::from_exif(v);
-            let back = o.inverse().map_norm_rect(o.map_norm_rect(r));
-            assert!([back.x0 - r.x0, back.y0 - r.y0, back.x1 - r.x1, back.y1 - r.y1].iter().all(|d| d.abs() < 1e-12), "{o:?}: {back:?}");
-        }
-        // a quarter turn clockwise: the left of the upright photo becomes its top
-        let q = Orientation::Rotate90.map_norm_rect(r);
-        assert!([q.x0 - 0.4, q.y0 - 0.1, q.x1 - 0.8, q.y1 - 0.3].iter().all(|d| d.abs() < 1e-12), "{q:?}");
+    fn rotate_deg_is_exact_at_quarter_turns() {
+        let v = Point::new(3.0, 4.0);
+        assert_eq!(rotate_deg(90.0) * v, Point::new(-4.0, 3.0));
+        assert_eq!(rotate_deg(-90.0) * v, Point::new(4.0, -3.0));
+        assert_eq!(rotate_deg(180.0) * v, Point::new(-3.0, -4.0));
+        assert_eq!(rotate_deg(-270.0) * v, rotate_deg(90.0) * v);
+        assert_eq!(rotate_deg(360.0) * v, v);
+        assert_eq!(rotate_deg(0.0), Affine::rotate(0.0));
+        assert_eq!(rotate_deg(30.0), Affine::rotate(30f64.to_radians()));
+        assert_eq!(constrain_rotation(30.0), Some(-30.0));
+        assert_eq!(constrain_rotation(0.0), None);
+        assert_eq!(constrain_rotation(-360.0), None);
+        assert_eq!(constrain_rotation(450.0), Some(-90.0));
     }
 
-    proptest::proptest! {
-        #[test]
-        fn affine_inverse_prop(a in -3.0f64..3.0, sx in 0.1f64..5.0, sy in 0.1f64..5.0, tx in -50.0f64..50.0, px in -20.0f64..20.0, py in -20.0f64..20.0) {
-            let t = Affine::translate(Vec2::new(tx, -tx)) * Affine::rotate(a) * Affine::scale(sx, sy);
-            let p = Point::new(px, py);
-            let q = t.inverse().unwrap().apply(t.apply(p));
-            proptest::prop_assert!(q.dist(p) < 1e-7);
+    #[test]
+    fn angle_normalization() {
+        assert_eq!(normalize_deg(190.0), -170.0);
+        assert_eq!(normalize_deg(-190.0), 170.0);
+        assert_eq!(normalize_deg(180.0), 180.0);
+        assert_eq!(normalize_deg(720.0), 0.0);
+    }
+
+    #[test]
+    fn constrain_45() {
+        let v = constrain_angle(Vec2::new(10.0, 1.0), 45.0);
+        assert!((v.y).abs() < 1e-9);
+        let v = constrain_angle(Vec2::new(10.0, 9.0), 45.0);
+        assert!((v.x - v.y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn constrain_from_a_base_angle() {
+        // 30° base: 45° steps land on 30°, 75°, … (counter-clockwise on the page, y down).
+        let deg = |v: Vec2| (-v.y).atan2(v.x).to_degrees();
+        assert!((deg(constrain_angle_from(Vec2::new(10.0, -4.0), 45.0, 30.0)) - 30.0).abs() < 1e-9);
+        assert!((deg(constrain_angle_from(Vec2::new(3.0, -10.0), 45.0, 30.0)) - 75.0).abs() < 1e-9);
+        assert!((deg(constrain_angle_from(Vec2::new(10.0, 1.0), 45.0, 30.0)) + 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reference_points() {
+        let r = Rect::new(0.0, 0.0, 10.0, 20.0);
+        assert_eq!(reference_point(r, 0), Point::new(0.0, 0.0));
+        assert_eq!(reference_point(r, 4), Point::new(5.0, 10.0));
+        assert_eq!(reference_point(r, 8), Point::new(10.0, 20.0));
+    }
+
+    #[test]
+    fn union_options() {
+        let a = Rect::new(0.0, 0.0, 1.0, 1.0);
+        let b = Rect::new(2.0, 2.0, 3.0, 3.0);
+        assert_eq!(union_opt(Some(a), Some(b)), Some(Rect::new(0.0, 0.0, 3.0, 3.0)));
+        assert_eq!(union_opt(None, Some(b)), Some(b));
+        assert_eq!(union_opt(None, None), None);
+    }
+
+    /// A tiny curve must not panic however small the tolerance: kurbo's subdivision count
+    /// saturates when its scaled tolerance underflows, and the buffer reservation would overflow.
+    #[test]
+    fn flatten_survives_underflowing_tolerances() {
+        let tiny = [
+            PathEl::MoveTo(Point::new(1e-160, 0.0)),
+            PathEl::CurveTo(Point::new(2e-160, 1e-160), Point::new(3e-160, -1e-160), Point::new(4e-160, 0.0)),
+        ];
+        for tol in [0.0, f64::NAN, f64::MIN_POSITIVE, 1e-167] {
+            let mut n = 0usize;
+            flatten(tiny.iter().copied(), tol, |e| {
+                n += 1;
+                assert!(matches!(e, PathEl::MoveTo(p) | PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) if p.is_finite()));
+            });
+            assert!(n >= 2 && n < 3 * MAX_FLATTEN_PER_CURVE as usize, "{n} at {tol}");
         }
     }
 }

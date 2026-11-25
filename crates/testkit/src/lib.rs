@@ -25,6 +25,13 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! Behind the `geom` feature (RFC-0030, decision 5) sit the vector kernel's test helpers:
+//! [`strategies`] (proptest strategies for points, rectangles, polygons, ellipses and whole
+//! paths) and [`geom`] (geometry assertions: approximate equality, curve sampling, Hausdorff
+//! distance). That feature alone pulls in `craft-geom`, `kurbo` and `proptest`; the default
+//! build depends on no craft-libs crate. The kernel crates take the feature from integration
+//! tests under `tests/` only.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -37,9 +44,13 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
+#[cfg(feature = "geom")]
+pub mod geom;
 pub mod guards;
 pub mod hostile;
 pub mod sample_damage;
+#[cfg(feature = "geom")]
+pub mod strategies;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};

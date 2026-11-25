@@ -1,0 +1,23 @@
+[package]
+name = "craft-trace"
+description = "Raster to vector tracing into craft-geom's PathData: quantise, boundary follow, polygon, Bézier fit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-geom = { workspace = true }
+kurbo = { workspace = true }
+craft-image-codecs = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+# Test fixtures only: the JPEG-block test needs the block artifacts of the encoder it was tuned on.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

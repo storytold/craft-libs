@@ -184,6 +184,20 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   millimetres to `G0`/`G1` moves with laser power and feed, for cutting lasers and plotters, as a
   commented file or as bare lines for streaming. Its `grbl` module has the real-time command bytes
   and the status and acknowledgement parsers.
+- [`craft-geom`](crates/geom/README.md): the 2D vector drawing kernel (RFC-0030), carved from
+  VectorCraft: the anchor-based editable path model (`PathData`, whose serde form is a published
+  format with a frozen wire shape and a hostile-input anchor budget), shape generators, hit
+  testing, live corners, shape recognition and snapping math, all over kurbo. No UI, no I/O, no
+  app types.
+- [`craft-pathops`](crates/pathops/README.md): path algebra on `craft-geom`'s `PathData`:
+  curve-preserving booleans over linesweeper (no polygon flattening), Pathfinder operations,
+  Shape Builder regions, Live Paint planar maps, offset path, outline stroke and simplify, with
+  explicit refusal (`try_` variants) of non-finite, degenerate or over-budget input.
+- [`craft-trace`](crates/trace/README.md): Image Trace, raster to `craft_geom::PathData`: palette
+  quantisation, noise removal, boundary following with sub-pixel edges, and Bézier fitting that
+  puts corners back and recognises lines and circles; centre-line stroke tracing and abutting or
+  overlapping colour layers included. Clean room, from the published ideas (the potrace paper,
+  classic quantisation).
 - [`craft-gif`](crates/gif/src/lib.rs): GIF block reader, from PhotoCraft: the logical screen,
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
@@ -378,8 +392,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
   replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
-  copies of a valid input, and fails the test with the case that panicked or did not finish. Not
-  published.
+  copies of a valid input, and fails the test with the case that panicked or did not finish. Behind
+  its `geom` feature (RFC-0030) sit the vector kernel's proptest strategies and geometry assertions
+  (Hausdorff closeness); that feature alone pulls in `craft-geom`, `kurbo` and `proptest`, and the
+  kernel crates take it from integration tests only. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

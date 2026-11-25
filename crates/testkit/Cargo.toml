@@ -9,6 +9,18 @@ description = "Source-level platform regression guards and verification utilitie
 publish = false
 
 [dependencies]
+# The `geom` feature alone pulls these in (RFC-0030, decision 5); the default build
+# depends on no craft-libs crate.
+craft-geom = { workspace = true, optional = true }
+kurbo = { workspace = true, optional = true }
+proptest = { workspace = true, optional = true }
+
+[features]
+# Geometry strategies and assertions for the vector kernel crates (`strategies`, `geom`).
+# Kernel crates take this feature from integration tests under `tests/` only, never from
+# `#[cfg(test)]` unit tests: a unit test taking it would build a second `craft-geom` whose
+# types do not match the crate under test.
+geom = ["dep:craft-geom", "dep:kurbo", "dep:proptest"]
 
 [lints]
 workspace = true
