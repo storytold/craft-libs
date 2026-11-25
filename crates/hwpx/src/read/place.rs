@@ -89,6 +89,9 @@ impl Converter<'_> {
         let body_w = page_w - m.left - m.right - m.gutter;
         let ref_w = match p.h_rel {
             Anchor::Page => page_w,
+            // inside a table cell the column is the cell's text (viewer: an object aligned right of
+            // the column sits at the cell's right edge); `text_width` is in twips
+            Anchor::Column if let Some(w) = self.text_width => w.saturating_mul(5).max(0),
             // the current column, whose left edge the offset is written from
             Anchor::Column if self.columns.0 > 1 => {
                 let (n, gap) = (self.columns.0, self.columns.1.max(0));

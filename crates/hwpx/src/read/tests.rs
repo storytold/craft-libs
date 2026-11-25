@@ -769,3 +769,21 @@ fn an_explicit_page_break_counts_where_the_cache_starts_alike() {
     let title = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_ref()).any(|s| s.title_page) || doc.last_section.title_page;
     assert!(!title, "the first page keeps its header");
 }
+
+/// An object inside a table cell placed at the right of its column sits at the cell's right
+/// edge, inside the cell (viewer, 2026-11-25): the cell is the column there. Before, the section's
+/// body width was taken, and the object landed far outside its cell.
+#[test]
+fn an_object_in_a_cell_aligns_to_the_cells_column() {
+    let rect = r#"<hp:rect textWrap="IN_FRONT_OF_TEXT"><hp:sz width="2000" height="2000"/><hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="COLUMN" horzAlign="RIGHT" horzOffset="0"/></hp:rect>"#;
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr><hp:pagePr width="59528" height="84188"><hp:margin left="8504" right="8504" top="5668" bottom="4252" header="0" footer="0" gutter="0"/></hp:pagePr></hp:secPr><hp:tbl rowCnt="1" colCnt="1"><hp:sz width="10000" height="3000"/><hp:pos treatAsChar="1"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run>{rect}<hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="10000" height="3000"/><hp:cellMargin left="0" right="0" top="0" bottom="0"/></hp:tc></hp:tr></hp:tbl></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&sec)).unwrap();
+    let t = doc.body.iter().find_map(|b| b.as_table()).expect("no table");
+    let cell = t.rows.first().and_then(|r| r.cells.first()).expect("no cell");
+    let o = cell.blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find(|o| o.is_floating()).expect("no floating object");
+    let x = o.clone().float_mut().map(|f| f.x).expect("not floating");
+    let cell_w = cell.props.width.unwrap_or(100.0);
+    assert!(x > 0.0 && x < cell_w, "the object starts inside its {cell_w} pt cell: {x}");
+}
