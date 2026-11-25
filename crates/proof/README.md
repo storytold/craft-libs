@@ -19,6 +19,7 @@ craft-proof = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 | French (fr-FR, fr-CA and other French pack locales) | the installed Language pack or Hunspell dictionary; dictionary-driven elisions and accent-oriented suggestions | conservative typography and basic checks, with Quebec punctuation spacing in fr-CA | the Language pack (generic fr fallback) |
 | German | — | — | TeX patterns (embedded, or a Language pack) |
 | Bulgarian | — | — | syllable rules |
+| Serbian (sr, sr-latn) | the installed Hunspell dictionary (dictionaries folder, Language pack or system) | — | the Cyrillic TeX patterns of a pack, a Latin word through its Cyrillic spelling; without them, a Latin word takes its pack's Latin patterns; `lj`, `nj`, `dž` one letter; compounds at the join ([`sr`](src/sr.rs)) |
 
 Grammar rules, suggestion tuning and the rule-based hyphenation are code: they work in every
 build.
@@ -141,7 +142,7 @@ locale (`nl`, `pt-br`, `sr-latn`):
 Hunspell dictionaries, then (English only) the built-in core list. A slot's Hunspell names map to
 pack locales (`pt_BR` → `pt-br`, then `pt`, then any other `pt-*` pack). Hyphenation, every
 language but English: an installed pack's patterns for a word in the language's script (Russian,
-Bulgarian, Turkish: their script; others: letters the patterns know), then the embedded ones, then the language's rules or the English fallback as before.
+Bulgarian, Turkish: their script; others: letters the patterns know), then the embedded ones, then the language's rules or the English fallback as before. Serbian first tries Cyrillic patterns, its own pack's then the `sr` pack's, for a word in either script.
 
 **Hostile packs.** Every file is read only if it is a regular file (never through a symbolic
 link), size-capped (`pack.toml` 1 MB, licences 4 MB, dictionaries and patterns 64 MB), and a pack
