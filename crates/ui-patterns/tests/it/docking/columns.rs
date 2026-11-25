@@ -492,28 +492,29 @@ fn a_flyout_stands_among_the_floating_windows_in_their_order() {
     let open = flyout.get().expect("Alpha's flyout shows its group");
     // The floating window shows over the flyout. It is raised as the newest layer while the flyout stands there; the
     // flyout is then closed and opened again, so it is the one opened after the window.
-    *workspace.borrow_mut() = flyout_dock(Some(window_over(open)));
+    let window = window_over(open);
+    *workspace.borrow_mut() = flyout_dock(Some(window));
     fixture.settle();
+    // The window is there and the flyout too; a corner of the window clear of the flyout names the window's layer.
+    let clear = Pos2::new(window.right() - 24.0, window.top() + 24.0);
+    let ctx = fixture.ctx().clone();
+    let window_layer = ctx.layer_id_at(clear).expect("the floating window shows");
+    let flyout_layer = ctx.layer_id_at(Pos2::new(open.left() + 8.0, open.center().y)).expect("the flyout shows beside the window");
+    assert_ne!(flyout_layer, window_layer, "the flyout and the window are layers of their own: {flyout_layer:?}");
+
+    // Closed and opened again, the flyout is the one opened after the window.
     fixture.click_at(icon).settle();
     assert!(flyout.get().is_none(), "the icon of the open panel closes its flyout");
     fixture.click_at(icon).settle();
     let open = flyout.get().expect("the flyout is open again");
     let button = fixture.by_label("Beta button").expect("the floating window shows Beta's button").center();
     assert!(open.contains(button), "the window's button lies over the open flyout: {button:?} in {open:?}");
-    let ctx = fixture.ctx().clone();
-    let window_layer = ctx.layer_id_at(button).expect("a layer lies under the button");
-    let alone = Pos2::new(open.left() + 8.0, open.center().y);
-    let flyout_layer = ctx.layer_id_at(alone).expect("the flyout shows beside the window");
-    assert_ne!(flyout_layer, window_layer, "the flyout and the window are layers of their own: {flyout_layer:?}");
     assert_eq!(ctx.layer_id_at(button), Some(flyout_layer), "the flyout opened after the window is on top where they overlap");
     fixture.click_at(button).settle();
     assert_eq!(clicks.get(), 0, "and the press there does not reach the window's button");
 
     // A press on the window where the flyout does not reach raises the window, as a press raises any floating window.
-    let clear = [Pos2::new(open.right() + 24.0, open.center().y), Pos2::new(open.center().x, open.bottom() + 24.0)]
-        .into_iter()
-        .find(|point| !open.contains(*point) && fixture.ctx().layer_id_at(*point) == Some(window_layer))
-        .expect("part of the window lies clear of the flyout");
+    assert!(!open.contains(clear), "the window's corner lies clear of the flyout: {clear:?} in {open:?}");
     fixture.frame(vec![pointer::moved(clear)]).frame(vec![pointer::press(clear)]).frame(vec![pointer::release(clear)]).settle();
     assert!(flyout.get().is_some(), "the flyout stays open: Auto-Collapse Iconic Panels is off");
     assert_eq!(ctx.layer_id_at(button), Some(window_layer), "the pressed window is in front of the flyout");
