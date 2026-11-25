@@ -1561,7 +1561,10 @@ fn open_room(ui: &Ui) -> Vec2 {
     // block behind a lead the width of its band; either less what they took.
     let env = Env::of(ui);
     if let Some(offered) = env.offered.or(env.row_room) {
-        room.x += offered - ui.max_rect().width();
+        // Unbounded along x (a sizing pass), the layout's width is infinite and what they took can't be read off it:
+        // the room is what was offered, so an unbounded offer stays unbounded instead of becoming NaN.
+        let width = ui.max_rect().width();
+        room.x = if width.is_finite() { room.x + offered - width } else { offered };
     }
     Vec2::new(if x { f32::INFINITY } else { room.x }, if y { f32::INFINITY } else { room.y })
 }
