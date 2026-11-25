@@ -1,0 +1,474 @@
+//! What a theme supplies (seeds, pins, optional shape) and what the user chooses (appearance).
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::color::Rgba;
+use super::ramp::Mode;
+use super::tokens::{ColorToken, ColorTokens, Edge, GripMark, GripShape, KnobShape, RadiusSet, Status, WellShape};
+use crate::{AppId, IconPackId, ThemeId};
+
+/// A theme: seeds to derive from, values that override the derivation, and an optional shape.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ThemeDef {
+    /// Stable identity.
+    pub id: ThemeId,
+    /// Display name.
+    pub name: String,
+    /// The author's revision of the theme; 1 for a new theme.
+    pub version: u32,
+    /// The colours every token derives from.
+    pub seeds: Seeds,
+    /// Per-mode seeds that replace the matching `seeds` fields in that mode.
+    pub mode_seeds: ModeSeeds,
+    /// Radius and edge of themes with their own shape (Classic, Breeze); `None` takes the Size
+    /// preset's.
+    pub shape: Option<ShapeSeed>,
+    /// Which modes the theme has.
+    pub variants: Variants,
+    /// Fixed colours per mode, replacing derived ones.
+    pub pins: ModePins,
+    /// Fixed colours used only with [`Contrast::High`], applied over `pins`.
+    pub high_contrast: ModePins,
+    /// Whether the theme is meant to have low contrast.
+    pub contrast_intent: ContrastIntent,
+    /// The icon pack the theme draws its icons from; `None` draws the suite's default set. Icons the pack lacks fall
+    /// back to the default drawings.
+    pub icon_pack: Option<IconPackId>,
+    /// Per-app overrides, applied over the theme's own values when resolving for that app.
+    pub apps: BTreeMap<AppId, AppOverrides>,
+}
+
+/// What a theme changes for one app. The pins apply after the theme's pins and before its
+/// high-contrast pins, and the high-contrast pins after the theme's high-contrast pins.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppOverrides {
+    /// Fixed colours per mode.
+    pub pins: ModePins,
+    /// Fixed colours per mode used only with [`Contrast::High`].
+    pub high_contrast: ModePins,
+    /// The app's own shape, in place of the theme's `shape` for that app (an app whose buttons are rounded
+    /// rectangles under a theme of capsules). `None` keeps the theme's.
+    pub shape: Option<ShapeSeed>,
+}
+
+impl ThemeDef {
+    /// The seeds `mode` derives from: the theme's `seeds` with that mode's overrides applied.
+    pub fn seeds_for(&self, mode: Mode) -> Seeds {
+        let o = self.mode_seeds.get(mode);
+        Seeds {
+            neutral: o.neutral.unwrap_or(self.seeds.neutral),
+            accent: o.accent.unwrap_or(self.seeds.accent),
+            status: Status {
+                good: o.status.good.unwrap_or(self.seeds.status.good),
+                warn: o.status.warn.unwrap_or(self.seeds.status.warn),
+                bad: o.status.bad.unwrap_or(self.seeds.status.bad),
+                info: o.status.info.unwrap_or(self.seeds.status.info),
+            },
+        }
+    }
+
+    /// This theme with `seed` as its accent in both modes: a user's accent over the theme they picked. The accent
+    /// colours (the tokens the accent ramp gives, and the ones derived from them) and the text of every contrast pair
+    /// drawn on an accent colour drop their pins and references in every layer, the high-contrast and per-app ones
+    /// included, so they derive from the seed and the contrast pass fits them as it fits an unpinned theme. A token
+    /// the theme refers to an accent colour keeps its reference, and so follows the seed.
+    #[must_use]
+    pub fn with_accent(&self, seed: Rgba) -> ThemeDef {
+        let mut theme = self.clone();
+        theme.seeds.accent = seed;
+        theme.mode_seeds.light.accent = None;
+        theme.mode_seeds.dark.accent = None;
+        for mode in [Mode::Light, Mode::Dark] {
+            let derived = self.accent_derived(mode);
+            let apps = theme.apps.values_mut().flat_map(|app| [&mut app.pins, &mut app.high_contrast]);
+            for layer in [&mut theme.pins, &mut theme.high_contrast].into_iter().chain(apps) {
+                let pins = match mode {
+                    Mode::Light => &mut layer.light,
+                    Mode::Dark => &mut layer.dark,
+                };
+                pins.colors.retain(|token, _| !derived.contains(token));
+                pins.refs.retain(|token, _| !derived.contains(token));
+            }
+        }
+        theme
+    }
+
+    /// The tokens [`with_accent`](Self::with_accent) derives in `mode`: the ones whose default follows the accent ramp,
+    /// and the text of each contrast pair drawn on an accent colour, counting the tokens a layer refers to one.
+    fn accent_derived(&self, mode: Mode) -> BTreeSet<ColorToken> {
+        use crate::values::{Bg, RULES, follows_accent};
+        let own: BTreeSet<ColorToken> = ColorToken::ALL.iter().copied().filter(|&token| follows_accent(token, mode)).collect();
+        let layers = [&self.pins, &self.high_contrast].into_iter().chain(self.apps.values().flat_map(|app| [&app.pins, &app.high_contrast]));
+        let refs: Vec<(ColorToken, ColorToken)> = layers.flat_map(|layer| layer.get(mode).refs.iter().map(|(&token, &to)| (token, to))).collect();
+        let mut shown = own.clone();
+        while let Some(token) = refs.iter().find(|(token, to)| shown.contains(to) && !shown.contains(token)).map(|&(token, _)| token) {
+            shown.insert(token);
+        }
+        let texts = RULES
+            .iter()
+            .filter(|rule| rule.bgs.iter().any(|bg| matches!(bg, Bg::Token(fill) if shown.contains(fill))))
+            .flat_map(|rule| rule.fgs.iter().copied());
+        own.iter().copied().chain(texts).collect()
+    }
+}
+
+/// Seed colours. Each one becomes a 12-step ramp per mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Seeds {
+    /// The grey family and its tint.
+    pub neutral: Rgba,
+    /// The accent hue.
+    pub accent: Rgba,
+    /// One hue per status.
+    pub status: Status<Rgba>,
+}
+
+/// Seeds one mode replaces; a field left `None` keeps the theme's value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SeedOverrides {
+    /// Replaces the neutral seed.
+    pub neutral: Option<Rgba>,
+    /// Replaces the accent seed.
+    pub accent: Option<Rgba>,
+    /// Replaces individual status seeds.
+    pub status: Status<Option<Rgba>>,
+}
+
+impl SeedOverrides {
+    /// Whether no field is overridden.
+    pub fn is_empty(&self) -> bool {
+        *self == SeedOverrides::default()
+    }
+}
+
+/// Seed overrides for each mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ModeSeeds {
+    /// Used in light mode.
+    pub light: SeedOverrides,
+    /// Used in dark mode.
+    pub dark: SeedOverrides,
+}
+
+impl ModeSeeds {
+    /// The overrides of `mode`.
+    pub fn get(&self, mode: Mode) -> &SeedOverrides {
+        match mode {
+            Mode::Light => &self.light,
+            Mode::Dark => &self.dark,
+        }
+    }
+}
+
+/// Fixed colours for some colour tokens, and references: tokens
+/// that take another token's final value (`"{accent.solid}"` in a theme file).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Pins {
+    /// Tokens pinned to a colour.
+    pub colors: BTreeMap<ColorToken, Rgba>,
+    /// Tokens pinned to the final value of another colour token, after
+    /// derivation and the contrast pass, in the same theme, mode, contrast and size. Resolution
+    /// replaces each with a colour pin. A reference to a token pinned in the theme reads the
+    /// pinned value. A token in `colors` and `refs` of the same layer takes the reference.
+    pub refs: BTreeMap<ColorToken, ColorToken>,
+}
+
+impl Pins {
+    /// The pinned colour of `token`, if any. A reference is not a colour until resolution.
+    pub fn get(&self, token: ColorToken) -> Option<Rgba> {
+        self.colors.get(&token).copied()
+    }
+
+    /// Whether nothing is pinned or referenced.
+    pub fn is_empty(&self) -> bool {
+        self.colors.is_empty() && self.refs.is_empty()
+    }
+}
+
+impl FromIterator<(ColorToken, Rgba)> for Pins {
+    fn from_iter<I: IntoIterator<Item = (ColorToken, Rgba)>>(iter: I) -> Pins {
+        Pins { colors: iter.into_iter().collect(), refs: BTreeMap::new() }
+    }
+}
+
+/// Pins for each mode.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ModePins {
+    /// Used in light mode.
+    pub light: Pins,
+    /// Used in dark mode.
+    pub dark: Pins,
+}
+
+impl ModePins {
+    /// The pins of `mode`.
+    pub fn get(&self, mode: Mode) -> &Pins {
+        match mode {
+            Mode::Light => &self.light,
+            Mode::Dark => &self.dark,
+        }
+    }
+}
+
+/// One set of pins in the order resolution applies them; a later layer wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum PinLayer {
+    /// [`ThemeDef::pins`].
+    Theme,
+    /// The app's [`AppOverrides::pins`].
+    App,
+    /// [`ThemeDef::high_contrast`], with [`Contrast::High`] only.
+    ThemeHighContrast,
+    /// The app's [`AppOverrides::high_contrast`], with [`Contrast::High`] only.
+    AppHighContrast,
+}
+
+/// A theme's own shape. Fields left `None` come from the Size preset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeSeed {
+    /// Replaces every radius of the preset.
+    pub radius: Option<RadiusSet>,
+    /// Added to the control, surface and window radii in force (the preset's, or `radius`), so a
+    /// theme keeps its own shape at every Size. A result below 0 is 0; a "full" radius stays full.
+    pub radius_offset: Option<RadiusOffset>,
+    /// Replaces the button radius in force (the preset's, or `radius`'s); 999 gives pills.
+    pub button_radius: Option<f32>,
+    /// Replaces the preset's edge style.
+    pub edge: Option<EdgeSeed>,
+    /// The knob shape; round when unset.
+    pub knob: Option<KnobShape>,
+    /// The shape of colour wells that stand on their own; square when unset.
+    pub wells: Option<WellShape>,
+    /// The dock grips' marks; each value left unset keeps [`GripShape::DEFAULT`]'s.
+    pub grip: Option<GripSeed>,
+    /// The reference point's squares; each value left unset is the Size preset's handle size.
+    pub locator: Option<LocatorSeed>,
+}
+
+/// A theme's reference point squares ([`LocatorShape`](crate::LocatorShape)): each `None` takes the Size preset's value, `size.handle.md`
+/// for the step and `size.handle.sm` for the square.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocatorSeed {
+    /// The step from one square's centre to the next, in points.
+    pub cell: Option<f32>,
+    /// A square's side, in points.
+    pub square: Option<f32>,
+}
+
+/// A theme's grip marks: each `None` keeps [`GripShape::DEFAULT`]'s value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GripSeed {
+    /// Ticks or dots.
+    pub mark: Option<GripMark>,
+    /// How many marks.
+    pub count: Option<u16>,
+    /// How tall a tick is, in points.
+    pub length: Option<f32>,
+    /// How wide a tick is, or a dot's side, in points.
+    pub width: Option<f32>,
+    /// The space between two marks, in points.
+    pub gap: Option<f32>,
+}
+
+impl GripSeed {
+    /// The grip shape: these values over [`GripShape::DEFAULT`].
+    pub fn shape(&self) -> GripShape {
+        let d = GripShape::DEFAULT;
+        GripShape {
+            mark: self.mark.unwrap_or(d.mark),
+            count: self.count.unwrap_or(d.count),
+            length: self.length.unwrap_or(d.length),
+            width: self.width.unwrap_or(d.width),
+            gap: self.gap.unwrap_or(d.gap),
+        }
+    }
+}
+
+/// Per-tier additions to the corner radii, in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RadiusOffset {
+    /// Added to `control`.
+    pub control: f32,
+    /// Added to `surface`.
+    pub surface: f32,
+    /// Added to `window`.
+    pub window: f32,
+}
+
+impl RadiusOffset {
+    /// `radius` with the offsets added; `panel`, `button` and `pill` are not offset.
+    pub fn apply(self, radius: RadiusSet) -> RadiusSet {
+        let add = |r: f32, d: f32| if r >= crate::scale::Radius::Full.px() { r } else { (r + d).max(0.0) };
+        RadiusSet {
+            control: add(radius.control, self.control),
+            surface: add(radius.surface, self.surface),
+            window: add(radius.window, self.window),
+            ..radius
+        }
+    }
+}
+
+/// A theme's edge style. A bevel's colours are the `edge.light` and `edge.dark` colour tokens:
+/// `surface.panel` lit and shaded unless pinned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EdgeSeed {
+    /// No edge effect.
+    Flat,
+    /// A two-tone bevel.
+    Bevel {
+        /// Line width in logical pixels.
+        width: f32,
+    },
+}
+
+impl EdgeSeed {
+    /// The edge this seed gives, a bevel taking `edge.light` and `edge.dark` from `color`.
+    pub fn resolve(self, color: &ColorTokens) -> Edge {
+        match self {
+            EdgeSeed::Flat => Edge::Flat,
+            EdgeSeed::Bevel { width } => Edge::Bevel { light: color.edge.light, dark: color.edge.dark, width },
+        }
+    }
+}
+
+/// Which modes a theme has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Variants {
+    /// Light and dark.
+    Both,
+    /// Light only; dark mode shows the light variant.
+    LightOnly,
+    /// Dark only; light mode shows the dark variant.
+    DarkOnly,
+}
+
+impl Variants {
+    /// The mode that is shown when `wanted` is asked for.
+    pub fn mode_for(self, wanted: Mode) -> Mode {
+        match self {
+            Variants::Both => wanted,
+            Variants::LightOnly => Mode::Light,
+            Variants::DarkOnly => Mode::Dark,
+        }
+    }
+}
+
+/// The contrast a theme is designed for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ContrastIntent {
+    /// Meets the standard minimums except where pins say otherwise.
+    #[default]
+    Standard,
+    /// Deliberately soft (Soft); the picker labels it.
+    Low,
+}
+
+/// The user's contrast setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Contrast {
+    /// WCAG AA minimums; pinned colours are kept and reported.
+    #[default]
+    Standard,
+    /// Higher minimums, enforced on every colour including pinned ones.
+    High,
+}
+
+/// The density preset: control heights, padding, gaps, type and default shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Size {
+    /// Dense, sharper corners (Pro).
+    #[default]
+    Compact,
+    /// Roomier, rounder corners (Studio).
+    Comfortable,
+}
+
+/// The text-size setting (Photoshop's Interface › UI Font Size); scales type roles only, by the
+/// factor [`TextSizeSteps`] gives each step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextSize {
+    /// Photoshop's Tiny (10 pt on a 12 pt base).
+    Tiny,
+    /// Photoshop's Small (12 pt), the default: factor 1.
+    #[default]
+    #[serde(alias = "default")]
+    Small,
+    /// Photoshop's Medium (14 pt).
+    Medium,
+    /// Photoshop's Large (16 pt).
+    #[serde(alias = "larger")]
+    Large,
+}
+
+impl TextSize {
+    /// Every step, smallest first.
+    pub const ALL: [TextSize; 4] = [TextSize::Tiny, TextSize::Small, TextSize::Medium, TextSize::Large];
+}
+
+/// The multipliers of the four text-size steps on the type roles, a runtime value an app may
+/// replace through [`AppSizes::text_steps`](crate::AppSizes::text_steps). The default is
+/// [`TextSizeSteps::PHOTOSHOP`]. Only the roles scale: faces, icon sizes and control heights
+/// don't, so Size and Text size stay independent. Scaled sizes round as every type size does
+/// (`values::TYPE_ROUNDING`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSizeSteps {
+    /// Multipliers in [`TextSize::ALL`] order; the second is 1.0.
+    pub factors: [f32; 4],
+}
+
+impl TextSizeSteps {
+    /// Photoshop's UI Font Size ladder relative to Small (12 pt): Tiny 10, Medium 14, Large 16.
+    pub const PHOTOSHOP: TextSizeSteps = TextSizeSteps { factors: [10.0 / 12.0, 1.0, 14.0 / 12.0, 16.0 / 12.0] };
+
+    /// The multiplier of one step.
+    pub fn factor(self, size: TextSize) -> f32 {
+        match size {
+            TextSize::Tiny => self.factors[0],
+            TextSize::Small => self.factors[1],
+            TextSize::Medium => self.factors[2],
+            TextSize::Large => self.factors[3],
+        }
+    }
+}
+
+impl Default for TextSizeSteps {
+    fn default() -> Self {
+        TextSizeSteps::PHOTOSHOP
+    }
+}
+
+/// The interface-font setting: the face the interface text draws with. Mono text keeps the suite's
+/// face either way, and type sizes stay the same.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceFont {
+    /// The suite's interface face.
+    #[default]
+    Suite,
+    /// The OS's own interface face (San Francisco, Segoe UI, the Linux desktop's), where the app
+    /// can read it; elsewhere the suite's face.
+    System,
+}
+
+impl InterfaceFont {
+    /// Every choice, default first.
+    pub const ALL: [InterfaceFont; 2] = [InterfaceFont::Suite, InterfaceFont::System];
+}
+
+/// The user's appearance choices, after "System" has been replaced by what the OS reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Appearance {
+    /// Light or dark.
+    pub mode: Mode,
+    /// Standard or high contrast.
+    pub contrast: Contrast,
+    /// Density preset.
+    pub size: Size,
+    /// Type scaling.
+    pub text_size: TextSize,
+    /// Whether animations are turned off.
+    pub reduced_motion: bool,
+}

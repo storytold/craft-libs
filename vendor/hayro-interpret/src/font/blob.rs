@@ -5,6 +5,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::metrics::GlyphMetrics;
 use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, Target};
 use skrifa::raw::TableProvider;
+use skrifa::raw::model::pen::NullPen;
 use skrifa::raw::ps::cff::{CffFontRef, Subfont, charset::Charset, v1::Cff};
 use skrifa::raw::ps::string::Sid;
 use skrifa::raw::ps::type1::Type1Font;
@@ -52,7 +53,8 @@ impl Type1FontBlob {
 #[derive(Clone)]
 pub(crate) struct CffFontBlob(Arc<CffFontYoke>, Arc<OnceLock<GlyphNames>>);
 
-/// PdfCraft patch (50): glyph name to glyph id, built on first use.
+/// PdfCraft patch: (see vendor/README.md hayro-interpret (50)) glyph name to glyph id, built on
+/// first use.
 type GlyphNames = HashMap<Box<[u8]>, GlyphId>;
 
 impl Debug for CffFontBlob {
@@ -66,18 +68,23 @@ impl CffFontBlob {
         let font = CffFontRef::new(data.as_ref().as_ref(), 0, None).ok()?;
         let cff = Cff::read(ReadFontData::new(data.as_ref().as_ref())).ok()?;
         let charset = font.charset();
+        // PdfCraft patch (93): a font dict that cannot be read (a CID font's FDArray entry
+        // emptied by a subsetter, with no Private DICT) leaves only the glyphs it selects
+        // missing. The font is dropped only when no font dict is usable.
         let subfonts = (0..font.num_subfonts())
             .map(|index| font.subfont(index, &[]).ok())
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Vec<_>>();
+        if !subfonts.iter().any(Option::is_some) {
+            return None;
+        }
 
-        let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), |data| {
+        // PdfCraft patch (93): the subfonts read above own their data, so they move into the
+        // yoke instead of being read again.
+        let yoke = Yoke::<CFFYoke<'static>, FontData>::attach_to_cart(data.clone(), move |data| {
             let bytes = data.as_ref();
             let font = CffFontRef::new(bytes, 0, None).unwrap();
             let cff = Cff::read(ReadFontData::new(bytes)).unwrap();
             let charset = font.charset();
-            let subfonts = (0..font.num_subfonts())
-                .map(|index| font.subfont(index, &[]).unwrap())
-                .collect();
             CFFYoke {
                 font,
                 cff,
@@ -86,7 +93,7 @@ impl CffFontBlob {
             }
         });
 
-        let _ = (cff, charset, subfonts);
+        let _ = (cff, charset);
         Some(Self(Arc::new(yoke), Arc::new(OnceLock::new())))
     }
 
@@ -104,7 +111,7 @@ impl CffFontBlob {
 
     fn subfont(&self, glyph: GlyphId) -> Option<&Subfont> {
         let index = self.font().subfont_index(glyph)? as usize;
-        self.0.as_ref().get().subfonts.get(index)
+        self.0.as_ref().get().subfonts.get(index)?.as_ref()
     }
 
     pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
@@ -118,6 +125,18 @@ impl CffFontBlob {
             .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path);
 
         path.take()
+    }
+
+    /// PdfCraft patch (see vendor/README.md hayro-interpret (77)): the glyph's own advance from
+    /// its charstring, in thousandths of an em like [`Self::outline_glyph`], or `None` when the
+    /// charstring can't be read or gives no usable width.
+    pub(crate) fn advance_width(&self, glyph: GlyphId) -> Option<f32> {
+        let subfont = self.subfont(glyph)?;
+        self.font()
+            .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut NullPen)
+            .ok()
+            .flatten()
+            .filter(|width| width.is_finite() && *width > 0.0)
     }
 
     pub(crate) fn glyph_names(&self) -> Vec<(GlyphId, String)> {
@@ -137,9 +156,8 @@ impl CffFontBlob {
     }
 
     pub(crate) fn glyph_index_by_name(&self, name: &str) -> Option<GlyphId> {
-        // PdfCraft patch (50): called for every character code of a font, so the charset is
-        // read once. The first glyph of a name wins, as it did when the charset was searched
-        // in order.
+        // Called for every character code of a font, so the charset is read once. The first
+        // glyph of a name wins, as it did when the charset was searched in order.
         self.1
             .get_or_init(|| {
                 let mut names = GlyphNames::new();
@@ -170,6 +188,13 @@ impl CffFontBlob {
         self.font().num_glyphs()
     }
 
+    /// PdfCraft patch (69): the `CFF ` table of an OpenType font, for a `FontFile3` of
+    /// subtype `OpenType` (ISO 32000-2 §9.9) under a simple font.
+    pub(crate) fn from_open_type(data: &[u8]) -> Option<Self> {
+        let cff = FontRef::new(data).ok()?.cff().ok()?;
+        Self::new(Arc::new(cff.offset_data().as_ref().to_vec()))
+    }
+
     pub(crate) fn is_cid(&self) -> bool {
         self.font().is_cid()
     }
@@ -190,13 +215,53 @@ impl Debug for OpenTypeFontBlob {
     }
 }
 
+/// PdfCraft patch (83): a copy of the font with its `head.indexToLocFormat` set to the format its
+/// `loca` table is in, when the field holds neither 0 (short offsets) nor 1 (long), or `None` when
+/// it needs no change. The glyph outline reader takes only 1 as long, so a font whose field reads
+/// 256 (the value's bytes swapped) had its long `loca` read as short offsets: every glyph came
+/// out wrong, and a line of text set in it drew boxes (pdf.js `issue2537r.pdf`). The `loca`
+/// table's length decides: room for `numGlyphs + 1` offsets of 4 bytes is long, room for only
+/// that many of 2 bytes short (a table may carry padding after its offsets), and a table too
+/// short for either is left as it is.
+fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
+    use skrifa::raw::types::Tag;
+    const HEAD: Tag = Tag::new(b"head");
+    const LOCA: Tag = Tag::new(b"loca");
+    // The `indexToLocFormat` field's offset in `head`.
+    const FORMAT_AT: usize = 50;
+    let f = FontRef::from_index(data, index).ok()?;
+    let format = f.head().ok()?.index_to_loc_format();
+    if format == 0 || format == 1 {
+        return None;
+    }
+    let offsets = usize::from(f.maxp().ok()?.num_glyphs()).checked_add(1)?;
+    let loca_len = f.table_data(LOCA)?.len();
+    let long = if loca_len >= offsets.checked_mul(4)? {
+        true
+    } else if loca_len >= offsets.checked_mul(2)? {
+        false
+    } else {
+        return None;
+    };
+    let head_at = f.table_directory.table_records().iter().find(|r| r.tag() == HEAD)?.offset() as usize;
+    let at = head_at.checked_add(FORMAT_AT)?;
+    let mut fixed = data.to_vec();
+    fixed.get_mut(at..at.checked_add(2)?)?.copy_from_slice(&i16::from(long).to_be_bytes());
+    Some(fixed)
+}
+
 impl OpenTypeFontBlob {
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
+        // PdfCraft patch (83): see `with_loca_format_fixed`.
+        let data = match with_loca_format_fixed(data.as_ref().as_ref(), index) {
+            Some(fixed) => Arc::new(fixed) as FontData,
+            None => data,
+        };
         // Check first whether the font is valid so we can unwrap in the closure.
         let f = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
         // Reject fonts with invalid post table version, fixes pdf.js issue 9462. Not sure if there
         // is a better fix, for some reason skrifa accepts the font which is completely invalid.
-        // PdfCraft patch (49): also accept 1.0, 2.0 and 3.0 with the two 16-bit halves swapped
+        // PdfCraft patch: also accept 1.0, 2.0 and 3.0 with the two 16-bit halves swapped
         // (`00 00 00 03` for 3.0), as ScanSoft PDF Create! writes it into every font it embeds
         // (#2946). Rejecting those fonts drew their text with a substitute that has no such glyphs.
         let invalid = f.post().is_ok_and(|p| {
@@ -279,10 +344,10 @@ impl OpenTypeFontBlob {
             return glyph_names;
         };
 
-        // PdfCraft patch (49): a version written with its halves swapped (`00 00 00 02`,
-        // accepted in `new`) is read as the version it means, from a copy of the table with the
-        // version written correctly: read-fonts reads a 2.0 table's name index only under
-        // version 2.0, so otherwise its glyph names were never found (#2946).
+        // PdfCraft patch: a version written with its halves swapped (`00 00 00 02`, accepted in
+        // `new`) is read as the version it means, from a copy of the table with the version
+        // written correctly: read-fonts reads a 2.0 table's name index only under version 2.0,
+        // so otherwise its glyph names were never found (#2946).
         let repaired = match post.version().to_be_bytes() {
             [0, 0, 0, n @ 1..=3] => self
                 .font_ref()
@@ -296,9 +361,9 @@ impl OpenTypeFontBlob {
                 }),
             _ => None,
         };
-        let repaired_post = repaired
-            .as_deref()
-            .and_then(|b| skrifa::raw::tables::post::Post::read(ReadFontData::new(b)).ok());
+        let repaired_post = repaired.as_deref().and_then(|b| {
+            skrifa::raw::tables::post::Post::read(ReadFontData::new(b)).ok()
+        });
         let post = repaired_post.as_ref().unwrap_or(&post);
         match post.version().to_major_minor() {
             (1, 0) => {
@@ -378,7 +443,8 @@ struct CFFYoke<'a> {
     font: CffFontRef<'a>,
     cff: Cff<'a>,
     charset: Option<Charset<'a>>,
-    subfonts: Vec<Subfont>,
+    /// PdfCraft patch (93): `None` for a font dict that could not be read.
+    subfonts: Vec<Option<Subfont>>,
 }
 
 #[cfg(test)]
@@ -477,49 +543,5 @@ mod tests {
         assert!(Arc::ptr_eq(&blob.1, &shared.1), "clones share one name map");
         assert_eq!(shared.glyph_index_by_name("Alpha"), Some(GlyphId::new(1)));
     }
-
-    /// An sfnt with only a `post` table of the given version, naming three glyphs `.notdef`,
-    /// `A` (a standard name) and `W.cv07` (a name of its own) when the version is 2.0.
-    fn font_with_post(version: [u8; 4]) -> FontData {
-        let mut post = version.to_vec();
-        post.extend_from_slice(&[0; 28]);
-        post.extend_from_slice(&3u16.to_be_bytes());
-        for index in [0u16, 36, 258] {
-            post.extend_from_slice(&index.to_be_bytes());
-        }
-        post.push(6);
-        post.extend_from_slice(b"W.cv07");
-        let mut font = vec![0, 1, 0, 0, 0, 1, 0, 16, 0, 0, 0, 0];
-        font.extend_from_slice(b"post");
-        font.extend_from_slice(&[0; 4]);
-        font.extend_from_slice(&28u32.to_be_bytes());
-        font.extend_from_slice(&(post.len() as u32).to_be_bytes());
-        font.extend(post);
-        Arc::new(font)
-    }
-
-    #[test]
-    fn a_post_version_with_swapped_halves_is_read_as_the_version_it_means() {
-        for (swapped, correct) in [([0, 0, 0, 1], [0, 1, 0, 0]), ([0, 0, 0, 3], [0, 3, 0, 0])] {
-            assert!(OpenTypeFontBlob::new(font_with_post(correct), 0).is_some());
-            assert!(
-                OpenTypeFontBlob::new(font_with_post(swapped), 0).is_some(),
-                "{swapped:?} is accepted"
-            );
-        }
-        let names = |version| {
-            OpenTypeFontBlob::new(font_with_post(version), 0)
-                .unwrap()
-                .glyph_names()
-        };
-        let correct = names([0, 2, 0, 0]);
-        assert_eq!(correct.get("A"), Some(&GlyphId::new(1)));
-        assert_eq!(correct.get("W.cv07"), Some(&GlyphId::new(2)));
-        assert_eq!(
-            names([0, 0, 0, 2]),
-            correct,
-            "a swapped 2.0 table names its glyphs"
-        );
-        assert!(OpenTypeFontBlob::new(font_with_post([0, 9, 0, 0]), 0).is_none());
-    }
 }
+

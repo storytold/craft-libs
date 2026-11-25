@@ -13,7 +13,7 @@
 //!   paragraphs, runs), [`table`], [`chart`] with [`numfmt`] (number format codes), [`theme`]
 //!   (colour, font and format schemes) and [`diagram`] (SmartArt outlines). Media are named by
 //!   [`MediaId`]; the bytes stay with the caller.
-//! - Readers and writers: [`read`] and [`write`] (`a:` fills, lines, effects, `a:xfrm`, text
+//! - Readers and writers: [`read`] and [`write`](mod@write) (`a:` fills, lines, effects, `a:xfrm`, text
 //!   bodies), [`chart::read`], [`chart::chartex`] and [`chart::write`] (`c:chartSpace`,
 //!   `cx:chartSpace`), [`theme::read_theme`] and [`theme::theme_xml`], [`table::styles`]
 //!   (`a:tblStyleLst`) and [`diagram::parts`] (`dgm:` data, layout, style and colour parts).

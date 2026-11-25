@@ -40,6 +40,39 @@ pub fn zlib(data: &[u8], tables: &mut Tables) -> Vec<u8> {
     w.out
 }
 
+/// Inflate a zlib-wrapped scanline payload to exactly `expected` bytes. The caller
+/// derives that size from the chunk's geometry and applies its chunk limit first.
+/// The legacy scanline reader allows an absent or invalid Adler-32 trailer. The
+/// zlib header and the complete DEFLATE payload are still required.
+#[cfg(feature = "zlib-inflate")]
+pub fn inflate_exact_without_checksum(src: &[u8], expected: usize) -> std::io::Result<Vec<u8>> {
+    use flate2::{Decompress, FlushDecompress, Status};
+    use std::io::{Error, ErrorKind};
+
+    let [cmf, flg, deflate @ ..] = src else {
+        return Err(Error::new(ErrorKind::UnexpectedEof, "truncated zlib header"));
+    };
+    let (cmf, flg) = (*cmf, *flg);
+    if cmf & 0x0f != 8 || cmf >> 4 > 7 || !u16::from_be_bytes([cmf, flg]).is_multiple_of(31) {
+        return Err(Error::new(ErrorKind::InvalidData, "not a zlib stream"));
+    }
+    if flg & 0x20 != 0 {
+        return Err(Error::new(ErrorKind::InvalidData, "zlib preset dictionary"));
+    }
+
+    // One extra byte distinguishes overflow from an exactly full output buffer
+    // while leaving room for the inflater to finish the stream.
+    let capacity = expected.checked_add(1).ok_or_else(|| Error::other("zlib output size overflow"))?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(capacity).map_err(Error::other)?;
+    let mut inflater = Decompress::new(false);
+    let status = inflater.decompress_vec(deflate, &mut output, FlushDecompress::Finish).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    if status != Status::StreamEnd || output.len() != expected {
+        return Err(Error::new(ErrorKind::InvalidData, "incomplete or wrong-size zlib output"));
+    }
+    Ok(output)
+}
+
 /// Adler-32 (RFC 1950 §9); 5552 bytes is the longest run that cannot overflow the sums.
 fn adler32(data: &[u8]) -> u32 {
     let (mut a, mut b) = (1_u32, 0_u32);
@@ -472,6 +505,32 @@ fn rle_lengths(lens: &[u8]) -> Vec<(u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "zlib-inflate")]
+    #[test]
+    fn exact_inflate_keeps_scanline_checksum_compatibility() {
+        let expected = vec![0x42; 4096];
+        let mut stream = zlib(&expected, &mut Tables::default());
+        let footer_start = stream.len() - 4;
+        assert_eq!(inflate_exact_without_checksum(&stream, expected.len()).unwrap(), expected);
+        stream[footer_start..].fill(0);
+        assert_eq!(inflate_exact_without_checksum(&stream, expected.len()).unwrap(), expected);
+        assert_eq!(inflate_exact_without_checksum(&stream[..footer_start], expected.len()).unwrap(), expected);
+    }
+
+    #[cfg(feature = "zlib-inflate")]
+    #[test]
+    fn exact_inflate_refuses_incomplete_and_wrong_length_streams() {
+        let stream = zlib(&[0x42; 4096], &mut Tables::default());
+        assert!(inflate_exact_without_checksum(&stream, 4095).is_err());
+        assert!(inflate_exact_without_checksum(&stream, 4097).is_err());
+        assert!(inflate_exact_without_checksum(&stream, usize::MAX).is_err());
+        assert!(inflate_exact_without_checksum(&stream[..stream.len() - 6], 4096).is_err());
+        assert!(inflate_exact_without_checksum(&stream[1..], 4096).is_err());
+        let mut dictionary_header = stream;
+        dictionary_header[..2].copy_from_slice(&[0x78, 0x20]);
+        assert!(inflate_exact_without_checksum(&dictionary_header, 4096).is_err());
+    }
 
     /// A minimal inflater (RFC 1951), only to check the encoder; returns None on any error.
     pub(crate) fn inflate(z: &[u8]) -> Option<Vec<u8>> {

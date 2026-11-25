@@ -232,6 +232,14 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
         assert!((m - 72.0).abs() < 0.05, "{s:?}");
     }
     assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
+    // storytold/wordcraft#5065: a page border of width 0 (a DOCX one without `w:sz`) is still
+    // drawn, at the thinnest line, rather than lost: ODF has no border that is drawn and still
+    // takes no room.
+    let thin = craft_wordmodel::props::Border { width: 0.0, ..edge };
+    d.last_section.page_borders = Some(craft_wordmodel::props::Borders { left: Some(thin), ..Default::default() });
+    let styles = crate::text::tests::styles_of(&crate::text::export(&d).unwrap());
+    let thinnest = crate::text::writer::pt(craft_wordmodel::props::Border::THINNEST);
+    assert!(styles.contains(&format!(r#"fo:border-left="{thinnest} solid"#)), "{styles}");
 }
 
 /// An ODT document with a page background and an active header containing a logo

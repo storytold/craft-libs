@@ -26,13 +26,16 @@ fn padding() -> String {
 #[test]
 fn a_flood_of_long_lines_ends_the_command() {
     let pad = padding();
-    // 600 lines of 60 KB are more than the 32 MB one command may bring.
-    let server = flood(600, |n| format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1)) + "A0001 OK done\r\n";
+    // 600 lines of 60 KB are more than the 32 MB one command may bring. The gate sends lines that
+    // are not parsed (the cap counts the text read); nightly sends the lines of a real listing.
+    let full = craft_testkit::hostile::divisor() == 1;
+    let ok_lines = format!("* OK {pad}\r\n").repeat(600);
+    let server = if full { flood(600, |n| format!("* {n} FETCH (UID {} FLAGS ({pad}))\r\n", n + 1)) } else { ok_lines.clone() } + "A0001 OK done\r\n";
     let mut s = Script::new(server);
     let err = opened(&mut s, 1000, 2000).uid_fetch_flags("1:*").unwrap_err();
     assert!(matches!(err, ProtoError::Protocol(ref m) if m.to_string().contains("too much")), "{err:?}");
     // The same in a list.
-    let server = flood(600, |n| format!("* LIST () \"/\" \"{n}{pad}\"\r\n")) + "A0001 OK done\r\n";
+    let server = if full { flood(600, |n| format!("* LIST () \"/\" \"{n}{pad}\"\r\n")) } else { ok_lines } + "A0001 OK done\r\n";
     let mut s = Script::new(server);
     assert!(matches!(opened(&mut s, 0, 0).list(), Err(ProtoError::Protocol(_))));
 }
@@ -113,6 +116,7 @@ fn only_uids_that_were_asked_for_and_exist_are_kept() {
 
 #[test]
 fn more_distinct_uids_than_the_mailbox_can_hold_fail_the_command() {
+    let full = craft_testkit::hostile::divisor() == 1;
     // 3 messages: room for 2 * 3 + FETCH_SLACK distinct UIDs, and not one more.
     let room = 2 * 3 + FETCH_SLACK;
     let many = |n: usize| flood(n, |i| format!("* {i} FETCH (UID {} FLAGS ())\r\n", i + 1)) + "A0001 OK done\r\n";
@@ -120,6 +124,9 @@ fn more_distinct_uids_than_the_mailbox_can_hold_fail_the_command() {
     assert_eq!(opened(&mut s, 3, u32::MAX).uid_fetch_flags("1:*").unwrap().len(), room);
     let mut s = Script::new(many(room + 1));
     assert!(matches!(opened(&mut s, 3, u32::MAX).uid_fetch_flags("1:*"), Err(ProtoError::Protocol(_))));
+    if !full {
+        return;
+    }
     let sizes = flood(room + 1, |i| format!("* {i} FETCH (UID {} RFC822.SIZE 1)\r\n", i + 1)) + "A0001 OK done\r\n";
     let mut s = Script::new(sizes);
     assert!(matches!(opened(&mut s, 3, u32::MAX).uid_fetch_sizes("1:*"), Err(ProtoError::Protocol(_))));
@@ -177,7 +184,9 @@ proptest! {
 
 #[test]
 fn a_folder_with_more_messages_than_other_commands_may_answer_still_reads() {
-    let exists = 300_000u32;
+    // The gate reads one folder just past the usual cap; nightly adds the sizes and the noise.
+    let full = craft_testkit::hostile::divisor() == 1;
+    let exists = if full { 300_000u32 } else { MAX_RESPONSES as u32 + 1 };
     let lines = |n: u32| flood(n as usize, |i| format!("* {i} FETCH (UID {} FLAGS ())\r\n", i + 1)) + "A0001 OK done\r\n";
     let mut s = Script::new(lines(exists));
     assert_eq!(opened(&mut s, exists, exists + 1).uid_fetch_flags("1:*").unwrap().len(), exists as usize);

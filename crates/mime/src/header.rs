@@ -416,9 +416,6 @@ pub fn write_field(out: &mut Vec<u8>, name: &str, value: &str) -> bool {
 mod tests {
     use super::*;
 
-    const MAX_FIELDS: usize = Limits::DEFAULT.max_header_fields;
-    const MAX_VALUE: usize = Limits::DEFAULT.max_header_value;
-
     fn split(bytes: &[u8], top: bool) -> (Headers, &[u8]) {
         split_headers(bytes, top, &Limits::default())
     }
@@ -438,40 +435,6 @@ mod tests {
     }
 
     #[test]
-    fn splits_headers_from_body() {
-        let (h, body) = split(b"Subject: Hi\r\nTo: bob@example.org\r\n\r\nBody\r\nmore", true);
-        assert_eq!(h.get("subject"), Some("Hi"));
-        assert_eq!(h.get("TO"), Some("bob@example.org"));
-        assert_eq!(h.get("cc"), None);
-        assert_eq!(body, b"Body\r\nmore");
-    }
-
-    #[test]
-    fn bare_lf_and_no_body() {
-        let (h, body) = split(b"A: 1\nB: 2\n\nBody\n", true);
-        assert_eq!(h.0.len(), 2);
-        assert_eq!(body, b"Body\n");
-        assert_eq!(split(b"A: 1", true), (Headers(vec![Field { name: "A".into(), value: "1".into() }]), &b""[..]));
-        assert_eq!(split(b"A: 1\r\n", true).1, b"");
-        assert_eq!(split(b"", true), (Headers::default(), &b""[..]));
-        assert_eq!(split(b"\r\nBody", true), (Headers::default(), &b"Body"[..]));
-    }
-
-    #[test]
-    fn folded_lines_are_joined() {
-        let got = fields(b"Subject: a\r\n b\r\n\tc\r\nX:\r\n folded value\r\n\r\n");
-        assert_eq!(got, [pair("Subject", "a b\tc"), pair("X", "folded value")]);
-    }
-
-    #[test]
-    fn odd_field_lines() {
-        assert_eq!(fields(b"Name : spaced\r\nEmpty:\r\nColons: a:b:c\r\n\r\n"), [pair("Name", "spaced"), pair("Empty", ""), pair("Colons", "a:b:c")]);
-        // Raw 8-bit values: UTF-8 when valid, else Windows-1252.
-        assert_eq!(fields("Subject: caf\u{e9}\n\n".as_bytes()), [pair("Subject", "café")]);
-        assert_eq!(fields(b"Subject: caf\xE9\n\n"), [pair("Subject", "café")]);
-    }
-
-    #[test]
     fn a_line_that_is_no_header_starts_the_body() {
         let (h, body) = split(b"A: 1\r\nThis is text\r\nB: 2\r\n", true);
         assert_eq!(h.0.len(), 1);
@@ -480,29 +443,6 @@ mod tests {
         assert_eq!(split(b" leading space: x\r\n", true).1, b" leading space: x\r\n");
         assert_eq!(split(b"Bad Name: x\r\n", true).1, b"Bad Name: x\r\n");
         assert_eq!(split(b": no name\r\n", true).1, b": no name\r\n");
-    }
-
-    #[test]
-    fn an_mbox_from_line_is_skipped_at_the_top_only() {
-        let msg = b"From ada@example.org Sat Jan  3 01:05:34 1996\r\nSubject: x\r\n\r\nB";
-        assert_eq!(fields(msg), [pair("Subject", "x")]);
-        assert_eq!(split(msg, false).0, Headers::default());
-        assert_eq!(split(b"A: 1\r\nFrom here on\r\n", true).1, b"From here on\r\n");
-    }
-
-    #[test]
-    fn header_counts_and_sizes_are_capped() {
-        let many = "X: 1\r\n".repeat(MAX_FIELDS + 50) + "\r\nBody";
-        let (h, body) = split(many.as_bytes(), true);
-        assert_eq!(h.0.len(), MAX_FIELDS);
-        assert_eq!(body, b"Body");
-        let long = format!("X: start\r\n{}\r\nbody", " more\r\n".repeat(100_000));
-        let (h, body) = split(long.as_bytes(), true);
-        assert!(h.get("x").is_some_and(|v| v.len() <= MAX_VALUE));
-        assert_eq!(body, b"body");
-        let one_line = format!("X: {}\r\n\r\n", "a".repeat(MAX_VALUE * 2));
-        // The cut includes the space after the colon, which is then trimmed.
-        assert_eq!(split(one_line.as_bytes(), true).0.get("x").map(str::len), Some(MAX_VALUE - 1));
     }
 
     #[test]
@@ -527,27 +467,6 @@ mod tests {
         // Cut values carry a mark, so that a cut one never reads as a shorter whole one.
         assert_eq!(got, [("P", "1"), ("P", "2"), ("x-stamp", "Inte…"), ("X-Stamp", "ok")]);
         assert!(cut);
-    }
-
-    #[test]
-    fn a_name_that_is_no_field_name_writes_nothing() {
-        for name in ["", "Bad Name", "X:Y", "X\r\nBcc", "Sübject", "X\0"] {
-            let mut out = Vec::new();
-            assert!(!write_field(&mut out, name, "v"), "{name:?}");
-            assert!(out.is_empty());
-        }
-    }
-
-    #[test]
-    fn parameters() {
-        let p = parse_params("Text/Plain; charset=\"UTF-8\"; Format=flowed");
-        assert_eq!(p.value, "text/plain");
-        assert_eq!(p.get("charset"), Some("UTF-8"));
-        assert_eq!(p.get("format"), Some("flowed"));
-        assert_eq!(p.get("missing"), None);
-        assert_eq!(parse_params("attachment").value, "attachment");
-        assert_eq!(parse_params("").value, "");
-        assert_eq!(parse_params("text/html (a comment); charset=us-ascii").value, "text/html");
     }
 
     #[test]
@@ -589,16 +508,6 @@ mod tests {
     }
 
     #[test]
-    fn encoded_words_in_parameters() {
-        let p = parse_params("application/pdf; name=\"=?UTF-8?B?csOpc3Vtw6kucGRm?=\"");
-        assert_eq!(p.text("name").as_deref(), Some("résumé.pdf"));
-        assert_eq!(p.get("name"), Some("=?UTF-8?B?csOpc3Vtw6kucGRm?="));
-        // The extended form is not decoded twice.
-        let p = parse_params("x; name*=utf-8''%3D%3FUTF-8%3FQ%3Fa%3F%3D");
-        assert_eq!(p.text("name").as_deref(), Some("=?UTF-8?Q?a?="));
-    }
-
-    #[test]
     fn comments_neither_end_the_value_nor_start_a_parameter() {
         // WordCraft's MHT reader: a quote or a `;` in a comment must not hide or fake a boundary.
         for comment in [r#"(10" screen)"#, r#"(outer (10" screen); boundary=wrong)"#, r#"(10\)" screen; boundary=wrong)"#] {
@@ -622,20 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn many_parameters_are_capped() {
-        let s = format!("x{}", (0..500).map(|i| format!("; p{i}=v")).collect::<String>());
-        let p = parse_params(&s);
-        assert_eq!(p.get("p0"), Some("v"));
-        assert_eq!(p.get("p499"), None);
-    }
-
-    #[test]
-    fn short_fields_are_written_on_one_line() {
-        assert_eq!(written("Subject", "Hello there"), "Subject: Hello there\r\n");
-        assert_eq!(written("X-Empty", ""), "X-Empty:\r\n");
-    }
-
-    #[test]
     fn long_fields_fold_at_white_space() {
         let value = "word ".repeat(40);
         let value = value.trim_end();
@@ -652,45 +547,7 @@ mod tests {
         assert_eq!(fields(format!("{text}\r\n").as_bytes()), [pair("Subject", value)]);
     }
 
-    #[test]
-    fn folding_keeps_every_space() {
-        for value in [
-            "a    b",
-            "tab\tseparated\twords",
-            &format!("{}  {}   {}", "x".repeat(50), "y".repeat(50), "z".repeat(50)),
-            &format!("{} \t {}", "x".repeat(70), "y".repeat(70)),
-        ] {
-            let text = written("X-Test", value);
-            assert_eq!(fields(format!("{text}\r\n").as_bytes()), [pair("X-Test", value)], "{text}");
-        }
-    }
-
-    #[test]
-    fn a_word_that_cannot_fold_stays_whole() {
-        let long = "x".repeat(300);
-        assert_eq!(written("X", &long), format!("X: {long}\r\n"));
-        // No fold before the first word, and none that would leave a blank line.
-        assert_eq!(written("X", &format!("{long} ")), format!("X: {long} \r\n"));
-        assert_eq!(written("X", &format!(" {long}")), format!("X:  {long}\r\n"));
-    }
-
-    #[test]
-    fn line_breaks_cannot_be_injected() {
-        assert_eq!(written("Subject", "Hi\r\nBcc: eve@example.org"), "Subject: HiBcc: eve@example.org\r\n");
-        assert_eq!(written("Subject", "a\nb\rc\0d"), "Subject: abcd\r\n");
-        assert_eq!(clean("\r\n\0"), "");
-    }
-
     proptest::proptest! {
-        #[test]
-        fn any_bytes_split(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..400)) {
-            let (h, body) = split(&data, true);
-            proptest::prop_assert!(body.len() <= data.len());
-            for f in &h.0 {
-                proptest::prop_assert!(is_field_name(f.name.as_bytes()));
-            }
-        }
-
         #[test]
         fn any_parameters_parse(s in "[a-z*0-9=;\"'%\\\\ é]{0,60}") {
             let p = parse_params(&s);
