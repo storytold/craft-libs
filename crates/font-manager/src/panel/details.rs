@@ -580,7 +580,7 @@ impl Sheet {
         let entries = [Entry::new(true, words.install_all_apps.clone()), Entry::new(false, words.install_craft_apps.clone())];
         let out =
             SplitButton::new(words.install_all.clone(), &entries).arrow_label(words.install_all_options.clone()).variant(Variant::PRIMARY).show(ui);
-        out.chosen.map(Some).or_else(|| clicked(&out.response).then_some(None))
+        out.chosen.map(Some).or_else(|| out.activated.then_some(None))
     }
 
     /// The styles, and beside them (or below, when narrow) the facts and the languages.

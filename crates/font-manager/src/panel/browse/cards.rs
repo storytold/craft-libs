@@ -111,7 +111,7 @@ impl EndOutput for Response {
 
 impl EndOutput for SplitOutput<bool> {
     fn event(&self, end: End) -> Option<CardEvent> {
-        self.chosen.map(|share| CardEvent::Install(Some(share))).or_else(|| self.response.event(end))
+        self.chosen.map(|share| CardEvent::Install(Some(share))).or_else(|| self.activated.then(|| end.event()).flatten())
     }
 }
 
