@@ -275,6 +275,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     // which is quadratic on hostile input. Once the budget is gone, further brackets are plain
     // text. A scan pays for what it reads; earlier bracket matches are looked up in `known`.
     let ticks = Backticks::new(s);
+    let mut comment_search_exhausted = false;
     let mut links = LinkScan { text: s, refs, ticks: &ticks, known: HashMap::new(), budget: s.len().saturating_mul(8).saturating_add(8192) };
     let b = s.as_bytes();
     let mut i = 0usize;
@@ -366,6 +367,28 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 }
             }
             b'<' => {
+                let comment_end = s.get(i..).filter(|r| r.starts_with("<!--")).and_then(|rest| {
+                    if rest.starts_with("<!-->") {
+                        return Some(5);
+                    }
+                    if rest.starts_with("<!--->") {
+                        return Some(6);
+                    }
+                    if comment_search_exhausted {
+                        return None;
+                    }
+                    let end = rest.get(4..).and_then(|r| r.find("-->")).map(|p| p + 7);
+                    // Successful searches are consumed below. After a miss no later opener
+                    // can have a closer, so scanning the same suffix again would be quadratic.
+                    comment_search_exhausted = end.is_none();
+                    end
+                });
+                if let Some(len) = comment_end {
+                    flush!();
+                    i += len;
+                    text_start = i;
+                    continue;
+                }
                 if let Some((end, parsed)) = angle_inlines(s, i, base) {
                     flush!();
                     nodes.extend(parsed);
@@ -395,9 +418,6 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
 }
 
 fn angle_inlines(s: &str, start: usize, base: &Fmt) -> Option<(usize, Vec<Node>)> {
-    if let Some(pos) = s.get(start..).and_then(|rest| rest.strip_prefix("<!--")).and_then(|rest| rest.find("-->")) {
-        return Some((start + 4 + pos + 3, Vec::new()));
-    }
     let rest = s.get(start + 1..).unwrap_or("");
     let tag_end = within(rest, MAX_TAG).find('>')?;
     let inner = rest.get(..tag_end)?;
