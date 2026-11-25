@@ -191,3 +191,59 @@ fn a_framed_gallery_paints_sunken_well_and_stepper_track() {
         seen.iter().find(|(rect, fill)| *fill == panel && rect.contains_rect(column.shrink(1.0)) && gallery_rect.contains_rect(*rect));
     assert!(stepper_track.is_some(), "a panel fill covers the stepper track column {column:?}: {seen:?}");
 }
+
+/// The current tile paints an `accent.soft` fill inside a 1 pt `accent.solid` edge, and a non-current tile paints
+/// neither; the fill stays under the focus ring, so a focused current tile still reads as current.
+/// This holds in light and dark, at standard and high contrast.
+#[trial]
+fn the_current_tile_paints_an_accent_fill_and_edge_even_when_focused() {
+    use craft_theme::{Contrast, Mode};
+    use craft_ui::runtime::env::Env;
+    use egui::Color32;
+
+    fn rects(shapes: &[egui::Shape], out: &mut Vec<(Rect, Color32)>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Vec(inner) => rects(inner, out),
+                egui::Shape::Rect(rect) => out.push((rect.rect, rect.fill)),
+                _ => {}
+            }
+        }
+    }
+
+    for (mode, contrast) in
+        [(Mode::Light, Contrast::Standard), (Mode::Dark, Contrast::Standard), (Mode::Light, Contrast::High), (Mode::Dark, Contrast::High)]
+    {
+        let colors = Rc::new(Cell::new((craft_theme::Rgba::TRANSPARENT, craft_theme::Rgba::TRANSPARENT)));
+        let held = colors.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let accent = Env::of(ui).tokens.tokens().color.accent;
+            held.set((accent.soft, accent.solid));
+            let paint = |_: &ContentPainterCx, _: Rect| {};
+            let items: Vec<GalleryItem<'_, usize>> =
+                (0..3).map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) }).collect();
+            let _ = Gallery::new("Styles", &items, Some(&0)).tiles(3, 3).show(ui);
+        });
+        fixture.theme(mode, contrast).settle();
+        let (soft, solid) = colors.get();
+        let [fill, edge] = [soft, solid].map(|c| {
+            let [r, g, b, a] = c.0;
+            Color32::from_rgba_unmultiplied(r, g, b, a)
+        });
+        assert_ne!(fill, edge, "{mode:?} {contrast:?}: the fill and the edge are different colours");
+        let [current, other] = ["Tile 0", "Tile 1"].map(|name| fixture.by_label(name).map_or(Rect::NOTHING, |tile| tile.rect));
+        let painted = |fixture: &mut Fixture, color: Color32, tile: Rect| {
+            let mut seen = Vec::new();
+            rects(&fixture.frame_shapes(), &mut seen);
+            seen.iter().any(|(rect, c)| *c == color && rect.intersects(tile) && tile.expand(8.0).contains_rect(*rect))
+        };
+        for color in [fill, edge] {
+            assert!(painted(&mut fixture, color, current), "{mode:?} {contrast:?}: the current tile paints {color:?}");
+            assert!(!painted(&mut fixture, color, other), "{mode:?} {contrast:?}: another tile does not paint {color:?}");
+        }
+
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+        assert!(fixture.focused().is_some(), "{mode:?} {contrast:?}: Tab focused the gallery");
+        assert!(painted(&mut fixture, fill, current), "{mode:?} {contrast:?}: the focused current tile keeps its fill");
+    }
+}

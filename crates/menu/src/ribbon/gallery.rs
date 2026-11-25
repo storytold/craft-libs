@@ -356,7 +356,7 @@ fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Op
 // ---------------------------------------------------------------------------------------------------------------
 // The tile.
 
-/// The style of a gallery tile: the accent outline while it is the current one.
+/// The style of a gallery tile: the accent fill and edge while it is the current one.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct GalleryTileStyle {
@@ -366,9 +366,11 @@ struct GalleryTileStyle {
     focus: FocusLook,
     /// Between the tile's edge and its picture.
     pad: f32,
-    /// The current tile's outline: `accent.solid`, unfilled, so the picture keeps its own background. Not
-    /// `accent.border`, which several themes pin translucent to read on a control's own fill: with no fill under it,
-    /// it falls under 3:1 on the ribbon.
+    /// The selection edge's width.
+    stroke: f32,
+    /// The current tile's fill: `accent.soft`, so the tile still reads as current under the focus ring.
+    fill: StyleColor,
+    /// The current tile's edge: `accent.solid`, not the translucent `accent.border`.
     edge: StyleColor,
     /// The ink of the item's name under the picture, in a captioned gallery.
     caption: StyleColor,
@@ -441,6 +443,8 @@ impl Component for GalleryTile<'_> {
             metrics: Metrics::new().padding(Insets::new(pad, pad, pad, pad)),
             focus: cx.focus_look(),
             pad,
+            stroke: cx.tokens.stroke.thin,
+            fill: cx.color(colors.accent.soft),
             edge: cx.color(colors.accent.solid),
             caption: cx.color(colors.text.normal),
             gap: cx.tokens.space.gap.tight,
@@ -468,7 +472,9 @@ impl Component for GalleryTile<'_> {
         }
         if self.selected {
             let outer = area.expand(cx.style.pad);
-            ui.draw().stroke(&PaintShape::Rect(outer, CornerRadius::ZERO), craft_ui::primitives::StrokeWidth::Thin, cx.style.edge);
+            let draw = ui.draw();
+            draw.fill(&PaintShape::Rect(outer, CornerRadius::ZERO), cx.style.edge);
+            draw.fill(&PaintShape::Rect(outer.shrink(cx.style.stroke), CornerRadius::ZERO), cx.style.fill);
         }
         // A captioned tile keeps the picture's height at the top and shows the name in the rest under it.
         let (area, caption) = match self.caption {
