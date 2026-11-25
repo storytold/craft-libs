@@ -15,7 +15,8 @@ pub enum DocumentTabLook {
     /// PdfCraft's tabs: they shrink before they overflow (a name at most 22 digits wide, at its least a readable
     /// prefix), stand the inline gap apart, and a modified tab shows the marker dot in place of the `*`.
     Shrinking,
-    /// VectorCraft's tabs: whole titles as [`Whole`](Self::Whole), the title and its `*` in the label's semibold face.
+    /// VectorCraft's tabs: whole titles as [`Whole`](Self::Whole), the title and its `*` in the label's semibold face,
+    /// or in the tab-title family's condensed face (`craft_theme::TypeRole::TabTitle`) where the app's font stack has it.
     Semibold,
 }
 
