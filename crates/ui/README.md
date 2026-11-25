@@ -6,6 +6,7 @@ interaction; `layout` provides toolbar fitting, split geometry and resize handle
 `layout::Section` groups dialog or inspector settings in caller-styled frames with optional headings.
 `docking` supplies transactional panel moves and an optional docking surface.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
+`radial` draws a ring of up to eight commands around a point and returns the one picked; the app chooses the commands and the key that opens it.
 `fonts` installs the UI font stack, the same fallback order in every app.
 `localized` supplies number fields that write and read the user's region's numbers.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
@@ -625,6 +626,52 @@ let r = ui.add(NumberField::new(&mut width, &numbers).range(0.0..=1e4).step(1.0)
   objects. The value stays until the user enters a number, which is `changed()` even when equal.
 - `localized::focus_first_field(ctx, true)` when a dialog opens: the first enabled field drawn
   takes the focus with its text selected.
+
+## Radial command menu
+
+`radial::RadialMenu` draws up to eight round command buttons around a point, with a close button
+in the middle, and returns the id of the item picked. The app keeps the preference that turns it
+on, the key that opens it and the list of commands in it.
+
+```rust
+let ring = RadialMenu::new(Id::unique("command-ring"));
+// The opening key first, then the ring, then the app's panels, so the ring reads Esc, Enter,
+// Tab and the arrows before a panel does. `shortcut` is the person's KeyboardShortcut. Only a
+// fresh press with exactly its modifiers opens the ring, so a held key's repeats do not reopen
+// it after a pick or Esc, and Shift+Tab is not taken for a ring bound to Tab. Removing that
+// press keeps an arrow, Tab or Enter bound to the ring from also acting in it.
+let opening = |e: &egui::Event| {
+    matches!(e, egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. }
+        if *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers))
+};
+// A focused text field keeps its keys, such as Space or Tab. Esc closes the ring, so it is not
+// offered as the opening key.
+if !ring.is_open(ctx) && !ctx.text_edit_focused() && ctx.input(|i| i.events.iter().any(opening)) {
+    ctx.input_mut(|i| i.events.retain(|e| !opening(e)));
+    // The ring ignores the key's repeats and acts on its release. Like `opening`, it reads only a
+    // press with exactly the shortcut's modifiers as the opening press, so a plain Space earlier
+    // in the pass is not taken for a Ctrl+Space binding.
+    ring.open_held_key(ctx, ctx.pointer_latest_pos().unwrap_or_default(), shortcut);
+}
+if let Some(RadialEvent::Picked(id)) = ring.show(ctx, &items, &labels) {
+    run_command(&id); // one undo step, like a menu pick
+}
+```
+
+- Build each item with `RadialItem::new(id, label)`, adding `.icon(source)` and
+  `.disabled(why)` as needed. Items past eight are not drawn, and the menu logs a warning.
+- `RadialLabels` holds the ring's accessible name and the close button's name. The defaults are
+  English; pass translated ones.
+- While the ring is open it takes every key press, typed or composed text and clipboard event, so
+  the app's shortcuts do not run under it. Key releases still reach the app. egui's `key_down`
+  still reports held keys, so read `ring.is_open(ctx)` before calling `show`, and skip acting on
+  a held key for the rest of that pass when it was open.
+- With the opening key held, releasing it picks the item in the direction the pointer moved. A
+  quick tap, or a release after the arrows or Tab moved the highlight, leaves the ring open for
+  Enter or a click.
+- In a right-to-left interface the items run counterclockwise from the top.
+- On a window too small for the ring, the items and their distance from the center shrink
+  together until the ring fits, down to an item size of 16 pt.
 
 ## Screenshot completion
 

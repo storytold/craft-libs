@@ -27,6 +27,7 @@ pub mod menu;
 pub mod panes;
 pub mod presence;
 pub mod printing;
+pub mod radial;
 pub mod shapes;
 #[cfg(feature = "share")]
 pub mod share;
