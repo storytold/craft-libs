@@ -1,5 +1,7 @@
 //! Startup update prompt dialog for egui frontends.
 
+use std::path::{Path, PathBuf};
+
 use egui::{Align, Align2, Color32, Layout, RichText, Vec2};
 
 use crate::app::App;
@@ -47,6 +49,66 @@ pub struct StartupPrompt {
     pub save_wanted: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
     pub translate: Translate,
+    /// Browser for the "What's new" link: absolute path; `None` = system default.
+    pub browser: Option<PathBuf>,
+}
+
+/// Opens `url` in `browser` (an absolute path to its executable, a `.app` bundle on macOS), or in
+/// the default browser through egui when `browser` is `None`. Only a safe web link is opened.
+/// If the browser can't be started, or exits unsuccessfully within a second of starting, the
+/// default browser gets the link instead. A browser that fails later isn't detected. The browser
+/// is watched on a helper thread, so the interface doesn't wait.
+pub fn open_url(ctx: &egui::Context, url: &str, browser: Option<PathBuf>) {
+    // `Release`'s fields are public: an app may build one from its own feed or cache, so the
+    // link is checked here, not only when parsed from GitHub.
+    if !crate::release::safe_web_link(url) {
+        log::warn!("not opening {url:?}: it is not a safe web link");
+        return;
+    }
+    let Some(path) = browser else {
+        ctx.open_url(egui::OpenUrl::new_tab(url));
+        return;
+    };
+    let (ctx, url) = (ctx.clone(), url.to_string());
+    let task = {
+        let (ctx, url) = (ctx.clone(), url.clone());
+        move || {
+            launch_or_fall_back(&ctx, &url, &path, crate::process::open_url_in_browser);
+        }
+    };
+    if std::thread::Builder::new().name("open-browser".into()).spawn(task).is_err() {
+        log::warn!("couldn't start a thread to open {url}; using the default browser");
+        ctx.open_url(egui::OpenUrl::new_tab(&url));
+    }
+}
+
+/// What [`launch_or_fall_back`] did with a link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BrowserOutcome<E> {
+    /// The chosen browser started and hadn't failed when it was last checked.
+    Opened,
+    /// The chosen browser failed with `error`, as the launch returned it; egui was asked to open
+    /// the default browser.
+    FellBack { error: E },
+}
+
+/// Starts the chosen browser with `launch` (which may wait) and, when that fails, asks egui to
+/// open `url` in the default browser. `url` must already be a safe web link.
+fn launch_or_fall_back<E: std::fmt::Display>(
+    ctx: &egui::Context,
+    url: &str,
+    browser: &Path,
+    launch: impl FnOnce(&Path, &str) -> Result<(), E>,
+) -> BrowserOutcome<E> {
+    match launch(browser, url) {
+        Ok(()) => BrowserOutcome::Opened,
+        Err(error) => {
+            log::warn!("couldn't open {url} in {}: {error}; using the default browser", browser.display());
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+            ctx.request_repaint();
+            BrowserOutcome::FellBack { error }
+        }
+    }
 }
 
 impl StartupPrompt {
@@ -75,7 +137,16 @@ impl StartupPrompt {
             is_saving: false,
             save_wanted: false,
             translate: english,
+            browser: None,
         }
+    }
+
+    /// The prompt with its "What's new" link opening in `browser` (an absolute path to its
+    /// executable); `None` is the system default.
+    #[must_use]
+    pub fn with_browser(mut self, browser: Option<PathBuf>) -> Self {
+        self.browser = browser;
+        self
     }
 
     /// Shows one of the crate's own messages, in the interface language whenever it draws.
@@ -198,11 +269,8 @@ impl StartupPrompt {
                                 let ring = egui::Stroke::new(2.0, text_primary);
                                 ui.painter().rect_stroke(link.rect.expand(2.0), egui::CornerRadius::ZERO, ring, egui::StrokeKind::Outside);
                             }
-                            // `Release`'s fields are public: an app may build one from its own feed or
-                            // cache, so the link is checked here too, not only when parsed from GitHub.
-                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && crate::release::safe_web_link(&self.release.html_url)
-                            {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(&self.release.html_url));
+                            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                open_url(ui.ctx(), &self.release.html_url, self.browser.clone());
                             }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -673,6 +741,7 @@ pub(crate) mod tests {
             is_saving: false,
             save_wanted: false,
             translate: english,
+            browser: None,
         }
     }
 
@@ -886,6 +955,47 @@ pub(crate) mod tests {
         let link = text_pos(&output, "What's new").expect("the link is painted");
         let button = text_pos(&output, "DOWNLOAD").expect("the button is painted");
         assert!((link.y - button.y).abs() <= 1.0, "link centred at {} but the button at {}", link.y, button.y);
+    }
+
+    /// Runs [`launch_or_fall_back`] with `launch`: its outcome and the URLs egui was asked to open.
+    fn opened<E: std::fmt::Display>(launch: impl FnOnce(&Path, &str) -> Result<(), E>) -> (BrowserOutcome<E>, Vec<String>) {
+        let page = "https://github.com/storytold/photocraft/releases/tag/v0.2.0";
+        let ctx = Context::default();
+        let outcome = launch_or_fall_back(&ctx, page, &std::env::temp_dir().join("craft-update-browser"), launch);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear(); // Headless test: no renderer consumes the font atlas.
+        let urls = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+                _ => None,
+            })
+            .collect();
+        (outcome, urls)
+    }
+
+    #[test]
+    fn a_browser_that_fails_to_open_the_link_falls_back_to_the_default() {
+        let (outcome, urls) = opened(|_, _| Ok::<(), String>(()));
+        assert_eq!((outcome, urls.len()), (BrowserOutcome::Opened, 0), "the chosen browser opens it, not egui");
+        let (outcome, urls) = opened(|_, _| Err("couldn't start it".into()));
+        assert_eq!(outcome, BrowserOutcome::FellBack { error: "couldn't start it".to_string() });
+        assert_eq!(urls.len(), 1, "egui is asked to open the link");
+    }
+
+    /// A wrapper (`flatpak-spawn`) that starts but then reports a launch failure.
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_that_starts_but_fails_falls_back_to_the_default_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = crate::process::browser_tests::fake_wrapper(dir.path(), "exit 1");
+        let launch =
+            |path: &Path, url: &str| crate::process::browser_tests::open_with_wrapper(path, url, &wrapper, std::time::Duration::from_secs(30));
+        let (outcome, urls) = opened(launch);
+        assert!(matches!(outcome, BrowserOutcome::FellBack { .. }), "{outcome:?}");
+        assert_eq!(urls.len(), 1);
     }
 
     /// #391: the "What's new" link opens the release page only when it is a safe web link; an app
