@@ -24,8 +24,8 @@
 //! | The connection file | [`Connection`], [`write_connection`], [`read_connection`], [`remove_connection`], [`remove_stale_connection`], [`probe`] | desktop, feature `agents` |
 //! | The CLI's side | [`Live`], [`LiveConfig`], [`Route`], [`Window`], [`Consent`], [`HeadlessFolders`], [`find_window`], [`launcher`] | desktop, feature `agents` |
 //!
-//! The same formats as `craft_automation::agents` on the shared UI library's branch (`next`),
-//! which adds the egui link host and the Agents page of Preferences.
+//! `craft_automation::agents` re-exports all of this and adds the egui link host and the Agents
+//! page of Preferences, for apps on the shared UI library.
 //!
 //! # Adding an app
 //!

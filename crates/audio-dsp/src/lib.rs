@@ -2,7 +2,7 @@
 //!
 //! * [`loudness`]: ITU-R BS.1770-4 / EBU R128 loudness meter (momentary, short-term,
 //!   integrated, loudness range, sample peak, true peak) and the loudness-normalization helper.
-//! * [`effects`]: audio effects behind the common [`AudioEffect`] trait, with a registry
+//! * [`mod@effects`]: audio effects behind the common [`AudioEffect`] trait, with a registry
 //!   ([`effects()`]) describing every effect's parameters (range, unit, default) so a host and
 //!   its interface can build controls generically.
 //! * [`biquad`]: RBJ-cookbook biquads (TDF-II) with analytic magnitude response.
@@ -434,6 +434,12 @@ pub(crate) fn block_len(channels: &[&mut [f32]]) -> usize {
 
 #[cfg(test)]
 pub(crate) mod testutil {
+    /// Every `CRAFT_HOSTILE_DIVISOR`-th registered effect: the gate's sample of a sweep over all
+    /// effects; the nightly run (no divisor) covers them all.
+    pub fn sampled_effects() -> impl Iterator<Item = &'static crate::effects::EffectInfo> {
+        crate::effects().iter().step_by(craft_testkit::hostile::divisor())
+    }
+
     /// Tiny deterministic PRNG (xorshift64*) for tests.
     pub struct Rng(u64);
     impl Rng {

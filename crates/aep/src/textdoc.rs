@@ -549,7 +549,7 @@ pub struct TextDocument {
     /// run from the sampled defaults).
     pub incomplete_runs: usize,
     /// Style slots that are not decoded and differ from the sampled default (`"68"`, ...), each
-    /// once and at most [`MAX_UNDECODED_FIELDS`]; empty for every synthetic sample.
+    /// once and at most `MAX_UNDECODED_FIELDS`; empty for every synthetic sample.
     pub undecoded_style_fields: Vec<String>,
     /// Paragraph slots that are not decoded and differ from the sampled default.
     pub undecoded_paragraph_fields: Vec<String>,

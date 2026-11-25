@@ -202,9 +202,7 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>) -> Result<SegmentHea
     if short_count == 7 {
         // Number of retention bytes: ceil((referred_to_count + 1) / 8)
         let retention_bytes = (referred_to_count as usize + 1).div_ceil(8);
-        reader
-            .skip_bytes(retention_bytes)
-            .ok_or(ParseError::UnexpectedEof)?;
+        reader.skip_bytes(retention_bytes).ok_or(ParseError::UnexpectedEof)?;
     }
 
     // 7.2.5: Referred-to segment numbers
@@ -250,11 +248,7 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>) -> Result<SegmentHea
     // length of the segment's data part is unknown at the time that the segment
     // header is written."
     let data_length_raw = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
-    let data_length = if data_length_raw == 0xFFFFFFFF {
-        None
-    } else {
-        Some(data_length_raw)
-    };
+    let data_length = if data_length_raw == 0xFFFFFFFF { None } else { Some(data_length_raw) };
 
     Ok(SegmentHeader {
         segment_number,
@@ -278,14 +272,9 @@ pub(crate) fn parse_segment<'a>(reader: &mut Reader<'a>) -> Result<Segment<'a>> 
 /// may contain the value 0xFFFFFFFF. This value is intended to mean that the
 /// length of the segment's data part is unknown at the time that the segment
 /// header is written." (7.2.7)
-pub(crate) fn parse_segment_data<'a>(
-    reader: &mut Reader<'a>,
-    header: SegmentHeader,
-) -> Result<Segment<'a>> {
+pub(crate) fn parse_segment_data<'a>(reader: &mut Reader<'a>, header: SegmentHeader) -> Result<Segment<'a>> {
     let data = if let Some(len) = header.data_length {
-        reader
-            .read_bytes(len as usize)
-            .ok_or(ParseError::UnexpectedEof)?
+        reader.read_bytes(len as usize).ok_or(ParseError::UnexpectedEof)?
     } else {
         // "In order for the decoder to correctly decode the segment, it needs to
         // read the four-byte row count field, which is stored in the last four
@@ -418,10 +407,7 @@ mod tests {
         // two bytes, since this segment's number is between 256 and 65535. The segments
         // that it refers to are, in decimal, numbers 256, 2, 30, 5, 512, 513, 514, 515,
         // and 516."
-        assert_eq!(
-            header.referred_to_segments,
-            vec![256, 2, 30, 5, 512, 513, 514, 515, 516]
-        );
+        assert_eq!(header.referred_to_segments, vec![256, 2, 30, 5, 512, 513, 514, 515, 516]);
 
         // "00 00 04 01: This segment is associated with page number 1025."
         assert_eq!(header._page_association, 1025);
@@ -447,15 +433,9 @@ mod tests {
 
         // The 29-bit maximum, 536,870,911, would reserve about 2 GiB.
         for count in [0x1FFF_FFFF, MAX_REFERRED_TO_SEGMENTS + 1] {
-            assert!(matches!(
-                header(count),
-                DecodeError::Segment(SegmentError::InvalidReferredCount)
-            ));
+            assert!(matches!(header(count), DecodeError::Segment(SegmentError::InvalidReferredCount)));
         }
         // At the cap the header is read on and ends at its missing retention bytes.
-        assert!(matches!(
-            header(MAX_REFERRED_TO_SEGMENTS),
-            DecodeError::Parse(ParseError::UnexpectedEof)
-        ));
+        assert!(matches!(header(MAX_REFERRED_TO_SEGMENTS), DecodeError::Parse(ParseError::UnexpectedEof)));
     }
 }

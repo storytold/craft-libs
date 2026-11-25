@@ -631,9 +631,13 @@ mod tests {
 
     #[test]
     fn shared_offsets_spend_a_pool_byte_budget() {
-        for utf8 in [true, false] {
+        // Each parse keeps 64 MiB of strings: the gate runs the UTF-8 pool with the appended bytes
+        // (the budget and the appended bytes together), nightly all four.
+        let full = craft_testkit::hostile::divisor() == 1;
+        let (encodings, appends): (&[bool], &[bool]) = if full { (&[true, false], &[false, true]) } else { (&[true], &[true]) };
+        for &utf8 in encodings {
             let mut data = shared_ascii_pool(utf8, 8192);
-            for appended in [false, true] {
+            for &appended in appends {
                 if appended {
                     // Unrelated bytes after the chunk cannot buy more retained copies.
                     data.resize(24 << 20, 0);

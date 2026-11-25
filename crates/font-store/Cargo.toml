@@ -35,6 +35,8 @@ toml = { version = "1", default-features = false, features = ["parse", "serde", 
 tar = { version = "0.4", default-features = false }
 # Blocking HTTPS with rustls and webpki roots: no async runtime, no OpenSSL.
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+# Decodes the preview service's WOFF2 subsets (`preview`); pure Rust. Brotli only: WOFF 1 isn't served.
+wuff = { version = "0.2.9", default-features = false, features = ["brotli"] }
 
 [dev-dependencies]
 write-fonts = "0.54"
