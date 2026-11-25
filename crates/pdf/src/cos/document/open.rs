@@ -89,6 +89,51 @@ impl Document {
     }
 
     fn open_as(data: Arc<Vec<u8>>, credentials: Credentials<'_>, stream_limit: usize) -> Result<Self, CosError> {
+        // A document followed by another file's data, as a file recovered from a damaged disk can
+        // be, is read from the data before its end (`earlier_document_ends`). When the file's own
+        // last `startxref` names nothing and what follows the latest earlier end is no PDF syntax
+        // (`trailing_data_end`), that end is read first: a rebuild of the whole file would mix the
+        // other data's objects into the document. Otherwise only when the whole file gives no
+        // document, the latest end first, so a file that opens today reads as it did. The renderer
+        // reads the same end (hayro-syntax `Pdf::load`).
+        if let Some(end) = trailing_data_end(&data)
+            && let Some(doc) = Self::open_before(&data, end, &credentials, stream_limit)?
+        {
+            return Ok(doc);
+        }
+        let whole = Self::open_document(data.clone(), &credentials, stream_limit);
+        if !matches!(whole, Err(CosError::Syntax { .. } | CosError::MissingObject(_) | CosError::NotADictionary(_) | CosError::Filter(_))) {
+            return whole;
+        }
+        for end in earlier_document_ends(&data) {
+            if let Some(doc) = Self::open_before(&data, end, &credentials, stream_limit)? {
+                return Ok(doc);
+            }
+        }
+        whole
+    }
+
+    /// The document in the first `end` bytes of `data`, with a repair note on what follows it;
+    /// `None` if there is none. A password error stands: the document is there and encrypted.
+    fn open_before(data: &[u8], end: usize, credentials: &Credentials<'_>, stream_limit: usize) -> Result<Option<Self>, CosError> {
+        let Some(document) = data.get(..end) else { return Ok(None) };
+        match Self::open_document(Arc::new(document.to_vec()), credentials, stream_limit) {
+            Ok(mut doc) => {
+                Arc::make_mut(&mut doc.repair_log).insert(
+                    0,
+                    format!(
+                        "the document ends at byte {end}, and {} bytes of other data follow it (part of another file?); they were left out",
+                        data.len() - end
+                    ),
+                );
+                Ok(Some(doc))
+            }
+            Err(e @ (CosError::NeedsPassword | CosError::WrongPassword | CosError::Security(_))) => Err(e),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn open_document(data: Arc<Vec<u8>>, credentials: &Credentials<'_>, stream_limit: usize) -> Result<Self, CosError> {
         // Viewers accept files whose header is missing or damaged as long as the body looks
         // like PDF; so do we (a note goes to the repair log).
         let header = find(&data, b"%PDF-", 0, 1024);
@@ -150,7 +195,7 @@ impl Document {
                 // Authenticate before checking the catalog: it may sit in an encrypted object
                 // stream, which reads as garbage until the key is known.
                 if let Some(enc) = doc.trailer.get(b"Encrypt").cloned() {
-                    doc.authenticate(&enc, &credentials)?;
+                    doc.authenticate(&enc, credentials)?;
                     authenticated = true;
                 }
                 let catalog = doc.root_is_catalog();
@@ -179,7 +224,7 @@ impl Document {
         if (!ok || !authenticated)
             && let Some(enc) = doc.trailer.get(b"Encrypt").cloned()
         {
-            doc.authenticate(&enc, &credentials)?;
+            doc.authenticate(&enc, credentials)?;
         }
         // Algorithm 13 (ISO 32000-2 §7.6.4.4.12) says byte 8 of /Perms "should" match
         // /EncryptMetadata: a should, so the file opens and the dictionary decides, as qpdf (which
@@ -522,6 +567,89 @@ pub(super) const PERMS_MISMATCH: &str =
 
 /// The repair-log line for a file rebuilt because its last update has no `/Prev`.
 const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its earlier revisions, so their objects (the page tree among them) are unreachable through the cross-reference chain; rebuilding from object headers";
+
+/// The most earlier document ends [`earlier_document_ends`] returns: each is a full open of the
+/// data before it, rebuild included.
+const MAX_EARLIER_ENDS: usize = 8;
+
+/// Where `data` could end as a whole document before its last `startxref`, newest first: after
+/// the `%%EOF` (and its end-of-line marker) of each earlier `startxref N %%EOF` whose `N` names a
+/// cross-reference table (`xref`) or an `N G obj` header before it. A file recovered from a
+/// damaged disk can carry another file's data after its own end (one recovered PDF carried 640 MB
+/// of fragments of other PDFs and a program, whose text held `startxref %ld %%EOF`): its last
+/// `startxref` names nothing, and a rebuild from every object header in the file takes the
+/// fragments' objects for the document's, which share their numbers. The renderer finds the same
+/// ends (hayro-syntax `earlier_document_ends`), so the two read the same document.
+pub(super) fn earlier_document_ends(data: &[u8]) -> Vec<usize> {
+    let mut startxrefs = Vec::new();
+    let mut from = 0;
+    while let Some(at) = find(data, b"startxref", from, data.len()) {
+        startxrefs.push(at);
+        from = at + 9;
+    }
+    // The last one is the whole file's own.
+    startxrefs.pop();
+    startxrefs.into_iter().rev().filter_map(|at| document_end_at(data, at)).take(MAX_EARLIER_ENDS).collect()
+}
+
+/// The latest earlier end of a document in `data` ([`earlier_document_ends`]) when the file's own
+/// last `startxref` names no cross-reference section and what follows that end, past white space,
+/// is no PDF syntax: not an `N G obj` header, `xref`, `trailer`, `startxref` or a comment, as an
+/// appended update would start. That is another file's data after the document, such as a
+/// recovered file can carry.
+fn trailing_data_end(data: &[u8]) -> Option<usize> {
+    // From the end: in an ordinary file the last `startxref` is a few bytes from it.
+    let last = super::reader::rfind(data, b"startxref", 0)?;
+    if document_end_at(data, last).is_some() {
+        return None;
+    }
+    let end = *earlier_document_ends(data).first()?;
+    let next = data.get(end..)?.iter().position(|&b| !crate::cos::is_whitespace(b))?;
+    let rest = data.get(end + next..)?;
+    let pdf_syntax = starts_with_object_header(rest) || [&b"xref"[..], b"trailer", b"startxref", b"%"].iter().any(|k| rest.starts_with(k));
+    (!pdf_syntax).then_some(end)
+}
+
+/// The end of the document whose `startxref` is at `at`, if it is followed by an offset and
+/// `%%EOF` and the offset names a cross-reference section.
+fn document_end_at(data: &[u8], at: usize) -> Option<usize> {
+    let skip_white_space = |mut i: usize| {
+        while data.get(i).copied().is_some_and(crate::cos::is_whitespace) {
+            i += 1;
+        }
+        i
+    };
+    let start = skip_white_space(at.checked_add(9)?);
+    let digits = data.get(start..)?.iter().take_while(|b| b.is_ascii_digit()).count();
+    let offset: usize = std::str::from_utf8(data.get(start..start + digits)?).ok()?.parse().ok()?;
+    let mut end = skip_white_space(start + digits);
+    if !data.get(end..)?.starts_with(b"%%EOF") {
+        return None;
+    }
+    end += 5;
+    if data.get(end) == Some(&b'\r') {
+        end += 1;
+    }
+    if data.get(end) == Some(&b'\n') {
+        end += 1;
+    }
+    let section = data.get(offset..at)?;
+    (section.starts_with(b"xref") || starts_with_object_header(section)).then_some(end)
+}
+
+/// Whether `data` starts with `N G obj`.
+fn starts_with_object_header(data: &[u8]) -> bool {
+    let mut i = 0;
+    for _ in 0..2 {
+        let digits = data.get(i..).map_or(0, |rest| rest.iter().take_while(|b| b.is_ascii_digit()).count());
+        let spaces = data.get(i + digits..).map_or(0, |rest| rest.iter().take_while(|&&b| crate::cos::is_whitespace(b)).count());
+        if digits == 0 || spaces == 0 {
+            return false;
+        }
+        i += digits + spaces;
+    }
+    data.get(i..).is_some_and(|rest| rest.starts_with(b"obj"))
+}
 
 /// Whether `data` has more than one `startxref`: an update was appended to it, or it is
 /// linearized (whose first-page section links to the main one).

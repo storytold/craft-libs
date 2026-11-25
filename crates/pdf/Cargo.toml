@@ -89,6 +89,10 @@ wasm-bindgen-test = "0.3"
 name = "testing_pdf"
 required-features = ["test-support"]
 
+[[test]]
+name = "trailing_data"
+required-features = ["read", "test-support"]
+
 [[example]]
 name = "cos_info"
 required-features = ["cos"]

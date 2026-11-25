@@ -42,6 +42,29 @@ impl<T: AsRef<[u8]> + 'static> From<Arc<T>> for PdfData {
     }
 }
 
+impl PdfData {
+    /// PdfCraft patch: (trailing data) the first `len` bytes of this data, sharing its storage,
+    /// for reading a document that ends before the file does (`Pdf::load`).
+    pub(crate) fn prefix(&self, len: usize) -> Self {
+        struct Prefix {
+            data: PdfData,
+            len: usize,
+        }
+
+        impl AsRef<[u8]> for Prefix {
+            fn as_ref(&self) -> &[u8] {
+                let all = self.data.as_ref();
+                all.get(..self.len).unwrap_or(all)
+            }
+        }
+
+        Self::from(Arc::new(Prefix {
+            data: self.clone(),
+            len,
+        }))
+    }
+}
+
 impl From<Vec<u8>> for PdfData {
     fn from(data: Vec<u8>) -> Self {
         Self {
