@@ -478,7 +478,9 @@ impl AudioEffect for VoicePitch {
             // While Keep Formants is off and faded out, the stage's frames copy the shifted voice,
             // so switching it on crossfades from a delayed copy instead of from silence.
             let warp = if mix > 0.0 { back } else { 1.0 };
-            for (c, (line, io)) in self.lines.iter().zip(channels.iter_mut()).enumerate() {
+            // A channel the block leaves out still reads its line into the formant stage, so the
+            // audio its line holds reaches the stage on time; only its output is dropped.
+            for (c, line) in self.lines.iter().enumerate() {
                 let dry = line[(self.pos + dry_at) & self.mask] as f64;
                 let y = if t.wet == 0.0 {
                     dry
@@ -492,10 +494,9 @@ impl AudioEffect for VoicePitch {
                 // The stage's output is `n` samples later than `y`, so a switch fades one out
                 // before the other comes in instead of mixing them.
                 let out = if mix < 0.5 { (1.0 - 2.0 * mix) * y } else { (2.0 * mix - 1.0) * z as f64 };
-                io[i] = out.clamp(-f32::MAX as f64, f32::MAX as f64) as f32;
-            }
-            for c in ch..self.lines.len() {
-                self.follow.tick(c, 0.0, warp);
+                if let Some(io) = channels.get_mut(c) {
+                    io[i] = out.clamp(-f32::MAX as f64, f32::MAX as f64) as f32;
+                }
             }
             self.pos = (self.pos + 1) & self.mask;
         }
@@ -1214,6 +1215,29 @@ mod tests {
             let (mut a, mut b, mut c) = (vec![0.0f32; 4_000], vec![0.0f32; 4_000], vec![0.0f32; 4_000]);
             fx.process(&mut [&mut a, &mut b, &mut c]);
             assert!(b.iter().chain(&c).all(|v| *v == 0.0), "{}: earlier audio came back", fx.id());
+        }
+    }
+
+    /// With Keep Formants on, a channel left out of a short block while its line still holds an
+    /// impulse passes that impulse to the formant stage, so after it comes back its output matches
+    /// a channel that was never left out.
+    #[test]
+    fn a_short_gap_keeps_the_formant_stage_fed() {
+        for semitones in [0.0, 5.0] {
+            let mut p = VoicePitch::new(SR, 2);
+            assert!(p.set_param("semitones", semitones) && p.set_param("formant_follow", 1.0));
+            p.reset();
+            let (mut a, mut b) = (vec![0.0f32; 480], vec![0.0f32; 480]);
+            a[0] = 1.0;
+            b[0] = 1.0;
+            p.process(&mut [&mut a, &mut b]);
+            // The impulse leaves the delay line during samples 480 to 735, while `b` is left out.
+            let mut a = vec![0.0f32; 256];
+            p.process(&mut [&mut a]);
+            let (mut a, mut b) = (vec![0.0f32; 2_000], vec![0.0f32; 2_000]);
+            p.process(&mut [&mut a, &mut b]);
+            assert!(a.iter().any(|v| v.abs() > 0.01), "{semitones}: the impulse never came out");
+            assert_eq!(a, b, "{semitones}: the left-out channel lost the impulse");
         }
     }
 
