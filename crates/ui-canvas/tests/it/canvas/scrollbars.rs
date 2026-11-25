@@ -504,3 +504,44 @@ fn after_a_thumb_drag_the_bars_follow_a_new_zoom() {
     let first = shown_range(&view.get(), Axis::X).0;
     assert!((first - fresh).abs() < 1.0, "after a thumb drag paging reaches the same end: shows from {first}, without the drag {fresh}");
 }
+
+/// Places marked on the vertical bar (find matches) show as short lines across its track, in the order of the places
+/// down the document, the current one across more of the bar than the others; a place past the document is not drawn.
+#[trial]
+fn marks_on_the_vertical_bar_follow_their_places_down_the_document() {
+    use craft_ui::canvas::ScrollMark;
+    let tall = Size::new(400.0, 3000.0);
+    let doc = DocRect::from_origin_size(Point::ZERO, tall);
+    let marked = Rc::new(Cell::new(false));
+    let shows = Rc::clone(&marked);
+    let marks = [ScrollMark::new(2500.0, false), ScrollMark::new(500.0, false), ScrollMark::new(1500.0, true), ScrollMark::new(9000.0, false)];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut view = view_at(Point::new(200.0, 150.0), 1.0);
+        let bars = CanvasScrollbars::new("Scroll bars", Bind::bound(&mut view), doc);
+        let bars = if shows.get() { bars.marks(&marks) } else { bars };
+        let _ = bars.show_at(ui, VIEW);
+    });
+    fixture.room(VIEW.size()).settle();
+    let rects = |shapes: Vec<Shape>| -> Vec<Rect> {
+        shapes
+            .into_iter()
+            .filter_map(|shape| match shape {
+                Shape::Rect(rect) => Some(rect.rect),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = rects(fixture.frame_shapes());
+    marked.set(true);
+    let after = rects(fixture.frame_shapes());
+    let track = track(&fixture, Axis::Y);
+    let mut drawn: Vec<Rect> = after.into_iter().filter(|rect| !before.contains(rect)).collect();
+    assert_eq!(drawn.len(), 3, "one line per place in the document, none for the place past it: {drawn:?}");
+    assert!(drawn.iter().all(|rect| track.expand(TOLERANCE).contains_rect(*rect)), "the lines lie on the vertical track {track:?}: {drawn:?}");
+    drawn.sort_by(|a, b| a.center().y.total_cmp(&b.center().y));
+    let widest = drawn.iter().map(Rect::width).fold(0.0, f32::max);
+    assert!(
+        drawn[1].width() == widest && drawn[0].width() < widest && drawn[2].width() < widest,
+        "the current place (the middle one) spans more of the bar: {drawn:?}"
+    );
+}

@@ -69,6 +69,34 @@ pub struct ScrollbarsStyle {
     look: ScrollBarLook,
     document: Option<DocumentLook>,
     margin: f32,
+    marks: MarkLook,
+}
+
+/// How the marks on the vertical bar look.
+#[derive(Clone, Debug, PartialEq)]
+struct MarkLook {
+    found: StyleColor,
+    current: StyleColor,
+    /// The height of a mark along the track.
+    height: f32,
+}
+
+/// A place in the document to mark on the vertical scroll bar, such as a find match: a short line across the bar at
+/// that height, so the reader sees where in the document the places are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScrollMark {
+    /// Where the place is along the document's vertical axis, in the document units of the bars' document.
+    pub at: f64,
+    /// The current place (the current find match): drawn across the whole bar, the others across its middle only.
+    pub current: bool,
+}
+
+impl ScrollMark {
+    /// A mark at `at` (document units along the vertical axis), the current one when `current`.
+    pub const fn new(at: f64, current: bool) -> Self {
+        ScrollMark { at, current }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -410,6 +438,10 @@ pub struct CanvasScrollbars<'a> {
     /// thumb on the reading-start side.
     #[prop]
     tip: Option<&'a dyn Fn(&CanvasView) -> Label>,
+    /// Places marked on the vertical bar, in document order or not. Marks that land on the same pixels of the track
+    /// draw as one.
+    #[prop]
+    marks: &'a [ScrollMark],
     /// The thumb pressed in this pass, as `update` read it from the press slot, for `paint` and `access`.
     held: Option<HeldThumb>,
 }
@@ -425,6 +457,7 @@ impl<'a> CanvasScrollbars<'a> {
             vertical_only: false,
             document_chrome: false,
             tip: None,
+            marks: &[],
             held: None,
         }
         .label(label)
@@ -498,7 +531,10 @@ impl Component for CanvasScrollbars<'_> {
             look.track = Stateful::new(cx.color(color.surface.sunken));
             DocumentLook { corner: cx.color(color.surface.panel), arrow: cx.quiet_ink() }
         });
-        ScrollbarsStyle { metrics: Metrics::new(), look, document, margin }
+        let colors = &cx.tokens.color;
+        let marks =
+            MarkLook { found: cx.color(colors.data.yellow), current: cx.color(colors.status.warn.solid), height: cx.tokens.stroke.thick.max(2.0) };
+        ScrollbarsStyle { metrics: Metrics::new(), look, document, margin, marks }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -674,6 +710,11 @@ impl Component for CanvasScrollbars<'_> {
         if let (Some(corner), Some(look)) = (bars.corner, &style.document) {
             fill(corner, look.corner);
         }
+        if let Some(bar) = &bars.vertical {
+            for (rect, current) in mark_rects(self.marks, self.document.y0, bar, &style.marks) {
+                fill(rect, if current { style.marks.current } else { style.marks.found });
+            }
+        }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
@@ -712,6 +753,43 @@ impl Component for CanvasScrollbars<'_> {
 }
 
 /// The axis whose thumb drags in this pass: its press past the drag threshold and still down.
+/// The rects of `marks` on the vertical `bar`, the current mark last so it paints over the others. Marks are placed
+/// along the bar's whole extent like the thumb is; marks that fall on the same pixel row are drawn once, and a mark
+/// outside the extent is not drawn.
+fn mark_rects(marks: &[ScrollMark], doc_top: f64, bar: &Bar, look: &MarkLook) -> Vec<(Rect, bool)> {
+    let track = bar.track;
+    let content = &bar.span.content;
+    let len = content.end - content.start;
+    if marks.is_empty() || !(len.is_finite() && len > 0.0) || track.height() <= 0.0 {
+        return Vec::new();
+    }
+    let height = look.height.min(track.height());
+    let inset = (track.width() / 4.0).floor();
+    let mut rows: Vec<(i64, bool)> = marks
+        .iter()
+        .filter_map(|mark| {
+            let t = (mark.at - doc_top - content.start) / len;
+            if !t.is_finite() || !(0.0..=1.0).contains(&t) {
+                return None;
+            }
+            let center = f64::from(track.top()) + t * f64::from(track.height() - height) + f64::from(height) / 2.0;
+            Some((center.round() as i64, mark.current))
+        })
+        .collect();
+    // One rect per pixel row; where a current mark shares its row with others, the row is the current one.
+    rows.sort_unstable_by_key(|&(row, current)| (current, row));
+    rows.dedup_by_key(|&mut (row, current)| (row, current));
+    let currents: Vec<i64> = rows.iter().filter(|(_, current)| *current).map(|(row, _)| *row).collect();
+    rows.retain(|(row, current)| *current || !currents.contains(row));
+    rows.into_iter()
+        .map(|(row, current)| {
+            let x = if current { track.x_range() } else { egui::Rangef::new(track.left() + inset, track.right() - inset) };
+            let top = row as f32 - height / 2.0;
+            (Rect::from_x_y_ranges(x, top..=top + height), current)
+        })
+        .collect()
+}
+
 fn thumb_dragging(cx: &Cx<'_, CanvasScrollbars<'_>>) -> Option<Axis> {
     [(HORIZONTAL, Axis::X), (VERTICAL, Axis::Y)].into_iter().find_map(|(key, axis)| {
         let press = cx.part_if_declared(thumb_of(key))?.press;
