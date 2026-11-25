@@ -36,6 +36,7 @@ pub(crate) mod workspace_dialogs;
 
 pub(crate) mod native;
 pub(crate) mod native_drag;
+pub(crate) mod native_float;
 pub(crate) mod panes;
 
 /// The docking sizes of the default theme with the given divider gap, least pane and strip height.
