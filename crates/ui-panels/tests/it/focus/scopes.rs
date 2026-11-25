@@ -68,3 +68,23 @@ fn tab_onto_the_last_stop_gone_in_the_same_pass_stays_where_it_was() {
     frames.idle(2, &mut show);
     assert_eq!(focused(&frames.ctx), Some(id("field")), "the focus stays on the stop the Tab left");
 }
+
+/// A Tab onto the last entry that went away wraps to the first entry, as Tab does from the last stop, rather than
+/// staying on the stop it left.
+#[trial]
+fn tab_onto_the_last_stop_gone_in_the_same_pass_wraps_to_the_first() {
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        control(ui, "first");
+        control(ui, "field");
+        if focused(ui.ctx()) == Some(id("field")) {
+            control(ui, "offer");
+        }
+    };
+    frames.idle(2, &mut show);
+    focus(&mut frames, "field", &mut show);
+    frames.idle(1, &mut show);
+    tap(&mut frames, egui::Key::Tab, egui::Modifiers::NONE, &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(focused(&frames.ctx), Some(id("first")), "the last entry gone, Tab wraps to the first, as it does from any last stop");
+}
