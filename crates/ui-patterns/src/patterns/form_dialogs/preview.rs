@@ -675,21 +675,13 @@ impl Outcome for PreviewZoomOutput {
 #[derive(crate::contract::Pattern)]
 pub struct PreviewZoom {
     view: PreviewView,
-    whole_percent: bool,
 }
 
 impl PreviewZoom {
     /// A zoom row for `view`, the one the pane takes: the buttons stay inside its zoom range. While the pane fits,
     /// the caller has adopted the pane's `PreviewOutput::shown`, so the row steps from what is on screen.
     pub fn new(view: &PreviewView) -> Self {
-        PreviewZoom { view: view.clone(), whole_percent: false }
-    }
-
-    /// Shows the zoom as a whole percent ("94 %"), as a word processor's print preview does, instead of up to two
-    /// decimals. The view keeps its fractional zoom, and a typed fraction still applies; only the shown value is whole.
-    pub fn whole_percent(mut self) -> Self {
-        self.whole_percent = true;
-        self
+        PreviewZoom { view: view.clone() }
     }
 
     /// Shows the row.
@@ -702,7 +694,7 @@ impl PreviewZoom {
         let row = Row::new().show(ui, |ui, _| {
             let out = IconButton::new(IconId::new("minus")).label(words.zoom_out.clone()).enabled(self.view.can_zoom_out()).show(ui);
             let field = NumberField::new(words.zoom.clone(), Bind::given(Some(percent(self.view.transform.scale))))
-                .codec(if self.whole_percent { env.units().zoom_codec().at_most(0) } else { env.units().zoom_codec() })
+                .codec(env.units().zoom_codec())
                 .unit_kind(UnitKind::Percent)
                 .range(range.clone())
                 .enabled(!self.view.fixed)

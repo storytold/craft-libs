@@ -3,6 +3,7 @@
 use craft_behavior::CanvasTransform;
 use craft_ui::contract::Show as _;
 use craft_ui::patterns::form_dialogs::{PreviewPane, PreviewView, PreviewZoom};
+use craft_ui::runtime::env::{ZoomPrecision, with_env};
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, Pos2, TextureId, Vec2, pos2, vec2};
@@ -84,28 +85,39 @@ fn a_click_reports_the_picture_point_under_it() {
     assert!(near(kept, pos2(PICTURE.x / 2.0 + 2.0, PICTURE.y / 2.0 + 1.0)) && !moved, "{kept:?} {moved}");
 }
 
-/// The zoom text the row shows for `scale`, with the option applied or not.
-fn shown_zoom(scale: f32, whole: bool) -> Vec<String> {
+/// The zoom text the row shows for `scale`, under the env's zoom precision when one is given.
+fn shown_zoom(scale: f32, precision: Option<ZoomPrecision>) -> Vec<String> {
     let view = PreviewView::new(CanvasTransform::new(scale, Vec2::ZERO));
     let mut fixture = Fixture::new(move |ui| {
-        let zoom = PreviewZoom::new(&view);
-        if whole { zoom.whole_percent() } else { zoom }.show(ui);
+        let show = |ui: &mut egui::Ui| {
+            PreviewZoom::new(&view).show(ui);
+        };
+        match precision {
+            Some(precision) => with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(precision);
+                },
+                show,
+            ),
+            None => show(ui),
+        }
     });
     fixture.settle();
     fixture.texts().iter().map(|run| run.text.clone()).collect()
 }
 
-/// With `whole_percent`, a fractional zoom shows with no decimals.
+/// Under the env's whole zoom precision, a fractional zoom shows with no decimals.
 #[trial]
-fn a_whole_percent_preview_zoom_shows_no_decimals() {
-    let shown = shown_zoom(0.9415, true);
+fn a_whole_zoom_precision_shows_the_preview_zoom_without_decimals() {
+    let shown = shown_zoom(0.9415, Some(ZoomPrecision::Whole));
     assert!(shown.iter().any(|text| text == "94"), "the zoom shows as 94: {shown:?}");
     assert!(!shown.iter().any(|text| text.contains('.') || text.contains(',')), "no decimals shown: {shown:?}");
 }
 
-/// Without it, a fractional zoom step keeps its decimals, as image apps need.
+/// Without a precision set, a fractional zoom step keeps its decimals, as image apps need.
 #[trial]
 fn a_default_preview_zoom_keeps_a_fractional_step() {
-    let shown = shown_zoom(0.125, false);
+    let shown = shown_zoom(0.125, None);
     assert!(shown.iter().any(|text| text.starts_with("12") && text.len() > 2), "the zoom keeps its decimals: {shown:?}");
 }

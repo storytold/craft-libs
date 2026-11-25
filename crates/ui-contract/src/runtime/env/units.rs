@@ -93,6 +93,26 @@ impl EnvValue for PointSize {
     }
 }
 
+/// How many decimals a zoom shows. An app sets it once on its root env with `RootEnv::values`; [`Units::zoom_codec`]
+/// follows it, so every zoom display (a zoom field, the status bar's, a print preview's row) reads alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum ZoomPrecision {
+    /// Up to two decimals, for the ladder's rungs such as 66.67 %.
+    #[default]
+    Fractional,
+    /// A whole percent ("94 %"), as a word processor shows its zoom. The zoom itself keeps its fraction, and a typed
+    /// fraction still applies; only the shown number is whole.
+    Whole,
+}
+
+impl EnvValue for ZoomPrecision {
+    fn root() -> Self {
+        ZoomPrecision::default()
+    }
+}
+
 impl EnvValue for craft_behavior::ZoomScheme {
     fn root() -> Self {
         craft_behavior::ZoomScheme::PHOTOSHOP
@@ -370,23 +390,29 @@ pub struct Units {
     readers: Arc<[OnceLock<Reader>; UnitKind::ALL.len() + 1]>,
     /// The scope's point size: what `reader` and `points_per_inch` use for Points and Picas.
     point_size: PointSize,
+    /// The decimals a zoom shows (`zoom_codec`).
+    zoom: ZoomPrecision,
 }
 
 /// What every number it reads and writes depends on: the format, the unit words and the scope's words (each by its
 /// generation) and the point size.
 impl crate::contract::MemoProps for Units {
     fn key(&self, key: &mut crate::contract::MemoKey) {
-        let Units { format, words, scope_words, readers: _, point_size } = self;
-        crate::contract::MemoProps::key(&(format, words, scope_words, point_size), key);
+        let Units { format, words, scope_words, readers: _, point_size, zoom } = self;
+        crate::contract::MemoProps::key(&(format, words, scope_words, point_size, zoom), key);
     }
 }
 
 impl Units {
     /// The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
     /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
-    /// typed text by the same rules.
+    /// typed text by the same rules. Under [`ZoomPrecision::Whole`] it writes whole percents.
     pub fn zoom_codec(&self) -> NumberCodec {
-        NumberCodec::new(self.reader(Some(UnitKind::Percent)), ZOOM_DECIMALS).zoom_typing()
+        let decimals = match self.zoom {
+            ZoomPrecision::Fractional => ZOOM_DECIMALS,
+            ZoomPrecision::Whole => 0,
+        };
+        NumberCodec::new(self.reader(Some(UnitKind::Percent)), decimals).zoom_typing()
     }
 }
 
@@ -396,7 +422,15 @@ const ZOOM_DECIMALS: usize = 2;
 impl Units {
     #[doc(hidden)]
     pub fn new(format: Arc<Format>, words: Arc<UnitWords>, scope_words: Arc<Words>, point_size: PointSize) -> Units {
-        Units { format, words, scope_words, readers: Arc::default(), point_size }
+        Units { format, words, scope_words, readers: Arc::default(), point_size, zoom: ZoomPrecision::default() }
+    }
+
+    /// The same units with `zoom` as the decimals a zoom shows: the env's [`ZoomPrecision`].
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_zoom_precision(mut self, zoom: ZoomPrecision) -> Self {
+        self.zoom = zoom;
+        self
     }
 
     /// How many points make an inch in the scope: the app's point-size preference.
