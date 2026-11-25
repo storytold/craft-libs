@@ -124,6 +124,51 @@ pub fn button(ui: &mut Ui, s: &Skin, text: &str, kind: Kind, height: f32, min_wi
     if enabled { resp.on_hover_cursor(CursorIcon::PointingHand) } else { resp }
 }
 
+/// An Install button, `name` for screen readers. With `menu`, a split button whose menu chooses
+/// where the fonts go. `None` when not clicked; `Some(None)` for the button itself (the family's
+/// choice, else the default), `Some(Some(true))` for all apps, `Some(Some(false))` for Craft apps
+/// only.
+pub fn install_button(ui: &mut Ui, s: &Skin, text: &str, name: &str, kind: Kind, height: f32, menu: bool) -> Option<Option<bool>> {
+    use crate::panel::i18n::tl;
+    use craft_ui::menu::{MenuItem, MenuLabels, SplitHit};
+    if !menu {
+        let resp = button(ui, s, text, kind, height, 0.0);
+        self::name(ui, &resp, name);
+        return resp.clicked().then_some(None);
+    }
+    let items = [MenuItem::new("all", tl!("Install for all apps")), MenuItem::new("craft", tl!("Install for Craft apps only"))];
+    let labels = MenuLabels { more: tl!("More options").to_owned(), more_for: tl!("More {action} options").to_owned() };
+    let text = if s.look.caps { text.to_uppercase() } else { text.to_owned() };
+    let p = s.p;
+    let (fill, hover, stroke, ink) = match kind {
+        // The background's colour around each half parts them.
+        Kind::Primary => (p.invert_bg, p.invert_bg.gamma_multiply(0.82), Stroke::new(1.0, p.bg), p.invert_fg),
+        Kind::Secondary | Kind::Danger => (Color32::TRANSPARENT, p.sunken, Stroke::new(1.0, p.line_strong), p.ink),
+    };
+    let hit = ui.scope(|ui| {
+        let style = ui.style_mut();
+        style.override_font_id = Some(FontId::new(if s.look.caps { 11.0 } else { 13.0 }, s.look.button.clone()));
+        style.spacing.interact_size.y = height;
+        style.spacing.button_padding.x = 14.0;
+        let w = &mut style.visuals.widgets;
+        for (v, fill) in [(&mut w.inactive, fill), (&mut w.hovered, hover), (&mut w.active, hover)] {
+            v.weak_bg_fill = fill;
+            v.bg_stroke = stroke;
+            v.fg_stroke = Stroke::new(1.0, ink);
+            v.corner_radius = s.look.corner;
+            v.expansion = 0.0;
+        }
+        // The chevron's colour.
+        w.noninteractive.fg_stroke.color = ink;
+        style.visuals.override_text_color = None;
+        craft_ui::menu::split_named(ui, &text, name, &items, &labels)
+    });
+    match hit.inner? {
+        SplitHit::Primary => Some(None),
+        SplitHit::Item(id) => Some(Some(id == "all")),
+    }
+}
+
 /// A text-only action in the accent colour: "Clear filters", "Retry".
 pub fn link(ui: &mut Ui, s: &Skin, text: &str) -> Response {
     let galley = s.label_galley(ui, text, s.p.accent_ink);

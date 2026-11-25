@@ -10,7 +10,7 @@ Fonts tab; the standalone app
 | `filter` | always | Search over the index: family names ignoring case and accents, category, language (English name, autonym or id) and script |
 | `index` | always | The pinned built-in indexes (Google Fonts and Noto) compiled into [`craft-font-store`](../font-store/README.md) (`bundled`), each family's source (`source_label`: its name and whether it is curated), and the categories |
 | `installed` | always | The installed fonts [`craft-font-catalog`](../font-catalog/README.md) sees, grouped by family and source |
-| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`) and the optional preview service address (`preview_service`, `set_preview_service`) and the previews setting (`previews_enabled`, `set_previews_enabled`), and a family's copies in the OS user font folder (`available_to_all_supported`, `is_available_to_all`, `not_yet_available`, `make_available`, `withdraw`). `SuiteStore` is craft-font-store's store (`with_default_preview_service(url)` gives it the host's default preview service, used while neither the environment nor the user's setting names one), `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
+| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`) and the optional preview service address (`preview_service`, `set_preview_service`) and the previews setting (`previews_enabled`, `set_previews_enabled`), and a family's copies in the OS user font folder (`available_to_all_supported`, `is_available_to_all`, `not_yet_available`, `make_available`, `withdraw`) with its recorded choice (`available_to_all_choice`, `set_available_to_all_choice`, the default `craft_apps_only`, and `shares` for the two together). `SuiteStore` is craft-font-store's store (`with_default_preview_service(url)` gives it the host's default preview service, used while neither the environment nor the user's setting names one), `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
 | `remote` | always | The preview service client: subset URLs (`PreviewKey`, `Codepoints`), a fetch pool (`Previews`: 8 at a time, highest priority first, cancel by key, results by `poll`) that decodes WOFF2, and the disk cache in the store's `previews/` folder (`DiskCache`, least recently used out past 50 MB). It requests nothing unless a preview service is set and previews are enabled (`Installer::previews_enabled`, a user setting, on by default). There is no prompt, and the install consent (`downloads_allowed`) is not consulted. With previews off nothing goes to the network, and cached previews are still used |
 | `FontsPanel` | `egui` | The whole interface as one egui panel |
 
@@ -23,7 +23,8 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   English name or its own, "Japanese · 日本語"), script, source, and installed or not; each option
   with its count.
 - **Family cards**, one per row: the name, style count, category and source on one line with the
-  card's state at its end (Install and Preview, Installed, a progress bar while downloading,
+  card's state at its end (Install, whose menu installs for all apps or for Craft apps only, and
+  Preview, Installed, a progress bar while downloading,
   Couldn't install with Retry, "Not curated" for a source the user added), and a large sample in
   the face below. The list is virtual: only the cards on screen are laid out, and their faces load
   as they come into view. With a preview service set, families that aren't installed draw from
@@ -36,7 +37,8 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   sample from the index, by its `sample_script`; the alphabet; numerals), the sample text, and the
   size.
 - **Details sheet** over the list: every style in its own face with Install or Remove for each,
-  Install all and Remove all, the source, scripts and languages, and what a preview downloads.
+  Install all (with the same menu) and Remove all, whether the family is available to all apps
+  with the switch that changes it, the source, scripts and languages, and what a preview downloads.
   With a preview service, styles not installed draw with its subsets: a static file's sample, and
   one subset of each variable file with every axis kept, drawn at each named instance and at the
   values of its axis sliders. The licence block shows the licence, copyright, designer and

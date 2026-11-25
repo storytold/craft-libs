@@ -193,6 +193,11 @@ pub struct InstalledFamily {
     pub license_file: Option<String>,
     /// The installed files: all of the family's, or some faces.
     pub files: Vec<InstalledFile>,
+    /// The user's choice for this family: copied into the OS user font folder for all apps
+    /// (`true`) or kept in Craft apps only (`false`). `None` when none is recorded (installed
+    /// before the choice existed, or by an agent): [`FontStore::craft_apps_only`] decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_to_all: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -506,20 +511,35 @@ impl FontStore {
         self.change_settings(|s| s.previews = enabled)
     }
 
-    /// Whether the user keeps store fonts in Craft apps only. Off by default: the font manager
-    /// then copies each family it installs into the OS user font folder
-    /// ([`FontStore::make_available`]), so other apps can use it.
+    /// Whether the user keeps store fonts in Craft apps only by default. Off by default: the font
+    /// manager then copies each family it installs into the OS user font folder
+    /// ([`FontStore::make_available`]), so other apps can use it, unless the user chose otherwise
+    /// for that family ([`InstalledFamily::available_to_all`]).
     pub fn craft_apps_only(&self) -> bool {
         self.settings().craft_apps_only
     }
 
-    /// Sets [`FontStore::craft_apps_only`], from the user's own action. It only records the choice:
-    /// the caller copies or withdraws the families. [`Error::NotAllowed`] for an agent.
+    /// Sets [`FontStore::craft_apps_only`], from the user's own action. It only records the choice;
+    /// installed families keep theirs. [`Error::NotAllowed`] for an agent.
     pub fn set_craft_apps_only(&self, on: bool) -> Result<(), Error> {
         if self.caller != Caller::User {
             return Err(Error::NotAllowed);
         }
         self.change_settings(|s| s.craft_apps_only = on)
+    }
+
+    /// Records the user's choice for the installed family ([`InstalledFamily::available_to_all`]).
+    /// It only records it: the caller copies or withdraws the family. [`Error::NotAllowed`] for an
+    /// agent, [`Error::NotInstalled`] for a family that isn't installed.
+    pub fn set_available_to_all_choice(&self, source: &str, name: &str, on: bool) -> Result<(), Error> {
+        if self.caller != Caller::User {
+            return Err(Error::NotAllowed);
+        }
+        let _lock = self.lock()?;
+        let mut manifest = self.read_manifest();
+        let entry = manifest.families.iter_mut().find(|f| f.is(source, name)).ok_or_else(|| Error::NotInstalled(name.to_string()))?;
+        entry.available_to_all = Some(on);
+        self.write_manifest(&manifest)
     }
 
     fn change_settings(&self, change: impl FnOnce(&mut Settings)) -> Result<(), Error> {
@@ -1061,6 +1081,7 @@ fn merge_entry(manifest: &mut Manifest, index: &Index, family: &Family, files: &
                 license: family.license.clone(),
                 license_file: None,
                 files: Vec::new(),
+                available_to_all: None,
             });
             manifest.families.len() - 1
         }
@@ -1090,7 +1111,15 @@ fn merge_entry(manifest: &mut Manifest, index: &Index, family: &Family, files: &
 
 impl InstalledFamily {
     fn empty() -> Self {
-        Self { family: String::new(), source: String::new(), dir: String::new(), license: String::new(), license_file: None, files: Vec::new() }
+        Self {
+            family: String::new(),
+            source: String::new(),
+            dir: String::new(),
+            license: String::new(),
+            license_file: None,
+            files: Vec::new(),
+            available_to_all: None,
+        }
     }
 
     /// Whether this is the family `name` (ignoring case) from `source`.

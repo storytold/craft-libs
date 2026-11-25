@@ -80,9 +80,6 @@ fn setup_seeded(
     let store_dir = root.join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
     seed(&store_dir);
-    let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
-    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
-    catalog.rescan();
     let files = HashMap::from([
         (HACK.to_owned(), epaint_default_fonts::HACK_REGULAR.to_vec()),
         (UBUNTU.to_owned(), epaint_default_fonts::UBUNTU_LIGHT.to_vec()),
@@ -92,7 +89,21 @@ fn setup_seeded(
         Some(checkout) => store.serving(checkout),
         None => store,
     });
-    let options = Options { catalog, installer: store.clone(), index: Ok(index()), runner };
+    (open(&root, store.clone(), settings, runner, fonts), store)
+}
+
+/// The panel over the system under `root` and `store`, as at a start of the app.
+fn open(
+    root: &std::path::Path,
+    store: Arc<FakeStore>,
+    settings: Settings,
+    runner: Runner,
+    fonts: impl Fn(&egui::Context) + 'static,
+) -> Harness<'static, FontsPanel> {
+    let env = FontEnv { os: Os::Unix, root: root.to_owned(), font_store: Some(root.join("store")), ..FontEnv::default() };
+    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
+    catalog.rescan();
+    let options = Options { catalog, installer: store, index: Ok(index()), runner };
     let app = FontsPanel::new(options, settings);
     let mut harness = Harness::builder()
         .with_size([1120.0, 678.0])
@@ -104,7 +115,7 @@ fn setup_seeded(
         })
         .build_ui_state(|ui, app: &mut FontsPanel| app.ui(ui), app);
     harness.run_steps(4);
-    (harness, store)
+    harness
 }
 
 fn settle(h: &mut Harness<'_, FontsPanel>) {
@@ -246,29 +257,45 @@ fn installs_are_copied_to_the_system_fonts_folder_unless_kept_in_craft_apps() {
     assert!(has_installed(&h, "Hack"));
     assert!(h.query_by_label_contains("/fonts/Hack-Regular.ttf already has the font name Hack-Regular").is_some());
 
+    // The setting decides what Install does from now on; Hack stays as it is.
     h.key_press(egui::Key::Escape);
     settle(&mut h);
     craft_apps_only_switch(&mut h);
     assert!(store.craft_apps_only());
+    assert_eq!(store.calls().len(), 2);
     click(&mut h, "Hack");
+    click(&mut h, "Remove all");
+    click(&mut h, "Install all");
+    assert_eq!(store.calls()[2..], [Call::Remove("Hack".into()), Call::Install("Hack".into())]);
     assert!(h.query_by_label("Kept in Craft apps only").is_some());
 
-    h.key_press(egui::Key::Escape);
-    settle(&mut h);
-    craft_apps_only_switch(&mut h);
-    click(&mut h, "Hack");
+    // The details switch copies it after all.
+    click(&mut h, "Make available to all apps");
+    assert_eq!(store.calls().last(), Some(&Call::MakeAvailable("Hack".into())));
     assert!(h.query_by_label("Available to all apps").is_some());
 }
 
 #[test]
-fn families_installed_before_os_copies_are_copied_at_start() {
+fn each_family_keeps_its_system_fonts_choice_across_starts() {
+    // Ubuntu, installed by an earlier run with no choice recorded, follows the default.
     let seed = |dir: &std::path::Path| {
-        std::fs::create_dir_all(dir.join("Hack")).unwrap();
-        std::fs::write(dir.join("Hack/Hack-Regular.ttf"), epaint_default_fonts::HACK_REGULAR).unwrap();
+        std::fs::create_dir_all(dir.join("Ubuntu")).unwrap();
+        std::fs::write(dir.join("Ubuntu/Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).unwrap();
     };
-    let (_h, store) = setup_seeded("os-copy-at-start", Settings::default(), Runner::Inline, |_| {}, seed);
-    assert_eq!(store.calls(), [Call::MakeAvailable("Hack".into())]);
-    assert!(store.is_available_to_all("Hack", &[]));
+    let (mut h, store) = setup_seeded("os-choice", Settings::default(), Runner::Inline, |_| {}, seed);
+    assert_eq!(store.calls(), [Call::MakeAvailable("Ubuntu".into())]);
+
+    allow(&mut h);
+    click(&mut h, "Hack");
+    click(&mut h, "More install all options");
+    click(&mut h, "Install for Craft apps only");
+    assert_eq!(store.calls()[1..], [Call::Install("Hack".into())]);
+    assert!(h.query_by_label("Kept in Craft apps only").is_some());
+
+    // The next start copies neither: Hack is kept in Craft apps, Ubuntu is there already.
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("flows").join("os-choice");
+    let _h = open(&root, store.clone(), Settings::default(), Runner::Inline, |_| {});
+    assert_eq!(store.calls().len(), 2);
 }
 
 #[test]
