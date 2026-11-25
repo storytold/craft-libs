@@ -536,14 +536,15 @@ fn cursors_over_the_bar(look: craft_ui::contract::MoveBandCursor) -> (Option<cra
     (over(file.center()), over(Pos2::new(help.right() + 40.0, help.center().y)))
 }
 
-/// A title bar's move band shows the open hand by default, also through the menu titles on it, which sense clicks
-/// only; under `MoveBandCursor::Arrow` the band and the titles show the arrow, as an OS title bar does.
+/// A title bar's move band shows the open hand by default over its free band, not over the menu titles on it, which
+/// take the press (they sense clicks only); under `MoveBandCursor::Arrow` the band shows the arrow too, as an OS title
+/// bar does.
 #[trial]
 fn a_move_band_shows_the_arrow_when_the_app_asks() {
     use craft_behavior::{Cursor, CursorIcon};
     use craft_ui::contract::MoveBandCursor;
     let grab = Some(Cursor::System(CursorIcon::Grab));
-    assert_eq!(cursors_over_the_bar(MoveBandCursor::Hand), (grab.clone(), grab), "the hand over the band and the titles on it");
+    assert_eq!(cursors_over_the_bar(MoveBandCursor::Hand), (None, grab), "the hand over the free band and not the titles on it");
     assert_eq!(cursors_over_the_bar(MoveBandCursor::Arrow), (None, None), "the arrow over the band and the titles on it");
 }
 
