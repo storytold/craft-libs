@@ -110,9 +110,20 @@ adds is an index at an https URL; its families are never curated.
 
 ## Strings
 
-Every interface string goes through craft-i18n with the English text as the key. The panel embeds
-its own Japanese and Arabic catalogs (`src/panel/catalogs/`) until its rows are part of
-craft-i18n; style and weight names, licence names and product names stay in English.
+Every interface string is a word of the Host's `I18n` (`craft_ui::words!`), so the panel is in the Host's
+language when the app's catalogs have its rows and in English where they have none. `CATALOGS` holds the
+Japanese and Arabic rows, until they are part of craft-i18n's shared catalog, as data the app passes to
+its Host's `I18n`:
+
+```rust
+// An app with no shared catalog of its own; one with a shared catalog joins the rows to it for
+// `I18n::from_owned`.
+let (i18n, problems) = craft_i18n::I18n::new(craft_font_manager::CATALOGS, &["ja", "ar"]);
+let lang = i18n.match_tag(language).unwrap_or(craft_i18n::Lang::EN);
+Host::builder(app).i18n(Arc::new(i18n)).lang(lang).install(ctx);
+```
+
+Style and weight names, licence names and product names stay in English.
 
 ## Testing
 

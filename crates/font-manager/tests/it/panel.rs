@@ -11,10 +11,11 @@ use std::time::Duration;
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::index::Index;
 use craft_font_manager::store::{Call, Conflict, FakeStore, Installer as _};
-use craft_font_manager::{Catalog, FontEnv, FontsPanel, FontsPanelView, Options};
+use craft_font_manager::{CATALOGS, Catalog, FontEnv, FontsPanel, FontsPanelView, Options};
 use craft_font_store::preview::{Fetch, Previews};
 use craft_font_store::{Cancel, FetchError};
 use craft_host::{AppInfo, Host, InlineJobs, Jobs, MemorySections};
+use craft_i18n::I18n;
 use craft_ui::contract::Role;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Room, Target, trial};
@@ -604,6 +605,19 @@ fn a_variable_family_draws_one_subset_at_every_axis_value() {
     rig.load();
     assert!(rig.present("401"), "the slider moved");
     assert!(service.urls().is_empty(), "the slider asked for another subset");
+}
+
+/// The rows the crate exports read without a problem, and a Host with them shows the panel in its language.
+#[trial]
+fn the_exported_rows_show_the_panel_in_japanese() {
+    let (i18n, problems) = I18n::new(CATALOGS, &["ja", "ar"]);
+    assert!(problems.is_empty() && i18n.check_all().is_empty(), "{problems:?} {:?}", i18n.check_all());
+    let lang = i18n.from_code("ja").unwrap();
+    let root = root("japanese");
+    let store = Arc::new(FakeStore::new(root.join("store"), HashMap::new()));
+    let panel = FontsPanel::new(Options::new(catalog(&root), store.clone(), Ok(index())));
+    let rig = show(panel, store, Arc::new(Host::builder(APP).i18n(Arc::new(i18n)).lang(lang).jobs(Arc::new(InlineJobs)).build()));
+    assert!(rig.present("すべてのカテゴリ") && !rig.present("All categories"));
 }
 
 #[trial]
