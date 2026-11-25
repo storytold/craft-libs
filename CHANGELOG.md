@@ -2,9 +2,9 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
-## v1.1
+## v1.0.7
 
-- **Release Notes:** [GitHub Release v1.1](https://github.com/ussoewwin/craft-libs/releases/tag/v1.1)
+- **Release Notes:** [GitHub Release v1.0.7](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.7)
 
 ### 2026-11-25 - Upstream Merge (`next`) and the Design-Lint Repairs
 
