@@ -1253,9 +1253,12 @@ fn large_text_tabs_have_bigger_labels_and_a_wider_gap() {
             let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         });
         fixture.settle();
-        let (first, second) = (tab_rect(fixture.tree(), "One"), tab_rect(fixture.tree(), "Two"));
-        let label = fixture.texts().iter().find(|line| line.text == "One").expect("the label is painted").rect;
-        (second.left() - first.right(), label.width())
+        // Text tabs touch (the strip puts no gap between their rects); the room between them is each tab's tail
+        // after its label, so the gap is measured between the painted labels, from the end of one to the start of
+        // the next.
+        let label = |name: &str| fixture.texts().iter().find(|line| line.text == name).expect("the label is painted").rect;
+        let (first, second) = (label("One"), label("Two"));
+        (second.left() - first.right(), first.width())
     };
     let ((gap, width), (large_gap, large_width)) = (strip(false), strip(true));
     assert!(large_gap > gap, "the large tabs stand further apart: {large_gap} against {gap}");
