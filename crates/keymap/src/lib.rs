@@ -14,7 +14,8 @@
 //! shortcut editor: undo, a chord recorder, conflict queries and search. With the `egui` feature,
 //! the `egui` module
 //! converts to and from egui keys, matches key presses against bindings and dispatches a frame's
-//! key events.
+//! key events. With the `global` feature, the `global` module registers chords with the operating
+//! system so that they run commands while another application has the keyboard.
 //!
 //! ```
 //! use craft_keymap::{Chord, Platform};
@@ -140,6 +141,8 @@ pub mod command;
 pub mod editor;
 #[cfg(feature = "egui")]
 pub mod egui;
+#[cfg(all(feature = "global", not(target_arch = "wasm32")))]
+pub mod global;
 pub mod import;
 pub mod keymap;
 pub mod layout;

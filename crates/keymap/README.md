@@ -18,7 +18,8 @@ supplies its command catalog, its file-format readers and its UI.
   `Keymap::with_reserved`, e.g. `reserved::system(platform)` for the operating system's window
   switching and closing chords. A reserved chord cannot be assigned or bound.
 - Dependencies: `serde` and `serde_json`; `egui` with the `egui` feature; `craft-ui` and
-  `craft-i18n` with the `ui` feature.
+  `craft-i18n` with the `ui` feature; `global-hotkey`, and `x11rb` on Linux and the BSDs, with
+  the `global` feature.
 
 ## A catalog and dispatch
 
@@ -462,6 +463,78 @@ lists (hidden entries keep their keys and still count in conflicts).
   desktop.
 
 - `ui`: the Shortcuts dialog (see above). Implies `egui`.
+- `global`: `global::GlobalHotkeys`, chords that run a command while another application has the
+  keyboard, such as a record toggle pressed during a full-screen game. It registers them with
+  `RegisterHotKey` on Windows, a Carbon hotkey on macOS and a key grab on the X11 root window
+  on Linux and the BSDs. Not built for wasm32; on other systems (Android, iOS) `new` fails with
+  `GlobalError::Unsupported`.
+
+  ```rust,ignore
+  let mut hotkeys = GlobalHotkeys::new()?;
+  hotkeys.set_waker(move || ctx.request_repaint());
+  let refused = hotkeys.replace(bindings); // (CommandRef, Chord) pairs
+  // Once a frame:
+  for event in hotkeys.poll() {
+      app.key(&event.command, event.state); // KeyState::Pressed or KeyState::Released
+  }
+  ```
+
+  - One set is open per process at a time (`GlobalError::AlreadyOpen`). Create it on the UI
+    thread: on Windows that thread receives the hotkey messages, and on macOS it must be the main
+    thread.
+  - A chord needs Cmd, Ctrl or Alt unless its key is F1 to F35 (`GlobalError::TypingKey`). Keys
+    typed with Shift (`+`, `:`, `?`) have no key of their own (`GlobalError::Unbindable`). Off
+    macOS, `Cmd+K` and `Ctrl+K` are one hotkey (`GlobalError::Duplicate`). A chord another
+    application holds is `GlobalError::Taken`. Windows registers F1 to F24 and macOS F1 to F20.
+    On X11 the ISO key between left Shift and Z and `\` are one hotkey (`GlobalError::Duplicate`),
+    and `'` cannot be grabbed (`GlobalError::Unbindable`). On Windows a chord with Ctrl and Alt on
+    a letter, digit, symbol or Space key is refused (`GlobalError::AltGr`), since Windows reports AltGr
+    as Ctrl+Alt.
+  - On X11 a symbol chord is grabbed at the key that types the symbol in the current layout. A
+    symbol the layout types only with AltGr is refused (`GlobalError::Unbindable`): with German,
+    `Ctrl+[` would grab Ctrl+8. A symbol typed with Shift is written without Shift, as the keymap
+    matches punctuation: with AZERTY, `Ctrl+.` grabs Ctrl+Shift on the key that types `.`, and
+    `Ctrl+Shift+.` is refused (`GlobalError::Unbindable`). The Latin letters of a second layout
+    group count as that layout's own keys when the key types no letter, digit or symbol in the
+    first group, so with Russian and US `Ctrl+A` grabs the key that types A. With US and French,
+    `Ctrl+A` is refused (`GlobalError::Unbindable`), since the grab would go to the US Q key.
+    Symbols of a second group are refused like AltGr ones.
+    Two chords that land on one key and modifier set are one hotkey (`GlobalError::Duplicate`):
+    with AZERTY, `Ctrl+-` and `Ctrl+6`. So are two chords registered as the same hotkey on
+    different keys: `Ctrl+.` registered with AZERTY, then `Ctrl+Shift+.` after a switch to US.
+  - On X11, when a layout change moves a chord's key, `replace`, `unregister` and `clear`
+    release the key that was grabbed. A grab that no key of the current layout leads to stays
+    until a later change can release it, and its chord is refused meanwhile (`GlobalError::Taken`).
+    When the layout changes while a grab is released, a binding whose grab that release removed
+    is grabbed again, or leaves the set when it cannot be grabbed again.
+    When the keyboard mapping cannot be read, `replace` refuses every binding and keeps the set
+    as it is, except that an empty `replace` still clears the set. The grabs of the chords that
+    leave the set then stay until a later change can release them, and `unregister` returns the
+    error.
+  - On Windows and X11 a letter chord is grabbed at the key that types the letter, as the keymap
+    matches letters on a Latin layout. On macOS it is grabbed at the letter's position on a US
+    keyboard: with AZERTY, `Cmd+A` is the key that types Q.
+  - A held chord gives one `Pressed` and one `Released`. `replace` leaves a binding whose chord
+    and command do not change registered, so a held chord stays held. Unregistering a held chord,
+    or replacing its binding, gives its `Released` at the next `poll`; events the system sent
+    before the change go to the command the chord ran then. On Windows and macOS a press that
+    waits in the app's event queue while the bindings change goes to the new command. On Windows
+    the release of a chord unregistered while held is dropped when it arrives, so it does not end
+    a later hold of the same chord.
+  - At most 256 system events wait between polls (`MAX_QUEUED`); beyond that the oldest are
+    dropped, and after such a loss every chord that was down is released. When more than 256
+    events wait for `poll`, the oldest press whose release also waits is dropped with that
+    release, so every press the app gets has its release. Past 512 waiting events
+    (`MAX_PENDING`) the oldest press is dropped; a release is never dropped. At most 128 chords
+    are registered (`MAX_GLOBAL`).
+  - On X11 each `register` and `unregister` waits for the key-grab thread, which takes one
+    request every 50 ms. `replace` sends the chords it removes in one request and those it adds
+    in another, and adds them one at a time when the system refuses one of them; `clear` sends
+    one request. `new` fails with
+    `GlobalError::Os` when that thread has stopped (a display without the XKEYBOARD extension).
+  - A Wayland session is refused with `GlobalError::Wayland`, since an X11 grab there sees only
+    keys typed into X11 windows. Without an X11 display, `new` fails with
+    `GlobalError::NoDisplay`.
 - `snapshot` (development): `tests/ui_snapshot.rs` writes PNGs of the dialog to
   `CRAFT_KEYMAP_SNAPSHOT_DIR` for review, using the same font input as the dialog tests.
 
