@@ -141,7 +141,9 @@ pub(crate) fn restrict_enabled(response: &mut Response, enabled: bool) {
 /// clicks of its parts and members. `hovered`: a shape of the root's arena shows hover; `contains`: one lies under the
 /// pointer, on top or not.
 pub(crate) fn hover_flags(response: &mut Response, hovered: bool, contains: bool) {
-    response.flags.set(Flags::HOVERED, hovered);
+    // egui's own rule: a disabled response is never hovered, whatever lies under it. Containment still reports, and the
+    // arena's own hover fact is untouched: this is only what the returned `Response` says.
+    response.flags.set(Flags::HOVERED, hovered && response.enabled());
     response.flags.set(Flags::CONTAINS_POINTER, contains);
 }
 

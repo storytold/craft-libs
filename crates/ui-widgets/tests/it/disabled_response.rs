@@ -5,7 +5,8 @@ use craft_ui::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
 use craft_ui::runtime::overlay::CloseReason;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, pointer, trial};
+use egui::{Pos2, Rect};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -88,4 +89,26 @@ fn a_disabled_opener_closes_its_popover_by_the_anchor_gone_rule() {
     enabled.set(false);
     fixture.idle(3);
     assert_eq!(closes.borrow().first(), Some(&CloseReason::AnchorGone), "the disabled opener's popover closes: {:?}", closes.borrow());
+}
+
+const FIELD: Rect = Rect { min: Pos2::new(20.0, 140.0), max: Pos2::new(200.0, 180.0) };
+
+#[trial]
+fn a_disabled_root_contains_the_pointer_without_reporting_hover() {
+    let enabled = Rc::new(Cell::new(false));
+    let seen = Rc::new(RefCell::new(None));
+    let (shown, out) = (enabled.clone(), seen.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = Button::new("Use Library Folder").enabled(shown.get()).show_at(ui, FIELD);
+        *out.borrow_mut() = Some((shown.response.enabled(), shown.response.contains_pointer(), shown.response.hovered()));
+    });
+    fixture.frame(vec![pointer::moved(FIELD.center())]);
+    let (is_enabled, contains, hovered) = seen.borrow().expect("the button ran");
+    assert!(!is_enabled, "the button reports itself disabled");
+    assert!(contains, "a disabled root still reports that it contains the pointer");
+    assert!(!hovered, "egui's rule: a disabled response is not hovered, though the pointer is over it");
+    enabled.set(true);
+    fixture.frame(vec![pointer::moved(FIELD.center())]);
+    let (is_enabled, contains, hovered) = seen.borrow().expect("the button ran");
+    assert!(is_enabled && contains && hovered, "an enabled root is hovered under the pointer");
 }
