@@ -880,7 +880,8 @@ fn copy_in(folder: &OsFontFolder, p: &Planned, found: Option<&str>) -> Result<()
     let _ = std::fs::remove_file(&part);
     std::fs::copy(&p.source, &part).map_err(io(what()))?;
     folder.unload(&p.path);
-    let checked = File::open(&part).and_then(|f| f.sync_all()).map_err(io(what())).and_then(|()| {
+    // Windows flushes a file only through a handle that can write to it.
+    let checked = std::fs::OpenOptions::new().write(true).open(&part).and_then(|f| f.sync_all()).map_err(io(what())).and_then(|()| {
         if file_sha256(&part).as_ref() == Some(&p.sha256) {
             Ok(())
         } else {

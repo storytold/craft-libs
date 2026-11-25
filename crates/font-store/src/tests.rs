@@ -1522,6 +1522,7 @@ mod store {
     }
 
     /// A catalog of the same system as [`shared_store`]'s, to look at what a scan sees.
+    #[cfg(unix)]
     fn catalog_of(dir: &Path, root: &Path) -> Catalog {
         let env = FontEnv {
             os: Os::Unix,
@@ -1704,9 +1705,12 @@ mod store {
         assert!(with(&[], &flatpak).is_err(), "read only");
         info("~/.local/share/fonts;");
         assert!(with(&[], &flatpak).is_ok());
-        assert!(with(&[("HOST_XDG_DATA_HOME", "/elsewhere")], &flatpak).is_err(), "the grant is for another folder");
+        // Absolute on every platform: `/elsewhere` isn't on Windows.
+        let elsewhere = root.join("elsewhere");
+        let host = [("HOST_XDG_DATA_HOME", elsewhere.to_str().unwrap())];
+        assert!(with(&host, &flatpak).is_err(), "the grant is for another folder");
         info("xdg-data/fonts;");
-        assert_eq!(with(&[("HOST_XDG_DATA_HOME", "/elsewhere")], &flatpak), Ok(PathBuf::from("/elsewhere/fonts/Craft")));
+        assert_eq!(with(&host, &flatpak), Ok(elsewhere.join("fonts/Craft")));
         let _ = std::fs::remove_dir_all(root);
     }
 
