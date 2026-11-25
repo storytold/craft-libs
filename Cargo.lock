@@ -1804,6 +1804,7 @@ dependencies = [
  "craft-flow",
  "craft-font-catalog",
  "craft-font-manager",
+ "craft-font-os-windows",
  "craft-font-store",
  "craft-font-subset",
  "craft-format",
@@ -2773,12 +2774,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-font-os-windows"
+version = "0.1.0"
+dependencies = [
+ "windows-registry",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "craft-font-store"
 version = "0.1.0"
 dependencies = [
  "cap-primitives",
  "craft-atomic",
  "craft-font-catalog",
+ "craft-font-os-windows",
  "flate2",
  "log",
  "ruzstd",
