@@ -66,22 +66,30 @@ enum Subtable {
 /// system and replaces glyph `from` with glyph `to`.
 fn gsub(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable) -> Vec<u8> {
     // No required feature (0xFFFF); one optional feature, feature 0.
-    gsub_listing(feature, from, to, subtable, &[0xFFFF, 1, 0])
+    gsub_listing(feature, from, to, subtable, &[(b"DFLT", &[0xFFFF, 1, 0])])
 }
 
-/// [`gsub`] with the default language system's `requiredFeatureIndex`, `featureIndexCount` and
-/// `featureIndices` given by `language`.
-fn gsub_listing(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable, language: &[u16]) -> Vec<u8> {
-    // DFLT script (offset 8); its default language system (offset 4, no other language systems;
-    // no lookup order) lists the features as `language` says.
-    let mut scripts = u16s(&[1]);
-    scripts.extend(b"DFLT");
-    scripts.extend(u16s(&[8, 4, 0, 0]));
-    scripts.extend(u16s(language));
-    // Feature 0: `feature`, lookup 0.
-    let mut features = u16s(&[1]);
+/// [`gsub`] with a second feature, `zero`, which has no lookups, and with `scripts`: each one's
+/// tag and its default language system's `requiredFeatureIndex`, `featureIndexCount` and
+/// `featureIndices`.
+fn gsub_listing(feature: &[u8; 4], from: u16, to: u16, subtable: Subtable, scripts: &[(&[u8; 4], &[u16])]) -> Vec<u8> {
+    // A script's default language system (offset 4, no other language systems; no lookup order)
+    // lists the features as `scripts` says.
+    let mut records = u16s(&[u16::try_from(scripts.len()).unwrap()]);
+    let mut tables = Vec::new();
+    for (tag, language) in scripts {
+        records.extend(*tag);
+        records.extend(u16s(&[u16::try_from(2 + 6 * scripts.len() + tables.len()).unwrap()]));
+        tables.extend(u16s(&[4, 0, 0]));
+        tables.extend(u16s(language));
+    }
+    let scripts = [records, tables].concat();
+    // Feature 0: `feature`, lookup 0. Feature 1: `zero`.
+    let mut features = u16s(&[2]);
     features.extend(feature);
-    features.extend(u16s(&[8, 0, 1, 0]));
+    features.extend(u16s(&[14]));
+    features.extend(b"zero");
+    features.extend(u16s(&[20, 0, 1, 0, 0, 0]));
     // Coverage of `from` only.
     let coverage = u16s(&[1, 1, from]);
     let single = match subtable {
@@ -238,9 +246,27 @@ fn a_face_without_a_vertical_glyph_draws_the_ordinary_one() {
 fn a_vert_feature_the_language_system_requires_applies() {
     let (bracket, a) = (glyph('「'), glyph('A'));
     // Required feature 0, no optional features.
-    let required = with_table(TINY_GLYF, b"GSUB", Some(&gsub_listing(b"vert", bracket, a, Subtable::List, &[0, 0])));
+    let required = with_table(TINY_GLYF, b"GSUB", Some(&gsub_listing(b"vert", bracket, a, Subtable::List, &[(b"DFLT", &[0, 0])])));
     assert_eq!(glyphs(&pdf("UniJIS-UCS2-V", "300C"), &required), [u32::from(a)], "the required vert feature applies");
     assert_eq!(glyphs(&pdf("UniJIS-UCS2-H", "300C"), &required), [u32::from(bracket)], "a horizontal CID keeps its glyph");
+}
+
+/// A script that exists but lists no vertical feature does not end the search: when `kana`, the
+/// collection's script, lists another feature only, `DFLT`'s `vert` applies; when `DFLT` lists
+/// none either, the `vert` of any script does.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_script_without_a_vertical_feature_leaves_it_to_the_next() {
+    let (bracket, a) = (glyph('「'), glyph('A'));
+    // Feature 0 is `vert`, feature 1 `zero`.
+    let (vert, zero): (&[u16], &[u16]) = (&[0xFFFF, 1, 0], &[0xFFFF, 1, 1]);
+    let only_dflt: &[(&[u8; 4], &[u16])] = &[(b"DFLT", vert), (b"kana", zero)];
+    let only_another: &[(&[u8; 4], &[u16])] = &[(b"DFLT", zero), (b"kana", zero), (b"latn", vert)];
+    for (scripts, which) in [(only_dflt, "only DFLT"), (only_another, "only a script other than kana and DFLT")] {
+        let face = with_table(TINY_GLYF, b"GSUB", Some(&gsub_listing(b"vert", bracket, a, Subtable::List, scripts)));
+        assert_eq!(glyphs(&pdf("UniJIS-UCS2-V", "300C"), &face), [u32::from(a)], "{which} lists vert: it applies");
+        assert_eq!(glyphs(&pdf("UniJIS-UCS2-H", "300C"), &face), [u32::from(bracket)], "{which} lists vert: a horizontal CID keeps its glyph");
+    }
 }
 
 /// Adobe-Japan1 gives “ (U+201C) CID 108 and its vertical form CID 8279 (0x2057), which only the

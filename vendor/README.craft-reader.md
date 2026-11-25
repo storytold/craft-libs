@@ -81,7 +81,9 @@ adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the c
 
 #7665 was open in PdfCraft when it was ported. Its comments keep the label `PdfCraft patch (107)`.
 Its tests are adapted in `crates/pdf/tests/interpretation/vertical_forms.rs`, with the fonts-build
-fixture `Tiny-glyf.ttf` as the substitute instead of PdfCraft's bundled Inter.
+fixture `Tiny-glyf.ttf` as the substitute instead of PdfCraft's bundled Inter. Two changes
+are not in #7665: the UCS-2 CMaps alone decide when a resolver lacks the UTF-16 ones, and a script
+that lists no vertical feature leaves the lookups to `DFLT`, then to every script of the face.
 
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2

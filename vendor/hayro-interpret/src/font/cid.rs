@@ -797,6 +797,14 @@ fn vertical_lookups(gsub: &Gsub<'_>, script: Tag) -> Vec<u16> {
     let Ok(features) = gsub.feature_list() else {
         return Vec::new();
     };
+    let is_vertical = |index: u16| {
+        features
+            .feature_records()
+            .get(usize::from(index))
+            .filter(|r| [Tag::new(b"vert"), Tag::new(b"vrt2")].contains(&r.feature_tag()))
+            .and_then(|r| r.feature(features.offset_data()).ok())
+            .is_some_and(|f| !f.lookup_list_indices().is_empty())
+    };
     let listed: Option<Vec<u16>> = gsub.script_list().ok().and_then(|scripts| {
         [script, Tag::new(b"DFLT")].into_iter().find_map(|tag| {
             let record = scripts
@@ -811,12 +819,12 @@ fn vertical_lookups(gsub: &Gsub<'_>, script: Tag) -> Vec<u16> {
             // The language system's required feature (0xFFFF: none) and its other features
             // (OpenType `LangSys`): a face may list `vert` as either.
             let required = Some(language.required_feature_index()).filter(|&i| i != 0xFFFF);
-            Some(
-                required
-                    .into_iter()
-                    .chain(language.feature_indices().iter().map(|i| i.get()))
-                    .collect(),
-            )
+            let listed: Vec<u16> = required
+                .into_iter()
+                .chain(language.feature_indices().iter().map(|i| i.get()))
+                .collect();
+            // A script that lists no vertical feature leaves the choice to the next.
+            listed.iter().any(|&i| is_vertical(i)).then_some(listed)
         })
     });
     for tag in [Tag::new(b"vert"), Tag::new(b"vrt2")] {
