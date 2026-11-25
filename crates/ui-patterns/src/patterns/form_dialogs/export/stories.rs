@@ -1,8 +1,8 @@
 //! Stories of the export dialogs.
 
 use super::{
-    ExportAsDialog, ExportOptions, ExportOptionsKind, ExportPreview, FormatOptions, FormatOptionsDialog, HostedExportAs, HostedFormatOptions,
-    JpegOptions, OutputPathRow, SizeEstimate, TargaOptions,
+    ExportAsAsset, ExportAsDialog, ExportOptions, ExportOptionsKind, ExportPreview, FormatOptions, FormatOptionsDialog, HostedExportAs,
+    HostedFormatOptions, JpegOptions, OutputPathRow, SizeEstimate, TargaOptions,
 };
 use crate::dialog::stories::{hosted, hosted_with};
 use crate::patterns::form_dialogs::PreviewState;
@@ -125,6 +125,28 @@ fn export_as_with_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
         HostedExportAs::new("Poster", DOCUMENT, ExportOptions::default()).presets(library)
     })
+}
+
+/// Export As over an asset list: two assets with a picture each and their own format, and one with no pixels whose row
+/// is left unticked. `skipped` moves which asset has no pixels.
+#[story(ExportAsDialog<'static>, covers = [], drive = Drive::Never)]
+fn export_as_asset_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let skipped = *data.value("skipped", true);
+    let texture = picture(ui);
+    let rows: Vec<ExportAsAsset> = [
+        ("full", "Sky", PixelSize::new(2000, 1500), "png"),
+        ("mark", "Small mark", PixelSize::new(400, 300), "jpg"),
+        ("none", "Adjustment", PixelSize::new(120, 90), "webp"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(at, (id, name, size, format))| {
+        let empty = skipped == (at == 2);
+        let options = ExportOptions { format: format.to_owned(), ..ExportOptions::default() };
+        ExportAsAsset::new(id, name, size).options(options).thumbnail(texture).empty(empty)
+    })
+    .collect();
+    hosted(ui, data, skipped, move || HostedExportAs::new("Poster", DOCUMENT, ExportOptions::default()).assets(rows.clone()))
 }
 
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]

@@ -93,10 +93,11 @@ pub use navigator_options::{NAVIGATOR_PROXY_COLOR_KEY, NavigatorOptionsDialog, N
 pub(crate) mod export;
 
 pub use export::{
-    DdsCompression, DdsOptions, ExportAsDialog, ExportAsOutput, ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions,
-    ExportOptionsKind, ExportOutput, ExportPreview, ExportProfile, ExportSize, ExportWords, FormatOptions, FormatOptionsDialog, FormatOptionsOutput,
-    FormatOptionsWords, HostedExportAs, HostedFormatOptions, JpegFormat, JpegOptions, JpegPreset, OutputPathOutput, OutputPathRow, OutputPathWords,
-    ScaleRow, ScaleSize, SizeEstimate, TargaOptions, TiffCompression, TiffOptions, jpeg_quality_percent,
+    DdsCompression, DdsOptions, ExportAsAsset, ExportAsDialog, ExportAsOutput, ExportAsResult, ExportAsRow, ExportAsRowEstimate, ExportAsRowResult,
+    ExportAsRows, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions, ExportOptionsKind, ExportOutput, ExportPreview, ExportProfile,
+    ExportSize, ExportWords, FormatOptions, FormatOptionsDialog, FormatOptionsOutput, FormatOptionsWords, HostedExportAs, HostedFormatOptions,
+    JpegFormat, JpegOptions, JpegPreset, OutputPathOutput, OutputPathRow, OutputPathWords, ScaleRow, ScaleSize, SizeEstimate, TargaOptions,
+    TiffCompression, TiffOptions, jpeg_quality_percent,
 };
 
 // Save PDF.
