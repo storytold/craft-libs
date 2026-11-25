@@ -3,12 +3,13 @@
 use craft_behavior::{Metrics, MotionMode, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-use craft_ui::contract::overlay::{Dismiss, Outside};
+use craft_ui::contract::overlay::{Dismiss, OpenFilter, Outside, any_open};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptChoice, PromptKind,
-    RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, Prompt, PromptChoice,
+    PromptKind, RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
+    dialog_id,
 };
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
@@ -300,6 +301,32 @@ fn a_prompt_without_a_default_answer_opens_with_no_button_focused() {
     assert_eq!(answered.get(), None, "Enter answers nothing");
     fixture.key(egui::Key::Escape, Modifiers::NONE).idle(2);
     assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+}
+
+/// A job window is not a dialog that asks: an app that draws it only while no such dialog is open draws it in every
+/// pass, and the window still counts as a modal layer. A prompt with an answer counts as asking.
+#[trial]
+fn a_job_window_is_a_modal_layer_that_asks_nothing() {
+    let (passes, drawn) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (all, shown) = (Rc::clone(&passes), Rc::clone(&drawn));
+    let mut fixture = Fixture::new(move |ui| {
+        all.set(all.get() + 1);
+        if !any_open(ui.ctx(), OpenFilter::Asks) {
+            JobProgress::new("Exporting", "Page 1 of 3").show(ui);
+            shown.set(shown.get() + 1);
+        }
+    });
+    fixture.idle(6);
+    assert_eq!(drawn.get(), passes.get(), "the window is drawn in every pass");
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows");
+    assert!(any_open(fixture.ctx(), OpenFilter::Modal), "the window is a modal layer");
+    assert!(!any_open(fixture.ctx(), OpenFilter::Asks), "the window asks nothing");
+
+    let mut fixture = Fixture::new(|ui| {
+        Prompt::new("Replace the file?", "A file with this name exists.").answers([FooterButton::new("Replace", DialogRole::Accept)]).show(ui);
+    });
+    fixture.idle(6);
+    assert!(any_open(fixture.ctx(), OpenFilter::Asks), "a prompt with an answer asks");
 }
 
 const BAND: PartKey = PartKey::new("band");
