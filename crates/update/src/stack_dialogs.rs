@@ -1,6 +1,6 @@
 //! The update dialogs on craft-ui's dialog host: [`UpdatePromptDialog`] (a release is available)
-//! and [`UpdateCheckDialog`] (the result of a manual check), on [`Dialog`], with the app's name from the
-//! host's `AppInfo` and the words from [`UpdateWords`].
+//! and [`UpdateCheckDialog`] (the result of a manual check), on [`Dialog`], with the app's name and icon from the
+//! host (`Host::app`, `Host::icon_png`) and the words from [`UpdateWords`].
 
 use std::hash::{Hash as _, Hasher as _};
 use std::sync::{Arc, OnceLock};
@@ -102,29 +102,36 @@ pub fn icon_image(png: &[u8]) -> Option<ColorImage> {
 /// The app's decoded icon, kept for the life of the dialog; `None` inside when it has none or it does not decode.
 type IconCell = OnceLock<Option<ColorImage>>;
 
-/// The app the dialogs are for: the installed host's name and the suite entry that carries its icon and
-/// developer.
+/// The app the dialogs are for: the installed host's name and icon, and the suite entry that carries its developer.
 struct Subject {
+    id: &'static str,
     name: &'static str,
+    icon_png: Option<&'static [u8]>,
     app: Option<&'static App>,
 }
 
 impl Subject {
     fn of(env: &Env) -> Self {
-        let info = env.view().host().map(|host| host.app().clone());
-        Self { name: info.as_ref().map_or("", |info| info.name), app: info.and_then(|info| App::by_id(info.id)) }
+        let host = env.view().host();
+        let info = host.map(|host| host.app().clone());
+        Self {
+            id: info.as_ref().map_or("", |info| info.id),
+            name: info.as_ref().map_or("", |info| info.name),
+            icon_png: host.and_then(|host| host.icon_png()),
+            app: info.and_then(|info| App::by_id(info.id)),
+        }
     }
 
     /// The icon, the name, the developer and `version_line`, as the head of both dialogs. An app without a
     /// decodable icon shows its initial in the icon's place.
     fn head(&self, ui: &mut Ui, words: &UpdateWords, icon: &IconCell, version_line: &str) {
-        let image = icon.get_or_init(|| self.app.and_then(|app| app.icon_png).and_then(icon_image)).as_ref();
+        let image = icon.get_or_init(|| self.icon_png.and_then(icon_image)).as_ref();
         Row::new().show(ui, |ui, _| {
-            match (image, self.app) {
-                (Some(image), Some(app)) => {
-                    Picture::new("", icon_key(app), &|| image.clone()).extent(PictureSize::Icon).show(ui);
+            match image {
+                Some(image) => {
+                    Picture::new("", self.icon_key(), &|| image.clone()).extent(PictureSize::Icon).show(ui);
                 }
-                _ => {
+                None => {
                     Text::new(self.name.chars().next().map_or_else(|| "A".to_owned(), String::from)).show(ui);
                 }
             }
@@ -137,13 +144,13 @@ impl Subject {
             });
         });
     }
-}
 
-/// The picture key of `app`'s icon.
-fn icon_key(app: &App) -> u64 {
-    let mut hasher = std::hash::DefaultHasher::new();
-    app.id.hash(&mut hasher);
-    hasher.finish()
+    /// The picture key of the app's icon.
+    fn icon_key(&self) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.id.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// The spinner with the progress word, shown while an install runs.

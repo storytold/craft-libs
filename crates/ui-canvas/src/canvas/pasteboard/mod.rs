@@ -12,7 +12,7 @@ use crate::contract::{
     Access, Bind, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
     Props as _, Rename, Role, Show as _,
 };
-use crate::primitives::{Checker, CheckerArea, PaintShape, PaintSlot, Rule, StrokeWidth, TextRun, paint_surround};
+use crate::primitives::{Checker, CheckerArea, PaintShape, PaintSlot, Rule, StrokeColor, StrokeWidth, TextRun, paint_surround};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::memory::Remember as _;
@@ -77,6 +77,23 @@ pub enum PageBorder {
     None,
 }
 
+/// How the edges of artboards (pages marked with [`PageFrame::active()`]) show which one is active.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ArtboardEdge {
+    /// The active artboard's edge in `accent.solid`, the others in `line.border`, all at `stroke.thin`.
+    #[default]
+    Accent,
+    /// Colours that read against the paper rather than the chrome: the active artboard's edge black at `stroke.thin`,
+    /// the others mid grey at a hairline.
+    Plain,
+}
+
+/// The edge of the active artboard under [`ArtboardEdge::Plain`]: black.
+const PLAIN_ACTIVE: DataColor = DataColor::new(Color32::from_gray(0));
+/// The edge of another artboard under [`ArtboardEdge::Plain`]: grey 120.
+const PLAIN_OTHER: DataColor = DataColor::new(Color32::from_gray(120));
+
 /// What fills a page under the document.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -97,9 +114,9 @@ pub struct PageFrame {
     pub name: Option<String>,
     /// The page's own fill under the document (an artboard's background), or `None` for none.
     pub fill: Option<PageFill>,
-    /// An artboard's edge: `Some(true)` for the active board (an accent edge, its name in the normal text colour),
-    /// `Some(false)` for another board (a faint dark edge, its name muted); `None` for a plain page, which only the
-    /// border shows.
+    /// An artboard's edge: `Some(true)` for the active board (its name in the normal text colour), `Some(false)` for
+    /// another board (its name muted), each edged as the pasteboard's [`ArtboardEdge`] says; `None` for a plain page,
+    /// which only the border shows.
     pub active: Option<bool>,
     /// Whether a double press on the page's name renames the page.
     pub renames: bool,
@@ -216,6 +233,9 @@ pub struct Pasteboard<'a> {
     /// The border round each page; a drop shadow by default.
     #[prop]
     border: PageBorder,
+    /// How the artboards' edges show the active one; the accent by default.
+    #[prop]
+    artboard_edge: ArtboardEdge,
     /// Document rects the pasteboard does not cover, subtracted like the pages.
     #[prop]
     uncovered: &'a [DocRect],
@@ -239,6 +259,7 @@ impl<'a> Pasteboard<'a> {
             common: Common::new(),
             pages,
             border: PageBorder::DropShadow,
+            artboard_edge: ArtboardEdge::Accent,
             uncovered: &[],
             shows_outside: false,
             name_sizes: Vec::new(),
@@ -477,16 +498,17 @@ impl Component for Pasteboard<'_> {
             surround();
         }
         let aligned = view.axis_aligned();
-        let edge = |quad: &[Pos2; 4], color: StyleColor| {
+        // An edge in `color`, at `stroke.thin` or a hairline: `rule` is the same colour as the snapped rule paints it.
+        let edge = |quad: &[Pos2; 4], rule: Color32, color: StrokeColor, hairline: bool| {
             if aligned {
                 let rect = bounds(quad);
-                let look = RuleLook { color: color.egui(), width: RuleWidth::Points(style.edge) };
+                let look = RuleLook { color: rule, width: if hairline { RuleWidth::Hairline } else { RuleWidth::Points(style.edge) } };
                 let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
                 for (from, to) in corners.into_iter().zip(corners.into_iter().cycle().skip(1)) {
                     edges.painter.extend(Rule::shapes(&look, from, to, edges.pixels_per_point()));
                 }
             } else {
-                draw.stroke(&polygon(quad), StrokeWidth::Thin, color);
+                draw.stroke(&polygon(quad), if hairline { StrokeWidth::Hairline } else { StrokeWidth::Thin }, color);
             }
         };
         let shown = |page: &PageFrame| page.name.is_some() || bounds(&view.quad(page.rect)).intersects(view.rect);
@@ -519,10 +541,19 @@ impl Component for Pasteboard<'_> {
         for (at, page) in self.pages.iter().enumerate().filter(|(_, page)| shown(page)) {
             let quad = view.quad(page.rect);
             if self.border == PageBorder::Line {
-                edge(&quad, style.outline);
+                edge(&quad, style.outline.egui(), style.outline.into(), false);
             }
             if let Some(active) = page.active {
-                edge(&quad, if active { style.active_edge } else { style.outline });
+                match self.artboard_edge {
+                    ArtboardEdge::Accent => {
+                        let color = if active { style.active_edge } else { style.outline };
+                        edge(&quad, color.egui(), color.into(), false);
+                    }
+                    ArtboardEdge::Plain => {
+                        let color = if active { PLAIN_ACTIVE } else { PLAIN_OTHER };
+                        edge(&quad, color.0, color.into(), !active);
+                    }
+                }
             }
             if let (Some(name), Some(size)) = (&page.name, self.name_sizes.get(at).copied().flatten()) {
                 let rect = name_rect(&view, page, style.name_gap, size);

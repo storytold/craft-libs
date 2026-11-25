@@ -61,7 +61,7 @@ pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
     ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DeleteTarget, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress,
     HeaderMenuRequest, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight,
-    RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    RowPressed, RowPreview, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -69,8 +69,8 @@ pub use container::InBar;
 pub use container::InMenu;
 pub use container::{
     BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
-    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope,
-    WrapWidth,
+    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, SectionRhythm, ShellPane,
+    Sizing, ThemeScope, WrapWidth,
 };
 pub use craft_tracked::{PlainData, Revision, Tracked};
 pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
@@ -85,6 +85,7 @@ pub use footer_slot::FooterSlot;
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
 pub use hosted::{Hosted, HostedKey, Hosting};
+pub use items::item_node;
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
@@ -93,7 +94,8 @@ pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
 pub use label::{
-    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, Scrub, SideLabel,
+    CaptionColumn, CaptionInk, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme,
+    LinkLabelInk, Scrub, SideLabel,
 };
 pub use lazy::Lazy;
 #[doc(hidden)]
@@ -124,7 +126,6 @@ use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "suite")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
@@ -424,6 +425,12 @@ pub trait Component: Meta + Sized {
     /// Steps 13 and 14 clip to the rect grown by this much; the paint-bounds suite case reads it.
     fn paint_outset(_tokens: &crate::style::UiTokens) -> f32 {
         0.0
+    }
+
+    /// The variant an instance that asks for none takes in `env`; `None` takes the style's first. A variant the caller
+    /// asks for always stands. Read only `#[env(style)]` values, which the style cache keys on.
+    fn default_variant(_env: &crate::runtime::env::Env) -> Option<craft_theme::Variant> {
+        None
     }
 
     /// Pure function of the resolved context and the key.

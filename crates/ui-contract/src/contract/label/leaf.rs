@@ -1,6 +1,6 @@
 //! The side label as a leaf component: its node, press state, reset dot and colon.
 
-use super::props::{FieldLayout, Glyph, LabelKind, LabelScheme};
+use super::props::{CaptionInk, FieldLayout, Glyph, GlyphColon, LabelKind, LabelScheme, LinkLabelInk};
 use super::step::LabelIn;
 use crate::contract::InBar;
 use crate::contract::{Component, Props};
@@ -30,8 +30,8 @@ pub(super) struct LabelStyle {
     gap: f32,
     /// The detail: `text.muted`, `text.disabled` with a disabled control.
     detail: Stateful<StyleColor>,
-    /// The name: `TypeRole::Label` in `text.muted`; after a check box or a radio, `TypeRole::Body` in `text.normal`.
-    /// `text.disabled` with a disabled control.
+    /// The name: `TypeRole::Label` in the [`CaptionInk`]; after a check box or a radio, `TypeRole::Body` in
+    /// `text.normal`. `text.disabled` with a disabled control.
     #[style(text)]
     name: TextLook,
     /// The glyph and icon: their own ink (`None`), `text.disabled` with a disabled control.
@@ -173,11 +173,15 @@ impl Component for LabelLeaf {
             // A caption reads as secondary; a check box's or a radio's text after it is the control's own.
             name: {
                 let text = &cx.tokens.color.text;
-                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
-                if key.link {
+                let caption = if cx.env::<CaptionInk>() == CaptionInk::Normal { text.normal } else { text.muted };
+                let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, caption) };
+                let neutral = cx.env::<LinkLabelInk>() == LinkLabelInk::Neutral;
+                if key.link && !neutral {
                     // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
                     TextLook { role, ..cx.link_look(true) }
                 } else {
+                    // A neutral link label reads in the body ink; its underline still marks it.
+                    let ink = if key.link { text.normal } else { ink };
                     let (ink, off) = (cx.color(ink), cx.color(text.disabled));
                     TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
                 }
@@ -411,18 +415,20 @@ impl Component for LabelLeaf {
 }
 
 /// The colon a beside label draws after its shown text in a form (`LabelScheme::Form`), unless that text ends in one:
-/// a text label's, and in a bar a glyph text's as well ("X:"). An inspector's labels draw none. The label's node and
-/// the control keep the name as given.
+/// a text label's, in a bar a glyph text's as well ("X:"), and under `GlyphColon::Form` a glyph caption's. An
+/// inspector's labels draw none. The label's node and the control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
     if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() == LabelScheme::Inspector {
         return None;
     }
     let text = match &input.side.kind {
         LabelKind::Text | LabelKind::Short(_) => env.view().resolve(input.side.kind.shown(input.text)),
-        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 => match glyph.resolved(env.view()) {
-            Glyph::Text(text) => text,
-            Glyph::Icon(_) => return None,
-        },
+        LabelKind::Glyph(glyph) if env.values.get::<InBar>().0 || (glyph.caption && env.values.get::<GlyphColon>() == GlyphColon::Form) => {
+            match glyph.resolved(env.view()) {
+                Glyph::Text(text) => text,
+                Glyph::Icon(_) => return None,
+            }
+        }
         _ => return None,
     };
     if text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {

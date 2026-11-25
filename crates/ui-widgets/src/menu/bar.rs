@@ -49,8 +49,22 @@ use egui::{Context, Pos2, Rect, Response, Ui, Vec2};
 const TITLE: PartKey = PartKey::new("title");
 const MORE: PartKey = PartKey::new("more");
 
-/// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the accent fill
-/// and `text.on_accent` under the pointer and while its menu is open or the keyboard is on it.
+/// How much room a menu bar's titles take on each side of their text, and so how far apart they stand. An app sets it
+/// once at its root (`RootEnv::values`); the default is the regular padding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum MenuTitlePad {
+    /// The padding inside panels (`space.pad.regular`).
+    #[default]
+    Regular,
+    /// The padding inside controls (`space.pad.control`): titles set closer, as in an app bar whose menus share the
+    /// line with many controls.
+    Control,
+}
+
+/// The style of a title's face: a menu row's surface and ink (flat, square corners, no border), with the command
+/// highlight (`CommandHighlight`) under the pointer and while its menu is open or the keyboard is on it.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 struct TitleFaceStyle {
@@ -103,7 +117,10 @@ impl Component for TitleFace {
         TitleFaceStyle {
             surface,
             metrics: Metrics::new()
-                .padding(craft_behavior::Insets::horizontal(tokens.space.pad.regular))
+                .padding(craft_behavior::Insets::horizontal(match cx.env::<MenuTitlePad>() {
+                    MenuTitlePad::Regular => tokens.space.pad.regular,
+                    MenuTitlePad::Control => tokens.space.pad.control,
+                }))
                 .min_size(Vec2::new(0.0, control.height))
                 .gap(control.gap),
             focus: cx.focus_look(),
@@ -170,17 +187,31 @@ pub struct MenuBarStyle {
     metrics: Metrics,
 }
 
+/// A title's text without its marker, and its mnemonic: the letter and its character index in the text, none for a
+/// letter the text does not show.
+type TitleText = (String, Option<(char, Option<usize>)>);
+
 /// A menu of the bar: its title and the body that fills the menu when it opens.
 pub struct MenuTitle<'a> {
     label: Label,
     body: Box<dyn FnMut(&mut Ui) + 'a>,
     holds: Vec<CommandRef>,
+    /// The letter that opens the menu in place of the bar's own pick.
+    mnemonic: Option<char>,
 }
 
 impl<'a> MenuTitle<'a> {
     /// A menu titled `label` (a `&` marks the mnemonic) whose rows `body` shows.
     pub fn new(label: impl Into<Label>, body: impl FnMut(&mut Ui) + 'a) -> Self {
-        MenuTitle { label: label.into(), body: Box::new(body), holds: Vec::new() }
+        MenuTitle { label: label.into(), body: Box::new(body), holds: Vec::new(), mnemonic: None }
+    }
+
+    /// The letter that opens the menu, in place of the bar's own pick. A letter the title lacks still opens it, with
+    /// nothing underlined.
+    #[must_use]
+    pub fn mnemonic(mut self, letter: char) -> Self {
+        self.mnemonic = Some(letter);
+        self
     }
 
     /// Records the title's rect for `commands` with `commands::holds` in every pass it is shown.
@@ -336,13 +367,14 @@ impl<'a> MenuBar<'a> {
         env.shell().menu() == MenuPlacement::InWindow
     }
 
-    /// Each title's text without its marker, and its mnemonic: the letter and its character index in the text. A Mac
-    /// menu has no access letters.
-    fn texts(&self, env: &EnvView<'_>) -> Vec<(String, Option<(char, usize)>)> {
+    /// Each title's text without its marker, and its mnemonic: the letter and its character index in the text, none
+    /// for a letter the text does not show. A Mac menu has no access letters.
+    fn texts(&self, env: &EnvView<'_>) -> Vec<TitleText> {
         let labels: Vec<Label> = self.titles.iter().map(|title| env.resolve(&title.label)).collect();
         let refs: Vec<&str> = labels.iter().map(Label::as_str).collect();
+        let own: Vec<Option<char>> = self.titles.iter().map(|title| title.mnemonic).collect();
         let folder = env.folder();
-        let marks = if env.shell().os.is_mac() { vec![None; refs.len()] } else { mnemonic::assign(&refs, &folder) };
+        let marks = if env.shell().os.is_mac() { vec![None; refs.len()] } else { mnemonic::assign_with(&refs, &own, &folder) };
         refs.iter().zip(marks).map(|(label, mark)| (mnemonic::marked(label, &folder).0, mark)).collect()
     }
 
@@ -498,7 +530,7 @@ impl Component for MenuBar<'_> {
         for key in keys {
             match key {
                 MenuKey::Letter(letter) => {
-                    let held = |(_, mark): &(String, Option<(char, usize)>)| mark.is_some_and(|(held, _)| held == letter);
+                    let held = |(_, mark): &TitleText| mark.is_some_and(|(held, _)| held == letter);
                     if let Some(at) = texts.iter().take(found.shown).position(held) {
                         Self::open_only(cx, &slots, found, Open::Title(at));
                     }
@@ -686,7 +718,7 @@ impl Component for MenuBar<'_> {
             // Under the pointer a title is the active row, as it is while its menu is open or the keyboard is on it.
             let lit = open || cx.hover_pos(part).is_some() || cx.part_state(part).flags.contains(Flags::FOCUS_VISIBLE);
             let mnemonic = match slot {
-                Open::Title(at) if underlined => texts[at].1.map(|(_, index)| index),
+                Open::Title(at) if underlined => texts[at].1.and_then(|(_, index)| index),
                 _ => None,
             };
             ui.face(part, Self::face(&text, lit, mnemonic));

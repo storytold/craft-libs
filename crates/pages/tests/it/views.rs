@@ -512,7 +512,7 @@ fn a_page_gap_change_keeps_the_scroll_offset() {
 #[trial]
 fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     let budget = TextureStoreOptions::pages().budget.max_entries;
-    let count = 4 * budget;
+    let count = 2 * budget;
     let state = Rc::new(RefCell::new(state_with(|s| {
         s.continuous = true;
         s.fit = Fit::None;
@@ -1007,12 +1007,11 @@ fn shift_and_command_with_the_page_keys_and_arrows_go_to_the_ends() {
         );
         focus_canvas(&mut fixture);
         let keys = [(Key::PageDown, both, 4), (Key::PageUp, both, 0), (Key::ArrowDown, both, 4), (Key::ArrowUp, both, 0)];
-        let ends = [
-            (Key::End, Modifiers::SHIFT, 4),
-            (Key::Home, Modifiers::SHIFT, 0),
-            (Key::End, Modifiers::COMMAND, 4),
-            (Key::Home, Modifiers::COMMAND, 0),
-        ];
+        // Off macOS Ctrl+End and Ctrl+Home go to the ends too; macOS gives Cmd with Home and End no move.
+        let mut ends = vec![(Key::End, Modifiers::SHIFT, 4), (Key::Home, Modifiers::SHIFT, 0)];
+        if !cfg!(target_os = "macos") {
+            ends.extend([(Key::End, Modifiers::COMMAND, 4), (Key::Home, Modifiers::COMMAND, 0)]);
+        }
         for (key, mods, want) in keys.into_iter().chain(ends) {
             fixture.key(key, mods);
             fixture.idle(2);

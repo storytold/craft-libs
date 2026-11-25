@@ -6,7 +6,7 @@ use craft_behavior::{Axis, CancelReason, CanvasView};
 use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::canvas_controls::reading::{GuideReading, running};
-use craft_ui::contract::{Bind, BodyCx, Show as _};
+use craft_ui::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::{ToolFixture, pointer, tool_fixture, trial};
 use egui::{Id, Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
@@ -283,4 +283,40 @@ fn a_deleted_guide_hands_focus_on_without_selecting_the_next_guide() {
     fixture.fixture().key(Key::Delete, Modifiers::NONE).idle(3);
     assert!(at(&guides, Axis::Y, 200.0).is_none(), "Delete removes it: {:?}", guides.borrow());
     assert_eq!(*selected.borrow(), None, "and selects no other guide");
+}
+
+// A right-click on an unlocked guide is the guide's: the guides report its menu request and the tool host under them
+// reports none. Off the guide the right-click reaches the host, which asks for its own menu.
+#[trial]
+fn a_right_click_on_a_guide_asks_for_the_guide_menu_not_the_tools() {
+    use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::tool_fixture::DOCUMENT;
+    let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(vec![guide(1, Axis::Y, 200.0)]));
+    let asked: Shared<(Option<GuideKey>, bool)> = Rc::new(RefCell::new((None, false)));
+    let (shown, seen) = (Rc::clone(&guides), Rc::clone(&asked));
+    let tool = RefCell::new(Recorder::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").id(tool_fixture::canvas_id("Document")).document(DOCUMENT).view(view_at(1.0)(room));
+        let _ = canvas.show(ui, |ui, body| {
+            let out = Guides::new("Guides", canvas_of(body), Bind::bound(&mut *shown.borrow_mut())).interactive(true).show_at(ui, body.rect);
+            let mut seen = seen.borrow_mut();
+            seen.0 = seen.0.or(out.context.map(|(key, _)| key));
+            if let Some(pass) = tool_pass(&body.env) {
+                seen.1 |= ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()).context.is_some();
+            }
+        });
+    });
+    fixture.settle();
+    let mut right_click = |at: Pos2| {
+        *asked.borrow_mut() = (None, false);
+        fixture.frame(vec![pointer::moved(at)]);
+        fixture.frame(vec![pointer::secondary(at, true)]);
+        fixture.frame(vec![pointer::secondary(at, false)]);
+        fixture.settle();
+        *asked.borrow()
+    };
+    assert_eq!(right_click(pos2(200.0, 300.0)), (Some(GuideKey::new(1)), false), "on the guide: its menu, not the tool's");
+    assert_eq!(right_click(pos2(400.0, 300.0)), (None, true), "off the guide: the tool's menu");
 }

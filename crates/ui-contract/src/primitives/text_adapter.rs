@@ -83,6 +83,9 @@ pub(crate) struct TextState {
     pub change: Option<DraftChange>,
     /// `Cx::select_all_text` asked for the whole text to be selected at the start of the next pass.
     pub select_all: bool,
+    /// Focus arrived on a `select_on_focus` part with a pointer press that is still down: the press keeps the caret or
+    /// range the pointer makes, and its release as a plain click selects the whole text, as an address bar does.
+    pub select_on_click: bool,
     /// The selection, `(caret, anchor)`, the text part had when its edit menu, or a menu bar or menu the keyboard goes
     /// back to it from, took the focus (`AdapterIn::keeps_selection`): egui collapses the selection of a widget without
     /// focus, and the menu's command acts on it once the focus is back, which reaches the widget the pass after the
@@ -460,7 +463,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         // The menu closed a pass ago and the focus went elsewhere: nothing comes back to the held selection.
         state.held_selection = None;
     }
-    let mut base = state.draft.clone().or_else(|| state.normalised.take()).unwrap_or_else(|| input.shown.to_owned());
+    // An idle part shows its resting text, if it has one; focus (or the edit menu holding it) and any draft show the
+    // value's own text. A pass that edits an idle part's text (the host replacing its selection, or putting a draft in)
+    // edits the value's own text, not the resting text drawn in its place.
+    let edits_idle = input.options.replace_selection.is_some() || state.change.is_some();
+    let resting = input.options.resting.as_deref().filter(|_| !input.focused && !input.held && !edits_idle);
+    let mut base =
+        state.draft.clone().or_else(|| state.normalised.take()).or_else(|| resting.map(str::to_owned)).unwrap_or_else(|| input.shown.to_owned());
     let mut edited = apply(&mut input, state, &mut base, widget);
     if let Some((range, insert)) = state.completions.take(&base) {
         let chars = |byte: usize| base.get(..byte).map_or_else(|| base.chars().count(), |head| head.chars().count());
@@ -481,8 +490,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
     // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first. In any modal dialog
-    // a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits.
+    // a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits. A field that keeps
+    // its text on Escape takes every Escape while editable and hands it on after committing (`keep_on_escape`).
+    let keep_on_escape = input.options.keep_on_escape && !input.options.clear_on_escape && input.enabled && !input.read_only;
     let closes_dialog = focused_before
+        && !keep_on_escape
         && state.preedit.is_none()
         && !input.options.clear_on_escape
         && input.intents.untaken(&Intent::Cancel)
@@ -497,8 +509,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus;
     // in a dialog that Escape closes, the Escape stays the dialog's.
     let leaves = !input.options.clear_on_escape && !closes_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
-    let takes_escape =
-        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
+    let takes_escape = keep_on_escape
+        || if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
     let list_first = input.list_open && !input.options.clear_on_escape;
     if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
         // Escape over a composition alone ends the composition and leaves the text.

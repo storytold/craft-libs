@@ -178,14 +178,14 @@ impl<'a> TypeBar<'a> {
                 .extend(toggle.events.map(|on| TypeBarChange::Orientation(if on { TextOrientation::Vertical } else { TextOrientation::Horizontal })));
 
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &character_words, character, families, None, picker.as_mut());
+            let family = family_field(ui, &character_words, character, families, None, None, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &character_words, character, families, None);
+            let family = family_field(ui, &character_words, character, families, None, None);
             preview_family = family.preview;
             rested_family = family.rested;
             edits.extend(family.edits.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
-            let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, CharacterChange::Style);
+            let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, None, CharacterChange::Style);
             edits.extend(style.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
             // The size glyph the Character panel's size row shows.

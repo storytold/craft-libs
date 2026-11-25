@@ -6,7 +6,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::overlay::{Align, Side};
 use craft_ui::buttons::Button;
-use craft_ui::canvas_controls::{TaskBar, TaskBarDismiss, TaskBarPlace};
+use craft_ui::canvas_controls::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarHang, TaskBarPlace};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::menu::PanelRow;
 use craft_ui::runtime::commands::{CommandRef, EditCommands};
@@ -53,6 +53,12 @@ fn frame(by: DocVec) -> Vec<Point> {
 /// A frame low on the story canvas: below it the canvas has no room for a bar.
 fn low_frame() -> Vec<Point> {
     [(120.0, 290.0), (520.0, 290.0), (520.0, 390.0), (120.0, 390.0)].into_iter().map(|(x, y)| Point::new(x, y)).collect()
+}
+
+/// A frame far larger than the story canvas, as a crop frame on a document zoomed past the view: it leaves no room for
+/// a bar above or below it.
+fn filling_frame() -> Vec<Point> {
+    [(-2000.0, -2000.0), (3000.0, -2000.0), (3000.0, 3000.0), (-2000.0, 3000.0)].into_iter().map(|(x, y)| Point::new(x, y)).collect()
 }
 
 /// A canvas that shows the bar for the scene's anchor and place, with the More menu before a Done button: a movable
@@ -424,6 +430,36 @@ fn a_fixed_task_bar_ignores_a_drag_shows_no_more_menu_and_opens_above_with_no_ro
     );
 }
 
+/// An anchor that fills the canvas leaves no room on either side: the task bar and a fixed bar still show all their
+/// members, over the anchor at the area's bottom edge, instead of an empty surface at its top (photocraft#16657).
+#[trial]
+fn a_bar_whose_anchor_fills_the_area_keeps_its_members_at_the_bottom_edge() {
+    for fixed in [false, true] {
+        let scene = Rc::new(RefCell::new(Scene {
+            anchor: filling_frame(),
+            place: TaskBarPlace::default(),
+            bounds: Rect::NOTHING,
+            area: Rect::NOTHING,
+            rect: Rect::NOTHING,
+        }));
+        let mut fixture = fixture(&scene, fixed);
+        fixture.settle();
+        let shown = seen(&scene);
+        assert!(shown.bounds.contains_rect(shown.area), "fixed {fixed}: the anchor {:?} covers the canvas {:?}", shown.bounds, shown.area);
+        let done = fixture.by_label("Done").unwrap_or_else(|| panic!("fixed {fixed}: the bar shows its members"));
+        assert!(done.rect.is_positive(), "fixed {fixed}: Done has a size: {:?}", done.rect);
+        assert!(shown.rect.contains_rect(done.rect.shrink(SLACK)), "fixed {fixed}: Done {:?} lies in the bar {:?}", done.rect, shown.rect);
+        assert!(inside_area(&shown), "fixed {fixed}: inside the canvas {:?}: {:?}", shown.area, shown.rect);
+        assert!(
+            (shown.area.bottom() - shown.rect.bottom()).abs() < SLACK,
+            "fixed {fixed}: on the canvas's bottom edge {:?}: {:?}",
+            shown.area,
+            shown.rect
+        );
+        assert_eq!(fixture.by_label("More options").is_some(), !fixed, "fixed {fixed}: only the task bar has its More menu");
+    }
+}
+
 /// The grip is one of the bar's members: it sits on the members' line, centred with them, inside the bar's padding,
 /// and a drag on it still moves the bar.
 #[trial]
@@ -522,4 +558,50 @@ fn a_compact_task_bar_is_smaller_and_shows_every_member_whole() {
     for button in buttons {
         assert!(button.is_positive() && compact.expand(SLACK).contains_rect(button), "each member shows whole in {compact:?}: {button:?}");
     }
+}
+
+/// The fill of the bar grip painted inside `grip` among `shapes`.
+fn grip_ink(shapes: &[egui::Shape], grip: Rect) -> Option<egui::Color32> {
+    shapes.iter().find_map(|shape| match shape {
+        egui::Shape::Rect(rect) if grip.contains_rect(rect.rect) => Some(rect.fill),
+        _ => None,
+    })
+}
+
+/// The bar grip lights under the pointer and while the bar moves, and goes back to its rest ink after the drop.
+#[trial]
+fn the_bar_grip_lights_under_the_pointer_and_while_the_bar_moves() {
+    let scene = scene();
+    let mut fixture = fixture_with(&scene, |bar| bar.grip(TaskBarGrip::Bar));
+    fixture.settle();
+    let grip = fixture.by_label("Move bar").expect("the grip is named");
+    let rest = grip_ink(&fixture.frame_shapes(), grip.rect).expect("the grip paints its bar");
+
+    fixture.frame(vec![moved(grip.center())]).idle(8);
+    let hovered = grip_ink(&fixture.frame_shapes(), grip.rect);
+    assert!(hovered.is_some_and(|ink| ink != rest), "the grip lights under the pointer: {hovered:?} against {rest:?}");
+
+    let by = Vec2::new(-60.0, 30.0);
+    fixture.drag_hold_at(grip.center(), by);
+    let moving = grip_ink(&fixture.frame_shapes(), grip.rect.translate(by));
+    assert!(moving.is_some_and(|ink| ink != rest), "the grip is lit while the bar moves: {moving:?} against {rest:?}");
+
+    fixture.release_at(grip.center() + by).frame(vec![moved(grip.center() + by + Vec2::new(0.0, 200.0))]).idle(8);
+    let dropped = fixture.by_label("Move bar").expect("the grip is named");
+    assert_eq!(grip_ink(&fixture.frame_shapes(), dropped.rect), Some(rest), "the grip is back to rest once dropped and left");
+}
+
+/// A bar hung clear of the handles hangs farther below its anchor than the default, by the handle ring at least.
+#[trial]
+fn a_bar_clear_of_the_handles_hangs_farther_below_its_anchor() {
+    let below = |configure: fn(TaskBar<'_>) -> TaskBar<'_>| {
+        let scene = scene();
+        let mut fixture = fixture_with(&scene, configure);
+        fixture.settle();
+        let seen = seen(&scene);
+        seen.rect.top() - seen.bounds.bottom()
+    };
+    let (default, clear) = (below(|bar| bar), below(|bar| bar.hang_gap(TaskBarHang::ClearOfHandles)));
+    assert!(default > 0.0, "the bar hangs below its anchor: {default}");
+    assert!(clear > default + 2.0 * SLACK, "the bar clear of the handles hangs farther below: {clear} against {default}");
 }

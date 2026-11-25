@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 
 use crate::{
-    BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps, GripMark,
+    BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
     GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet,
     RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens, TypeStyle,
     TypeTokens, WellShape, WindowSizes,
@@ -66,7 +66,7 @@ fn edge(e: Edge) -> String {
 }
 
 fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
-    let ShapeTokens { radius, edge: e, knob, wells, grip } = shape;
+    let ShapeTokens { radius, edge: e, knob, wells, grip, locator } = shape;
     let RadiusSet { sm, control, surface, window, panel, button, pill } = radius;
     for (k, v) in [("sm", sm), ("control", control), ("surface", surface), ("window", window), ("panel", panel), ("button", button), ("pill", pill)] {
         out.line(&format!("shape.radius.{k}"), len(*v));
@@ -76,11 +76,13 @@ fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
     out.line("shape.knob", if *knob == KnobShape::Round { "round" } else { "tab" });
     out.line("shape.wells", if *wells == WellShape::Square { "square" } else { "round" });
     let GripShape { mark, count, length, width, gap } = grip;
-    out.line("shape.grip.mark", if *mark == GripMark::Ticks { "ticks" } else { "dots" });
+    out.line("shape.grip.mark", mark.name());
     out.line("shape.grip.count", count.to_string());
     for (k, v) in [("length", length), ("width", width), ("gap", gap)] {
         out.line(&format!("shape.grip.{k}"), len(*v));
     }
+    out.line("shape.locator.cell", len(locator.cell));
+    out.line("shape.locator.square", len(locator.square));
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
@@ -153,8 +155,10 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let RailSizes { width, button } = rail;
     out.line("size.rail.width", len(*width));
     out.line("size.rail.button", len(*button));
-    let BarSizes { title, tab, status, options, options_narrow } = bar;
-    for (k, v) in [("title", title), ("tab", tab), ("status", status), ("options", options), ("options_narrow", options_narrow)] {
+    let BarSizes { title, tab, tab_large, status, options, options_narrow } = bar;
+    for (k, v) in
+        [("title", title), ("tab", tab), ("tab_large", tab_large), ("status", status), ("options", options), ("options_narrow", options_narrow)]
+    {
         out.line(&format!("size.bar.{k}"), len(*v));
     }
     out.line("size.panel_header", len(*panel_header));

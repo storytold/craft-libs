@@ -1,15 +1,21 @@
 //! Trials of `IconicColumn`: the letter of a panel without an icon, the names a wide column shows, the grips of its
-//! groups, and the resizes of its flyouts.
+//! groups, the resizes of its flyouts, and a flyout that a command leaves open.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
-use super::GRIP;
+use super::{CELL, GRIP};
+use crate::buttons::Button;
+use crate::contract::overlay::{self, OpenFilter};
 use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
-    DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
+    DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconGroupSeparator, IconicColumn, PanelKey,
+    PanelSpec,
 };
+use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
 use crate::runtime::drag;
-use crate::runtime::env::Direction;
+use crate::runtime::env::{Direction, with_env};
+use crate::runtime::focus::{FocusTarget, request};
+use crate::runtime::frame::take_output;
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
@@ -18,7 +24,7 @@ use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
 use craft_behavior::overlay::Side;
-use egui::{Pos2, Rect, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, UiBuilder, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -235,6 +241,53 @@ fn a_press_outside_closes_the_flyout_only_with_auto_collapse() {
         let away = d.rect().right_center() + Vec2::new(100.0, 0.0);
         d.fixture.click_at(away).settle();
         assert_eq!(d.shown.get().is_none(), auto_collapse, "auto-collapse {auto_collapse}: a press outside closes the flyout only with it on");
+    }
+}
+
+/// The app command the trials bind to a key.
+const NUDGE: &str = "flyoutTrial.nudge";
+
+/// A key that runs an app command, with a stop in the open flyout focused, leaves the flyout open and live in every
+/// pass and the stop focused, with Auto-Collapse Iconic Panels off or on: the host's binding opens and closes a flyout,
+/// and a command closes only the transient popups (menus, dropdowns, lists).
+#[trial]
+fn a_key_command_leaves_the_open_flyout_and_the_focus_in_it() {
+    for auto_collapse in [false, true] {
+        let (open, stop, faded) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+        let (seen, shown, fade) = (Rc::clone(&open), Rc::clone(&stop), Rc::clone(&faded));
+        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+        let mut fixture = Fixture::new(move |ui| {
+            let column = Column::new(vec![Group::new(vec![0, 1], 0)]);
+            let mut now = seen.get();
+            IconicColumn::new("Panels", global("iconic column", "commands"), &column, Bind::bound(&mut now), &spec)
+                .within(screen())
+                .auto_collapse(auto_collapse)
+                .show_flyouts_at(ui, place, |_, at, ui, _| {
+                    let GroupAt::Show(rect) = at else { return None };
+                    shown.set(Some(ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| Button::new("Snap").show(ui).id).inner));
+                    None
+                });
+            // Last pass the open flyout was not among the live layers that take keys: it played its exit.
+            fade.set(fade.get() || (now.is_some() && !overlay::any_open(ui.ctx(), OpenFilter::Keys)));
+            seen.set(now);
+        });
+        let binding = Binding::parse("F9").expect("the trial's chord parses");
+        let catalog = AppCatalog::new(vec![CommandDef::new(NUDGE, NUDGE, Scope::app()).with_default(binding)], 1).expect("the catalog is taken");
+        fixture.commands(CommandInput::new().catalog(catalog)).room(SCREEN).settle();
+        let icon = fixture.by_label("Swatches").expect("the Swatches icon").rect.center();
+        fixture.click_at(icon).settle();
+        let button = stop.get().expect("the flyout shows its stop");
+        request(fixture.ctx(), FocusTarget::Id(button));
+        fixture.settle();
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(button), "auto-collapse {auto_collapse}: the flyout's stop has the focus");
+        faded.set(false);
+        take_output(fixture.ctx());
+        fixture.key(Key::F9, Modifiers::NONE).settle();
+        let fired = take_output(fixture.ctx()).fired;
+        assert!(fired.iter().any(|fired| fired.command.id == NUDGE), "auto-collapse {auto_collapse}: the key runs its command");
+        assert_eq!(open.get(), Some(1), "auto-collapse {auto_collapse}: the flyout stays open");
+        assert!(!faded.get(), "auto-collapse {auto_collapse}: and never plays its exit");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(button), "auto-collapse {auto_collapse}: and its stop keeps the focus");
     }
 }
 
@@ -534,11 +587,9 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
     }
 }
 
-/// A theme's `shape.grip` reaches the grips (photocraft#16426): six dots, two points on a side and three apart, in the
-/// theme's grip ink.
-#[trial]
-fn a_themes_grip_shape_reaches_the_grips() {
-    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 };
+/// The shapes a collapsed column of one group paints under a built-in theme whose `shape.grip` is `shape`, and its
+/// group's grip strip.
+fn themed_grip(shape: craft_theme::GripShape) -> (Vec<egui::Shape>, Rect) {
     let mut def = craft_theme::builtins().first().expect("a built-in theme").clone();
     let mut seed = def.shape.unwrap_or(craft_theme::ShapeSeed {
         radius: None,
@@ -548,11 +599,12 @@ fn a_themes_grip_shape_reaches_the_grips() {
         knob: None,
         wells: None,
         grip: None,
+        locator: None,
     });
     seed.grip = Some(craft_theme::GripSeed {
         mark: Some(shape.mark),
         count: Some(shape.count),
-        length: None,
+        length: Some(shape.length),
         width: Some(shape.width),
         gap: Some(shape.gap),
     });
@@ -574,10 +626,89 @@ fn a_themes_grip_shape_reaches_the_grips() {
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
     let strip = fixture.part_rect(id, GRIP.at(0)).expect("the group has its grip");
-    let shapes = fixture.frame_shapes();
+    (fixture.frame_shapes(), strip)
+}
+
+/// A theme's `shape.grip` reaches the grips (photocraft#16426): six dots, two points on a side and three apart, in the
+/// theme's grip ink.
+#[trial]
+fn a_themes_grip_shape_reaches_the_grips() {
+    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 };
+    let (shapes, strip) = themed_grip(shape);
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
     assert!(marks.iter().all(|m| equals_token(m.width(), shape.width) && equals_token(m.height(), shape.width)), "two-point dots: {marks:?}");
     assert!(marks.windows(2).all(|w| equals_token(w[1].min.x - w[0].max.x, shape.gap)), "three points apart: {marks:?}");
     assert_ne!(ink, egui::Color32::TRANSPARENT);
+}
+
+/// A theme's bar grip (VectorCraft's) is one level bar as long and as thick as the theme says, centred across the
+/// strip, with no row of ticks.
+#[trial]
+fn a_themes_bar_grip_is_one_level_bar() {
+    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Bar, count: 11, length: 18.0, width: 3.0, gap: 1.0 };
+    let (shapes, strip) = themed_grip(shape);
+    assert!(grip_ticks(&shapes, strip).is_none(), "no row of ticks");
+    let bars: Vec<Rect> = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if strip.expand(EPS).contains_rect(rect.rect) && rect.fill != egui::Color32::TRANSPARENT => Some(rect.rect),
+            _ => None,
+        })
+        .collect();
+    let [bar] = bars.as_slice() else { panic!("one bar in the strip: {bars:?}") };
+    assert!(bar.width() > bar.height(), "the bar lies level: {bar:?}");
+    assert!(equals_token(bar.width(), shape.length) && equals_token(bar.height(), shape.width), "the theme's 18 by 3 bar: {bar:?}");
+    assert!((bar.center().x - strip.center().x).abs() <= 0.5, "centred across the strip: {bar:?} in {strip:?}");
+}
+
+/// An app's `IconGroupSeparator::Rule` (VectorCraft's): the grip strips show no marks, and one level edge rule lies in
+/// the room between the two groups, under the first group's last icon and over the second group's first, short of the
+/// column's sides; none lies over the first group.
+#[trial]
+fn icon_groups_apart_by_a_rule_show_one_level_rule_between_them() {
+    let mut fixture = Fixture::hosted(|ui| {
+        let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
+        column.iconic = true;
+        let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(IconGroupSeparator::Rule);
+            },
+            |ui| {
+                let output = IconicColumn::new("Panels", global("iconic column", "rule"), &column, Bind::kept(), &named)
+                    .within(screen())
+                    .show_flyouts_at(ui, place, |_, _, _, _| None);
+                Some(output.into())
+            },
+        )
+    });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let border = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.line.border);
+    let shapes = fixture.frame_shapes();
+    let level: Vec<(Pos2, Pos2, egui::Color32)> = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points: [a, b], stroke } if (a.y - b.y).abs() < EPS => Some((*a, *b, stroke.color)),
+            _ => None,
+        })
+        .collect();
+    for group in [0, 1] {
+        let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group keeps its grip");
+        assert!(grip_ticks(&shapes, strip).is_none(), "group {group}: the strip shows no marks");
+    }
+    let first = fixture.part_rect(id, GRIP.at(0)).expect("the first group's grip");
+    assert!(!level.iter().any(|(a, _, _)| first.y_range().contains(a.y)), "no rule over the first group: {level:?}");
+    let (last, next) = (
+        fixture.part_rect(id, CELL.at(1)).expect("the first group's last icon"),
+        fixture.part_rect(id, CELL.at(2)).expect("the second group's icon"),
+    );
+    let between: Vec<_> = level.iter().filter(|(a, _, _)| a.y > last.bottom() && a.y < next.top()).collect();
+    let [(a, b, ink)] = between.as_slice() else { panic!("one rule between the groups: {level:?}") };
+    let (left, right) = (a.x.min(b.x), a.x.max(b.x));
+    assert!(left > 0.0 && right < RAIL && right - left > RAIL / 2.0, "the rule reaches across the column, short of its sides: {a:?} to {b:?}");
+    let [r, g, bl, al] = border.0;
+    assert_eq!(*ink, egui::Color32::from_rgba_unmultiplied(r, g, bl, al), "the rule is in line.border");
 }
