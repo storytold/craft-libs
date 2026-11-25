@@ -611,3 +611,24 @@ fn print_flagged_annotations_left_out_are_counted() {
     assert!(!list.items.is_empty());
     assert_eq!(report.dropped_annotations, 0);
 }
+
+#[test]
+fn device_n_attributes_name_process_inks_and_spot_alternates() {
+    // P1..P4 are the process components (ISO 32000-2 §8.6.6.5, Table 72); Gold alone looks like
+    // its `/Colorants` Separation (Table 71), not like the tint transform's all-zero result.
+    let gold = "[/Separation /Gold /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.3 1 0] /N 1 >>]";
+    let space = format!(
+        "[/DeviceN [/P1 /P2 /P3 /P4 /Gold] /DeviceCMYK 5 0 R << /Process << /ColorSpace /DeviceCMYK /Components [/P1 /P2 /P3 /P4] >> /Colorants << /Gold {gold} >> >>]"
+    );
+    let tint = stream("/FunctionType 4 /Domain [0 1 0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1 0 1]", "{pop}");
+    let pdf = raw_pdf("/N cs 0.25 0.5 0.75 1 1 scn 0 0 100 100 re f", &format!("/ColorSpace << /N {space} >>"), &[tint]);
+    let (list, _) = read(&pdf);
+    assert!(list.inks.lookup("P1").is_none(), "P1 is process cyan");
+    let gold = list.inks.lookup("Gold").unwrap();
+    let alternate = list.inks.spots().find(|(id, _)| *id == gold).unwrap().1.alternate;
+    assert_eq!(alternate, craft_prepress::Alternate::Cmyk([0.0, 0.3, 1.0, 0.0]));
+    let fills = fill_items(&list);
+    let Paint::Solid(InkColor::Tints(tints)) = &fills[0].1.paint else { panic!("{:?}", fills[0].1.paint) };
+    let expected = [(ink(Process::Cyan), 0.25), (ink(Process::Magenta), 0.5), (ink(Process::Yellow), 0.75), (ink(Process::Black), 1.0), (gold, 1.0)];
+    assert_eq!(tints[..], expected[..]);
+}
