@@ -487,10 +487,8 @@ impl Component for MenuItem<'_> {
         // A row's content sits `space.pad.regular` in from the popup's own padding, so a label starts clear of the edge.
         let mut metrics = control.metrics();
         metrics.padding = Insets::new(tokens.space.pad.regular, tokens.space.pad.regular, metrics.padding.top, metrics.padding.bottom);
-        if key.compact {
-            // The text line sets the height, as in a classic menu: no control height floor.
-            metrics.min_size.y = 0.0;
-        }
+        // The text line sets a compact row's height, as in a classic menu; any other row stands a menu row high.
+        metrics.min_size.y = if key.compact { 0.0 } else { cx.menu_row_height() };
         MenuItemStyle {
             surface,
             metrics,

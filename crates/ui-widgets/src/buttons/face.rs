@@ -398,7 +398,8 @@ pub(crate) struct IconFace {
 pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
     let on = match cx.env::<ActiveLook>() {
         ActiveLook::Accent => on_parts(cx),
-        ActiveLook::Pressed => pressed_parts(cx),
+        ActiveLook::Pressed => filled_parts(cx, cx.tokens.color.state.pressed),
+        ActiveLook::Control => filled_parts(cx, cx.tokens.color.surface.control),
     };
     let off = cx.variant_look();
     let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
@@ -430,11 +431,10 @@ pub(super) fn on_parts(cx: &StyleCx<'_>) -> VariantParts {
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), ..soft }
 }
 
-/// The on look under `ActiveLook::Pressed`: the pressed state's fill with no edge, the normal text colour.
-fn pressed_parts(cx: &StyleCx<'_>) -> VariantParts {
+/// The on look under `ActiveLook::Pressed` and `ActiveLook::Control`: `fill` with no edge, the normal text colour.
+fn filled_parts(cx: &StyleCx<'_>, fill: craft_theme::Rgba) -> VariantParts {
     let soft = on_parts(cx);
-    let colors = &cx.tokens.color;
-    let (fill, ink) = (cx.color(colors.state.pressed), cx.color(colors.text.normal));
+    let (fill, ink) = (cx.color(fill), cx.color(cx.tokens.color.text.normal));
     VariantParts { fill: Stateful::new(fill), text: Stateful::new(ink).off(States::new(ink, ink, ink, soft.text.off.disabled)), edge: None, ..soft }
 }
 
