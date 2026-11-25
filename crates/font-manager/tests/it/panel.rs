@@ -2,13 +2,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::index::Index;
-use craft_font_manager::store::{Call, FakeStore};
+use craft_font_manager::store::{Call, Conflict, FakeStore, Installer as _};
 use craft_font_manager::{Catalog, FontEnv, FontsPanel, FontsPanelView, Options};
 use craft_host::{AppInfo, Host, InlineJobs, Jobs, MemorySections};
 use craft_ui::contract::Role;
@@ -86,20 +86,30 @@ fn setup_with(name: &str, sections: Arc<MemorySections>) -> Rig {
 }
 
 fn setup_jobs(name: &str, sections: Arc<MemorySections>, jobs: Arc<dyn Jobs>) -> Rig {
+    setup_seeded(name, sections, jobs, |_| {})
+}
+
+/// [`setup_jobs`] after `seed` filled the store folder, as families installed by an earlier run.
+fn setup_seeded(name: &str, sections: Arc<MemorySections>, jobs: Arc<dyn Jobs>, seed: impl Fn(&Path)) -> Rig {
     let root = root(name);
     let system = root.join("usr/share/fonts");
     std::fs::create_dir_all(&system).unwrap();
     std::fs::write(system.join("Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).unwrap();
     let store_dir = root.join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
-    let env = FontEnv { os: Os::Unix, root: root.clone(), font_store: Some(store_dir.clone()), ..FontEnv::default() };
-    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
-    catalog.rescan();
+    seed(&store_dir);
     let files = HashMap::from([
         (HACK.to_owned(), epaint_default_fonts::HACK_REGULAR.to_vec()),
         (UBUNTU.to_owned(), epaint_default_fonts::UBUNTU_LIGHT.to_vec()),
     ]);
-    let store = Arc::new(FakeStore::new(store_dir, files));
+    start(&root, Arc::new(FakeStore::new(store_dir, files)), sections, jobs)
+}
+
+/// The panel over the system under `root` and `store`, as at a start of the app.
+fn start(root: &Path, store: Arc<FakeStore>, sections: Arc<MemorySections>, jobs: Arc<dyn Jobs>) -> Rig {
+    let env = FontEnv { os: Os::Unix, root: root.to_owned(), font_store: Some(root.join("store")), ..FontEnv::default() };
+    let catalog = Arc::new(Catalog::new(env).with_font_service(false));
+    catalog.rescan();
     let panel = Rc::new(RefCell::new(FontsPanel::new(Options::new(catalog, store.clone(), Ok(index())))));
     let shown = Rc::clone(&panel);
     let mut fx = Fixture::new(move |ui| {
@@ -218,7 +228,7 @@ fn queued_installs_run_one_runner_in_request_order() {
     assert_eq!(spawned.len(), 1, "one runner drains the queue");
     assert!(rig.store.calls().is_empty(), "nothing runs before the runner does");
     spawned.remove(0)();
-    assert_eq!(rig.store.calls(), [Call::Install("Amiri".into()), Call::Install("Hack".into())]);
+    assert_eq!(rig.store.calls(), [Call::Install("Amiri".into()), Call::Install("Hack".into()), Call::MakeAvailable("Hack".into())]);
 }
 
 impl Rig {
@@ -254,4 +264,68 @@ fn a_press_outside_the_details_sheet_closes_it() {
     rig.fx.click_at(Pos2::new(other.rect.left() + 4.0, other.rect.bottom() - 4.0));
     rig.fx.settle();
     assert_eq!(rig.panel.borrow().details_family(), None, "the sheet closed and no other family opened");
+}
+
+#[trial]
+fn installs_are_copied_to_the_system_fonts_folder_unless_kept_in_craft_apps() {
+    let mut rig = setup("os-copy");
+    rig.allow();
+    let conflict = Conflict { postscript: Some("Hack-Regular".into()), path: PathBuf::from("/fonts/Hack-Regular.ttf") };
+    rig.store.refuse_next(vec![conflict]);
+    rig.open("Hack");
+    rig.click("Install all");
+    assert_eq!(rig.store.calls(), [Call::Install("Hack".into()), Call::MakeAvailable("Hack".into())]);
+    assert!(rig.has_installed("Hack"));
+    assert!(rig.present("Not copied to your system's fonts folder: /fonts/Hack-Regular.ttf already has the font name Hack-Regular"));
+
+    // The setting decides what Install does from now on; Hack stays as it is.
+    rig.key(Key::Escape);
+    rig.click("Keep fonts in Craft apps only");
+    assert!(rig.store.craft_apps_only());
+    assert_eq!(rig.store.calls().len(), 2);
+    rig.open("Hack");
+    rig.click("Remove all");
+    rig.click("Install all");
+    assert_eq!(rig.store.calls()[2..], [Call::Remove("Hack".into()), Call::Install("Hack".into())]);
+    assert!(rig.present("Kept in Craft apps only"));
+
+    // The details switch copies it after all.
+    rig.click("Make available to all apps");
+    assert_eq!(rig.store.calls().last(), Some(&Call::MakeAvailable("Hack".into())));
+    assert!(rig.present("Available to all apps"));
+}
+
+#[trial]
+fn each_family_keeps_its_system_fonts_choice_across_starts() {
+    // Ubuntu, installed by an earlier run with no choice recorded, follows the default.
+    let seed = |dir: &Path| {
+        std::fs::create_dir_all(dir.join("Ubuntu")).unwrap();
+        std::fs::write(dir.join("Ubuntu/Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+    };
+    let mut rig = setup_seeded("os-choice", Arc::new(MemorySections::default()), Arc::new(InlineJobs), seed);
+    assert_eq!(rig.store.calls(), [Call::MakeAvailable("Ubuntu".into())]);
+
+    rig.allow();
+    rig.open("Hack");
+    rig.click("More install all options");
+    rig.click("Install for Craft apps only");
+    assert_eq!(rig.store.calls()[1..], [Call::Install("Hack".into())]);
+    assert!(rig.present("Kept in Craft apps only"));
+
+    // The next start copies neither: Hack is kept in Craft apps, Ubuntu is there already.
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("panel").join("os-choice");
+    let again = start(&root, rig.store.clone(), Arc::new(MemorySections::default()), Arc::new(InlineJobs));
+    assert_eq!(again.store.calls().len(), 2);
+}
+
+/// A card's Install menu installs for the choice picked, and the press on it opens no details.
+#[trial]
+fn a_cards_install_menu_chooses_where_the_fonts_go() {
+    let mut rig = setup("card-menu");
+    rig.allow();
+    rig.type_into("Search", "Hack");
+    rig.click("More install options");
+    rig.click("Install for Craft apps only");
+    assert_eq!(rig.store.calls(), [Call::Install("Hack".into())]);
+    assert_eq!(rig.panel.borrow().details_family(), None);
 }

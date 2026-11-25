@@ -3,10 +3,11 @@
 
 use craft_behavior::{IconId, PartRef};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::contract::{Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
 use craft_ui::runtime::focus::{FocusTarget, request};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Id, Key, Modifiers};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -110,4 +111,73 @@ fn an_icon_row_is_one_stop_in_the_menu_left_and_right_move_between_its_icons_and
     fixture.settle();
     assert_eq!(*picks.borrow(), vec![2, 0], "a click picks the icon under it");
     assert!(fixture.by_label("Ungroup").is_none(), "the pick closes the menu");
+}
+
+/// Regression: Return as the first key in a menu the pointer opened picked the first icon of a focused icon row the
+/// pointer never lit. With no row lit it only closes the menu; with a row lit under the pointer it runs that row.
+#[trial]
+fn return_in_a_pointer_opened_menu_whose_first_row_is_an_icon_row_runs_only_the_lit_row() {
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let ran = Rc::new(Cell::new(None::<&'static str>));
+    let row_id = Rc::new(Cell::new(None::<Id>));
+    let (picked, seen, shown) = (picks.clone(), ran.clone(), row_id.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let icons =
+            [MenuIcon::new(IconId::new("align_edge_left"), "Align Left Edges"), MenuIcon::new(IconId::new("align_edge_right"), "Align Right Edges")];
+        let opener = Button::new("Open").show(ui);
+        Menu::new("Arrange").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            let row = MenuIconRow::new("Align", &icons).show(ui);
+            shown.set(Some(row.response.id));
+            picked.borrow_mut().extend(row.picked);
+            for name in ["Group", "Ungroup"] {
+                if MenuItem::new(name).show(ui).ran {
+                    seen.set(Some(name));
+                }
+            }
+        });
+    });
+    fixture.settle();
+    let open = |fixture: &mut Fixture| {
+        let opener = fixture.by_label("Open").expect("the opener");
+        fixture.advance(1.0).click(&opener).settle();
+        assert!(fixture.by_label("Ungroup").is_some(), "a click on the opener opens the menu");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), row_id.get(), "the menu puts its first row, the icon row, in focus");
+    };
+    open(&mut fixture);
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(fixture.by_label("Ungroup").is_none(), "Return with no row lit closes the menu");
+    assert!(picks.borrow().is_empty(), "and picks no icon");
+    assert_eq!(ran.get(), None, "and runs no row");
+    open(&mut fixture);
+    let ungroup = fixture.by_label("Ungroup").expect("the Ungroup row").center();
+    fixture.frame(vec![pointer::moved(ungroup)]).settle();
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(ran.get(), Some("Ungroup"), "Return runs the row the pointer lit");
+    assert!(picks.borrow().is_empty(), "and picks no icon of the focused row");
+    assert!(fixture.by_label("Ungroup").is_none(), "and the run closes the menu");
+}
+
+/// Regression: the first key in a menu the pointer opened was withheld from an icon an AccessKit `Focus` had moved to,
+/// so Return picked nothing. Only the focus the menu gave as it opened is withheld from; an icon aimed at is picked.
+#[trial]
+fn return_on_an_icon_accesskit_focused_in_a_pointer_opened_menu_picks_it() {
+    let picks = Rc::new(RefCell::new(Vec::new()));
+    let picked = picks.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let icons =
+            [MenuIcon::new(IconId::new("align_edge_left"), "Align Left Edges"), MenuIcon::new(IconId::new("align_edge_right"), "Align Right Edges")];
+        let opener = Button::new("Open").show(ui);
+        Menu::new("Arrange").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            picked.borrow_mut().extend(MenuIconRow::new("Align", &icons).show(ui).picked);
+            MenuItem::new("Group").show(ui);
+        });
+    });
+    fixture.settle();
+    let opener = fixture.by_label("Open").expect("the opener");
+    fixture.advance(1.0).click(&opener).settle();
+    let right = fixture.by_label("Align Right Edges").expect("the menu shows its icons");
+    fixture.access(AccessActionKind::Focus, &right).settle();
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(*picks.borrow(), vec![1], "Return picks the icon AccessKit focused");
+    assert!(fixture.by_label("Group").is_none(), "and the pick closes the menu");
 }
