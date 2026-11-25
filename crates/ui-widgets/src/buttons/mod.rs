@@ -80,6 +80,9 @@ pub enum ActiveLook {
     Accent,
     /// The pressed state's fill with no edge, and the glyph in the normal text colour.
     Pressed,
+    /// The `surface.control` fill with no edge, and the glyph in the normal text colour: the open panel's icon of a
+    /// dock in VectorCraft 0.24's block look (`PanelTabLook::Block`).
+    Control,
 }
 
 /// The look of a push or split button that asks for no variant. An app sets it once at its root (`RootEnv::values`);

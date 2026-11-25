@@ -160,6 +160,7 @@ size.bar.tab_large = 32
 size.bar.status = 24
 size.bar.options = 36
 size.bar.options_narrow = 28
+size.bar.column = 20
 size.panel_header = 28
 size.popup_min = 192
 size.thumb.sm = 18

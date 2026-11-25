@@ -15,6 +15,7 @@
     },
     "size": {
       "bar": {
+        "column": 20.0,
         "options": 36.0,
         "options_narrow": 28.0,
         "status": 24.0,

@@ -65,10 +65,10 @@ fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
     assert!(fixture.by_label("2 replies").is_none(), "Comments' caption goes with it");
 }
 
-// Beside pill tabs (VectorCraft's) the panel menu button stands in the strip's middle, level with the shown tab's pill;
-// beside plain tabs it keeps to the strip's top.
+// Beside pill and block tabs (VectorCraft's) the panel menu button stands in the strip's middle, level with the shown
+// tab's middle; beside plain tabs it keeps to the strip's top.
 #[trial]
-fn the_panel_menu_button_stands_level_with_pill_tabs() {
+fn the_panel_menu_button_stands_level_with_pill_and_block_tabs() {
     use craft_ui::menu::PanelRow;
     use craft_ui::tabs::PanelTabLook;
     let middles = |look: PanelTabLook| {
@@ -82,10 +82,12 @@ fn the_panel_menu_button_stands_level_with_pill_tabs() {
         let Some(menu) = fixture.by_label("Panel Menu") else { panic!("the panel menu button shows") };
         (tab.rect.center().y, menu.rect)
     };
-    let (tab, menu) = middles(PanelTabLook::Pill);
-    assert!((menu.center().y - tab).abs() <= 0.5, "the menu button {menu:?} is level with the pill tab's middle {tab}");
     let (_, plain) = middles(PanelTabLook::Plain);
-    assert!(menu.top() > plain.top() + 0.5, "beside plain tabs the button {plain:?} keeps to the strip's top, above {menu:?}");
+    for look in [PanelTabLook::Pill, PanelTabLook::Block] {
+        let (tab, menu) = middles(look);
+        assert!((menu.center().y - tab).abs() <= 0.5, "beside {look:?} tabs the menu button {menu:?} is level with the tab's middle {tab}");
+        assert!(menu.top() > plain.top() + 0.5, "beside plain tabs the button {plain:?} keeps to the strip's top, above {menu:?}");
+    }
 }
 
 // A titled group shows the shown panel's name as a heading with its count and a close button, not a tab strip: the
