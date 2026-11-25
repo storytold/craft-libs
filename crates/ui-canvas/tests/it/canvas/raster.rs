@@ -313,7 +313,8 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
     // A 100 x 70 document at 50 percent: each copy is 50 x 35 points, and no copy's edge falls on the canvas's.
     let document = Document::new(100, 70);
     let center = Point::new(50.0, 35.0);
-    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5);
+    // As the canvas shows it: the document's origin on a whole pixel.
+    let view = craft_ui::canvas::pixel_aligned(CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5), 1.0);
     let canvas = view.rect;
     let at =
         |i: i32, j: i32| doc_rect(&view, Rect64::new(f64::from(i) * 100.0, f64::from(j) * 70.0, f64::from(i + 1) * 100.0, f64::from(j + 1) * 70.0));
@@ -343,7 +344,7 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
         // the document, and nowhere between them.
         let tiny = Document::new(1, 1);
         let center = Point::new(500.5, 0.5);
-        let panned = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5);
+        let panned = craft_ui::canvas::pixel_aligned(CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5), 1.0);
         let (capped, checker, _) = pictures(&tiny, center, 0.5, Extent::Tiled, None, painted);
         assert_eq!(capped.len(), 31 * 31 + 1, "painted {painted}: the capped run and the document");
         let run = doc_rect(&panned, Rect64::new(485.0, -15.0, 516.0, 16.0));
@@ -364,7 +365,8 @@ fn a_mapped_picture_tiles_its_area_a_whole_area_apart() {
     let corners = [Point::new(area.x0, area.y0), Point::new(area.x1, area.y0), Point::new(area.x1, area.y1), Point::new(area.x0, area.y1)];
     let frame = Homography::unit_to_quad(corners).expect("a rectangle");
     let center = Point::new(50.0, 35.0);
-    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5);
+    // As the canvas shows it: the document's origin on a whole pixel.
+    let view = craft_ui::canvas::pixel_aligned(CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5), 1.0);
     let at = |i: i32, j: i32| doc_rect(&view, area + craft_behavior::kurbo::Vec2::new(f64::from(i) * 140.0, f64::from(j) * 90.0));
     let in_view: Vec<Rect> =
         (-40..40).flat_map(|j| (-40..40).map(move |i| (i, j))).map(|(i, j)| at(i, j)).filter(|r| r.intersects(view.rect)).collect();

@@ -78,8 +78,8 @@ fn assert_same(got: &[Vec<Pos2>], want: &[Vec<Pos2>], what: &str) {
     assert!(close, "{what}: {got:?} against {want:?}");
 }
 
-/// The outline trial's zoom: no whole number of device pixels per document unit, so the canvas shows the view as it is
-/// set (`pixel_aligned`) and a pan by a fraction of a pixel reaches the outline.
+/// The outline trial's zoom: no whole number of device pixels per document unit. The canvas still shows the document's
+/// origin on a whole pixel (`pixel_aligned`), so a pan by a fraction of a pixel reaches the outline as a whole one.
 const ZOOM: f64 = 1.5;
 
 #[trial]
@@ -115,7 +115,14 @@ fn a_selection_outline_keeps_its_shapes_while_its_revision_holds_and_follows_a_w
     }
     assert_same(&outline_lines(&mut fixture), &moved(&rebuilt, vec2(-8.0 * ZOOM as f32, 0.0)), "a pan by whole pixels moves the kept shapes");
 
-    // A pan that is not whole device pixels builds again: the first paths, at the panned view.
+    // A pan that is not whole device pixels is shown on whole pixels: the kept shapes stay where they are or move one
+    // pixel on, and nothing is built again.
     state.borrow_mut().centre.x += 0.3;
-    assert_same(&outline_lines(&mut fixture), &moved(&built, vec2(-8.3 * ZOOM as f32, 0.0)), "a pan by a fraction rebuilds");
+    let after = outline_lines(&mut fixture);
+    let kept = |by: f32| {
+        let want = moved(&rebuilt, vec2(-8.0 * ZOOM as f32 - by, 0.0));
+        after.len() == want.len()
+            && after.iter().zip(&want).all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (*p - *q).length() < 1e-2))
+    };
+    assert!(kept(0.0) || kept(1.0), "a pan by a fraction moves the kept shapes by whole pixels: {after:?} against {rebuilt:?}");
 }
