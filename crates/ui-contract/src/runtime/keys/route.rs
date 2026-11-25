@@ -589,8 +589,9 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput, repeat: bool) {
 /// and the shortcut dispatcher fired no command for it. A press a command fired for holds its key: the key's
 /// auto-repeats are the command's too, whether or not they fire it again (`RootEnv::shortcuts_repeat`), and so is its
 /// release. The hold ends at any release of the key, wherever it lands, so the next press and release of the key are
-/// left over. A press the dispatcher declined (a chord whose commands are all disabled) is left over, and so are its
-/// repeats that fire nothing.
+/// left over; a press of it that is no repeat ends it too, at that press, whose own place in the pass keeps the events
+/// before it the command's. A press the dispatcher declined (a chord whose commands are all disabled) is left over, and
+/// so are its repeats that fire nothing.
 ///
 /// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
 /// as the `Copy`, `Cut` or `Paste` event (`PasteImage` for a pasted image), in its place among the other events. Empty
@@ -604,7 +605,8 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
     }
     let platform = craft_keymap::egui::platform(ctx);
     // The keys whose press a command took in an earlier pass and that are still held as this pass's events begin. The
-    // key stage keeps the hold itself (`note_fired_up`), so this reads it and leaves it as it is.
+    // key stage ends the hold for the passes after this one (`note_fired_up`); this reading ends it where a fresh press
+    // of the key comes, which is where it ends in this pass.
     let (fired, clips, passed, mut down) =
         current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), stage.passed.clone(), stage.fired_before.clone()));
     let key_of = |input: &KeyInput| input.physical.or(input.typed);
@@ -631,6 +633,15 @@ pub fn leftover_events(ctx: &Context) -> Vec<Event> {
         match leftover(&event) {
             Leftover::Key { pressed, repeat } => {
                 let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
+                // A press of a held key that is no repeat ends the hold here, as the key stage's `note_fired_up` ends it
+                // for the passes after this one (`Stage::fired_before`): this pass's events before the press stay the
+                // command's, and the press itself is a fresh one.
+                if pressed
+                    && !repeat
+                    && let Some(at) = key_of(&input).and_then(|key| down.iter().position(|held| *held == key))
+                {
+                    down.swap_remove(at);
+                }
                 if pressed && fired.iter().any(|(fired, by_repeat)| *by_repeat == repeat && same(fired, &input)) {
                     // A press a command took holds its key until its release.
                     if let Some(key) = key_of(&input).filter(|key| !repeat && !down.contains(key)) {

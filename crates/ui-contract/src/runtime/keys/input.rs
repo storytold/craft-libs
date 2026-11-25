@@ -765,7 +765,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
-            note_fired_up(&mut stage.fired_down, &mut stage.fired_before, &read);
+            note_fired_up(&mut stage.fired_down, &read);
             if batch.focus_lost {
                 // The releases of the keys held now go to another window.
                 stage.fired_down.clear();
@@ -878,16 +878,15 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 
 /// Ends the hold of a key a command fired for (`Stage::fired_down`) at any release of the key, whatever has focus, and
 /// at a press of it that is no repeat, as the release of the earlier press went to another window: the next release
-/// of that key is no command's. Such a press ends it for this pass's events too (`Stage::fired_before`).
-fn note_fired_up(fired_down: &mut Vec<Key>, fired_before: &mut Vec<Key>, event: &KeyEvent) {
-    match event {
-        KeyEvent::Press { input, repeat: false, .. } => {
-            let pressed = input.physical.or(input.typed);
-            fired_down.retain(|key| Some(*key) != pressed);
-            fired_before.retain(|key| Some(*key) != pressed);
-        }
-        KeyEvent::Release { input } => fired_down.retain(|key| Some(*key) != input.physical.or(input.typed)),
-        _ => {}
+/// of that key is no command's. The events before that press stay the command's: `leftover_events` ends the hold where
+/// the press is, in `Stage::fired_before`'s reading of this pass.
+fn note_fired_up(fired_down: &mut Vec<Key>, event: &KeyEvent) {
+    let ends = match event {
+        KeyEvent::Press { input, repeat: false, .. } | KeyEvent::Release { input } => input.physical.or(input.typed),
+        _ => None,
+    };
+    if let Some(key) = ends {
+        fired_down.retain(|held| *held != key);
     }
 }
 

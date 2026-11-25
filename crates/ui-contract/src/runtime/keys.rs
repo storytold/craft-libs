@@ -350,7 +350,8 @@ pub(crate) struct Stage {
     /// release went to another window) and when the window loses focus.
     fired_down: Vec<Key>,
     /// The keys of `fired_down` held over from earlier passes, as `leftover_events` reads this pass's events by them:
-    /// `fired_down` before this pass's events, less each key pressed again (no repeat) in this pass.
+    /// `fired_down` before this pass's events. A press of a held key that is no repeat ends the hold where the press
+    /// is, so the pass's events before it stay the command's.
     fired_before: Vec<Key>,
     /// The paste the focused component reads through its clipboard handle.
     pasted: Option<(Id, ClipContent)>,

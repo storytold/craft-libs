@@ -65,3 +65,37 @@ fn leftover_events_holds_both_pastes_of_a_pass() {
     frames.frame(vec![Event::Paste("a".to_owned()), Event::Paste("b".to_owned())], &mut show);
     assert_eq!(pasted(left.take()), ["a".to_owned(), "b".to_owned()], "both pastes are left over, in the order they arrived");
 }
+
+/// A fresh press of a key a command fired for ends that command's hold where the press is: the pass's events before it,
+/// the key's repeat and its release, stay the command's, and the press and its release are the host's.
+#[trial]
+fn a_fresh_press_ends_a_fired_key_hold_after_the_events_before_it() {
+    let mut frames = Frames::new();
+    let binding = Binding::parse("F1").expect("the trial's chord parses");
+    let help = CommandDef::new("leftoverTrial.hold", "Help", Scope::app()).with_default(binding);
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid")));
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+
+    frames.frame(vec![key_press(Key::F1, Modifiers::NONE)], &mut show);
+    assert_eq!(take_output(&frames.ctx).fired.len(), 1, "the command fired for the press");
+    assert!(key_events(left.take()).is_empty(), "the press is the command's");
+
+    let held = vec![
+        key_repeat(Key::F1, Modifiers::NONE),
+        key_release(Key::F1, Modifiers::NONE),
+        key_press(Key::F1, Modifiers::SHIFT),
+        key_release(Key::F1, Modifiers::SHIFT),
+    ];
+    frames.frame(held, &mut show);
+    assert_eq!(
+        key_events(left.take()),
+        [(Key::F1, true), (Key::F1, false)],
+        "the repeat and release before the fresh press stay the command's, and the fresh press and its release are left over"
+    );
+}
