@@ -194,6 +194,10 @@ pub(crate) struct State {
     /// How many of egui's focus candidates of the running pass (`Memory::focus_candidates`) `take_app_widgets` has
     /// read.
     pub(super) candidates_seen: usize,
+    /// The widget the runtime gave egui's focus, under its own press rule, until the end hook of a pass that drew it: the
+    /// focus of an app's own widget (`State::app_widget`) is left to egui's rule there. A press or click of the pass that
+    /// gave the focus so never takes it back.
+    given: Option<Id>,
     /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
     surrender_after_scopes: Option<Id>,
     /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
@@ -228,7 +232,10 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
     }
     for act in acts {
         match act {
-            Act::Focus(id, filter) => egui_focus::focus_with_filter(ctx, id, filter),
+            Act::Focus(id, filter) => {
+                egui_focus::focus_with_filter(ctx, id, filter);
+                with(ctx, |state| state.given = Some(id));
+            }
             Act::Surrender(id) => egui_focus::surrender(ctx, id),
         }
     }
@@ -1144,6 +1151,12 @@ pub(crate) fn end(ctx: &Context) {
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport);
     let acts = with(ctx, |state| nav::end(state, focused, on_app_widget, frame));
     apply(ctx, acts);
+    if let Some(id) = with(ctx, |state| state.given).filter(|id| ctx.read_response(*id).is_some()) {
+        with(ctx, |state| state.given = None);
+        if app_widget(id) {
+            egui_focus::leave_to_egui(ctx, id);
+        }
+    }
     // Escape over a captured framework press or drag cancels it (`frame::begin_pass`), whatever egui has focused.
     let captured = crate::runtime::pointer::press_captured(ctx) || crate::runtime::drag::running(ctx);
     let host_focus = !captured && with(ctx, |state| state.focus_now).is_some_and(app_widget);

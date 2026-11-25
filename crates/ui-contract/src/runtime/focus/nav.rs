@@ -266,9 +266,9 @@ impl State {
         let stop = &rec.stop;
         let roving = stop.group.is_some();
         let keys = stop.keys;
-        // An app's own widget (`Stop::host`) reads its Escape from egui, as a stop that claims it does: egui keeps its
-        // focus on it.
-        let escape = stop.host || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
+        // The app's canvas (`host_canvas`) reads its Escape from egui, as a stop that claims it does: egui keeps its focus
+        // on it. Every other widget of the app's own keeps Escape by its own egui filter.
+        let escape = (stop.host && !stop.automatic()) || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
         let filter = egui_focus::filter(
             keys.keep == super::KeepKeys::Tab,
             roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),

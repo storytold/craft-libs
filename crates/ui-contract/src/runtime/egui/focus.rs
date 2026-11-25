@@ -44,14 +44,25 @@ pub(crate) fn label_selection(ctx: &Context) -> bool {
 }
 
 /// Gives `id` key focus with `filter`, applied from this pass: a filter set afterwards acts a pass late. egui never
-/// takes this focus away on a press or click elsewhere: the runtime moves it on press (8.3). egui's own rule, the
-/// app's `surrender_focus_on`, applies to the focus of the app's own widgets.
+/// takes this focus away on a press or click elsewhere: the runtime moves it on press (8.3). The end hook leaves
+/// the focus of an app's own widget to egui's rule (`leave_to_egui`).
 pub(crate) fn focus_with_filter(ctx: &Context, id: Id, filter: KeyFilter) {
     let filter =
         EventFilter { tab: filter.tab, horizontal_arrows: filter.horizontal_arrows, vertical_arrows: filter.vertical_arrows, escape: filter.escape };
     ctx.memory_mut(|memory| {
         memory.request_focus_with_filter(id, filter);
         memory.set_focus_surrender(id, SurrenderFocusOn::Never);
+    });
+}
+
+/// Leaves the focus of the app's own widget `id`, if it holds it, to egui's rule, the app's `surrender_focus_on`, with
+/// the key filter it has.
+pub(crate) fn leave_to_egui(ctx: &Context, id: Id) {
+    ctx.memory_mut(|memory| {
+        if memory.has_focus(id) {
+            let filter = memory.focus_lock_filter().unwrap_or_default();
+            memory.request_focus_with_filter(id, filter);
+        }
     });
 }
 

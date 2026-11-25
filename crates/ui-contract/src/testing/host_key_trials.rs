@@ -750,6 +750,136 @@ fn an_app_field_that_keeps_tab_types_it_and_a_single_line_field_tabs_on() {
     assert_eq!(texts.borrow().1, "", "and types nothing");
 }
 
+/// How the focus of the app's own widget `id` in `mixed_window`, given by Tab (`tab`) or by the app's own egui request,
+/// ends.
+#[derive(Debug, PartialEq, Eq)]
+struct FocusEnds {
+    /// egui's focus after the press and after the release of a click elsewhere.
+    click: (Option<Id>, Option<Id>),
+    /// Whether the widget lost focus by egui's word, in each pass from the press on.
+    lost: Vec<bool>,
+    /// egui's focus after Escape, the focus given again.
+    escape: Option<Id>,
+    /// egui's focus after a click elsewhere while the app's option is never to surrender it, the focus given again.
+    kept: Option<Id>,
+}
+
+fn focus_ends(id: Id, tab: bool) -> FocusEnds {
+    let lost = Rc::new(RefCell::new(Vec::new()));
+    let losses = Rc::clone(&lost);
+    let mut base = mixed_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        losses.borrow_mut().push(ui.ctx().read_response(id).is_some_and(|response| response.lost_focus()));
+    };
+    let give = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| {
+        for _ in 0..MIXED.len() {
+            if tab && egui_focused(&frames.ctx) != Some(id) {
+                tab_with(frames, &mut &mut *show, Modifiers::NONE);
+            }
+        }
+        if !tab {
+            fixture::host_focus(&frames.ctx, id);
+        }
+        frames.idle(2, &mut *show);
+        assert_eq!(egui_focused(&frames.ctx), Some(id), "the widget has the focus");
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let empty = Pos2::new(300.0, 450.0);
+    give(&mut frames, &mut show);
+    lost.borrow_mut().clear();
+    let click = click_focus(&mut frames, &mut show, empty);
+    frames.idle(2, &mut show);
+    let lost = lost.take();
+    give(&mut frames, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    let escape = egui_focused(&frames.ctx);
+    fixture::set_app_surrender(&frames.ctx, true);
+    give(&mut frames, &mut show);
+    let (_, kept) = click_focus(&mut frames, &mut show, empty);
+    FocusEnds { click, lost, escape, kept }
+}
+
+/// Focus that Tab gave an app's own button or text field ends as the focus the app's own request gave it: a click
+/// elsewhere and Escape release it once, by egui's rule and the app's surrender option.
+#[trial]
+fn tab_focus_on_an_app_widget_ends_as_the_focus_the_app_gave_it() {
+    for id in ["app first", "app field"].map(named_id) {
+        let ends = focus_ends(id, true);
+        assert_eq!(ends.click, (Some(id), None), "a click elsewhere releases it, at the release by egui's option");
+        assert!(ends.lost.contains(&true), "and the widget sees its focus lost");
+        assert_eq!(ends.escape, None, "Escape releases it");
+        assert_eq!(ends.kept, Some(id), "the app's option keeps it over a click elsewhere");
+        assert_eq!(ends, focus_ends(id, false), "as the focus the app gave it does, seen lost in the same passes");
+    }
+}
+
+/// A component reached with Tab keeps its focus over Escape and drops it at a press no component takes.
+#[trial]
+fn tab_focus_on_a_component_ends_by_the_framework_s_press_rule() {
+    let mut show = mixed_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    tab_with(&mut frames, &mut show, Modifiers::NONE);
+    let one = Some(named_id("framework one"));
+    assert_eq!(tab_with(&mut frames, &mut show, Modifiers::NONE), one);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(egui_focused(&frames.ctx), one, "Escape leaves the component's focus");
+    let empty = Pos2::new(300.0, 450.0);
+    assert_eq!(click_focus(&mut frames, &mut show, empty).0, None, "a press no component takes drops it at the press");
+}
+
+/// A press on a component that takes focus moves it there from the app's field that Tab focused, and the field sees its
+/// focus lost once.
+#[trial]
+fn a_press_on_a_component_takes_the_focus_tab_gave_an_app_field() {
+    let field = named_id("app field");
+    let rect = Rect::from_min_size(Pos2::new(300.0, 400.0), egui::vec2(160.0, 40.0));
+    let lost = Rc::new(Cell::new(0));
+    let losses = Rc::clone(&lost);
+    let mut base = mixed_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        sensing::show(ui, &[ProbeRoot::new("probe", rect, Sense::CLICK | Sense::TAKE_FOCUS)]);
+        register_stop(ui.ctx(), Stop::new(ProbeRoot::id("probe"), KeyUse::of(Input::Pointer)));
+        losses.set(losses.get() + usize::from(ui.ctx().read_response(field).is_some_and(|response| response.lost_focus())));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    for _ in 0..3 {
+        tab_with(&mut frames, &mut show, Modifiers::NONE);
+    }
+    assert_eq!(egui_focused(&frames.ctx), Some(field));
+    lost.set(0);
+    let probe = Some(ProbeRoot::id("probe"));
+    assert_eq!(click_focus(&mut frames, &mut show, rect.center()), (probe, probe), "the press moves the focus to the component");
+    frames.idle(2, &mut show);
+    assert_eq!(lost.get(), 1, "the field sees its focus lost once");
+}
+
+/// A focus request that a click makes for an app's own widget drawn later in the same pass stands: the click, which is
+/// elsewhere for that widget, does not take the focus back. The next click elsewhere does.
+#[trial]
+fn a_request_at_a_click_gives_an_app_field_drawn_later_the_focus() {
+    let field = named_id("app field");
+    let asking = Rc::new(Cell::new(false));
+    let ask = Rc::clone(&asking);
+    let mut base = mixed_window();
+    let mut show = move |ui: &mut Ui| {
+        if ui.input(|input| input.pointer.any_click()) && ask.take() {
+            request(ui.ctx(), FocusTarget::Id(field));
+        }
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    asking.set(true);
+    let empty = Pos2::new(300.0, 450.0);
+    assert_eq!(click_focus(&mut frames, &mut show, empty).1, Some(field), "the requested focus stands");
+    assert_eq!(click_focus(&mut frames, &mut show, empty).1, None, "the next click elsewhere takes it by egui's rule");
+}
+
 /// Where Tab reaches only text fields (the Mac's default), it reaches the app's own text field and skips the app's
 /// own buttons, as it skips the framework's.
 #[trial]
