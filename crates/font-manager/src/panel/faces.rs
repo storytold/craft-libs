@@ -10,6 +10,7 @@ use craft_ui::primitives::{ContentPainterCx, DocRun, DocText, FacesCx, TextLayou
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect};
 
+use crate::panel::subsets::SubsetFont;
 use crate::{Catalog, FaceInfo};
 
 /// Larger files are not drawn: a whole CJK family can be hundreds of megabytes.
@@ -53,6 +54,14 @@ pub(crate) fn shown(at: &impl FacesCx, catalog: &Arc<Catalog>, owner: Owner, fac
     at.document_face(&key(owner, face), || {
         let (catalog, info) = (Arc::clone(catalog), face.clone());
         move || load(&catalog, &info)
+    })
+}
+
+/// The font that draws a subset of the preview service, once the registry has taken it.
+pub(crate) fn subset(at: &impl FacesCx, subset: &SubsetFont) -> Shown {
+    at.document_face(&format!("subset:{}", subset.key), || {
+        let face = subset.face();
+        move || Some(face)
     })
 }
 

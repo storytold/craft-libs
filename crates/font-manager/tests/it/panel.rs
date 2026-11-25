@@ -4,16 +4,21 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use craft_font_manager::craft_font_catalog::Os;
 use craft_font_manager::index::Index;
 use craft_font_manager::store::{Call, Conflict, FakeStore, Installer as _};
 use craft_font_manager::{Catalog, FontEnv, FontsPanel, FontsPanelView, Options};
+use craft_font_store::preview::{Fetch, Previews};
+use craft_font_store::{Cancel, FetchError};
 use craft_host::{AppInfo, Host, InlineJobs, Jobs, MemorySections};
 use craft_ui::contract::Role;
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Room, Target, trial};
-use egui::{Key, Modifiers, Pos2};
+use egui::{Event, Key, Modifiers, Pos2};
 
 const HACK: &str = "ofl/hack/Hack-Regular.ttf";
 const UBUNTU: &str = "ufl/ubuntu/Ubuntu-Light.ttf";
@@ -107,15 +112,26 @@ fn setup_seeded(name: &str, sections: Arc<MemorySections>, jobs: Arc<dyn Jobs>, 
 
 /// The panel over the system under `root` and `store`, as at a start of the app.
 fn start(root: &Path, store: Arc<FakeStore>, sections: Arc<MemorySections>, jobs: Arc<dyn Jobs>) -> Rig {
+    let panel = FontsPanel::new(Options::new(catalog(root), store.clone(), Ok(index())));
+    show(panel, store, host_with(sections, jobs))
+}
+
+/// The fonts installed under `root`, its store folder included.
+fn catalog(root: &Path) -> Arc<Catalog> {
     let env = FontEnv { os: Os::Unix, root: root.to_owned(), font_store: Some(root.join("store")), ..FontEnv::default() };
     let catalog = Arc::new(Catalog::new(env).with_font_service(false));
     catalog.rescan();
-    let panel = Rc::new(RefCell::new(FontsPanel::new(Options::new(catalog, store.clone(), Ok(index())))));
+    catalog
+}
+
+/// `panel` over `store`, shown to a window of `host`.
+fn show(panel: FontsPanel, store: Arc<FakeStore>, host: Arc<Host>) -> Rig {
+    let panel = Rc::new(RefCell::new(panel));
     let shown = Rc::clone(&panel);
     let mut fx = Fixture::new(move |ui| {
         FontsPanelView::new(&mut shown.borrow_mut()).show(ui);
     });
-    fx.in_room(Room::Window).host(host_with(sections, jobs));
+    fx.in_room(Room::Window).host(host);
     fx.settle();
     Rig { fx, panel, store }
 }
@@ -328,4 +344,275 @@ fn a_cards_install_menu_chooses_where_the_fonts_go() {
     rig.click("Install for Craft apps only");
     assert_eq!(rig.store.calls(), [Call::Install("Hack".into())]);
     assert_eq!(rig.panel.borrow().details_family(), None);
+}
+
+/// A preview service that answers every subset with the same small font, and logs what it answered. While held it
+/// answers nothing, and a request cancelled meanwhile isn't logged.
+#[derive(Default)]
+struct FakeService {
+    answered: Mutex<Vec<String>>,
+    held: AtomicBool,
+    /// Answers sample subsets with HTTP 404, as for a sample text the service doesn't have.
+    no_samples: AtomicBool,
+    /// Answers every subset with HTTP 500.
+    failing: AtomicBool,
+}
+
+impl Fetch for FakeService {
+    fn get(&self, url: &str, _: u64, cancel: &Cancel) -> Result<Vec<u8>, FetchError> {
+        while self.held.load(Ordering::SeqCst) {
+            if cancel.is_cancelled() {
+                return Err(FetchError::Cancelled);
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if cancel.is_cancelled() {
+            return Err(FetchError::Cancelled);
+        }
+        self.answered.lock().unwrap_or_else(PoisonError::into_inner).push(url.to_owned());
+        if self.no_samples.load(Ordering::SeqCst) && url.contains("/sample-") {
+            return Err(FetchError::Failed("HTTP 404".into()));
+        }
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(FetchError::Failed("HTTP 500".into()));
+        }
+        Ok(include_bytes!("../data/Tiny-glyf.woff2").to_vec())
+    }
+}
+
+impl FakeService {
+    /// The URLs answered since the last call.
+    fn urls(&self) -> Vec<String> {
+        std::mem::take(&mut *self.answered.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// The numbers of the families whose `subset` the URLs of `answered` name: `sample`, `ascii`, or `u/` for typed
+    /// characters.
+    fn numbers(answered: &[String], subset: &str) -> Vec<usize> {
+        let mut numbers: Vec<usize> = answered
+            .iter()
+            .filter_map(|url| url.split_once("/v1/faces/"))
+            .filter(|(_, path)| path[64..].starts_with(&format!("/list/{subset}")))
+            .map(|(_, path)| usize::from_str_radix(&path[..2], 16).unwrap())
+            .collect();
+        numbers.sort_unstable();
+        numbers
+    }
+}
+
+const SERVICE: &str = "http://127.0.0.1:9";
+const SAMPLE: &str = "Sphinx of black quartz, judge my vow";
+
+/// An index of `families` with `SAMPLE` as the sample text of Latin.
+fn service_index(families: &str) -> Index {
+    let json = format!(
+        r#"{{"schema":1,"version":"1.2","source":"google/fonts","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","base_url":"https://cdn.jsdelivr.net/gh/google/fonts@45e3d5269e4a17d823f6d84470bc084dc5ae46f6/",
+        "languages":[{{"id":"en_Latn","name":"English","script":"Latn","population":1}}],
+        "scripts":[{{"id":"Latn","name":"Latin"}}],
+        "samples":{{"Latn":{{"text":"{SAMPLE}","method":"udhr","language":"en_Latn"}}}},
+        "families":[{families}]}}"#
+    );
+    Index::from_json(json.as_bytes()).unwrap()
+}
+
+/// Sixty Latin families, `Family 01` to `Family 60`, whose one file's sha256 starts with the family's number in hex.
+fn latin_index() -> Index {
+    let families: Vec<String> = (1..=60)
+        .map(|n| {
+            format!(
+                r#"{{"family":"Family {n:02}","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"OFL","sample_script":"Latn",
+                "files":[{{"path":"ofl/family{n}/Family-Regular.ttf","size":1000,"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}]}}"#,
+                format!("{n:02x}").repeat(32)
+            )
+        })
+        .collect();
+    service_index(&families.join(","))
+}
+
+/// The panel over `index` with no installed fonts and previews from `service`, whose address is not set yet.
+fn service_rig(name: &str, service: &Arc<FakeService>, index: Index) -> Rig {
+    let root = root(name);
+    std::fs::create_dir_all(root.join("store")).unwrap();
+    let store = Arc::new(FakeStore::new(root.join("store"), HashMap::new()));
+    let previews = Previews::new(store.clone()).with_fetcher(service.clone()).with_cache(None);
+    let panel = FontsPanel::new(Options::new(catalog(&root), store.clone(), Ok(index))).with_previews(previews);
+    show(panel, store, host_with(Arc::new(MemorySections::default()), Arc::new(InlineJobs)))
+}
+
+impl Rig {
+    /// Sets the preview service and the previews setting, as a host's settings page does.
+    fn set_previews(&mut self, on: bool) {
+        self.store.set_preview_service(Some(SERVICE)).unwrap();
+        self.store.set_previews_enabled(on).unwrap();
+        self.panel.borrow_mut().reload_preview_settings();
+        self.fx.settle();
+    }
+
+    /// Runs passes until the panel has fetched what it asks for and asks for nothing more.
+    fn load(&mut self) {
+        let mut quiet = 0;
+        for _ in 0..500 {
+            self.fx.frame(Vec::new());
+            quiet = if self.panel.borrow().loading_previews() { 0 } else { quiet + 1 };
+            if quiet == 3 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("previews kept loading");
+    }
+
+    /// Types `text` as the sample, waits for the pause and loads what it asks for.
+    fn sample(&mut self, text: &str) {
+        self.type_into("Sample text", text);
+        self.fx.advance(1.0);
+        self.load();
+    }
+
+    /// The numbers of the family cards on screen.
+    fn numbers(&self) -> Vec<usize> {
+        let numbers = self.cards().iter().filter_map(|name| name.strip_prefix("Family ")?.get(..2)?.parse().ok()).collect();
+        sorted(numbers)
+    }
+
+    /// Scrolls the cards by `points`.
+    fn scroll(&mut self, points: f32) {
+        let first = self.numbers()[0];
+        let card = self.named(Role::LIST_ITEM, &format!("Family {first:02}")).center();
+        self.fx.frame(vec![Event::PointerMoved(card)]).frame(vec![craft_ui::testing::pointer::wheel(-points)]);
+        for _ in 0..4 {
+            self.fx.advance(0.5);
+            self.fx.frame(Vec::new());
+        }
+        self.fx.settle();
+    }
+}
+
+fn sorted(mut numbers: Vec<usize>) -> Vec<usize> {
+    numbers.sort_unstable();
+    numbers
+}
+
+/// The cards on screen and round them draw from the preview service without a click, and the typed text too; a card that
+/// scrolls away is not asked for any more.
+#[trial]
+fn previews_follow_the_screen_and_the_typed_text() {
+    let service = Arc::new(FakeService::default());
+    let mut rig = service_rig("previews", &service, latin_index());
+    assert!(service.urls().is_empty(), "no service, no request");
+    assert!(rig.present("Preview"), "the whole-family preview is offered");
+    rig.set_previews(false);
+    assert!(!rig.panel.borrow().loading_previews() && service.urls().is_empty(), "previews are off");
+
+    rig.set_previews(true);
+    rig.load();
+    assert!(!rig.panel.borrow().downloads_allowed(), "installs are still not allowed");
+    assert!(rig.present("Nothing is installed until you allow downloads."));
+    assert!(!rig.present("Preview"), "no session download while the service previews");
+    let shown = rig.numbers();
+    let answered = service.urls();
+    let samples = FakeService::numbers(&answered, "sample-");
+    assert!(shown.len() > 1 && shown.len() < 20, "{shown:?}");
+    assert!(shown.iter().all(|n| samples.contains(n)) && samples.len() > shown.len(), "the screen, then the rows below it: {samples:?}");
+    assert!(samples.len() < 60, "not the whole catalogue: {samples:?}");
+    assert_eq!(FakeService::numbers(&answered, "ascii"), shown, "ASCII for the screen");
+
+    rig.sample("Hello, world");
+    assert!(service.urls().is_empty(), "the ASCII subsets have typed ASCII");
+    rig.sample("สวัสดี");
+    assert_eq!(FakeService::numbers(&service.urls(), "u/"), shown, "one subset of the typed characters per row on screen");
+
+    service.held.store(true, Ordering::SeqCst);
+    rig.scroll(6.0 * 400.0);
+    assert!(rig.panel.borrow().loading_previews());
+    let passed = rig.numbers();
+    rig.scroll(100_000.0);
+    service.held.store(false, Ordering::SeqCst);
+    rig.load();
+    let last = rig.numbers();
+    assert!(passed[0] > shown[shown.len() - 1] && last[0] > passed[passed.len() - 1], "{shown:?} {passed:?} {last:?}");
+    let answered = FakeService::numbers(&service.urls(), "u/");
+    assert!(!answered.is_empty() && answered.iter().all(|n| last.contains(n)), "rows that left were asked for: {answered:?} {last:?}");
+}
+
+/// A sample the service has not (another text) is asked for as the sample's characters, once.
+#[trial]
+fn a_sample_the_service_lacks_falls_back_to_its_characters_once() {
+    let service = Arc::new(FakeService::default());
+    service.no_samples.store(true, Ordering::SeqCst);
+    let mut rig = service_rig("previews-404", &service, latin_index());
+    rig.set_previews(true);
+    rig.load();
+    let shown = rig.numbers();
+    assert_eq!(FakeService::numbers(&service.urls(), "u/"), shown, "one subset of the sample's characters per row on screen");
+    rig.fx.advance(60.0);
+    rig.load();
+    assert!(FakeService::numbers(&service.urls(), "sample-").is_empty(), "the sample is not asked for again");
+}
+
+/// A family the service can't draw offers the whole-family preview, and the panel names the server that failed.
+#[trial]
+fn a_failing_preview_service_is_named_and_previews_are_offered() {
+    let service = Arc::new(FakeService::default());
+    service.failing.store(true, Ordering::SeqCst);
+    let mut rig = service_rig("previews-failing", &service, latin_index());
+    rig.set_previews(true);
+    rig.load();
+    assert!(!service.urls().is_empty());
+    assert!(rig.present("Font previews are unavailable"));
+    assert!(rig.fx.texts().iter().any(|painted| painted.text.contains(SERVICE)), "the notice names the server");
+    assert!(rig.present("Preview"), "the card offers the whole-family preview");
+    rig.open("Family 01");
+    assert!(rig.present("Preview"), "and so does its sheet");
+}
+
+/// One family: a variable upright file with three named instances, whose sha256 is `ab…`, and a static italic, `cd…`.
+fn variable_index() -> Index {
+    let file = |path: &str, sha: &str, style: &str, more: &str| {
+        format!(r#"{{"path":"ofl/varia/{path}","size":1000,"sha256":"{}","style":"{style}","weight":400,"postscript":[],{more}}}"#, sha.repeat(32))
+    };
+    let instance = |name: &str, weight: u32| format!(r#"{{"name":"{name}","coordinates":{{"wght":{weight}}}}}"#);
+    let instances = [instance("Thin", 100), instance("Regular", 400), instance("Bold", 700)].join(",");
+    let axes = format!(r#""axes":[{{"tag":"wght","min":100,"max":900}}],"instances":[{instances}],"list_instance":1"#);
+    let files = [file("Varia[wght].ttf", "ab", "normal", &axes), file("Varia-Italic.ttf", "cd", "italic", r#""axes":[]"#)].join(",");
+    service_index(&format!(
+        r#"{{"family":"Varia","categories":["SANS_SERIF"],"languages":[0],"scripts":["Latn"],"license":"OFL","sample_script":"Latn","files":[{files}]}}"#
+    ))
+}
+
+/// Every style of a variable file draws from one subset, whatever its axis sliders say.
+#[trial]
+fn a_variable_family_draws_one_subset_at_every_axis_value() {
+    let service = Arc::new(FakeService::default());
+    let mut rig = service_rig("previews-variable", &service, variable_index());
+    rig.set_previews(true);
+    rig.load();
+    service.urls();
+    rig.open("Varia");
+    rig.load();
+    let urls = service.urls();
+    let var: Vec<&String> = urls.iter().filter(|url| url.contains("/var/")).collect();
+    assert!(var.len() == 1 && var[0].contains(&"ab".repeat(32)) && var[0].contains("/var/sample-"), "one subset for the variable file: {urls:?}");
+    assert!(urls.iter().any(|url| url.contains(&"cd".repeat(32)) && url.contains("/list/sample-")), "the static italic's own: {urls:?}");
+    for style in ["Thin", "Regular", "Bold", "Italic"] {
+        assert!(rig.present(style), "no {style} row");
+    }
+
+    let weight = rig.named(Role::SLIDER, "Weight");
+    assert!(rig.present("400") && !rig.present("401"));
+    rig.fx.access(AccessActionKind::Increment, &weight);
+    rig.load();
+    assert!(rig.present("401"), "the slider moved");
+    assert!(service.urls().is_empty(), "the slider asked for another subset");
+}
+
+#[trial]
+fn default_filters_are_sans_serif_and_the_system_language() {
+    let mut rig = setup("default-filters");
+    rig.panel.borrow_mut().use_default_filters("ja-JP");
+    rig.fx.settle();
+    assert_eq!(rig.panel.borrow().results(), ["Noto Sans JP"]);
+    rig.panel.borrow_mut().use_default_filters("fr");
+    rig.fx.settle();
+    assert_eq!(rig.panel.borrow().results(), ["Noto Sans JP", "Ubuntu"], "no French in the index: English");
 }

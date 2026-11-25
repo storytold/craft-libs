@@ -13,6 +13,7 @@ use egui::{Color32, Vec2};
 use crate::Catalog;
 use crate::FaceInfo;
 use crate::panel::faces::{self, Owner, Sample, Shown};
+use crate::panel::subsets::SubsetFont;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -35,6 +36,8 @@ pub(crate) struct FontSampleStyle {
 pub(crate) enum SampleFace<'a> {
     /// A face of `catalog`, which the document-face registry loads when the sample is measured or painted.
     Face { catalog: &'a Arc<Catalog>, owner: Owner, face: &'a FaceInfo },
+    /// A subset of a face from the preview service.
+    Subset(&'a SubsetFont),
     /// A face the host gives, ready as it is (a host row of the picker).
     Font(&'a FontRef),
     /// No face is here to draw with: the sample keeps its band and shows nothing.
@@ -47,12 +50,47 @@ impl SampleFace<'_> {
     /// may lack the sample's characters.
     pub(crate) fn ready(&self, at: &impl craft_ui::primitives::FacesCx) -> Option<FontRef> {
         match self {
-            SampleFace::Face { catalog, owner, face } => match faces::shown(at, catalog, *owner, face) {
-                Shown::Ready(font) => Some(font),
-                _ => None,
-            },
+            SampleFace::Face { catalog, owner, face } => ready(faces::shown(at, catalog, *owner, face)),
+            SampleFace::Subset(subset) => ready(faces::subset(at, subset)),
             SampleFace::Font(font) => Some((*font).clone()),
             SampleFace::Missing => None,
+        }
+    }
+}
+
+fn ready(shown: Shown) -> Option<FontRef> {
+    match shown {
+        Shown::Ready(font) => Some(font),
+        _ => None,
+    }
+}
+
+/// The face a card or a style row draws its sample in, as the panel holds it.
+#[derive(Clone)]
+pub(crate) enum HeldFace {
+    /// A face of `catalog`.
+    Local { owner: Owner, face: Box<FaceInfo>, catalog: Arc<Catalog> },
+    /// A subset of a face from the preview service.
+    Subset(SubsetFont),
+}
+
+impl HeldFace {
+    /// `face` of `owner`'s catalog `catalog`.
+    pub(crate) fn local(owner: Owner, face: FaceInfo, catalog: &Arc<Catalog>) -> HeldFace {
+        HeldFace::Local { owner, face: Box::new(face), catalog: Arc::clone(catalog) }
+    }
+
+    /// Whether the face is installed here.
+    pub(crate) fn installed(&self) -> bool {
+        matches!(self, HeldFace::Local { owner: Owner::Installed, .. })
+    }
+
+    /// The face of a sample: `face`, or none.
+    pub(crate) fn sample(face: Option<&HeldFace>) -> SampleFace<'_> {
+        match face {
+            Some(HeldFace::Local { owner, face, catalog }) => SampleFace::Face { catalog, owner: *owner, face },
+            Some(HeldFace::Subset(subset)) => SampleFace::Subset(subset),
+            None => SampleFace::Missing,
         }
     }
 }

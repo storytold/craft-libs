@@ -13,6 +13,7 @@ pub(crate) mod jobs;
 pub(crate) mod samples;
 pub(crate) mod sources;
 pub(crate) mod specimen;
+pub(crate) mod subsets;
 
 pub use app::{
     FontsCommand, FontsPanel, FontsPanelOutput, FontsPanelSettings, FontsPanelView, FontsPanelWords, Options, Preset, Tab, install_interface_fonts,
