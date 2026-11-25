@@ -1332,6 +1332,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         };
         let tabs = output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(kind_of(*key)?, *rect, *node)));
         self.report.sources.extend(tabs);
+        if let Some((rect, node)) = output.overflow {
+            self.report.sources.push(DockSource::new(SourceKind::Overflow(anchor.clone()), rect, node));
+        }
         if let Some((rect, node)) = output.grip {
             self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));
         }

@@ -302,6 +302,8 @@ pub struct DockGroupOutput {
     pub tabs: Vec<(PanelKey, Rect, Id)>,
     /// The band the group is dragged by this pass, with the id of its accessibility node.
     pub grip: Option<(Rect, Id)>,
+    /// The strip's overflow button, when some tabs do not fit, with the id of its accessibility node.
+    pub overflow: Option<(Rect, Id)>,
 }
 
 impl Outcome for DockGroupOutput {
@@ -337,6 +339,7 @@ struct Reported {
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
     empty_drag: bool,
     tabs: Vec<(PanelKey, Rect, Id)>,
+    overflow: Option<(Rect, Id)>,
 }
 
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
@@ -627,7 +630,19 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         }
         let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
         let Reported {
-            picked, closed, picked_document, closed_documents, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, ..
+            picked,
+            closed,
+            picked_document,
+            closed_documents,
+            menu,
+            item,
+            commands,
+            toggle_minimized,
+            torn_off,
+            drag_started,
+            tabs,
+            overflow,
+            ..
         } = self.reported;
         DockGroupOutput {
             response: cx.response.clone(),
@@ -643,6 +658,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             drag_started,
             tabs,
             grip,
+            overflow,
         }
     }
 }
@@ -749,12 +765,13 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         // A press on the group's empty body focuses its panel, as in Photoshop; an app's own egui body keeps its presses.
         if surface_pressed
             && !self.host_body
-            && let Some((strip, _)) = &strip
+            && let Some((strip, _, _)) = &strip
         {
             focus::request(ui.ctx(), FocusTarget::Id(*strip));
         }
-        if let Some((strip, tabs)) = &strip {
+        if let Some((strip, tabs, overflow)) = &strip {
             self.reported.tabs = tabs.iter().map(|(key, rect)| (*key, *rect, crate::contract::item_node(*strip, key))).collect();
+            self.reported.overflow = *overflow;
         }
         let size = self.size;
         let (titles, reported) = (&self.panels, &mut self.reported);
@@ -888,10 +905,13 @@ fn shown_tab(panels: &[PanelTitle], active: PanelKey) -> PanelKey {
         .unwrap_or(active)
 }
 
-/// A group's tab strip with its tab insertion spots. Returns the strip's id and the rect of each tab it shows, which a
-/// replay returns again, moved with the row. The panels' documents are tabs of the same strip after the panel tabs: one
+/// What a group's tab row shows: the strip's id, each shown tab's rect and the overflow button with its node id.
+type TabRowShown = (Id, Vec<(PanelKey, Rect)>, Option<(Rect, Id)>);
+
+/// A group's tab strip with its tab insertion spots. Returns the strip's id, the rect of each tab it shows and the
+/// overflow button with its node id, which a replay returns again, moved with the row. The panels' documents are tabs of the same strip after the panel tabs: one
 /// fit, one overflow menu and one keyboard order for both. Only panel tabs drag and take tab insertions.
-fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> (Id, Vec<(PanelKey, Rect)>) {
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> TabRowShown {
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
@@ -978,7 +998,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if strip.empty_double {
         row.sent.send(TabEvent::EmptyDouble);
     }
-    (strip.response.response.id, strip.tab_rects)
+    (strip.response.response.id, strip.tab_rects, strip.overflow)
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before
