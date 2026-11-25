@@ -23,5 +23,10 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 # `default_fonts` so that the bar's tests lay out text.
 egui = { workspace = true, features = ["default_fonts"] }
 
+# tests/appkit.rs: AppKit's menus need the main thread.
+[[test]]
+name = "appkit"
+harness = false
+
 [lints]
 workspace = true
