@@ -395,17 +395,22 @@ const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 /// `ext`, a descendant of `parents` (outermost first), as markup that stands on its own: it
 /// gets the parents' namespace declarations for the prefixes it uses (Markup Compatibility's
 /// attributes included, [`compatibility_prefixes`]), and the prefixes they mark
-/// ignorable (`mc:Ignorable`) join its own. `None` when it uses a prefix nothing declares, which
-/// a save could only write as markup no reader accepts.
+/// ignorable (`mc:Ignorable`) that still name the namespace they marked join its own. `None`
+/// when it uses a prefix nothing declares, which a save could only write as markup no reader
+/// accepts.
 fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String> {
     let mut scope: Vec<(&str, &str)> = Vec::new();
-    let mut ignorable: Vec<&str> = Vec::new();
+    // Each prefix a parent marks ignorable, with the namespace it named there: the mark is on
+    // the namespace, not on the prefix's spelling.
+    let mut marked: Vec<(&str, &str)> = Vec::new();
     for e in parents {
         declare(&mut scope, e);
         let tokens = e.attrs.iter().find(|(k, _)| is_ignorable(k, &scope)).map(|(_, v)| v.split_whitespace());
         for t in tokens.into_iter().flatten() {
-            if !ignorable.contains(&t) && scope.iter().any(|(p, _)| *p == t) {
-                ignorable.push(t);
+            if let Some(&binding) = scope.iter().find(|(p, _)| *p == t)
+                && !marked.contains(&binding)
+            {
+                marked.push(binding);
             }
         }
     }
@@ -414,12 +419,11 @@ fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String>
         return None;
     }
     let own: Vec<&str> = ext.ns_decls().map(|(p, _)| p).collect();
-    // A prefix `ext` binds to another namespace is no longer the one the parents mark; one it
-    // declares again with the same namespace still is.
-    ignorable.retain(|t| ext.ns_decls().all(|(p, u)| p != *t || scope.contains(&(p, u))));
     let mut el = ext.clone();
     let mut ext_scope = scope.clone();
     declare(&mut ext_scope, ext);
+    // A marked prefix a later parent or `ext` binds to another namespace no longer marks it.
+    let ignorable: Vec<&str> = marked.iter().filter(|b| ext_scope.contains(b)).map(|(p, _)| *p).collect();
     if !ignorable.is_empty() {
         match el.attrs.iter_mut().find(|(k, _)| is_ignorable(k, &ext_scope)) {
             Some((_, v)) => {

@@ -342,35 +342,54 @@ fn kept_extensions_carry_the_namespaces_their_own_ignorable_lists() {
 /// declares it again with the same namespace, and not when it binds it to another one.
 #[test]
 fn kept_extensions_keep_an_outer_ignorable_prefix_they_declare_again_alike() {
-    let (same, markup) = kept_marks_q_ignorable(r#"xmlns:q="urn:q""#);
-    assert!(same, "{markup}");
-    let (other, markup) = kept_marks_q_ignorable(r#"xmlns:q="urn:other""#);
-    assert!(!other, "{markup}");
+    for (same, markup) in kept_marks_q_ignorable("", r#"xmlns:q="urn:q""#) {
+        assert!(same, "{markup}");
+    }
+    for (other, markup) in kept_marks_q_ignorable("", r#"xmlns:q="urn:other""#) {
+        assert!(!other, "{markup}");
+    }
 }
 
 /// A prefix the file marks ignorable outside kept markup stays ignorable in it when the markup
 /// binds the file's Markup Compatibility prefix to another namespace.
 #[test]
 fn kept_extensions_keep_an_outer_ignorable_prefix_when_they_rebind_mc() {
-    let (kept, markup) = kept_marks_q_ignorable(r#"xmlns:mc="urn:vendor""#);
-    assert!(kept, "{markup}");
+    for (kept, markup) in kept_marks_q_ignorable("", r#"xmlns:mc="urn:vendor""#) {
+        assert!(kept, "{markup}");
+    }
 }
 
-/// Whether the extension kept from an `extLst` carrying `decls`, under a root that marks `q`
-/// ignorable, still marks `q` ignorable by Markup Compatibility; and the kept markup.
-fn kept_marks_q_ignorable(decls: &str) -> (bool, String) {
+/// The root marks a namespace ignorable, not a prefix: kept markup doesn't mark the namespace
+/// a comment element binds that prefix to instead, through a save and a second round trip.
+#[test]
+fn kept_extensions_do_not_mark_ignorable_a_prefix_their_comment_rebinds() {
+    for (marked, markup) in kept_marks_q_ignorable(r#"xmlns:q="urn:b""#, "") {
+        assert!(!marked && markup.contains(r#"xmlns:q="urn:b""#), "{markup}");
+    }
+}
+
+/// Whether the extension kept from an `extLst` carrying `ext_decls`, in a comment element
+/// carrying `comment_decls`, under a root that marks `q` ignorable, marks `q` ignorable by
+/// Markup Compatibility, as read and after a save and a second read; each with the kept markup.
+fn kept_marks_q_ignorable(comment_decls: &str, ext_decls: &str) -> Vec<(bool, String)> {
     const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
     let cex = format!(
-        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst {decls}><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="{MCE}" xmlns:q="urn:q" mc:Ignorable="q" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D" {comment_decls}><x:extLst {ext_decls}><r:reactions q:note="n"/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
     );
-    let markup = comments_with_cex(&cex).comments.values().find_map(|c| c.extensions.clone()).unwrap();
-    let ext = craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap();
-    let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
-    let marked = ext
-        .attrs
+    let doc = comments_with_cex(&cex);
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    [doc, back]
         .iter()
-        .any(|(k, v)| k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)) && v.split_whitespace().any(|t| t == "q"));
-    (marked, markup)
+        .map(|d| {
+            let markup = d.comments.values().find_map(|c| c.extensions.clone()).unwrap();
+            let ext = craft_xml::Options::default().strict().parse(markup.as_bytes()).unwrap();
+            let mce: Vec<&str> = ext.ns_decls().filter(|(_, u)| *u == MCE).map(|(p, _)| p).collect();
+            let marked = ext.attrs.iter().any(|(k, v)| {
+                k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && mce.contains(&p)) && v.split_whitespace().any(|t| t == "q")
+            });
+            (marked, markup)
+        })
+        .collect()
 }
 
 /// The namespace `prefix` names on the first element called `name` in `root`, by the
