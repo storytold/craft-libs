@@ -101,32 +101,28 @@ pub fn text_size_case(story: &Story) -> Result<(), String> {
 
 /// The text-size case for `story`, whose settled default shot is `base`.
 fn text_size_from(story: &Story, base: Shot) -> Result<(), String> {
-    let variants: [(&str, Shot); 4] = [
-        (
-            "text size",
+    // The shot at the default density is the base shot, so a density is shot only when it is not the default.
+    let densities = [("compact density", Size::Compact), ("comfortable density", Size::Comfortable)];
+    let mut variants: Vec<(&str, Shot)> = vec![(
+        "text size",
+        shot(story, &|f| {
+            f.text_size(TextSize::Large);
+        }),
+    )];
+    for (name, density) in densities.into_iter().filter(|(_, density)| *density != Size::default()) {
+        variants.push((
+            name,
             shot(story, &|f| {
-                f.text_size(TextSize::Large);
+                f.density(density);
             }),
-        ),
-        (
-            "compact density",
-            shot(story, &|f| {
-                f.density(Size::Compact);
-            }),
-        ),
-        (
-            "comfortable density",
-            shot(story, &|f| {
-                f.density(Size::Comfortable);
-            }),
-        ),
-        (
-            "scale 2",
-            shot(story, &|f| {
-                f.scale(Scale(2.0));
-            }),
-        ),
-    ];
+        ));
+    }
+    variants.push((
+        "scale 2",
+        shot(story, &|f| {
+            f.scale(Scale(2.0));
+        }),
+    ));
     let (before, after) = (base.shown.size(), |shot: &Shot| shot.shown.size());
     for (name, grown) in &variants {
         let size = after(grown);

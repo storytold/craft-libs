@@ -13,7 +13,7 @@ use std::sync::{Condvar, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
 use craft_font_catalog::Catalog;
-pub use craft_font_store::preview::PreviewStore;
+pub use craft_font_store::PreviewStore;
 #[cfg(not(target_arch = "wasm32"))]
 use craft_font_store::{Cancel, Client, Face, FontStore, Network, PINNED_INDEX, verify_font};
 pub use craft_font_store::{LegalText, PREVIEW_SERVICE_ENV, PreviewServiceSource, UserSource};

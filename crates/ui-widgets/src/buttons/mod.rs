@@ -50,6 +50,9 @@ pub enum GroupLevel {
 /// A page's side menu (a File page's list of pages) sets `SideMenu` for its rows: a `Button` there shows its label in
 /// the large body role (`TypeRole::BodyLarge`), with `space.pad.segment` above and below it and `space.pad.roomy`
 /// at its sides, so the menu reads as a list of places rather than a row of controls.
+///
+/// A page's call to action (a start page's primary link) sets `CallToAction`: a `Button` there stands
+/// `size.page.action` high, its label strong.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
@@ -61,6 +64,8 @@ pub enum ControlPlace {
     Ribbon,
     /// In a page's side menu.
     SideMenu,
+    /// A page's call to action.
+    CallToAction,
 }
 
 /// How an icon button or a segment that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`),

@@ -4,9 +4,9 @@ use super::CELL;
 use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
-use crate::docking::{ColumnBar, DockSizes, GroupAt, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
+use crate::docking::{ColumnBar, DockSizes, GroupAt, IconGroupSeparator, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
 use crate::runtime::commands::{CommandState, CommandStates};
-use crate::runtime::env::{Env, Message};
+use crate::runtime::env::{Env, Message, with_env};
 use crate::sections::Panel;
 use crate::testing::memory::global;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
@@ -112,6 +112,23 @@ fn icons_as_a_card(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         None
     })
     .into()
+}
+
+/// The icon groups of an app that sets `IconGroupSeparator::Rule` at its root (VectorCraft's): bare grip strips, and an
+/// edge rule across the room between two groups.
+#[story(IconicColumn<'static, u8>, covers = [], drive = Drive::Never, title = "Icon groups apart by a rule")]
+fn icon_groups_apart_by_a_rule(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(IconGroupSeparator::Rule);
+        },
+        |ui| {
+            let column = IconicColumn::new("Panels", global("iconic column", "rule story"), &column, Bind::kept(), &spec);
+            at_stage(ui, column, |_, _, _, _| None).into()
+        },
+    )
 }
 
 /// Cells bound to their panels' toggle commands: a marked command whose panel is closed shows the marker.

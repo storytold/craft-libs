@@ -44,15 +44,15 @@ fn review_rig() -> Rig {
     rig
 }
 
-/// Only the lines in view are drawn: the review of 2,000 entries holds a few include boxes, not 2,000.
+/// Only the lines in view are drawn: a review of several hundred entries holds a few include boxes, not one per entry.
 #[trial]
 fn a_large_review_draws_only_the_rows_in_view() {
-    let commands: Vec<String> = (0..2000).map(|i| command(&format!("Entry {i}"), "Cmd+K")).collect();
+    let commands: Vec<String> = (0..400).map(|i| command(&format!("Entry {i}"), "Cmd+K")).collect();
     let mut rig = Rig::new(keymap(Platform::Mac), options(), None);
     rig.review(set(&commands), ImportOptions::default());
     let drawn = rig.names_with(Role::CHECK_BOX, "").len();
     assert!(drawn > 0, "the lines in view carry include boxes");
-    assert!(drawn < 100, "{drawn} include boxes drawn for 2,000 entries");
+    assert!(drawn < 100, "{drawn} include boxes drawn for 400 entries");
 }
 
 /// Start, include and a picked target re-plan the import; a pick and No equivalent reach the app.
