@@ -291,6 +291,7 @@ mod tests {
         std::thread::scope(|scope| {
             for e in crate::testutil::sampled_effects() {
                 scope.spawn(move || {
+                    let started = std::time::Instant::now();
                     for setting in [0.0f32, 1.0] {
                         let mut fx = (e.create)(SR, 2);
                         for p in e.params {
@@ -317,6 +318,9 @@ mod tests {
                                 e.id
                             );
                         }
+                    }
+                    if started.elapsed() > std::time::Duration::from_secs(1) {
+                        eprintln!("DIAG extreme settings: {} took {:?}", e.id, started.elapsed());
                     }
                 });
             }
