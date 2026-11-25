@@ -1,10 +1,10 @@
-//! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
-//! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
-//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
-//! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
-//! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
-//! pointer, the placement of a minimized window, the root frame decided again, a held close, `act`, and a hosted
-//! window's Control-click and window-input policy.
+//! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS resize
+//! (H4), the raise of a modal's window and the keyboard it takes from a window it blocks, the mount of a full-window
+//! container (in a window of its own, or in a full-screen or Wayland-maximized main window), the size of a
+//! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
+//! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
+//! window that has the keys, a wheel with no known pointer, the placement of a minimized window, the root frame decided
+//! again, a held close, `act`, and a hosted window's Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -326,6 +326,120 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
         let other = if backend == Backend::Wayland { ViewportCommand::Focus } else { attention.clone() };
         assert_eq!(at(&other), None, "{backend:?}: one way of raising: {sent:?}");
     }
+}
+
+/// Window facts with the focus as given, at a place the window system tells.
+fn focus(on: bool) -> ViewportInfo {
+    ViewportInfo { focused: Some(on), inner_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(300.0))), ..ViewportInfo::default() }
+}
+
+fn on_x11() -> Windows {
+    Windows::with(InstallSpec::new(ShellInfo::default().backend(Backend::X11), Arc::new(FakeSystem::new())))
+}
+
+/// How many focus requests `out` sent to `viewport`.
+fn focus_requests(out: &Out, viewport: ViewportId) -> usize {
+    out.commands.iter().filter(|(id, command)| *id == viewport && *command == ViewportCommand::Focus).count()
+}
+
+/// Frames that last longer than a modal's window waits before it takes the keyboard.
+const PAST_THE_WAIT: usize = 40;
+
+/// The app's own modal that opens while a window it blocks has the keyboard (a command typed in a floated panel opens
+/// the save prompt in the main window) gets the keys it needs: its window takes the OS focus from the blocked one,
+/// once, and the wait before it wakes an idle app. Nothing is sent when no blocked window has the focus by then (an OS
+/// dialog that opened with the modal took it, or the modal's window has it) or the modal closed meanwhile.
+#[trial]
+fn an_app_modal_takes_the_keyboard_from_a_window_it_blocks() {
+    // The frames after the modal opens in which the main window, which shows it, got a focus request, with the main
+    // window and a child window focused as given and `before` run before each frame.
+    let requests = |root: bool, float: bool, before: &dyn Fn(&Windows, usize)| -> Vec<usize> {
+        let windows = on_x11();
+        windows.root_info(focus(root));
+        windows.child_info(focus(float));
+        let frame = || windows.frame(vec![], vec![], |ui| ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |_, _| {}));
+        for _ in 0..4 {
+            frame();
+        }
+        windows.app_modal(Some(ViewportId::ROOT));
+        (0..PAST_THE_WAIT)
+            .flat_map(|at| {
+                before(&windows, at);
+                vec![at; focus_requests(&frame(), ViewportId::ROOT)]
+            })
+            .collect()
+    };
+    let none: [usize; 0] = [];
+    let sent = requests(false, true, &|_, _| {});
+    let &[handed] = sent.as_slice() else { panic!("the main window takes the keyboard from the float once: {sent:?}") };
+    assert!(handed > 1, "not before an OS dialog that opens with the modal could take it: frame {handed}");
+    let closes = |windows: &Windows, at| {
+        if at == handed {
+            windows.app_modal(None);
+        }
+    };
+    assert_eq!(requests(false, true, &closes), none, "the modal closed meanwhile");
+    let os_dialog = |windows: &Windows, at| {
+        if at == 1 {
+            windows.child_info(focus(false));
+        }
+    };
+    assert_eq!(requests(false, true, &os_dialog), none, "an OS dialog took the focus");
+    assert_eq!(requests(false, false, &|_, _| {}), none, "no window of the app has the focus");
+    assert_eq!(requests(true, false, &|_, _| {}), none, "the modal's window has the focus");
+
+    let woken = Arc::new(Mutex::new(false));
+    let settled = |windows: &Windows, at| {
+        if at == 2 {
+            let woken = woken.clone();
+            windows.ctx.set_request_repaint_callback(move |info| *woken.lock().unwrap() |= !info.delay.is_zero());
+        }
+    };
+    requests(false, true, &settled);
+    assert!(*woken.lock().unwrap(), "an idle app wakes for the hand-over");
+}
+
+/// A framework modal in a window of its own takes the keyboard from the main window it blocks.
+#[trial]
+fn a_framework_modal_takes_the_keyboard_from_the_window_it_blocks() {
+    let windows = on_x11();
+    windows.root_info(focus(true));
+    windows.child_info(focus(false));
+    let sent: usize = (0..PAST_THE_WAIT).map(|_| focus_requests(&modal_frame(&windows), child())).sum();
+    assert_eq!(sent, 1, "once");
+}
+
+/// A popup window opened from the window that shows the app's modal keeps the keyboard.
+#[trial]
+fn a_popup_window_of_the_modals_window_keeps_the_keyboard() {
+    use craft_behavior::overlay::{Align, Side};
+    use craft_ui::contract::overlay::{Anchor, Place};
+    let windows = on_x11();
+    windows.root_info(focus(false));
+    windows.child_info(focus(true));
+    let open = Cell::new(false);
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                if open.get() {
+                    let anchor = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(10.0));
+                    let place = Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start);
+                    let props = ContainerProps::new().mount(Mount::Layer(Overlay::menu().place(place)));
+                    Modal { common: Common::new(), props }.id_salt("popup").show(ui, |_, _| {});
+                }
+            });
+        })
+    };
+    let palette = builder_titled(&frame(), "tool").0;
+    windows.app_modal(Some(palette));
+    open.set(true);
+    frame();
+    windows.child_info(focus(false));
+    let outs: Vec<Out> = (0..PAST_THE_WAIT).map(|_| frame()).collect();
+    let popup = outs.last().and_then(|out| out.builders.iter().map(|(id, _)| *id).find(|id| ![ViewportId::ROOT, palette].contains(id)));
+    let popup = popup.expect("the layer opened in the palette shows in a popup window");
+    assert_eq!(windows.facts(popup).focused, Some(true), "the popup window has the keyboard");
+    assert_eq!(outs.iter().map(|out| focus_requests(out, palette)).sum::<usize>(), 0, "the modal's window leaves it there");
 }
 
 /// A window that a modal in another window blocks takes no wheel, as it takes no press or key: what is under the
