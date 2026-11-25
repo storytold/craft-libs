@@ -705,7 +705,7 @@ When a component's remembered state is due for eviction.
 
 ## `craft_behavior::fit`
 
-The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`],
+The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
 
 - `craft_behavior::fit::Fit`: `pub struct Fit { pub shown: Vec<usize>, pub overflow: Vec<usize>, pub short: Vec<usize> }`. Which items the strip shows and which go to the overflow menu, as indexes into the input, in input order.
 - `craft_behavior::fit::FitItem`: `pub struct FitItem { pub extent: f32, pub section: u16, pub keep: FitKeep, pub short: Option<f32> }`. One item as the fit rule sees it: its extent along the strip, its section and whether it may overflow.
