@@ -336,6 +336,25 @@ fn button_in_side_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     shown.into()
 }
 
+/// A page's call to action: a primary button with its icon in the `CallToAction` place, `size.page.action` high,
+/// beside a standard one.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "As a call to action")]
+fn button_as_call_to_action(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ControlPlace::CallToAction);
+            },
+            |ui| {
+                Button::new("Join the community").icon(IconId::new("note")).variant(Variant::PRIMARY).show(ui);
+            },
+        );
+        Button::new("Open").show(ui);
+    });
+    shown.into()
+}
+
 /// One toggle off and one on with an icon, as the gallery card shows them.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

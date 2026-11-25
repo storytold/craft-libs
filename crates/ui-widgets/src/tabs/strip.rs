@@ -99,6 +99,8 @@ pub struct TabStripOutput<K> {
     pub empty_drag: bool,
     /// The second press of a double click went down on the strip's empty room this pass.
     pub empty_double: bool,
+    /// The overflow button, when some tabs do not fit: its rect in screen space and the id of its accessibility node.
+    pub overflow: Option<(Rect, Id)>,
 }
 
 impl<K> Outcome for TabStripOutput<K> {
@@ -546,8 +548,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
-    /// Which tabs a middle click closes, where the kind closes on one (`TabKind::middle_click_closes`): every tab
-    /// when unset. A host with tabs that cannot close (`Tab::closable(false)`) names the ones that can.
+    /// Which tabs a middle click closes, where the kind closes on one (`TabKind::middle_click_closes`). Unset, the
+    /// kind's default (`TabKind::closes_by_default`): every document tab, no panel tab. A host whose tabs differ from
+    /// that default (`Tab::closable`) names the ones that close.
     #[prop(func = "Fn(&K) -> bool")]
     can_close: Option<RowTest<'a, K>>,
     /// The role of each tab, an input of the fit: contextual tabs are kept ahead of plain tabs.
@@ -987,7 +990,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
-        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, can_close, .. } = self;
+        let overflow = self.more.map(|rect| (rect, crate::runtime::access::sub_node_id(cx.core.id, OVERFLOW.into())));
+        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, can_close, kind, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
         let mut kept = Vec::with_capacity(response.events.len());
@@ -995,7 +999,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             match event {
                 CollectionEvent::Item(key, TabPartEvent::Close) => closed.push(key),
                 CollectionEvent::MiddleClick(key) => {
-                    if can_close.as_ref().is_none_or(|test| test.passes(&key)) {
+                    if can_close.as_ref().map_or(kind.closes_by_default(), |test| test.passes(&key)) {
                         closed.push(key);
                     }
                 }
@@ -1009,7 +1013,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             mods: craft_keymap::Mods::NONE,
         }));
         response.events = kept;
-        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
+        TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double, overflow }
     }
 }
 

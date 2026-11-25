@@ -1,6 +1,8 @@
 //! `Slider` and `RangeSlider`: the value maths that is the family's own: stepping in the reading direction, the scales
 //! that spread a range over a track, and thumbs that never cross.
 
+pub(crate) mod primary_down;
+
 pub(crate) mod dials;
 
 pub(crate) mod codec_override;

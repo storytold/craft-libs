@@ -7,6 +7,7 @@ use crate::rails::RailDensity;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
+use craft_theme::Srgba;
 use egui::Vec2;
 
 /// Body heights a panel asks for in a dock column while the user has not resized its group. Like [`SizeLimits`]
@@ -150,6 +151,54 @@ impl DockGrid {
 /// How far a width or height may pass the room and still fit it: the rounding of laid-out sizes.
 const WIDTH_SLACK: f32 = 0.5;
 
+/// A document a panel shows (a composition in a Timeline): a tab of the panel's group after the group's panel tabs,
+/// whichever panel the group shows. Picking the tab shows the panel and reports
+/// [`DockEvent::DocumentPicked`](super::DockEvent::DocumentPicked); its close button and a middle click report
+/// [`DockEvent::DocumentClosed`](super::DockEvent::DocumentClosed). The host opens, shows and closes documents by editing
+/// the panel's spec; the dock never changes them. A document tab is not dragged and takes no tab drop.
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub struct PanelDocument {
+    /// The document's id, unique among the panel's documents.
+    pub id: u64,
+    /// The tab's text.
+    pub label: Label,
+    /// The data colour shown before the label ([`PanelSpec::swatch`]).
+    pub swatch: Option<Option<Srgba>>,
+    /// The tab shows a close button, where the group's tabs close.
+    pub closable: bool,
+    /// The panel shows this document: its tab is the selected tab while the panel is the one its group shows.
+    pub shown: bool,
+}
+
+impl PanelDocument {
+    /// The document `id` titled `label`: no swatch, not closable, not shown.
+    pub fn new(id: u64, label: impl Into<Label>) -> Self {
+        PanelDocument { id, label: label.into(), swatch: None, closable: false, shown: false }
+    }
+
+    /// The data colour before the label; `None` is the theme's empty swatch.
+    #[must_use]
+    pub fn swatch(mut self, color: Option<Srgba>) -> Self {
+        self.swatch = Some(color);
+        self
+    }
+
+    /// Whether the tab shows a close button.
+    #[must_use]
+    pub fn closable(mut self, closable: bool) -> Self {
+        self.closable = closable;
+        self
+    }
+
+    /// Whether the panel shows this document.
+    #[must_use]
+    pub fn shown(mut self, shown: bool) -> Self {
+        self.shown = shown;
+        self
+    }
+}
+
 /// What the dock reads of a panel: its name and icon, its size policy and how its floating window behaves. The
 /// permissions of a panel (movable, floatable, closable, takes tabs, takes splits) belong to the dock model, not
 /// to this spec.
@@ -191,6 +240,12 @@ pub struct PanelSpec {
     pub count: Option<usize>,
     /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
     pub caption: Option<Label>,
+    /// A data colour shown as a swatch before the name on the panel's tab: what the panel shows is labelled with it
+    /// (a composition's label colour). `Some(None)` is the theme's empty swatch, for something without a colour; the
+    /// swatch is not part of the tab's accessible name.
+    pub swatch: Option<Option<Srgba>>,
+    /// The documents the panel shows, as tabs of its group after the panel tabs ([`PanelDocument`]).
+    pub documents: Vec<PanelDocument>,
     /// The panel's body is the app's own egui code: the dock hands `DockPanels::body`, `footer`, `group_header`,
     /// `rail_footer` and the group's `group_view` (while the panel is the one its group shows) a `Ui` with the style
     /// of the `Ui` the dock was shown in, so the code lays out as it does outside the dock, and runs them once per pass,
@@ -217,6 +272,8 @@ impl PanelSpec {
             footer: false,
             count: None,
             caption: None,
+            swatch: None,
+            documents: Vec::new(),
             host_body: false,
         }
     }
@@ -232,6 +289,20 @@ impl PanelSpec {
     #[must_use]
     pub fn caption(mut self, text: impl Into<Label>) -> Self {
         self.caption = Some(text.into());
+        self
+    }
+
+    /// Shows a swatch of `color` before the panel's name on its tab; `None` is the theme's empty swatch.
+    #[must_use]
+    pub fn swatch(mut self, color: Option<Srgba>) -> Self {
+        self.swatch = Some(color);
+        self
+    }
+
+    /// The documents the panel shows, as tabs of its group after the panel tabs.
+    #[must_use]
+    pub fn documents(mut self, documents: Vec<PanelDocument>) -> Self {
+        self.documents = documents;
         self
     }
 

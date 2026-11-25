@@ -87,6 +87,21 @@ pub enum CommandHighlight {
     Hover,
 }
 
+/// How tall a row with a thumbnail stands, and how far a tree row indents per level. An app sets it at its root or on
+/// the scope of a list (`with_env`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::runtime::env::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ThumbRows {
+    /// The thumbnail with `space.gap.stack` around it, at least a standard control and the panel padding high; a level
+    /// of indent is an icon slot.
+    #[default]
+    Roomy,
+    /// The thumbnail with `space.gap.tight` around it, at least the row's own height; a level of indent is a small
+    /// icon and `space.gap.tight`: VectorCraft's Layers panel.
+    Tight,
+}
+
 /// What the row fill depends on.
 #[derive(Clone, Copy)]
 pub(super) struct FillKey {

@@ -501,6 +501,11 @@ pub fn entry(ctx: &Context, id: Id) -> Option<OpenEntry> {
     with_pass(ctx, |pass| pass.last.iter().find(|entry| entry.id == id).cloned())
 }
 
+/// The actual egui layer registered for `id` in this pass, never an old or exiting entry or an OS-window placeholder.
+pub(crate) fn current_egui_layer(ctx: &Context, id: Id) -> Option<Layer> {
+    with_pass(ctx, |pass| pass.current.iter().find(|entry| entry.id == id && !entry.exiting && !entry.window).map(|entry| entry.layer))
+}
+
 /// The side of its anchor the layer `id` was placed on in this pass, once its host placed it by a known size.
 pub(crate) fn placed_side(ctx: &Context, id: Id) -> Option<Side> {
     with_pass(ctx, |pass| pass.sides.iter().rev().find(|(layer, _)| *layer == id).map(|(_, side)| *side))
@@ -659,7 +664,8 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
 }
 
 /// Brings the family of the open layer `id` in front of the other families of its class at the end of this pass, as a
-/// press on it does.
+/// press on it does: a floating window goes to the top of egui's area order, which it shares with the app's own egui
+/// windows.
 pub fn raise(ctx: &Context, id: Id) {
     with_pass(ctx, |pass| pass.raise.push(id));
 }

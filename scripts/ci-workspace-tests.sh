@@ -4,9 +4,10 @@
 #   run      one leg builds and runs every test: each macOS and Windows leg, and the Linux leg when
 #            the selection reaches no replay-audit crate
 #   archive  the Linux build job (gate.yml `archive-command`) builds once and writes one nextest
-#            archive per shard: 1 every selected test, 2 the replay audit's UI crates, 3 the
-#            default-feature crates
-#   shard    a Linux shard leg runs its archive ($GATE_SHARD)
+#            archive per shard: 1 every selected test outside the replay audit's crates, 2 those
+#            crates, 3 the default-feature crate
+#   shard    a Linux shard leg runs its archive ($GATE_SHARD); shard 2 runs it plainly, then with
+#            the audit on
 #   doctest  the doctests, in the build job after the archives (`after-archive-command`)
 #   audit    prints whether the selection reaches a replay-audit crate (`true` or `false`)
 #   full     the nightly run: every test, at the full sweep and proptest counts nightly.yml leaves set
@@ -24,14 +25,19 @@ config=(--config .config/cargo-dev.toml --config .config/cargo-ci.toml)
 all_features=(--workspace --all-features --locked --profile ci "${config[@]}")
 targets=(--lib --bins --tests)
 examples=(-p craft-aep -p craft-video --example stubicc --example h264_h264enc_bench)
-# The crates whose tests check behaviour with a feature off, which an all-features build cannot reach.
-default_features=(-p craft-image-codecs -p craft-text --locked --profile ci "${config[@]}")
+# The crate whose tests check behaviour with a feature off, which an all-features build cannot reach.
+# craft-text is not here: its tests all need features, and its craft-ui dev-dependency would build
+# the whole UI stack a second time with default features.
+default_features=(-p craft-image-codecs --locked --profile ci "${config[@]}")
 # The replay audit (craft-libs#2336): these crates' tests again, with every memoized view that would
 # replay also run for real and compared with its replay.
 audit_packages=(craft-ui-contract craft-ui-widgets craft-ui-panels craft-ui-patterns craft-ui-shell craft-ui-gallery craft-menu)
-audit_filter=$(printf ' | package(%s)' "${audit_packages[@]}")
-audit_filter="(${CRAFT_TEST_FILTER:-all()}) & (${audit_filter:3})"
+audit_crates=$(printf ' | package(%s)' "${audit_packages[@]}")
+audit_crates=${audit_crates:3}
 filter=${CRAFT_TEST_FILTER:-all()}
+# Shard 1 leaves the audit crates to shard 2, which runs them plainly and with the audit on.
+plain_filter="($filter) & !($audit_crates)"
+audit_filter="($filter) & ($audit_crates)"
 
 doctests() {
   # Whole-workspace: `cargo test -p <selected>` would resolve features over the selected crates
@@ -58,7 +64,7 @@ case "${1:-}" in
     for shard in 1 2 3; do mkdir -p "$NEXTEST_ARCHIVE_DIR/$shard"; done
     # The examples' two packages join the one build here, so their tests are in shard 1's archive.
     cargo nextest archive "${all_features[@]}" "${targets[@]}" --example stubicc --example h264_h264enc_bench \
-      -E "$filter" --archive-file "$NEXTEST_ARCHIVE_DIR/1/$NEXTEST_ARCHIVE_NAME"
+      -E "$plain_filter" --archive-file "$NEXTEST_ARCHIVE_DIR/1/$NEXTEST_ARCHIVE_NAME"
     # The same build, so nothing compiles again; only the audit crates' binaries.
     cargo nextest archive "${all_features[@]}" "${targets[@]}" --example stubicc --example h264_h264enc_bench \
       -E "$audit_filter" --archive-file "$NEXTEST_ARCHIVE_DIR/2/$NEXTEST_ARCHIVE_NAME"
@@ -69,7 +75,7 @@ case "${1:-}" in
     run=(cargo nextest run --archive-file "$NEXTEST_ARCHIVE_FILE" --workspace-remap . --profile ci --no-tests=warn)
     case "${GATE_SHARD:-}" in
       1 | 3) "${run[@]}" ;;
-      2) CRAFT_UI_AUDIT_REPLAY=1 "${run[@]}" ;;
+      2) "${run[@]}"; CRAFT_UI_AUDIT_REPLAY=1 "${run[@]}" ;;
       *) echo "unknown shard: '${GATE_SHARD:-}'" >&2; exit 2 ;;
     esac
     ;;
