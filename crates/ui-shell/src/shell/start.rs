@@ -11,10 +11,10 @@ use crate::buttons::button::ButtonStyleKey;
 use crate::buttons::{Button, Link};
 use crate::choice::Segmented;
 use crate::contract::{
-    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, Scroll, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, Sizing, clicked,
+    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowAlign, Scroll, SelectMode,
+    Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
 };
-use crate::display::{Divider, Icon, Text};
+use crate::display::{Divider, Icon, Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow, RowEvent, ThumbAspect, TrailingFace, TrailingPart};
 use crate::menu::{Menu, MenuItem};
@@ -29,11 +29,11 @@ use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
 use crate::sections::{HeaderStrength, Section};
 use crate::style::{Corners, DataColor, StyleCx, SurfaceKind, SurroundLook, TypeRole};
-use crate::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid};
+use crate::tile_grid::{CaptionPlace, CardText, GridZoom, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Proposal, SelectionChange, keyed};
 use craft_theme::variant::{CustomVariant, Emphasis, RadiusStep, Tone, VariantLook};
 use craft_theme::{Rgba, Tokens, Variant};
-use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
+use egui::{CornerRadius, Rect, Response, Ui, UiBuilder, Vec2, pos2, vec2};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -150,6 +150,21 @@ pub enum StartLayout {
     Gallery,
     /// A greeting page: a title, the templates, then the recent files as rows. It shows neither Pinned nor the drop card.
     Greeting,
+    /// One centred column, at most `size.page.column` wide and a page margin from every edge: the title and subtitle,
+    /// New and Open, the recent files as rows when there are any, the app's section, the templates as cards that keep
+    /// their size and wrap, then the links, the call to action as a pill. It shows neither Pinned, the drop card nor
+    /// the recent files' view switch and sort.
+    Column,
+}
+
+/// The column's template cards keep the card thumbnail's size, so as many as fit stand in a row and the rest wrap.
+const COLUMN_CARD_ZOOM: f32 = 1.0;
+
+/// The call to action among a Column page's links: the primary variant at pill corners, with its icon.
+const CALL_TO_ACTION_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.start-call-to-action", call_to_action_look);
+
+fn call_to_action_look(tokens: &Tokens) -> VariantLook {
+    Variant::PRIMARY.resolve(tokens).radius(RadiusStep::Pill)
 }
 
 /// Where a host section sits on the start screen.
@@ -345,6 +360,15 @@ pub struct StartScreen<'a> {
     /// The page's heading.
     #[prop(into)]
     title: Option<Label>,
+    /// The line under the title on a [`StartLayout::Column`] page.
+    #[prop(into)]
+    subtitle: Option<Label>,
+    /// The heading of the templates section, in place of the built-in word.
+    #[prop(into)]
+    templates_title: Option<Label>,
+    /// The heading over the links on a [`StartLayout::Column`] page.
+    #[prop(into)]
+    links_title: Option<Label>,
     /// The text of the link that fires [`StartAction::MoreTemplates`].
     #[prop(into)]
     more_templates: Option<Label>,
@@ -404,6 +428,7 @@ pub struct StartLink {
     /// What the link does.
     pub target: StartLinkTarget,
     selected: bool,
+    primary: bool,
 }
 
 /// What a [`StartLink`] does.
@@ -419,17 +444,25 @@ pub enum StartLinkTarget {
 impl StartLink {
     /// A link that opens `url`, shown as its tooltip.
     pub fn url(label: impl Into<Label>, icon: Option<IconId>, url: impl Into<String>) -> Self {
-        StartLink { label: label.into(), icon, target: StartLinkTarget::Url(url.into()), selected: false }
+        StartLink { label: label.into(), icon, target: StartLinkTarget::Url(url.into()), selected: false, primary: false }
     }
 
     /// A link that fires `command`.
     pub fn command(label: impl Into<Label>, icon: Option<IconId>, command: impl Into<CommandRef>) -> Self {
-        StartLink { label: label.into(), icon, target: StartLinkTarget::Command(command.into()), selected: false }
+        StartLink { label: label.into(), icon, target: StartLinkTarget::Command(command.into()), selected: false, primary: false }
     }
 
     /// Highlights this command link on a Home rail.
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Makes this link the page's call to action: on a [`StartLayout::Column`] page it stands as a pill in the
+    /// primary variant with its icon, where the other links show as text alone. The other layouts show it as a link.
+    #[must_use]
+    pub fn primary(mut self) -> Self {
+        self.primary = true;
         self
     }
 }
@@ -452,6 +485,9 @@ impl<'a> StartScreen<'a> {
             home: None,
             layout: StartLayout::default(),
             title: None,
+            subtitle: None,
+            templates_title: None,
+            links_title: None,
             more_templates: None,
             picture: (PICTURE_WIDE, PICTURE_HIGH),
             card_zoom: None,
@@ -531,6 +567,8 @@ pub(super) struct Page<'p> {
     pub(super) offers_open: bool,
     /// The heading of the pinned folders section, in place of the built-in word.
     pub(super) pinned_title: Option<&'p Label>,
+    /// The heading of the templates section, in place of the built-in word.
+    pub(super) templates_title: Option<&'p Label>,
     /// PdfCraft's section look (`StartScreen::heading_sections`).
     pub(super) heading_sections: bool,
 }
@@ -664,6 +702,9 @@ impl StartScreen<'_> {
             section,
             layout,
             title,
+            subtitle,
+            templates_title,
+            links_title,
             more_templates,
             picture,
             card_zoom,
@@ -685,13 +726,14 @@ impl StartScreen<'_> {
             words: &words,
             thumbnails,
             picture,
-            card_zoom,
+            card_zoom: if layout == StartLayout::Column { card_zoom.or(Some(COLUMN_CARD_ZOOM)) } else { card_zoom },
             paper: page_paper,
             drop_hint: drop_hint.as_ref(),
             now,
             offers_new,
             offers_open,
             pinned_title: pinned_title.as_ref(),
+            templates_title: templates_title.as_ref(),
             heading_sections,
             actions: &actions,
         };
@@ -726,22 +768,23 @@ impl StartScreen<'_> {
         };
         // `beside` is whether the rail stands beside the page; without it New and Open lead the page and the links follow
         // the sections.
+        // The app's own section, under the heading `heading` makes of its title.
+        let app_section = |ui: &mut Ui, heading: fn(Label) -> Section<'static>| {
+            if let Some((title, body)) = &section {
+                let _ = heading(title.clone()).show(ui, |ui, _| {
+                    let mut body = body.borrow_mut();
+                    (*body)(ui);
+                });
+            }
+        };
         let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool, drop_area: Option<(f32, bool)>| {
             if !beside && (offers_new || offers_open) {
                 let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui, Sizing::Content));
             }
-            let app_section = |ui: &mut Ui| {
-                if let Some((title, body)) = &section {
-                    let _ = Section::fixed(title.clone()).header_gap(Gap::Section).show(ui, |ui, _| {
-                        let mut body = body.borrow_mut();
-                        (*body)(ui);
-                    });
-                }
-            };
             host_sections(ui, StartPlace::BeforeRecent);
             if layout == StartLayout::Greeting {
                 greeting_body(&page, ui, title.as_ref(), more_templates.as_ref(), templates, recent, max_recent);
-                app_section(ui);
+                app_section(ui, page_section);
             } else {
                 // With `pinned_first` the pinned folders stand above the recent files, as production's Folders section
                 // does; else they follow them.
@@ -763,7 +806,7 @@ impl StartScreen<'_> {
                 if let Some(pinned) = pinned.filter(|_| !pinned_first) {
                     pinned_section(&page, ui, pinned);
                 }
-                app_section(ui);
+                app_section(ui, page_section);
                 if !templates.is_empty() {
                     templates_section(&page, ui, templates);
                 }
@@ -773,6 +816,40 @@ impl StartScreen<'_> {
                 let _ = Stack::new().gap(Gap::Tight).label(words.start_links.clone()).show(ui, |ui, _| link_items(ui, links, false));
             }
         };
+
+        if layout == StartLayout::Column {
+            let column = env.tokens.size.page.column;
+            // The page senses its own surface for the empty-room double click, as the other layouts do.
+            let shown = Stack::new().fill().pad(Pad::Page).scroll(Scroll::vertical()).senses_surface().show(ui, |ui, cx| {
+                if cx.surface_double_pressed() {
+                    page.push(StartAction::Open);
+                }
+                let room = ui.available_rect_before_wrap();
+                let width = room.width().min(column);
+                let at = Rect::from_min_size(pos2(room.center().x - width / 2.0, room.top()), vec2(width, room.height()));
+                ui.scope_builder(UiBuilder::new().max_rect(at), |ui| {
+                    let _ = Stack::new().id_salt("start-column").gap(Gap::Section).fill_width().show(ui, |ui, _| {
+                        column_heading(&page, ui, title.as_ref(), subtitle.as_ref());
+                        host_sections(ui, StartPlace::BeforeRecent);
+                        // The recent files as rows in the app's order, only when there are any.
+                        let files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
+                        if !files.is_empty() {
+                            let _ = column_section(words.recent.clone())
+                                .command_scope(StartRecentCommands::SCOPE)
+                                .show(ui, |ui, cx| recent_body(&page, ui, cx, &files, RecentView::List, &words.no_recent, false));
+                        }
+                        app_section(ui, column_section);
+                        if !templates.is_empty() {
+                            let heading = page.templates_title.cloned().unwrap_or_else(|| words.templates.clone());
+                            let _ = column_section(heading).show(ui, |ui, _| templates_grid(&page, ui, templates));
+                        }
+                        host_sections(ui, StartPlace::AfterSections);
+                        column_links(&page, ui, links_title.as_ref(), links);
+                    });
+                });
+            });
+            return StartOutput { response: shown.output, actions: actions.into_inner() };
+        }
 
         if let Some(home) = home {
             let response = home.show(ui, &page, links, |ui, cx, center, wide| page_body(ui, cx, true, Some((center, wide))));
@@ -1057,6 +1134,83 @@ fn greeting_body(
     for action in list.show(ui).actions {
         page.push(action);
     }
+}
+
+/// A section of the gallery and greeting pages, its body a section gap under its title.
+fn page_section(title: Label) -> Section<'static> {
+    Section::fixed(title).header_gap(Gap::Section)
+}
+
+/// A section of a Column page: its title a heading with no rule, its body a stack gap under it.
+fn column_section(title: Label) -> Section<'static> {
+    Section::fixed(title).quiet_header().header_gap(Gap::Stack)
+}
+
+/// `body` centred across the column.
+fn centred(ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) {
+    let _ = Row::new().align(RowAlign::Center).fill_width().show(ui, body);
+}
+
+/// The top of a Column page: the title over the subtitle, then New and Open, each centred.
+fn column_heading(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, subtitle: Option<&Label>) {
+    if title.is_some() || subtitle.is_some() {
+        let _ = Stack::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| {
+            if let Some(title) = title {
+                centred(ui, |ui, _| drop(Text::new(title.clone()).role(TypeRole::Display).show(ui)));
+            }
+            if let Some(subtitle) = subtitle {
+                centred(ui, |ui, _| drop(Text::new(subtitle.clone()).shade(Shade::Muted).show(ui)));
+            }
+        });
+    }
+    if page.offers_new || page.offers_open {
+        let _ = Row::new().align(RowAlign::Center).gap(Gap::Stack).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::Content));
+    }
+}
+
+/// The links of a Column page under their heading, each centred: the call to action ([`StartLink::primary`]) as a
+/// pill with its icon, the others as links without their icons. A URL opens in the browser (the URL is its tooltip);
+/// a command fires as a pointer activation.
+fn column_links(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, links: &[StartLink]) {
+    if links.is_empty() {
+        return;
+    }
+    let _ = Stack::new().id_salt("start-links").gap(Gap::Stack).label(page.words.start_links.clone()).fill_width().show(ui, |ui, cx| {
+        if let Some(title) = title {
+            centred(ui, |ui, _| drop(Text::new(title.clone()).role(TypeRole::BodyStrong).show(ui)));
+        }
+        for (at, link) in links.iter().enumerate() {
+            let url = match &link.target {
+                StartLinkTarget::Url(url) => Some(url),
+                StartLinkTarget::Command(_) => None,
+            };
+            let mut activated = false;
+            centred(ui, |ui, _| {
+                activated = if link.primary {
+                    let mut button = Button::new(link.label.clone()).id_salt(("start-link", at)).variant(Variant::Custom(CALL_TO_ACTION_LOOK));
+                    if let Some(icon) = &link.icon {
+                        button = button.icon(icon.clone());
+                    }
+                    if let Some(url) = url {
+                        button = button.tooltip(url.clone());
+                    }
+                    clicked(&button.show(ui))
+                } else {
+                    let mut text = Link::new(link.label.clone()).id_salt(("start-link", at));
+                    if let Some(url) = url {
+                        text = text.url(url.clone()).tooltip(url.clone());
+                    }
+                    clicked(&text.show(ui))
+                };
+            });
+            // A link opens its own URL; the pill is a button, so the page opens its URL.
+            match (&link.target, activated) {
+                (StartLinkTarget::Url(url), true) if link.primary => cx.open_url(url, false),
+                (StartLinkTarget::Command(command), true) => drop(commands::fire(ui.ctx(), command.clone(), FireSource::Pointer)),
+                _ => {}
+            }
+        }
+    });
 }
 
 /// New and Open, the first Tab stops of the page; Open alone where the app offers no New.
@@ -1374,17 +1528,35 @@ fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
 }
 
 fn templates_section(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
-    let _ = page.section(page.words.templates.clone()).header_gap(Gap::Section).show(ui, |ui, _| templates_grid(page, ui, templates));
+    let _ = page
+        .section(page.templates_title.cloned().unwrap_or_else(|| page.words.templates.clone()))
+        .header_gap(Gap::Section)
+        .show(ui, |ui, _| templates_grid(page, ui, templates));
 }
 
 /// The template cards, which report the chosen one as [`StartAction::UseTemplate`].
 fn templates_grid(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
     let words = page.words;
     let source = keyed(templates, |template: &Template| template.id.clone()).with_text(|template| Cow::Borrowed(template.name.as_str()));
-    let out = page.grid::<String>(words.templates.clone(), false).show_items(ui, &source, &mut |id, _| {
+    let mut grid = page.grid::<String>(words.templates.clone(), false);
+    // Templates of page sizes are New Document's page cards: the page on a picture twice as wide as high, the text
+    // centred.
+    if templates.iter().any(|template| template.page.is_some()) {
+        grid = grid.card_text(CardText::Preset).aspect(2.0);
+    }
+    let out = grid.show_items(ui, &source, &mut |id, _| {
         let Some(template) = templates.iter().find(|template| &template.id == id) else { return Tile::new(Label::Empty) };
         let detail = (!template.detail.is_empty()).then(|| template.detail.clone());
-        page.tile(&template.name, detail, ThumbKey::Template(template.id.clone()))
+        match template.page {
+            Some((width, height)) => {
+                let tile = Tile::new(Label::from(template.name.clone())).page(width, height);
+                match detail {
+                    Some(detail) => tile.detail(detail),
+                    None => tile,
+                }
+            }
+            None => page.tile(&template.name, detail, ThumbKey::Template(template.id.clone())),
+        }
     });
     let mut lead = None;
     for id in read_events(out.response.events, &mut lead).0 {

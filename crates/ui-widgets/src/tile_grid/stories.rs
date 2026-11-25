@@ -107,6 +107,12 @@ fn tile_hue(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tile::new("Quarterly report.pdf").icon(IconId::new("file")).hue(DataColor::new(Color32::from_rgb(196, 64, 52))).show(ui).into()
 }
 
+/// A page picture: a letter-size page on its shadow, as New Document's preset cards and page templates show it.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_page(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Letter").detail("612 × 792 pt").page(612.0, 792.0).show(ui).into()
+}
+
 /// A compact action card: icon and name, a description, and the action that activates the whole card.
 #[story(Tile<'static>, covers = [], drive = Drive::Activate)]
 fn tile_summary_card(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {

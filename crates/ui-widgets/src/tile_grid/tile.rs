@@ -20,7 +20,9 @@ use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
 use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{Label, Units};
-use crate::style::{ComponentStyle, Corners, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, UiTokens};
+use crate::style::{
+    ComponentStyle, Corners, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceLook, SurfaceStyle, TextLook, UiTokens,
+};
 use craft_behavior::{AccessAction, AccessData, Flow, IconId, Insets, Metrics, Mixed, NavShape, PartKey, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::{Emphasis, Tone};
@@ -302,6 +304,24 @@ pub struct TileStyle {
     sizes: Sizes,
 }
 
+/// The paper of a page picture (`Tile::page`): a document's blank page, which is data, not a theme surface.
+const PAPER: DataColor = DataColor::new(Color32::WHITE);
+
+/// A `width` by `height` page centred in `picture` on the popup surface's shadow: the page with its shadow fills as
+/// much of the picture as its shape allows.
+fn paint_page(cx: &ContentPainterCx<'_>, picture: Rect, width: f64, height: f64) {
+    let shadow = cx.style_cx().surface(SurfaceKind::Popup).shadow;
+    let reach = shadow.map(|shadow| shadow.margin()).unwrap_or_default();
+    let room = Rect::from_min_max(picture.min + Vec2::new(reach.left, reach.top), picture.max - Vec2::new(reach.right, reach.bottom));
+    let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
+    let scale = (room.width() / width).min(room.height() / height).max(0.0);
+    let page = Rect::from_center_size(room.center(), Vec2::new(width * scale, height * scale));
+    cx.with_draw(|draw| {
+        draw.surface_styled(page, &SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow });
+        draw.data_fill(&PaintShape::Rect(page, CornerRadius::ZERO), PAPER);
+    });
+}
+
 /// A text badge's variant: a solid fill in its tone.
 fn pill_variant(tone: Tone) -> Variant {
     Variant::look(Emphasis::Solid, tone)
@@ -526,6 +546,14 @@ impl<'a> Tile<'a> {
         self.first = None;
         self.picture = None;
         self
+    }
+
+    /// The picture is a page `width` by `height` (in any one unit: only the shape counts): blank paper lifted on the
+    /// popup surface's soft shadow, as large as the picture holds with its shadow, drawn flat on the tile. A preset or
+    /// template that stands for a document size shows it this way (New Document's presets, a start page's templates).
+    #[must_use]
+    pub fn page(self, width: f64, height: f64) -> Self {
+        self.flat_thumbnail().thumb(ThumbAspect::new(2, 1), move |cx: &ContentPainterCx<'_>, picture: Rect| paint_page(cx, picture, width, height))
     }
 
     /// A hover action: an `IconButton::command` face shown while the pointer is over the tile, it has visible focus or

@@ -6,15 +6,14 @@ use super::{NewDocumentWords, Read, Session, background_label, depth_label, mode
 use crate::buttons::{Button, ButtonOutput};
 use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
 use crate::display::{Shade, Text};
-use crate::list::{List, ListRow, ThumbAspect};
+use crate::list::{List, ListRow};
 use crate::patterns::presets::{PresetId, PresetLibrary};
-use crate::primitives::{ContentPainterCx, StrokeWidth};
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{CardText, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
-use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
+use egui::Ui;
 use std::borrow::Cow;
 use std::cell::Cell;
 
@@ -350,30 +349,12 @@ fn recent_title(recent: &DocumentOptions, cx: &CardCx<'_, DocumentOptions>) -> L
     found.map_or_else(|| cx.words.custom.clone(), |preset| preset_title(preset, cx.setup, cx.words, cx.preset_words))
 }
 
-/// The tile of a card: the page outline at the card's aspect, the title and the size line.
+/// The tile of a card: the page at the card's shape, the title and the size line.
 fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>) -> Tile<'static> {
-    let page = card.settings.page();
-    let tile = Tile::new(card.title.clone())
-        .detail(card.line.clone())
-        .flat_thumbnail()
-        .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page));
+    let (width, height) = card.settings.page();
+    let tile = Tile::new(card.title.clone()).detail(card.line.clone()).page(width, height);
     match &card.tooltip {
         Some(tooltip) => tile.tooltip(tooltip.clone()),
         None => tile,
     }
-}
-
-/// A page icon inside the tile's picture, in content ink so the tile alone draws the selection ring.
-fn paint_page(painter: &ContentPainterCx<'_>, picture: Rect, (width, height): (f64, f64)) {
-    let page = page_rect(picture, width, height);
-    let stroke = Stroke::new(painter.stroke_width(StrokeWidth::Thin), painter.ink());
-    painter.painter.rect_stroke(page, CornerRadius::ZERO, stroke, StrokeKind::Inside);
-}
-
-/// The page's aspect inside `room`, capped at the 30-point size of the original outline.
-fn page_rect(room: Rect, width: f64, height: f64) -> Rect {
-    const PAGE_SIDE: f32 = 30.0;
-    let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
-    let scale = (room.width().min(PAGE_SIDE) / width).min(room.height().min(PAGE_SIDE) / height);
-    Rect::from_center_size(room.center(), vec2(width * scale, height * scale))
 }

@@ -198,6 +198,7 @@ size.dialog.least = 380
 size.dialog.wrap = 440
 size.dialog.button = 84
 size.dialog.side_button = 96
+size.page.column = 820
 stroke.thin = 1
 stroke.medium = 1.5
 stroke.thick = 2

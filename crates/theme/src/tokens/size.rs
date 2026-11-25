@@ -310,6 +310,15 @@ pub struct SizeTokens {
     pub dock: DockColumnSizes,
     /// Dialogs: their content width and their buttons.
     pub dialog: DialogSizes,
+    /// Full-window pages.
+    pub page: PageSizes,
+}
+
+/// The sizes of a full-window page (a start page), in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PageSizes {
+    /// The widest a page's centred column of content grows; a narrower room keeps the page's margin at each side.
+    pub column: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.

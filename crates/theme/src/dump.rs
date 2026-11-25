@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 
 use crate::{
     BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
-    GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet,
-    RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens, TypeStyle,
+    GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PageSizes, PaneSizes, PlotSizes,
+    RadiusSet, RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens, TypeStyle,
     TypeTokens, WellShape, WindowSizes,
 };
 
@@ -143,6 +143,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         pane,
         dock,
         dialog,
+        page,
     } = size;
     let ControlSizes { sm, md } = control;
     out.line("size.control.sm", len(*sm));
@@ -215,6 +216,8 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.dialog.wrap", len(*wrap));
     out.line("size.dialog.button", len(*button));
     out.line("size.dialog.side_button", len(*side_button));
+    let PageSizes { column } = page;
+    out.line("size.page.column", len(*column));
 }
 
 fn slot(s: FontSlot) -> &'static str {

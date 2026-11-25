@@ -71,6 +71,9 @@
         "short": 96.0,
         "track": 128.0
       },
+      "page": {
+        "column": 820.0
+      },
       "pane": {
         "least": 40.0
       },

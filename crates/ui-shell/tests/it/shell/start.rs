@@ -857,3 +857,80 @@ fn a_start_screen_takes_the_shape_and_width_of_its_card_pictures() {
     assert!(page.y > page.x, "a 3:4 card is taller than wide: {page:?}");
     assert!(page.x < default.x * 0.7, "a card at zoom 1 does not grow to fill the row: {page:?}");
 }
+
+/// The Column page of `files` in a 1600 by 900 room: title, subtitle, New and Open, the recent rows, a page template
+/// and the links, the first a call to action. Returns the fixture and the column's widest width.
+fn column_page(files: Vec<RecentFile>) -> (Fixture, f32) {
+    let column = Rc::new(RefCell::new(0.0));
+    let widest = column.clone();
+    let templates = vec![Template::new("letter", "Letter", "612 × 792 pt").page(612.0, 792.0)];
+    let links = vec![
+        StartLink::url("Join the community", Some(craft_behavior::IconId::new("globe")), "https://example.com/chat").primary(),
+        StartLink::url("Website", Some(craft_behavior::IconId::new("globe")), "https://example.com"),
+    ];
+    let mut fixture = Fixture::new(move |ui| {
+        *widest.borrow_mut() = Env::of(ui).tokens.size.page.column;
+        let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+        let _ = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files)
+            .layout(StartLayout::Column)
+            .title("Welcome")
+            .subtitle("Make something")
+            .templates(&templates)
+            .links(&links)
+            .links_title("Community")
+            .drop_hint("Drop files here")
+            .show(ui);
+    });
+    fixture.room(egui::Vec2::new(1600.0, 900.0)).settle();
+    let column = *column.borrow();
+    (fixture, column)
+}
+
+/// A Column page stands centred in a wide room, no wider than its column, with its parts in the page's order: the
+/// title over the subtitle, New and Open, Recent, the templates, then the links.
+#[trial]
+fn a_column_page_stands_centred_with_its_parts_in_order() {
+    let (fixture, column) = column_page(vec![RecentFile::new("/tmp/Report.vc", "Report.vc")]);
+    let find = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("{label} shows"));
+    let order = ["Welcome", "Make something", "New…", "Report.vc, /tmp", "Letter, 612 × 792 pt", "Community", "Join the community", "Website"];
+    let parts: Vec<_> = order.iter().map(|label| find(label)).collect();
+    for (pair, labels) in parts.windows(2).zip(order.windows(2)) {
+        assert!(pair[0].rect.top() < pair[1].rect.top(), "{} stands above {}: {:?} {:?}", labels[0], labels[1], pair[0].rect, pair[1].rect);
+    }
+    let middle = 800.0;
+    for label in ["Welcome", "Make something", "Community", "Join the community", "Website"] {
+        let centre = find(label).rect.center().x;
+        assert!((centre - middle).abs() < 2.0, "{label} is centred: {centre}");
+    }
+    let (new, open) = (find("New…").rect, find("Open…").rect);
+    assert!(((new.left() + open.right()) / 2.0 - middle).abs() < 2.0, "New and Open stand centred together: {new:?} {open:?}");
+    let (row, card) = (find("Report.vc, /tmp").rect, find("Letter, 612 × 792 pt").rect);
+    assert!(row.left() >= middle - column / 2.0 - 1.0 && row.right() <= middle + column / 2.0 + 1.0, "the rows keep to the column: {row:?}");
+    assert!(card.left() >= row.left() - 1.0, "the cards start inside the column: {card:?} {row:?}");
+}
+
+/// The Column page shows Recent only when there are recent files: no section, no drop card and no view switch
+/// without them.
+#[trial]
+fn a_column_page_shows_recent_only_with_files() {
+    let (with, _) = column_page(vec![RecentFile::new("/tmp/Report.vc", "Report.vc")]);
+    assert!(with.by_label("Recent").is_some(), "Recent shows with a file");
+    assert!(with.by_label("Grid").is_none(), "the column has no view switch");
+    let (without, _) = column_page(Vec::new());
+    assert!(without.by_label("Recent").is_none(), "no Recent section without files");
+    assert!(without.by_label("Drop files here").is_none(), "no drop card on a column page");
+    assert!(without.by_label("Letter, 612 × 792 pt").is_some(), "the templates still show");
+}
+
+/// The call to action is a pill button taller than the plain links, and a click on it opens its URL; the other links
+/// stay links.
+#[trial]
+fn a_column_call_to_action_is_a_pill_that_opens_its_url() {
+    let (mut fixture, _) = column_page(Vec::new());
+    let (pill, link) = (fixture.by_label("Join the community").expect("the pill"), fixture.by_label("Website").expect("the link"));
+    assert!(fixture.by_role(Role::BUTTON).iter().any(|button| button.node == pill.node), "the call to action is a button");
+    assert!(fixture.by_role(Role::LINK).iter().any(|plain| plain.node == link.node), "the other links are links");
+    assert!(pill.rect.height() > link.rect.height(), "the pill stands taller than a link: {:?} {:?}", pill.rect, link.rect);
+    fixture.click(&pill).idle(2);
+    assert!(fixture.opened().iter().any(|(url, _)| url == "https://example.com/chat"), "the pill opens its URL: {:?}", fixture.opened());
+}

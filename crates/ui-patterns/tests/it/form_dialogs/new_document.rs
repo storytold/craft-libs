@@ -357,11 +357,12 @@ fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
         for (name, key, size) in [("Clipboard", clipboard, wide), ("Custom", custom, tall)] {
             let card = tree.bounds_of(key).expect("visible tile bounds");
             let caption = frames.texts().iter().find(|line| line.text == name).expect("the preset title is painted");
-            let outlines: Vec<_> = shapes
+            // The page is blank paper: the one white fill centred in the card above its title.
+            let pages: Vec<_> = shapes
                 .iter()
                 .filter_map(|shape| match shape {
                     egui::Shape::Rect(rect)
-                        if rect.stroke.width > 0.0
+                        if rect.fill == egui::Color32::WHITE
                             && (rect.rect.center().x - card.center().x).abs() <= 1.0
                             && card.contains_rect(rect.rect)
                             && rect.rect.bottom() <= caption.rect.top() =>
@@ -371,9 +372,9 @@ fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(outlines.len(), 1, "one page outline and no extra frame in {name} at {scale}: {outlines:?}");
-            let page = outlines[0];
-            assert!((page.width().max(page.height()) - 30.0).abs() <= 1.0, "the compact page outline in {name}: {page:?}");
+            assert_eq!(pages.len(), 1, "one page and no extra frame in {name} at {scale}: {pages:?}");
+            let page = pages[0];
+            assert!(page.width() < card.width() && page.height() < card.height() / 2.0, "a small page inside the card in {name}: {page:?}");
             assert!((page.width() / page.height() - size.width as f32 / size.height as f32).abs() < 0.05, "the page has the preset's aspect");
         }
 
