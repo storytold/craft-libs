@@ -557,6 +557,10 @@ fn write_back_keeps_a_resized_turned_picture_in_the_box_around_it() {
         (e.get("width").unwrap().parse().unwrap(), e.get("height").unwrap().parse().unwrap())
     };
     let ((fw, fh), (cw, ch)) = (size("hp:sz"), size("hp:curSz"));
-    assert!(fw < 4000 || fh < 10000, "resized: {:?}", (fw, fh));
+    // half of 4000 x 10000 on both axes (which way round depends on the size the reader gives a
+    // turned picture: its own once the reader keeps it, the frame before)
+    let mut sides = [fw, fh];
+    sides.sort_unstable();
+    assert!((sides[0] - 2000).abs() <= 1 && (sides[1] - 5000).abs() <= 1, "resized on both axes: {:?}", (fw, fh));
     assert!((fw - ch).abs() <= 1 && (fh - cw).abs() <= 1, "the box around the turned picture: {:?}", ((fw, fh), (cw, ch)));
 }

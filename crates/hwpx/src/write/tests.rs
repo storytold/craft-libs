@@ -504,14 +504,14 @@ fn new_hwpx_writes_offsets_before_their_anchor_as_hancom_does() {
     let (bytes, _) = new_hwpx(&doc).unwrap();
     let sec = xml::parse(zip_part(&bytes, "Contents/section0.xml").as_bytes(), false).unwrap();
     let pos = sec.iter("hp:pos").next().expect("the shape's place");
-    for k in ["horzOffset", "vertOffset"] {
-        assert!(pos.get(k).is_some_and(|v| v.parse::<u32>().is_ok()), "{k} unsigned: {:?}", pos.get(k));
-    }
+    // -20 pt and -30 pt in HWPUNIT, as 32-bit two's complement
+    assert_eq!(pos.get("horzOffset"), Some((-2000i32 as u32).to_string().as_str()));
+    assert_eq!(pos.get("vertOffset"), Some((-3000i32 as u32).to_string().as_str()));
     assert_eq!(pos.get("flowWithText"), Some("0"), "not held at the paragraph's top");
     let back = crate::read(&bytes).unwrap();
     let f = back.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
         InlineObject::Shape { float, .. } => Some(float.clone()),
         _ => None,
     });
-    assert!(f.is_some_and(|f| f.x < 0.0 && f.y < 0.0), "read back before its anchor");
+    assert!(f.as_ref().is_some_and(|f| (f.x + 20.0).abs() < 0.01 && (f.y + 30.0).abs() < 0.01), "read back where it was: {f:?}");
 }
