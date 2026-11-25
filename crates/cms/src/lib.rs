@@ -45,7 +45,7 @@ pub use black::BlackPreserving;
 pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;
-pub use gamut::GamutCheck;
+pub use gamut::{GamutCheck, Metric};
 pub use gpu_matrix_shaper::GpuMatrixShaper;
 pub use lut3d::Lut3d;
 pub use math::Mat3;
