@@ -2375,6 +2375,7 @@ dependencies = [
  "craft-geom",
  "craft-raw",
  "craft-render-parity",
+ "craft-testkit",
  "proptest",
  "rayon",
  "serde",
@@ -2533,6 +2534,7 @@ name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "craft-testkit",
  "craft-xml",
  "kurbo",
  "log",
@@ -3127,6 +3129,7 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
+ "craft-testkit",
  "jpeg-decoder",
  "jpeg-encoder 0.6.1",
  "rayon",
