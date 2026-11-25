@@ -977,10 +977,10 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         Some(craft_behavior::Axis::X)
     }
 
-    /// No wheel bits: as a value control the row takes the vertical wheel only while focused or armed, and no scope
-    /// frees it, since a wheel over the track has no one thumb to step.
+    /// The vertical wheel only while focused or armed (`Sense::WHEEL_Y_FOCUSED`), which no scope frees, since a wheel
+    /// over the track has no one thumb to step: it steps the focused one.
     fn sense(&self) -> Sense {
-        Sense::empty()
+        Sense::WHEEL_Y_FOCUSED
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
