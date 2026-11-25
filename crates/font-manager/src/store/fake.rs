@@ -281,7 +281,11 @@ impl Installer for FakeStore {
     }
 
     fn set_preview_service(&self, url: Option<&str>) -> Result<(), StoreError> {
+        // The address check is the native store's; the browser has no preview service to reach.
+        #[cfg(not(target_arch = "wasm32"))]
         let url = url.map(craft_font_store::check_preview_service).transpose().map_err(err)?;
+        #[cfg(target_arch = "wasm32")]
+        let url = url.map(str::to_owned);
         *self.preview_service.lock().map_err(err)? = url;
         Ok(())
     }
