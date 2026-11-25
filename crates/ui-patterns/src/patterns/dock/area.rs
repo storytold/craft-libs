@@ -1717,6 +1717,28 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
+    /// What a floating window handed back this pass besides its layout: the files dropped on it, for the group under
+    /// the drop, else its first group (a drop on the title row, or with no pointer known), from `first_group` on in the
+    /// shown groups, else `active`; and the keys nothing in it took, with the modifiers held in it.
+    fn take_window_input(
+        &mut self,
+        first_group: usize,
+        active: &P,
+        (files, files_at): (Vec<drag::OsFile>, Option<Pos2>),
+        (forwarded, modifiers): (Vec<egui::Event>, Option<egui::Modifiers>),
+    ) {
+        if !files.is_empty() {
+            let groups = &self.report.shown[first_group..];
+            let under = files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
+            let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
+            self.report.files.push(WindowFiles { panel, files });
+        }
+        if !forwarded.is_empty() {
+            self.report.forwarded_modifiers = modifiers;
+            self.report.forwarded_events.extend(forwarded);
+        }
+    }
+
     /// The floating windows of the pruned layout, each a `FloatingGroup` holding its one column, drawn as a dock
     /// column is with the window's title row as the column's bar, in an OS window where the config, the platform and
     /// its panels allow one. A window takes the drops over it on its own layer, from the spots its column registers in
@@ -1877,17 +1899,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     source.viewport = viewport;
                 }
             }
-            if !output.files.is_empty() {
-                // The group under the drop, else the first group: a drop on the title row, or with no pointer known.
-                let groups = &self.report.shown[first_group..];
-                let under = output.files_at.and_then(|at| groups.iter().find(|(_, rect)| rect.contains(at)));
-                let panel = under.or(groups.first()).map_or_else(|| active.clone(), |(panel, _)| panel.clone());
-                self.report.files.push(WindowFiles { panel, files: output.files });
-            }
-            if !output.forwarded_events.is_empty() {
-                self.report.forwarded_modifiers = output.forwarded_modifiers;
-                self.report.forwarded_events.extend(output.forwarded_events);
-            }
+            self.take_window_input(first_group, &active, (output.files, output.files_at), (output.forwarded_events, output.forwarded_modifiers));
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
