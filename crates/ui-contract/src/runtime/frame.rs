@@ -40,6 +40,12 @@ pub struct FrameInput {
     pub app_modal: Option<ViewportId>,
     /// Whether the window system's input reaches the OS windows the runtime hosts.
     pub window_input: WindowInput,
+    /// The window whose keys belong to the app's own egui code this frame (a prompt the app draws over a framework
+    /// dialog, which the runtime does not know covers it): the key stage routes none of its keys, typing, Escape,
+    /// pastes or Tab to a component and withdraws nothing, so they all stay in egui's input for the app. A framework
+    /// text part egui focuses still reads egui's input, so the app shows the layer it covers disabled or takes the
+    /// events itself. `None` (the default) when the app holds no window's keys; set every frame from the app's state.
+    pub keys_to_app: Option<ViewportId>,
 }
 
 /// Whether the window system's input reaches the OS windows the runtime hosts beside the root (a panel floated into
@@ -60,7 +66,15 @@ pub enum WindowInput {
 impl FrameInput {
     /// A frame with `root` and no host.
     pub fn new(root: RootEnv) -> Self {
-        FrameInput { root, commands: CommandInput::new(), host: None, latched: Mods::NONE, app_modal: None, window_input: WindowInput::Live }
+        FrameInput {
+            root,
+            commands: CommandInput::new(),
+            host: None,
+            latched: Mods::NONE,
+            app_modal: None,
+            window_input: WindowInput::Live,
+            keys_to_app: None,
+        }
     }
 
     /// Sets whether the window system's input reaches the hosted windows.
@@ -84,6 +98,12 @@ impl FrameInput {
     /// Sets the window in which the app's own egui code shows a modal ([`FrameInput::app_modal`](Self::app_modal)).
     pub fn app_modal(mut self, viewport: Option<ViewportId>) -> Self {
         self.app_modal = viewport;
+        self
+    }
+
+    /// Sets the window whose keys go to the app's own egui code this frame ([`FrameInput::keys_to_app`](Self::keys_to_app)).
+    pub fn keys_to_app(mut self, viewport: Option<ViewportId>) -> Self {
+        self.keys_to_app = viewport;
         self
     }
 
@@ -471,6 +491,11 @@ impl RootInput {
 pub(crate) fn root_input(ctx: &Context) -> RootInput {
     pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| RootInput::of(&input.root)))
         .unwrap_or_else(|| RootInput::of(&RootEnv::default()))
+}
+
+/// The window whose keys go to the app's own egui code this frame (`FrameInput::keys_to_app`).
+pub(crate) fn keys_to_app(ctx: &Context) -> Option<ViewportId> {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().and_then(|input| input.keys_to_app))
 }
 
 /// The window in which the app's own egui code shows a modal this frame (`FrameInput::app_modal`), and the root frame
