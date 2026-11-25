@@ -1,4 +1,9 @@
 //! A primary press on a standalone toggle can set the other toggles of its layout as it sweeps.
+//!
+//! A drag from a toggle that crosses no other toggle of its layout and does not end on the toggle itself is not a sweep:
+//! it cancels, as a press released outside a control does, and the pressed toggle keeps its value. Only a toggle that
+//! takes the sweep in the pass the drag reaches it counts as crossed: one that pass disables, hides, moves or leaves out
+//! takes nothing, so the press stays one released outside the control.
 
 use std::sync::Arc;
 
@@ -69,6 +74,38 @@ struct Sweep {
     on: bool,
     travel: Travel,
     visited: IdSet,
+    /// A sibling of the group took the sweep's value in a pass, or the button went up over the owner: the owner takes
+    /// the value too, in this pass or the next.
+    engaged: bool,
+}
+
+/// What a sweep shows its owner: it has engaged, or the button went up over the owner itself.
+#[derive(Clone, Copy)]
+struct Gives {
+    /// The sweep has engaged: a sibling took its value in a pass, or the button went up over the owner.
+    engaged: bool,
+    /// Where the button went up, when it went up in this pass.
+    end: Option<Pos2>,
+}
+
+impl Gives {
+    /// What `sweep` shows its owner so far.
+    fn of(sweep: &Sweep) -> Self {
+        Gives { engaged: sweep.engaged, end: sweep.travel.released.then_some(sweep.travel.last).flatten() }
+    }
+
+    /// Whether the sweep gives the owner the value at `layer` and `visible`: it has engaged, or the button went up over
+    /// the owner, which is a click rather than a sweep. The last pass's layout says nothing here: a sibling the crossing
+    /// pass disables, hides, moves or leaves out takes no sweep.
+    fn takes(self, ctx: &Context, layer: areas::Layer, visible: Rect) -> bool {
+        self.engaged || self.end.is_some_and(|end| crosses_visible(ctx, layer, visible, &[(end, end)]))
+    }
+}
+
+/// What a pass's records say about the toggle asking.
+enum Ready {
+    Owner { on: bool, replay: bool, gives: Gives },
+    Sibling { on: bool, path: Arc<Vec<Segment>> },
 }
 
 struct CompletedSweep {
@@ -82,10 +119,14 @@ struct Record {
     sweep: Option<Sweep>,
     path: Arc<Vec<Segment>>,
     // A press and move may arrive together; siblings drawn before the pressed control get that
-    // initial path on the following pass. Visited ids keep the edit from applying twice.
+    // initial path on the following pass. Visited ids keep the edit from applying twice. A sweep released
+    // in the pass a sibling after its owner took the value is kept the same way, for the owner (`accept`).
     replay_first_path: bool,
     // The replay survives opening another gesture in the same pass.
     completed: Option<CompletedSweep>,
+    /// The toggles that asked in this pass: an owner among them read the sweep before a sibling took it, so it takes the
+    /// value in the next pass.
+    asked: IdSet,
 }
 
 impl Stored for Record {}
@@ -95,6 +136,7 @@ impl Record {
         if self.pass == pass {
             return;
         }
+        self.asked.clear();
         self.completed = None;
         if !self.replay_first_path {
             Arc::make_mut(&mut self.path).clear();
@@ -128,12 +170,25 @@ impl Record {
         }
     }
 
+    /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group and the
+    /// owner takes the value too: only a toggle that takes the sweep in this pass counts as crossed. An owner that asked
+    /// in this pass before the sibling gets the value in the next pass; a sweep released in this pass is kept for it then.
+    /// Returns whether that next pass must run.
+    fn accept(&mut self, sibling: Id) -> bool {
+        let Some(sweep) = &mut self.sweep else { return false };
+        sweep.visited.insert(sibling);
+        let late = !sweep.engaged && sweep.travel.released && self.asked.contains(&sweep.owner);
+        sweep.engaged = true;
+        self.replay_first_path |= late;
+        late
+    }
+
     fn finish(&mut self) {
         self.completed = self.sweep.take().map(|sweep| CompletedSweep { sweep, path: std::mem::take(&mut self.path) });
     }
 
     fn start(&mut self, owner: Id, group: Id, press: PressStart, on: bool, input: &PassPointer) {
-        let mut sweep = Sweep { owner, group, on, travel: Travel::new(press.origin), visited: IdSet::default() };
+        let mut sweep = Sweep { owner, group, on, travel: Travel::new(press.origin), visited: IdSet::default(), engaged: false };
         let path = Arc::make_mut(&mut self.path);
         path.clear();
         sweep.travel.advance(after_press(&input.events, press), input.frame.as_ref().map_or(0.0, |frame| frame.slop), path);
@@ -159,25 +214,39 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
     let eligible = |sweep: &Sweep| enabled && sweep.group == group && sweep.travel.dragging;
     let completed = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.advance(pass, &input, cancelled);
+        record.asked.insert(id);
         let finished = record.completed.as_ref().filter(|finished| eligible(&finished.sweep))?;
         let sweep = &finished.sweep;
         if sweep.owner == id {
-            return Some((sweep.on, None));
+            // A sweep that finished with the next press never ran its owner's check, so it runs now, over the finished path.
+            return Some(Ready::Owner { on: sweep.on, replay: false, gives: Gives::of(sweep) });
         }
-        (!sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&finished.path))))
+        (!sweep.visited.contains(&id)).then(|| Ready::Sibling { on: sweep.on, path: Arc::clone(&finished.path) })
     })
-    .and_then(|(on, path)| {
-        if let Some(path) = path {
+    .and_then(|ready| match ready {
+        Ready::Owner { on, gives, .. } => {
+            if !gives.takes(ctx, layer, visible) {
+                return None;
+            }
+            PerViewport::<Record>::with(ctx, viewport, |record| {
+                if let Some(finished) = record.completed.as_mut().filter(|finished| finished.sweep.owner == id) {
+                    finished.sweep.engaged = true;
+                }
+            });
+            Some(on)
+        }
+        Ready::Sibling { on, path } => {
             if !crosses_visible(ctx, layer, visible, &path) {
                 return None;
             }
             PerViewport::<Record>::with(ctx, viewport, |record| {
                 if let Some(finished) = &mut record.completed {
                     finished.sweep.visited.insert(id);
+                    finished.sweep.engaged = true;
                 }
             });
+            Some(on)
         }
-        Some(on)
     });
     let ready = PerViewport::<Record>::with(ctx, viewport, |record| {
         match press {
@@ -189,26 +258,36 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
         }
         let sweep = record.sweep.as_ref().filter(|sweep| eligible(sweep))?;
         if sweep.owner == id {
-            return Some((sweep.on, None, record.replay_first_path));
+            return Some(Ready::Owner { on: sweep.on, replay: record.replay_first_path, gives: Gives::of(sweep) });
         }
-        (!record.path.is_empty() && !sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&record.path)), false))
+        (!record.path.is_empty() && !sweep.visited.contains(&id)).then(|| Ready::Sibling { on: sweep.on, path: Arc::clone(&record.path) })
     });
     let Some(ready) = ready else { return completed };
-    let (on, path, replay) = ready;
-    if replay {
-        ctx.request_repaint();
-    }
-    if let Some(path) = path {
-        if !crosses_visible(ctx, layer, visible, &path) {
-            return completed;
-        }
-        PerViewport::<Record>::with(ctx, viewport, |record| {
-            if let Some(sweep) = &mut record.sweep {
-                sweep.visited.insert(id);
+    match ready {
+        Ready::Owner { on, replay, gives } => {
+            if !gives.takes(ctx, layer, visible) {
+                return completed;
             }
-        });
+            PerViewport::<Record>::with(ctx, viewport, |record| {
+                if let Some(sweep) = record.sweep.as_mut().filter(|sweep| sweep.owner == id) {
+                    sweep.engaged = true;
+                }
+            });
+            if replay {
+                ctx.request_repaint();
+            }
+            Some(on)
+        }
+        Ready::Sibling { on, path } => {
+            if !crosses_visible(ctx, layer, visible, &path) {
+                return completed;
+            }
+            if PerViewport::<Record>::with(ctx, viewport, |record| record.accept(id)) {
+                ctx.request_repaint();
+            }
+            Some(on)
+        }
     }
-    Some(on)
 }
 
 /// Keep the entire part of the path inside the rect: a floating layer may cover only part of it.

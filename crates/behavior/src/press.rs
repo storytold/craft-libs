@@ -584,6 +584,23 @@ impl<T> Open<T> {
         !self.reported || (self.dragging && !self.drag_reported) || self.passing.is_some()
     }
 
+    /// The pointer reached `at`, by a move or by the button going up there: once past `slop` from the press, a target
+    /// that senses a drag starts one, one that clicks and passes its drag waits for its hand-over, and any other loses
+    /// its click. A release with no move before it (the pointer jumped) is judged where it went up, so only a release
+    /// within slop clicks.
+    fn reach(&mut self, at: Pos2, slop: f32) {
+        if self.released_at.is_none() && !self.dragging && !self.abandoned && self.passing.is_none() && at.distance(self.start.origin) > slop {
+            if self.sense.contains(Sense::DRAG) {
+                self.dragging = true;
+                self.silent = false;
+            } else if self.sense.contains(Sense::CLICK | Sense::PASSES_DRAG) {
+                self.passing = Some(at);
+            } else {
+                self.abandoned = true;
+            }
+        }
+    }
+
     /// A release now is a click.
     fn clicks(&self) -> bool {
         !self.dragging && !self.abandoned && !self.left && self.passing.is_none() && self.sense.contains(Sense::CLICK)
@@ -693,21 +710,8 @@ impl<T: Copy> PressMachine<T> {
             match *event {
                 PointerEvent::Moved { at, .. } => {
                     pos = at;
-                    if let Some(open) = &mut self.open
-                        && open.released_at.is_none()
-                        && !open.dragging
-                        && !open.abandoned
-                        && open.passing.is_none()
-                        && at.distance(open.start.origin) > input.slop
-                    {
-                        if open.sense.contains(Sense::DRAG) {
-                            open.dragging = true;
-                            open.silent = false;
-                        } else if open.sense.contains(Sense::CLICK | Sense::PASSES_DRAG) {
-                            open.passing = Some(at);
-                        } else {
-                            open.abandoned = true;
-                        }
+                    if let Some(open) = &mut self.open {
+                        open.reach(at, input.slop);
                     }
                 }
                 PointerEvent::Gone => {
@@ -787,6 +791,9 @@ impl<T: Copy> PressMachine<T> {
                     }
                     if self.open.is_some_and(|open| open.start.button != button || open.released_at.is_some()) {
                         continue;
+                    }
+                    if let Some(open) = &mut self.open {
+                        open.reach(at, input.slop);
                     }
                     if let Some(open) = &mut self.open
                         && open.owes_phase()
@@ -1113,5 +1120,86 @@ mod tests {
         assert_eq!(end.target, Some(1));
         assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
         assert_eq!(end.activated, None);
+    }
+
+    /// A release past slop with no move before it (the pointer jumped while the button was down) reads as a move there
+    /// and a release: it does what a move past slop and a release in one pass do, for every sense. A target that drags
+    /// starts its drag and ends it, with no click.
+    #[test]
+    fn a_jump_release_past_slop_starts_and_ends_a_drag() {
+        let sense = Sense::CLICK | Sense::DRAG;
+        let (far, near) = (SLOP * 4.0, SLOP / 2.0);
+        let jumped = phases(&[&[press(0.0, 1.0)], &[up(far)], &[]], sense);
+        assert_eq!(jumped, phases(&[&[press(0.0, 1.0)], &[moved(far), up(far)], &[]], sense), "a jump is a move and a release");
+        assert_eq!(jumped, "D S R", "the drag starts where the button went up, then ends with no click");
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &[up(near)]], sense), "D R!", "a jump within slop still clicks");
+
+        let mut machine = PressMachine::new();
+        pass(&mut machine, &[press(0.0, 1.0)], sense);
+        let start = pass(&mut machine, &[up(far)], sense);
+        assert!(matches!(start.phase, Some(PressPhase::DragStart { pos, .. }) if pos == pos2(far, 0.0)), "{:?}", start.phase);
+        assert!(machine.release_held(), "the release waits for the owed DragStart");
+        let end = pass(&mut machine, &[], sense);
+        assert!(matches!(end.phase, Some(PressPhase::Release { pos, click: false, .. }) if pos == pos2(far, 0.0)), "{:?}", end.phase);
+        assert!(end.dragging, "the release ends a drag");
+        assert_eq!(end.activated, None, "a jump release past slop is no click");
+    }
+
+    /// A jump release past slop on a target that clicks and passes its drag passes the press as a move past slop does:
+    /// the pass reports it in `passes`, a shape below that takes it drags and releases with no click, and a press no
+    /// shape takes is abandoned with no click.
+    #[test]
+    fn a_jump_release_past_slop_on_a_part_that_passes_its_drag_passes_the_press() {
+        let far = SLOP * 4.0;
+        let origin = pos2(0.0, 0.0);
+        for events in [&[up(far)][..], &[moved(far), up(far)][..]] {
+            // No shape takes the press: the next pass abandons it, and its release is no click.
+            let mut machine = PressMachine::new();
+            passing_pass(&mut machine, &[press(0.0, 1.0)]);
+            let passed = passing_pass(&mut machine, events);
+            assert_eq!(passed.passes.map(|start| start.origin), Some(origin), "{events:?}: {passed:?}");
+            assert!(matches!(passed.phase, Some(PressPhase::Held { .. })) && passed.activated.is_none(), "{events:?}: {passed:?}");
+            let end = passing_pass(&mut machine, &[]);
+            assert_eq!(end.target, Some(1));
+            assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{events:?}: {:?}", end.phase);
+            assert_eq!(end.activated, None, "{events:?}: a passed press no shape took is no click");
+
+            // The shape below takes it: it starts the drag where the button went up and ends it with no click.
+            let mut machine = PressMachine::new();
+            passing_pass(&mut machine, &[press(0.0, 1.0)]);
+            assert!(passing_pass(&mut machine, events).passes.is_some(), "{events:?}");
+            let handed = machine.hand_over(2, Sense::DRAG).expect("the shape below takes the drag");
+            assert_eq!(handed.target, Some(2));
+            assert!(
+                matches!(handed.phase, Some(PressPhase::DragStart { start, pos }) if start.origin == origin && pos == pos2(far, 0.0)),
+                "{events:?}: {:?}",
+                handed.phase
+            );
+            let end = passing_pass(&mut machine, &[]);
+            assert_eq!(end.target, Some(2));
+            assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{events:?}: {:?}", end.phase);
+            assert_eq!(end.activated, None, "{events:?}: a passed press is no click");
+        }
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &[up(SLOP / 2.0)]], PASSES), "D R!", "a jump within slop is the shape's click");
+    }
+
+    /// A jump release past slop on a target that only clicks abandons the click as a move past slop does: the release
+    /// is reported with no click and nothing activates.
+    #[test]
+    fn a_jump_release_past_slop_on_a_click_only_part_abandons_the_click() {
+        let (far, near) = (SLOP * 4.0, SLOP / 2.0);
+        let jumped = phases(&[&[press(0.0, 1.0)], &[up(far)]], Sense::CLICK);
+        assert_eq!(jumped, phases(&[&[press(0.0, 1.0)], &[moved(far), up(far)]], Sense::CLICK), "a jump is a move and a release");
+        assert_eq!(jumped, "D R", "the release is no click");
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &[up(near)]], Sense::CLICK), "D R!", "a jump within slop still clicks");
+
+        let mut machine = PressMachine::new();
+        pass(&mut machine, &[press(0.0, 1.0)], Sense::CLICK);
+        let end = pass(&mut machine, &[up(far)], Sense::CLICK);
+        assert_eq!(end.target, Some(1));
+        assert!(matches!(end.phase, Some(PressPhase::Release { pos, click: false, .. }) if pos == pos2(far, 0.0)), "{:?}", end.phase);
+        assert!(!end.dragging, "a click-only part never drags");
+        assert_eq!(end.activated, None, "the abandoned click activates nothing");
+        assert!(machine.target().is_none(), "the release ends the press");
     }
 }
