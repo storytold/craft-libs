@@ -109,6 +109,9 @@ pub fn overflow(ui: &mut Ui, items: &[MenuItem], labels: &MenuLabels) -> Option<
     items_of(&hit, items)
 }
 
+/// Width of a split button's chevron half.
+const CHEVRON_WIDTH: f32 = 24.0;
+
 /// A primary action with a chevron beside it.
 ///
 /// The two halves are two controls. Pressing the label does the thing. Pressing
@@ -149,9 +152,18 @@ pub fn split_named(ui: &mut Ui, primary: &str, name: &str, items: &[MenuItem], l
             }
         };
         let chevron = |ui: &mut Ui, hit: &mut Option<SplitHit>| {
-            // Room for the triangle, which is painted rather than typed.
-            let more = ui.add(egui::Button::new("    ").corner_radius(if backwards { outer } else { inner }));
-            crate::buttons::chevron(ui, more.rect, ui.visuals().text_color());
+            // Just room for the painted triangle, whatever padding and font the
+            // caller's style gives the label half.
+            let more = ui
+                .scope(|ui| {
+                    ui.spacing_mut().button_padding.x = 0.0;
+                    let corner = if backwards { outer } else { inner };
+                    ui.add(egui::Button::new("").min_size(egui::vec2(CHEVRON_WIDTH, 0.0)).corner_radius(corner))
+                })
+                .inner;
+            // `chevron` paints 9 points in from the rect's right edge; centre it.
+            let at = more.rect.translate(egui::vec2(9.0 - more.rect.width() / 2.0, 0.0));
+            crate::buttons::chevron(ui, at, ui.visuals().text_color());
             let name = labels.more_for.replace("{action}", &primary.to_lowercase());
             more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.as_str()));
             let more = more.on_hover_text(name.as_str());
