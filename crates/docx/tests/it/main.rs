@@ -1,6 +1,7 @@
 // The code came from an app whose lints allow this.
 #![allow(clippy::type_complexity)]
 mod alt_chunks;
+mod annotation_ids;
 mod bidi;
 mod bidi_runs;
 mod border_lines;
