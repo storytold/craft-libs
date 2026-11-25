@@ -3,7 +3,9 @@
 mod common;
 
 use craft_opc::{PackageOut, RelsOut};
+use craft_pptx::text::{LevelStyle, ListStyle, RunProps};
 use craft_pptx::{Defaults, Geom, LayoutType, Master, PhType, Plain, Presentation, ShapeKind, Size};
+use craft_xml::{Local, Options};
 
 const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
 const CT_PRES: &str = "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
@@ -37,11 +39,15 @@ fn sp(id: u32, name: &str, ph: &str, pr: &str, text: &str) -> String {
 const XFRM: &str = r#"<a:xfrm><a:off x="12700" y="25400"/><a:ext cx="1270000" cy="635000"/></a:xfrm>"#;
 
 fn deck() -> Vec<u8> {
+    deck_with_master_body_style("<p:bodyStyle/>")
+}
+
+fn deck_with_master_body_style(body_style: &str) -> Vec<u8> {
     let pres = format!(
         r#"<p:presentation {NS} firstSlideNum="3"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/><p:custShowLst><p:custShow name="Short" id="0"><p:sldLst><p:sld r:id="rId2"/></p:sldLst></p:custShow></p:custShowLst><p:extLst><p:ext uri="{{521415D9-36F7-43E2-AB2F-B90AF26B5E84}}"><p14:sectionLst xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"><p14:section name="Intro" id="{{0}}"><p14:sldIdLst><p14:sldId id="256"/></p14:sldIdLst></p14:section></p14:sectionLst></p:ext></p:extLst></p:presentation>"#
     );
     let master = format!(
-        r#"<p:sldMaster {NS}><p:cSld name="Main"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}{}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="4400"/></a:lvl1pPr></p:titleStyle><p:bodyStyle/><p:otherStyle/></p:txStyles></p:sldMaster>"#,
+        r#"<p:sldMaster {NS}><p:cSld name="Main"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}{}</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles><p:titleStyle><a:lvl1pPr><a:defRPr sz="4400"/></a:lvl1pPr></p:titleStyle>{body_style}<p:otherStyle/></p:txStyles></p:sldMaster>"#,
         sp(2, "Title", r#"<p:ph type="title"/>"#, XFRM, ""),
         sp(3, "Body", r#"<p:ph type="body" idx="1"/>"#, XFRM, "")
     );
@@ -95,6 +101,47 @@ fn deck() -> Vec<u8> {
             ),
         ],
     )
+}
+
+/// Synthetic master XML extending this fixture to reproduce storytold/deckcraft#2108.
+#[test]
+fn omitted_and_empty_master_body_styles_stay_distinct_through_saves() {
+    struct WithBodyDefault;
+    impl Defaults for WithBodyDefault {
+        fn master(&self, size: Size, after: u32) -> (Master, u32) {
+            Plain.master(size, after)
+        }
+        fn master_styles(&self) -> (ListStyle, ListStyle, ListStyle) {
+            let mut body = ListStyle::default();
+            body.set(0, LevelStyle { run: RunProps { size: Some(32.0), ..Default::default() }, ..Default::default() });
+            (ListStyle::default(), body, ListStyle::default())
+        }
+    }
+
+    for (source, present) in [("", false), ("<p:bodyStyle/>", true)] {
+        let mut p = craft_pptx::import(&deck_with_master_body_style(source), &Plain).unwrap();
+        for _ in 0..2 {
+            assert!(p.masters[0].body_style.is_empty());
+            let output = craft_pptx::export(&p, &WithBodyDefault).unwrap();
+            let package = craft_opc::Package::open(&output, &craft_pptx::LIMITS).unwrap();
+            let master = package.xml("ppt/slideMasters/slideMaster1.xml", &Options::default()).unwrap().unwrap();
+            let style = master.child(Local("txStyles")).and_then(|e| e.child(Local("bodyStyle")));
+            assert_eq!(style.is_some(), present);
+            p = craft_pptx::import(&output, &Plain).unwrap();
+        }
+        assert!(p.masters[0].body_style.is_empty());
+
+        std::sync::Arc::make_mut(&mut p.masters[0])
+            .body_style
+            .set(0, LevelStyle { run: RunProps { size: Some(24.0), ..Default::default() }, ..Default::default() });
+        let output = craft_pptx::export(&p, &WithBodyDefault).unwrap();
+        let edited = craft_pptx::import(&output, &Plain).unwrap();
+        assert_eq!(edited.masters[0].body_style.level(0).and_then(|level| level.run.size), Some(24.0));
+    }
+
+    let output = craft_pptx::export(&Presentation::default(), &WithBodyDefault).unwrap();
+    let authored = craft_pptx::import(&output, &Plain).unwrap();
+    assert_eq!(authored.masters[0].body_style.level(0).and_then(|level| level.run.size), Some(32.0));
 }
 
 fn shape<'a>(p: &'a Presentation, name: &str) -> &'a craft_pptx::Shape {

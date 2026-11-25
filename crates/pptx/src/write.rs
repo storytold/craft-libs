@@ -831,7 +831,11 @@ fn master_xml(x: &mut Exp, o: &mut Out, m: &Master, layouts: &[(u64, String)]) -
     let (dt, db, dother) = x.defaults.master_styles();
     let pick = |s: &crate::text::ListStyle, d: crate::text::ListStyle| if s.is_empty() { d } else { s.clone() };
     dml::list_style(&mut w, &mut Snk(x, o), "p:titleStyle", &pick(&m.title_style, dt));
-    dml::list_style(&mut w, &mut Snk(x, o), "p:bodyStyle", &pick(&m.body_style, db));
+    if !m.body_style.is_empty() || m.body_style_present == Some(true) {
+        dml::list_style(&mut w, &mut Snk(x, o), "p:bodyStyle", &m.body_style);
+    } else if m.body_style_present.is_none() {
+        dml::list_style(&mut w, &mut Snk(x, o), "p:bodyStyle", &db);
+    }
     dml::list_style(&mut w, &mut Snk(x, o), "p:otherStyle", &pick(&m.other_style, dother));
     w.close();
     ext_list(&mut w, ext_children(m.raw_ext.as_deref()).as_deref());
