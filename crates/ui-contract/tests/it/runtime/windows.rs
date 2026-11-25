@@ -1300,6 +1300,40 @@ fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_clo
     assert_eq!(back, Some(true), "the palette returns once the modal closed");
 }
 
+/// A palette that opens while the palettes still yield to a modal or popup of the root window that has just closed
+/// opens hidden and appears in the frames after.
+#[trial]
+fn a_palette_opened_as_the_roots_modal_or_popup_closes_appears() {
+    let windows = Windows::new();
+    let frame = |modal: bool, palette: bool| {
+        windows.frame(vec![], vec![], |ui| {
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("modal").show(ui, |_, _| {});
+            }
+            if palette {
+                Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            }
+        })
+    };
+    for _ in 0..3 {
+        frame(true, false);
+    }
+    frame(false, false);
+    let out = frame(false, true);
+    let (tool, builder) = builder_titled(&out, "tool");
+    let mut shown = builder.visible != Some(false);
+    assert!(!shown, "it opens hidden while the palettes yield");
+    for out in [out].into_iter().chain((0..3).map(|_| frame(false, true))) {
+        for (id, command) in out.commands {
+            if let (true, ViewportCommand::Visible(visible)) = (id == tool, command) {
+                shown = visible;
+            }
+        }
+    }
+    assert!(shown, "it appears once the modal is gone");
+}
+
 /// A key automation holds is in `keys::held` while it is held and not after its release.
 #[trial]
 fn a_key_held_by_automation_reads_as_held() {
