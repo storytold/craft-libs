@@ -374,7 +374,7 @@ fn text_entry(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
 }
 
 /// A PDF text string (ISO 32000-2 §7.9.2.2): UTF-16BE or UTF-8 after its byte order mark, else
-/// PDFDocEncoding, read here as Latin-1 (they differ only in rarely used punctuation).
+/// PDFDocEncoding (Annex D). Bytes PDFDocEncoding leaves undefined become U+FFFD.
 pub(crate) fn pdf_text(bytes: &[u8]) -> String {
     if let Some(utf16) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let units: Vec<u16> = utf16.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
@@ -383,7 +383,29 @@ pub(crate) fn pdf_text(bytes: &[u8]) -> String {
     if let Some(utf8) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(utf8).into_owned();
     }
-    bytes.iter().map(|b| char::from(*b)).collect()
+    bytes.iter().map(|b| pdf_doc_char(*b)).collect()
+}
+
+/// PDFDocEncoding's code points for 0x18–0x1F, where it puts spacing accents.
+const PDF_DOC_ACCENTS: [char; 8] = ['\u{02D8}', '\u{02C7}', '\u{02C6}', '\u{02D9}', '\u{02DD}', '\u{02DB}', '\u{02DA}', '\u{02DC}'];
+
+/// PDFDocEncoding's code points for 0x7F–0xA0; U+FFFD where it leaves a byte undefined.
+const PDF_DOC_HIGH: [char; 34] = [
+    '\u{FFFD}', '\u{2022}', '\u{2020}', '\u{2021}', '\u{2026}', '\u{2014}', '\u{2013}', '\u{0192}', '\u{2044}', '\u{2039}', '\u{203A}', '\u{2212}',
+    '\u{2030}', '\u{201E}', '\u{201C}', '\u{201D}', '\u{2018}', '\u{2019}', '\u{201A}', '\u{2122}', '\u{FB01}', '\u{FB02}', '\u{0141}', '\u{0152}',
+    '\u{0160}', '\u{0178}', '\u{017D}', '\u{0131}', '\u{0142}', '\u{0153}', '\u{0161}', '\u{017E}', '\u{FFFD}', '\u{20AC}',
+];
+
+/// One PDFDocEncoding byte: Latin-1 outside the accent, punctuation and undefined positions.
+fn pdf_doc_char(b: u8) -> char {
+    let table = |t: &[char], base: u8| b.checked_sub(base).and_then(|i| t.get(usize::from(i))).copied();
+    match b {
+        0x18..=0x1F => table(&PDF_DOC_ACCENTS, 0x18),
+        0x7F..=0xA0 => table(&PDF_DOC_HIGH, 0x7F),
+        0xAD => Some('\u{FFFD}'),
+        _ => None,
+    }
+    .unwrap_or(char::from(b))
 }
 
 /// The printing condition of page `page` (ISO 32000-2 §14.11.5): of the page's own
@@ -630,5 +652,13 @@ endstream endobj
         // A 1 × 10 000 pt strip fits the area cap but not the renderer's side limit.
         assert!(10_000.0 * plate_scale(1.0, 10_000.0, 1.0) <= MAX_SIDE as f32);
         assert!(plate_scale(0.0, f32::NAN, 1.0) > 0.0);
+    }
+
+    #[test]
+    fn unmarked_text_is_pdfdocencoding_not_latin1() {
+        // Print-intent conditions and identifiers read through here.
+        let text = pdf_text(b"Fogra \x80\x84\xA0\xAD\x18\xDC");
+        assert_eq!(text, "Fogra \u{2022}\u{2014}\u{20AC}\u{FFFD}\u{02D8}\u{dc}");
+        assert_eq!(pdf_text(b"\xFE\xFF\x00\x80"), "\u{80}", "UTF-16BE is not remapped");
     }
 }

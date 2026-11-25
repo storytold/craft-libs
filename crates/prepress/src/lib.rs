@@ -12,6 +12,7 @@ pub mod flatten;
 pub mod ink;
 pub mod marks;
 pub mod output;
+pub mod pdfx;
 #[cfg(feature = "flatten")]
 pub mod pdfx1a;
 pub mod plates;
@@ -21,6 +22,7 @@ pub use coverage::{Above, Coverage, InkStats, MAX_REGIONS, Region, Stats};
 pub use ink::{Alternate, Ink, InkColor, InkId, InkSet, Overprint, Process, Spot, normalize_name, to_pdf_color};
 pub use marks::{MarkOptions, Marks, MarksError};
 pub use output::{Output, OutputError};
+pub use pdfx::{PdfxClaim, pdfx_claim, pdfx_output_intents};
 pub use plates::{
     Band, Conversion, Error, Fallback, MAX_BANDED_PIXELS, MAX_PLATE_PIXELS, MAX_SPOT_INKS, Options, Plates, plates, plates_in_bands, press_profile,
 };
