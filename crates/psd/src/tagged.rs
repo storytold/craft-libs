@@ -204,6 +204,35 @@ impl TaggedBlock {
         (alignment - len % alignment) % alignment
     }
 
+    /// Read the raw descriptor prefix of `lfx2`, `SoCo` or `CgEd` with caller limits.
+    ///
+    /// This opt-in recovery ignores both version words of `lfx2` (eight bytes), or
+    /// the one version word of `SoCo` / `CgEd` (four bytes). Trailing bytes are
+    /// ignored and nonfinite descriptor numbers are retained. Strict validation
+    /// and versioned-descriptor parsing are unchanged.
+    ///
+    /// Other keys return `None`. Recognized unloaded blocks, short headers and
+    /// malformed or over-limit descriptors return `Some(Err)`.
+    pub fn descriptor_prefix_recovering_versions_with_limits(
+        &self,
+        limits: crate::descriptor::ParseLimits,
+    ) -> Option<Result<crate::descriptor::Descriptor>> {
+        let words = match &self.key {
+            b"lfx2" => 2,
+            b"SoCo" | b"CgEd" => 1,
+            _ => return None,
+        };
+        if self.stored.is_some() {
+            return Some(Err(PsdError::invalid(format!("{}: block data is still in the source; load it first", self.key_str()))));
+        }
+        Some((|| {
+            let mut r = Reader::new(&self.data);
+            for _ in 0..words {
+                let _version = r.u32()?;
+            }
+            crate::descriptor::Descriptor::read_with_limits(&mut r, limits)
+        })())
+    }
     /// Typed view for known keys. `None` for keys without a typed parser,
     /// `Some(Err)` if a known key's data is malformed.
     pub fn parsed(&self) -> Option<Result<BlockData<'_>>> {
@@ -489,7 +518,23 @@ fn expect_kind(r: &mut Reader<'_>, kind: &'static [u8; 4]) -> Result<()> {
     Ok(())
 }
 
+impl SectionDivider {
+    /// Read a divider while recovering a missing or invalid optional blend signature.
+    ///
+    /// The four-byte kind is required. Fewer than eight bytes after the kind, or a suffix
+    /// whose signature is not `8BIM`, leaves both blend mode and subtype absent.
+    /// Unlike this opt-in recovery, [`TaggedBlock::parsed`] still rejects an invalid
+    /// complete signature. Unknown kinds and blend keys are preserved.
+    pub fn from_bytes_recovering_blend(data: &[u8]) -> Result<Self> {
+        parse_section_with_recovery(data, true)
+    }
+}
+
 fn parse_section(d: &[u8]) -> Result<SectionDivider> {
+    parse_section_with_recovery(d, false)
+}
+
+fn parse_section_with_recovery(d: &[u8], recover_blend: bool) -> Result<SectionDivider> {
     let mut r = Reader::new(d);
     let kind = SectionType::from_u32(r.u32()?);
     let mut blend_mode = None;
@@ -497,6 +542,9 @@ fn parse_section(d: &[u8]) -> Result<SectionDivider> {
     if r.remaining() >= 8 {
         let sig = r.array::<4>()?;
         if &sig != b"8BIM" {
+            if recover_blend {
+                return Ok(SectionDivider { kind, blend_mode, sub_type });
+            }
             return Err(PsdError::InvalidSignature { expected: "8BIM", found: sig });
         }
         blend_mode = Some(BlendMode::from_key(r.array()?));
@@ -636,6 +684,36 @@ pub(crate) fn write_blocks_to<W: std::io::Write + std::io::Seek + ?Sized>(
         }
     }
     Ok(())
+}
+
+/// Append the data of an lfx2 block: fixed version words 0 and 16, then a descriptor.
+///
+/// No outer signature, key, length or padding is written. Existing output is preserved.
+/// Descriptor semantics are the caller's responsibility; no values are normalized.
+/// Views inherit the borrowed writer's finite, stable, acyclic contract and O(depth)
+/// heap traversal. No owned model conversion or serialized temporary is created.
+pub fn append_layer_effects_data(out: &mut Vec<u8>, descriptor: &dyn crate::descriptor::borrowed::DescriptorView) {
+    out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, descriptor);
+}
+
+/// Append the data of a SoCo block: fixed descriptor version 16, then a descriptor.
+///
+/// This is data-only, with the same append and borrowed-view contract as
+/// [append_layer_effects_data]. The caller supplies the color descriptor unchanged.
+pub fn append_solid_color_data(out: &mut Vec<u8>, descriptor: &dyn crate::descriptor::borrowed::DescriptorView) {
+    out.extend_from_slice(&[0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, descriptor);
+}
+
+/// Append SoLd data: the soLD signature, version 4 and descriptor version 16.
+///
+/// No outer block key, length or padding is written. The descriptor is supplied
+/// unchanged by the caller. This inherits the append semantics and finite,
+/// stable, acyclic borrowed-view contract of [append_layer_effects_data].
+pub fn append_smart_object_data(out: &mut Vec<u8>, descriptor: &dyn crate::descriptor::borrowed::DescriptorView) {
+    out.extend_from_slice(b"soLD\0\0\0\x04\0\0\0\x10");
+    crate::descriptor::borrowed::append_descriptor(out, descriptor);
 }
 
 #[cfg(test)]
@@ -808,5 +886,122 @@ mod tests {
         let (blocks, trailing) = read_record_blocks(&mut Reader::new(&out), Version::Psd).unwrap();
         assert_eq!(blocks, vec![TaggedBlock::layer_id(1)]);
         assert_eq!(trailing, out[damaged..]);
+    }
+
+    #[test]
+    fn section_recovering_blend_preserves_strict_parser_and_prefixes() {
+        let full = [0, 0, 0, 99, b'8', b'B', b'I', b'M', b'z', b'z', b'z', b'z', 0, 0, 0, 7, 255];
+        for len in 0..=17 {
+            let data = &full[..len];
+            let recovered = SectionDivider::from_bytes_recovering_blend(data);
+            if len < 4 {
+                assert!(recovered.is_err());
+                assert!(parse_section(data).is_err());
+                continue;
+            }
+            let value = recovered.unwrap();
+            assert_eq!(value.kind, SectionType::Unknown(99));
+            assert_eq!(value.blend_mode.map(BlendMode::key), (len >= 12).then_some(*b"zzzz"));
+            assert_eq!(value.sub_type, (len >= 16).then_some(7));
+            assert_eq!(parse_section(data).unwrap(), value);
+            for key in [*b"lsct", *b"lsdk"] {
+                assert_eq!(TaggedBlock::new(key, data.to_vec()).parsed(), Some(Ok(BlockData::SectionDivider(value))));
+            }
+        }
+        for len in 12..=17 {
+            let mut data = full[..len].to_vec();
+            data[4..8].copy_from_slice(b"nope");
+            let value = SectionDivider::from_bytes_recovering_blend(&data).unwrap();
+            assert_eq!(value, SectionDivider { kind: SectionType::Unknown(99), blend_mode: None, sub_type: None });
+            for key in [*b"lsct", *b"lsdk"] {
+                assert!(matches!(TaggedBlock::new(key, data.clone()).parsed(), Some(Err(PsdError::InvalidSignature { .. }))));
+            }
+        }
+    }
+
+    #[test]
+    fn descriptor_prefix_recovery_keeps_versions_suffixes_and_limits_explicit() {
+        use crate::descriptor::{Descriptor, ParseLimits, Value, VersionedDescriptor};
+        let limits = ParseLimits { max_descriptor_items: 1, max_list_items: 1 };
+        // Independent raw descriptor: empty name, null class, one doub item named num .
+        let mut raw = vec![0; 8];
+        raw.extend(b"null");
+        raw.extend(1u32.to_be_bytes());
+        raw.extend(0u32.to_be_bytes());
+        raw.extend(b"num doub");
+        raw.extend(f64::NAN.to_be_bytes());
+        for key in [*b"lfx2", *b"SoCo", *b"CgEd"] {
+            let header = if key == *b"lfx2" { 8 } else { 4 };
+            for word in [0u32, 16, u32::MAX] {
+                let mut bytes = word.to_be_bytes().repeat(header / 4);
+                bytes.extend(&raw);
+                for cut in 0..bytes.len() {
+                    assert!(TaggedBlock::new(key, bytes[..cut].to_vec()).descriptor_prefix_recovering_versions_with_limits(limits).unwrap().is_err());
+                }
+                for tail in [vec![], vec![255], vec![1, 2, 3, 4, 5]] {
+                    let mut data = bytes.clone();
+                    data.extend(tail);
+                    let block = TaggedBlock::new(key, data);
+                    let d = block.descriptor_prefix_recovering_versions_with_limits(limits).unwrap().unwrap();
+                    assert!(matches!(d.get("num "), Some(Value::Double(v)) if v.is_nan()));
+                    assert!(block.parsed().is_none());
+                    if key == *b"lfx2" && word != 16 {
+                        assert!(block.check_structure().is_err());
+                    }
+                }
+                assert!(
+                    TaggedBlock::new(key, bytes)
+                        .descriptor_prefix_recovering_versions_with_limits(ParseLimits { max_descriptor_items: 0, ..limits })
+                        .unwrap()
+                        .is_err()
+                );
+            }
+            let mut list = vec![0; header];
+            list.extend(Descriptor::new("null").with("list", Value::List(vec![Value::Integer(1), Value::Integer(2)])).to_bytes());
+            assert!(TaggedBlock::new(key, list).descriptor_prefix_recovering_versions_with_limits(limits).unwrap().is_err());
+            let mut unloaded = TaggedBlock::new(key, vec![]);
+            unloaded.stored = Some(crate::source::Stored { source: crate::source::Source::new(Vec::<u8>::new()), offset: 0, len: 0 });
+            assert!(unloaded.descriptor_prefix_recovering_versions_with_limits(limits).unwrap().is_err());
+        }
+        assert!(TaggedBlock::new(*b"zzzz", raw.clone()).descriptor_prefix_recovering_versions_with_limits(limits).is_none());
+        let mut versioned = 99u32.to_be_bytes().to_vec();
+        versioned.extend(raw);
+        assert!(VersionedDescriptor::parse_prefix(&versioned).is_err());
+    }
+
+    #[test]
+    fn borrowed_block_headers_append_literal_empty_and_nonempty_data() {
+        use crate::descriptor::borrowed::{ClassRef, DescriptorView, IdRef, UnicodeRef, ValueRef};
+        struct View(bool);
+        impl DescriptorView for View {
+            fn class(&self) -> ClassRef<'_> {
+                ClassRef { name: UnicodeRef::Units(&[]), id: IdRef::Code(*b"null") }
+            }
+            fn item(&self, index: usize) -> Option<(IdRef<'_>, ValueRef<'_>)> {
+                (self.0 && index == 0).then_some((IdRef::Code(*b"enab"), ValueRef::Boolean(true)))
+            }
+        }
+        for populated in [false, true] {
+            let mut descriptor = b"\0\0\0\0\0\0\0\0null\0\0\0".to_vec();
+            descriptor.push(u8::from(populated));
+            if populated {
+                descriptor.extend_from_slice(b"\0\0\0\0enabbool\x01");
+            }
+            let mut effects = vec![0xa5, 0x5a];
+            append_layer_effects_data(&mut effects, &View(populated));
+            let mut expected = vec![0xa5, 0x5a, 0, 0, 0, 0, 0, 0, 0, 16];
+            expected.extend_from_slice(&descriptor);
+            assert_eq!(effects, expected);
+            let mut color = vec![0xa5, 0x5a];
+            append_solid_color_data(&mut color, &View(populated));
+            let mut expected = vec![0xa5, 0x5a, 0, 0, 0, 16];
+            expected.extend_from_slice(&descriptor);
+            assert_eq!(color, expected);
+            let mut placed = vec![0xa5, 0x5a];
+            append_smart_object_data(&mut placed, &View(populated));
+            let mut expected = vec![0xa5, 0x5a, 0x73, 0x6f, 0x4c, 0x44, 0, 0, 0, 4, 0, 0, 0, 16];
+            expected.extend_from_slice(&descriptor);
+            assert_eq!(placed, expected);
+        }
     }
 }

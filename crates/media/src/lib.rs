@@ -11,7 +11,7 @@
 //! - `avi` (feature `avi`): a clean-room AVI (RIFF) and OpenDML demuxer.
 //! - `mxf` (feature `mxf`, enables `chrono`): a clean-room MXF demuxer and writer (OP1a, OP-Atom).
 //! - `mpegts` (feature `mpegts`): a clean-room MPEG-2 Systems demuxer (transport streams and
-//!   program streams).
+//!   program streams) and transport stream writer.
 //! - `vmd` (feature `vmd`): a clean-room Sierra VMD (Video and Music Data) demuxer.
 //! - [`Container`] and [`CodecId`] (no feature): the identifiers the codec crates report a file's
 //!   container and codec with.
@@ -47,3 +47,10 @@ pub use file::{FileReader, MAX_OPEN_FILES};
 
 pub use id::{CodecId, CodecParams, Container, PcmFormat, xiph_lace};
 pub use source::{ByteSource, ReadSeekSource};
+
+#[cfg(test)]
+extern crate self as craft_media;
+
+#[cfg(test)]
+#[path = "../tests/main.rs"]
+mod integration;

@@ -120,6 +120,16 @@ pub fn uri_decode(s: &str) -> String {
     String::from_utf8_lossy(&percent_decode(s)).into_owned()
 }
 
+/// Percent-decode a URI, rejecting decoded bytes that are not UTF-8.
+///
+/// As with [`uri_decode`], incomplete or non-hex escapes stay literal and `+` stays
+/// `+`. This does not validate or confine a filesystem path; callers must retain
+/// their own reference policy. Decoding is linear and output is no larger than input.
+/// Use this instead of the lossy decoder when a resolver requires exact UTF-8 names.
+pub fn uri_decode_strict(s: &str) -> Option<String> {
+    String::from_utf8(percent_decode(s)).ok()
+}
+
 /// [`uri_decode`] as bytes, so escaped bytes that are not UTF-8 survive.
 fn percent_decode(s: &str) -> Vec<u8> {
     let b = s.as_bytes();
@@ -609,6 +619,8 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
         let pbr = m.get("pbrMetallicRoughness").unwrap_or(&null);
         let ext = m.get("extensions");
         let strength = ext.and_then(|e| e.get("KHR_materials_emissive_strength")).map_or(1.0, |e| num(e, "emissiveStrength", 1.0));
+        let clearcoat = ext.and_then(|e| e.get("KHR_materials_clearcoat"));
+        let sheen = ext.and_then(|e| e.get("KHR_materials_sheen"));
         scene.materials.push(Material {
             name: name(m),
             base_color: nums(pbr, "baseColorFactor", [1.0; 4]).map(|v| v as f32),
@@ -629,6 +641,14 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
             occlusion_texture: tref(m.get("occlusionTexture")),
             occlusion_strength: m.get("occlusionTexture").map_or(1.0, |n| num(n, "strength", 1.0)) as f32,
             emissive_texture: tref(m.get("emissiveTexture")),
+            clearcoat: clearcoat.map_or(0.0, |c| num(c, "clearcoatFactor", 0.0)) as f32,
+            clearcoat_roughness: clearcoat.map_or(0.0, |c| num(c, "clearcoatRoughnessFactor", 0.0)) as f32,
+            clearcoat_texture: clearcoat.and_then(|c| tref(c.get("clearcoatTexture"))),
+            clearcoat_roughness_texture: clearcoat.and_then(|c| tref(c.get("clearcoatRoughnessTexture"))),
+            sheen_color: sheen.map_or([0.0; 3], |s| nums(s, "sheenColorFactor", [0.0; 3]).map(|v| v as f32)),
+            sheen_roughness: sheen.map_or(0.0, |s| num(s, "sheenRoughnessFactor", 0.0)) as f32,
+            sheen_color_texture: sheen.and_then(|s| tref(s.get("sheenColorTexture"))),
+            sheen_roughness_texture: sheen.and_then(|s| tref(s.get("sheenRoughnessTexture"))),
         });
         // The older specular-glossiness model, as the nearest metallic-roughness material: its
         // diffuse colour and texture, no metal, and roughness from the glossiness.
@@ -806,12 +826,14 @@ fn uv_transform(t: &Value) -> UvTransform {
 /// the reader handles: the geometry reads without the others being understood.
 fn check_extensions(j: &Value, scene: &mut Scene) -> Result<()> {
     const LOOKS: [&str; 3] = ["KHR_texture_basisu", "MSFT_texture_dds", "KHR_lights_punctual"];
-    const READ: [&str; 6] = [
+    const READ: [&str; 8] = [
         TEXTURE_TRANSFORM,
         "KHR_mesh_quantization",
         "KHR_materials_unlit",
         "KHR_materials_emissive_strength",
         "KHR_materials_pbrSpecularGlossiness",
+        "KHR_materials_clearcoat",
+        "KHR_materials_sheen",
         "EXT_texture_webp",
     ];
     for e in arr(j, "extensionsRequired").iter().filter_map(Value::as_str) {
@@ -1011,12 +1033,46 @@ fn material_json(m: &Material, textures: &mut Textures, extensions: &mut Vec<&'s
     if m.unlit {
         ext.insert("KHR_materials_unlit".into(), json!({}));
     }
-    for name in ["KHR_materials_emissive_strength", "KHR_materials_unlit"] {
+    if m.clearcoat > 0.0 || m.clearcoat_texture.is_some() || m.clearcoat_roughness_texture.is_some() {
+        let mut coat = Map::new();
+        coat.insert("clearcoatFactor".into(), json!(m.clearcoat));
+        if let Some(t) = textures.slot(m.clearcoat_texture) {
+            coat.insert("clearcoatTexture".into(), t);
+        }
+        coat.insert("clearcoatRoughnessFactor".into(), json!(m.clearcoat_roughness));
+        if let Some(t) = textures.slot(m.clearcoat_roughness_texture) {
+            coat.insert("clearcoatRoughnessTexture".into(), t);
+        }
+        ext.insert("KHR_materials_clearcoat".into(), Value::Object(coat));
+    }
+    if m.sheen_color != [0.0; 3] || m.sheen_color_texture.is_some() || m.sheen_roughness_texture.is_some() {
+        let mut sheen = Map::new();
+        sheen.insert("sheenColorFactor".into(), json!(m.sheen_color));
+        if let Some(t) = textures.slot(m.sheen_color_texture) {
+            sheen.insert("sheenColorTexture".into(), t);
+        }
+        sheen.insert("sheenRoughnessFactor".into(), json!(m.sheen_roughness));
+        if let Some(t) = textures.slot(m.sheen_roughness_texture) {
+            sheen.insert("sheenRoughnessTexture".into(), t);
+        }
+        ext.insert("KHR_materials_sheen".into(), Value::Object(sheen));
+    }
+    for name in ["KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_materials_clearcoat", "KHR_materials_sheen"] {
         if ext.contains_key(name) && !extensions.contains(&name) {
             extensions.push(name);
         }
     }
-    let slots = [m.base_color_texture, m.metallic_roughness_texture, m.normal_texture, m.occlusion_texture, m.emissive_texture];
+    let slots = [
+        m.base_color_texture,
+        m.metallic_roughness_texture,
+        m.normal_texture,
+        m.occlusion_texture,
+        m.emissive_texture,
+        m.clearcoat_texture,
+        m.clearcoat_roughness_texture,
+        m.sheen_color_texture,
+        m.sheen_roughness_texture,
+    ];
     if slots.iter().flatten().any(|t| t.transform.is_some()) && !extensions.contains(&TEXTURE_TRANSFORM) {
         extensions.push(TEXTURE_TRANSFORM);
     }
@@ -1057,17 +1113,56 @@ fn check_finite(scene: &Scene) -> Result<()> {
     let positions = scene.meshes.iter().flat_map(|m| m.positions.iter().flatten()).all(|x| (*x as f32).is_finite());
     let nodes = scene.nodes.iter().flat_map(|n| n.transform.iter()).all(|x| x.is_finite());
     let materials = scene.materials.iter().all(|m| {
-        let values = [m.metallic, m.roughness, m.normal_scale, m.occlusion_strength];
+        let values = [m.metallic, m.roughness, m.normal_scale, m.occlusion_strength, m.clearcoat, m.clearcoat_roughness, m.sheen_roughness];
         let cutoff = if let AlphaMode::Mask(c) = m.alpha_mode { c } else { 0.0 };
-        let slots = [&m.base_color_texture, &m.metallic_roughness_texture, &m.normal_texture, &m.occlusion_texture, &m.emissive_texture];
+        let slots = [
+            &m.base_color_texture,
+            &m.metallic_roughness_texture,
+            &m.normal_texture,
+            &m.occlusion_texture,
+            &m.emissive_texture,
+            &m.clearcoat_texture,
+            &m.clearcoat_roughness_texture,
+            &m.sheen_color_texture,
+            &m.sheen_roughness_texture,
+        ];
         let transforms = slots
             .into_iter()
             .flatten()
             .filter_map(|t| t.transform)
             .all(|t| t.offset.iter().chain(&t.scale).chain([&t.rotation]).all(|x| x.is_finite()));
-        m.base_color.iter().chain(&m.emissive).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite() && transforms
+        m.base_color.iter().chain(&m.emissive).chain(&m.sheen_color).chain(&values).all(|x| x.is_finite()) && cutoff.is_finite() && transforms
     });
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
+}
+
+/// Texture magnification filtering for a GLB sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u16)]
+pub enum MagFilter {
+    Nearest = 9728,
+    Linear = 9729,
+}
+
+/// Texture minification filtering for a GLB sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u16)]
+pub enum MinFilter {
+    Nearest = 9728,
+    Linear = 9729,
+    NearestMipmapNearest = 9984,
+    LinearMipmapNearest = 9985,
+    NearestMipmapLinear = 9986,
+    LinearMipmapLinear = 9987,
+}
+
+/// Options applied to each sampler written by the GLB exporter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlbWriteOptions {
+    /// Magnification filter. None leaves the choice to the viewer.
+    pub mag_filter: Option<MagFilter>,
+    /// Minification filter. None leaves the choice to the viewer.
+    pub min_filter: Option<MinFilter>,
 }
 
 /// The scene as a binary glTF file: its nodes, meshes (each part a primitive over the mesh's
@@ -1075,6 +1170,11 @@ fn check_finite(scene: &Scene) -> Result<()> {
 /// images that have bytes embedded and the others named by their URI. The binary chunk is
 /// limited to `limits.max_data_bytes`.
 pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
+    write_glb_with_options(scene, limits, &GlbWriteOptions::default())
+}
+
+/// Write a binary glTF scene with explicit sampler filtering options.
+pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWriteOptions) -> Result<Vec<u8>> {
     scene.validate()?;
     scene.instances(limits)?;
     check_finite(scene)?;
@@ -1154,7 +1254,23 @@ pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
     list("meshes", meshes);
     list("materials", materials);
     list("textures", textures.textures.iter().map(|(image, sampler)| json!({ "source": image, "sampler": sampler })).collect());
-    list("samplers", textures.samplers.iter().map(|s| json!({ "wrapS": wrap(s[0]), "wrapT": wrap(s[1]) })).collect());
+    list(
+        "samplers",
+        textures
+            .samplers
+            .iter()
+            .map(|s| {
+                let mut sampler = Map::from_iter([("wrapS".into(), json!(wrap(s[0]))), ("wrapT".into(), json!(wrap(s[1])))]);
+                if let Some(filter) = options.mag_filter {
+                    sampler.insert("magFilter".into(), json!(filter as u16));
+                }
+                if let Some(filter) = options.min_filter {
+                    sampler.insert("minFilter".into(), json!(filter as u16));
+                }
+                Value::Object(sampler)
+            })
+            .collect(),
+    );
     list("images", textures.images);
     list("accessors", w.accessors);
     list("bufferViews", w.views);

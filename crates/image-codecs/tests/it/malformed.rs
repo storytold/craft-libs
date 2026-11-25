@@ -6,7 +6,7 @@ use craft_image_codecs::*;
 use proptest::prelude::*;
 
 fn tight() -> DecodeOptions {
-    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 22, max_alloc: 64 << 20 }, ..Default::default() }
+    DecodeOptions { limits: Limits { max_width: 4096, max_height: 4096, max_pixels: 1 << 21, max_alloc: 16 << 20 }, ..Default::default() }
 }
 
 fn samples() -> Vec<(Format, Vec<u8>)> {
@@ -76,9 +76,11 @@ fn truncated_files_mostly_error() {
 
 #[test]
 fn bit_flips_never_panic() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs 1/N of the flips.
+    let rounds = 150usize.div_ceil(craft_media_testkit::hostile::divisor());
     let mut rng = common::Rng::new(42);
     for (f, bytes) in samples() {
-        for _ in 0..150 {
+        for _ in 0..rounds {
             let mut b = bytes.clone();
             let flips = 1 + (rng.next_u64() % 4) as usize;
             for _ in 0..flips {
@@ -92,11 +94,17 @@ fn bit_flips_never_panic() {
 
 #[test]
 fn byte_overwrites_in_header_never_panic() {
-    for (f, bytes) in samples() {
-        for i in 0..bytes.len().min(64) {
-            for v in [0x00, 0x7F, 0xFF] {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) overwrites every N-th byte, from a different offset
+    // for each sample, so the samples together still reach every header position.
+    let step = craft_media_testkit::hostile::divisor();
+    for (k, (f, bytes)) in samples().into_iter().enumerate() {
+        for i in (0..bytes.len().min(64)).filter(|i| (i + k) % step == 0) {
+            // nightly writes every value to each byte; the gate one per byte, rotating, so the sampled bytes together see all
+            let values = [0x00, 0x7F, 0xFF];
+            let one = [values[(i / step) % 3]];
+            for v in if step == 1 { &values[..] } else { &one[..] } {
                 let mut b = bytes.clone();
-                b[i] = v;
+                b[i] = *v;
                 no_panic(f, &b);
             }
         }
