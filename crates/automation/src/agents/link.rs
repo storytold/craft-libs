@@ -172,7 +172,7 @@ impl AgentLink {
     /// Brings the server in line with `want` (`None`: agents may not connect): start it, restart it
     /// on another port, stop it, or keep it while other settings change. Does nothing while `want`
     /// equals the last call's and no retry of a failed start is due. A token file refused as it is
-    /// (open to others, a damaged token) is replaced by a new one ([`Self::start`]). One that still
+    /// (open to others, a damaged token) is replaced by a new one (`fresh_token`). One that still
     /// can't be used (a folder in its place, a folder that can't be written) schedules no retry:
     /// that lasts until someone changes it, and on Windows each check blocks the UI thread for
     /// about 300 ms (`owner_only` starts `whoami` and PowerShell), which a retry every [`RETRY`]
