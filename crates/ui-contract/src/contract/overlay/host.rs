@@ -73,6 +73,27 @@ fn recall(layer: &Layer<'_>, ctx: &Context) -> LayerMemory {
     MemoryStage::peek::<LayerMemory>(ctx, memory_slot(layer.id))
 }
 
+/// What the layer remembers as its host's pass starts. A layer that `appears` starts with nothing it remembered while
+/// shown before, also when it opens again during its exit fade or its host never saw it hide: the focus that was inside
+/// it does not close it as `focus_left`. A right-click on a context opener while its layer is open hangs the layer at
+/// the new pointer.
+fn recall_shown(layer: &Layer<'_>, ctx: &Context, appears: bool) -> LayerMemory {
+    if appears {
+        return LayerMemory::default();
+    }
+    let mut memory = recall(layer, ctx);
+    let pointed = layer
+        .overlay
+        .opener
+        .as_ref()
+        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
+    if pointed {
+        memory.opening = None;
+        memory.pointer_at = None;
+    }
+    memory
+}
+
 fn remember(layer: &Layer<'_>, ctx: &Context, memory: LayerMemory) {
     let mut stage = MemoryStage::open_owned(ctx, memory_slot(layer.id), layer.owner);
     *stage.shown::<LayerMemory>(memory_slot(layer.id)) = memory;
@@ -116,20 +137,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     {
         return host_in_popup(ctx, layer, popup, body);
     }
-    // A layer that appears starts with nothing it remembered while shown before, also when it opens again during its
-    // exit fade or its host never saw it hide: the focus that was inside it does not close it as `focus_left`.
     let appears = overlay::appears(ctx, layer.id, layer.exiting);
-    let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
-    // A right-click on a context opener while its layer is open hangs the layer at the new pointer.
-    let pointed = layer
-        .overlay
-        .opener
-        .as_ref()
-        .is_some_and(|first| first.all().any(|opener| opener.fired && opener.trigger == Trigger::Context && opener.opening == Opening::Pointer));
-    if pointed {
-        memory.opening = None;
-        memory.pointer_at = None;
-    }
+    let mut memory = recall_shown(layer, ctx, appears);
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
@@ -285,8 +294,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
 /// laid out in the popup's pass first, in the room its unplaced form has, and placed by the size it took there.
 /// A popup that takes keys (a menu, a flyout) takes the OS focus; a tooltip takes none and lets the pointer through.
 fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
-    let appears = overlay::appears(ctx, layer.id, layer.exiting);
-    let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
+    let appears = overlay::note_appeared(ctx, layer.id, layer.exiting);
+    let mut memory = recall_shown(layer, ctx, appears);
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
@@ -337,7 +346,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     entry.popup = true;
     overlay::record(ctx, entry);
     let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
-    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport, appears)) };
+    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport)) };
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);
     LayerOut { dismissed }
