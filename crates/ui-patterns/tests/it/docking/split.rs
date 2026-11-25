@@ -61,6 +61,22 @@ fn a_column_divider_dragged_past_a_minimum_and_back_stays_under_the_pointer() {
     );
 }
 
+/// The move that carries the press past slop moves the divider in its own pass, not the pass after it.
+#[trial]
+fn a_column_divider_follows_the_move_that_starts_its_drag_in_the_same_pass() {
+    let (mut fixture, rects) = column();
+    fixture.settle();
+    let settled = rects.borrow()[0].bottom();
+    let grip = divider(&fixture);
+    let at = grip.center();
+    fixture.press(&grip);
+    let pressed = rects.borrow()[0].bottom();
+    assert!((pressed - settled).abs() < f32::EPSILON, "a press with no move leaves the divider where it was: {pressed} for {settled}");
+    fixture.frame(vec![pointer::moved(Pos2::new(at.x, at.y + 20.0))]);
+    let bottom = rects.borrow()[0].bottom();
+    assert!((bottom - (at.y + 20.0)).abs() < 1.0, "the divider is at the pointer in the pass the drag starts: {bottom} for {}", at.y + 20.0);
+}
+
 #[trial]
 fn a_resize_under_a_pruned_view_keeps_the_hidden_panels() {
     let rest = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![1], 0), Node::tabs(vec![2], 0));

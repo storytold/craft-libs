@@ -457,9 +457,12 @@ impl<D: Clone + Send + Sync + 'static> SplitViews<'_, D> {
 fn resize<D: Clone + Send + Sync + 'static>(cx: &mut Cx<'_, SplitViews<'_, D>>, at: &SplitAt, laid: &Laid, dividers: &[Divider]) {
     let rect = cx.rect;
     for (index, divider) in dividers.iter().enumerate() {
-        match divider::pointer(cx, DIVIDER, index as u64, divider) {
-            Some(Drag::Start) => cx.begin(),
-            Some(Drag::To(coord)) => cx.propose(moved(laid, index, divider, coord, rect)),
+        let dragged = divider::pointer(cx, DIVIDER, index as u64, divider);
+        if let Some(Drag::Start(_)) = dragged {
+            cx.begin();
+        }
+        match dragged {
+            Some(Drag::Start(coord) | Drag::To(coord)) => cx.propose(moved(laid, index, divider, coord, rect)),
             Some(Drag::Release) => cx.commit(),
             None => {}
         }
