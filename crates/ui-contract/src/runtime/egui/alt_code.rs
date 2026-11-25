@@ -40,8 +40,9 @@ struct Echo {
 /// after the Alt release. Returns whether an Alt release in `events` ended a hold in which digits were typed (a code,
 /// or one a focus loss dropped), so the key stage does not take it for a lone Alt. The caller does not call it on macOS, where Option+digit types its own characters.
 ///
-/// `claimed` tells whether the key stage takes a press as a chord a component claims or a capture holds: such an
-/// Alt+digit is its owner's, as an app's shortcut goes before Alt-code entry, and it ends the entry like any other key.
+/// `claimed` tells whether the key stage takes a press as a chord the key target claims (the focused component, or with
+/// nothing focused the window's document canvas) or a capture holds: such an Alt+digit is its owner's, as an app's
+/// shortcut goes before Alt-code entry, and it ends the entry like any other key.
 pub(crate) fn fold(entry: &mut AltCodeEntry, events: &mut Vec<Event>, pages: AltCodePages, os: Os, claimed: &dyn Fn(&Event) -> bool) -> bool {
     let composes = os == Os::Windows;
     let mut ended = false;

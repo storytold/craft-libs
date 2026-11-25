@@ -17,7 +17,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let gesture = crate::runtime::edit::next_gesture_id(&cx.core.ctx);
         let before = Rename { key: key.clone(), name: draft.clone() };
         self.events.push(CollectionEvent::Rename(EditEvent::begin(gesture, Mixed::Same(before), cx.core.label_arc(), None)));
-        self.renaming = Renaming { key: Some(key), draft, gesture, focused: false, proposed };
+        self.renaming = Renaming { key: Some(key), draft, gesture, focused: false, held: false, proposed };
     }
 
     /// A rename requested from outside (`request_rename`): the lead moves to the item, the item is revealed and its

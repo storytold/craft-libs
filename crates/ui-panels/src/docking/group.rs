@@ -15,10 +15,10 @@ use crate::contract::{
 };
 use crate::display::{Shade, Text};
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
-use crate::primitives::PaintShape;
+use crate::primitives::{IconSpec, PaintShape};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
-use crate::runtime::focus::{self, FocusTarget};
+use crate::runtime::focus::{self, FocusRequest, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
@@ -45,7 +45,8 @@ pub struct GroupGripStyle {
 /// references' 0.83 of the panel was almost invisible on our darker panels). Its shape is the theme's `shape.grip`
 /// (photocraft#16426): ticks, dots or one level bar, how many, how large and how far apart; by default eleven upright ticks, a thin
 /// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
-/// under its column bar and the grip above each icon group of a collapsed column paint the same marks.
+/// under its column bar and the grip above each icon group of a collapsed column paint the same marks, unless the app
+/// separates icon groups by a rule (`IconGroupSeparator::Rule`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GripMarks {
     ink: StyleColor,
@@ -276,6 +277,10 @@ pub struct DockGroupOutput {
     pub picked: Option<PanelKey>,
     /// The panels whose close button or middle click closed their tab this pass.
     pub closed: Vec<PanelKey>,
+    /// The panel and document whose tab was picked this pass ([`PanelDocument`](super::PanelDocument)).
+    pub picked_document: Option<(PanelKey, u64)>,
+    /// The panels and documents whose close button or middle click closed their tab this pass.
+    pub closed_documents: Vec<(PanelKey, u64)>,
     /// A context request on a tab (right click, the Menu key, Shift+F10): the group menu opened at the pointer.
     pub menu: Option<ContextMenuRequest<PanelKey>>,
     /// The dock row of the group menu that ran this pass: a Move Panel To target. The menu's command rows fire their
@@ -292,6 +297,11 @@ pub struct DockGroupOutput {
     /// The host may add the size
     /// the dragged unit floats at with `drag::amend` in this pass.
     pub drag_started: bool,
+    /// The tabs the strip shows this pass, each with its rect and the id of its accessibility node; none for a
+    /// [`titled`](DockGroup::titled) group.
+    pub tabs: Vec<(PanelKey, Rect, Id)>,
+    /// The band the group is dragged by this pass, with the id of its accessibility node.
+    pub grip: Option<(Rect, Id)>,
 }
 
 impl Outcome for DockGroupOutput {
@@ -316,6 +326,8 @@ pub struct DockGroupStyle {
 struct Reported {
     picked: Option<PanelKey>,
     closed: Vec<PanelKey>,
+    picked_document: Option<(PanelKey, u64)>,
+    closed_documents: Vec<(PanelKey, u64)>,
     menu: Option<ContextMenuRequest<PanelKey>>,
     item: Option<GroupItem>,
     commands: Vec<DockCommands>,
@@ -324,6 +336,7 @@ struct Reported {
     drag_started: bool,
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
     empty_drag: bool,
+    tabs: Vec<(PanelKey, Rect, Id)>,
 }
 
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
@@ -363,6 +376,8 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// single titled panel does: the panels are shown from a rail, not by tabs.
     #[prop(flag)]
     titled: bool,
+    /// The tab row takes key focus in this pass: [`take_focus`](DockGroup::take_focus).
+    take_focus: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -373,6 +388,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// sides take no drop, and its top, bottom and middle zones reach across them.
     #[prop(flag)]
     in_window: bool,
+    /// The shown panel's body is the app's own egui code (`PanelSpec::host_body`): a press on the body is the app's,
+    /// and its widgets take egui focus themselves, so the press does not focus the group's tabs.
+    #[prop(flag)]
+    host_body: bool,
     /// The rows of the group menu, read while it is open: the panel menu button and a context request on a tab open
     /// it.
     #[prop(func = "FnMut() -> Vec<PanelRow>")]
@@ -416,9 +435,11 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             wheel_selects_tabs: false,
             tab_look: PanelTabLook::Plain,
             titled: false,
+            take_focus: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
+            host_body: false,
             menu: None,
             panel_menu_shown: true,
             panel_menu_icon: IconId::new("more"),
@@ -438,6 +459,14 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         self.props = self.props.footer(FooterRegion::new());
         self.footer = Some(Box::new(content));
         self
+    }
+
+    /// The group takes key focus in this pass, as a press on its body gives it: its tab row's stop takes it while the
+    /// row runs, so the keys of the next pass route through the group; a titled header, which has no tab row, focuses
+    /// its drag band. A request of the pass.
+    #[must_use]
+    pub fn take_focus(self) -> Self {
+        DockGroup { take_focus: true, ..self }
     }
 
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
@@ -559,6 +588,10 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
                 popup.open(cx);
             }
         }
+        // A titled header has no tab row: its drag band is the group's stop.
+        if self.take_focus && self.titled && cx.part_if_declared(GRIP).is_some() {
+            focus::request(&cx.core.ctx, FocusTarget::Part(cx.core.id, GRIP.into()));
+        }
         if let Some(grip) = cx.part_if_declared(GRIP).map(|grip| grip.press) {
             self.reported.toggle_minimized |= grip.double_pressed();
             if self.movable && matches!(grip.phase, PressPhase::DragStart { .. }) {
@@ -592,8 +625,25 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         if let Some(request) = &self.reported.menu {
             cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0 = Some(request.at);
         }
-        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, .. } = self.reported;
-        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started }
+        let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
+        let Reported {
+            picked, closed, picked_document, closed_documents, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, ..
+        } = self.reported;
+        DockGroupOutput {
+            response: cx.response.clone(),
+            picked,
+            closed,
+            picked_document,
+            closed_documents,
+            menu,
+            item,
+            commands,
+            toggle_minimized,
+            torn_off,
+            drag_started,
+            tabs,
+            grip,
+        }
     }
 }
 
@@ -652,6 +702,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                 let shown = self.panels.as_slice().iter().find(|panel| panel.key == self.active);
                 if titled && let Some(panel) = shown {
                     Text::new(panel.title.clone()).role(TypeRole::Title).show(ui);
+                    if let Some(document) = panel.documents.iter().find(|document| document.shown) {
+                        Text::new(document.label.clone()).role(TypeRole::Title).shade(Shade::Faint).show(ui);
+                    }
                     if let Some(count) = panel.count {
                         let count = env.format().integer(u64::try_from(count).unwrap_or(u64::MAX));
                         Text::new(count).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
@@ -683,6 +736,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
                     look: self.tab_look,
+                    take_focus: self.take_focus,
                     dock: self.dock,
                     sent: Outbox::new(&mut sent),
                 };
@@ -692,16 +746,28 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             })
             .inner;
         self.extra = extra;
-        // A press on the group's empty body focuses its panel, as in Photoshop.
-        if surface_pressed && let Some(strip) = strip {
-            focus::request(ui.ctx(), FocusTarget::Id(strip));
+        // A press on the group's empty body focuses its panel, as in Photoshop; an app's own egui body keeps its presses.
+        if surface_pressed
+            && !self.host_body
+            && let Some((strip, _)) = &strip
+        {
+            focus::request(ui.ctx(), FocusTarget::Id(*strip));
+        }
+        if let Some((strip, tabs)) = &strip {
+            self.reported.tabs = tabs.iter().map(|(key, rect)| (*key, *rect, crate::contract::item_node(*strip, key))).collect();
         }
         let size = self.size;
-        let reported = &mut self.reported;
+        let (titles, reported) = (&self.panels, &mut self.reported);
         for event in sent {
             match event {
-                TabEvent::Picked(key) => reported.picked = Some(key),
-                TabEvent::Closed(key) => reported.closed.push(key),
+                TabEvent::Picked(key) => match titles.document_of(key) {
+                    Some(document) => reported.picked_document = Some(document),
+                    None => reported.picked = Some(key),
+                },
+                TabEvent::Closed(key) => match titles.document_of(key) {
+                    Some(document) => reported.closed_documents.push(document),
+                    None => reported.closed.push(key),
+                },
                 TabEvent::Menu(request) => reported.menu = Some(request),
                 TabEvent::TornOff(torn) => reported.torn_off = Some(torn),
                 // The strip's empty room is a handle the group is dragged by; a double click on it minimizes the group.
@@ -758,6 +824,9 @@ struct TabRow<'a, P> {
     closable: bool,
     wheel_selects: bool,
     look: PanelTabLook,
+    /// The strip takes key focus in this pass (`DockGroup::take_focus`): in the key, so the row runs and the strip
+    /// takes it while it runs.
+    take_focus: bool,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
 }
@@ -773,43 +842,109 @@ fn tab_marks(ctx: &egui::Context, panels: &[PanelTitle]) -> Vec<(PanelKey, Optio
         .collect()
 }
 
-/// A group's tab strip with its tab insertion spots. Returns the strip's id.
-fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> Id {
+/// One tab of a group's strip: a panel's, or one of a panel's documents.
+struct StripTab<'t> {
+    key: PanelKey,
+    title: &'t Label,
+    swatch: Option<Option<craft_theme::Srgba>>,
+    closes: bool,
+    count: Option<usize>,
+    /// A document's tab: it is not dragged.
+    document: bool,
+}
+
+/// The tabs of a group's strip: the panels' tabs, then every panel's documents in panel order.
+fn strip_tabs(panels: &[PanelTitle], closable: bool) -> Vec<StripTab<'_>> {
+    let documents = panels.iter().flat_map(|panel| {
+        panel.documents.iter().map(move |document| StripTab {
+            key: panel.document_key(document.id),
+            title: &document.label,
+            swatch: document.swatch,
+            closes: closable && document.closable,
+            count: None,
+            document: true,
+        })
+    });
+    panels
+        .iter()
+        .map(|panel| StripTab {
+            key: panel.key,
+            title: &panel.title,
+            swatch: panel.swatch,
+            closes: closable && panel.closable,
+            count: panel.count,
+            document: false,
+        })
+        .chain(documents)
+        .collect()
+}
+
+/// The tab the strip shows as selected: the shown document of the `active` panel, else that panel's own tab.
+fn shown_tab(panels: &[PanelTitle], active: PanelKey) -> PanelKey {
+    panels
+        .iter()
+        .find(|panel| panel.key == active)
+        .and_then(|panel| panel.documents.iter().find(|document| document.shown).map(|document| panel.document_key(document.id)))
+        .unwrap_or(active)
+}
+
+/// A group's tab strip with its tab insertion spots. Returns the strip's id and the rect of each tab it shows, which a
+/// replay returns again, moved with the row. The panels' documents are tabs of the same strip after the panel tabs: one
+/// fit, one overflow menu and one keyboard order for both. Only panel tabs drag and take tab insertions.
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> (Id, Vec<(PanelKey, Rect)>) {
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
     let (panels, active, closable) = (row.panels.as_slice(), row.active, row.closable);
     let from = PanelKey::of(&row.anchor);
     let drags = crate::runtime::drag::started(ui.ctx());
-    let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
-    let closes = |panel: &PanelTitle| closable && panel.closable;
-    let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
+    let tabs = strip_tabs(panels, closable);
+    let source = keyed(&tabs, |tab: &StripTab<'_>| tab.key).with_text(|tab| Cow::Borrowed(tab.title.as_str()));
+    let tabs = &tabs;
+    let documents: Vec<PanelKey> = tabs.iter().filter(|tab| tab.document).map(|tab| tab.key).collect();
+    // A press on a panel tab leaves key focus where it is, as in Photoshop: the document's keys keep working.
     let mut strip = TabStrip::new(name)
-        .kind(kind)
+        // Panel tabs whether or not they close: they shrink to their first letters, and the closable ones show a close
+        // button.
+        .kind(TabKind::Panel)
+        .keeps_focus()
         .panel_look(row.look)
-        .shown(active)
+        .shown(shown_tab(panels, active))
         .tear_off()
         .natural_height(true)
         // Group, column and icon drags name what they move inside the drop region; a tab drag does the same.
         .drag_preview(crate::contract::RowPreview::Named)
-        .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
-        .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
+        .can_close(move |key: &PanelKey| tabs.iter().any(|tab| &tab.key == key && tab.closes))
+        .can_drag(move |key: &PanelKey| tabs.iter().any(|tab| &tab.key == key && !tab.document))
+        .drag_payload(move |drag: &ListDrag<PanelKey>| {
+            (!documents.contains(&drag.grabbed)).then_some(PanelDrag { panel: drag.grabbed, from, source: None, started: None })
+        });
     if row.wheel_selects {
         strip = strip.wheel_selects();
     }
+    // The strip takes the focus while it runs, so it runs focused and the keys of the next pass route through it.
+    if row.take_focus {
+        strip = strip.request_focus(FocusRequest::Take);
+    }
     let marks = &row.marks;
     let strip = strip.show_items(ui, &source, &mut |key, _| {
-        let panel = panels.iter().find(|panel| &panel.key == key);
-        let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
+        let tab = tabs.iter().find(|tab| &tab.key == key);
+        let title = tab.map_or_else(Label::default, |tab| tab.title.clone());
         // The panel's toggle command marks its tab as it marks the panel's rail button, with the hint to say why.
         let mark = marks.iter().find(|(marked, _)| marked == key);
-        let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(mark.is_some());
-        if let Some(count) = panel.and_then(|panel| panel.count) {
-            tab = tab.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+        let mut shown = Tab::new(title).closable(tab.is_some_and(|tab| tab.closes)).marked(mark.is_some());
+        if let Some(count) = tab.and_then(|tab| tab.count) {
+            shown = shown.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+        }
+        // A data colour before the name, in the tab's icon slot; not part of its name.
+        match tab.and_then(|tab| tab.swatch) {
+            Some(Some(color)) => shown = shown.icon(IconSpec::swatch(color)),
+            Some(None) => shown = shown.icon(IconSpec::empty_swatch()),
+            None => {}
         }
         match mark.and_then(|(_, hint)| hint.clone()) {
-            Some(hint) => tab.tooltip(hint),
-            None => tab,
+            Some(hint) => shown.tooltip(hint),
+            None => shown,
         }
     });
     for event in strip.response.events {
@@ -843,7 +978,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if strip.empty_double {
         row.sent.send(TabEvent::EmptyDouble);
     }
-    strip.response.response.id
+    (strip.response.response.id, strip.tab_rects)
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before

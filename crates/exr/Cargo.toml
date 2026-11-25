@@ -24,3 +24,6 @@ half = { version = "2", optional = true }
 thiserror = { workspace = true, optional = true }
 # zlib for scanline payloads and deep ZIPS chunks, which the `exr` crate does not read.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }

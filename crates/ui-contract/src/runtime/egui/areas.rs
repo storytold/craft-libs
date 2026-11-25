@@ -53,6 +53,12 @@ pub(crate) fn layer_position(ctx: &Context, layer: LayerId) -> usize {
     ctx.memory(|memory| memory.layer_ids().position(|listed| listed == layer).map_or(0, |at| at + 1))
 }
 
+/// Whether the screen position `pos` lies in `rect`, given in the space of `layer`, with `layer` the topmost layer there.
+pub(crate) fn lies_in(ctx: &Context, layer: LayerId, rect: Rect, pos: Pos2) -> bool {
+    let at = layer_map(ctx, layer).map_or(pos, |map| map.to_layer(pos));
+    layer_at(ctx, pos) == Some(layer) && rect.contains(at)
+}
+
 /// The topmost layer under a screen position. Inside the canvas a modal layer leaves open (`runtime::sampler`) and
 /// where nothing but the canvas lies over it, it answers the canvas's own layer as if the modal's gate and its scrim
 /// were not there.
@@ -417,6 +423,11 @@ pub(crate) fn safe_rect_raw(ctx: &Context) -> Rect {
 /// Hands egui the whole layer order of the running pass, bottom first. egui consumes it by the end of the pass.
 pub(crate) fn set_layer_order(ctx: &Context, order: &[LayerId]) {
     ctx.set_layer_order(order);
+}
+
+/// Brings `layer` to the top of egui's own area order at the end of the running pass, as a press on it does.
+pub(crate) fn move_to_top(ctx: &Context, layer: LayerId) {
+    ctx.move_to_top(layer);
 }
 
 /// Makes `layer` the modal layer of the running pass: layers below it take no input.

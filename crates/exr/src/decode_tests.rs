@@ -243,11 +243,13 @@ fn hostile_files_never_panic() {
         (5, 3),
     );
     let limits = Limits { max_bytes: 1 << 24, ..Limits::default() };
-    for n in 0..good.len() {
+    // The gate runs every divisor-th truncation and byte; nightly runs every one.
+    let step = craft_testkit::hostile::divisor();
+    for n in (0..good.len()).step_by(step) {
         let _ = parts(&good[..n], &limits);
         let _ = decode_part(&good[..n], 1, &all, &limits);
     }
-    for i in 0..good.len() {
+    for i in (0..good.len()).step_by(step) {
         for v in [0u8, 1, 0x7F, 0xFF] {
             let mut b = good.clone();
             b[i] = v;
