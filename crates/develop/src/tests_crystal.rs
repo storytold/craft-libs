@@ -155,7 +155,7 @@ fn tones_keep_their_mean() {
     for (amount, size, levels) in cases {
         let g = CrystalGrain::new(&Grain { amount, size, roughness: 50.0, seed: 3 }, REF_LONG).expect("grain");
         for &level in levels {
-            let n = 160;
+            let n = 256;
             let mut sum = 0.0f64;
             for k in 0..n * n {
                 let (x, y) = ((k % n) as f32 + 0.5, (k / n) as f32 + 0.5);
@@ -163,7 +163,6 @@ fn tones_keep_their_mean() {
                 sum += (e[1].clamp(0.0, 1.0) * 255.0) as f64;
             }
             let shift = sum / (n * n) as f64 - level as f64;
-            eprintln!("DIAG tones {amount}/{size} level {level}: shift {shift:+.3} (limit 0.5)");
             assert!(shift.abs() < 0.5, "{amount}/{size}: level {level} moved {shift:+.2}");
         }
     }
