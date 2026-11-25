@@ -99,6 +99,8 @@ impl<'a> RecentList<'a> {
             offers_open: true,
             pinned_title: None,
             templates_title: None,
+            new_label: None,
+            open_label: None,
             heading_sections: false,
         };
         let files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();

@@ -72,7 +72,9 @@
         "track": 144.0
       },
       "page": {
-        "column": 820.0
+        "action": 30.0,
+        "column": 820.0,
+        "margin": 50.0
       },
       "pane": {
         "least": 50.0

@@ -8,11 +8,11 @@ use super::recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort
 use super::recent_list::{RecentList, recent_body};
 use super::words::ShellWords;
 use crate::buttons::button::ButtonStyleKey;
-use crate::buttons::{Button, Link};
+use crate::buttons::{Button, ControlPlace, Link};
 use crate::choice::Segmented;
 use crate::contract::{
-    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowAlign, Scroll, SelectMode,
-    Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, PadEdges, Pattern, Props, Remember as _, RowAlign, Scroll,
+    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
 };
 use crate::display::{Divider, Icon, Shade, Text};
 use crate::layout_components::{Row, Stack};
@@ -26,13 +26,13 @@ use crate::primitives::{
 };
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
-use crate::runtime::env::{AgeStyle, Env, Label};
+use crate::runtime::env::{AgeStyle, Env, Label, Overrides, with_env};
 use crate::sections::{HeaderStrength, Section};
-use crate::style::{Corners, DataColor, StyleCx, SurfaceKind, SurroundLook, TypeRole};
+use crate::style::{Corners, DataColor, StyleCx, SurfaceKind, SurroundLook, TypeRole, rgba_color};
 use crate::tile_grid::{CaptionPlace, CardText, GridZoom, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Proposal, SelectionChange, keyed};
 use craft_theme::variant::{CustomVariant, Emphasis, RadiusStep, Tone, VariantLook};
-use craft_theme::{Rgba, Tokens, Variant};
+use craft_theme::{PageSizes, Rgba, Tokens, Variant};
 use egui::{CornerRadius, Rect, Response, Ui, UiBuilder, Vec2, pos2, vec2};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -387,6 +387,12 @@ pub struct StartScreen<'a> {
     /// The New… button shows (true by default).
     #[prop]
     offers_new: bool,
+    /// The New button's text, in place of the built-in word.
+    #[prop(into)]
+    new_label: Option<Label>,
+    /// The Open button's text, in place of the built-in word.
+    #[prop(into)]
+    open_label: Option<Label>,
     /// The Open… button shows (true by default); an app that opens files from its title bar leaves it out. A double
     /// click on the page's empty room still asks for Open.
     #[prop]
@@ -493,6 +499,8 @@ impl<'a> StartScreen<'a> {
             card_zoom: None,
             page_paper: None,
             offers_new: true,
+            new_label: None,
+            open_label: None,
             offers_open: true,
             pinned_title: None,
             heading_sections: false,
@@ -569,6 +577,9 @@ pub(super) struct Page<'p> {
     pub(super) pinned_title: Option<&'p Label>,
     /// The heading of the templates section, in place of the built-in word.
     pub(super) templates_title: Option<&'p Label>,
+    /// The New and Open buttons' texts, in place of the built-in words.
+    pub(super) new_label: Option<&'p Label>,
+    pub(super) open_label: Option<&'p Label>,
     /// PdfCraft's section look (`StartScreen::heading_sections`).
     pub(super) heading_sections: bool,
 }
@@ -576,6 +587,16 @@ pub(super) struct Page<'p> {
 impl<'p> Page<'p> {
     pub(super) fn push(&self, action: StartAction) {
         self.actions.borrow_mut().push(action);
+    }
+
+    /// The New button's text: the app's, else the built-in word.
+    fn new_label(&self) -> Label {
+        self.new_label.cloned().unwrap_or_else(|| self.words.new.clone())
+    }
+
+    /// The Open button's text: the app's, else the built-in word.
+    fn open_label(&self) -> Label {
+        self.open_label.cloned().unwrap_or_else(|| self.words.open.clone())
     }
 
     /// A section of the page titled `title`: in the heading strength and quiet under `heading_sections`.
@@ -711,6 +732,8 @@ impl StartScreen<'_> {
             page_paper,
             home,
             offers_new,
+            new_label,
+            open_label,
             offers_open,
             pinned_title,
             heading_sections,
@@ -734,6 +757,8 @@ impl StartScreen<'_> {
             offers_open,
             pinned_title: pinned_title.as_ref(),
             templates_title: templates_title.as_ref(),
+            new_label: new_label.as_ref(),
+            open_label: open_label.as_ref(),
             heading_sections,
             actions: &actions,
         };
@@ -741,8 +766,12 @@ impl StartScreen<'_> {
         let sort = RefCell::new(sort);
 
         let room = ui.available_rect_before_wrap();
-        // The page's surround is square.
-        paint_surround(ui.painter(), CheckerArea::Rect(room, CornerRadius::ZERO), &SurroundLook::of(&env.tokens).shown(env.canvas_pattern));
+        // The page's surround is square; a Column page stands on the page surface.
+        if layout == StartLayout::Column {
+            ui.painter().rect_filled(room, CornerRadius::ZERO, rgba_color(env.tokens.color.surface.page));
+        } else {
+            paint_surround(ui.painter(), CheckerArea::Rect(room, CornerRadius::ZERO), &SurroundLook::of(&env.tokens).shown(env.canvas_pattern));
+        }
 
         let rail_stack = || Stack::new().gap(Gap::Tight).pad(Pad::Regular).label(words.start_links.clone());
         let rail_body = |ui: &mut Ui| {
@@ -818,15 +847,17 @@ impl StartScreen<'_> {
         };
 
         if layout == StartLayout::Column {
-            let column = env.tokens.size.page.column;
-            // The page senses its own surface for the empty-room double click, as the other layouts do.
-            let shown = Stack::new().fill().pad(Pad::Page).scroll(Scroll::vertical()).senses_surface().show(ui, |ui, cx| {
+            let PageSizes { column, margin, .. } = env.tokens.size.page;
+            // The page senses its own surface for the empty-room double click, as the other layouts do. The page margin
+            // stands beside the column; `size.page.margin` above it and below it.
+            let page_stack = Stack::new().fill().pad(Pad::Page).pad_edges(PadEdges::Inline).scroll(Scroll::vertical()).senses_surface();
+            let shown = page_stack.show(ui, |ui, cx| {
                 if cx.surface_double_pressed() {
                     page.push(StartAction::Open);
                 }
                 let room = ui.available_rect_before_wrap();
                 let width = room.width().min(column);
-                let at = Rect::from_min_size(pos2(room.center().x - width / 2.0, room.top()), vec2(width, room.height()));
+                let at = Rect::from_min_size(pos2(room.center().x - width / 2.0, room.top() + margin), vec2(width, room.height()));
                 ui.scope_builder(UiBuilder::new().max_rect(at), |ui| {
                     let _ = Stack::new().id_salt("start-column").gap(Gap::Section).fill_width().show(ui, |ui, _| {
                         column_heading(&page, ui, title.as_ref(), subtitle.as_ref());
@@ -847,6 +878,7 @@ impl StartScreen<'_> {
                         column_links(&page, ui, links_title.as_ref(), links);
                     });
                 });
+                ui.allocate_space(vec2(0.0, margin));
             });
             return StartOutput { response: shown.output, actions: actions.into_inner() };
         }
@@ -1018,15 +1050,14 @@ fn home_row_selected_look(tokens: &Tokens) -> VariantLook {
 
 /// New and Open on the desktop Home page, filling the rail (or the narrow page's row).
 fn home_new_and_open(page: &Page<'_>, ui: &mut Ui) {
-    let words = page.words;
     if page.offers_new {
-        let new = Button::new(words.new.clone()).id_salt("new").variant(Variant::Custom(HOME_NEW_LOOK)).sizing(Sizing::FillWidth);
+        let new = Button::new(page.new_label()).id_salt("new").variant(Variant::Custom(HOME_NEW_LOOK)).sizing(Sizing::FillWidth);
         if clicked(&new.show(ui)) {
             page.push(StartAction::New);
         }
     }
     if page.offers_open {
-        let open = Button::new(words.open.clone()).id_salt("open").variant(Variant::Custom(HOME_OPEN_LOOK)).sizing(Sizing::FillWidth);
+        let open = Button::new(page.open_label()).id_salt("open").variant(Variant::Custom(HOME_OPEN_LOOK)).sizing(Sizing::FillWidth);
         if clicked(&open.show(ui)) {
             page.push(StartAction::Open);
         }
@@ -1194,7 +1225,10 @@ fn column_links(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, links: &[St
                     if let Some(url) = url {
                         button = button.tooltip(url.clone());
                     }
-                    clicked(&button.show(ui))
+                    let place = |overrides: &mut Overrides| {
+                        overrides.values.set(ControlPlace::CallToAction);
+                    };
+                    clicked(&with_env(ui, place, |ui| button.show(ui)))
                 } else {
                     let mut text = Link::new(link.label.clone()).id_salt(("start-link", at));
                     if let Some(url) = url {
@@ -1215,11 +1249,10 @@ fn column_links(page: &Page<'_>, ui: &mut Ui, title: Option<&Label>, links: &[St
 
 /// New and Open, the first Tab stops of the page; Open alone where the app offers no New.
 fn new_and_open(page: &Page<'_>, ui: &mut Ui, sizing: Sizing) {
-    let words = page.words;
-    if page.offers_new && clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).sizing(sizing).show(ui)) {
+    if page.offers_new && clicked(&Button::new(page.new_label()).id_salt("new").variant(Variant::PRIMARY).sizing(sizing).show(ui)) {
         page.push(StartAction::New);
     }
-    if page.offers_open && clicked(&Button::new(words.open.clone()).id_salt("open").sizing(sizing).show(ui)) {
+    if page.offers_open && clicked(&Button::new(page.open_label()).id_salt("open").sizing(sizing).show(ui)) {
         page.push(StartAction::Open);
     }
 }
@@ -1539,10 +1572,9 @@ fn templates_grid(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
     let words = page.words;
     let source = keyed(templates, |template: &Template| template.id.clone()).with_text(|template| Cow::Borrowed(template.name.as_str()));
     let mut grid = page.grid::<String>(words.templates.clone(), false);
-    // Templates of page sizes are New Document's page cards: the page on a picture twice as wide as high, the text
-    // centred.
+    // Templates of page sizes are page cards: the page on a picture twice as wide as high.
     if templates.iter().any(|template| template.page.is_some()) {
-        grid = grid.card_text(CardText::Preset).aspect(2.0);
+        grid = grid.card_text(CardText::Page).aspect(2.0);
     }
     let out = grid.show_items(ui, &source, &mut |id, _| {
         let Some(template) = templates.iter().find(|template| &template.id == id) else { return Tile::new(Label::Empty) };

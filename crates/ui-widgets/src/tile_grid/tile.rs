@@ -17,7 +17,7 @@ use crate::contract::{
 };
 use crate::display::{Badge, Picture};
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
-use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{Label, Units};
 use crate::style::{
@@ -187,7 +187,7 @@ impl Sizes {
     fn of(cx: &StyleCx<'_>, card: bool, text: CardText, place: CaptionPlace, regular_card_padding: bool) -> Sizes {
         let (tokens, control) = (cx.tokens, cx.control());
         let line = tokens.typography.get(TypeRole::Caption).line_height;
-        let name_line = if card { tokens.typography.get(text.name_role()).line_height } else { line };
+        let name_line = if card { tokens.typography.get(text.name_role()).line_height * f32::from(text.name_lines()) } else { line };
         let inset = match (card, place) {
             (true, _) if regular_card_padding => tokens.space.pad.regular,
             (true, _) => tokens.space.pad.control,
@@ -815,6 +815,10 @@ impl Component for Tile<'_> {
                 c(state.selected),
                 c(state.selected),
             ))
+        } else if key.card && key.card_text == CardText::Page {
+            // A page card lies flat on the surface under it.
+            let (rest, hover, pressed) = (c(clear), c(state.hover), c(state.pressed));
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(hover, hover, pressed, hover))
         } else if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
@@ -847,12 +851,13 @@ impl Component for Tile<'_> {
         };
         let radius = UiTokens::corner(tokens.shape.radius.control);
         let mut surface = SurfaceLook::new(fill).radius(radius);
-        if key.action_place == TileActionPlace::Band {
-            // A band tile has no ring round its picture: the selected tile is outlined as a whole.
+        let page_card = key.card && key.card_text == CardText::Page;
+        if key.action_place == TileActionPlace::Band || page_card {
+            // A band tile or a page card has no ring round its picture: the selected tile is outlined as a whole.
             let (line, accent) = (c(clear), c(colors.accent.solid));
             surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
         }
-        let surface = if key.card { surface.kind(SurfaceKind::Raised) } else { surface };
+        let surface = if key.card && !page_card { surface.kind(SurfaceKind::Raised) } else { surface };
         // A selected tile's name reads in the normal ink: the selection is the ring, not a fill under the name.
         let normal = c(text.normal);
         let ink = |base: StyleColor| Stateful::new(base).on(States::new(normal, normal, normal, normal));
@@ -1320,11 +1325,15 @@ impl Tile<'_> {
         let failed = matches!(self.status, TileStatus::Offline(_));
         let look = if failed { &style.name_failed } else { &style.name };
         let ink = cx.resolve(&look.color);
+        let mut name_bottom = placed.name.bottom();
         if !self.renaming {
-            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElideMiddle);
+            let lines = if style.sizes.card { style.sizes.text.name_lines() } else { 1 };
+            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink);
+            let run = if lines > 1 { run.wrap(Wrap::Clamp(lines)).align(HAlign::Center) } else { run.wrap(Wrap::ElideMiddle) };
             let layout = draw.layout(&run, placed.name.width());
             let at = Pos2::new(Self::text_x(placed.name, layout.size().x, cx), placed.name.top());
             draw.galley(at, &layout);
+            name_bottom = at.y + layout.size().y;
             if self.hidden && self.caption == CaptionPlace::Start {
                 let name = Rect::from_min_size(at, layout.size());
                 draw.stroke(&PaintShape::Path(vec![name.left_bottom(), name.right_top()]), StrokeWidth::Medium, ink);
@@ -1333,7 +1342,9 @@ impl Tile<'_> {
         if let (Some(detail), Some(rect)) = (&self.detail, placed.detail) {
             let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, rect.width());
-            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), rect.top()), &layout);
+            // Under a name of fewer lines than the card keeps, the detail follows the name.
+            let top = if style.sizes.card && style.sizes.text.name_lines() > 1 { name_bottom } else { rect.top() };
+            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), top), &layout);
         }
         for (mark, rect) in self.marks.iter().zip(&placed.marks) {
             draw.icon(*rect, &IconSpec::svg(mark.icon.clone()).color(cx.resolve(&style.mark.color)));

@@ -147,6 +147,8 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.dialog.button" Num 24.0..=240.0 => s.dialog.button;
         "base.size.dialog.side_button" Num 24.0..=240.0 => s.dialog.side_button;
         "base.size.page.column" Num 240.0..=2048.0 => s.page.column;
+        "base.size.page.margin" Num 0.0..=240.0 => s.page.margin;
+        "base.size.page.action" Num 16.0..=96.0 => s.page.action;
     }
     let sp = &mut b.space;
     leaves! { out;

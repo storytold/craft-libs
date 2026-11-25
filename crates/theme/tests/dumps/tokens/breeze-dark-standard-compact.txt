@@ -2,6 +2,7 @@
 surface.background = #1a1d22ff
 surface.canvas = #111418ff
 surface.canvas_pattern = #111418ff
+surface.page = #111418ff
 surface.panel = #1d2126ff
 surface.chrome = #262a30ff
 surface.raised = #272b30ff
@@ -199,6 +200,8 @@ size.dialog.wrap = 440
 size.dialog.button = 84
 size.dialog.side_button = 96
 size.page.column = 820
+size.page.margin = 40
+size.page.action = 24
 stroke.thin = 1
 stroke.medium = 1.5
 stroke.thick = 2

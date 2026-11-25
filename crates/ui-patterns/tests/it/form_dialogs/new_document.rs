@@ -357,12 +357,11 @@ fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
         for (name, key, size) in [("Clipboard", clipboard, wide), ("Custom", custom, tall)] {
             let card = tree.bounds_of(key).expect("visible tile bounds");
             let caption = frames.texts().iter().find(|line| line.text == name).expect("the preset title is painted");
-            // The page is blank paper: the one white fill centred in the card above its title.
-            let pages: Vec<_> = shapes
+            let outlines: Vec<_> = shapes
                 .iter()
                 .filter_map(|shape| match shape {
                     egui::Shape::Rect(rect)
-                        if rect.fill == egui::Color32::WHITE
+                        if rect.stroke.width > 0.0
                             && (rect.rect.center().x - card.center().x).abs() <= 1.0
                             && card.contains_rect(rect.rect)
                             && rect.rect.bottom() <= caption.rect.top() =>
@@ -372,9 +371,9 @@ fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(pages.len(), 1, "one page and no extra frame in {name} at {scale}: {pages:?}");
-            let page = pages[0];
-            assert!(page.width() < card.width() && page.height() < card.height() / 2.0, "a small page inside the card in {name}: {page:?}");
+            assert_eq!(outlines.len(), 1, "one page outline and no extra frame in {name} at {scale}: {outlines:?}");
+            let page = outlines[0];
+            assert!((page.width().max(page.height()) - 30.0).abs() <= 1.0, "the compact page outline in {name}: {page:?}");
             assert!((page.width() / page.height() - size.width as f32 / size.height as f32).abs() < 0.05, "the page has the preset's aspect");
         }
 
@@ -385,6 +384,50 @@ fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
         assert_eq!(tree.selected_of(custom), Some(true));
         assert_eq!(tree.selected_of(clipboard), Some(false));
     }
+}
+
+/// An app that sets `PresetCardLook::Page` (VectorCraft) gets each preset card's page as blank paper at the preset's
+/// aspect above its title, and no page outline.
+#[trial]
+fn preset_cards_in_the_page_look_paint_paper_and_no_outline() {
+    use craft_behavior::PixelSize;
+    use craft_ui::patterns::form_dialogs::PresetCardLook;
+    use craft_ui::runtime::access::Role;
+    use craft_ui::runtime::env::with_env;
+    use craft_ui::testing::Frames;
+
+    let wide = PixelSize::new(1200, 900);
+    let mut frames = Frames::new();
+    frames.screen(Vec2::new(1440.0, 900.0));
+    let mut options = DocumentOptions::default();
+    let mut show = |ui: &mut egui::Ui| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(PresetCardLook::Page);
+            },
+            |ui| drop(NewDocumentDialog::new(Bind::bound(&mut options)).clipboard(wide).show(ui)),
+        );
+    };
+    for _ in 0..30 {
+        frames.frame(Vec::new(), &mut show);
+    }
+    let tree = frames.tree();
+    let card = tree
+        .with_role(Role::LIST_ITEM)
+        .into_iter()
+        .find(|key| tree.name_of(*key).is_some_and(|label| label.starts_with("Clipboard")))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the visible Clipboard card");
+    let shapes = frames.frame_shapes(&mut show);
+    let caption = frames.texts().iter().find(|line| line.text == "Clipboard").expect("the preset title is painted").rect;
+    let above_title =
+        |rect: &egui::Rect| card.contains_rect(*rect) && rect.bottom() <= caption.top() && (rect.center().x - card.center().x).abs() <= 1.0;
+    let rects: Vec<_> = shapes.iter().filter_map(|shape| if let egui::Shape::Rect(rect) = shape { Some(rect) } else { None }).collect();
+    let pages: Vec<_> = rects.iter().filter(|rect| rect.fill == egui::Color32::WHITE && above_title(&rect.rect)).map(|rect| rect.rect).collect();
+    assert_eq!(pages.len(), 1, "one sheet of paper in the card: {pages:?}");
+    assert!((pages[0].width() / pages[0].height() - wide.width as f32 / wide.height as f32).abs() < 0.05, "the paper has the preset's aspect");
+    assert!(!rects.iter().any(|rect| rect.stroke.width > 0.0 && above_title(&rect.rect)), "no page outline");
 }
 
 /// A Web card turns Artboards on and a Photo card turns it off again; Artboards the user ticked stays on.

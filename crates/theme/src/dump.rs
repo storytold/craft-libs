@@ -216,8 +216,10 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.dialog.wrap", len(*wrap));
     out.line("size.dialog.button", len(*button));
     out.line("size.dialog.side_button", len(*side_button));
-    let PageSizes { column } = page;
+    let PageSizes { column, margin, action } = page;
     out.line("size.page.column", len(*column));
+    out.line("size.page.margin", len(*margin));
+    out.line("size.page.action", len(*action));
 }
 
 fn slot(s: FontSlot) -> &'static str {

@@ -1,10 +1,11 @@
 //! `StartScreen`: which part of the page takes a double click, what a recent file's menu offers, where host sections
 //! sit, and how a pinned folder lists its files.
 
+use craft_theme::{AppSizes, SizeValue};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::display::Text;
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, RootEnv};
 use craft_ui::shell::{
     FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, RecentFile, RecentList, RecentSort, RecentView, ShellWords, StartAction,
     StartLayout, StartLink, StartPlace, StartScreen, Template,
@@ -15,6 +16,7 @@ use egui::{Key, Modifiers};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 type Log = Rc<RefCell<Vec<StartAction>>>;
 
@@ -861,6 +863,11 @@ fn a_start_screen_takes_the_shape_and_width_of_its_card_pictures() {
 /// The Column page of `files` in a 1600 by 900 room: title, subtitle, New and Open, the recent rows, a page template
 /// and the links, the first a call to action. Returns the fixture and the column's widest width.
 fn column_page(files: Vec<RecentFile>) -> (Fixture, f32) {
+    column_page_in(files, RootEnv::default())
+}
+
+/// `column_page` under the app's `root`.
+fn column_page_in(files: Vec<RecentFile>, root: RootEnv) -> (Fixture, f32) {
     let column = Rc::new(RefCell::new(0.0));
     let widest = column.clone();
     let templates = vec![Template::new("letter", "Letter", "612 × 792 pt").page(612.0, 792.0)];
@@ -881,7 +888,7 @@ fn column_page(files: Vec<RecentFile>) -> (Fixture, f32) {
             .drop_hint("Drop files here")
             .show(ui);
     });
-    fixture.room(egui::Vec2::new(1600.0, 900.0)).settle();
+    fixture.root(root).room(egui::Vec2::new(1600.0, 900.0)).settle();
     let column = *column.borrow();
     (fixture, column)
 }
@@ -933,4 +940,24 @@ fn a_column_call_to_action_is_a_pill_that_opens_its_url() {
     assert!(pill.rect.height() > link.rect.height(), "the pill stands taller than a link: {:?} {:?}", pill.rect, link.rect);
     fixture.click(&pill).idle(2);
     assert!(fixture.opened().iter().any(|(url, _)| url == "https://example.com/chat"), "the pill opens its URL: {:?}", fixture.opened());
+}
+
+/// A Column page takes its room above the column and its call to action's height from the page sizes, which an app
+/// sets (VectorCraft's 60-point margin and 36-point pill).
+#[trial]
+fn a_column_page_follows_its_page_sizes() {
+    let shown = |margin: f32, action: f32| {
+        let mut sizes = AppSizes::default();
+        sizes.all.insert("size.page.margin".to_owned(), SizeValue::Number(margin));
+        sizes.all.insert("size.page.action".to_owned(), SizeValue::Number(action));
+        let mut root = RootEnv::default();
+        root.sizes = Arc::new(sizes);
+        let (fixture, _) = column_page_in(Vec::new(), root);
+        let (title, pill) = (fixture.by_label("Welcome").expect("the title"), fixture.by_label("Join the community").expect("the pill"));
+        assert!(title.rect.top() >= margin, "the title stands the margin {margin} below the page's top: {:?}", title.rect);
+        assert!(pill.rect.height() >= action - 0.5, "the pill is {action} high: {:?}", pill.rect);
+        (title.rect.top(), pill.rect.height())
+    };
+    let (low, high) = (shown(20.0, 24.0), shown(90.0, 48.0));
+    assert!(high.0 > low.0 && high.1 > low.1, "a larger margin lowers the column and a larger action height raises the pill: {low:?} {high:?}");
 }

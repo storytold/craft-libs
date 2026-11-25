@@ -319,6 +319,10 @@ pub struct SizeTokens {
 pub struct PageSizes {
     /// The widest a page's centred column of content grows; a narrower room keeps the page's margin at each side.
     pub column: f32,
+    /// The room above and below a page's centred column.
+    pub margin: f32,
+    /// The height of a page's call to action (`ControlPlace::CallToAction`).
+    pub action: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.
