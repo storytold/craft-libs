@@ -50,5 +50,5 @@ pub(crate) fn icon_buttons(v: &Visuals) -> IconButtonStyle {
 
 /// The table/detail divider.
 pub(crate) fn divider(v: &Visuals) -> ResizeHandleStyle {
-    ResizeHandleStyle { hovered: v.widgets.hovered.bg_fill, dragged: v.widgets.active.bg_fill, focused: v.selection.bg_fill }
+    ResizeHandleStyle { hovered: v.widgets.hovered.bg_fill, dragged: v.widgets.active.bg_fill, focused: v.selection.bg_fill, rest: None }
 }

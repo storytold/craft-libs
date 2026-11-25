@@ -89,6 +89,7 @@ impl DockContent<u32> for Host {
             hovered: egui::Color32::TRANSPARENT,
             dragged: egui::Color32::TRANSPARENT,
             focused: egui::Color32::TRANSPARENT,
+            rest: None,
         }
     }
     fn body(&mut self, _: &mut egui::Ui, _: &u32) {
