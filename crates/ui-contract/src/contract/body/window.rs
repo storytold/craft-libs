@@ -810,8 +810,9 @@ impl BodyHooks<'_> {
             // areas cover its ends and top edge, and a cursor set over them fights the OS's.
             let moved = os.or(moves_window.then(|| pass::current_viewport(&ctx)));
             let os_bar = moved.is_some_and(|viewport| windows::shell_of(&ctx, viewport).window.chrome == WindowChrome::Inset);
+            let hand = pcx.env.get::<crate::contract::MoveBandCursor>() == crate::contract::MoveBandCursor::Hand;
             let mut part = pcx.part(MOVE_BAND, band).sense(craft_behavior::Sense::DRAG).pointer_only(reason);
-            if !os_bar {
+            if !os_bar && hand {
                 part = part.cursor(CursorIcon::Grab).drag_cursor(CursorIcon::Grabbing);
             }
             if let Some(hit) = exclusive(WindowHit::Move).or(moves_window.then_some(WindowHit::Move)) {
