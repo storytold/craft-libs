@@ -53,7 +53,8 @@ is left out and named (`Error::Cap`).
 
 ## What is not here
 
-- Writing. The `test-writer` feature has a writer of small synthetic files, for tests only.
+- Writing. The `test-support` feature has a writer of small synthetic files, for tests only.
+  `test-writer` is an alias of `test-support`.
 - Offline folders files with 4 KB pages (version 36) and files protected by Windows Information
   Protection (version 37): `Error::UnsupportedVersion`.
 - Text in a code page: `PropValue::String8` carries the bytes, and the caller decodes them in

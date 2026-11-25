@@ -361,6 +361,23 @@ fn lookup_by_every_name_kind() {
 }
 
 #[test]
+fn the_stores_face_wins_over_its_copy_in_the_os_folder() {
+    // A Flatpak's store sits under ~/.var/app, which sorts after the host's ~/.local/share/fonts
+    // the store copies its fonts into.
+    let root = temp("store-copy");
+    let bytes = font(&spec("Copied Sans", "Regular", 400));
+    write(&root.join("home/.local/share/fonts/Craft/Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let store = root.join("home/.var/app/org.example.Fonts/data/craft-fonts");
+    write(&store.join("Copied Sans/CopiedSans-Regular.ttf"), &bytes);
+    let cat = Catalog::new(FontEnv { font_store: Some(store), ..linux_env(&root) }).with_font_service(false);
+    cat.rescan();
+    let styles = cat.styles("Copied Sans");
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].source, Source::Store);
+    assert_eq!(cat.scanned_faces().iter().filter(|f| f.family == "Copied Sans").count(), 2);
+}
+
+#[test]
 fn installed_and_removed_fonts_are_seen_without_a_restart() {
     let root = temp("rescan");
     let cat = system(&root);
@@ -567,4 +584,40 @@ fn a_read_is_capped_where_the_file_has_grown() {
     assert!(matches!(read_capped(&path, 9), Err(FontFileError::TooLarge { size: 10, max: 9 })));
     assert!(matches!(read_capped(&path.with_extension("missing"), 9), Err(FontFileError::Io(_))));
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn shape_plan_cache_reuses_and_evicts_plans() {
+    let data = font(&spec("Test", "Regular", 400));
+    let face = harfrust::FontRef::from_index(&data, 0).unwrap();
+    let shaper_data = harfrust::ShaperData::new(&face);
+    let shaper = shaper_data.shaper(&face).build();
+    let cache = ShapePlanCache::default();
+    let make = |language: &harfrust::Language| cache.get_or_create(&shaper, None, harfrust::Direction::LeftToRight, None, Some(language), &[]);
+    let languages: Vec<harfrust::Language> = ('a'..='z').flat_map(|a| ['a', 'b'].map(move |b| format!("{a}{b}").parse().unwrap())).collect();
+    let first = make(&languages[0]);
+    assert!(Arc::ptr_eq(&first, &make(&languages[0])));
+    for language in languages.iter().skip(1) {
+        make(language);
+    }
+    assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
+    assert!(!Arc::ptr_eq(&first, &make(&languages[0])));
+    assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
+}
+
+#[test]
+fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
+    let mut bold = spec("Example", "Bold Italic", 700);
+    bold.italic = true;
+    let data = font(&bold);
+    let faces = crate::sfnt::read_faces_bytes(&data);
+    assert_eq!(faces.len(), 1);
+    assert_eq!((&*faces[0].family, &*faces[0].style, faces[0].weight, faces[0].italic), ("Example", "Bold Italic", 700, true));
+    let mut hidden = spec("Hidden", "Regular", 400);
+    hidden.outlines = false;
+    let combined = collection(&[font(&hidden), data]);
+    let faces = crate::sfnt::read_faces_bytes(&combined);
+    assert_eq!(faces.len(), 1);
+    assert_eq!((faces[0].index, faces[0].family.as_str()), (1, "Example"));
+    assert!(crate::sfnt::read_faces_bytes(b"invalid").is_empty());
 }

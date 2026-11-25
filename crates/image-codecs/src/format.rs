@@ -19,14 +19,15 @@ pub enum Format {
     Pcx,
     /// X PixMap icons (XPM2 plain text and XPM3 C-string arrays).
     Xpm,
-    /// DirectDraw Surface: a 2D texture, uncompressed or BC1–BC3. Reading takes the top mip
+    /// DirectDraw Surface: a 2D texture, uncompressed or BC1–BC5. Reading takes the top mip
     /// level; writing can add the full mip chain ([`crate::DdsOptions`]).
     Dds,
     Qoi,
     OpenExr,
     /// Radiance RGBE.
     Hdr,
-    /// Encode-only behind the `avif` feature; see [`ASYMMETRIC_EXCEPTIONS`].
+    /// Encoded behind the `avif` feature and decoded behind `avif-decode` (native targets); see
+    /// [`ASYMMETRIC_EXCEPTIONS`] for a build with only one of them.
     Avif,
     /// HEIF/HEIC (HEVC-coded): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Heif,
@@ -44,6 +45,12 @@ pub enum Format {
     Iff,
     /// JPEG 2000 (JP2 container or raw J2K codestream): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Jp2,
+    /// Sun Raster (`.ras`): 1-, 8-, 24- and 32-bit, uncompressed or RLE.
+    SunRaster,
+    /// SGI image files (`.sgi`, `.rgb`, `.bw`): 8- and 16-bit gray, gray + alpha, RGB and RGBA.
+    Sgi,
+    /// JPEG-LS (`.jls`): lossless and near-lossless gray and RGB.
+    JpegLs,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -89,10 +96,17 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     ),
     (
         Format::Avif,
-        "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
-         until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
+        "AVIF encode (ravif and rav1e, pure Rust) is behind the non-default `avif` feature and AVIF \
+         decode (craft-video's clean-room pure-Rust AV1 decoder) behind the non-default \
+         `avif-decode` feature, native targets only (on wasm32 a decoder panic would abort). A build \
+         with only one of them reads or writes AVIF, not both.",
     ),
-    (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
+    (
+        Format::Jxl,
+        "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder in every build; JPEG XL decode \
+         (craft-jxl on jxl-oxide, pure Rust) is behind the non-default `jxl` feature, which official \
+         builds enable. Without the feature JPEG XL is written but not read.",
+    ),
     (
         Format::Heif,
         "HEIC decode uses heic-rs (pure Rust, in the optional craft-heif crate behind the \
@@ -113,7 +127,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 24] = [
+    pub const ALL: [Format; 27] = [
         Format::Png,
         Format::Jpeg,
         Format::Jp2,
@@ -138,6 +152,9 @@ impl Format {
         Format::Cineon,
         Format::Dicom,
         Format::Iff,
+        Format::SunRaster,
+        Format::Sgi,
+        Format::JpegLs,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -176,6 +193,9 @@ impl Format {
             Format::Dicom => "DICOM",
             Format::Iff => "Amiga IFF",
             Format::Jp2 => "JPEG 2000",
+            Format::SunRaster => "Sun Raster",
+            Format::Sgi => "SGI",
+            Format::JpegLs => "JPEG-LS",
         }
     }
 
@@ -207,6 +227,9 @@ impl Format {
             Format::Dicom => &["dcm", "dicom", "dc3"],
             Format::Iff => &["iff", "lbm", "ilbm"],
             Format::Jp2 => &["jp2", "j2k", "j2c", "jpf", "jpx"],
+            Format::SunRaster => &["ras", "sun"],
+            Format::Sgi => &["sgi", "rgb", "rgba", "bw"],
+            Format::JpegLs => &["jls"],
         }
     }
 
@@ -236,13 +259,16 @@ impl Format {
             Format::Dicom => "application/dicom",
             Format::Iff => "image/x-iff",
             Format::Jp2 => "image/jp2",
+            Format::SunRaster => "image/x-sun-raster",
+            Format::Sgi => "image/x-sgi",
+            Format::JpegLs => "image/jls",
         }
     }
 
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif | Format::Iff => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Iff | Format::Sgi | Format::JpegLs => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -287,7 +313,8 @@ pub fn caps(format: Format) -> FormatCaps {
         // Resolution travels in EXIF (WebP has no field of its own).
         Format::WebP => FormatCaps { icc: true, exif: true, xmp: true, dpi: true, animation: true, ..base },
         Format::Gif => FormatCaps { layouts: &[L::Rgba], animation: true, lossy: true, ..base },
-        Format::Bmp => base,
+        // Resolution in the header's pixels per metre (BITMAPINFOHEADER and later).
+        Format::Bmp => FormatCaps { dpi: true, ..base },
         Format::Tga => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Ico => FormatCaps { layouts: &[L::Rgba], ..base },
         Format::Pnm => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, ..base },
@@ -298,7 +325,9 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Qoi => base,
         Format::OpenExr => FormatCaps { depths: &[S::F16, S::F32], layouts: RGB_GRAY, ..base },
         Format::Hdr => FormatCaps { depths: &[S::F32], layouts: &[L::Rgb], alpha: false, lossy: true, ..base },
-        Format::Avif => FormatCaps { read: false, write: cfg!(feature = "avif"), lossy: true, ..base },
+        Format::Avif => {
+            FormatCaps { read: cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))), write: cfg!(feature = "avif"), lossy: true, ..base }
+        }
         Format::Heif => {
             FormatCaps { read: cfg!(feature = "heif"), write: false, depths: &[S::U8, S::U16], icc: true, exif: true, xmp: true, lossy: true, ..base }
         }
@@ -306,20 +335,91 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
+        Format::SunRaster => FormatCaps {
+            read: cfg!(feature = "sunraster"),
+            write: cfg!(feature = "sunraster"),
+            layouts: &[L::Gray, L::Rgb, L::Rgba],
+            alpha: true,
+            ..base
+        },
+        Format::Sgi => {
+            FormatCaps { read: cfg!(feature = "sgi"), write: cfg!(feature = "sgi"), depths: &[S::U8, S::U16], layouts: RGB_GRAY, alpha: true, ..base }
+        }
+        Format::JpegLs => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
+    }
+}
+
+/// What [`detect_prefix`] makes of the first bytes of a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detection {
+    /// The bytes identify this format, as [`detect`] reports it.
+    Format(Format),
+    /// The bytes start with a JPEG SOI and end before the frame header that tells JPEG from
+    /// JPEG-LS. Read the file up to at least this many bytes and call [`detect_prefix`] or
+    /// [`PrefixDetector::detect`] again.
+    NeedBytes(usize),
+    /// The bytes match no format.
+    Unknown,
+}
+
+/// Identify a format from the first bytes of a file, which may be all of it or only its start.
+/// A JPEG and a JPEG-LS file both start with an SOI, and only the frame header after their marker
+/// segments tells them apart. When `bytes` ends before that header, the answer is
+/// [`Detection::NeedBytes`]; every other answer is the one [`detect`] gives.
+///
+/// Each call walks the marker segments from the SOI. To read more of a file after each
+/// [`Detection::NeedBytes`], use a [`PrefixDetector`], which starts each walk where the previous
+/// one stopped.
+pub fn detect_prefix(bytes: &[u8]) -> Detection {
+    PrefixDetector::new().detect(bytes)
+}
+
+/// [`detect_prefix`] for a file read in steps. The detector keeps the offset of the JPEG marker
+/// where its last walk stopped, so it reads each marker segment once, however many steps the file
+/// is read in.
+#[derive(Debug, Clone, Default)]
+pub struct PrefixDetector {
+    jpeg_pos: usize,
+}
+
+impl PrefixDetector {
+    /// A detector that has seen no bytes.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The answer [`detect_prefix`] gives for `bytes`. The `bytes` of each call must start with
+    /// the `bytes` of the previous call on this detector.
+    pub fn detect(&mut self, bytes: &[u8]) -> Detection {
+        use crate::codecs::jpegls::{JpegFrame, jpeg_frame_from};
+        match jpeg_frame_from(bytes, &mut self.jpeg_pos) {
+            Some(JpegFrame::Short(len)) => Detection::NeedBytes(len),
+            Some(JpegFrame::Ls) => Detection::Format(Format::JpegLs),
+            // The walk found no SOF55 frame header, so `detect` answers JPEG for these bytes.
+            Some(JpegFrame::Other) if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) => Detection::Format(Format::Jpeg),
+            Some(JpegFrame::Other) | None => detect(bytes).map_or(Detection::Unknown, Detection::Format),
+        }
     }
 }
 
 /// Identify a format from its leading bytes (magic numbers). TGA has no
 /// magic and is recognized last, by header plausibility.
+///
+/// JPEG-LS is told from JPEG by the frame header that follows the marker segments, so `bytes`
+/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`]. Use
+/// [`detect_prefix`] on a buffer that may hold only the start of a file.
 pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
+    }
+    if crate::codecs::jpegls::looks_like_jpegls(b) {
+        return Some(Format::JpegLs);
     }
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(Format::Jpeg);
@@ -354,10 +454,11 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
         return Some(Format::Hdr);
     }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
-        if is_avif_ftyp(b) {
+        let prefix = &b[..b.len().min(64)];
+        if is_avif_ftyp(prefix) {
             return Some(Format::Avif);
         }
-        if is_heif_ftyp(b) {
+        if is_heif_ftyp(prefix) {
             return Some(Format::Heif);
         }
     }
@@ -388,6 +489,14 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.starts_with(b"/* XPM */") || b.starts_with(b"! XPM2\n") || b.starts_with(b"! XPM2\r\n") {
         return Some(Format::Xpm);
     }
+    #[cfg(feature = "sunraster")]
+    if crate::codecs::sunraster::looks_like_sunraster(b) {
+        return Some(Format::SunRaster);
+    }
+    #[cfg(feature = "sgi")]
+    if crate::codecs::sgi::looks_like_sgi(b) {
+        return Some(Format::Sgi);
+    }
     if crate::codecs::pcx::looks_like_pcx(b) {
         return Some(Format::Pcx);
     }
@@ -397,11 +506,21 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     None
 }
 
-/// The `ftyp` brands: the major brand, then the compatible ones (the minor version between them is skipped).
-fn ftyp_brands(b: &[u8]) -> impl Iterator<Item = &[u8; 4]> {
-    let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-    let end = size.clamp(12, b.len().min(64));
-    b[8..end].as_chunks::<4>().0.iter().enumerate().filter(|(i, _)| *i != 1).map(|(_, c)| c)
+/// The major brand and complete compatible brands in a leading ISO-BMFF `ftyp` box.
+///
+/// Pass at most the bytes the caller wants to inspect. A missing box or incomplete major
+/// brand yields an empty iterator. For sniffing, a declared size below 12 still permits the
+/// major brand. Compatible brands stop at the declared box end or the available prefix,
+/// whichever comes first. This does not validate the full box.
+pub fn ftyp_brands(prefix: &[u8]) -> impl Iterator<Item = &[u8; 4]> + Clone {
+    let brands = match prefix.first_chunk::<12>() {
+        Some(header) if &header[4..8] == b"ftyp" => {
+            let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+            &prefix[8..size.clamp(12, prefix.len())]
+        }
+        _ => &[],
+    };
+    brands.as_chunks::<4>().0.iter().enumerate().filter(|(i, _)| *i != 1).map(|(_, brand)| brand)
 }
 
 fn is_avif_ftyp(b: &[u8]) -> bool {

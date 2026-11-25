@@ -5,9 +5,10 @@ use craft_image_codecs::{
 };
 
 #[test]
-fn jpeg_xl_is_export_only_and_detects_both_signatures() {
+fn jpeg_xl_is_export_only_without_the_jxl_feature_and_detects_both_signatures() {
     let c = caps(Format::Jxl);
-    assert!(c.write && !c.read);
+    assert!(c.write);
+    assert_eq!(c.read, cfg!(feature = "jxl"));
     assert_eq!(c.depths, &[SampleType::U8, SampleType::U16]);
     assert_eq!(c.layouts, &[ChannelLayout::Gray, ChannelLayout::Rgb, ChannelLayout::Rgba]);
     assert!(c.alpha && !c.icc && !c.exif && !c.xmp && !c.dpi && !c.lossy);
@@ -17,7 +18,13 @@ fn jpeg_xl_is_export_only_and_detects_both_signatures() {
     assert_eq!(detect(b"\0\0\0\x0cJXL \r\n\x87\n"), Some(Format::Jxl));
     assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(format, reason)| *format == Format::Jxl && !reason.is_empty()));
     let err = decode(&[0xff, 0x0a]);
-    assert!(matches!(err, Err(CodecError::Unsupported { format: Format::Jxl, .. })), "{err:?}");
+    #[cfg(not(feature = "jxl"))]
+    assert!(
+        matches!(&err, Err(CodecError::Unsupported { format: Format::Jxl, reason }) if reason.contains("isn't included in this build")),
+        "{err:?}"
+    );
+    #[cfg(feature = "jxl")]
+    assert!(matches!(err, Err(CodecError::Malformed { format: Format::Jxl, .. })), "{err:?}");
 }
 
 #[test]

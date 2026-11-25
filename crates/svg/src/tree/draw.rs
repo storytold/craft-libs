@@ -29,6 +29,13 @@ pub use resvg;
 #[cfg(feature = "tree-render")]
 pub use resvg::tiny_skia;
 
+#[cfg(feature = "tree-render")]
+mod raster;
+#[cfg(feature = "tree-render")]
+pub use raster::{RasterValidationFailure, validate_raster};
+#[cfg(feature = "tree-render")]
+pub(super) use raster::{decode_raster, probe_raster_pixels};
+
 /// Filter primitives per filter. A result of every primitive is kept; real filters have 1 to 12
 /// (Inkscape's drop shadow has 5), and 64 leaves headroom for generated ones.
 const MAX_PRIMITIVES: usize = 64;
@@ -546,3 +553,6 @@ fn deeper(cx: Cx) -> Result<(), Refusal> {
     }
     Ok(())
 }
+
+#[cfg(all(test, feature = "tree-render"))]
+mod decoder_edges;

@@ -14,6 +14,7 @@ pub const MAX_LM: usize = 3;
 pub const PREEMPH: f32 = 0.850_006_1;
 
 /// Static allocation table (Table 57), indexed `[quality][band]`, in 1/32 bit per MDCT bin.
+#[cfg(not(feature = "opus-encode"))]
 pub const ALLOC: [[u8; NB_EBANDS]; 11] = transpose([
     [0, 90, 110, 118, 126, 134, 144, 152, 162, 172, 200],
     [0, 80, 100, 110, 119, 127, 137, 145, 155, 165, 200],
@@ -38,6 +39,7 @@ pub const ALLOC: [[u8; NB_EBANDS]; 11] = transpose([
     [0, 0, 0, 0, 0, 1, 1, 1, 1, 20, 104],
 ]);
 
+#[cfg(not(feature = "opus-encode"))]
 const fn transpose(t: [[u8; 11]; NB_EBANDS]) -> [[u8; NB_EBANDS]; 11] {
     let mut out = [[0u8; NB_EBANDS]; 11];
     let mut b = 0;

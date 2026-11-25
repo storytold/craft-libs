@@ -1,0 +1,17 @@
+# The dev-build tuning every Workspace test build uses: scripts/ci-workspace-tests.sh passes it to each cargo command
+# (`--config .config/cargo-dev.toml`). It lives here and not in Cargo.toml's `[profile]` table, which the CI cache key
+# hashes; the per-crate levels Cargo.toml sets (craft-video, craft-affinity) still apply.
+#
+# lto off: with cargo's default, rustc runs thin-local LTO across every optimised crate's codegen units on each rebuild;
+# off, a one-line edit re-optimises only the changed units. Dependencies build at opt-level 2, once per target dir and
+# cache entry: egui, text shaping, hashing and codecs run in nearly every test.
+# craft-proof runs dictionary-sized tests and is rarely edited, so it builds at opt-level 1; every other workspace crate
+# stays at 0, where rustc shares generic instantiations across crates and an edit rebuilds in seconds.
+[profile.dev]
+lto = "off"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.craft-proof]
+opt-level = 1

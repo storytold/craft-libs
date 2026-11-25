@@ -1,8 +1,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 //! The suite's font store: the font indexes of every source (Google Fonts, Noto, indexes the user
-//! adds), exact lookup of a missing font, and verified installs into the one folder every app's
-//! font catalog reads.
+//! adds), exact lookup of a missing font, verified installs into the one folder every app's font
+//! catalog reads, and, per family at the user's request, copies in the OS user font folder for
+//! every other program ([`FontStore::make_available`]).
 //!
 //! ```no_run
 //! # #[cfg(not(target_arch = "wasm32"))] {
@@ -36,8 +37,8 @@ mod language_packs;
 mod store;
 
 pub use index::{
-    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, LICENSES, Language, LicenseFile, MAJOR_VERSION, MAX_FILE_BYTES,
-    MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Script, SourceProblem, Unavailable, parse_style,
+    Axis, Face, Family, FontFile, FontSource, GOOGLE_FONTS, Index, IndexError, Instance, LICENSES, Language, LicenseFile, MAJOR_VERSION,
+    MAX_FILE_BYTES, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, Sample, Script, SourceProblem, Unavailable, parse_style,
 };
 pub use pin::{IndexPin, PINNED_INDEX};
 pub use sources::{SourceEntry, SourcesFile};
@@ -51,7 +52,10 @@ pub use language_packs::{
     MAX_PACK_INDEX_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, PackIndex, PackIndexPin, language_pack_index_overridden,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress, UserSource};
+pub use store::{
+    Caller, Conflict, Error, FontStore, InstalledFamily, InstalledFile, LegalText, Network, OsFontFolder, OsFontLayout, PREVIEW_SERVICE_ENV,
+    PreviewServiceSource, Problem, Progress, UserSource, check_preview_service,
+};
 
 #[cfg(test)]
 mod tests;

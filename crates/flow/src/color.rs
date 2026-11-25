@@ -131,7 +131,8 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
             if let Some(p) = x.strip_suffix('%') {
                 Some((p.trim().parse::<f64>().ok()? / 100.0).clamp(0.0, 1.0))
             } else {
-                Some(x.parse::<f64>().ok()?.clamp(0.0, 1.0))
+                // CSS Color 4: numeric saturation and lightness use the same 0–100 scale as percentages.
+                Some((x.parse::<f64>().ok()? / 100.0).clamp(0.0, 1.0))
             }
         };
         let s = parse_pct(parts[1])?;
@@ -192,5 +193,21 @@ mod tests {
         assert_eq!(parse_color("rgba(0, 0, 0, nan)"), Some(Rgb(0, 0, 0)));
         assert_eq!(parse_color("rgba(0, 0, 0, inf)"), Some(Rgb(0, 0, 0)));
         assert_eq!(parse_color("rgba(0, 0, 0, nan%)"), Some(Rgb(0, 0, 0)));
+    }
+
+    #[test]
+    fn numeric_hsl_channels_use_the_percentage_scale() {
+        for (numeric, percent, expected) in [
+            ("hsl(0 0 50)", "hsl(0 0% 50%)", Rgb(128, 128, 128)),
+            ("hsl(0 100 50)", "hsl(0 100% 50%)", Rgb(255, 0, 0)),
+            ("hsl(120 50 50)", "hsl(120 50% 50%)", Rgb(64, 191, 64)),
+            ("hsl(0 0 1)", "hsl(0 0% 1%)", Rgb(3, 3, 3)),
+            ("hsl(0 -10 150)", "hsl(0 -10% 150%)", Rgb(255, 255, 255)),
+            ("hsl(0 100 -10)", "hsl(0 100% -10%)", Rgb(0, 0, 0)),
+            ("hsla(0.5turn 100 50 / 50%)", "hsla(0.5turn 100% 50% / 50%)", Rgb(128, 255, 255)),
+        ] {
+            assert_eq!(parse_color(numeric), Some(expected), "{numeric}");
+            assert_eq!(parse_color(numeric), parse_color(percent), "{numeric} == {percent}");
+        }
     }
 }

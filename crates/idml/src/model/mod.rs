@@ -22,14 +22,19 @@ mod story;
 
 use craft_xml::{El, Local, Node};
 pub use document::{
-    CellStyleValues, ConditionValues, CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, ModelDocument, NumberingListValues,
-    TableStyleValues, TextDateKind, TextVariableKind, TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode,
+    CellStyleValues, ConditionValues, CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, KinsokuTableValues, LayerColorValue,
+    LayerValues, ModelDocument, MojikumiTableValues, NumberingListValues, SectionValues, TableStyleValues, TextDateKind, TextVariableKind,
+    TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode, default_languages, default_xref_text_variables,
+    hyperlink_el, hyperlink_page_destination_el, hyperlink_page_item_source_el, hyperlink_url_destination_el, root_color_group_el,
 };
 pub use effects::{
     DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, ObjectStyleStack, OpacityStopValues, TransparencySetting,
 };
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
-pub use preferences::{DocumentPreferences, FootnotePreferences, GridPreferences, TextFramePreferences};
+pub use preferences::{
+    DocumentPreferences, FootnotePreferences, GridPreferences, TextFramePreferences, TextPreferenceValues, ViewPreferenceValues,
+    pasteboard_preference_el, transparency_preference_el,
+};
 pub use resources::{
     CharacterAppearanceValues, CharacterSpecialValues, CharacterTypographyValues, CjkCharacterValues, CjkParagraphValues, ColorDefinition,
     ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition, CompositeFontEntryDefinition, EpubExportTagMap,
@@ -37,18 +42,19 @@ pub use resources::{
     GrepStyleValue, Ink, InkDefinition, MojikumiRow, NestedLineStyleValue, NestedStyleValue, NestedStyleValues, ObjectStyleValues,
     OpenTypeFeatureValues, ParagraphAlignmentValues, ParagraphBoxValues, ParagraphFlowValues, ParagraphListValues, ParagraphSpanValues, RubyValues,
     StrokeDefinition, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind, StyleNode, Swatch, SwatchKind, TabStopValues,
-    TextDecorationValues, TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
+    TextDecorationValues, TintDefinition, color_groups, inks, named, object_style_effects_category_settings, preference, stroke_styles, style_groups,
+    swatches,
 };
 pub use spread::{
     BaselineFrameGridOption, BaselineFrameGridRelative, ClippingPathValues, FrameFittingOption, Graphic, GraphicChild, GraphicKind,
-    GraphicLayerOptions, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, PdfAttribute, Spread, SpreadChild, TextPath,
-    TextWrapPreference, spreads,
+    GraphicLayerOptions, Guide, GuideValues, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, PdfAttribute, Spread,
+    SpreadChild, TextPath, TextWrapPreference, spreads,
 };
 pub use story::{
     Ace, AnchoredObjectSetting, AnchoredObjectValues, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, CrossReferenceSource,
     IndexCrossReferenceValues, IndexDocument, IndexReference, IndexTopicPath, IndexValues, PageReference, Range, SavedCrossReference,
     SavedCrossReferencePart, Story, StoryAnchor, StoryPreference, Table, TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind,
-    stories,
+    stories, text_variable_instance_el, tracked_change_el,
 };
 
 use crate::value::{matrix, nums};
@@ -143,6 +149,30 @@ impl StrokeValues {
         }
         result
     }
+
+    /// Writes prefixed cell/table stroke attributes onto `el`. When `line_style_for_kind` is
+    /// true, `kind` is written as `{prefix}LineStyle` (used for `EndColumnLineStyle`).
+    pub fn push_prefixed_attrs(&self, el: &mut El, prefix: &str, line_style_for_kind: bool) {
+        if let Some(value) = self.weight {
+            el.attrs.push((format!("{prefix}StrokeWeight"), crate::value::num(value)));
+        }
+        if let Some(value) = &self.color {
+            el.attrs.push((format!("{prefix}StrokeColor"), value.clone()));
+        }
+        if let Some(value) = self.tint {
+            el.attrs.push((format!("{prefix}StrokeTint"), crate::value::num(value)));
+        }
+        if let Some(value) = &self.kind {
+            let key = if line_style_for_kind { format!("{prefix}LineStyle") } else { format!("{prefix}StrokeType") };
+            el.attrs.push((key, value.clone()));
+        }
+        if let Some(value) = &self.gap_color {
+            el.attrs.push((format!("{prefix}StrokeGapColor"), value.clone()));
+        }
+        if let Some(value) = self.gap_tint {
+            el.attrs.push((format!("{prefix}StrokeGapTint"), crate::value::num(value)));
+        }
+    }
 }
 
 /// Raw fill properties before a caller resolves swatch names to its own colour model.
@@ -197,6 +227,56 @@ pub struct AlternatingStrokeValues {
     pub next: StrokeValues,
     pub skip_first: Option<f64>,
     pub skip_last: Option<f64>,
+}
+
+impl AlternatingFillValues {
+    /// Writes alternating row/column fill attributes onto `el`.
+    pub fn push_attrs(&self, el: &mut El, kind: &str) {
+        if let Some(value) = self.first_count {
+            el.attrs.push((format!("Start{kind}FillCount"), crate::value::num(value)));
+        }
+        if let Some(value) = &self.first_color {
+            el.attrs.push((format!("Start{kind}FillColor"), value.clone()));
+        }
+        if let Some(value) = self.first_tint {
+            el.attrs.push((format!("Start{kind}FillTint"), crate::value::num(value)));
+        }
+        if let Some(value) = self.next_count {
+            el.attrs.push((format!("End{kind}FillCount"), crate::value::num(value)));
+        }
+        if let Some(value) = &self.next_color {
+            el.attrs.push((format!("End{kind}FillColor"), value.clone()));
+        }
+        if let Some(value) = self.next_tint {
+            el.attrs.push((format!("End{kind}FillTint"), crate::value::num(value)));
+        }
+        if let Some(value) = self.skip_first {
+            el.attrs.push((format!("SkipFirstAlternatingFill{kind}s"), crate::value::num(value)));
+        }
+        if let Some(value) = self.skip_last {
+            el.attrs.push((format!("SkipLastAlternatingFill{kind}s"), crate::value::num(value)));
+        }
+    }
+}
+
+impl AlternatingStrokeValues {
+    /// Writes alternating row/column stroke attributes onto `el`.
+    pub fn push_attrs(&self, el: &mut El, kind: &str) {
+        if let Some(value) = self.first_count {
+            el.attrs.push((format!("Start{kind}StrokeCount"), crate::value::num(value)));
+        }
+        if let Some(value) = self.next_count {
+            el.attrs.push((format!("End{kind}StrokeCount"), crate::value::num(value)));
+        }
+        self.first.push_prefixed_attrs(el, &format!("Start{kind}"), false);
+        self.next.push_prefixed_attrs(el, &format!("End{kind}"), kind == "Column");
+        if let Some(value) = self.skip_first {
+            el.attrs.push((format!("SkipFirstAlternatingStroke{kind}s"), crate::value::num(value)));
+        }
+        if let Some(value) = self.skip_last {
+            el.attrs.push((format!("SkipLastAlternatingStroke{kind}s"), crate::value::num(value)));
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

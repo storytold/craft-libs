@@ -156,8 +156,11 @@ pub struct GroupItem {
     pub blend: BlendMode,
     pub isolated: bool,
     pub knockout: bool,
-    /// Nonzero clip in page space.
+    /// Clip in page space, filled by `clip_rule`.
     pub clip: Option<BezPath>,
+    /// The fill rule of `clip`. The PDF reader rebuilds an even-odd clip as a nonzero path,
+    /// and keeps the path even-odd when the rebuild fails.
+    pub clip_rule: FillRule,
     pub mask: Option<Box<Mask>>,
     /// The Unicode text the children show, for content drawn as items that is text in the
     /// source, such as a colored Type 3 glyph.

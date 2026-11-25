@@ -116,34 +116,74 @@ fn inline_object(xml: &str) -> Option<usize> {
     None
 }
 
+const PICTURE: &str = "<office:binary-data>";
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes the searches for inline pictures and objects looked through on this thread (tests:
+    /// the work is linear in the document, #2219).
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Notes that a search looked through `xml[from..to]` (counted in tests only).
+fn scanned(from: usize, to: usize) {
+    #[cfg(test)]
+    SCANNED.with(|s| s.set(s.get().saturating_add(to.saturating_sub(from))));
+    #[cfg(not(test))]
+    let _ = (from, to);
+}
+
+/// Where the next inline picture's data (`<office:binary-data>`) starts at or after `from`.
+fn next_picture(xml: &str, from: usize) -> Option<usize> {
+    let found = xml.get(from..).and_then(|r| r.find(PICTURE)).map(|i| from + i);
+    scanned(from, found.map_or(xml.len(), |i| i + PICTURE.len()));
+    found
+}
+
+/// Where the next inline object ([`inline_object`]) starts at or after `from`.
+fn next_object(xml: &str, from: usize) -> Option<usize> {
+    let found = xml.get(from..).and_then(inline_object).map(|i| from + i);
+    scanned(from, found.map_or(xml.len(), |i| i + "<draw:object".len()));
+    found
+}
+
 /// `xml` with its inline pictures and formulas moved into `files` (named as a package names
 /// them) and pointed at there, as a package's content holds them.
 fn take_out(xml: &str, files: &mut Vec<(String, Vec<u8>)>, folders: &mut Vec<(String, String)>, max_entry: u64) -> String {
     let mut out = String::with_capacity(xml.len());
-    let mut rest = xml;
+    // How far `xml` has been copied or taken out.
+    let mut pos = 0;
+    // The next picture and the next inline object, each searched for again only once `pos` has
+    // passed it: searching the whole rest for both on every pass made a document with many of
+    // one and none of the other quadratic (#2219).
+    let (mut pic, mut obj) = (next_picture(xml, 0), next_object(xml, 0));
     loop {
-        let pic = rest.find("<office:binary-data>");
-        let obj = inline_object(rest);
+        if pic.is_some_and(|p| p < pos) {
+            pic = next_picture(xml, pos);
+        }
+        if obj.is_some_and(|o| o < pos) {
+            obj = next_object(xml, pos);
+        }
         let (at, picture) = match (pic, obj) {
             (Some(p), Some(o)) if o < p => (o, false),
             (Some(p), _) => (p, true),
             (None, Some(o)) => (o, false),
             (None, None) => break,
         };
-        let (before, from) = rest.split_at(at);
+        let (Some(before), Some(from)) = (xml.get(pos..at), xml.get(at..)) else { break };
         let close = if picture { "</office:binary-data>" } else { "</draw:object>" };
         let Some(end) = from.find(close) else {
             out.push_str(before);
-            rest = from;
+            pos = at;
             break;
         };
-        let open_len = if picture { "<office:binary-data>".len() } else { from.find('>').map_or(0, |e| e + 1) };
+        let open_len = if picture { PICTURE.len() } else { from.find('>').map_or(0, |e| e + 1) };
         let body = from.get(open_len..end).unwrap_or("");
-        let after = from.get(end + close.len()..).unwrap_or("");
+        let after = (at + end + close.len()).min(xml.len());
         let n = files.len() + 1;
         if files.len() >= MAX_INLINE {
             out.push_str(before);
-            rest = after;
+            pos = after;
             continue;
         }
         if picture {
@@ -187,9 +227,9 @@ fn take_out(xml: &str, files: &mut Vec<(String, Vec<u8>)>, folders: &mut Vec<(St
                 None => files.push((format!("{dir}/content.xml"), body.as_bytes().to_vec())),
             }
         }
-        rest = after;
+        pos = after;
     }
-    out.push_str(rest);
+    out.push_str(xml.get(pos..).unwrap_or(""));
     out
 }
 
