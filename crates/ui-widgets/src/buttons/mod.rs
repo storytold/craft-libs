@@ -37,6 +37,19 @@ pub enum GroupLevel {
     Collapsed,
 }
 
+/// How a `Link` that stands alone marks itself beside its colour. An app sets it once at its root (`RootEnv::values`);
+/// a link in a sentence stays underlined, since the text around it shares its line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum LinkLook {
+    /// Underlined, so colour is not its only cue.
+    #[default]
+    Underlined,
+    /// The link colour alone, as a list of links under its heading on a start page (VectorCraft's).
+    Plain,
+}
+
 /// Where controls are shown. A ribbon group sets `Ribbon` for its content (and for its collapsed button and the
 /// popover that holds its content), and styles keyed on the env follow it:
 ///
@@ -53,6 +66,9 @@ pub enum GroupLevel {
 ///
 /// A page's call to action (a start page's primary link) sets `CallToAction`: a `Button` there stands
 /// `size.page.action` high, its label strong.
+///
+/// A start page's New and Open stand in `PageAction`: a `Button` there stands at least `size.page.button` high, with at
+/// least `size.page.button_side` at each side of its label.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
@@ -66,6 +82,8 @@ pub enum ControlPlace {
     SideMenu,
     /// A page's call to action.
     CallToAction,
+    /// A start page's New and Open.
+    PageAction,
 }
 
 /// How an icon button or a segment that is on shows it. A tool rail sets it for its buttons (`ToolRail::active_look`),
@@ -80,6 +98,9 @@ pub enum ActiveLook {
     Accent,
     /// The pressed state's fill with no edge, and the glyph in the normal text colour.
     Pressed,
+    /// The `surface.control` fill with no edge, and the glyph in the normal text colour: the open panel's icon of a
+    /// dock in VectorCraft 0.24's block look (`PanelTabLook::Block`).
+    Control,
 }
 
 /// The look of a push or split button that asks for no variant. An app sets it once at its root (`RootEnv::values`);

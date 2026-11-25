@@ -64,7 +64,7 @@ Grouped by gallery level, then shape, then name.
 | `Disclosure` | Leaf | `craft_ui_widgets::controls::disclosure` | A button bound to an open state, with the expanded state |
 | `IconButton` | Leaf | `craft_ui_widgets::buttons::icon_button` | A square button showing only an icon |
 | `Kbd` | Leaf | `craft_ui_widgets::display::kbd` | A key chord |
-| `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue |
+| `Link` | Leaf | `craft_ui_widgets::buttons::link` | A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue (`LinkLook::Plain` drops the underline of a link standing alone) |
 | `LinkedFields` | Leaf | `craft_ui_widgets::text::linked` | `N` number fields joined by a link toggle |
 | `NumberField` | Leaf | `craft_ui_widgets::text::number` | A number field: a text part over [`NumberCodec`]; empty text is `None` |
 | `PointPicker` | Leaf | `craft_ui_widgets::value_drag::point_picker` | A point `[x, y]` picked on a well: x grows to the right and y downwards, as image coordinates do, in either reading direction |

@@ -215,10 +215,11 @@ impl Component for Segment {
     fn style(cx: &StyleCx<'_>, _: SegmentStyleKey) -> SegmentStyle {
         let colors = &cx.tokens.color;
         let c = |rgba| cx.color(rgba);
-        // The picked segment wears the look of an icon button that is on (`face::pressed_parts` under `Pressed`).
+        // The picked segment wears the look of an icon button that is on (`face::filled_parts` under `Pressed` and `Control`).
         let (selected, selected_hover, on_ink) = match cx.env::<ActiveLook>() {
             ActiveLook::Accent => (c(colors.state.selected), c(colors.state.selected_hover), c(colors.text.on_selected)),
             ActiveLook::Pressed => (c(colors.state.pressed), c(colors.state.pressed), c(colors.text.normal)),
+            ActiveLook::Control => (c(colors.surface.control), c(colors.surface.control), c(colors.text.normal)),
         };
         let (clear, disabled) = (c(Rgba::TRANSPARENT), c(colors.state.disabled_fill));
         let fill = cx.state_layer().on(States::new(selected, selected_hover, selected_hover, disabled));
