@@ -1135,21 +1135,31 @@ pub(crate) fn close_content(ctx: &Context, regions: &[(Id, Vec2)]) {
         if removed {
             #[cfg(feature = "testing")]
             if std::env::var_os("CRAFT_UI_TRACE_KEPT").is_some() {
-                let what = if reports_differ {
+                let mut causes = Vec::new();
+                if reports_differ {
                     let differing = made.iter().zip(&scope.reported).find(|(was, now)| was.0 != now.0 || (was.1 - now.1).abs() > tolerance);
-                    format!(
+                    causes.push(format!(
                         "a report differed: the measuring run made {} ({made:?}), the real run {} ({:?}); first difference {differing:?}",
                         made.len(),
                         scope.reported.len(),
                         scope.reported
-                    )
-                } else if let Some((id, _)) = served.leaves.iter().find(|entry| unvisited(entry)) {
-                    format!("the leaf {id:?} the kept transcript holds was not asked")
-                } else if let Some((id, leaf)) = served.leaves.iter().find(|entry| unseen(entry)) {
-                    format!("the leaf {id:?} that fills {:?} did not fill", leaf.fill)
-                } else {
-                    String::from("no cause found")
-                };
+                    ));
+                }
+                causes.extend(
+                    served
+                        .leaves
+                        .iter()
+                        .filter(|entry| unvisited(entry))
+                        .map(|(id, _)| format!("the leaf {id:?} the kept transcript holds was not asked")),
+                );
+                causes.extend(
+                    served
+                        .leaves
+                        .iter()
+                        .filter(|entry| unseen(entry))
+                        .map(|(id, leaf)| format!("the leaf {id:?} that fills {:?} did not fill", leaf.fill)),
+                );
+                let what = if causes.is_empty() { String::from("no cause found") } else { causes.join("; ") };
                 eprintln!("layout memory: a component of {:?} did not run: {what}", scope.body);
             }
             memory.changed(moment.frame, scope.body);
