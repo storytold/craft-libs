@@ -2,8 +2,8 @@
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
 //! palette's level under a modal and its visibility while the main window is minimized, a layer shown in a popup
-//! window and what it remembers while it shows (a scrolled body keeps its offset), injected keys across a focus loss,
-//! non-finite injected points, a
+//! window and what it remembers while it shows (a scrolled body's offset, a context opener clicked again), injected
+//! keys across a focus loss, non-finite injected points, a
 //! repeated injected press, the window that has the keys, a wheel with no known pointer, the placement of a minimized
 //! window, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
 //! policy.
@@ -13,6 +13,7 @@ use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo,
 use craft_keymap::{Key, Mods};
 use craft_ui::contract::{
     Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Dismiss, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
+    Trigger,
 };
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
@@ -21,7 +22,7 @@ use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::Block;
-use craft_ui::testing::pointer::{moved, press, release, wheel};
+use craft_ui::testing::pointer::{moved, press, release, secondary, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
@@ -1449,6 +1450,116 @@ fn a_scrolled_body_of_a_layer_in_a_popup_window_keeps_its_offset() {
     }
     assert_eq!(seen.borrow().rect, scrolled, "the offset stays while the layer shows, with no input at all");
     assert!(closed.borrow().is_empty(), "scrolling the body closed nothing: {:?}", closed.borrow());
+}
+
+/// A layer mounted as `props`' layer whose open state is its opener's: a menu a context opener opens, with the body the
+/// trial gives it and the closes it is given.
+#[derive(craft_ui::contract::Component)]
+#[component(container)]
+struct OpenedMenu<'a> {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    closed: &'a RefCell<Vec<CloseReason>>,
+}
+
+impl Component for OpenedMenu<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: OpenedMenuStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(80.0, 24.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for OpenedMenu<'_> {
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.borrow_mut().push(why);
+    }
+}
+
+/// A second right-click on a context opener hangs its menu at the new pointer while the menu stays open, also when the
+/// menu shows in a popup window of a palette window: the pointer the layer opened at goes when its opener fires again.
+#[trial]
+fn a_second_right_click_hangs_a_menu_in_a_popup_window_at_the_new_pointer() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    let palette = ViewportInfo {
+        focused: Some(true),
+        inner_rect: Some(PALETTE_AT),
+        outer_rect: Some(PALETTE_AT),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.child_info(palette);
+    let overlay = Overlay::menu();
+    let opener_at = RefCell::new(Seen::default());
+    let closed = RefCell::new(Vec::new());
+    let frame = |events: Vec<Event>| {
+        windows.frame(vec![], events, |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                let opener = Probe::new(&opener_at).size(Vec2::new(240.0, 140.0)).sense(Sense::CLICK).id_salt("opener").show(ui);
+                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone().opened_by(&opener, Trigger::Context)));
+                OpenedMenu { common: Common::new(), props, closed: &closed }.id_salt("rows").show(ui, |ui, _| {
+                    for _ in 0..3 {
+                        Block::new(Vec2::new(80.0, 24.0)).show(ui);
+                    }
+                });
+            });
+        })
+    };
+    // Where the menu shows: the window of its own that the frame opened besides the palette's.
+    let menu_window = |out: &Out| -> Rect {
+        let (palette, _) = builder_titled(out, "tool");
+        let (viewport, _) = out
+            .builders
+            .iter()
+            .find(|(viewport, _)| *viewport != ViewportId::ROOT && *viewport != palette)
+            .expect("the menu shows in a popup window of the palette's");
+        let facts = windows.facts(*viewport);
+        facts.outer_rect.or(facts.inner_rect).expect("the menu's window is placed")
+    };
+    for _ in 0..2 {
+        frame(vec![]);
+    }
+    let at = opener_at.borrow().rect;
+    assert!(at.height() > 0.0, "the opener showed: {at:?}");
+    // Two points well inside the opener, the second above the first where the menu hanging below it does not reach:
+    // the palette's body lies within its window's points, and either way both right-clicks land on the opener.
+    let (first, second) = (at.center() + Vec2::new(0.0, 20.0), at.center() - Vec2::new(30.0, 20.0));
+    // A right-click on the opener opens the menu at that point.
+    frame(vec![moved(first)]);
+    frame(vec![secondary(first, true)]);
+    let mut out = frame(vec![secondary(first, false)]);
+    for _ in 0..2 {
+        out = frame(vec![]);
+    }
+    assert!(closed.borrow().is_empty(), "the right-click opened the menu and closed nothing: {:?}", closed.borrow());
+    let opened = menu_window(&out);
+    // A second right-click on the same opener, while the menu is open, hangs the menu at the new pointer.
+    frame(vec![moved(second)]);
+    frame(vec![secondary(second, true)]);
+    let mut out = frame(vec![secondary(second, false)]);
+    for _ in 0..2 {
+        out = frame(vec![]);
+    }
+    // The press lands outside the menu's own rect, so it closes the menu and the release opens it again. The layer shows
+    // in the pass between them (the close is decided after its body ran), so it never shows nothing and keeps what it
+    // remembered: where its opener first hung it. No other rule closed it.
+    assert!(closed.borrow().iter().all(|why| *why == CloseReason::Outside), "only an outside press closed the menu: {:?}", closed.borrow());
+    let after = menu_window(&out);
+    let moved = after.min - opened.min;
+    let pointer = second - first;
+    assert!(
+        (moved - pointer).length() < 1.0,
+        "the menu hangs where the pointer is now: it stood at {opened:?}, stands at {after:?}, and the pointer moved {pointer:?}"
+    );
 }
 
 /// A key automation holds is in `keys::held` while it is held and not after its release.
