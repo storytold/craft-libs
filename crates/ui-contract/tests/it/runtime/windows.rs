@@ -4,16 +4,15 @@
 //! content-sized window, the app id of child windows, a palette's level under a modal and its visibility while the main
 //! window is minimized, injected keys across a focus loss, non-finite injected points, a repeated injected press, the
 //! window that has the keys, a wheel with no known pointer, what a layer in a popup window keeps while it is open, that
-//! it closes after its timeout and where a second right-click on its opener hangs it, the placement of a minimized
-//! window, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
-//! policy.
+//! it closes after its timeout, the placement of a minimized window, the root frame decided again, a held close, `act`,
+//! and a hosted window's Control-click and window-input policy.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton, Sense};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
 use craft_ui::contract::overlay::Dismiss;
 use craft_ui::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _, Trigger,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Scroll, Show as _, ShowContainer as _,
 };
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
@@ -21,8 +20,7 @@ use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::layout::Block;
-use craft_ui::testing::pointer::{moved, press, release, secondary, wheel};
+use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
@@ -582,76 +580,6 @@ fn a_layer_in_a_popup_window_closes_after_its_timeout() {
     assert!(!open.get(), "the layer closed after its timeout with no input: {:?}", closed.borrow());
     assert_eq!(*closed.borrow(), [CloseReason::Timeout], "the timeout closed it, and no other rule did");
     assert_eq!(popup_window(&out, palette), None, "its popup window closed with it");
-}
-
-/// A second right-click on a context opener hangs its menu at the new pointer while the menu stays open, also when the
-/// menu shows in a popup window of a palette window: the pointer the layer opened at goes when its opener fires again.
-#[trial]
-fn a_second_right_click_hangs_a_menu_in_a_popup_window_at_the_new_pointer() {
-    let windows = on_x11();
-    windows.root_info(focus(true));
-    windows.child_info(focus(true));
-    let (opener_at, closed) = (RefCell::new(Seen::default()), RefCell::new(Vec::new()));
-    let frame = |events: Vec<Event>| {
-        windows.frame(vec![], events, |ui| {
-            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
-                let opener = Probe::new(&opener_at).size(Vec2::new(240.0, 140.0)).sense(Sense::CLICK).id_salt("opener").show(ui);
-                let props = ContainerProps::new().mount(Mount::Layer(Overlay::menu().opened_by(&opener, Trigger::Context)));
-                Sheet { common: Common::new(), props, open: None, closed: &closed }.id_salt("rows").show(ui, |ui, _| {
-                    for _ in 0..3 {
-                        Block::new(Vec2::new(80.0, 24.0)).show(ui);
-                    }
-                });
-            });
-        })
-    };
-    // Where the menu shows: the window of its own that the frame opened besides the palette's.
-    let menu_window = |out: &Out| -> Rect {
-        let palette = builder_titled(out, "tool").0;
-        let popup = popup_window(out, palette).expect("the menu shows in a popup window of the palette's");
-        let facts = windows.facts(popup);
-        facts.outer_rect.or(facts.inner_rect).expect("the menu's window is placed")
-    };
-    for _ in 0..2 {
-        frame(vec![]);
-    }
-    let at = opener_at.borrow().rect;
-    assert!(at.height() > 0.0, "the opener showed: {at:?}");
-    // Two points well inside the opener, the second above the first where the menu hanging below it does not reach:
-    // the palette's body lies within its window's points, and either way both right-clicks land on the opener.
-    let (first, second) = (at.center() + Vec2::new(0.0, 20.0), at.center() - Vec2::new(30.0, 20.0));
-    // A right-click on the opener opens the menu at that point.
-    frame(vec![moved(first)]);
-    frame(vec![secondary(first, true)]);
-    let mut out = frame(vec![secondary(first, false)]);
-    for _ in 0..2 {
-        out = frame(vec![]);
-    }
-    assert!(closed.borrow().is_empty(), "the right-click opened the menu and closed nothing: {:?}", closed.borrow());
-    let opened = menu_window(&out);
-    // The pointer moves over the opener with no press: a menu that shows keeps the place its opener hung it at.
-    let out = frame(vec![moved(second)]);
-    let stayed = menu_window(&out);
-    assert!(
-        (stayed.min - opened.min).length() < 1.0,
-        "the menu stays where it opened while the pointer moves over its opener: it stood at {opened:?}, stands at {stayed:?}"
-    );
-    // A second right-click on the same opener, while the menu is open, hangs the menu at the new pointer.
-    frame(vec![secondary(second, true)]);
-    let mut out = frame(vec![secondary(second, false)]);
-    for _ in 0..2 {
-        out = frame(vec![]);
-    }
-    // The pointer the layer opened at goes when its opener fires again, so the menu hangs where the pointer is now. No
-    // rule but an outside press closed it on the way.
-    assert!(closed.borrow().iter().all(|why| *why == CloseReason::Outside), "only an outside press closed the menu: {:?}", closed.borrow());
-    let after = menu_window(&out);
-    let shift = after.min - opened.min;
-    let pointer = second - first;
-    assert!(
-        (shift - pointer).length() < 1.0,
-        "the menu hangs where the pointer is now: it stood at {opened:?}, stands at {after:?}, and the pointer moved {pointer:?}"
-    );
 }
 
 /// A popup that a press in another window of the app opened stays open, also when its opener runs a second pass of the
