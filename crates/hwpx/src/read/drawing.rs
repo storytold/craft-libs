@@ -126,6 +126,15 @@ fn org_size(el: &Element, w: f64, h: f64) -> (f64, f64) {
     }
 }
 
+/// Whether a picture is mirrored left to right and top to bottom: its `hp:flip` with the scale
+/// matrix that draws it so (negative on that axis). Hancom's viewer mirrors only by the matrix.
+fn mirrored(el: &Element) -> (bool, bool) {
+    let Some(fl) = el.find("hp:flip") else { return (false, false) };
+    let sca = el.find("hp:renderingInfo").and_then(|r| r.find("hc:scaMatrix"));
+    let negative = |k: &str| sca.and_then(|m| m.get(k)).and_then(|v| v.trim().parse::<f64>().ok()).is_some_and(|v| v < 0.0);
+    (truthy(fl.get("horizontal")) && negative("e1"), truthy(fl.get("vertical")) && negative("e5"))
+}
+
 fn angle_of(el: &Element) -> i64 {
     el.find("hp:rotationInfo").map(|r| num(r.get("angle"))).unwrap_or(0)
 }
@@ -428,7 +437,10 @@ impl Converter<'_> {
         let media = self.media(name, data);
         self.pic_n += 1;
         let mut float = Float::default();
-        float.set_spin(Spin::new(turn(angle_of(el)), false, false));
+        // mirrored as the drawing matrices draw it (viewer, 2026-11-25: hp:flip alone doesn't
+        // mirror; the scale matrix negative on that axis does)
+        let (flip_h, flip_v) = mirrored(el);
+        float.set_spin(Spin::new(turn(angle_of(el)), flip_h, flip_v));
         Some(InlineObject::Image { media, w: 0.0, h: 0.0, alt: String::new(), float, crop, fx: Default::default(), ole: None })
     }
 

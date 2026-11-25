@@ -184,6 +184,93 @@ fn a_page_break_before_a_paragraph_holding_a_table_comes_once() {
     assert_ne!(after.props.page_break_before, Some(true), "not before the text after the table");
 }
 
+/// A section asking for no page number (`pos="NONE"`) stops the number of the footer it
+/// inherits; the footer's text stays (viewer, 2026-11-25). Before, the inherited number went on.
+#[test]
+fn no_page_number_stops_an_inherited_one() {
+    let first = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:footer applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>꼬리말 글</hp:t></hp:run></hp:p></hp:subList></hp:footer></hp:ctrl><hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar=""/></hp:ctrl><hp:t>첫 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let second = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:pageNum pos="NONE" formatType="DIGIT" sideChar=""/></hp:ctrl><hp:t>둘째 구역</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let bytes =
+        package(&[("Contents/header.xml", EMPTY_HEAD), ("Contents/section0.xml", first.as_bytes()), ("Contents/section1.xml", second.as_bytes())]);
+    let doc = read_bytes(&bytes).unwrap();
+    let secs = sections(&doc);
+    assert!(!part_page_fields(&doc, secs[0].footers.default).is_empty(), "the first section numbers its pages");
+    let footer = secs[1].footers.default.or(secs[0].footers.default);
+    assert!(part_text(&doc, footer).contains("꼬리말 글"), "the footer's text goes on");
+    assert!(part_page_fields(&doc, footer).is_empty(), "without the number");
+}
+
+/// A page number is on even pages too when they have a footer of their own (viewer,
+/// 2026-11-25). Before, only the default footer took the number.
+#[test]
+fn the_page_number_is_on_an_even_pages_own_footer_too() {
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr/><hp:ctrl><hp:footer applyPageType="BOTH"><hp:subList><hp:p><hp:run><hp:t>양쪽</hp:t></hp:run></hp:p></hp:subList></hp:footer></hp:ctrl><hp:ctrl><hp:footer applyPageType="EVEN"><hp:subList><hp:p><hp:run><hp:t>짝수</hp:t></hp:run></hp:p></hp:subList></hp:footer></hp:ctrl><hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar=""/></hp:ctrl><hp:t>본문</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&sec)).unwrap();
+    let footers = &sections(&doc)[0].footers;
+    assert!(!part_page_fields(&doc, footers.default).is_empty(), "odd pages");
+    assert!(part_text(&doc, footers.even).contains("짝수"), "the even pages' own footer");
+    assert!(!part_page_fields(&doc, footers.even).is_empty(), "with the number");
+}
+
+/// The binding margin (gutter) narrows the line: two tables that fit side by side without it go
+/// one under the other with it (viewer, 2026-11-25). Before, the line was measured without it.
+#[test]
+fn the_binding_margin_narrows_the_line() {
+    let table = |t: &str| {
+        format!(
+            r#"<hp:tbl rowCnt="1" colCnt="1"><hp:sz width="9000" height="1000"/><hp:pos treatAsChar="1"/><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>{t}</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="9000" height="1000"/></hp:tc></hp:tr></hp:tbl>"#
+        )
+    };
+    // 20,000 wide between the margins: two tables of 9,000 fit, in 16,000 beside a 4,000 gutter not
+    let read = |gutter: u32| {
+        let sec = format!(
+            r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr><hp:pagePr width="24000" height="34000"><hp:margin left="2000" right="2000" top="2000" bottom="2000" header="0" footer="0" gutter="{gutter}"/></hp:pagePr></hp:secPr><hp:t>표 둘</hp:t>{}{}</hp:run></hp:p></hs:sec>"#,
+            table("왼쪽"),
+            table("오른쪽")
+        );
+        let doc = read_bytes(&hwpx(&sec)).unwrap();
+        doc.body.iter().filter(|b| b.as_table().is_some()).count()
+    };
+    assert_eq!(read(0), 0, "side by side on the line without a binding margin");
+    assert_eq!(read(4000), 2, "one under the other with it");
+}
+
+/// A picture mirrored by its drawing matrix as well as its `hp:flip` is read mirrored; `hp:flip`
+/// alone isn't, as the viewer doesn't mirror it (2026-11-25). Before, pictures were never read
+/// mirrored.
+#[test]
+fn a_picture_mirrored_by_its_matrix_reads_mirrored() {
+    let png = {
+        let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        b.extend(1u32.to_be_bytes());
+        b.extend(1u32.to_be_bytes());
+        b.extend([8, 6, 0, 0, 0]);
+        b
+    };
+    let read = |sca: &str| {
+        let pic = format!(
+            r#"<hp:pic id="1" zOrder="1" textWrap="IN_FRONT_OF_TEXT"><hp:offset x="0" y="0"/><hp:orgSz width="4000" height="2000"/><hp:curSz width="4000" height="2000"/><hp:flip horizontal="1" vertical="0"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="4000" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca}" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="image1"/><hp:sz width="4000" height="2000"/><hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/></hp:pic>"#
+        );
+        let sec =
+            format!(r#"<hs:sec {NS} xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hp:p><hp:run>{pic}<hp:t>글</hp:t></hp:run></hp:p></hs:sec>"#);
+        let doc =
+            read_bytes(&package(&[("Contents/header.xml", EMPTY_HEAD), ("Contents/section0.xml", sec.as_bytes()), ("BinData/image1.png", &png)]))
+                .unwrap();
+        doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+            InlineObject::Image { float, .. } => Some(float.flip_h),
+            _ => None,
+        })
+    };
+    assert_eq!(read("-1"), Some(true), "mirrored by the matrix");
+    assert_eq!(read("1"), Some(false), "hp:flip alone");
+}
+
 #[test]
 fn package_finds_sections() {
     let bytes = hwpx(&format!(r#"<hs:sec {NS}><hp:p/></hs:sec>"#));

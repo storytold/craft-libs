@@ -137,8 +137,8 @@ pub(crate) struct Carry {
     /// would inherit one takes a plain copy instead (Hancom draws both in their own section
     /// only).
     pub decorated: HashSet<String>,
-    /// The page number (pos, formatType, sideChar) each kind's inherited story shows.
-    pub page_num_of: HashMap<&'static str, (String, String, String)>,
+    /// The page number (pos, formatType, sideChar) each inherited story (kind, which) shows.
+    pub page_num_of: HashMap<(&'static str, &'static str), (String, String, String)>,
     /// Master page parts read so far, by manifest id: sections naming the same one don't read
     /// it again.
     pub masters: HashMap<String, Option<Element>>,
@@ -247,7 +247,9 @@ impl Converter<'_> {
         let (s, m) = (&self.sec, &self.sec.margin);
         let page_w = if s.landscape { s.width.max(s.height) } else { s.width };
         let (cols, gap) = self.columns;
-        tw_f((page_w - m.left - m.right - gap * (cols - 1)) as f64 / cols.max(1) as f64)
+        // less the binding margin, as objects are placed (viewer, 2026-11-25: two tables that
+        // fit the width without it go one under the other with it)
+        tw_f((page_w - m.left - m.right - m.gutter.max(0) - gap * (cols - 1)) as f64 / cols.max(1) as f64)
     }
 
     /// HWPUNIT height of the current section's body (page minus margins, header, footer).
@@ -264,8 +266,12 @@ impl Converter<'_> {
         if !decorated {
             self.plain_inherited_headers();
         }
-        if self.sec.page_num.as_ref().is_some_and(|(pos, _, _)| !matches!(pos.as_str(), "NONE" | "")) {
-            self.add_page_number();
+        match self.sec.page_num.as_ref().map(|(pos, _, _)| pos.as_str()) {
+            // no page number from here on: an inherited story loses its number, keeps its text
+            // (viewer, 2026-11-25)
+            Some("NONE") => self.stop_page_number(),
+            Some("") | None => {}
+            Some(_) => self.add_page_number(),
         }
         let has_master = self.sec.master.is_some();
         self.sec.title_pg = self.sec.hide_first.is_some_and(|h| h.header || h.footer || h.pagenum || (h.master && has_master));
@@ -329,37 +335,74 @@ impl Converter<'_> {
         }
         let para = P { props: ParaProps { align: Some(align), ..ParaProps::default() }, items, page_num: true, ..P::default() };
         let number = (pos, fmt, side);
-        for h in self.sec.hf.iter_mut() {
-            if h.kind == kind && h.which == "default" {
-                if let Some(b) = h.blocks.as_mut() {
-                    b.retain(|b| !matches!(b, Blk::P(p) if p.page_num));
-                    b.push(Blk::P(Box::new(para)));
-                }
-                self.carry.page_num_of.insert(kind, number);
-                return;
+        // The number is on every page: in the default story, and in the even pages' own story
+        // when there is one (viewer, 2026-11-25).
+        for which in ["default", "even"] {
+            let own = self.sec.hf.iter().any(|h| h.kind == kind && h.which == which);
+            let inherited = self.carry.inherited_refs.iter().any(|(k, _)| *k == (kind, which));
+            if !own && !inherited && which == "even" {
+                continue; // the default story is on even pages too
             }
+            self.number_story(kind, which, &para, &number);
         }
-        if self.carry.inherited_refs.iter().any(|(k, _)| *k == (kind, "default")) {
+    }
+
+    /// Story (`kind`, `which`) of this section showing the page number `para`: its own story
+    /// with the number in place of any other, a copy of an inherited one (unless that already
+    /// shows this number), or a story of just the number.
+    fn number_story(&mut self, kind: &'static str, which: &'static str, para: &P, number: &(String, String, String)) {
+        if let Some(h) = self.sec.hf.iter_mut().find(|h| h.kind == kind && h.which == which) {
+            if let Some(b) = h.blocks.as_mut() {
+                b.retain(|b| !matches!(b, Blk::P(p) if p.page_num));
+                b.push(Blk::P(Box::new(para.clone())));
+            }
+            self.carry.page_num_of.insert((kind, which), number.clone());
+            return;
+        }
+        if self.carry.inherited_refs.iter().any(|(k, _)| *k == (kind, which)) {
             // An earlier section's header/footer continues here. If it shows this page number
             // it does here too; if not (text only, or another number: the viewer shows this
             // section's number in its place), this section takes a copy of its own with the
             // number.
-            let Some((_, blocks)) = self.carry.inherited_hf.get(&(kind, "default")).cloned() else { return };
+            let Some((_, blocks)) = self.carry.inherited_hf.get(&(kind, which)).cloned() else { return };
             let shows = blocks.iter().any(|b| matches!(b, Blk::P(p) if p.page_num));
-            if shows && self.carry.page_num_of.get(kind) == Some(&number) {
+            if shows && self.carry.page_num_of.get(&(kind, which)) == Some(number) {
                 return;
             }
             let mut blocks: Vec<Blk> = blocks.into_iter().filter(|b| !matches!(b, Blk::P(p) if p.page_num)).collect();
-            blocks.push(Blk::P(Box::new(para)));
-            self.carry.page_num_of.insert(kind, number);
+            blocks.push(Blk::P(Box::new(para.clone())));
+            self.carry.page_num_of.insert((kind, which), number.clone());
             self.carry.hf_n += 1;
             let name = format!("{kind}{}", self.carry.hf_n);
-            self.sec.hf.push(Hf { kind, which: "default", name, blocks: Some(blocks) });
+            self.sec.hf.push(Hf { kind, which, name, blocks: Some(blocks) });
             return;
         }
-        self.carry.page_num_of.insert(kind, number);
+        self.carry.page_num_of.insert((kind, which), number.clone());
         self.carry.hf_n += 1;
-        self.sec.hf.push(Hf { kind, which: "default", name: format!("{kind}{}", self.carry.hf_n), blocks: Some(vec![Blk::P(Box::new(para))]) });
+        self.sec.hf.push(Hf { kind, which, name: format!("{kind}{}", self.carry.hf_n), blocks: Some(vec![Blk::P(Box::new(para.clone()))]) });
+    }
+
+    /// A section asking for no page number: each story it would inherit showing one becomes a
+    /// copy of its own without it (its text kept), as its own stories are.
+    fn stop_page_number(&mut self) {
+        for kind in ["header", "footer"] {
+            for which in ["default", "even"] {
+                if let Some(h) = self.sec.hf.iter_mut().find(|h| h.kind == kind && h.which == which) {
+                    if let Some(b) = h.blocks.as_mut() {
+                        b.retain(|b| !matches!(b, Blk::P(p) if p.page_num));
+                    }
+                } else if self.carry.inherited_refs.iter().any(|(k, _)| *k == (kind, which))
+                    && let Some((_, blocks)) = self.carry.inherited_hf.get(&(kind, which)).cloned()
+                    && blocks.iter().any(|b| matches!(b, Blk::P(p) if p.page_num))
+                {
+                    let blocks: Vec<Blk> = blocks.into_iter().filter(|b| !matches!(b, Blk::P(p) if p.page_num)).collect();
+                    self.carry.hf_n += 1;
+                    let name = format!("{kind}{}", self.carry.hf_n);
+                    self.sec.hf.push(Hf { kind, which, name, blocks: Some(blocks) });
+                }
+                self.carry.page_num_of.remove(&(kind, which));
+            }
+        }
     }
 
     /// A section without a master page or background that would inherit an earlier section's
