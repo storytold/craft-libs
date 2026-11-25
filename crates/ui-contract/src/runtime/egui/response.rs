@@ -125,6 +125,17 @@ fn member_on(ctx: &egui::Context, layer_id: LayerId, clip: Rect, id: Id, rect: R
     response
 }
 
+/// Clears a root's `Response` enabled flag when its component is disabled or inert, so the returned response tells the
+/// truth: `enabled()` is false and egui's disabled-hover hooks apply. The root's own egui widget stays registered as
+/// enabled, so a disabled button with a reason can still take keyboard focus and explain itself. Calling egui's
+/// `Response::interact` on this response is not supported: it registers the id again from this flag, as disabled, and
+/// the root loses that focus. Add senses through the component instead.
+pub(crate) fn restrict_enabled(response: &mut Response, enabled: bool) {
+    if !enabled {
+        response.flags.remove(Flags::ENABLED);
+    }
+}
+
 /// Sets the hover of a root's `Response` from what lies under the pointer (`pointer::Under`), in place of egui's: egui
 /// reports a widget that senses a click hovered only where it is egui's click winner, and a root's widget senses the
 /// clicks of its parts and members. `hovered`: a shape of the root's arena shows hover; `contains`: one lies under the
