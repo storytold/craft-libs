@@ -119,6 +119,18 @@ pub enum Name {
     Decorative,
 }
 
+impl Name {
+    /// The text the name gives itself: a `Text`'s, or a `Joined`'s texts joined with a comma. `None` for a name taken
+    /// from a label or another node, and for no name.
+    pub(crate) fn own_text(&self) -> Option<String> {
+        match self {
+            Name::Text(text) => Some(text.clone()),
+            Name::Joined(parts) => Some(parts.join(", ")),
+            Name::FromLabel | Name::LabelledBy(_) | Name::Decorative => None,
+        }
+    }
+}
+
 /// A numeric value.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
