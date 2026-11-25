@@ -15,7 +15,7 @@ use crate::runtime::motion::{self, Driver};
 use crate::runtime::overlay::{self, Backdrop, CloseReason, OpenEntry, Rank};
 use crate::runtime::windows::{self, PopupOpen, PopupRoom, WindowSpec};
 use craft_behavior::{MotionKind, Playback};
-use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
+use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 
 /// What the host reads for one layer.
 pub(crate) struct Layer<'a> {
@@ -106,6 +106,17 @@ fn close_family(ctx: &Context, layer: &Layer<'_>, closing: bool, memory: &mut La
 /// The egui layer id of the layer `id`.
 fn area_id(id: Id) -> Id {
     sub(id, "area")
+}
+
+/// The viewport whose pass shows the layer `id` of `overlay`, opened in the running viewport: the popup window's when
+/// it shows there ([`host_in_popup`]), else the running one. That pass is where the layer is stamped
+/// (`overlay::begin_layer`), and where a body's read step and the host read what it appeared and remembers.
+pub(crate) fn layer_viewport(ctx: &Context, overlay: &Overlay, id: Id) -> ViewportId {
+    if !overlay.is_full_window() && windows::popup_room(ctx).is_some() {
+        crate::runtime::egui::viewports::viewport_id(id)
+    } else {
+        crate::runtime::egui::pass::current_viewport(ctx)
+    }
 }
 
 /// The overlay host: shows `body` on an egui layer for `layer` and decides its dismissal. A layer opened in a palette
@@ -287,7 +298,7 @@ fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut 
     // The layer's body runs in the popup window's pass, which stamps the layer's appearance in that window's record:
     // this pass, which decides the window, reads it there. The opener's own record never holds the layer, so a layer
     // that appeared once would read as appearing in every pass.
-    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
+    let viewport = layer_viewport(ctx, layer.overlay, layer.id);
     let appears = overlay::appears_in(ctx, viewport, layer.id, layer.exiting);
     let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
     let opened = opened_overlay(ctx, layer.overlay, memory.opening);

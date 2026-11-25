@@ -2,7 +2,8 @@
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
 //! palette's level under a modal and its visibility while the main window is minimized, a layer shown in a popup
-//! window and what it remembers while it shows, injected keys across a focus loss, non-finite injected points, a
+//! window and what it remembers while it shows (a scrolled body keeps its offset), injected keys across a focus loss,
+//! non-finite injected points, a
 //! repeated injected press, the window that has the keys, a wheel with no known pointer, the placement of a minimized
 //! window, the root frame decided again, a held close, `act`, and a hosted window's Control-click and window-input
 //! policy.
@@ -19,6 +20,7 @@ use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::windows::{WindowHost, WindowLevel, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
+use craft_ui::testing::layout::Block;
 use craft_ui::testing::pointer::{moved, press, release, wheel};
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
@@ -1391,6 +1393,62 @@ fn a_layer_in_a_popup_window_closes_after_its_timeout() {
     }
     assert!(!open.get(), "the layer closes after its timeout");
     assert_eq!(*closed.borrow(), [CloseReason::Timeout], "the timeout closed it, and no other rule did");
+}
+
+/// A scrolled body of a layer shown in a popup window keeps its offset while the layer shows. The read step that starts
+/// a layer's body at the top when it opens runs in the opener's pass, before the popup window's pass, which is where the
+/// layer is stamped: it reads the layer's appearance in that window's record, not in the opener's, which never holds it.
+#[trial]
+fn a_scrolled_body_of_a_layer_in_a_popup_window_keeps_its_offset() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    // The palette's window: a tool window, whose layers show in popup windows of their own.
+    let palette = ViewportInfo {
+        focused: Some(true),
+        inner_rect: Some(PALETTE_AT),
+        outer_rect: Some(PALETTE_AT),
+        native_pixels_per_point: Some(1.0),
+        ..ViewportInfo::default()
+    };
+    windows.child_info(palette);
+    // A dropdown list, whose body is capped by the room its popup window leaves, holding more than it shows: it scrolls.
+    let overlay = Overlay::dropdown();
+    let owner = egui::Id::unique("a tall body in a popup window");
+    let seen = RefCell::new(Seen::default());
+    let open = Cell::new(true);
+    let closed = RefCell::new(Vec::new());
+    let frame = || {
+        let mut is_open = open.get();
+        let out = windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                let props = ContainerProps::new().mount(Mount::Layer(overlay.clone()));
+                Sheet { common: Common::new(), props, open: Bind::bound(&mut is_open), closed: &closed }.id(owner).show(ui, |ui, _| {
+                    for _ in 0..8 {
+                        Block::new(Vec2::new(60.0, 40.0)).show(ui);
+                    }
+                    Probe::new(&seen).id_salt("lowest row").show(ui);
+                });
+            });
+        });
+        open.set(is_open);
+        out
+    };
+    for _ in 0..4 {
+        frame();
+    }
+    let at_top = seen.borrow().rect;
+    assert!(at_top.height() > 0.0, "the layer's body laid its content out: {at_top:?}");
+    // Show the lowest row, which lies below the room the popup window leaves.
+    craft_ui::testing::contract::queue_reveal(&windows.ctx, owner, at_top);
+    frame();
+    frame();
+    let scrolled = seen.borrow().rect;
+    assert!(scrolled.min.y < at_top.min.y - 1.0, "the reveal scrolled the body: {at_top:?} then {scrolled:?}");
+    for _ in 0..4 {
+        frame();
+    }
+    assert_eq!(seen.borrow().rect, scrolled, "the offset stays while the layer shows, with no input at all");
+    assert!(closed.borrow().is_empty(), "scrolling the body closed nothing: {:?}", closed.borrow());
 }
 
 /// A key automation holds is in `keys::held` while it is held and not after its release.
