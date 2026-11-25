@@ -74,8 +74,8 @@ pub use panel::{
     ColorPanelShown, ColorPanelState, ColorPanelWords, PanelTarget, TintRow,
 };
 pub use picker::{
-    ChannelRow, ChannelRule, ChannelUnit, ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, PickedColor,
-    ScreenPickGesture, TrackRamp,
+    ChannelRow, ChannelRule, ChannelUnit, ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, HeldInput,
+    PickedColor, ScreenPickGesture, TrackRamp,
 };
 pub use picker_dialog::{
     ColorPickerDialog, ColorPickerDialogLayout, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult, ColorPickerTab, PickerLibrary,

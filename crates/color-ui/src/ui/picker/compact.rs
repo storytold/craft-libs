@@ -14,7 +14,7 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::screen_pick::ScreenPickButton;
-use super::{Collected, ColorPickerLayout, ColorPickerWords, Pass};
+use super::{Collected, ColorPickerLayout, ColorPickerWords, HeldInput, Pass};
 use crate::ui::channels::WEB_LEVELS;
 use crate::ui::{AreaMode, AreaShape, ColorArea, ColorStrip, ColorWarning};
 
@@ -130,16 +130,22 @@ impl<'a> Body<'a> {
     /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected. In the Compact
     /// layout (the tabbed Colors dialog) Enter in it commits the typed digits and does not reach the dialog's OK, as in
     /// the production Colors dialog. In the Full layout Enter commits the digits and confirms the dialog, as in the
-    /// reference image editor's Color Picker.
+    /// reference image editor's Color Picker, whose field also reads short input (`12` is `000012`) and holds more
+    /// than six digits to `ffffff`, which the output reports as [`HeldInput::Hex`].
     pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
+        let full = self.layout == ColorPickerLayout::Full;
+        let mut held = None;
         let field =
             TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
-        let field = if self.layout == ColorPickerLayout::Compact { field.submits() } else { field };
+        let field = if full { field.short_input(true).held_into(&mut held) } else { field.submits() };
         let edit = match sizing {
             Some(sizing) => field.sizing(sizing),
             None => field,
         }
         .show(ui);
+        if held.is_some() {
+            got.held = Some(HeldInput::Hex);
+        }
         if pass.focus_hex {
             focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
         }

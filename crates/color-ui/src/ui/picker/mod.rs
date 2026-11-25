@@ -5,9 +5,13 @@
 pub(crate) mod channel;
 mod compact;
 mod full;
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod hex_short_input_tests;
 pub(crate) mod screen_pick;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
+#[cfg(all(test, feature = "screen-testing"))]
+pub(crate) mod test_rig;
 mod value;
 
 use std::sync::Arc;
@@ -94,6 +98,15 @@ pub enum ScreenPickGesture {
     },
 }
 
+/// Input a field of the picker held to its range and replaced with the closest value, which the host reports with the
+/// reference image editor's "Closest value inserted" alert ([`ColorPickerDialog::take_range_alert`](super::ColorPickerDialog::take_range_alert)).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum HeldInput {
+    /// The Full layout's hex field took more than six digits and inserted `ffffff`.
+    Hex,
+}
+
 /// What [`ColorPicker`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -106,6 +119,8 @@ pub struct ColorPickerOutput {
     pub events: EditEvents<PickedColor>,
     /// The screen-pick button's press this pass.
     pub screen_pick: Option<ScreenPickGesture>,
+    /// Input a field committed in this pass that was held to its range: the host shows the range alert.
+    pub held: Option<HeldInput>,
 }
 
 impl Outcome for ColorPickerOutput {
@@ -189,6 +204,8 @@ struct Collected {
     web_pick: Option<bool>,
     /// The picker held no colour when the pass began: its edits begin from Mixed.
     empty: bool,
+    /// Input a field committed held to its range.
+    held: Option<HeldInput>,
 }
 
 impl Collected {
@@ -423,8 +440,8 @@ impl<'a> ColorPicker<'a> {
             events: EditEvents::new(),
         };
         let shown = Stack::new().label(label).show(ui, |ui, body| run.show(ui, body));
-        let (events, screen_pick) = shown.inner.unwrap_or_default();
-        ColorPickerOutput { response: shown.output, events, screen_pick }
+        let (events, screen_pick, held) = shown.inner.unwrap_or_default();
+        ColorPickerOutput { response: shown.output, events, screen_pick, held }
     }
 }
 
@@ -454,7 +471,7 @@ struct Run<'s, 'a> {
 }
 
 impl<'a> Run<'_, 'a> {
-    fn show(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>) -> (EditEvents<PickedColor>, Option<ScreenPickGesture>) {
+    fn show(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>) -> (EditEvents<PickedColor>, Option<ScreenPickGesture>, Option<HeldInput>) {
         let memo = body.memory::<Memo>().clone();
         let held_mode = self.mode.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied());
         let mut mode = held_mode.unwrap_or(memo.mode);
@@ -539,7 +556,7 @@ impl<'a> Run<'_, 'a> {
                 None => body.memory::<Memo>().model = Some(next),
             }
         }
-        (std::mem::take(&mut self.events), got.screen_pick)
+        (std::mem::take(&mut self.events), got.screen_pick, got.held)
     }
 
     /// Lands `event`, an edit of the colour: a gesture's end takes the colour it began from, the binding takes the
