@@ -35,6 +35,10 @@ pub enum DxfError {
     /// The memory for `tags` group codes couldn't be had: an error, not the process ending.
     #[error("not enough memory to read this drawing's {tags} DXF group codes")]
     OutOfMemory { tags: usize },
+    /// An invalid integer value ([`Value::Invalid`]) cannot be encoded in binary DXF
+    /// because binary integer fields have no non-finite sentinel.
+    #[error("cannot encode invalid integer tag (group {code}) as binary DXF: `{text}`")]
+    InvalidInteger { code: i32, text: String },
 }
 
 pub type Result<T> = std::result::Result<T, DxfError>;
@@ -50,6 +54,13 @@ pub enum Value {
     Hex(String),
     /// Non-finite or malformed numeric group value preserved as raw text.
     Invalid(String),
+}
+
+const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+const I64_MAX_EXCLUSIVE_F64: f64 = 9_223_372_036_854_775_808.0;
+
+fn f64_to_i64_checked(r: f64) -> Option<i64> {
+    if r.is_finite() && (I64_MIN_F64..I64_MAX_EXCLUSIVE_F64).contains(&r) { Some(r as i64) } else { None }
 }
 
 impl Value {
@@ -100,8 +111,8 @@ impl Value {
     pub fn checked_i64(&self) -> Option<i64> {
         match self {
             Value::Int(i) => Some(*i),
-            Value::Real(r) if r.is_finite() => Some(*r as i64),
-            Value::Str(s) => s.trim().parse::<i64>().ok().or_else(|| s.trim().parse::<f64>().ok().filter(|f| f.is_finite()).map(|f| f as i64)),
+            Value::Real(r) => f64_to_i64_checked(*r),
+            Value::Str(s) => s.trim().parse::<i64>().ok().or_else(|| s.trim().parse::<f64>().ok().and_then(f64_to_i64_checked)),
             Value::Bool(b) => Some(i64::from(*b)),
             _ => None,
         }
@@ -479,6 +490,21 @@ fn parse_ascii_counted(text: &str, max_tags: usize, expected: usize) -> Result<V
     ascii_tags(text, max_tags, expected, false).map(|(tags, _)| tags)
 }
 
+fn unescape_invalid(code: i32, s: String) -> String {
+    let unescaped = unescape_owned(s.clone());
+    if unescaped == s {
+        return s;
+    }
+    let becomes_valid_numeric = match kind_of(code) {
+        Kind::Real => unescaped.trim().parse::<f64>().ok().filter(|v| v.is_finite()).is_some(),
+        Kind::Int16 | Kind::Int32 | Kind::Int64 => {
+            unescaped.trim().parse::<i64>().is_ok() || unescaped.trim().parse::<f64>().ok().filter(|f| f.is_finite()).is_some()
+        }
+        _ => false,
+    };
+    if becomes_valid_numeric { s } else { unescaped }
+}
+
 /// The tags of ASCII DXF text. With `recover`, a line that is no group code, or a group code
 /// with no value after it, ends the reading instead of failing it: the tags before it are
 /// returned with the 1-based number of that line.
@@ -511,7 +537,7 @@ fn ascii_tags(text: &str, max_tags: usize, expected: usize, recover: bool) -> Re
         let v = match typed(code, val) {
             // Only text with a backslash can hold an escape; the rest moves in as it is.
             Value::Str(s) => Value::Str(unescape_owned(s)),
-            Value::Invalid(s) => Value::Invalid(unescape_owned(s)),
+            Value::Invalid(s) => Value::Invalid(unescape_invalid(code, s)),
             o => o,
         };
         let eof = code == 0 && matches!(&v, Value::Str(s) if s.trim_end() == "EOF");
@@ -847,19 +873,34 @@ fn ascii(tags: &[Tag], strings: Strings) -> Vec<u8> {
 /// is stored as a number; a code outside the 16-bit range is skipped.
 ///
 /// Invalid real values ([`Value::Invalid`]) are preserved across binary serialization using
-/// `f64::NAN`. Because binary integer representations have no non-finite sentinel, invalid
-/// integer groups are encoded as `0`.
-pub fn write_binary(tags: &[Tag], utf8: bool) -> Vec<u8> {
-    binary(tags, if utf8 { Strings::Utf8 } else { Strings::Escaped(None) })
+/// `f64::NAN`.
+///
+/// # Errors
+///
+/// Returns [`DxfError::InvalidInteger`] if any integer tag holds an invalid value ([`Value::Invalid`]),
+/// because binary DXF integer representations have no IEEE-754 non-finite sentinel. Callers who
+/// want invalid integers normalized to `0` can use [`write_binary_lossy`].
+pub fn write_binary(tags: &[Tag], utf8: bool) -> Result<Vec<u8>> {
+    binary(tags, if utf8 { Strings::Utf8 } else { Strings::Escaped(None) }, false)
 }
 
 /// Write tags as pre-R2007 binary DXF with text in the code page `code_page` names, as
 /// [`write_ascii_in`] does.
-pub fn write_binary_in(tags: &[Tag], code_page: &str) -> Vec<u8> {
-    binary(tags, Strings::Escaped(codepage::encoder(code_page)))
+///
+/// # Errors
+///
+/// Returns [`DxfError::InvalidInteger`] if any integer tag holds an invalid value ([`Value::Invalid`]).
+pub fn write_binary_in(tags: &[Tag], code_page: &str) -> Result<Vec<u8>> {
+    binary(tags, Strings::Escaped(codepage::encoder(code_page)), false)
 }
 
-fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
+/// Write tags as binary DXF, normalizing invalid integer tags ([`Value::Invalid`]) to `0`
+/// instead of returning an error.
+pub fn write_binary_lossy(tags: &[Tag], utf8: bool) -> Vec<u8> {
+    binary(tags, if utf8 { Strings::Utf8 } else { Strings::Escaped(None) }, true).unwrap_or_default()
+}
+
+fn binary(tags: &[Tag], strings: Strings, normalize_invalid_integers: bool) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(BINARY_SENTINEL.len() + tags.len() * 12);
     out.extend_from_slice(BINARY_SENTINEL);
     for t in tags {
@@ -887,19 +928,35 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
             }
             Kind::Int16 => {
                 out.extend_from_slice(&code_bytes);
-                // Binary DXF integer fields have no IEEE-754 non-finite / NaN marker.
-                // Value::Invalid explicitly loses invalidity and converts to 0 via checked_i64.
-                let i = t.value.checked_i64().unwrap_or(0);
+                let i = match t.value.checked_i64() {
+                    Some(i) => i,
+                    None if normalize_invalid_integers => 0,
+                    None => {
+                        return Err(DxfError::InvalidInteger { code: t.code, text: t.value.invalid_str().unwrap_or_default().to_string() });
+                    }
+                };
                 out.extend_from_slice(&wrap_i16(i));
             }
             Kind::Int32 => {
                 out.extend_from_slice(&code_bytes);
-                let i = t.value.checked_i64().unwrap_or(0);
+                let i = match t.value.checked_i64() {
+                    Some(i) => i,
+                    None if normalize_invalid_integers => 0,
+                    None => {
+                        return Err(DxfError::InvalidInteger { code: t.code, text: t.value.invalid_str().unwrap_or_default().to_string() });
+                    }
+                };
                 out.extend_from_slice(&wrap_i32(i));
             }
             Kind::Int64 => {
                 out.extend_from_slice(&code_bytes);
-                let i = t.value.checked_i64().unwrap_or(0);
+                let i = match t.value.checked_i64() {
+                    Some(i) => i,
+                    None if normalize_invalid_integers => 0,
+                    None => {
+                        return Err(DxfError::InvalidInteger { code: t.code, text: t.value.invalid_str().unwrap_or_default().to_string() });
+                    }
+                };
                 out.extend_from_slice(&i.to_le_bytes());
             }
             Kind::Bool => {
@@ -921,7 +978,7 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Hex text cleaned up: only the hex digits are kept, and an odd trailing digit is padded with
@@ -1156,7 +1213,7 @@ mod tests {
                 let tags = vec![Tag::s(8, text)];
                 let back = parse_ascii(&write_ascii_as(&tags, utf8)).unwrap();
                 assert_eq!(back, tags, "utf8={utf8} {text}");
-                let back = parse_binary(&write_binary(&tags, utf8)).unwrap();
+                let back = parse_binary(&write_binary(&tags, utf8).unwrap()).unwrap();
                 assert_eq!(back[1..], tags[..], "binary utf8={utf8} {text}");
             }
         }
@@ -1458,7 +1515,7 @@ mod tests {
         assert_eq!(back_ascii[1], Tag::invalid(20, "inf"));
         assert_eq!(back_ascii[2], Tag::invalid(30, "malformed"));
 
-        let bin_out = write_binary(&tags, true);
+        let bin_out = write_binary(&tags, true).unwrap();
         let back_bin = parse(&bin_out).unwrap();
         assert_eq!(back_bin[0], Tag::invalid(10, "NaN"));
         assert_eq!(back_bin[1], Tag::invalid(20, "inf"));
@@ -1467,6 +1524,61 @@ mod tests {
         assert_eq!(back_bin[2], Tag::invalid(30, "NaN"));
         assert_eq!(back_bin[2].f64(), 0.0);
         assert!(back_bin[2].is_invalid());
+    }
+
+    #[test]
+    fn checked_i64_bounds_enforced_including_exclusive_upper_bound() {
+        // Inclusive lower bound: -2^63 fits
+        assert_eq!(Value::Real(-9_223_372_036_854_775_808.0).checked_i64(), Some(i64::MIN));
+        assert_eq!(Value::Str("-9223372036854775808".into()).checked_i64(), Some(i64::MIN));
+
+        // Just below lower bound: does not fit
+        assert_eq!(Value::Real(-1e30).checked_i64(), None);
+        assert_eq!(Value::Str("-1e30".into()).checked_i64(), None);
+
+        // Exclusive upper bound: 2^63 does not fit in i64
+        assert_eq!(Value::Real(9_223_372_036_854_775_808.0).checked_i64(), None);
+        assert_eq!(Value::Str("9223372036854775808".into()).checked_i64(), None);
+
+        // Just below exclusive upper bound: 2^63 - 2048 (largest representable f64 < 2^63)
+        assert_eq!(Value::Real(9_223_372_036_854_774_784.0).checked_i64(), Some(9_223_372_036_854_774_784));
+
+        // Normal values
+        assert_eq!(Value::Real(42.0).checked_i64(), Some(42));
+        assert_eq!(Value::Int(42).checked_i64(), Some(42));
+        assert_eq!(Value::Invalid("foo".into()).checked_i64(), None);
+    }
+
+    #[test]
+    fn invalid_numeric_escape_does_not_decode_into_valid_numeric_spelling() {
+        let text = "10\n\\U+0030\n0\nEOF\n";
+        let tags = parse(text.as_bytes()).unwrap();
+        assert_eq!(tags[0], Tag::invalid(10, "\\U+0030"));
+        assert!(tags[0].is_invalid());
+
+        // Roundtrip in ASCII preserves raw invalid escape and signal
+        let ascii_out = write_ascii(&tags);
+        let back_ascii = parse(ascii_out.as_bytes()).unwrap();
+        assert_eq!(back_ascii[0], Tag::invalid(10, "\\U+0030"));
+        assert!(back_ascii[0].is_invalid());
+
+        // Roundtrip in binary preserves invalid signal via NaN sentinel
+        let bin_out = write_binary(&tags, true).unwrap();
+        let back_bin = parse(&bin_out).unwrap();
+        assert_eq!(back_bin[0], Tag::invalid(10, "NaN"));
+        assert!(back_bin[0].is_invalid());
+    }
+
+    #[test]
+    fn binary_integer_writer_reports_error_unless_lossy_normalized() {
+        let tags = vec![Tag::invalid(70, "corrupted"), Tag::s(0, "EOF")];
+        // Checked write_binary returns error for invalid integer tag
+        assert!(matches!(write_binary(&tags, true), Err(DxfError::InvalidInteger { code: 70, .. })));
+
+        // Explicit write_binary_lossy normalizes invalid integer to 0
+        let lossy_bin = write_binary_lossy(&tags, true);
+        let back = parse(&lossy_bin).unwrap();
+        assert_eq!(back[0], Tag::i(70, 0));
     }
 }
 

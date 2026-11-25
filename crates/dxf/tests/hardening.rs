@@ -171,15 +171,19 @@ fn invalid_numbers_with_dxf_escapes_roundtrip_through_ascii_write_and_parse() {
 }
 
 #[test]
-fn binary_integer_writer_makes_invalid_loss_explicit() {
+fn binary_integer_writer_reports_error_unless_lossy_normalized() {
     let invalid_int_tag = Tag::invalid(70, "corrupted");
     assert!(invalid_int_tag.is_invalid());
     assert_eq!(invalid_int_tag.checked_i64(), None);
     assert_eq!(invalid_int_tag.i64(), 0);
 
-    // Binary DXF integer groups have no NaN marker, so invalid integers explicitly encode as 0
-    let bin = write_binary(&[invalid_int_tag, Tag::s(0, "EOF")], true);
-    let back = parse(&bin).unwrap();
+    // Binary DXF integer groups have no NaN marker, so write_binary reports conversion error
+    let res = write_binary(&[invalid_int_tag.clone(), Tag::s(0, "EOF")], true);
+    assert!(matches!(res, Err(craft_dxf::DxfError::InvalidInteger { code: 70, .. })));
+
+    // Explicit write_binary_lossy normalizes invalid integer to 0
+    let lossy_bin = craft_dxf::write_binary_lossy(&[invalid_int_tag, Tag::s(0, "EOF")], true);
+    let back = parse(&lossy_bin).unwrap();
     assert_eq!(back[0], Tag::i(70, 0));
     assert_eq!(back[0].checked_i64(), Some(0));
 }
@@ -203,7 +207,7 @@ fn hex_groups_pad_odd_digits_and_drop_junk() {
     assert_eq!(t[2].value, Value::Hex(String::new()));
     assert_eq!(t[3].value, Value::Hex("0aF0".into()));
     // The binary writer agrees with the reader: the odd digit is padded, nothing shifts.
-    let back = parse(&write_binary(&[Tag::new(310, Value::Hex("ABC".into())), Tag::s(0, "EOF")], true)).unwrap();
+    let back = parse(&write_binary(&[Tag::new(310, Value::Hex("ABC".into())), Tag::s(0, "EOF")], true).unwrap()).unwrap();
     assert_eq!(back[0].value, Value::Hex("ABC0".into()));
 }
 
@@ -235,7 +239,7 @@ fn binary_sixteen_and_thirty_two_bit_values_wrap_in_range_and_clamp_outside() {
         Tag::i(90, -(1 << 40)),
         Tag::s(0, "EOF"),
     ];
-    let back = parse(&write_binary(&tags, true)).unwrap();
+    let back = parse(&write_binary(&tags, true).unwrap()).unwrap();
     assert_eq!(back[0], Tag::i(70, -1));
     assert_eq!(back[1], Tag::i(70, 40000 - 65536));
     assert_eq!(back[2], Tag::i(70, i64::from(i16::MAX)));
