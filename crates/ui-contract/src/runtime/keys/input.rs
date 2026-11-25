@@ -781,7 +781,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             batch.egui_events += usize::from(kept);
             kept
         });
-        if !batch.left_clips.is_empty() {
+        // `leftover_events` places each clip back and ends a fired key's hold among the events egui still holds, so a
+        // pass that leaves a clip or ends a hold keeps them (`Batch::passed`).
+        if !batch.left_clips.is_empty() || !stage.hold_ends.is_empty() {
             batch.passed = events.iter().map(|arrived| arrived.event.clone()).collect();
         }
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {

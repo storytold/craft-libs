@@ -183,9 +183,10 @@ struct Batch {
     left_clips: Vec<LeftClip>,
     /// How many events the strip has left in egui's input so far.
     egui_events: usize,
-    /// The events the strip left in egui's input, kept only in a pass with `left_clips`: `leftover_events` puts each
-    /// clip back among them where it was, though a widget may have taken some of them since. Each event egui still holds
-    /// takes its own entry, counted from the end, so equal events keep their places apart.
+    /// The events the strip left in egui's input, kept only in a pass with `left_clips` or `hold_ends`: `leftover_events`
+    /// puts each clip back among them where it was and ends a fired key's hold at the press that ends it, though a widget
+    /// may have taken some of them since. Each event egui still holds takes its own entry, counted from the end, so equal
+    /// events keep their places apart.
     passed: Vec<Event>,
     access: Vec<Action>,
     escapes: Vec<EscapePress>,
@@ -341,7 +342,8 @@ pub(crate) struct Stage {
     shortcuts: Shortcuts,
     /// The clipboard events `Batch::left_clips` held, for this pass.
     left_clips: Vec<LeftClip>,
-    /// The events `Batch::passed` held, for this pass.
+    /// The events `Batch::passed` held, for this pass: `leftover_events` places each clip and each ended hold among
+    /// them.
     passed: Vec<Event>,
     /// The presses the shortcut dispatcher fired a command for in this pass (`note_fired`), each `true` when the command
     /// fired for an auto-repeat.

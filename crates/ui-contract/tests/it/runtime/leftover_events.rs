@@ -107,6 +107,33 @@ fn a_fresh_press_ends_a_fired_key_hold_after_the_events_before_it() {
     );
 }
 
+/// A fresh press of a key a command fired for ends that command's hold in a pass that leaves no clip: egui reads the
+/// press as a repeat, as it does for a key whose release went to another window, and the press is the host's.
+#[trial]
+fn a_fresh_press_ends_a_fired_key_hold_in_a_pass_with_no_clip() {
+    let mut frames = Frames::new();
+    let binding = Binding::parse("F1").expect("the trial's chord parses");
+    let help = CommandDef::new("leftoverTrial.holdNoClip", "Help", Scope::app()).with_default(binding);
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(vec![help], 1).expect("the trial's catalog is valid")));
+    let left = RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        left.borrow_mut().extend(leftover_events(ui.ctx()));
+    };
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    left.borrow_mut().clear();
+
+    frames.frame(vec![key_press(Key::F1, Modifiers::NONE)], &mut show);
+    assert_eq!(take_output(&frames.ctx).fired.len(), 1, "the command fired for the press");
+    assert!(key_events(left.take()).is_empty(), "the press is the command's");
+
+    // No release of F1 comes between the passes, so the viewport still has F1 down and egui reads the second press as a
+    // repeat of the first, as it reads a press whose key's release went to another window.
+    frames.frame(vec![text("y"), key_press(Key::F1, Modifiers::SHIFT)], &mut show);
+    assert!(take_output(&frames.ctx).fired.is_empty(), "the fresh press's chord is bound to nothing");
+    assert_eq!(key_events(left.take()), [(Key::F1, true)], "the hold ends at the fresh press, which is left over");
+}
+
 /// An event a widget took from egui's input does not pull a clip too late: the events the input still holds take their
 /// own places among the pass's, equal ones apart.
 #[trial]
